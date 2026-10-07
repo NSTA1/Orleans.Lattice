@@ -31,6 +31,7 @@
         <LtColumn TItem="ReplicationPeerStatusEntry" Title="Health" SortBy="@(link => ReplicationHealth.Severity(link.Health))">
             <LtStatusPill State="@ReplicationHealth.Role(context.Health)" Text="@ReplicationHealth.Label(context.Health)" />
         </LtColumn>
+        <LtColumn TItem="ReplicationPeerStatusEntry" Title="Stall reason" Value="@(link => ReplicationFormat.StallReason(link.StallReason))" />
         <LtColumn TItem="ReplicationPeerStatusEntry" Title="Entries behind" Align="LtColumnAlign.End" Mono="true" SortBy="@(link => link.EntriesBehind)" Value="@(link => ReplicationFormat.Count(link.EntriesBehind))" />
         <LtColumn TItem="ReplicationPeerStatusEntry" Title="Bytes behind" Align="LtColumnAlign.End" Mono="true" SortBy="@(link => link.BytesBehind)" Value="@(link => ReplicationFormat.Bytes(link.BytesBehind))" />
         <LtColumn TItem="ReplicationPeerStatusEntry" Title="Errors" Align="LtColumnAlign.End" Mono="true" SortBy="@(link => link.ConsecutiveErrors)" Value="@(link => ReplicationFormat.Count(link.ConsecutiveErrors))" />
@@ -50,6 +51,7 @@
             <LtDefinition Term="Peer region" Mono="true">@context.PeerRegionId</LtDefinition>
             <LtDefinition Term="Direction">@ReplicationFormat.Direction(context.Direction)</LtDefinition>
             <LtDefinition Term="Health"><LtStatusPill State="@ReplicationHealth.Role(context.Health)" Text="@ReplicationHealth.Label(context.Health)" /></LtDefinition>
+            <LtDefinition Term="Stall reason">@ReplicationFormat.StallReason(context.StallReason)</LtDefinition>
             <LtDefinition Term="Backlog">@ReplicationFormat.Backlog(context.EntriesBehind, context.BytesBehind)</LtDefinition>
             <LtDefinition Term="Consecutive errors" Mono="true">@ReplicationFormat.Count(context.ConsecutiveErrors)</LtDefinition>
             <LtDefinition Term="Last contact">@ReplicationFormat.Contact(context.TimeSinceLastContact)</LtDefinition>

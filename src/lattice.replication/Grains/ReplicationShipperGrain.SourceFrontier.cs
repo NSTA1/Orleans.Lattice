@@ -137,15 +137,30 @@ internal sealed partial class ReplicationShipperGrain
     /// <summary>Records the receiver lineage an acknowledgement reports.</summary>
     private void NoteReceiverLineage(ReplicationAck ack)
     {
-        if (ack.ReceiverLineage is not { } lineage)
+        var frontier = state.State.Frontier;
+        if (ack.ReceiverLineage is not { } lineage || lineage == Guid.Empty)
         {
-            // Not reported this time: no change, and nothing it covers counts.
+            // Empty is the gRPC sentinel for a tree whose lineage is not
+            // established yet; treating it as an observed lineage turns the
+            // first real lineage after initial writes into a false replacement.
             _latestAckLineageUnreported = true;
+            if (ack.Accepted && !frontier.LineageObserved)
+            {
+                var acknowledgedBefore = state.State.PartitionCursors.Values.Any(cursor => cursor > 0);
+                if (ack.SupportedWireVersion is not null && !acknowledgedBefore)
+                {
+                    frontier.ModernAcceptedBeforeFirstLineage = true;
+                }
+                else if (ack.SupportedWireVersion is null)
+                {
+                    frontier.ModernAcceptedBeforeFirstLineage = false;
+                }
+            }
+
             return;
         }
 
         _latestAckLineageUnreported = false;
-        var frontier = state.State.Frontier;
         var differs = !frontier.LineageObserved || frontier.Lineage != lineage;
         if (differs && (!_tickAckLineageReported || _tickAckLineage != lineage))
         {
@@ -396,8 +411,14 @@ internal sealed partial class ReplicationShipperGrain
             if (!frontier.LineageObserved || frontier.Lineage != seen)
             {
                 var forced = seen != Guid.Empty && acknowledgedBefore;
+                if (!frontier.LineageObserved && frontier.ModernAcceptedBeforeFirstLineage)
+                {
+                    forced = false;
+                }
+
                 frontier.LineageObserved = true;
                 frontier.Lineage = seen;
+                frontier.ModernAcceptedBeforeFirstLineage = false;
                 if (forced)
                 {
                     frontier.LineageReseedPending = true;

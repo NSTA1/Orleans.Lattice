@@ -59,7 +59,8 @@ so it does not need `enableRuntimeConfig: true` or `AddLatticeReplicationApi()`.
 `ReplicationPeerStatusEntry` per tree, peer region and direction. Each entry holds
 entries and bytes behind, consecutive errors, time since last contact, in-flight
 count, and a derived `ReplicationLinkHealth`: `Healthy`, `Lagging`, `Stalled` or
-`Unknown`.
+`Unknown`. A stalled entry also reports its `StallReason` when it is waiting for
+a re-seed or a full dead-letter queue to clear.
 
 - **Cluster-wide.** Peer statistics are kept per silo. The facade fans out to every
   active silo through an internal grain service. When the same link appears on more

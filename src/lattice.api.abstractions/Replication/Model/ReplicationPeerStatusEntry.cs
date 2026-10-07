@@ -98,4 +98,10 @@ public sealed record ReplicationPeerStatusEntry
 
     /// <summary>The link health derived from the fields above against the facade's configured thresholds.</summary>
     [Id(8)] public ReplicationLinkHealth Health { get; init; }
+
+    /// <summary>
+    /// The reason a link is stalled by a re-seed requirement or a full
+    /// dead-letter queue; <see langword="null"/> when neither condition applies.
+    /// </summary>
+    [Id(9)] public ReplicationLinkStallReason? StallReason { get; init; }
 }

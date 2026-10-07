@@ -115,6 +115,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `TimeSinceLastContact` | `TimeSpan?` | Time since the last successful contact in this direction, or `null` when there has never been one. The liveness probe refreshes an idle outbound link; an inbound link is refreshed only when the peer's entries are applied, so an idle peer's inbound link ages without being unhealthy. |
 | `InFlight` | `long` | Batches shipped to the peer and not yet acknowledged. Outbound links only; always `0` on an inbound link. |
 | `Health` | `ReplicationLinkHealth` | The health derived from the fields above against the `LatticeReplicationStatusOptions` thresholds (see [Configuration](configuration.md#latticereplicationstatusoptions)). |
+| `StallReason` | `ReplicationLinkStallReason?` | The reason a link is stalled by a re-seed requirement or full dead-letter queue; `null` when neither applies. |
 
 ### `ReplicationLinkDirection`
 
@@ -131,6 +132,13 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `Healthy` | Every signal is within its lagging threshold. |
 | `Lagging` | At least one signal is past its lagging threshold and none is past its stalled threshold. |
 | `Stalled` | At least one signal is past its stalled threshold, or the sender has taken the peer off the log after a write-ahead-log trim lost records it never shipped and is waiting for the peer to re-seed ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)); such a peer receives no saga records until it does. |
+
+### `ReplicationLinkStallReason`
+
+| Value | Meaning |
+|---|---|
+| `ReseedRequired` | The peer lost records to a WAL trim and requires a snapshot re-seed. |
+| `DeadLetterQueueFull` | The peer's dead-letter queue is full and is withholding the next entry. |
 
 ## Exceptions
 

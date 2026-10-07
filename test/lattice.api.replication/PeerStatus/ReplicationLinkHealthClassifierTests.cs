@@ -47,6 +47,20 @@ public sealed class ReplicationLinkHealthClassifierTests
         });
     }
 
+    [Test]
+    public void Classify_returns_reseed_before_dead_letter_as_the_stall_cause()
+    {
+        var row = Outbound() with { ReseedRequiredSeconds = 1, DeadLetterFullSeconds = 2 };
+
+        var health = ReplicationLinkHealthClassifier.Classify(row, Defaults, out var reason);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(health, Is.EqualTo(ReplicationLinkHealth.Stalled));
+            Assert.That(reason, Is.EqualTo(ReplicationLinkStallReason.ReseedRequired));
+        });
+    }
+
     [TestCase(0L, ReplicationLinkHealth.Healthy)]
     [TestCase(LatticeReplicationStatusOptions.DefaultLaggingEntriesBehind, ReplicationLinkHealth.Healthy)]
     [TestCase(LatticeReplicationStatusOptions.DefaultLaggingEntriesBehind + 1, ReplicationLinkHealth.Lagging)]

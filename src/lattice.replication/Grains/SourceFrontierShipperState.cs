@@ -59,4 +59,13 @@ internal sealed class SourceFrontierShipperState
     /// <summary>The tree's export epoch when <see cref="SkipClamp"/> was last lowered.</summary>
     [Id(7)]
     public long SkipClampEpoch { get; set; }
+
+    /// <summary>
+    /// Whether a modern peer acknowledged data before it first reported a
+    /// lineage, with no earlier acknowledged cursor to protect. Its first
+    /// reported lineage identifies those already-accepted contents rather than
+    /// replacing a known lineage.
+    /// </summary>
+    [Id(8)]
+    public bool ModernAcceptedBeforeFirstLineage { get; set; }
 }

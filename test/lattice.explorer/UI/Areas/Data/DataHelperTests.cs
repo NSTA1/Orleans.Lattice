@@ -115,6 +115,16 @@ public sealed class DataHelperTests
             Assert.That(DataErrors.Describe(unimplemented, "follow changes"), Is.EqualTo("This cluster does not let you follow changes."));
             Assert.That(DataErrors.Describe(new KeyNotFoundException("t/acme/x"), "read it"), Is.EqualTo("It no longer exists, or you cannot see it."));
             Assert.That(DataErrors.Describe(transient, "read it"), Is.EqualTo("The cluster did not answer in time, so the Explorer could not read it. Try again."));
+            Assert.That(
+                DataErrors.Describe(
+                    new ShellTransportException(
+                        "retry",
+                        isTransient: true,
+                        new LatticeStateApiException(
+                            "retry",
+                            new RpcException(new Status(StatusCode.Unavailable, "The requested tree is being bootstrapped from a snapshot.")))),
+                    "read this tree's keys"),
+                Is.EqualTo("This tree is bootstrapping from a peer; reads resume when it completes."));
             Assert.That(DataErrors.Describe(new InvalidOperationException("t/acme/x"), "read it"), Does.Not.Contain("t/acme"));
         });
     }

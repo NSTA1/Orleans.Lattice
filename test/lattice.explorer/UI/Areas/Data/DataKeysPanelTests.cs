@@ -260,6 +260,33 @@ public sealed class DataKeysPanelTests : DataTestContext
     }
 
     [Test]
+    public async Task Live_changes_do_not_restart_a_first_page_scan_during_failure_backoff()
+    {
+        Client.WithTree("orders", keys: 2);
+        Client.Fault = call => call == nameof(ILatticeStateClient.ScanEntriesAsync)
+            ? new LatticeStateApiException("unavailable", new RpcException(new Status(StatusCode.Unavailable, "down"))) { IsTransient = true }
+            : null;
+
+        var cut = RenderAt("data/orders");
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Client.OpenFeeds, Is.EqualTo(1));
+            Assert.That(cut.Markup, Does.Contain("The cluster did not answer in time"));
+        });
+        var initialScans = Client.Calls.Count(call => call == "ScanEntriesAsync:first");
+        Assert.That(initialScans, Is.EqualTo(1));
+
+        for (var i = 0; i < 20; i++)
+        {
+            Client.Feeds[^1].Writer.TryWrite(FakeStateClient.Change("orders", $"key/{i:D4}"));
+        }
+
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+        Assert.That(Client.Calls.Count(call => call == "ScanEntriesAsync:first"), Is.EqualTo(initialScans));
+    }
+
+    [Test]
     public void A_live_change_seen_from_a_later_page_offers_a_reload_from_the_first()
     {
         Client.WithTree("orders", keys: 30);

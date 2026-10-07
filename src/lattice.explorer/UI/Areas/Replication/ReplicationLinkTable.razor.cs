@@ -52,7 +52,8 @@ public partial class ReplicationLinkTable
 
     private static string CompactSummary(ReplicationPeerStatusEntry link) =>
         (link.Direction == ReplicationLinkDirection.Outbound ? "To " : "From ")
-        + link.PeerRegionId + " - " + ReplicationFormat.Backlog(link.EntriesBehind, link.BytesBehind);
+        + link.PeerRegionId + " - " + ReplicationFormat.Backlog(link.EntriesBehind, link.BytesBehind)
+        + (ReplicationFormat.StallReason(link.StallReason) is { } reason ? " - " + reason : string.Empty);
 
     private string DetailTitleOf(ReplicationPeerStatusEntry link) =>
         (ShowTree ? link.TreeId + ": " : string.Empty)
