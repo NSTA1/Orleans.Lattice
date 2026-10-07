@@ -455,12 +455,12 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     /// the boundary. Honours <see cref="LatticeReplicationOptions.AutoBootstrapOnFallOffLog"/>
     /// as a fall-off does; asks at most once per sibling per import.
     /// </summary>
-    private async Task RequestStuckSiblingReseedsAsync(string? sourceClusterId)
+    private Task RequestStuckSiblingReseedsAsync(string? sourceClusterId)
     {
         if (string.IsNullOrEmpty(sourceClusterId)
             || DateTime.UtcNow.Ticks - state.State.SiblingBoundariesSinceUtcTicks < SiblingBoundaryReseedAfter.Ticks)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         foreach (var sibling in state.State.PendingSiblingBoundaries.Keys.ToList())
@@ -480,18 +480,48 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
 
             try
             {
-                await _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling)
-                    .BootstrapAsync(sourceClusterId, CancellationToken.None)
-                    .ConfigureAwait(true);
-                Logger.LogInformation(
-                    "Sibling tree '{Sibling}' has not passed its boundary from {Source} within {Bound}; re-seeding it so tree '{TreeName}' can be served",
-                    sibling, sourceClusterId, SiblingBoundaryReseedAfter, TreeName);
+                // Do not await a sibling coordinator here: it may be making the
+                // same request while its own timer turn is waiting on this one.
+                _ = ObserveSiblingReseedAsync(
+                    _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling)
+                        .BootstrapAsync(sourceClusterId, CancellationToken.None),
+                    sibling,
+                    sourceClusterId);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 state.State.SiblingReseedsRequested.Remove(sibling);
-                Logger.LogDebug(ex, "Re-seeding sibling tree '{Sibling}' from {Source} was not accepted; retried on a later tick", sibling, sourceClusterId);
+                Logger.LogDebug(ex, "The request to re-seed sibling tree '{Sibling}' from {Source} failed; retried on a later tick", sibling, sourceClusterId);
             }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ObserveSiblingReseedAsync(Task request, string sibling, string sourceClusterId)
+    {
+        try
+        {
+            await request.ConfigureAwait(true);
+            Logger.LogInformation(
+                "Sibling tree '{Sibling}' has not passed its boundary from {Source} within {Bound}; its re-seed request completed so tree '{TreeName}' can be served",
+                sibling, sourceClusterId, SiblingBoundaryReseedAfter, TreeName);
+        }
+        catch (Exception ex)
+        {
+            state.State.SiblingReseedsRequested.Remove(sibling);
+            try
+            {
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch (Exception writeException)
+            {
+                Logger.LogWarning(writeException,
+                    "Could not persist retry state after the re-seed request for sibling tree '{Sibling}' from {Source} failed",
+                    sibling, sourceClusterId);
+            }
+
+            Logger.LogDebug(ex, "The request to re-seed sibling tree '{Sibling}' from {Source} failed; retried on a later tick", sibling, sourceClusterId);
         }
     }
 

@@ -10,6 +10,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ## Unreleased
 
+### Fixed
+
+- **Replication - Defer bootstrap after an untrusted startup WAL gap, and do not await sibling re-seeds.** A fresh silo waits for its cluster manifest before classifying an unknown WAL gap as a trim; sibling coordinators issue re-seed requests without waiting on one another, preventing a cross-tree bootstrap cycle. A tree first registered after its shipper bound it also re-seeds the peer to establish the new source lineage. ([#4768](https://github.com/NSTA1/Orleans.Lattice/issues/4768)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
 ### Added
 
 - **Replication - In-place bootstrap stages imports on a shadow copy.** Re-bootstrap keeps the existing tree readable while the complete snapshot is imported, then publishes it through alias cutover; a failed import discards the shadow and preserves the original. ([#4567](https://github.com/NSTA1/Orleans.Lattice/issues/4567)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)

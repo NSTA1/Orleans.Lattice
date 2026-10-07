@@ -3471,11 +3471,24 @@ internal sealed partial class ReplicationShipperGrain(
             _partitionPages[partition] = null;
             return;
         }
-        if (page.Entries[0].Sequence > _partitionNextSeq[partition]
-            && await IsTrimmedPastAsync(grain, _partitionNextSeq[partition], cancellationToken))
+        if (page.Entries[0].Sequence > _partitionNextSeq[partition])
         {
-            // A trim removed records this shipper never delivered (#4534).
-            await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
+            var trimmed = await IsTrimmedPastAsync(grain, _partitionNextSeq[partition], cancellationToken);
+            if (trimmed is null)
+            {
+                // The manifest is empty while the silo is starting. Hold the
+                // cursor at the gap until the capability gate can distinguish a
+                // genuine trim from an unwritten offset.
+                _partitionPages[partition] = null;
+                _partitionPageIndex[partition] = 0;
+                return;
+            }
+
+            if (trimmed.Value)
+            {
+                // A trim removed records this shipper never delivered (#4534).
+                await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
+            }
         }
         _partitionPages[partition] = page.Entries;
         _partitionPageIndex[partition] = 0;
@@ -3490,12 +3503,20 @@ internal sealed partial class ReplicationShipperGrain(
     /// its deadline that never lands leaves a permanent hole the allocator has
     /// already moved past. The shard's trusted trim watermark separates the two;
     /// without one (a provider that keeps none, or a silo in the cluster that
-    /// predates it) every jump is treated as a trim, which re-seeds the peer
-    /// needlessly at worst and never skips a trim silently.
+    /// predates it) every jump is treated as a trim. While a silo is still
+    /// assembling its initial manifest, defer that decision until the capability
+    /// gate can distinguish a genuine trim from an unwritten offset.
     /// </summary>
-    private static async Task<bool> IsTrimmedPastAsync(IWalShardGrain grain, long requested, CancellationToken cancellationToken)
-        => await grain.GetTrimWatermarkAsync(cancellationToken) is not { } trimmedThrough
-            || trimmedThrough >= requested;
+    private async Task<bool?> IsTrimmedPastAsync(IWalShardGrain grain, long requested, CancellationToken cancellationToken)
+    {
+        var trimmedThrough = await grain.GetTrimWatermarkAsync(cancellationToken).ConfigureAwait(true);
+        if (trimmedThrough is null && WalTrimWatermarkSupport.IsManifestStartingUp(Context.ActivationServices))
+        {
+            return null;
+        }
+
+        return trimmedThrough is null || trimmedThrough >= requested;
+    }
 
     /// <summary>
     /// Grows the activation-scoped scratch arrays in lockstep when the

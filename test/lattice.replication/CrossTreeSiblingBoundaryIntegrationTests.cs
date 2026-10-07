@@ -277,6 +277,35 @@ public class CrossTreeSiblingBoundaryIntegrationTests
     }
 
     [Test]
+    public async Task Mutual_stuck_sibling_reseed_requests_do_not_deadlock_the_coordinators()
+    {
+        const string tree = "xtsb-mutual-reseed-t";
+        const string sibling = "xtsb-mutual-reseed-s";
+        await WriteAsync(tree, sibling);
+        Siblings[tree] = true;
+        LatticeBootstrapCoordinatorGrain.SiblingBoundaryReseedAfter = TimeSpan.FromSeconds(1);
+
+        await Task.WhenAll(
+            Coordinator(tree).BootstrapAsync(SiteAClusterId, CancellationToken.None),
+            Coordinator(sibling).BootstrapAsync(SiteAClusterId, CancellationToken.None));
+
+        var phases = await Task.WhenAll(
+            AwaitPhaseAsync(tree, TimeSpan.FromSeconds(15), LatticeBootstrapState.IncrementalHandoff),
+            AwaitPhaseAsync(sibling, TimeSpan.FromSeconds(15), LatticeBootstrapState.IncrementalHandoff));
+        await Task.Delay(TimeSpan.FromSeconds(4));
+        var stateRequests = Task.WhenAll(
+            Coordinator(tree).GetStateAsync(CancellationToken.None),
+            Coordinator(sibling).GetStateAsync(CancellationToken.None));
+        var completed = await Task.WhenAny(stateRequests, Task.Delay(TimeSpan.FromSeconds(15)));
+
+        Assert.That(phases, Is.All.EqualTo(LatticeBootstrapState.IncrementalHandoff),
+            "both imports reach the held cross-tree barrier");
+        Assert.That(completed, Is.SameAs(stateRequests),
+            "both coordinators remain responsive after the mutual re-seed requests are issued");
+        Assert.That(await stateRequests, Is.All.EqualTo(LatticeBootstrapState.IncrementalHandoff));
+    }
+
+    [Test]
     public async Task A_sibling_that_never_passes_is_re_seeded_automatically()
     {
         const string tree = "xtsb-reseed-t";

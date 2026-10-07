@@ -79,14 +79,13 @@ internal sealed partial class ReplicationShipperGrain
 
     /// <summary>
     /// Records the lineage a binding was resolved under. Returns whether the
-    /// binding's lineage changed from one known lineage to another, which the
-    /// caller answers with <see cref="ForceSourceLineageGapAsync"/>. Only a move
-    /// between two non-null lineages is a change: a tree first registered after
-    /// its shipper bound it (no lineage, then one) replaced nothing, and a read
-    /// that finds no lineage - a tree unregistered for a recreate, or a legacy
-    /// row - keeps the last lineage seen, so a recreate under a new lineage is
-    /// still a change against it. A restart that re-reads the same lineage is
-    /// never one.
+    /// binding's observed lineage changed, which the caller answers with
+    /// <see cref="ForceSourceLineageGapAsync"/>. A known absence is a lineage
+    /// too: when a tree is first registered after its shipper bound it, the
+    /// transition from no lineage to one must take the peer off the log so it
+    /// drains the contents under the new lineage. An unknown observation is not
+    /// a prior lineage, and a restart that re-reads the same lineage is never a
+    /// change.
     /// </summary>
     private bool NoteSourceLineage(SourceLineageObservation observed, bool physicalChanged)
     {
@@ -113,8 +112,7 @@ internal sealed partial class ReplicationShipperGrain
         }
 
         var changed = state.State.BoundSourceLineageKnown
-            && state.State.BoundSourceLineage is { } previous
-            && previous != lineage;
+            && state.State.BoundSourceLineage != lineage;
         state.State.BoundSourceLineage = lineage;
         state.State.BoundSourceLineageKnown = true;
         return changed;
