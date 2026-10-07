@@ -409,6 +409,17 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   further `/` separators (for example `feat/wal-shard-batching`). Anything else -
   a bare description with no prefix, an upper-case segment, or a name containing
   the author's GitHub login - fails CI.
+
+  Dependabot PRs authored by `dependabot[bot]` may use the generated
+  `dependabot/<ecosystem>/<dependency>` namespace instead, including mixed-case
+  package names. This is a bot-only exception, not an additional human branch
+  prefix; the commit-trailer and single-author-identity gates still apply.
+
+  PRs confined to `videos/**`, `.github/workflows/**`, and this instruction
+  file use lightweight CI: guard self-tests and video order run, but the
+  .NET, formal, and content-fixture suites do not. The required
+  `build-and-test` check still reports; any other changed path retains the
+  normal selection, and integration-branch pushes remain fully gated.
 - **An epic shares one long-lived integration branch, grouped under an `epic`
   segment rather than by a new prefix.** When an epic fans out into several
   sub-issues, the epic gets one branch `<type>/epic/<epic-slug>`, each sub-issue
