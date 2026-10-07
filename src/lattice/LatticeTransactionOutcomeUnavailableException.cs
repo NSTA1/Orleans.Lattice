@@ -28,9 +28,11 @@ namespace Orleans.Lattice;
 ///     is served on the strength of a registry that did not answer.
 ///   </description></item>
 /// </list>
-/// A multi-key read raises it only when its result actually depended on the
-/// registry - some key it read carried a prepared mutation. <c>GetManyAsync</c>
-/// and the counts raise it only after their own bounded snapshot retry
+/// A multi-key read raises it when its result depended on the registry - some
+/// key it read carried a prepared mutation - or its bounded decision-gated
+/// fallback could not certify a stable saga view. <c>GetManyAsync</c> uses that
+/// fallback after exhausting its optimistic snapshot retries. The counts raise
+/// it after their own bounded snapshot retry
 /// (<see cref="LatticeOptions.MaxScanRetries"/>) is exhausted. Key and entry
 /// enumeration does not retry: a scan resolves every page against a single
 /// registry view - the one it takes when it starts, or the one a point-in-time
