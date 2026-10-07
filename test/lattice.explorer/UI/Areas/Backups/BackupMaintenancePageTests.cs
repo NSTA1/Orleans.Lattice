@@ -68,7 +68,7 @@ public sealed class BackupMaintenancePageTests : BackupsTestContext
         {
             Assert.That(Operations.Find("1")!.Kind, Is.EqualTo(BackupOperationKind.RebuildCatalogue));
             Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartCatalogRebuildAsync)), Is.EqualTo(1));
-            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RebuildCatalogFromSinkAsync)), Is.Zero, "the blocking verb is not called");
+            Assert.That(Backups.CountOf("RebuildCatalogFromSinkAsync"), Is.Zero, "the blocking verb is not called");
         });
     }
 
@@ -130,7 +130,7 @@ public sealed class BackupMaintenancePageTests : BackupsTestContext
         Assert.Multiple(() =>
         {
             Assert.That(Backups.LastOf<bool>(nameof(ILatticeBackupOperations.StartCatalogScrubAsync)), Is.True);
-            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.ScrubCatalogAgainstSinkAsync)), Is.Zero, "the blocking verb is not called");
+            Assert.That(Backups.CountOf("ScrubCatalogAgainstSinkAsync"), Is.Zero, "the blocking verb is not called");
         });
     }
 

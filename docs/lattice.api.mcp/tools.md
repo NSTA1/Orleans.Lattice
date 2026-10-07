@@ -136,7 +136,7 @@ The OR-Map tools operate on an `OrMap<string, MvRegister>` (string field keys; e
 
 ## Backup tools (`lattice_backup_*`)
 
-Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Registered by `AddBackupTools(enableControl)`. The read-only tools are always exposed; the control tools, including the deprecated `lattice_backup_create`, `lattice_backup_create_incremental` and `lattice_backup_restore` aliases, require `enableControl: true`.
+Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Registered by `AddBackupTools(enableControl)`. The read-only tools are always exposed; the control tools require `enableControl: true`.
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -157,11 +157,8 @@ Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Regi
 | `lattice_backup_operation_cancel` | control | Request cancellation of a tracked backup or restore operation. |
 | `lattice_backup_revert_restore` | control | Undo a shadow-cutover restore from a prior restore result. |
 | `lattice_backup_delete` | control | Delete a backup and its unshared artifacts. |
-| `lattice_backup_create` | control | Deprecated alias for `lattice_backup_start`; will be removed in the next major version and now returns an operation handle instead of blocking. |
-| `lattice_backup_create_incremental` | control | Deprecated alias for `lattice_backup_start_incremental`; will be removed in the next major version and now returns an operation handle instead of blocking. |
-| `lattice_backup_restore` | control | Deprecated alias for `lattice_backup_start_restore`; will be removed in the next major version and keeps its `operationId` argument as the restore engine idempotency key. |
 
-The operation view returned by `lattice_backup_operation_status`, `lattice_backup_operation_list`, and `lattice_backup_operation_cancel` includes `operationId`, `kind`, `treeIds`, `state`, `phase`, `phaseIndex`, `phaseCount`, `completedUnits`, `totalUnits`, `unitName`, start and finish timestamps, `failureReason`, `resultReference`, the `result` map, `restoreResult` for a succeeded restore, and `cancelRequested`. Without control enabled the backup group exposes 7 tools; with control enabled it exposes 20.
+The operation view returned by `lattice_backup_operation_status`, `lattice_backup_operation_list`, and `lattice_backup_operation_cancel` includes `operationId`, `kind`, `treeIds`, `state`, `phase`, `phaseIndex`, `phaseCount`, `completedUnits`, `totalUnits`, `unitName`, start and finish timestamps, `failureReason`, `resultReference`, the `result` map, `restoreResult` for a succeeded restore, and `cancelRequested`. Without control enabled the backup group exposes 7 tools; with control enabled it exposes 17.
 
 ## Auth tools (`lattice_auth_*`)
 
@@ -218,7 +215,6 @@ The MCP group holds the `ILatticeSchemaControl` and `ILatticeSchemaOperations` f
 | `lattice_treeadmin_schema_count_dead_letters` | inspect | Count a tree's strict-mode dead-letter entries. |
 | `lattice_treeadmin_schema_get_version_config` | inspect | Read a tree's envelope-version config, or none when unversioned. |
 | `lattice_treeadmin_schema_get_remediation_status` | inspect | Read a tree's current or last-known remediation status. |
-| `lattice_treeadmin_schema_scan_compliance` | inspect | Scan every current value against the compiled policy and report compliance, in one blocking call; prefer `lattice_treeadmin_schema_compliance_scan_start`. |
 | `lattice_treeadmin_schema_probe_capabilities` | inspect | Probe which schema operations the caller may perform, side-effect free. |
 | `lattice_treeadmin_schema_set_policy` | manage | Set or replace a tree's enforcement policy. |
 | `lattice_treeadmin_schema_clear_policy` | manage | Clear a tree's enforcement policy. |
@@ -231,11 +227,8 @@ The MCP group holds the `ILatticeSchemaControl` and `ILatticeSchemaOperations` f
 | `lattice_treeadmin_schema_operation_status` | inspect | Read a schema operation's state, phase, values processed of total, and its result map. |
 | `lattice_treeadmin_schema_operation_list` | inspect | List the caller's schema operations, newest-first. |
 | `lattice_treeadmin_schema_operation_cancel` | manage | Request cancellation of a schema operation; it takes effect only before cutover. |
-| `lattice_treeadmin_schema_remediate` | manage | Deprecated alias for `lattice_treeadmin_schema_remediation_start`; will be removed in the next major version and now returns an operation handle instead of blocking. |
-| `lattice_treeadmin_schema_migrate_to_target` | manage | Deprecated alias for `lattice_treeadmin_schema_migration_start`; will be removed in the next major version and now returns an operation handle instead of blocking. |
-| `lattice_treeadmin_schema_advance_and_migrate` | manage | Deprecated alias for `lattice_treeadmin_schema_advance_and_migrate_start`; will be removed in the next major version and now returns an operation handle instead of blocking. |
 
-The manage tools carry `destructiveHint = true` and `readOnlyHint = false`, except `lattice_treeadmin_schema_operation_cancel`, which only stops a run before cutover and so carries `destructiveHint = false`; the inspect tools carry `readOnlyHint = true`. The status and list tools are always exposed; the start, cancel and alias tools require `enableSchemaControl: true`. `lattice_treeadmin_schema_set_version_config` takes the version config as scalar `schemaId` / `targetVersion` / `strictIngest` arguments; `lattice_treeadmin_schema_set_policy` and `lattice_treeadmin_schema_remediation_start` take the schema policy and value-transform model objects directly.
+The manage tools carry `destructiveHint = true` and `readOnlyHint = false`, except `lattice_treeadmin_schema_operation_cancel`, which only stops a run before cutover and so carries `destructiveHint = false`; the inspect tools carry `readOnlyHint = true`. The status and list tools are always exposed; the start and cancel tools require `enableSchemaControl: true`. `lattice_treeadmin_schema_set_version_config` takes the version config as scalar `schemaId` / `targetVersion` / `strictIngest` arguments; `lattice_treeadmin_schema_set_policy` and `lattice_treeadmin_schema_remediation_start` take the schema policy and value-transform model objects directly.
 
 Every start tool takes an optional `operationId`: starting again with an id in use returns the existing operation with `created = false`, so a retried start is safe. Poll `lattice_treeadmin_schema_operation_status` with the handle's `operationId` until the state is terminal. The operation kinds, phases and result keys are described in [Schema operations](../lattice.api.schema/operations.md#remediation-and-migration).
 
@@ -316,7 +309,6 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_wal_placement_audit` | read | Audit WAL placement against the reporting silo's storage-provider catalog. |
 | `lattice_treeadmin_wal_reclamation` | read | Read which durable pin holds a tree's WAL floor (consumer id, leaf, partition, pin offset), the leaf's persisted checkpoint and durable state, and `isWedged`: true exactly when the holder has a usable offset above a checkpoint of `-1`, a pin that never moves. Keyed on the holder, not on WAL growth; `pinStoreReadable = false` means nothing was established. Served by `ILatticeWalReclamation`; a host without it fails the call. |
 | `lattice_treeadmin_wal_move_plan` | read | Preview moving a WAL partition to a target storage provider. |
-| `lattice_treeadmin_wal_move_execute` | manage | Execute a planned WAL partition move, waiting for it (deprecated blocking verb; prefer `lattice_treeadmin_wal_move_start`). |
 | `lattice_treeadmin_wal_move_reclaim` | manage | Reclaim source WAL storage after a move. |
 | `lattice_treeadmin_orphaned_leaves_audit` | read | Audit descent-unreachable leaves and repair eligibility. Optional `survey=true` counts every key outcome per leaf (100,000-key bound, read-only, off by default); `VerifiedKeyCount` remains a prefix, not a census. Nullable survey counts distinguish unknown from zero; findings identify shard, leaf, range and first failure. Batch totals include orphan/repairable/refused leaves and surveyed missing keys. Keep survey enabled on resumed batches; pass each batch's `resumeFrom` back until the report's `isComplete` is `true`, then check `verdictComplete` and unknown counts. |
 | `lattice_treeadmin_orphaned_leaves_repair` | manage | Unsplice every orphaned leaf whose keys were all verified readable elsewhere, releasing the WAL trim floor. One bounded batch per call; pass each batch's `resumeFrom` back until `isComplete` is `true`, then re-audit. On a timeout the return value is not authoritative. |
@@ -328,12 +320,9 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 | `lattice_treeadmin_view_create` | manage | Create or update a provider-backed runtime materialised view from a provider key and a base64 payload (64 KiB decoded maximum). |
 | `lattice_treeadmin_view_list` | read | List runtime-registered materialised views with provider key and projection version; payloads are never returned. |
 | `lattice_treeadmin_view_status` | read | Read one materialised view's source, lag, active generation, provider key, and projection version; payloads are never returned. |
-| `lattice_treeadmin_view_rebuild` | manage | Rebuild a materialised view, waiting for it (deprecated blocking verb; prefer `lattice_treeadmin_view_rebuild_start`). |
-| `lattice_treeadmin_view_reconcile` | manage | Reconcile a materialised view, waiting for it (deprecated blocking verb; prefer `lattice_treeadmin_view_reconcile_start`). |
 | `lattice_treeadmin_view_drop` | manage | Drop a runtime materialised view. |
 | `lattice_treeadmin_tag_index_list` | read | List tag indexes and their backing membership trees. |
 | `lattice_treeadmin_tag_index_status` | read | Read one tag index's backing tree, covered trees, and reconcile state. |
-| `lattice_treeadmin_tag_index_reconcile` | manage | Reconcile a tag index, waiting for it (deprecated blocking verb; prefer `lattice_treeadmin_tag_index_reconcile_start`). |
 | `lattice_treeadmin_compaction_trigger` | manage | Trigger an out-of-cycle tombstone-compaction pass on one physical shard of a tree (`shardIndex`), bypassing the shard's cooldown; reaps only tombstones and TTL-expired entries. |
 | `lattice_treeadmin_retention_get` | read | Read a tree's durable-history retention policy. |
 | `lattice_treeadmin_retention_set` | manage | Set or clear a tree's durable-history retention policy: a null `mode` or `windowSeconds` clears that part, a non-positive window is rejected, and a `mode` other than `MetadataOnly`, `FullValue` or `Hybrid` is rejected before a tree is resolved. |

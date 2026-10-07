@@ -24,7 +24,7 @@ namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 public sealed class LatticeBackupApiGrpcAuthInterceptorStreamingTests
 {
     private const string LatticeMethod =
-        "/" + LatticeBackupGrpcMethods.ServiceName + "/" + LatticeBackupGrpcMethods.CreateBackupMethodName;
+        "/" + LatticeBackupGrpcMethods.ServiceName + "/" + LatticeBackupGrpcMethods.StartBackupMethodName;
 
     private const string ForeignMethod = "/some.other.service/Ping";
 

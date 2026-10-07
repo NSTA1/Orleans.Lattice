@@ -16,20 +16,16 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 /// <remarks>
 /// The contract is a flat set of RPCs over the transport-agnostic
 /// <see cref="Orleans.Lattice.Api.Backup.ILatticeBackupControl"/> facade:
-/// capture (<c>CreateBackup</c> / <c>CreateIncrementalBackup</c>), catalog
+/// catalog,
 /// (<c>ListBackups</c> unary + <c>StreamBackups</c> server-streaming), chain
-/// inspection (<c>DescribeBackup</c>), lifecycle (<c>DeleteBackup</c> /
-/// <c>RestoreBackup</c> / <c>RevertRestore</c>), artifact export
+/// inspection (<c>DescribeBackup</c>), lifecycle (<c>DeleteBackup</c> / <c>RevertRestore</c>), artifact export
 /// (<c>ExportArtifact</c> server-streaming), and unauthenticated discovery
 /// (<c>GetAuthScheme</c>), plus the accept-then-poll operation RPCs
 /// (<c>StartBackup</c>, <c>StartIncrementalBackup</c>, <c>StartBackupSet</c>,
 /// <c>StartRestore</c>, <c>StartColdRestore</c>, <c>StartBackupHealthCheck</c>,
 /// <c>StartCatalogRebuild</c>, <c>StartCatalogScrub</c>, <c>GetBackupOperationStatus</c>,
 /// <c>ListBackupOperations</c>, <c>CancelBackupOperation</c>). The blocking
-/// <c>CreateBackup</c>, <c>CreateIncrementalBackup</c>, <c>CreateBackupSet</c>,
-/// <c>RestoreBackup</c> and <c>CheckBackupHealth</c> RPCs are deprecated (diagnostic
-/// <c>LATTICE0002</c>) and will
-/// be removed in the next major version. Contract-versioning policy: fields on the wire
+/// Contract-versioning policy: fields on the wire
 /// messages are additive-only (new <c>[Id(n)]</c>); aliases and field numbers
 /// are never renumbered, so a newer response decodes cleanly under an older
 /// client.
@@ -38,15 +34,6 @@ internal sealed class LatticeBackupGrpcMethods
 {
     /// <summary>The fully-qualified gRPC service name.</summary>
     public const string ServiceName = "orleans.lattice.api.backup";
-
-    /// <summary>The unary full-capture RPC method name.</summary>
-    public const string CreateBackupMethodName = "CreateBackup";
-
-    /// <summary>The unary incremental-capture RPC method name.</summary>
-    public const string CreateIncrementalBackupMethodName = "CreateIncrementalBackup";
-
-    /// <summary>The unary backup-set-capture RPC method name.</summary>
-    public const string CreateBackupSetMethodName = "CreateBackupSet";
 
     /// <summary>The unary cursor-resumable catalog-listing RPC method name.</summary>
     public const string ListBackupsMethodName = "ListBackups";
@@ -59,9 +46,6 @@ internal sealed class LatticeBackupGrpcMethods
 
     /// <summary>The unary delete-backup RPC method name.</summary>
     public const string DeleteBackupMethodName = "DeleteBackup";
-
-    /// <summary>The unary restore RPC method name.</summary>
-    public const string RestoreBackupMethodName = "RestoreBackup";
 
     /// <summary>The unary revert-restore RPC method name.</summary>
     public const string RevertRestoreMethodName = "RevertRestore";
@@ -86,9 +70,6 @@ internal sealed class LatticeBackupGrpcMethods
 
     /// <summary>The unary health-monitoring-availability RPC method name.</summary>
     public const string IsHealthMonitoringAvailableMethodName = "IsHealthMonitoringAvailable";
-
-    /// <summary>The unary check-backup-health RPC method name.</summary>
-    public const string CheckBackupHealthMethodName = "CheckBackupHealth";
 
     /// <summary>The unary get-backup-health RPC method name.</summary>
     public const string GetBackupHealthMethodName = "GetBackupHealth";
@@ -215,26 +196,8 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(operationListRequestSerializer);
         ArgumentNullException.ThrowIfNull(operationPageSerializer);
 
-        CreateBackup = new Method<BackupCaptureRequestMessage, BackupCaptureResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: CreateBackupMethodName,
-            requestMarshaller: LatticeBackupGrpcMarshallers.Create(captureRequestSerializer),
-            responseMarshaller: LatticeBackupGrpcMarshallers.Create(captureResponseSerializer));
 
-        CreateIncrementalBackup = new Method<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: CreateIncrementalBackupMethodName,
-            requestMarshaller: LatticeBackupGrpcMarshallers.Create(incrementalCaptureRequestSerializer),
-            responseMarshaller: LatticeBackupGrpcMarshallers.Create(captureResponseSerializer));
 
-        CreateBackupSet = new Method<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: CreateBackupSetMethodName,
-            requestMarshaller: LatticeBackupGrpcMarshallers.Create(setCaptureRequestSerializer),
-            responseMarshaller: LatticeBackupGrpcMarshallers.Create(setCaptureResponseSerializer));
 
         ListBackups = new Method<Orleans.Lattice.Api.Backup.BackupCatalogRequest, Orleans.Lattice.Api.Backup.BackupCatalogPage>(
             type: MethodType.Unary,
@@ -264,12 +227,6 @@ internal sealed class LatticeBackupGrpcMethods
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(deleteRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(deleteResponseSerializer));
 
-        RestoreBackup = new Method<RestoreRequestMessage, RestoreResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: RestoreBackupMethodName,
-            requestMarshaller: LatticeBackupGrpcMarshallers.Create(restoreRequestSerializer),
-            responseMarshaller: LatticeBackupGrpcMarshallers.Create(restoreResponseSerializer));
 
         RevertRestore = new Method<RestoreResponse, RevertRestoreResponse>(
             type: MethodType.Unary,
@@ -327,12 +284,6 @@ internal sealed class LatticeBackupGrpcMethods
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthAvailabilityRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthAvailabilityResponseSerializer));
 
-        CheckBackupHealth = new Method<BackupHealthCheckRequestMessage, BackupHealthReportResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: CheckBackupHealthMethodName,
-            requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthCheckRequestSerializer),
-            responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthReportResponseSerializer));
 
         GetBackupHealth = new Method<BackupHealthGetRequestMessage, BackupHealthReportResponse>(
             type: MethodType.Unary,
@@ -398,15 +349,6 @@ internal sealed class LatticeBackupGrpcMethods
             LatticeBackupGrpcMarshallers.Create(catalogScrubRequestSerializer), handleMarshaller);
     }
 
-    /// <summary>The unary <c>CreateBackup</c> full-capture RPC.</summary>
-    public Method<BackupCaptureRequestMessage, BackupCaptureResponse> CreateBackup { get; }
-
-    /// <summary>The unary <c>CreateIncrementalBackup</c> incremental-capture RPC.</summary>
-    public Method<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse> CreateIncrementalBackup { get; }
-
-    /// <summary>The unary <c>CreateBackupSet</c> backup-set-capture RPC.</summary>
-    public Method<BackupSetCaptureRequestMessage, BackupSetCaptureResponse> CreateBackupSet { get; }
-
     /// <summary>The unary <c>ListBackups</c> cursor-resumable catalog RPC.</summary>
     public Method<Orleans.Lattice.Api.Backup.BackupCatalogRequest, Orleans.Lattice.Api.Backup.BackupCatalogPage> ListBackups { get; }
 
@@ -418,9 +360,6 @@ internal sealed class LatticeBackupGrpcMethods
 
     /// <summary>The unary <c>DeleteBackup</c> RPC.</summary>
     public Method<BackupDeleteRequest, BackupDeleteResponse> DeleteBackup { get; }
-
-    /// <summary>The unary <c>RestoreBackup</c> RPC.</summary>
-    public Method<RestoreRequestMessage, RestoreResponse> RestoreBackup { get; }
 
     /// <summary>The unary <c>RevertRestore</c> RPC.</summary>
     public Method<RestoreResponse, RevertRestoreResponse> RevertRestore { get; }
@@ -445,9 +384,6 @@ internal sealed class LatticeBackupGrpcMethods
 
     /// <summary>The unary <c>IsHealthMonitoringAvailable</c> capability RPC.</summary>
     public Method<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse> IsHealthMonitoringAvailable { get; }
-
-    /// <summary>The unary <c>CheckBackupHealth</c> on-demand verification RPC.</summary>
-    public Method<BackupHealthCheckRequestMessage, BackupHealthReportResponse> CheckBackupHealth { get; }
 
     /// <summary>The unary <c>GetBackupHealth</c> stored-report read RPC.</summary>
     public Method<BackupHealthGetRequestMessage, BackupHealthReportResponse> GetBackupHealth { get; }

@@ -3,10 +3,6 @@ using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Schema;
 
-// These tests exercise the deprecated blocking compliance scan (LATTICE0002) on purpose:
-// it is still served, unchanged, until the next major version removes it (#4126).
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
 /// <summary>
@@ -175,31 +171,6 @@ public sealed class GrpcLatticeSchemaControlTests
     }
 
     [Test]
-    public async Task AdvanceAndMigrateAsync_forwards_the_new_target_and_unwraps_report()
-    {
-        var report = LatticeSchemaRemediationReport.Completed(3, "orders#v4", "op-1");
-        var invoker = new FakeCallInvoker(_ => new SchemaRemediationReportResponse { Report = report });
-
-        var result = await Adapter(invoker).AdvanceAndMigrateAsync("orders", 4);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(((AdvanceVersionRequest)invoker.LastRequest!).NewTargetVersion, Is.EqualTo(4u));
-            Assert.That(result, Is.EqualTo(report));
-        });
-    }
-
-    [Test]
-    public async Task MigrateToTargetVersionAsync_unwraps_the_report()
-    {
-        var report = LatticeSchemaRemediationReport.Completed(2, "orders#v2", "op-2");
-        var result = await Adapter(_ => new SchemaRemediationReportResponse { Report = report })
-            .MigrateToTargetVersionAsync("orders");
-
-        Assert.That(result, Is.EqualTo(report));
-    }
-
-    [Test]
     public async Task ClearVersionConfigAsync_unwraps_removed()
     {
         var removed = await Adapter(_ => new SchemaRemovedResponse { Removed = false })
@@ -209,41 +180,11 @@ public sealed class GrpcLatticeSchemaControlTests
     }
 
     [Test]
-    public async Task RemediateAsync_forwards_transform_and_policy_and_unwraps_report()
-    {
-        var transform = LatticeValueTransform.Passthrough();
-        var policy = new LatticeSchemaPolicy(new[] { LatticeSchemaRule.Json() });
-        var report = LatticeSchemaRemediationReport.Completed(5, "orders#r1", "op-3");
-        var invoker = new FakeCallInvoker(_ => new SchemaRemediationReportResponse { Report = report });
-
-        var result = await Adapter(invoker).RemediateAsync("orders", transform, policy);
-
-        var sent = (RemediateRequest)invoker.LastRequest!;
-        Assert.Multiple(() =>
-        {
-            Assert.That(sent.TreeId, Is.EqualTo("orders"));
-            Assert.That(sent.Transform, Is.EqualTo(transform));
-            Assert.That(sent.TargetPolicy, Is.SameAs(policy));
-            Assert.That(result, Is.EqualTo(report));
-        });
-    }
-
-    [Test]
     public async Task GetRemediationStatusAsync_unwraps_the_report()
     {
         var report = LatticeSchemaRemediationReport.Idle;
         var result = await Adapter(_ => new SchemaRemediationReportResponse { Report = report })
             .GetRemediationStatusAsync("orders");
-
-        Assert.That(result, Is.EqualTo(report));
-    }
-
-    [Test]
-    public async Task ScanComplianceAsync_unwraps_the_report()
-    {
-        var report = LatticeSchemaComplianceReport.Ungoverned("orders");
-        var result = await Adapter(_ => new SchemaComplianceReportResponse { Report = report })
-            .ScanComplianceAsync("orders");
 
         Assert.That(result, Is.EqualTo(report));
     }

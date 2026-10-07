@@ -19,8 +19,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </summary>
 /// <remarks>
 /// They are contributed regardless of the schema-control and lifecycle opt-ins,
-/// alongside the read-only <c>lattice_treeadmin_schema_scan_compliance</c> and
-/// <c>lattice_treeadmin_storage_usage</c> they supersede: a scan and a refresh are
+/// alongside the read-only <c>lattice_treeadmin_storage_usage</c> they supersede: a scan and a refresh are
 /// reads of the tree or the cluster, so the start and cancel tools are annotated
 /// mutating (they record and stop an operation) but never destructive.
 /// </remarks>

@@ -27,7 +27,7 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 
 ## Surface
 
-The facade operations (each projected by the gRPC binding as one RPC when the sibling binding is registered):
+The facade operations (each projected by the gRPC binding as one RPC when the sibling binding is registered). The blocking `LATTICE0002` facade verbs were removed in this major version; use the operation starts below and the migration tables in [Schema operations](operations.md#migrating-from-the-removed-blocking-scan) and [Schema operations](operations.md#migrating-from-the-removed-blocking-verbs).
 
 | Operation | Purpose |
 |---|---|
@@ -39,12 +39,8 @@ The facade operations (each projected by the gRPC binding as one RPC when the si
 | Set version config | Set a tree's versioning config. |
 | Get version config | Read a tree's version config, or absent. |
 | Advance target version | Advance the declared target version without migrating existing values. |
-| Advance and migrate | Advance the target version and migrate existing values to it. |
-| Migrate to target version | Migrate existing values up to the current target version. |
 | Clear version config | Remove the tree's version config and report whether one was present. |
-| Remediate | Apply a value transform across a tree and adopt a target policy (deprecated: blocks until done; see Start remediation). |
 | Get remediation status | Read the status or last report of remediation for a tree. |
-| Scan compliance | Run a read-only compliance audit and return counts and reasons. Deprecated in favour of the accept-then-poll scan below. |
 | Start a compliance scan | Start the same audit in the background and poll its progress and report (`ILatticeSchemaComplianceOperations`; see [Schema operations](operations.md)). |
 | Start remediation, start migration, start advance and migrate | Start the run in the background and return at once; poll the operation for its phase and values processed (`ILatticeSchemaOperations`; see [Schema operations](operations.md)). |
 | Operation status, list, cancel | Read, page or cancel the caller's remediation and migration operations through `ILatticeSchemaOperations`, and the caller's compliance scans through `ILatticeSchemaComplianceOperations`. |
@@ -53,7 +49,7 @@ The facade operations (each projected by the gRPC binding as one RPC when the si
 ## Reference
 
 - [API reference](api.md) - the public options and model types, and the facade operations by name.
-- [Schema operations](operations.md) - the accept-then-poll compliance scan, remediation and migration, and migrating from the deprecated blocking verbs.
+- [Schema operations](operations.md) - the accept-then-poll compliance scan, remediation and migration, and migrating from the removed blocking verbs.
 - [Configuration](configuration.md) - the public options properties, their types, and defaults.
 - [Architecture](architecture.md) - how the facade authorizes, streams dead letters, gates versioning, and audits compliance.
 

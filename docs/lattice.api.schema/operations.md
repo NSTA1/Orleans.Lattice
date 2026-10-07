@@ -117,45 +117,27 @@ The tree's own remediation report (`ILatticeSchemaControl.GetRemediationStatusAs
 
 A remediation never runs as one long call. The tree's coordinator records the run when it is accepted, and the work then drives it one bounded slice of values at a time from a durable cursor. A cancel therefore takes effect between two slices. Cutover is the point of no return: a cancel that arrives during cutover is declined, and the run completes. If the silo running the work is lost, the operation reads as `Failed`, as for any operation. The remediation itself stays recorded in flight at its last slice, so starting the same remediation again resumes it from there.
 
-## Migrating from the blocking scan
+## Migrating from the removed blocking scan
 
-`ScanComplianceAsync` on `ILatticeSchemaControl`, and the matching call on the gRPC client, are **deprecated** and **will be removed in the next major version**. They raise compiler warning `LATTICE0002`, whose help link points here; existing code still compiles and runs, and the blocking scan behaves exactly as before.
+`ScanComplianceAsync` on `ILatticeSchemaControl`, and the matching call that previously existed on the gRPC client and MCP surface, were deprecated in 9.9.0 with warning `LATTICE0002` and are removed in this major version. Use the tracked compliance-scan operation instead:
 
-| Deprecated | Replacement |
+| Removed blocking verb | Replacement |
 |---|---|
 | `ScanComplianceAsync(treeId)` | `StartComplianceScanAsync(treeId)`, then poll `GetOperationStatusAsync` and read the report with `SchemaComplianceScanResults.TryReadReport`. |
 
-Over gRPC, the `ScanCompliance` RPC stays on the wire, deprecated, until the next major version; use `StartComplianceScan`, `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan` (see the [gRPC API reference](../lattice.api.schema.grpc/api.md)). Over MCP, use the `lattice_treeadmin_schema_compliance_scan_*` tools (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
+Over gRPC, use `StartComplianceScan`, `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan` (see the [gRPC API reference](../lattice.api.schema.grpc/api.md)). Over MCP, use the `lattice_treeadmin_schema_compliance_scan_*` tools (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
 
-To keep a deliberate use of the deprecated scan building warning-free, suppress the diagnostic locally:
+## Migrating from the removed blocking verbs
 
-```text
-#pragma warning disable LATTICE0002
-var report = await control.ScanComplianceAsync(treeId, cancellationToken);
-#pragma warning restore LATTICE0002
-```
+`RemediateAsync`, `MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` on `ILatticeSchemaControl`, and the matching blocking calls that previously existed on the gRPC client and MCP surface, were deprecated in 9.9.0 with warning `LATTICE0002` and are removed in this major version. Migrate to the tracked operations below:
 
-## Migrating from the blocking verbs
-
-`RemediateAsync`, `MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` on `ILatticeSchemaControl`, and the matching blocking calls on the gRPC client, are **deprecated** and **will be removed in the next major version**. They raise compiler warning `LATTICE0002`, whose help link points here; existing code still compiles and runs.
-
-The deprecated verbs drive the same bounded slices and return the terminal report as before, so no single cluster call times out under them. They still wait for the whole run, though, so a long run is still exposed to the caller's own timeout. To migrate:
-
-| Deprecated | Replacement |
+| Removed blocking verb | Replacement |
 |---|---|
 | `RemediateAsync(tree, transform, policy)` | `StartRemediationAsync(tree, transform, policy)`, then poll `GetOperationStatusAsync`. |
 | `MigrateToTargetVersionAsync(tree)` | `StartMigrationAsync(tree)`. |
 | `AdvanceAndMigrateAsync(tree, version)` | `StartAdvanceAndMigrateAsync(tree, version)`. |
 
-Over gRPC, the `Remediate`, `MigrateToTargetVersion` and `AdvanceAndMigrate` RPCs stay on the wire, deprecated, until the next major version. Use `StartRemediation`, `StartMigration`, `StartAdvanceAndMigrate`, `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation` instead (see the [gRPC API reference](../lattice.api.schema.grpc/api.md)). Over MCP, use the `lattice_treeadmin_schema_remediation_start`, `lattice_treeadmin_schema_migration_start` and `lattice_treeadmin_schema_advance_and_migrate_start` tools with the `lattice_treeadmin_schema_operation_*` tools; the old `lattice_treeadmin_schema_remediate`, `lattice_treeadmin_schema_migrate_to_target` and `lattice_treeadmin_schema_advance_and_migrate` names are deprecated aliases of the start tools (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
-
-To keep a deliberate use of a deprecated verb building warning-free, suppress the diagnostic locally:
-
-```text
-#pragma warning disable LATTICE0002
-var report = await control.RemediateAsync(treeId, transform, policy, cancellationToken);
-#pragma warning restore LATTICE0002
-```
+Over gRPC, use `StartRemediation`, `StartMigration`, `StartAdvanceAndMigrate`, `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation` instead (see the [gRPC API reference](../lattice.api.schema.grpc/api.md)). Over MCP, use the `lattice_treeadmin_schema_remediation_start`, `lattice_treeadmin_schema_migration_start` and `lattice_treeadmin_schema_advance_and_migrate_start` tools with the `lattice_treeadmin_schema_operation_*` tools; the `lattice_treeadmin_schema_remediate`, `lattice_treeadmin_schema_migrate_to_target` and `lattice_treeadmin_schema_advance_and_migrate` aliases are removed with the same major-version change (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
 
 ## See also
 

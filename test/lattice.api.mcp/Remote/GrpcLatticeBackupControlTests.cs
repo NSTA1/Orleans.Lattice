@@ -2,10 +2,6 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Backup;
 
-// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
-// they prove the start-then-wait wrappers still behave exactly as before.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
 /// <summary>
@@ -31,80 +27,6 @@ public sealed class GrpcLatticeBackupControlTests
     [Test]
     public void Constructor_null_client_throws()
         => Assert.That(() => new GrpcLatticeBackupControl(null!), Throws.ArgumentNullException);
-
-    [Test]
-    public async Task CreateBackupAsync_unwraps_id_and_manifest()
-    {
-        var manifest = Manifest();
-        var invoker = new FakeCallInvoker(_ => new BackupCaptureResponse { BackupId = "bk-1", Manifest = manifest });
-
-        var result = await Adapter(invoker).CreateBackupAsync(new LatticeBackupCaptureRequest("nightly", Scope));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.BackupId, Is.EqualTo("bk-1"));
-            Assert.That(result.Manifest, Is.SameAs(manifest));
-        });
-    }
-
-    [Test]
-    public async Task CreateIncrementalBackupAsync_unwraps_id_and_manifest()
-    {
-        var manifest = Manifest("bk-2");
-        var invoker = new FakeCallInvoker(_ => new BackupCaptureResponse { BackupId = "bk-2", Manifest = manifest });
-
-        var result = await Adapter(invoker).CreateIncrementalBackupAsync(
-            new LatticeBackupIncrementalCaptureRequest("nightly", Scope, "bk-1"));
-
-        Assert.That(result.BackupId, Is.EqualTo("bk-2"));
-    }
-
-    [Test]
-    public async Task CreateBackupSetAsync_unwraps_set_manifest_and_members()
-    {
-        var manifest = Manifest("bk-1");
-        var setManifest = new BackupSetManifest("set-1", "nightly", DateTimeOffset.UnixEpoch, false, null, new[] { "bk-1" });
-        var invoker = new FakeCallInvoker(_ => new BackupSetCaptureResponse
-        {
-            SetManifest = setManifest,
-            Members = new[] { new BackupCaptureResponse { BackupId = "bk-1", Manifest = manifest } },
-        });
-
-        var result = await Adapter(invoker).CreateBackupSetAsync(
-            new LatticeBackupSetCaptureRequest("nightly", new[] { Scope }));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.SetManifest.SetId, Is.EqualTo("set-1"));
-            Assert.That(result.Members, Has.Count.EqualTo(1));
-            Assert.That(result.Members[0].BackupId, Is.EqualTo("bk-1"));
-        });
-    }
-
-    [Test]
-    public async Task CreateBackupSetAsync_unwraps_an_absent_set_id_as_null()
-    {
-        // The MCP remote adapter must not invent an id for a single-scope set: the
-        // only thing a remote consumer can do with a set id is group catalog rows,
-        // and a one-member set stamps none.
-        var manifest = Manifest("bk-1");
-        var setManifest = new BackupSetManifest(null, "solo", DateTimeOffset.UnixEpoch, false, null, new[] { "bk-1" });
-        var invoker = new FakeCallInvoker(_ => new BackupSetCaptureResponse
-        {
-            SetManifest = setManifest,
-            Members = new[] { new BackupCaptureResponse { BackupId = "bk-1", Manifest = manifest } },
-        });
-
-        var result = await Adapter(invoker).CreateBackupSetAsync(
-            new LatticeBackupSetCaptureRequest("solo", new[] { Scope }));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.SetManifest.SetId, Is.Null);
-            Assert.That(result.SetManifest.Name, Is.EqualTo("solo"));
-            Assert.That(result.Members[0].BackupId, Is.EqualTo("bk-1"));
-        });
-    }
 
     [Test]
     public async Task ScheduleBackupAsync_forwards_scope_flag_and_interval()
@@ -195,28 +117,6 @@ public sealed class GrpcLatticeBackupControlTests
     }
 
     [Test]
-    public async Task RestoreBackupAsync_maps_response()
-    {
-        var invoker = new FakeCallInvoker(_ => new RestoreResponse
-        {
-            BackupId = "bk-1",
-            TargetTreeId = "orders",
-            Mode = LatticeRestoreMode.InPlace,
-            OperationId = "op-1",
-            EntriesApplied = 5,
-        });
-
-        var result = await Adapter(invoker).RestoreBackupAsync(new LatticeRestoreRequest("bk-1"));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.BackupId, Is.EqualTo("bk-1"));
-            Assert.That(result.TargetTreeId, Is.EqualTo("orders"));
-            Assert.That(result.EntriesApplied, Is.EqualTo(5));
-        });
-    }
-
-    [Test]
     public async Task RevertRestoreAsync_forwards_restore()
     {
         var invoker = new FakeCallInvoker(_ => new RevertRestoreResponse());
@@ -288,17 +188,6 @@ public sealed class GrpcLatticeBackupControlTests
     }
 
     [Test]
-    public async Task CheckBackupHealthAsync_returns_report()
-    {
-        var report = new BackupHealthReport(
-            "bk-1", BackupHealthStatus.Healthy, true,
-            Array.Empty<string>(), Array.Empty<string>(), DateTimeOffset.UnixEpoch, "ok");
-        var result = await Adapter(new FakeCallInvoker(_ => new BackupHealthReportResponse { Found = true, Report = report }))
-            .CheckBackupHealthAsync("bk-1");
-        Assert.That(result, Is.SameAs(report));
-    }
-
-    [Test]
     public async Task GetBackupHealthAsync_found_returns_report()
     {
         var report = new BackupHealthReport(
@@ -339,21 +228,4 @@ public sealed class GrpcLatticeBackupControlTests
             () => Adapter(new FakeCallInvoker(_ => throw new InvalidOperationException())).GetInventoryAsync(),
             Throws.TypeOf<NotSupportedException>());
 
-    [Test]
-    public void RebuildCatalogFromSinkAsync_has_no_binding_and_throws()
-        => Assert.That(
-            () => Adapter(new FakeCallInvoker(_ => throw new InvalidOperationException())).RebuildCatalogFromSinkAsync(),
-            Throws.TypeOf<NotSupportedException>());
-
-    [Test]
-    public void ScrubCatalogAgainstSinkAsync_has_no_binding_and_throws()
-        => Assert.That(
-            () => Adapter(new FakeCallInvoker(_ => throw new InvalidOperationException())).ScrubCatalogAgainstSinkAsync(),
-            Throws.TypeOf<NotSupportedException>());
-
-    [Test]
-    public void ColdRestoreAsync_has_no_binding_and_throws()
-        => Assert.That(
-            () => Adapter(new FakeCallInvoker(_ => throw new InvalidOperationException())).ColdRestoreAsync(new LatticeRestoreRequest("bk-1")),
-            Throws.TypeOf<NotSupportedException>());
 }

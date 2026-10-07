@@ -35,23 +35,11 @@ public enum LatticeSchemaApiOperation
     /// <summary>The <c>AdvanceTargetVersion</c> RPC.</summary>
     AdvanceTargetVersion,
 
-    /// <summary>The <c>AdvanceAndMigrate</c> RPC.</summary>
-    AdvanceAndMigrate,
-
-    /// <summary>The <c>MigrateToTargetVersion</c> RPC.</summary>
-    MigrateToTargetVersion,
-
     /// <summary>The <c>ClearVersionConfig</c> RPC.</summary>
     ClearVersionConfig,
 
-    /// <summary>The <c>Remediate</c> RPC.</summary>
-    Remediate,
-
     /// <summary>The <c>GetRemediationStatus</c> RPC.</summary>
     GetRemediationStatus,
-
-    /// <summary>The read-only <c>ScanCompliance</c> compliance-audit RPC.</summary>
-    ScanCompliance,
 
     /// <summary>The read-only <c>ProbeCapabilities</c> capability-probe RPC.</summary>
     ProbeCapabilities,

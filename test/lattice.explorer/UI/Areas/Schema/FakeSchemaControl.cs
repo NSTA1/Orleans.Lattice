@@ -24,9 +24,6 @@ internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
     /// <summary>The remediation status, by tree; absent reads as idle.</summary>
     public Dictionary<string, LatticeSchemaRemediationReport> Status { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>The compliance report a scan returns, by tree; absent reads as ungoverned.</summary>
-    public Dictionary<string, LatticeSchemaComplianceReport> Compliance { get; } = new(StringComparer.Ordinal);
-
     /// <summary>Per-tree capabilities; a tree without an entry gets <see cref="DefaultCapabilities"/>.</summary>
     public Dictionary<string, Func<string, LatticeSchemaCapabilities>> Capabilities { get; } = new(StringComparer.Ordinal);
 
@@ -48,9 +45,6 @@ internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
 
     /// <summary>When set, a migration, an advance and migrate, and a remediation wait for it.</summary>
     public TaskCompletionSource<LatticeSchemaRemediationReport>? OperationGate { get; set; }
-
-    /// <summary>When set, a compliance scan waits for it.</summary>
-    public TaskCompletionSource<LatticeSchemaComplianceReport>? ScanGate { get; set; }
 
     /// <summary>Every call, as <c>Verb:tree</c>.</summary>
     public List<string> Calls { get; } = [];
@@ -155,22 +149,6 @@ internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
         return Task.FromResult(Advance(treeId, newTargetVersion));
     }
 
-#pragma warning disable LATTICE0002 // Test fake implements the legacy contract; Explorer tests assert production uses ILatticeSchemaOperations.
-    /// <inheritdoc />
-    public async Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
-    {
-        RecordVersion("AdvanceAndMigrate", treeId);
-        Advance(treeId, newTargetVersion);
-        return await RunAsync(treeId, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(string treeId, CancellationToken cancellationToken = default)
-    {
-        RecordVersion("MigrateToTargetVersion", treeId);
-        return await RunAsync(treeId, cancellationToken);
-    }
-
     /// <inheritdoc />
     public Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)
     {
@@ -179,35 +157,10 @@ internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
     }
 
     /// <inheritdoc />
-    public async Task<LatticeSchemaRemediationReport> RemediateAsync(
-        string treeId,
-        LatticeValueTransform transform,
-        LatticeSchemaPolicy targetPolicy,
-        CancellationToken cancellationToken = default)
-    {
-        Record("Remediate", treeId);
-        LastRemediation = (transform, targetPolicy);
-        return await RunAsync(treeId, cancellationToken);
-    }
-#pragma warning restore LATTICE0002
-
-    /// <inheritdoc />
     public Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)
     {
         Record("GetRemediationStatus", treeId);
         return Task.FromResult(Status.TryGetValue(treeId, out var report) ? report : LatticeSchemaRemediationReport.Idle);
-    }
-
-    /// <inheritdoc />
-    public async Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)
-    {
-        Record("ScanCompliance", treeId);
-        if (ScanGate is { } gate)
-        {
-            return await gate.Task.WaitAsync(cancellationToken);
-        }
-
-        return Compliance.TryGetValue(treeId, out var report) ? report : LatticeSchemaComplianceReport.Ungoverned(treeId);
     }
 
     /// <inheritdoc />

@@ -102,14 +102,6 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Reads a tree's current or last-known background-remediation status: the phase, whether a build is "
                 + "in flight, how many entries were scanned, and - on an abort - the first offending key, the "
                 + "reason, and a bounded value preview. Read-only."),
-            ReadOnlyTool(services, TreeAdminSchemaToolHandlers.ScanComplianceAsync, "lattice_treeadmin_schema_scan_compliance",
-                "Scan a tree for schema compliance",
-                "Scans every current value of a tree against its compiled enforcement policy and returns a "
-                + "compliance report: whether the tree has a policy, how many values are compliant / non-compliant, "
-                + "the total scanned, and the non-compliant population grouped by failure reason. A pure read - it "
-                + "never mutates data. Blocks until the whole tree is read, so a large tree can time out: prefer "
-                + "lattice_treeadmin_schema_compliance_scan_start, which runs in the background with progress. "
-                + "Read-only."),
             ReadOnlyTool(services, TreeAdminSchemaToolHandlers.ProbeCapabilitiesAsync, "lattice_treeadmin_schema_probe_capabilities",
                 "Probe a caller's schema capabilities",
                 "Probes which schema-management operations the current caller may perform over a tree, evaluated "
@@ -381,21 +373,21 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Starts a tracked shadow-swap rebuild of a materialised view and returns its operation handle at "
                 + "once. The rebuild runs in the background and survives the caller disconnecting; poll "
                 + "lattice_treeadmin_operation_status for its phase (Scanning, Projecting, Swapping) and keys "
-                + "projected. Prefer this to lattice_treeadmin_view_rebuild, which blocks. Requires whole-tree admin "
+                + "projected. Requires whole-tree admin "
                 + "authority over the view's source tree. Admin-gated and destructive."));
             tools.Add(DestructiveTool(services, TreeAdminOperationToolHandlers.StartViewReconcileAsync, "lattice_treeadmin_view_reconcile_start",
                 "Start a materialised-view reconcile",
                 "Starts a tracked reconcile (view anti-entropy) of a materialised view and returns its operation "
                 + "handle at once; poll lattice_treeadmin_operation_status for its phase (Digesting, Scanning, "
                 + "Projecting, Comparing, Swapping) and keys projected. The result's driftRepaired says whether the "
-                + "view was repaired. Prefer this to lattice_treeadmin_view_reconcile, which blocks. Requires "
+                + "view was repaired. Requires "
                 + "whole-tree admin authority over the view's source tree. Admin-gated and destructive."));
             tools.Add(DestructiveTool(services, TreeAdminOperationToolHandlers.StartTagIndexReconcileAsync, "lattice_treeadmin_tag_index_reconcile_start",
                 "Start a tag-index reconcile sweep",
                 "Starts a tracked digest-gated reconcile sweep of a tag index and returns its operation handle at "
                 + "once; poll lattice_treeadmin_operation_status for its phase (Probing, then Repairing when a covered "
                 + "tree diverged) and trees done. Cancelling abandons the sweep and leaves the index idle. Prefer this "
-                + "to lattice_treeadmin_tag_index_reconcile, which blocks. Requires whole-tree admin authority over "
+                + "to the legacy blocking reconcile tool. Requires whole-tree admin authority over "
                 + "the index's backing tree. Admin-gated and destructive."));
             tools.Add(DestructiveTool(services, TreeAdminOperationToolHandlers.StartWalMoveAsync, "lattice_treeadmin_wal_move_start",
                 "Start a WAL partition move",
@@ -403,8 +395,7 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "returns its operation handle at once; poll lattice_treeadmin_operation_status for its phase "
                 + "(Copying with entries copied of the live tail, Verifying, Flipping). Cancelling before the flip "
                 + "leaves the source live; once flipped the move is committed. The source tail is retained until "
-                + "lattice_treeadmin_wal_move_reclaim. Prefer this to lattice_treeadmin_wal_move_execute, which "
-                + "blocks. Rejected for a reserved tree id. Tree-lifecycle-gated and destructive."));
+                + "lattice_treeadmin_wal_move_reclaim. Rejected for a reserved tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(DestructiveTool(services, TreeAdminOperationToolHandlers.StartOrphanedLeavesRepairAsync, "lattice_treeadmin_orphaned_leaves_repair_start",
                 "Start a whole-tree orphaned-leaf repair",
                 "Starts a tracked whole-tree orphaned-leaf repair and returns its operation handle at once: the "
@@ -605,14 +596,6 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "artifact. Idempotent for a matching in-flight capture. Rejected for a reserved source or destination "
                 + "tree id, when the destination already exists, or when a different snapshot is already in flight. "
                 + "Admin-gated and destructive."));
-            tools.Add(DestructiveTool(services, TreeAdminLifecycleToolHandlers.ExecuteWalMoveAsync, "lattice_treeadmin_wal_move_execute",
-                "Move a WAL partition to a new provider",
-                "Executes an online move of a single write-ahead-log partition to a target storage provider key. Only "
-                + "the target partition is briefly quiesced while its tail is copied and the placement pin is "
-                + "atomically flipped; the source tail is retained (never trimmed by the move) so the move is "
-                + "revertible until an explicit wal_move_reclaim discards it. Preview first with wal_move_plan and "
-                + "confirm the target key resolves on every silo. Idempotent: a partition already pinned to the "
-                + "target is a no-copy repair. Rejected for a reserved tree id. Tree-lifecycle-gated and destructive."));
             tools.Add(DestructiveTool(services, TreeAdminLifecycleToolHandlers.ReclaimMovedWalSourceAsync, "lattice_treeadmin_wal_move_reclaim",
                 "Reclaim a moved WAL partition's source",
                 "Reclaims the orphaned source tail left behind by a completed wal_move_execute, discarding the "
@@ -620,24 +603,6 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "deliberately separate from the move: once reclaimed the move can no longer be reverted by moving "
                 + "the partition back. Refused if the given key is the partition's live placement. Rejected for a "
                 + "reserved tree id. Tree-lifecycle-gated and destructive."));
-            tools.Add(DestructiveTool(services, TreeAdminLifecycleToolHandlers.RebuildViewAsync, "lattice_treeadmin_view_rebuild",
-                "Rebuild a materialised view",
-                "Rebuilds a materialised view from current source state using an online shadow-swap: a complete new "
-                + "generation tree is built and the active generation is atomically flipped over in a single durable "
-                + "commit, so readers never observe a half-built view. The source keeps serving reads and writes "
-                + "throughout. A materialised view is authorized by the readability of its source tree, which the "
-                + "facade resolves authoritatively; the caller cannot supply the source. Returns the view's status "
-                + "after the rebuild. Requires whole-tree admin authority over the view's source tree. Admin-gated "
-                + "and destructive."));
-            tools.Add(DestructiveTool(services, TreeAdminLifecycleToolHandlers.ReconcileViewAsync, "lattice_treeadmin_view_reconcile",
-                "Reconcile a materialised view against its source",
-                "Reconciles a materialised view against current source state - view anti-entropy that builds the "
-                + "expected view into a shadow generation, compares it to the live view via a content digest, and "
-                + "swaps the shadow in only when they diverge. Online and idempotent: a view that already matches its "
-                + "source is left untouched and reports no drift. A materialised view is authorized by the "
-                + "readability of its source tree, which the facade resolves authoritatively; the caller cannot "
-                + "supply the source. Returns whether drift was detected and repaired. Requires whole-tree admin "
-                + "authority over the view's source tree. Admin-gated and destructive."));
             tools.Add(DestructiveTool(services, TreeAdminLifecycleToolHandlers.DropViewAsync, "lattice_treeadmin_view_drop",
                 "Drop a materialised view",
                 "Drops a materialised view: stops and decommissions its maintainer, deletes every backing view "
@@ -648,17 +613,6 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "which the facade resolves authoritatively; the caller cannot supply the source. Returns the "
                 + "dropped view name. Requires whole-tree admin authority over the view's source tree. Admin-gated "
                 + "and destructive."));
-            tools.Add(DestructiveTool(services, TreeAdminLifecycleToolHandlers.ReconcileTagIndexAsync, "lattice_treeadmin_tag_index_reconcile",
-                "Reconcile a tag index against its source",
-                "Reconciles a tag index against current source state - tag-index anti-entropy that rescans the covered "
-                + "source trees and removes membership rows for keys that no longer carry the tag. Online and "
-                + "idempotent: an index already consistent with its sources has no orphaned rows removed. A tag index "
-                + "is authorized by the admin authority over its backing membership tree (tag-{indexName}), which the "
-                + "facade resolves authoritatively; the caller supplies only the index name. Reconcile writes only to "
-                + "the backing membership tree; covered source trees are scanned read-only. Returns the reconcile "
-                + "counts (trees covered, keys scanned, membership rows scanned, orphan rows removed) and discloses no "
-                + "key or value content. Requires whole-tree admin authority over the index's backing tree. "
-                + "Admin-gated and destructive."));
             tools.Add(NonDestructiveMutatingTool(services, TreeAdminLifecycleToolHandlers.TriggerShardCompactionAsync, "lattice_treeadmin_compaction_trigger",
                 "Trigger tombstone compaction on a shard",
                 "Triggers an out-of-cycle tombstone-compaction pass on one physical shard of a tree, bypassing the "

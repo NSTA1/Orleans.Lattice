@@ -10,9 +10,8 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 /// <summary>
 /// Abstract base for the backup control-API gRPC service. Carries the
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c> reflects
-/// against to discover and register the unary RPCs (<c>CreateBackup</c>,
-/// <c>CreateIncrementalBackup</c>, <c>ListBackups</c>, <c>DescribeBackup</c>,
-/// <c>DeleteBackup</c>, <c>RestoreBackup</c>, <c>RevertRestore</c>,
+/// against to discover and register the unary RPCs (<c>ListBackups</c>, <c>DescribeBackup</c>,
+/// <c>DeleteBackup</c>, <c>RevertRestore</c>,
 /// <c>GetAuthScheme</c>) and the server-streaming RPCs (<c>StreamBackups</c>,
 /// <c>ExportArtifact</c>).
 /// </summary>
@@ -28,15 +27,6 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 [BindServiceMethod(typeof(LatticeBackupGrpcServiceBase), nameof(BindService))]
 internal abstract class LatticeBackupGrpcServiceBase
 {
-    /// <summary>Captures a full backup. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
-    public abstract Task<BackupCaptureResponse> CreateBackup(BackupCaptureRequestMessage request, ServerCallContext context);
-
-    /// <summary>Captures an incremental backup. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
-    public abstract Task<BackupCaptureResponse> CreateIncrementalBackup(BackupIncrementalCaptureRequestMessage request, ServerCallContext context);
-
-    /// <summary>Captures a backup set. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
-    public abstract Task<BackupSetCaptureResponse> CreateBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context);
-
     /// <summary>Lists a cursor-resumable page of the catalog. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupCatalogPage> ListBackups(BackupCatalogRequest request, ServerCallContext context);
 
@@ -51,9 +41,6 @@ internal abstract class LatticeBackupGrpcServiceBase
 
     /// <summary>Deletes a backup. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupDeleteResponse> DeleteBackup(BackupDeleteRequest request, ServerCallContext context);
-
-    /// <summary>Restores a backup into its target tree. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
-    public abstract Task<RestoreResponse> RestoreBackup(RestoreRequestMessage request, ServerCallContext context);
 
     /// <summary>Reverts a shadow-cutover restore. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<RevertRestoreResponse> RevertRestore(RestoreResponse request, ServerCallContext context);
@@ -86,9 +73,6 @@ internal abstract class LatticeBackupGrpcServiceBase
 
     /// <summary>Reports whether backup-health monitoring is available. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupHealthAvailabilityResponse> IsHealthMonitoringAvailable(BackupHealthAvailabilityRequest request, ServerCallContext context);
-
-    /// <summary>Runs an on-demand backup-health verification. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
-    public abstract Task<BackupHealthReportResponse> CheckBackupHealth(BackupHealthCheckRequestMessage request, ServerCallContext context);
 
     /// <summary>Reads a backup's latest stored health report. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupHealthReportResponse> GetBackupHealth(BackupHealthGetRequestMessage request, ServerCallContext context);
@@ -148,14 +132,10 @@ internal abstract class LatticeBackupGrpcServiceBase
 
         if (serviceImpl is null)
         {
-            binder.AddMethod(methods.CreateBackup, (UnaryServerMethod<BackupCaptureRequestMessage, BackupCaptureResponse>?)null);
-            binder.AddMethod(methods.CreateIncrementalBackup, (UnaryServerMethod<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse>?)null);
-            binder.AddMethod(methods.CreateBackupSet, (UnaryServerMethod<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>?)null);
             binder.AddMethod(methods.ListBackups, (UnaryServerMethod<BackupCatalogRequest, BackupCatalogPage>?)null);
             binder.AddMethod(methods.StreamBackups, (ServerStreamingServerMethod<BackupStreamRequest, BackupManifest>?)null);
             binder.AddMethod(methods.DescribeBackup, (UnaryServerMethod<BackupDescribeRequest, BackupChainResponse>?)null);
             binder.AddMethod(methods.DeleteBackup, (UnaryServerMethod<BackupDeleteRequest, BackupDeleteResponse>?)null);
-            binder.AddMethod(methods.RestoreBackup, (UnaryServerMethod<RestoreRequestMessage, RestoreResponse>?)null);
             binder.AddMethod(methods.RevertRestore, (UnaryServerMethod<RestoreResponse, RevertRestoreResponse>?)null);
             binder.AddMethod(methods.ExportArtifact, (ServerStreamingServerMethod<ArtifactExportRequest, ArtifactChunk>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
@@ -164,7 +144,6 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.CancelSchedule, (UnaryServerMethod<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>?)null);
             binder.AddMethod(methods.GetScopeStatus, (UnaryServerMethod<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>?)null);
             binder.AddMethod(methods.IsHealthMonitoringAvailable, (UnaryServerMethod<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse>?)null);
-            binder.AddMethod(methods.CheckBackupHealth, (UnaryServerMethod<BackupHealthCheckRequestMessage, BackupHealthReportResponse>?)null);
             binder.AddMethod(methods.GetBackupHealth, (UnaryServerMethod<BackupHealthGetRequestMessage, BackupHealthReportResponse>?)null);
             binder.AddMethod(methods.ConfigureBackupHealth, (UnaryServerMethod<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>?)null);
             binder.AddMethod(methods.StartBackup, (UnaryServerMethod<BackupCaptureRequestMessage, LatticeOperationHandle>?)null);
@@ -181,14 +160,10 @@ internal abstract class LatticeBackupGrpcServiceBase
             return;
         }
 
-        binder.AddMethod(methods.CreateBackup, new UnaryServerMethod<BackupCaptureRequestMessage, BackupCaptureResponse>(serviceImpl.CreateBackup));
-        binder.AddMethod(methods.CreateIncrementalBackup, new UnaryServerMethod<BackupIncrementalCaptureRequestMessage, BackupCaptureResponse>(serviceImpl.CreateIncrementalBackup));
-        binder.AddMethod(methods.CreateBackupSet, new UnaryServerMethod<BackupSetCaptureRequestMessage, BackupSetCaptureResponse>(serviceImpl.CreateBackupSet));
         binder.AddMethod(methods.ListBackups, new UnaryServerMethod<BackupCatalogRequest, BackupCatalogPage>(serviceImpl.ListBackups));
         binder.AddMethod(methods.StreamBackups, new ServerStreamingServerMethod<BackupStreamRequest, BackupManifest>(serviceImpl.StreamBackups));
         binder.AddMethod(methods.DescribeBackup, new UnaryServerMethod<BackupDescribeRequest, BackupChainResponse>(serviceImpl.DescribeBackup));
         binder.AddMethod(methods.DeleteBackup, new UnaryServerMethod<BackupDeleteRequest, BackupDeleteResponse>(serviceImpl.DeleteBackup));
-        binder.AddMethod(methods.RestoreBackup, new UnaryServerMethod<RestoreRequestMessage, RestoreResponse>(serviceImpl.RestoreBackup));
         binder.AddMethod(methods.RevertRestore, new UnaryServerMethod<RestoreResponse, RevertRestoreResponse>(serviceImpl.RevertRestore));
         binder.AddMethod(methods.ExportArtifact, new ServerStreamingServerMethod<ArtifactExportRequest, ArtifactChunk>(serviceImpl.ExportArtifact));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
@@ -197,7 +172,6 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.CancelSchedule, new UnaryServerMethod<BackupCancelScheduleRequestMessage, BackupCancelScheduleResponse>(serviceImpl.CancelSchedule));
         binder.AddMethod(methods.GetScopeStatus, new UnaryServerMethod<BackupScopeStatusRequestMessage, BackupScopeStatusResponse>(serviceImpl.GetScopeStatus));
         binder.AddMethod(methods.IsHealthMonitoringAvailable, new UnaryServerMethod<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse>(serviceImpl.IsHealthMonitoringAvailable));
-        binder.AddMethod(methods.CheckBackupHealth, new UnaryServerMethod<BackupHealthCheckRequestMessage, BackupHealthReportResponse>(serviceImpl.CheckBackupHealth));
         binder.AddMethod(methods.GetBackupHealth, new UnaryServerMethod<BackupHealthGetRequestMessage, BackupHealthReportResponse>(serviceImpl.GetBackupHealth));
         binder.AddMethod(methods.ConfigureBackupHealth, new UnaryServerMethod<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>(serviceImpl.ConfigureBackupHealth));
         binder.AddMethod(methods.StartBackup, new UnaryServerMethod<BackupCaptureRequestMessage, LatticeOperationHandle>(serviceImpl.StartBackup));
@@ -299,46 +273,9 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         return credential is null ? null : LatticeCredentialContext.With(credential);
     }
 
-    // The deprecated blocking RPCs (LATTICE0002) are served by the deprecated
-    // blocking verbs they have always called; the RPCs stay for wire compatibility
-    // until the next major version, and new clients use the Start* RPCs below.
-#pragma warning disable LATTICE0002
 
-    /// <inheritdoc />
-    public override Task<BackupCaptureResponse> CreateBackup(BackupCaptureRequestMessage request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-            var result = await control
-                .CreateBackupAsync(new LatticeBackupCaptureRequest(req.Name, req.Scope, req.PageSize), ct)
-                .ConfigureAwait(false);
-            return ToCaptureResponse(result);
-        });
 
-    /// <inheritdoc />
-    public override Task<BackupCaptureResponse> CreateIncrementalBackup(BackupIncrementalCaptureRequestMessage request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-            var result = await control
-                .CreateIncrementalBackupAsync(
-                    new LatticeBackupIncrementalCaptureRequest(req.Name, req.Scope, req.BaseBackupId, req.PageSize),
-                    ct)
-                .ConfigureAwait(false);
-            return ToCaptureResponse(result);
-        });
 
-    /// <inheritdoc />
-    public override Task<BackupSetCaptureResponse> CreateBackupSet(BackupSetCaptureRequestMessage request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-            var result = await control
-                .CreateBackupSetAsync(
-                    new LatticeBackupSetCaptureRequest(req.Name, req.Scopes, req.CrossTreeConsistent, req.PageSize),
-                    ct)
-                .ConfigureAwait(false);
-            return ToSetCaptureResponse(result);
-        });
-
-#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<BackupScheduleResponse> ScheduleBackup(BackupScheduleRequestMessage request, ServerCallContext context)
@@ -466,17 +403,6 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             return new BackupDeleteResponse { Deleted = deleted };
         });
 
-    /// <inheritdoc />
-    public override Task<RestoreResponse> RestoreBackup(RestoreRequestMessage request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-#pragma warning disable LATTICE0002 // The deprecated RPC is served by the deprecated verb; see CreateBackup.
-            var result = await control
-                .RestoreBackupAsync(ToRestoreRequest(req), ct)
-                .ConfigureAwait(false);
-#pragma warning restore LATTICE0002
-            return RestoreResponseMapping.ToRestoreResponse(result);
-        });
 
     /// <inheritdoc />
     public override Task<LatticeOperationHandle> StartBackup(BackupCaptureRequestMessage request, ServerCallContext context)
@@ -655,15 +581,6 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             return new BackupHealthAvailabilityResponse { Available = available };
         });
 
-    /// <inheritdoc />
-    public override Task<BackupHealthReportResponse> CheckBackupHealth(BackupHealthCheckRequestMessage request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-#pragma warning disable LATTICE0002 // The deprecated RPC is served by the deprecated verb; see CreateBackup.
-            var report = await control.CheckBackupHealthAsync(req.BackupId, ct).ConfigureAwait(false);
-#pragma warning restore LATTICE0002
-            return new BackupHealthReportResponse { Found = true, Report = report };
-        });
 
     /// <inheritdoc />
     public override Task<BackupHealthReportResponse> GetBackupHealth(BackupHealthGetRequestMessage request, ServerCallContext context)

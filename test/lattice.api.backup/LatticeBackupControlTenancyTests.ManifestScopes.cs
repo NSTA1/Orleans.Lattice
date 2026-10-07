@@ -1,9 +1,6 @@
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice;
 using Orleans.Lattice.Backup;
-
-// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
-// they prove the start-then-wait wrappers still behave exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Tests;
 
@@ -36,7 +33,7 @@ public sealed partial class LatticeBackupControlTenancyTests
         // effective.
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
-        await control.RestoreBackupAsync(new LatticeRestoreRequest(captured.BackupId));
+        await RestoreAsync(control, new LatticeRestoreRequest(captured.BackupId));
 
         var authorized = gate.TreeIdsFor(LatticeOperation.Restore);
         Assert.Multiple(() =>
@@ -58,7 +55,7 @@ public sealed partial class LatticeBackupControlTenancyTests
 
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
-        await control.ColdRestoreAsync(new LatticeRestoreRequest(captured.BackupId));
+        await RestoreAsync(control, new LatticeRestoreRequest(captured.BackupId), cold: true);
 
         var authorized = gate.TreeIdsFor(LatticeOperation.Restore);
         Assert.Multiple(() =>
@@ -79,7 +76,7 @@ public sealed partial class LatticeBackupControlTenancyTests
 
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
-        await control.RestoreBackupAsync(new LatticeRestoreRequest(captured.BackupId));
+        await RestoreAsync(control, new LatticeRestoreRequest(captured.BackupId));
 
         // Composing here would quietly adopt a default-tenant backup into the
         // active tenant's namespace instead of letting the gate refuse the
@@ -98,7 +95,7 @@ public sealed partial class LatticeBackupControlTenancyTests
 
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
-        await control.ColdRestoreAsync(new LatticeRestoreRequest(captured.BackupId));
+        await RestoreAsync(control, new LatticeRestoreRequest(captured.BackupId), cold: true);
 
         Assert.That(gate.TreeIdsFor(LatticeOperation.Restore), Does.Contain(LegacyName));
         Assert.That(
@@ -169,8 +166,8 @@ public sealed partial class LatticeBackupControlTenancyTests
 
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
-        await control.CheckBackupHealthAsync(qualified.BackupId);
-        await control.CheckBackupHealthAsync(legacy.BackupId);
+        await StartHealthCheckAsync(control, qualified.BackupId);
+        await StartHealthCheckAsync(control, legacy.BackupId);
 
         AssertStoredScopesOnly(gate);
     }
@@ -272,7 +269,9 @@ public sealed partial class LatticeBackupControlTenancyTests
         await _fixture.InitializeAsync();
 
         var gate = new RecordingAccessGate();
-        await ControlFor(Acme, gate).RebuildCatalogFromSinkAsync();
+        var rebuildOperations = (ILatticeBackupOperations)ControlFor(Acme, gate);
+        var rebuild = await rebuildOperations.StartCatalogRebuildAsync();
+        await UntilTerminalAsync(rebuildOperations, rebuild.OperationId);
 
         Assert.That(
             gate.TreeIdsFor(LatticeOperation.Restore),
@@ -285,7 +284,9 @@ public sealed partial class LatticeBackupControlTenancyTests
         await _fixture.InitializeAsync();
 
         var gate = new RecordingAccessGate();
-        await ControlFor(Acme, gate).ScrubCatalogAgainstSinkAsync();
+        var scrubOperations = (ILatticeBackupOperations)ControlFor(Acme, gate);
+        var scrub = await scrubOperations.StartCatalogScrubAsync();
+        await UntilTerminalAsync(scrubOperations, scrub.OperationId);
 
         Assert.That(
             gate.TreeIdsFor(LatticeOperation.Restore),
@@ -302,7 +303,7 @@ public sealed partial class LatticeBackupControlTenancyTests
     private async Task<LatticeBackupCaptureResult> CaptureAsAsync(string tenant, string localName)
     {
         await SeedAsync(Effective(tenant, localName), "k", "v");
-        var captured = await ControlFor(tenant).CreateBackupAsync(
+        var captured = await CaptureAsync(ControlFor(tenant),
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(localName)));
 
         Assert.That(captured.Manifest.Scope.TreeId, Is.EqualTo(Effective(tenant, localName)));
@@ -319,7 +320,7 @@ public sealed partial class LatticeBackupControlTenancyTests
     private async Task<LatticeBackupCaptureResult> CaptureLegacyAsync()
     {
         await SeedAsync(LegacyName, "k", "legacy");
-        var captured = await _fixture.Control.CreateBackupAsync(
+        var captured = await CaptureAsync(_fixture.Control,
             new LatticeBackupCaptureRequest("legacy", BackupScopeSelector.WholeTree(LegacyName)));
 
         Assert.That(captured.Manifest.Scope.TreeId, Is.EqualTo(LegacyName));

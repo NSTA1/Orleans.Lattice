@@ -136,46 +136,6 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     }
 
     /// <inheritdoc />
-    public async Task<LatticeBackupCaptureResult> CreateBackupAsync(
-        LatticeBackupCaptureRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        // Deprecated blocking verb (LATTICE0002): a thin wrapper that starts the
-        // tracked operation and waits for it, so the one engine path serves both.
-        ArgumentNullException.ThrowIfNull(request);
-        cancellationToken.ThrowIfCancellationRequested();
-        var (tenantId, launch) = await StartCaptureCoreAsync(request, LatticeOperationKey.NewId(), cancellationToken)
-            .ConfigureAwait(false);
-        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(
-        LatticeBackupIncrementalCaptureRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        // Deprecated blocking verb (LATTICE0002): start, then wait.
-        ArgumentNullException.ThrowIfNull(request);
-        cancellationToken.ThrowIfCancellationRequested();
-        var (tenantId, launch) = await StartIncrementalCaptureCoreAsync(
-            request, LatticeOperationKey.NewId(), cancellationToken).ConfigureAwait(false);
-        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
-        LatticeBackupSetCaptureRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        // Deprecated blocking verb (LATTICE0002): start, then wait.
-        ArgumentNullException.ThrowIfNull(request);
-        cancellationToken.ThrowIfCancellationRequested();
-        var (tenantId, launch) = await StartSetCaptureCoreAsync(request, LatticeOperationKey.NewId(), cancellationToken)
-            .ConfigureAwait(false);
-        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
     public async Task ScheduleBackupAsync(
         LatticeBackupScheduleRequest request,
         CancellationToken cancellationToken = default)
@@ -417,32 +377,6 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         return true;
     }
 
-    /// <inheritdoc />
-    public async Task<LatticeRestoreResult> RestoreBackupAsync(
-        LatticeRestoreRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        // Deprecated blocking verb (LATTICE0002): start, then wait.
-        ArgumentNullException.ThrowIfNull(request);
-        cancellationToken.ThrowIfCancellationRequested();
-        var (tenantId, launch) = await StartRestoreCoreAsync(request, LatticeOperationKey.NewId(), cancellationToken)
-            .ConfigureAwait(false);
-        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<LatticeRestoreResult> ColdRestoreAsync(
-        LatticeRestoreRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        // Deprecated blocking verb (LATTICE0002): start, then wait.
-        ArgumentNullException.ThrowIfNull(request);
-        cancellationToken.ThrowIfCancellationRequested();
-        var (tenantId, launch) = await StartColdRestoreCoreAsync(request, LatticeOperationKey.NewId(), cancellationToken)
-            .ConfigureAwait(false);
-        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-    }
-
     /// <summary>
     /// Resolves the scope a restore is authorized at, so the gate is <b>total</b>:
     /// every call authorizes exactly one scope and no input can skip the check.
@@ -604,37 +538,6 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     }
 
     /// <inheritdoc />
-    public async Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(
-        CancellationToken cancellationToken = default)
-    {
-        // Deprecated blocking verb (LATTICE0002): start, then wait. Rebuilding the
-        // catalog re-registers manifests of every scope from the sink, so it is a
-        // cluster-wide administrative action authorized fail-closed at the reserved
-        // catalog tree with the high-privilege Restore (author / bulk-load)
-        // authority before any catalog write happens; see StartCatalogRebuildCoreAsync.
-        cancellationToken.ThrowIfCancellationRequested();
-        var (tenantId, launch) = await StartCatalogRebuildCoreAsync(LatticeOperationKey.NewId(), cancellationToken)
-            .ConfigureAwait(false);
-        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(
-        bool pruneOrphans = false,
-        CancellationToken cancellationToken = default)
-    {
-        // Deprecated blocking verb (LATTICE0002): start, then wait. Scrubbing
-        // reconciles rows of every scope against the sink and, when pruning, removes
-        // rows from the reserved catalog tree, so it is authorized fail-closed at the
-        // catalog tree with the Restore authority before any probe or delete happens;
-        // see StartCatalogScrubCoreAsync.
-        cancellationToken.ThrowIfCancellationRequested();
-        var (tenantId, launch) = await StartCatalogScrubCoreAsync(
-            pruneOrphans, LatticeOperationKey.NewId(), cancellationToken).ConfigureAwait(false);
-        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
     public async Task<BackupScopeStatus?> GetScopeStatusAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken = default)
@@ -716,21 +619,6 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     /// <inheritdoc />
     public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(_sink.IsDurable);
-
-    /// <inheritdoc />
-    public async Task<BackupHealthReport> CheckBackupHealthAsync(
-        string backupId,
-        CancellationToken cancellationToken = default)
-    {
-        // Deprecated blocking verb (LATTICE0002): start, then wait. The start
-        // authorizes the manifest's own (already effective) scope fail-closed and
-        // the work persists the fresh report, exactly as before.
-        ArgumentException.ThrowIfNullOrEmpty(backupId);
-        cancellationToken.ThrowIfCancellationRequested();
-        var (tenantId, launch) = await StartHealthCheckCoreAsync(backupId, LatticeOperationKey.NewId(), cancellationToken)
-            .ConfigureAwait(false);
-        return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-    }
 
     /// <inheritdoc />
     public async Task<BackupHealthReport?> GetBackupHealthAsync(

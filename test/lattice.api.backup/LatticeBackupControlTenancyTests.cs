@@ -1,11 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice;
 using Orleans.Lattice.Backup;
-
-// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
-// they prove the start-then-wait wrappers still behave exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Tests;
 
@@ -52,7 +49,7 @@ public sealed partial class LatticeBackupControlTenancyTests
         await SeedAsync(Effective(Acme, LocalName), "k", "acme-secret");
 
         var control = ControlFor(Acme);
-        var captured = await control.CreateBackupAsync(
+        var captured = await CaptureAsync(control,
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         Assert.That(captured.Manifest.Scope.TreeId, Is.EqualTo(Effective(Acme, LocalName)));
@@ -66,8 +63,8 @@ public sealed partial class LatticeBackupControlTenancyTests
         await SeedAsync(Effective(Globex, LocalName), "k", "globex-secret");
 
         var request = new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName));
-        var acme = await ControlFor(Acme).CreateBackupAsync(request);
-        var globex = await ControlFor(Globex).CreateBackupAsync(request);
+        var acme = await CaptureAsync(ControlFor(Acme), request);
+        var globex = await CaptureAsync(ControlFor(Globex), request);
 
         Assert.Multiple(() =>
         {
@@ -84,12 +81,12 @@ public sealed partial class LatticeBackupControlTenancyTests
         await SeedAsync(Effective(Acme, LocalName), "k", "acme-secret");
 
         var control = ControlFor(Acme);
-        var captured = await control.CreateBackupAsync(
+        var captured = await CaptureAsync(control,
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         // The caller names its restore target tenant-locally, exactly as it named
         // the capture source.
-        var restored = await control.RestoreBackupAsync(
+        var restored = await RestoreAsync(control,
             new LatticeRestoreRequest(captured.BackupId, targetTreeId: "orders-copy"));
 
         Assert.That(restored.TargetTreeId, Is.EqualTo(Effective(Acme, "orders-copy")));
@@ -106,11 +103,11 @@ public sealed partial class LatticeBackupControlTenancyTests
         await SeedAsync(Effective(Acme, LocalName), "k", "v1");
 
         var control = ControlFor(Acme);
-        var full = await control.CreateBackupAsync(
+        var full = await CaptureAsync(control,
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
         await SeedAsync(Effective(Acme, LocalName), "k2", "v2");
 
-        var incremental = await control.CreateIncrementalBackupAsync(
+        var incremental = await CaptureAsync(control,
             new LatticeBackupIncrementalCaptureRequest(
                 "incr", BackupScopeSelector.WholeTree(LocalName), full.BackupId));
 
@@ -127,13 +124,14 @@ public sealed partial class LatticeBackupControlTenancyTests
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
 
-        await control.CreateBackupSetAsync(
+        var handle = await ((ILatticeBackupOperations)control).StartBackupSetAsync(
             new LatticeBackupSetCaptureRequest(
                 "set",
                 [BackupScopeSelector.WholeTree("a"), BackupScopeSelector.WholeTree("b")]));
+        await UntilTerminalAsync((ILatticeBackupOperations)control, handle.OperationId);
 
         Assert.That(
-            gate.TreeIdsFor(LatticeOperation.Backup),
+            gate.TreeIdsFor(LatticeOperation.Backup).Distinct(StringComparer.Ordinal),
             Is.EquivalentTo(new[] { Effective(Acme, "a"), Effective(Acme, "b") }));
     }
 
@@ -186,7 +184,7 @@ public sealed partial class LatticeBackupControlTenancyTests
         await SeedAsync(Effective(Acme, LocalName), "k", "v");
 
         var control = ControlFor(Acme);
-        await control.CreateBackupAsync(
+        await CaptureAsync(control,
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         var status = await control.GetScopeStatusAsync(BackupScopeSelector.WholeTree(LocalName));
@@ -225,12 +223,12 @@ public sealed partial class LatticeBackupControlTenancyTests
         await _fixture.InitializeAsync();
         await SeedAsync(Effective(Globex, LocalName), "k", "v");
 
-        var captured = await ControlFor(Globex).CreateBackupAsync(
+        var captured = await CaptureAsync(ControlFor(Globex),
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
-        await control.RestoreBackupAsync(
+        await RestoreAsync(control,
             new LatticeRestoreRequest(captured.BackupId, targetTreeId: "landing"));
 
         // Only the caller's own target was composed; the manifest's captured tree
@@ -244,13 +242,15 @@ public sealed partial class LatticeBackupControlTenancyTests
         await _fixture.InitializeAsync();
         await SeedAsync(Effective(Globex, LocalName), "k", "v");
 
-        var captured = await ControlFor(Globex).CreateBackupAsync(
+        var captured = await CaptureAsync(ControlFor(Globex),
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
-        await control.ColdRestoreAsync(
-            new LatticeRestoreRequest(captured.BackupId, targetTreeId: "cold-landing"));
+        await RestoreAsync(
+            control,
+            new LatticeRestoreRequest(captured.BackupId, targetTreeId: "cold-landing"),
+            cold: true);
 
         Assert.That(gate.TreeIdsFor(LatticeOperation.Restore), Does.Contain(Effective(Acme, "cold-landing")));
     }
@@ -261,12 +261,12 @@ public sealed partial class LatticeBackupControlTenancyTests
         await _fixture.InitializeAsync();
         await SeedAsync(Effective(Acme, LocalName), "eu/k", "v");
 
-        var captured = await ControlFor(Acme).CreateBackupAsync(
+        var captured = await CaptureAsync(ControlFor(Acme),
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         var gate = new RecordingAccessGate();
         var control = ControlFor(Acme, gate);
-        await control.RestoreBackupAsync(
+        await RestoreAsync(control,
             new LatticeRestoreRequest(
                 captured.BackupId,
                 targetTreeId: "landing",
@@ -291,10 +291,10 @@ public sealed partial class LatticeBackupControlTenancyTests
         await SeedAsync(Effective(Acme, LocalName), "k", "v");
 
         var control = ControlFor(Acme);
-        var captured = await control.CreateBackupAsync(
+        var captured = await CaptureAsync(control,
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
-        var restored = await control.RestoreBackupAsync(
+        var restored = await RestoreAsync(control,
             new LatticeRestoreRequest(
                 captured.BackupId, targetTreeId: LocalName, mode: LatticeRestoreMode.ShadowCutover));
         Assert.That(restored.TargetTreeId, Is.EqualTo(Effective(Acme, LocalName)));
@@ -320,7 +320,7 @@ public sealed partial class LatticeBackupControlTenancyTests
         await SeedAsync(Effective(Acme, LocalName), "k", "v");
 
         var control = ControlFor(Acme);
-        await control.CreateBackupAsync(
+        await CaptureAsync(control,
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         var mine = await control.ListBackupsAsync(
@@ -350,12 +350,12 @@ public sealed partial class LatticeBackupControlTenancyTests
         var gate = new RecordingAccessGate();
         var control = _fixture.CreateControlWith(new BackupAccessAuthorizer(gate, membership: null));
 
-        var captured = await control.CreateBackupAsync(
+        var captured = await CaptureAsync(control,
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         Assert.Multiple(() =>
         {
-            Assert.That(gate.TreeIdsFor(LatticeOperation.Backup), Is.EqualTo(new[] { LocalName }));
+            Assert.That(gate.TreeIdsFor(LatticeOperation.Backup).Distinct(StringComparer.Ordinal), Is.EqualTo(new[] { LocalName }));
             Assert.That(captured.Manifest.Scope.TreeId, Is.EqualTo(LocalName));
         });
     }
@@ -503,7 +503,7 @@ public sealed partial class LatticeBackupControlTenancyTests
             new FixedTenantResolver(default));
 
         Assert.That(
-            async () => await control.CreateBackupAsync(
+            async () => await ((ILatticeBackupOperations)control).StartBackupAsync(
                 new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName))),
             Throws.TypeOf<LatticeTenantAccessDeniedException>());
 
@@ -524,6 +524,59 @@ public sealed partial class LatticeBackupControlTenancyTests
         _fixture.CreateControlWith(
             new BackupAccessAuthorizer(gate, membership: null),
             new FixedTenantResolver(TenantId.Parse(tenant)));
+
+    private static async Task<LatticeOperationStatus> UntilTerminalAsync(ILatticeBackupOperations operations, string operationId)
+    {
+        LatticeOperationStatus? status = null;
+        await Orleans.Lattice.Testing.TestPoll.UntilAsync(
+            async () => (status = await operations.GetOperationStatusAsync(operationId)) is { IsTerminal: true },
+            $"operation {operationId} to finish");
+        return status!;
+    }
+
+    private static async Task<LatticeBackupCaptureResult> CaptureAsync(
+        ILatticeBackupControl control,
+        LatticeBackupCaptureRequest request)
+    {
+        var operations = (ILatticeBackupOperations)control;
+        var handle = await operations.StartBackupAsync(request);
+        var status = await UntilTerminalAsync(operations, handle.OperationId);
+        var manifest = (await control.DescribeBackupAsync(status.ResultReference!))!.Manifest;
+        return new LatticeBackupCaptureResult(status.ResultReference!, manifest);
+    }
+
+    private static async Task<LatticeBackupCaptureResult> CaptureAsync(
+        ILatticeBackupControl control,
+        LatticeBackupIncrementalCaptureRequest request)
+    {
+        var operations = (ILatticeBackupOperations)control;
+        var handle = await operations.StartIncrementalBackupAsync(request);
+        var status = await UntilTerminalAsync(operations, handle.OperationId);
+        var manifest = (await control.DescribeBackupAsync(status.ResultReference!))!.Manifest;
+        return new LatticeBackupCaptureResult(status.ResultReference!, manifest);
+    }
+
+    private static async Task<LatticeRestoreResult> RestoreAsync(
+        ILatticeBackupControl control,
+        LatticeRestoreRequest request,
+        bool cold = false)
+    {
+        var operations = (ILatticeBackupOperations)control;
+        var handle = cold
+            ? await operations.StartColdRestoreAsync(request)
+            : await operations.StartRestoreAsync(request);
+        var status = await UntilTerminalAsync(operations, handle.OperationId);
+        Assert.That(BackupOperationResults.TryReadRestoreResult(status.Result, out var restore), Is.True);
+        return restore!;
+    }
+
+    private static async Task<BackupHealthReport> StartHealthCheckAsync(ILatticeBackupControl control, string backupId)
+    {
+        var operations = (ILatticeBackupOperations)control;
+        var handle = await operations.StartBackupHealthCheckAsync(backupId);
+        await UntilTerminalAsync(operations, handle.OperationId);
+        return (await control.GetBackupHealthAsync(backupId))!;
+    }
 
     /// <summary>
     /// Writes a key into a tree by its effective id. A <c>t/</c>-prefixed id is a

@@ -14,9 +14,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// facades. The read-only inspect tools (list, describe, inventory, scope status,
 /// artifact export, operation status and operation list) are always contributed;
 /// the mutating control tools (the accept-then-poll start tools, operation cancel,
-/// revert, delete, and the deprecated <c>lattice_backup_create</c>,
-/// <c>lattice_backup_create_incremental</c> and <c>lattice_backup_restore</c>
-/// aliases of the start tools) are contributed only when backup control is opted in
+/// revert, and delete) are contributed only when backup control is opted in
 /// via <see cref="LatticeApiMcpOptions.EnableBackupControlTools"/> or
 /// <c>AddBackupTools(enableControl: true)</c>. Every control tool is annotated
 /// destructive and non-read-only.
@@ -97,18 +95,6 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             tools.Add(CreateRevertRestoreTool());
             tools.Add(CreateDeleteTool());
 
-            // Deprecated aliases (one release; removed in the next major version).
-            tools.Add(CreateStartBackupTool(
-                "lattice_backup_create",
-                "Create backup (deprecated alias)",
-                "Use lattice_backup_start. Starts a tracked full capture and returns an operation handle; poll "
-                + "lattice_backup_operation_status." + DeprecatedAliasNote));
-            tools.Add(CreateStartIncrementalTool(
-                "lattice_backup_create_incremental",
-                "Create incremental backup (deprecated alias)",
-                "Use lattice_backup_start_incremental. Starts a tracked incremental capture and returns an operation "
-                + "handle; poll lattice_backup_operation_status." + DeprecatedAliasNote));
-            tools.Add(CreateRestoreAliasTool());
         }
 
         return tools;
@@ -242,9 +228,6 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 UseStructuredContent = true,
             });
 
-    private const string DeprecatedAliasNote =
-        " Deprecated alias kept for one release and removed in the next major version: it now starts the "
-        + "operation and returns a handle at once rather than blocking until the work completes.";
 
     private static McpServerTool CreateStartBackupTool(string name, string title, string description)
         => McpServerTool.Create(
@@ -445,31 +428,6 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 UseStructuredContent = true,
             });
 
-    private static McpServerTool CreateRestoreAliasTool()
-        => McpServerTool.Create(
-            (
-                RequestContext<CallToolRequestParams> context,
-                [Description("The content-addressed id of the backup to restore to.")] string backupId,
-                CancellationToken cancellationToken,
-                [Description("The tree to restore into; null restores into the captured tree.")] string? targetTreeId = null,
-                [Description(RestoreModeDescription)] string? mode = null,
-                [Description("The restore's own idempotency key, which makes a retried restore a no-op; null derives one.")] string? operationId = null) =>
-            {
-                using var scope = McpToolCredentialScope.Stamp(context.Services!);
-                var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
-                return BackupToolInvocations.StartRestoreAsync(operations, backupId, targetTreeId, mode, operationId, operationId: null, cancellationToken);
-            },
-            new McpServerToolCreateOptions
-            {
-                Name = "lattice_backup_restore",
-                SerializerOptions = LatticeApiMcpToolSerialization.Options,
-                Title = "Restore backup (deprecated alias)",
-                Description = "Use lattice_backup_start_restore. Starts a tracked restore and returns an operation handle; "
-                    + "poll lattice_backup_operation_status." + DeprecatedAliasNote,
-                ReadOnly = false,
-                Destructive = true,
-                UseStructuredContent = true,
-            });
 
     private static McpServerTool CreateOperationStatusTool()
         => McpServerTool.Create(
@@ -585,7 +543,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Revert restore",
                 Description =
-                    "Reverts a shadow-cutover restore, reconstructed from the fields of a prior lattice_backup_restore result. "
+                    "Reverts a shadow-cutover restore, reconstructed from the fields of a prior lattice_backup_start_restore result. "
                     + "Idempotent. Mutating: subject to the fail-closed backup access gate. Requires backup control to "
                     + "be enabled on the server.",
                 ReadOnly = false,

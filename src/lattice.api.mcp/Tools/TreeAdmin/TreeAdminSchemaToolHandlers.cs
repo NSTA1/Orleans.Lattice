@@ -84,21 +84,6 @@ internal static class TreeAdminSchemaToolHandlers
         return schema.GetRemediationStatusAsync(treeId, cancellationToken);
     }
 
-    /// <summary>Scans every current value of a tree against its compiled policy and returns a compliance report.</summary>
-    public static Task<LatticeSchemaComplianceReport> ScanComplianceAsync(
-        ILatticeSchemaControl schema,
-        string treeId,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(schema);
-
-        // The blocking scan tool stays until the next major version, alongside the
-        // accept-then-poll compliance-scan tools (#4126).
-#pragma warning disable LATTICE0002
-        return schema.ScanComplianceAsync(treeId, cancellationToken);
-#pragma warning restore LATTICE0002
-    }
-
     /// <summary>Probes which schema-management operations the caller may perform over a tree, with no side effects.</summary>
     public static Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(
         ILatticeSchemaControl schema,

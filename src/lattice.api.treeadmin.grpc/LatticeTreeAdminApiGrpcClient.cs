@@ -943,25 +943,6 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The move receipt.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c> or empty.</exception>
-    [Obsolete("ExecuteWalMoveAsync calls a blocking RPC, so a long run is cut off by the call deadline. Use StartWalMoveAsync and poll GetTreeAdminOperationStatusAsync instead. ExecuteWalMoveAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
-    public Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
-        string treeId, int partition, string targetProviderKey,
-        TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
-        return UnaryAsync(
-            _methods.ExecuteWalMove,
-            new TreeAdminWalMoveExecuteRequest
-            {
-                TreeId = treeId,
-                Partition = partition,
-                TargetProviderKey = targetProviderKey,
-                Options = options,
-            },
-            cancellationToken);
-    }
-
     /// <summary>
     /// Reclaims the orphaned source tail left behind by a completed WAL move of
     /// partition <paramref name="partition"/> of <paramref name="treeId"/>. Requires
@@ -1062,13 +1043,6 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The view's status after the rebuild.</returns>
     /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
-    [Obsolete("RebuildViewAsync calls a blocking RPC, so a long run is cut off by the call deadline. Use StartViewRebuildAsync and poll GetTreeAdminOperationStatusAsync instead. RebuildViewAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
-    public Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
-        return UnaryAsync(_methods.RebuildView, new TreeAdminViewRequest { ViewName = viewName }, cancellationToken);
-    }
-
     /// <summary>
     /// Reconciles the materialised view named <paramref name="viewName"/> against
     /// current source state. Requires admin authority over the view's source tree.
@@ -1077,13 +1051,6 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The reconcile result.</returns>
     /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
-    [Obsolete("ReconcileViewAsync calls a blocking RPC, so a long run is cut off by the call deadline. Use StartViewReconcileAsync and poll GetTreeAdminOperationStatusAsync instead. ReconcileViewAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
-    public Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
-        return UnaryAsync(_methods.ReconcileView, new TreeAdminViewRequest { ViewName = viewName }, cancellationToken);
-    }
-
     /// <summary>
     /// Drops the materialised view named <paramref name="viewName"/>. Requires admin
     /// authority over the view's source tree.
@@ -1129,13 +1096,6 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The reconcile report.</returns>
     /// <exception cref="ArgumentException"><paramref name="indexName"/> is <c>null</c> or empty.</exception>
-    [Obsolete("ReconcileTagIndexAsync calls a blocking RPC, so a long run is cut off by the call deadline. Use StartTagIndexReconcileAsync and poll GetTreeAdminOperationStatusAsync instead. ReconcileTagIndexAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
-    public Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(indexName);
-        return UnaryAsync(_methods.ReconcileTagIndex, new TreeAdminTagIndexRequest { IndexName = indexName }, cancellationToken);
-    }
-
     /// <summary>
     /// Triggers an out-of-cycle tombstone-compaction pass scoped to a single physical
     /// shard of <paramref name="treeId"/>. Requires admin authority over the tree. The

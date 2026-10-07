@@ -19,21 +19,17 @@ namespace Orleans.Lattice.Api.Schema.Grpc;
 /// (<c>SetPolicy</c> / <c>ClearPolicy</c> / <c>GetPolicy</c>), dead letters
 /// (<c>StreamDeadLetters</c> server-streaming + <c>CountDeadLetters</c>),
 /// versioning (<c>SetVersionConfig</c> / <c>GetVersionConfig</c> /
-/// <c>AdvanceTargetVersion</c> / <c>AdvanceAndMigrate</c> /
-/// <c>MigrateToTargetVersion</c> / <c>ClearVersionConfig</c>), remediation
-/// (<c>Remediate</c> / <c>GetRemediationStatus</c>), the read-only compliance
-/// audit (<c>ScanCompliance</c>), the capability probe (<c>ProbeCapabilities</c>),
+/// <c>AdvanceTargetVersion</c> / <c>ClearVersionConfig</c>), remediation
+/// (<c>GetRemediationStatus</c>), the read-only compliance
+/// audit, the capability probe (<c>ProbeCapabilities</c>),
 /// unauthenticated discovery (<c>GetAuthScheme</c>), and the accept-then-poll
 /// compliance-scan operation RPCs (<c>StartComplianceScan</c>,
 /// <c>GetComplianceScanStatus</c>, <c>ListComplianceScans</c>,
 /// <c>CancelComplianceScan</c>) and the remediation and migration operation RPCs
 /// (<c>StartRemediation</c>, <c>StartMigration</c>, <c>StartAdvanceAndMigrate</c>,
 /// <c>GetSchemaOperationStatus</c>, <c>ListSchemaOperations</c>,
-/// <c>CancelSchemaOperation</c>). The blocking <c>ScanCompliance</c>,
-/// <c>Remediate</c>, <c>MigrateToTargetVersion</c> and <c>AdvanceAndMigrate</c> RPCs
-/// are deprecated (diagnostic <c>LATTICE0002</c>) and will be removed in the next
-/// major version. Contract-versioning
-/// policy: fields on the wire messages are additive-only (new <c>[Id(n)]</c>);
+/// <c>CancelSchemaOperation</c>). Contract-versioning policy: fields on the wire
+/// messages are additive-only (new <c>[Id(n)]</c>);
 /// aliases and field numbers are never renumbered, so a newer response decodes
 /// cleanly under an older client.
 /// </remarks>
@@ -66,23 +62,11 @@ internal sealed class LatticeSchemaGrpcMethods
     /// <summary>The unary advance-target-version RPC method name.</summary>
     public const string AdvanceTargetVersionMethodName = "AdvanceTargetVersion";
 
-    /// <summary>The unary advance-and-migrate RPC method name.</summary>
-    public const string AdvanceAndMigrateMethodName = "AdvanceAndMigrate";
-
-    /// <summary>The unary migrate-to-target-version RPC method name.</summary>
-    public const string MigrateToTargetVersionMethodName = "MigrateToTargetVersion";
-
     /// <summary>The unary clear-version-config RPC method name.</summary>
     public const string ClearVersionConfigMethodName = "ClearVersionConfig";
 
-    /// <summary>The unary remediate RPC method name.</summary>
-    public const string RemediateMethodName = "Remediate";
-
     /// <summary>The unary get-remediation-status RPC method name.</summary>
     public const string GetRemediationStatusMethodName = "GetRemediationStatus";
-
-    /// <summary>The unary scan-compliance RPC method name.</summary>
-    public const string ScanComplianceMethodName = "ScanCompliance";
 
     /// <summary>The unary capability-probe RPC method name.</summary>
     public const string ProbeCapabilitiesMethodName = "ProbeCapabilities";
@@ -232,19 +216,7 @@ internal sealed class LatticeSchemaGrpcMethods
             requestMarshaller: LatticeSchemaGrpcMarshallers.Create(advanceVersionRequestSerializer),
             responseMarshaller: LatticeSchemaGrpcMarshallers.Create(versionConfigResponseSerializer));
 
-        AdvanceAndMigrate = new Method<AdvanceVersionRequest, SchemaRemediationReportResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: AdvanceAndMigrateMethodName,
-            requestMarshaller: LatticeSchemaGrpcMarshallers.Create(advanceVersionRequestSerializer),
-            responseMarshaller: LatticeSchemaGrpcMarshallers.Create(remediationReportResponseSerializer));
 
-        MigrateToTargetVersion = new Method<SchemaTreeRequest, SchemaRemediationReportResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: MigrateToTargetVersionMethodName,
-            requestMarshaller: LatticeSchemaGrpcMarshallers.Create(treeRequestSerializer),
-            responseMarshaller: LatticeSchemaGrpcMarshallers.Create(remediationReportResponseSerializer));
 
         ClearVersionConfig = new Method<SchemaTreeRequest, SchemaRemovedResponse>(
             type: MethodType.Unary,
@@ -253,12 +225,6 @@ internal sealed class LatticeSchemaGrpcMethods
             requestMarshaller: LatticeSchemaGrpcMarshallers.Create(treeRequestSerializer),
             responseMarshaller: LatticeSchemaGrpcMarshallers.Create(removedResponseSerializer));
 
-        Remediate = new Method<RemediateRequest, SchemaRemediationReportResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: RemediateMethodName,
-            requestMarshaller: LatticeSchemaGrpcMarshallers.Create(remediateRequestSerializer),
-            responseMarshaller: LatticeSchemaGrpcMarshallers.Create(remediationReportResponseSerializer));
 
         GetRemediationStatus = new Method<SchemaTreeRequest, SchemaRemediationReportResponse>(
             type: MethodType.Unary,
@@ -267,12 +233,6 @@ internal sealed class LatticeSchemaGrpcMethods
             requestMarshaller: LatticeSchemaGrpcMarshallers.Create(treeRequestSerializer),
             responseMarshaller: LatticeSchemaGrpcMarshallers.Create(remediationReportResponseSerializer));
 
-        ScanCompliance = new Method<SchemaTreeRequest, SchemaComplianceReportResponse>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: ScanComplianceMethodName,
-            requestMarshaller: LatticeSchemaGrpcMarshallers.Create(treeRequestSerializer),
-            responseMarshaller: LatticeSchemaGrpcMarshallers.Create(complianceReportResponseSerializer));
 
         ProbeCapabilities = new Method<SchemaTreeRequest, LatticeSchemaCapabilities>(
             type: MethodType.Unary,
@@ -363,23 +323,11 @@ internal sealed class LatticeSchemaGrpcMethods
     /// <summary>The unary <c>AdvanceTargetVersion</c> RPC.</summary>
     public Method<AdvanceVersionRequest, VersionConfigResponse> AdvanceTargetVersion { get; }
 
-    /// <summary>The unary <c>AdvanceAndMigrate</c> RPC.</summary>
-    public Method<AdvanceVersionRequest, SchemaRemediationReportResponse> AdvanceAndMigrate { get; }
-
-    /// <summary>The unary <c>MigrateToTargetVersion</c> RPC.</summary>
-    public Method<SchemaTreeRequest, SchemaRemediationReportResponse> MigrateToTargetVersion { get; }
-
     /// <summary>The unary <c>ClearVersionConfig</c> RPC.</summary>
     public Method<SchemaTreeRequest, SchemaRemovedResponse> ClearVersionConfig { get; }
 
-    /// <summary>The unary <c>Remediate</c> RPC.</summary>
-    public Method<RemediateRequest, SchemaRemediationReportResponse> Remediate { get; }
-
     /// <summary>The unary <c>GetRemediationStatus</c> RPC.</summary>
     public Method<SchemaTreeRequest, SchemaRemediationReportResponse> GetRemediationStatus { get; }
-
-    /// <summary>The unary <c>ScanCompliance</c> compliance-audit RPC.</summary>
-    public Method<SchemaTreeRequest, SchemaComplianceReportResponse> ScanCompliance { get; }
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
     public Method<SchemaTreeRequest, LatticeSchemaCapabilities> ProbeCapabilities { get; }

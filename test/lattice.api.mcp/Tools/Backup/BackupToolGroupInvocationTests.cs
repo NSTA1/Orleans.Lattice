@@ -66,7 +66,7 @@ public sealed class BackupToolGroupInvocationTests
     [Test]
     public async Task List_tool_delegate_returns_the_catalog_page()
     {
-        await _control.CreateBackupAsync(Capture("nightly", "orders"));
+        await _control.SeedBackupAsync(Capture("nightly", "orders"));
 
         var page = await CallAsync<McpBackupCatalogPage>(
             "lattice_backup_list",
@@ -81,7 +81,7 @@ public sealed class BackupToolGroupInvocationTests
     [Test]
     public async Task List_tool_delegate_binds_its_defaults_when_no_arguments_are_supplied()
     {
-        await _control.CreateBackupAsync(Capture("nightly", "orders"));
+        await _control.SeedBackupAsync(Capture("nightly", "orders"));
 
         await using var services = Services();
         var result = await McpToolInvocation.CallAsync(Tool("lattice_backup_list"), services);
@@ -93,7 +93,7 @@ public sealed class BackupToolGroupInvocationTests
     [Test]
     public async Task Describe_tool_delegate_forwards_the_backup_id()
     {
-        var created = await _control.CreateBackupAsync(Capture("nightly", "orders"));
+        var created = await _control.SeedBackupAsync(Capture("nightly", "orders"));
 
         var chain = await CallAsync<McpBackupChain>("lattice_backup_describe", ("backupId", created.BackupId));
 
@@ -185,7 +185,6 @@ public sealed class BackupToolGroupInvocationTests
     // ---- mutating control tools --------------------------------------------
 
     [TestCase("lattice_backup_start")]
-    [TestCase("lattice_backup_create")]
     public async Task Start_tool_delegate_forwards_the_name_scope_and_operation_id(string toolName)
     {
         var handle = await CallAsync<McpBackupOperationHandle>(
@@ -212,10 +211,9 @@ public sealed class BackupToolGroupInvocationTests
     }
 
     [TestCase("lattice_backup_start_incremental")]
-    [TestCase("lattice_backup_create_incremental")]
     public async Task Start_incremental_tool_delegate_forwards_the_base_backup_id(string toolName)
     {
-        var baseBackup = await _control.CreateBackupAsync(Capture("full", "orders"));
+        var baseBackup = await _control.SeedBackupAsync(Capture("full", "orders"));
 
         var handle = await CallAsync<McpBackupOperationHandle>(
             toolName,
@@ -297,25 +295,6 @@ public sealed class BackupToolGroupInvocationTests
     }
 
     [Test]
-    public async Task Restore_alias_tool_delegate_treats_operation_id_as_the_restore_key()
-    {
-        var handle = await CallAsync<McpBackupOperationHandle>(
-            "lattice_backup_restore",
-            ("backupId", "bk-0"),
-            ("mode", "InPlace"),
-            ("operationId", "op-42"));
-        var status = await CallAsync<McpBackupOperationResult>(
-            McpBackupOperationHandle.StatusToolName, ("operationId", handle.OperationId));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(handle.OperationId, Is.Not.EqualTo("op-42"),
-                "The alias keeps its shipped meaning: operationId is the restore key, not the tracking id.");
-            Assert.That(status.Operation!.RestoreResult!.OperationId, Is.EqualTo("op-42"));
-        });
-    }
-
-    [Test]
     public async Task Operation_list_and_cancel_tool_delegates_reach_the_operations_facade()
     {
         _control.SeedOperation(new Orleans.Lattice.Api.Operations.LatticeOperationStatus
@@ -373,7 +352,7 @@ public sealed class BackupToolGroupInvocationTests
     [Test]
     public async Task Delete_tool_delegate_forwards_the_backup_id()
     {
-        var created = await _control.CreateBackupAsync(Capture("nightly", "orders"));
+        var created = await _control.SeedBackupAsync(Capture("nightly", "orders"));
 
         var deleted = await CallAsync<McpBackupDeleteResult>(
             "lattice_backup_delete", ("backupId", created.BackupId));

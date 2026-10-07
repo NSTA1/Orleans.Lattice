@@ -31,24 +31,6 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
         _client = client;
     }
 
-    // The deprecated blocking verbs (LATTICE0002) forward to the client's deprecated
-    // blocking calls; this adapter only implements the shipped interface. New callers
-    // use GrpcLatticeBackupOperations.
-#pragma warning disable LATTICE0002
-
-    /// <inheritdoc />
-    public Task<LatticeBackupCaptureResult> CreateBackupAsync(LatticeBackupCaptureRequest request, CancellationToken cancellationToken = default)
-        => _client.CreateBackupAsync(request, cancellationToken);
-
-    /// <inheritdoc />
-    public Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(LatticeBackupIncrementalCaptureRequest request, CancellationToken cancellationToken = default)
-        => _client.CreateIncrementalBackupAsync(request, cancellationToken);
-
-    /// <inheritdoc />
-    public Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default)
-        => _client.CreateBackupSetAsync(request, cancellationToken);
-#pragma warning restore LATTICE0002
-
     /// <inheritdoc />
     public async Task ScheduleBackupAsync(LatticeBackupScheduleRequest request, CancellationToken cancellationToken = default)
     {
@@ -77,12 +59,6 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
         => _client.DeleteBackupAsync(backupId, cancellationToken);
 
     /// <inheritdoc />
-    public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
-#pragma warning disable LATTICE0002 // Forwards the deprecated verb; see CreateBackupAsync.
-        => _client.RestoreBackupAsync(request, cancellationToken);
-#pragma warning restore LATTICE0002
-
-    /// <inheritdoc />
     public Task RevertRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)
         => _client.RevertRestoreAsync(restore, cancellationToken);
 
@@ -96,21 +72,6 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
             "GetInventoryAsync has no gRPC binding on the backup-API surface; it cannot be served under the remote-host topology.");
 
     /// <inheritdoc />
-    public Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException(
-            "RebuildCatalogFromSinkAsync has no gRPC binding on the backup-API surface; it cannot be served under the remote-host topology.");
-
-    /// <inheritdoc />
-    public Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(bool pruneOrphans = false, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException(
-            "ScrubCatalogAgainstSinkAsync has no gRPC binding on the backup-API surface; it cannot be served under the remote-host topology.");
-
-    /// <inheritdoc />
-    public Task<LatticeRestoreResult> ColdRestoreAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException(
-            "ColdRestoreAsync has no gRPC binding on the backup-API surface; it cannot be served under the remote-host topology.");
-
-    /// <inheritdoc />
     public Task<BackupScopeStatus?> GetScopeStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
         => _client.GetScopeStatusAsync(scope, cancellationToken);
 
@@ -121,12 +82,6 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
     /// <inheritdoc />
     public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)
         => _client.IsHealthMonitoringAvailableAsync(cancellationToken);
-
-    /// <inheritdoc />
-    public Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
-#pragma warning disable LATTICE0002 // Forwards the deprecated verb; see CreateBackupAsync.
-        => _client.CheckBackupHealthAsync(backupId, cancellationToken);
-#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)

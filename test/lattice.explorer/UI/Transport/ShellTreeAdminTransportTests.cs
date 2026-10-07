@@ -4,14 +4,6 @@ using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Explorer.UI.Operations;
 
-// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
-// they stay supported until the next major version.
-#pragma warning disable LATTICE0002
-
-// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
-// they stay supported until the next major version.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Explorer.Tests.UI.Transport;
 
 /// <summary>
@@ -73,17 +65,13 @@ public sealed class ShellTreeAdminTransportTests : ShellTransportAdapterContract
         new("SurveyOrphanedLeavesAsync", Service + "AuditOrphanedLeaves", (f, ct) => f.SurveyOrphanedLeavesAsync("orders", "r1", ct)),
         new("RepairOrphanedLeavesAsync", Service + "RepairOrphanedLeaves", (f, ct) => f.RepairOrphanedLeavesAsync("orders", "r1", ct)),
         new("PlanWalMoveAsync", Service + "PlanWalMove", (f, ct) => f.PlanWalMoveAsync("orders", 0, "cold", ct)),
-        new("ExecuteWalMoveAsync", Service + "ExecuteWalMove", (f, ct) => f.ExecuteWalMoveAsync("orders", 0, "cold", null, ct)),
         new("ReclaimMovedWalSourceAsync", Service + "ReclaimMovedWalSource", (f, ct) => f.ReclaimMovedWalSourceAsync("orders", 0, "hot", ct)),
         new("ListViewsAsync", Service + "ListViews", (f, ct) => f.ListViewsAsync(ct)),
         new("CreateViewAsync", Service + "CreateView", (f, ct) => f.CreateViewAsync("by-customer", "orders", "customer-index", [1, 2], ct)),
         new("GetViewStatusAsync", Service + "GetViewStatus", (f, ct) => f.GetViewStatusAsync("by-customer", ct)),
-        new("RebuildViewAsync", Service + "RebuildView", (f, ct) => f.RebuildViewAsync("by-customer", ct)),
-        new("ReconcileViewAsync", Service + "ReconcileView", (f, ct) => f.ReconcileViewAsync("by-customer", ct)),
         new("DropViewAsync", Service + "DropView", (f, ct) => f.DropViewAsync("by-customer", ct)),
         new("ListTagIndexesAsync", Service + "ListTagIndexes", (f, ct) => f.ListTagIndexesAsync(ct)),
         new("GetTagIndexStatusAsync", Service + "GetTagIndexStatus", (f, ct) => f.GetTagIndexStatusAsync("colour", ct)),
-        new("ReconcileTagIndexAsync", Service + "ReconcileTagIndex", (f, ct) => f.ReconcileTagIndexAsync("colour", ct)),
         new("TriggerShardCompactionAsync", Service + "TriggerShardCompaction", (f, ct) => f.TriggerShardCompactionAsync("orders", 1, ct)),
         new("GetHistoryRetentionAsync", Service + "GetHistoryRetention", (f, ct) => f.GetHistoryRetentionAsync("orders", ct)),
         new("SetHistoryRetentionAsync", Service + "SetHistoryRetention", (f, ct) => f.SetHistoryRetentionAsync("orders", TreeHistoryRetentionMode.FullValue, TimeSpan.FromDays(7), ct)),

@@ -8,9 +8,8 @@ using Orleans.Lattice.Views;
 namespace Orleans.Lattice.Api.TreeAdmin.Tests;
 
 /// <summary>
-/// The orphaned-leaf operations, the shared status, list and cancel verbs, and the
-/// deprecated blocking wrappers of <see cref="LatticeTreeAdmin"/>'s accept-then-poll
-/// surface (#4124).
+/// The orphaned-leaf operations and the shared status, list and cancel verbs of
+/// <see cref="LatticeTreeAdmin"/>'s accept-then-poll surface (#4124).
 /// </summary>
 public sealed partial class LatticeTreeAdminOperationsTests
 {
@@ -192,73 +191,4 @@ public sealed partial class LatticeTreeAdminOperationsTests
         await maintainer.ReceivedWithAnyArgs(1).RebuildTrackedAsync(default!, default);
     }
 
-#pragma warning disable LATTICE0002 // The deprecated wrappers are exercised on purpose.
-    [Test]
-    public async Task Deprecated_RebuildViewAsync_wraps_a_tracked_operation()
-    {
-        var maintainer = WireMaintainer();
-        var facade = Create();
-
-        var status = await facade.RebuildViewAsync(ViewName);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(status.ViewName, Is.EqualTo(ViewName));
-            Assert.That(_operations.Values.Single().BeginRequest!.Kind, Is.EqualTo(TreeAdminOperationKinds.ViewRebuild),
-                "The blocking verb now runs as a tracked operation, so it is listed and survives as one.");
-        });
-        await maintainer.ReceivedWithAnyArgs(1).RebuildTrackedAsync(default!, default);
-        await maintainer.DidNotReceiveWithAnyArgs().RebuildAsync(default);
-    }
-
-    [Test]
-    public async Task Deprecated_ReconcileViewAsync_returns_the_operations_drift_verdict()
-    {
-        var maintainer = WireMaintainer();
-        maintainer.ReconcileTrackedAsync(Arg.Any<LatticeOperationTicket>(), Arg.Any<CancellationToken>()).Returns(true);
-
-        var result = await Create().ReconcileViewAsync(ViewName);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.DriftRepaired, Is.True);
-            Assert.That(result.SourceTreeId, Is.EqualTo(SourceTree));
-        });
-        await maintainer.DidNotReceiveWithAnyArgs().ReconcileAsync(default);
-    }
-
-    [Test]
-    public void Deprecated_ExecuteWalMoveAsync_rethrows_the_engines_own_exception()
-    {
-        var admin = Substitute.For<ILatticeAdminTrackedGrain>();
-        admin.ExecuteWalMoveTrackedAsync(default!, default, default!, default, default!, default)
-            .ReturnsForAnyArgs<Task<WalMoveReceipt>>(_ => throw new ArgumentOutOfRangeException("partition"));
-        _factory.GetGrain<ILatticeAdminTrackedGrain>(LatticeConstants.AdminGrainKey, null).Returns(admin);
-
-        Assert.That(async () => await Create().ExecuteWalMoveAsync(SourceTree, 9, "secondary"),
-            Throws.TypeOf<ArgumentOutOfRangeException>());
-        Assert.That(_operations.Values.Single().Completion!.State, Is.EqualTo(Orleans.Lattice.Operations.LatticeOperationState.Failed));
-    }
-
-    [Test]
-    public async Task Deprecated_ReconcileTagIndexAsync_wraps_a_tracked_sweep()
-    {
-        var registry = Substitute.For<ILatticeRegistry>();
-        registry.GetEntryAsync(IndexTree).Returns(new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry());
-        _factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
-        var coordinator = Substitute.For<ITagIndexReconcileGrain>();
-        coordinator.RunTrackedSweepAsync(Arg.Any<LatticeOperationTicket>(), Arg.Any<CancellationToken>())
-            .Returns(new TagReconcileReport(2, 5, 6, 1));
-        _factory.GetGrain<ITagIndexReconcileGrain>(IndexName, null).Returns(coordinator);
-
-        var report = await Create().ReconcileTagIndexAsync(IndexName);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.TreeId, Is.EqualTo(IndexTree));
-            Assert.That(report.OrphanRowsRemoved, Is.EqualTo(1));
-        });
-        await coordinator.DidNotReceive().RunSweepAsync();
-    }
-#pragma warning restore LATTICE0002
 }

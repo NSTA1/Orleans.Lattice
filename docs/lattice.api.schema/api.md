@@ -38,12 +38,8 @@ The control facade exposes these methods. Each method corresponds to one RPC in 
 | `SetVersionConfigAsync` | `Task SetVersionConfigAsync(string treeId, LatticeSchemaVersionConfig config, CancellationToken cancellationToken = default)` |
 | `GetVersionConfigAsync` | `Task<LatticeSchemaVersionConfig?> GetVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `AdvanceTargetVersionAsync` | `Task<LatticeSchemaVersionConfig> AdvanceTargetVersionAsync(string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)` |
-| `AdvanceAndMigrateAsync` | `Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)` |
-| `MigrateToTargetVersionAsync` | `Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `ClearVersionConfigAsync` | `Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)` |
-| `RemediateAsync` | `Task<LatticeSchemaRemediationReport> RemediateAsync(string treeId, LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, CancellationToken cancellationToken = default)` |
 | `GetRemediationStatusAsync` | `Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)` |
-| `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` - deprecated (`LATTICE0002`); use `ILatticeSchemaComplianceOperations` |
 | `ProbeCapabilitiesAsync` | `Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 
 Policy operations manage a tree's write-validation policy. `SetPolicyAsync` and `ClearPolicyAsync` require SchemaAdmin authority; `GetPolicyAsync` requires Read authority. Once authorized, `SetPolicyAsync` compiles the policy before storing it and refuses one it cannot compile - a rule incomplete for its kind, a regex the non-backtracking engine rejects, or a `MaxByteLength` encoding rule with a negative limit - with an `ArgumentException`, storing nothing. The policy type, the structural predicate kinds (`TypeOf`, `Length`, `Every`, and `Self`), the public `LatticeSchemaPolicyValidator` preview helper, and the enforcement semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
@@ -52,9 +48,9 @@ Dead-letter operations inspect diverted, schema-rejected writes. `ListDeadLetter
 
 Versioning operations require the separate schema-versioning add-on. If the host did not register `AddLatticeSchemaVersioning(...)`, these calls throw a clear `InvalidOperationException` rather than failing dependency resolution. Reads require Read authority; mutations require SchemaAdmin authority. The config and migration semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
 
-Remediation operations apply or report a tree-wide repair. `RemediateAsync` requires SchemaAdmin authority, applies a `LatticeValueTransform` across a tree, and adopts the supplied target policy. `GetRemediationStatusAsync` requires Read authority and returns the status or last report; it never waits behind a running remediation, and it names the tracked operation that started the run in its `OperationId`.
+Remediation operations apply or report a tree-wide repair. `StartRemediationAsync` requires SchemaAdmin authority, accepts a tracked remediation that applies a `LatticeValueTransform` across a tree, and adopts the supplied target policy on cutover. `GetRemediationStatusAsync` requires Read authority and returns the status or last report; it never waits behind a running remediation, and it names the tracked operation that started the run in its `OperationId`.
 
-`RemediateAsync`, `MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` are **deprecated** (`LATTICE0002`) and will be removed in the next major version. They still wait for the terminal report, so a long run remains exposed to the caller's own timeout even though the work itself is driven in resumable slices. The same singleton implements `ILatticeSchemaOperations`, whose start verbs return as soon as the run is accepted and whose status verbs report its phase and values processed:
+The same singleton implements `ILatticeSchemaOperations`, whose start verbs return as soon as the run is accepted and whose status verbs report its phase and values processed. The blocking `LATTICE0002` facade verbs were removed in this major version; see [Schema operations](operations.md#migrating-from-the-removed-blocking-verbs) for the migration table:
 
 | Method | Signature |
 |---|---|
@@ -65,9 +61,9 @@ Remediation operations apply or report a tree-wide repair. `RemediateAsync` requ
 | `ListOperationsAsync` | `Task<LatticeOperationPage> ListOperationsAsync(LatticeOperationListRequest request, CancellationToken cancellationToken = default)` |
 | `CancelOperationAsync` | `Task<LatticeOperationStatus?> CancelOperationAsync(string operationId, CancellationToken cancellationToken = default)` |
 
-See [Schema operations](operations.md) for the kinds, phases, outcomes, scoping and the migration from the blocking verbs.
+See [Schema operations](operations.md) for the kinds, phases, outcomes, scoping and the migration from the removed blocking verbs.
 
-Scan compliance is read-only. It scans a tree's entries against the cached compiled policy and reports per-tree compliant and non-compliant counts plus a reason breakdown; when no policy is set, it returns the ungoverned report (`HasPolicy` is `false` and every count is zero). It never mutates values or policy. The blocking `ScanComplianceAsync` is deprecated (`LATTICE0002`, removed in the next major version) because a large scan outlasts the caller's timeout; start the scan with `ILatticeSchemaComplianceOperations` instead (below).
+Scan compliance is read-only. Start it with `ILatticeSchemaComplianceOperations`, then read the same `LatticeSchemaComplianceReport` back from the operation result with `SchemaComplianceScanResults.TryReadReport`. A large scan can outlast the caller's timeout, so the facade now exposes only the tracked operation path.
 
 Probe capabilities has no side effects. It performs two fail-closed probes, Read and SchemaAdmin, and maps them to capability flags. The result is advisory only: every real operation still performs its own authorization immediately before touching data.
 

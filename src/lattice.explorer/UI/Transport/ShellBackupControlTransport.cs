@@ -2,10 +2,6 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Backup;
 
-// Still calls the deprecated blocking backup verbs (LATTICE0002); the Explorer moves to
-// ILatticeBackupOperations in the second #4122 change, which removes this suppression.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Explorer.UI.Transport;
 
 /// <summary>
@@ -30,37 +26,6 @@ internal sealed partial class ShellBackupControlTransport(ShellTransportChannel 
 {
     /// <summary>The message the verbs the backup binding does not serve fail with.</summary>
     internal const string NotServedMessage = "The backup control API does not serve this operation over the wire.";
-
-    // The shipped ILatticeBackupControl still carries the deprecated blocking verbs
-    // (LATTICE0002), so this adapter forwards them to the client's deprecated calls.
-    // Nothing in the Explorer calls them: it starts tracked operations instead.
-#pragma warning disable LATTICE0002
-
-    /// <inheritdoc />
-    public Task<LatticeBackupCaptureResult> CreateBackupAsync(LatticeBackupCaptureRequest request, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return CallAsync(request, static (client, state, ct) => client.CreateBackupAsync(state, ct), null, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(
-        LatticeBackupIncrementalCaptureRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return CallAsync(request, static (client, state, ct) => client.CreateIncrementalBackupAsync(state, ct), null, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
-        LatticeBackupSetCaptureRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return CallAsync(request, static (client, state, ct) => client.CreateBackupSetAsync(state, ct), null, cancellationToken);
-    }
-#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task ScheduleBackupAsync(LatticeBackupScheduleRequest request, CancellationToken cancellationToken = default)
@@ -110,15 +75,6 @@ internal sealed partial class ShellBackupControlTransport(ShellTransportChannel 
     }
 
     /// <inheritdoc />
-    public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-#pragma warning disable LATTICE0002 // Forwards the deprecated verb; see CreateBackupAsync.
-        return CallAsync(request, static (client, state, ct) => client.RestoreBackupAsync(state, ct), null, cancellationToken);
-#pragma warning restore LATTICE0002
-    }
-
-    /// <inheritdoc />
     public Task RevertRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(restore);
@@ -145,21 +101,6 @@ internal sealed partial class ShellBackupControlTransport(ShellTransportChannel 
         Task.FromException<BackupInventoryReport>(new NotSupportedException(NotServedMessage));
 
     /// <inheritdoc />
-    public Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(CancellationToken cancellationToken = default) =>
-        Task.FromException<BackupCatalogRebuildReport>(new NotSupportedException(NotServedMessage));
-
-    /// <inheritdoc />
-    public Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(bool pruneOrphans = false, CancellationToken cancellationToken = default) =>
-        Task.FromException<BackupCatalogScrubReport>(new NotSupportedException(NotServedMessage));
-
-    /// <inheritdoc />
-    public Task<LatticeRestoreResult> ColdRestoreAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return Task.FromException<LatticeRestoreResult>(new NotSupportedException(NotServedMessage));
-    }
-
-    /// <inheritdoc />
     public Task<BackupScopeStatus?> GetScopeStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(scope);
@@ -176,15 +117,6 @@ internal sealed partial class ShellBackupControlTransport(ShellTransportChannel 
     /// <inheritdoc />
     public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default) =>
         CallAsync((object?)null, static (client, _, ct) => client.IsHealthMonitoringAvailableAsync(ct), null, cancellationToken);
-
-    /// <inheritdoc />
-    public Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(backupId);
-#pragma warning disable LATTICE0002 // Forwards the deprecated verb; see CreateBackupAsync.
-        return CallAsync(backupId, static (client, state, ct) => client.CheckBackupHealthAsync(state, ct), null, cancellationToken);
-#pragma warning restore LATTICE0002
-    }
 
     /// <inheritdoc />
     public Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)

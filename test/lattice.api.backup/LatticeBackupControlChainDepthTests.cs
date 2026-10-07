@@ -1,9 +1,6 @@
 using System.Text;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
-
-// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
-// they prove the start-then-wait wrappers still behave exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Tests;
 
@@ -43,6 +40,31 @@ public sealed class LatticeBackupControlChainDepthTests
     private async Task SeedAsync(string treeId, string key, string value) =>
         await _fixture.GrainFactory.GetGrain<ILattice>(treeId).SetAsync(key, Bytes(value));
 
+    private ILatticeBackupOperations Operations => (ILatticeBackupOperations)_fixture.Control;
+
+    private static async Task<LatticeOperationStatus> UntilTerminalAsync(ILatticeBackupOperations operations, string operationId)
+    {
+        LatticeOperationStatus? status = null;
+        await Orleans.Lattice.Testing.TestPoll.UntilAsync(
+            async () => (status = await operations.GetOperationStatusAsync(operationId)) is { IsTerminal: true },
+            $"operation {operationId} to finish");
+        return status!;
+    }
+
+    private async Task<string> CaptureBackupIdAsync(LatticeBackupCaptureRequest request)
+    {
+        var handle = await Operations.StartBackupAsync(request);
+        var status = await UntilTerminalAsync(Operations, handle.OperationId);
+        return status.ResultReference!;
+    }
+
+    private async Task<string> CaptureBackupIdAsync(LatticeBackupIncrementalCaptureRequest request)
+    {
+        var handle = await Operations.StartIncrementalBackupAsync(request);
+        var status = await UntilTerminalAsync(Operations, handle.OperationId);
+        return status.ResultReference!;
+    }
+
     [Test]
     public async Task GetScopeStatusAsync_walks_the_whole_base_chain_not_just_its_first_link()
     {
@@ -50,16 +72,15 @@ public sealed class LatticeBackupControlChainDepthTests
         var scope = BackupScopeSelector.WholeTree(Source);
         await SeedAsync(Source, "k1", "v1");
 
-        var full = await _fixture.Control.CreateBackupAsync(
-            new LatticeBackupCaptureRequest("full", scope));
+        var full = await CaptureBackupIdAsync(new LatticeBackupCaptureRequest("full", scope));
 
         await SeedAsync(Source, "k2", "v2");
-        var first = await _fixture.Control.CreateIncrementalBackupAsync(
-            new LatticeBackupIncrementalCaptureRequest("incr-1", scope, full.BackupId));
+        var first = await CaptureBackupIdAsync(
+            new LatticeBackupIncrementalCaptureRequest("incr-1", scope, full));
 
         await SeedAsync(Source, "k3", "v3");
-        await _fixture.Control.CreateIncrementalBackupAsync(
-            new LatticeBackupIncrementalCaptureRequest("incr-2", scope, first.BackupId));
+        await CaptureBackupIdAsync(
+            new LatticeBackupIncrementalCaptureRequest("incr-2", scope, first));
 
         var status = await _fixture.Control.GetScopeStatusAsync(scope);
 
@@ -79,7 +100,7 @@ public sealed class LatticeBackupControlChainDepthTests
         var scope = BackupScopeSelector.WholeTree(Source);
         await SeedAsync(Source, "k1", "v1");
 
-        await _fixture.Control.CreateBackupAsync(new LatticeBackupCaptureRequest("full", scope));
+        await CaptureBackupIdAsync(new LatticeBackupCaptureRequest("full", scope));
 
         var status = await _fixture.Control.GetScopeStatusAsync(scope);
 
@@ -97,16 +118,16 @@ public sealed class LatticeBackupControlChainDepthTests
         await SeedAsync(Source, "k1", "v1");
         await SeedAsync(Other, "k1", "v1");
 
-        await _fixture.Control.CreateBackupAsync(new LatticeBackupCaptureRequest("full", scope));
+        await CaptureBackupIdAsync(new LatticeBackupCaptureRequest("full", scope));
 
         // Two further backups on a different scope. They share the catalogue but
         // must not contribute to this scope's chain, so the scope-match filter
         // has to skip them.
-        var otherFull = await _fixture.Control.CreateBackupAsync(
+        var otherFull = await CaptureBackupIdAsync(
             new LatticeBackupCaptureRequest("other-full", foreign));
         await SeedAsync(Other, "k2", "v2");
-        await _fixture.Control.CreateIncrementalBackupAsync(
-            new LatticeBackupIncrementalCaptureRequest("other-incr", foreign, otherFull.BackupId));
+        await CaptureBackupIdAsync(
+            new LatticeBackupIncrementalCaptureRequest("other-incr", foreign, otherFull));
 
         var status = await _fixture.Control.GetScopeStatusAsync(scope);
 
@@ -128,13 +149,13 @@ public sealed class LatticeBackupControlChainDepthTests
         await SeedAsync(Source, "k1", "v1");
         await SeedAsync(Other, "k1", "v1");
 
-        await _fixture.Control.CreateBackupAsync(new LatticeBackupCaptureRequest("full", scope));
+        await CaptureBackupIdAsync(new LatticeBackupCaptureRequest("full", scope));
 
-        var otherFull = await _fixture.Control.CreateBackupAsync(
+        var otherFull = await CaptureBackupIdAsync(
             new LatticeBackupCaptureRequest("other-full", foreign));
         await SeedAsync(Other, "k2", "v2");
-        await _fixture.Control.CreateIncrementalBackupAsync(
-            new LatticeBackupIncrementalCaptureRequest("other-incr", foreign, otherFull.BackupId));
+        await CaptureBackupIdAsync(
+            new LatticeBackupIncrementalCaptureRequest("other-incr", foreign, otherFull));
 
         var mine = await _fixture.Control.GetScopeStatusAsync(scope);
         var theirs = await _fixture.Control.GetScopeStatusAsync(foreign);
