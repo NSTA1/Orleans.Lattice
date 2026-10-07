@@ -1069,6 +1069,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // while the drain runs.
         var carriedSagas = new HashSet<Guid>();
         var decidedSagas = new Dictionary<Guid, bool>();
+        var importedDecisions = new HashSet<Guid>();
         var crossTreeBarriers = new HashSet<string>(StringComparer.Ordinal);
         var namedCrossTreeOperations = new HashSet<string>(StringComparer.Ordinal);
 
@@ -1096,6 +1097,10 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             if (entry.IsDecision)
             {
                 await ApplySettledDecisionAsync(_grainFactory, treeName, entry).ConfigureAwait(true);
+                if (entry.SettledDecision is not null && entry.TransactionId != Guid.Empty)
+                {
+                    importedDecisions.Add(entry.TransactionId);
+                }
 
                 // A cross-tree sub-saga's decision replaces its terminal here, so
                 // it arrives at the receiver's barrier as the terminal would
@@ -1268,6 +1273,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // operation the import settled from bare rows (#4684).
         RecordSiblingBoundaries(treeName, snapshot);
         await PruneSiblingBoundariesAsync(sourceClusterId).ConfigureAwait(true);
+        await RegisterImportedDecisionsAsync(treeName, sourceClusterId, snapshot, importedDecisions).ConfigureAwait(true);
 
         if (state.State.PendingCrossTreeBarriers.Count == 0 && state.State.PendingSiblingBoundaries.Count == 0)
         {
@@ -2110,12 +2116,12 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     /// receiver instead of being staged in a pending bucket no terminal will
     /// drain. Idempotent: a repeat records the same outcome.
     /// <para>
-    /// The row is deliberately not forgotten. Re-shipping a long retained
-    /// tail can outlast the receiver's decision retention, and a prepare
-    /// arriving after the row was purged would strand again. The receiver
-    /// cannot yet observe the incremental stream passing the export's cut,
-    /// which is what would make retiring the row safe, so it retains one
-    /// row per saga the source stored at the export (#4524).
+    /// The row is not forgotten here. Re-shipping a long retained tail can
+    /// outlast the receiver's decision retention, and a prepare arriving
+    /// after the row was purged would strand again. The drain hands the row
+    /// to <see cref="IImportedDecisionRetirementGrain"/>, which forgets it
+    /// once the incremental stream has passed the export's cut on every
+    /// partition, and retains it when the source captured no cut (#4524).
     /// </para>
     /// </summary>
     internal static async Task ApplySettledDecisionAsync(IGrainFactory grainFactory, string treeName, SnapshotEntry entry)
