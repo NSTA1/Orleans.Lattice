@@ -29,6 +29,7 @@ public sealed partial class SchemaRemediationPanelTests
 
         StartRename();
         cut.WaitUntil(() => Assert.That(Schema.OperationStatuses["op-1"].State, Is.EqualTo(Orleans.Lattice.Api.Operations.LatticeOperationState.Running)));
+        cut.WaitUntil(() => Assert.That(Operations.IsFollowing("orders"), Is.True));
 
         first.SetResult(LatticeSchemaRemediationReport.Aborted(17, "order/42", "still fails", Array.Empty<byte>(), "op-1"));
         cut.WaitUntil(() => Assert.That(Schema.OperationStatuses["op-1"].IsTerminal, Is.True));
@@ -43,6 +44,7 @@ public sealed partial class SchemaRemediationPanelTests
         {
             Assert.That(Schema.CountOf("StartRemediation"), Is.EqualTo(2));
             Assert.That(cut.FindAll(".lt-schema-abort"), Is.Empty);
+            Assert.That(Operations.IsFollowing("orders"), Is.True);
         });
 
         second.SetResult(LatticeSchemaRemediationReport.Completed(1234, "physical-orders-shadow", "op-2"));
@@ -80,7 +82,11 @@ public sealed partial class SchemaRemediationPanelTests
         cut.WaitUntil(() => Assert.That(cut.FindAll("[role=alertdialog]"), Has.Count.EqualTo(1)));
         cut.Find("[role=alertdialog] input").Input("orders");
         cut.Find("[role=alertdialog] form").Submit();
-        cut.WaitUntil(() => Assert.That(Schema.CountOf("StartRemediation"), Is.EqualTo(1)));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Schema.CountOf("StartRemediation"), Is.EqualTo(1));
+            Assert.That(Operations.IsFollowing("orders"), Is.True);
+        });
 
         operation.SetResult(LatticeSchemaRemediationReport.Completed(1234, "physical-orders-shadow", "op-1"));
         cut.WaitUntil(() => Assert.That(Schema.OperationStatuses["op-1"].IsTerminal, Is.True));
