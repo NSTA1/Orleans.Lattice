@@ -540,8 +540,16 @@ raise `MaxScanRetries` or reduce concurrent split activity. If you see it, read 
 activity](#concurrent-split-activity) first - the scan is a symptom of the
 topology churn, not the cause. `GetManyAsync` spends the same budget when a
 shard-map change or a concurrently committing atomic-write saga races its
-batched read; its exhaustion message tells you to reduce the concurrent saga
-rate instead. A multi-key read whose result depended on a pending atomic
+batched read, then falls back to one bounded decision-gated read. Sustained saga
+commits alone no longer invalidate every attempt after gate acquisition. An
+Information-level log, `GetManyAsync for tree {TreeId} entering bounded
+decision-gated fallback after {Attempts} optimistic attempts.`, records each
+fallback entry. Frequent entries indicate commit contention; concurrent fallback
+readers can still exhaust the bounded admission deadline. The hold briefly delays
+new local saga decisions tree-wide, with a writer-open interval between read
+holds; see [Atomic writes](atomic-writes.md) for the latency bounds. A lost or expired gate, registry
+coverage growth or a topology change during the fallback instead fails closed
+with `LatticeTransactionOutcomeUnavailableException`. A multi-key read whose result depended on a pending atomic
 write while the transaction registry could not be reached throws
 `LatticeTransactionOutcomeUnavailableException` (a `TimeoutException`)
 instead of either message: a transient condition, so retry after a back-off;
@@ -692,8 +700,8 @@ These are different faults with different remedies:
 | `SplitInProgress` stuck on for a long time | [Concurrent split activity](#concurrent-split-activity) |
 | `BulkOperationPending` stuck on | [Concurrent split activity](#concurrent-split-activity) and [Bulk loading](bulk-loading.md) |
 | Scan latency climbing while live keys stay flat | [Slow scans](#slow-scans) |
-| `InvalidOperationException` naming `MaxScanRetries` | [Slow scans](#slow-scans), then [Concurrent split activity](#concurrent-split-activity); from `GetManyAsync`, concurrent [atomic writes](atomic-writes.md) |
-| `LatticeTransactionOutcomeUnavailableException` on a read | [Atomic writes](atomic-writes.md#when-the-registry-cannot-be-reached-latticetransactionoutcomeunavailableexception) - the transaction registry was unreachable for a key under a pending atomic write: transient, retry after a back-off |
+| `InvalidOperationException` naming `MaxScanRetries` | [Slow scans](#slow-scans), then [Concurrent split activity](#concurrent-split-activity) |
+| `LatticeTransactionOutcomeUnavailableException` on a read | [Atomic writes](atomic-writes.md#when-the-registry-cannot-be-reached-latticetransactionoutcomeunavailableexception) - the transaction registry was unreachable for a prepared key, or the bounded `GetManyAsync` fallback lost its gate/topology/registry-coverage certification: transient, retry after a back-off |
 | `LatticeSaturatedException` on a read or write | [WAL saturation signal](wal-saturation-signal.md#caller-side-recovery-shape) - back-pressure, not a fault: back off and retry. `SaturationSource` names the seam that refused, and the `source` tag on `orleans.lattice.saturation.refusals` counts refusals by seam; a `replay_permit_admission` refusal also carries an `arm` tag naming which part of the replay admission check refused |
 | WAL retained bytes stay high, or `lattice_treeadmin_wal_reclamation` reports `IsWedged` | [WAL reclamation and cold replay loops](#wal-reclamation-and-cold-replay-loops) - read the floor holder, pin offset, persisted checkpoint and state before concluding whether the tree is idle or stranded |
 | `SELF-REINFORCING COLD REPLAY LOOP` warning, or `orleans.lattice.leaf.activation.cold_replay_loop` advances | [WAL reclamation and cold replay loops](#wal-reclamation-and-cold-replay-loops) - read the warning split by arm: mid-replay, queued-for-permit, and resolving-options have different remedies |
