@@ -295,6 +295,21 @@ public class CrossTreeSiblingBoundaryIntegrationTests
             Coordinator(tree).BootstrapAsync(SiteAClusterId, CancellationToken.None),
             Coordinator(sibling).BootstrapAsync(SiteAClusterId, CancellationToken.None));
 
+        var heldPhases = await Task.WhenAll(
+            AwaitPhaseAsync(tree, TimeSpan.FromSeconds(20), LatticeBootstrapState.IncrementalHandoff),
+            AwaitPhaseAsync(sibling, TimeSpan.FromSeconds(20), LatticeBootstrapState.IncrementalHandoff));
+        var initialHolds = (await Coordinator(tree).GetPendingCrossTreeHoldsForTestingAsync())
+            .Select(hold => $"{tree}: {hold}")
+            .Concat((await Coordinator(sibling).GetPendingCrossTreeHoldsForTestingAsync())
+                .Select(hold => $"{sibling}: {hold}"))
+            .Where(static hold => hold.Contains("sibling:", StringComparison.Ordinal))
+            .ToArray();
+
+        await Coordinator(sibling).MarkSiblingReseedRequestedForTestingAsync(tree);
+        await Coordinator(tree).ReleaseCrossTreeHoldForTestingAsync(ageSiblingBoundaries: true);
+        var releaseAfterPriorRequest = await Coordinator(sibling).ReleaseCrossTreeHoldForTestingAsync(ageSiblingBoundaries: true);
+        var refreshedHolds = await Coordinator(sibling).GetPendingCrossTreeHoldsForTestingAsync();
+
         var phases = await Task.WhenAll(
             AwaitPhaseAsync(tree, TimeSpan.FromMinutes(2), LatticeBootstrapState.LiveIncremental),
             AwaitPhaseAsync(sibling, TimeSpan.FromMinutes(2), LatticeBootstrapState.LiveIncremental));
@@ -316,8 +331,20 @@ public class CrossTreeSiblingBoundaryIntegrationTests
             $"{sibling}: phase={statuses[1].Phase};source={statuses[1].SourceClusterId ?? "none"};readFenced={statuses[1].ReadFenced};entries={statuses[1].EntriesApplied};epoch={drainedEpochs[1]?.ToString() ?? "none"}",
         };
 
-        Assert.That(phases, Is.All.EqualTo(LatticeBootstrapState.LiveIncremental),
-            $"both imports should pass their sibling boundaries; status: {string.Join(" | ", statusDescriptions)}; remaining holds: {string.Join(" | ", holdDescriptions)}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(heldPhases, Is.All.EqualTo(LatticeBootstrapState.IncrementalHandoff),
+                "both imports must be active at the handoff before the aged-boundary recovery is exercised");
+            Assert.That(initialHolds, Has.Some.Contains($"{tree}: sibling:{sibling};"),
+                "the first coordinator must be held at the second coordinator's captured export boundary");
+            Assert.That(initialHolds, Has.Some.Contains($"{sibling}: sibling:{tree};"),
+                "the second coordinator must be held at the first coordinator's captured export boundary");
+            Assert.That(releaseAfterPriorRequest, Is.False);
+            Assert.That(refreshedHolds, Has.Some.Contains($"sibling:{tree};").And.Contains("reseedRequested=True").And.Contains("refreshRequested=True"),
+                "the lower-named coordinator must still refresh an active sibling after a bootstrap request was already issued");
+            Assert.That(phases, Is.All.EqualTo(LatticeBootstrapState.LiveIncremental),
+                $"both imports should pass their sibling boundaries; status: {string.Join(" | ", statusDescriptions)}; remaining holds: {string.Join(" | ", holdDescriptions)}");
+        });
     }
 
     [Test]
@@ -397,7 +424,11 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeReplication(opts => opts.ClusterId = SiteBClusterId);
+            siloBuilder.AddLatticeReplication(opts =>
+            {
+                opts.ClusterId = SiteBClusterId;
+                opts.AutoBootstrapOnFallOffLog = true;
+            });
             if (SiteATransports.TryGetValue(SiteAClusterId, out var transport))
             {
                 siloBuilder.Services.AddSingleton(transport);

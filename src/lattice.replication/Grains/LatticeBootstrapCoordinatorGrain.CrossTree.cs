@@ -372,6 +372,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
 
         state.State.PendingCrossTreeBarriers = [];
         state.State.SiblingReseedsRequested.Clear();
+        state.State.SiblingRefreshesRequested.Clear();
         Logger.LogInformation(
             "Every cross-tree barrier and sibling boundary holding the import of tree '{TreeName}' is settled; its read fence is lifted",
             TreeName);
@@ -393,9 +394,35 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
                 var boundary = entry.Value;
                 var tails = string.Join(",", boundary.Tails);
                 var reseedRequested = state.State.SiblingReseedsRequested.Contains(entry.Key);
-                return $"sibling:{entry.Key};exportEpoch={boundary.ExportEpoch};physical={boundary.PhysicalTreeId};tails=[{tails}];reseedRequested={reseedRequested}";
+                var refreshRequested = state.State.SiblingRefreshesRequested.Contains(entry.Key);
+                return $"sibling:{entry.Key};exportEpoch={boundary.ExportEpoch};physical={boundary.PhysicalTreeId};tails=[{tails}];reseedRequested={reseedRequested};refreshRequested={refreshRequested}";
             }));
         return Task.FromResult(holds.ToArray());
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> ReleaseCrossTreeHoldForTestingAsync(bool ageSiblingBoundaries)
+    {
+        if (ageSiblingBoundaries && state.State.PendingSiblingBoundaries.Count > 0)
+        {
+            state.State.SiblingBoundariesSinceUtcTicks =
+                DateTime.UtcNow.Ticks - SiblingBoundaryReseedAfter.Ticks - 1;
+        }
+
+        return await ReleaseCrossTreeHoldAsync().ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    public async Task MarkSiblingReseedRequestedForTestingAsync(string siblingTreeName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(siblingTreeName);
+        if (!state.State.PendingSiblingBoundaries.ContainsKey(siblingTreeName))
+        {
+            throw new InvalidOperationException($"Sibling '{siblingTreeName}' has no pending boundary for tree '{TreeName}'.");
+        }
+
+        state.State.SiblingReseedsRequested.Add(siblingTreeName);
+        await state.WriteStateAsync().ConfigureAwait(true);
     }
 
     /// <inheritdoc />
@@ -451,6 +478,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     {
         state.State.PendingSiblingBoundaries = new Dictionary<string, CrossTreeSiblingBoundary>(StringComparer.Ordinal);
         state.State.SiblingReseedsRequested.Clear();
+        state.State.SiblingRefreshesRequested.Clear();
         state.State.SiblingBoundariesSinceUtcTicks = DateTime.UtcNow.Ticks;
         if (snapshot.SiblingBoundaries is not { } boundaries)
         {
@@ -538,14 +566,19 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
                 continue;
             }
 
-            if (status.SourceClusterId is null && state.State.SiblingReseedsRequested.Remove(sibling))
+            if (status.SourceClusterId is null)
             {
-                // The requested drain finished but did not pass this captured
-                // boundary. Back off before asking for another export, which
-                // must open after the boundary rather than merely repeat it.
-                state.State.SiblingBoundariesSinceUtcTicks = DateTime.UtcNow.Ticks;
-                await state.WriteStateAsync().ConfigureAwait(true);
-                continue;
+                var reseedFinished = state.State.SiblingReseedsRequested.Remove(sibling);
+                var refreshFinished = state.State.SiblingRefreshesRequested.Remove(sibling);
+                if (reseedFinished || refreshFinished)
+                {
+                    // The requested drain finished but did not pass this captured
+                    // boundary. Back off before asking for another export, which
+                    // must open after the boundary rather than merely repeat it.
+                    state.State.SiblingBoundariesSinceUtcTicks = DateTime.UtcNow.Ticks;
+                    await state.WriteStateAsync().ConfigureAwait(true);
+                    continue;
+                }
             }
 
             if (!_optionsMonitor.Get(sibling).AutoBootstrapOnFallOffLog)
@@ -553,11 +586,6 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
                 Logger.LogWarning(
                     "Tree '{TreeName}' stays read-fenced: sibling tree '{Sibling}' has not passed its boundary from {Source} and automatic bootstrap is disabled; re-seed it to serve '{TreeName}'",
                     TreeName, sibling, sourceClusterId, TreeName);
-                continue;
-            }
-
-            if (state.State.SiblingReseedsRequested.Contains(sibling))
-            {
                 continue;
             }
 
@@ -572,24 +600,41 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
                 if (status.Phase != LatticeBootstrapState.IncrementalHandoff
                     || !string.Equals(status.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
                     || string.CompareOrdinal(TreeName, sibling) >= 0
-                    || !state.State.SiblingReseedsRequested.Add(sibling))
+                    || !state.State.SiblingRefreshesRequested.Add(sibling))
                 {
                     continue;
                 }
 
                 try
                 {
+                    await state.WriteStateAsync().ConfigureAwait(true);
+                }
+                catch
+                {
+                    state.State.SiblingRefreshesRequested.Remove(sibling);
+                    throw;
+                }
+
+                try
+                {
                     if (!await coordinator.RefreshStuckSiblingImportAsync(sourceClusterId, TreeName).ConfigureAwait(true))
                     {
-                        state.State.SiblingReseedsRequested.Remove(sibling);
+                        state.State.SiblingRefreshesRequested.Remove(sibling);
+                        await state.WriteStateAsync().ConfigureAwait(true);
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    state.State.SiblingReseedsRequested.Remove(sibling);
+                    state.State.SiblingRefreshesRequested.Remove(sibling);
+                    await state.WriteStateAsync().ConfigureAwait(true);
                     Logger.LogDebug(ex, "The request to refresh stuck sibling import '{Sibling}' failed; retried on a later tick", sibling);
                 }
 
+                continue;
+            }
+
+            if (state.State.SiblingReseedsRequested.Contains(sibling))
+            {
                 continue;
             }
 

@@ -52,6 +52,12 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     [Orleans.Concurrency.AlwaysInterleave]
     Task<string[]> GetPendingCrossTreeHoldsForTestingAsync();
 
+    /// <summary>Re-checks cross-tree holds for deterministic integration tests, optionally expiring their age threshold.</summary>
+    Task<bool> ReleaseCrossTreeHoldForTestingAsync(bool ageSiblingBoundaries);
+
+    /// <summary>Marks a pending sibling as already requested for deterministic integration tests.</summary>
+    Task MarkSiblingReseedRequestedForTestingAsync(string siblingTreeName);
+
     /// <summary>Requests a fresh snapshot attempt for an aged, mutually held sibling import.</summary>
     Task<bool> RefreshStuckSiblingImportAsync(string sourceClusterId, string requestingTreeName);
 

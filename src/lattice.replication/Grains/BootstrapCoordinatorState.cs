@@ -301,4 +301,7 @@ internal sealed class BootstrapCoordinatorState
 
     /// <summary>Whether the shadow copy has become the logical tree's authoritative alias target.</summary>
     [Id(35)] public bool ShadowCopyCutoverComplete { get; set; }
+
+    /// <summary>The active sibling imports this coordinator has already asked to refresh.</summary>
+    [Id(36)] public HashSet<string> SiblingRefreshesRequested { get; set; } = new(StringComparer.Ordinal);
 }
