@@ -46,6 +46,11 @@ public sealed class DerivedTreeEntriesTests
         nameof(TreeRegistryEntry.ReplacedShardMap),
         nameof(TreeRegistryEntry.ReplacedNextShardIndex),
         nameof(TreeRegistryEntry.AliasCutoverTarget),
+        // Bare-alias routing and recovery bookkeeping belongs to the logical
+        // registry row and must not follow a derived physical copy.
+        nameof(TreeRegistryEntry.UnaliasedShardMap),
+        nameof(TreeRegistryEntry.UnaliasedNextShardIndex),
+        nameof(TreeRegistryEntry.AliasRoutingOperationId),
         // Content identity, not configuration (#4537): a derived copy gets its own
         // lineage, and carrying one tree's onto another would claim the copy holds
         // that tree's contents.
@@ -107,7 +112,15 @@ public sealed class DerivedTreeEntriesTests
     {
         var target = new TreeRegistryEntry { ShardCount = 2, MaxLeafKeys = 7 };
 
-        var carried = target.WithConfigurationOverridesOf(WithEveryOverride() with { ShardCount = 9, MaxLeafKeys = 99 });
+        var source = WithEveryOverride() with
+        {
+            ShardCount = 9,
+            MaxLeafKeys = 99,
+            UnaliasedShardMap = ShardMap.CreateDefault(128, 4),
+            UnaliasedNextShardIndex = 17,
+            AliasRoutingOperationId = "logical-move",
+        };
+        var carried = target.WithConfigurationOverridesOf(source);
 
         Assert.Multiple(() =>
         {
@@ -119,6 +132,9 @@ public sealed class DerivedTreeEntriesTests
 
             Assert.That(carried.ShardCount, Is.EqualTo(2));
             Assert.That(carried.MaxLeafKeys, Is.EqualTo(7));
+            Assert.That(carried.UnaliasedShardMap, Is.Null, "logical-tree routing state is not inherited");
+            Assert.That(carried.UnaliasedNextShardIndex, Is.Null, "logical-tree allocation state is not inherited");
+            Assert.That(carried.AliasRoutingOperationId, Is.Null, "logical-tree recovery ownership is not inherited");
         });
     }
 
