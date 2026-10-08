@@ -12,11 +12,25 @@ public sealed class TenantResidencySnapshotTests
 {
     private static readonly TenantId Acme = TenantId.Parse("acme");
 
+    private static TenantRecord RecordWith(TenantId tenant, TenantRegionStatus status)
+    {
+        var record = TenantRecord.Create(
+            tenant,
+            TenantStatus.Active,
+            TenantQuotas.Unbounded,
+            TenantPlacement.Shared,
+            HybridLogicalClock.Zero,
+            "test");
+        record.SetRegionStatus(
+            status == TenantRegionStatus.None ? "remote" : "local",
+            status == TenantRegionStatus.None ? TenantRegionStatus.Online : status,
+            HybridLogicalClock.Zero,
+            "test");
+        return record;
+    }
+
     private static TenantResidencySnapshot SnapshotWith(TenantRegionStatus status) =>
-        TenantResidencySnapshot.Build(new[]
-        {
-            new KeyValuePair<TenantId, TenantRegionStatus>(Acme, status),
-        });
+        TenantResidencySnapshot.Build([RecordWith(Acme, status)], "local");
 
     [Test]
     public void Empty_has_no_entries()
@@ -37,17 +51,17 @@ public sealed class TenantResidencySnapshotTests
     [Test]
     public void Build_null_throws()
     {
-        Assert.That(() => TenantResidencySnapshot.Build(null!), Throws.ArgumentNullException);
+        Assert.That(() => TenantResidencySnapshot.Build(null!, "local"), Throws.ArgumentNullException);
     }
 
     [Test]
-    public void Build_deduplicates_with_last_write_winning()
+    public void Build_keeps_the_latest_status_for_duplicate_tenant_records()
     {
         var snapshot = TenantResidencySnapshot.Build(new[]
         {
-            new KeyValuePair<TenantId, TenantRegionStatus>(Acme, TenantRegionStatus.Provisioning),
-            new KeyValuePair<TenantId, TenantRegionStatus>(Acme, TenantRegionStatus.Online),
-        });
+            RecordWith(Acme, TenantRegionStatus.Provisioning),
+            RecordWith(Acme, TenantRegionStatus.Online),
+        }, "local");
 
         Assert.Multiple(() =>
         {
@@ -55,6 +69,30 @@ public sealed class TenantResidencySnapshotTests
             Assert.That(snapshot.TryGetStatus(Acme, out var status), Is.True);
             Assert.That(status, Is.EqualTo(TenantRegionStatus.Online));
         });
+    }
+
+    [Test]
+    public void IsReplicationSourceInRegion_admits_draining_but_not_as_destination()
+    {
+        var snapshot = TenantResidencySnapshot.Build(
+            [RecordWith(Acme, TenantRegionStatus.Draining)],
+            "local");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.IsReplicationSourceInRegion(Acme, "local"), Is.True);
+            Assert.That(snapshot.IsReplicationAdmissibleLocally(Acme), Is.False);
+        });
+    }
+
+    [Test]
+    public void IsReplicationSourceInRegion_unconfigured_tenant_is_allowed_without_identity()
+    {
+        var snapshot = TenantResidencySnapshot.Build(
+            [RecordWith(Acme, TenantRegionStatus.Online)],
+            "local");
+
+        Assert.That(snapshot.IsReplicationSourceInRegion(TenantId.Parse("other"), null), Is.True);
     }
 
     [Test]

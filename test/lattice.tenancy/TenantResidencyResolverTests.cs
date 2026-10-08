@@ -132,21 +132,22 @@ public sealed class TenantResidencyResolverTests
     [TestCase(TenantRegionStatus.Provisioning, true)]
     [TestCase(TenantRegionStatus.Backfilling, true)]
     [TestCase(TenantRegionStatus.Online, true)]
-    [TestCase(TenantRegionStatus.Draining, false)]
+    [TestCase(TenantRegionStatus.Draining, true)]
     [TestCase(TenantRegionStatus.Offline, false)]
     [TestCase(TenantRegionStatus.Removed, false)]
-    public async Task TryResolveSourceResident_answers_from_all_regions_in_an_authoritative_snapshot(
+    public async Task TryResolveSourceResidency_allows_draining_region_to_ship_final_writes(
         TenantRegionStatus sourceStatus,
-        bool expectedResident)
+        bool expectedAllowed)
     {
         var resolver = await AuthoritativeAsync(Configured(Acme, "relay", sourceStatus));
 
         Assert.Multiple(() =>
         {
-            Assert.That(resolver.TryResolveSourceResident(Acme, "relay", out var resident), Is.True);
-            Assert.That(resident, Is.EqualTo(expectedResident));
-            Assert.That(resolver.TryResolveSourceResident(Acme, "unknown", out var unknownResident), Is.True);
-            Assert.That(unknownResident, Is.False);
+            Assert.That(resolver.TryResolveSourceResidency(Acme, "relay", out var configured, out var allowed), Is.True);
+            Assert.That(configured, Is.True);
+            Assert.That(allowed, Is.EqualTo(expectedAllowed));
+            Assert.That(resolver.TryResolveSourceResidency(Acme, "unknown", out _, out var unknownAllowed), Is.True);
+            Assert.That(unknownAllowed, Is.False);
         });
     }
 

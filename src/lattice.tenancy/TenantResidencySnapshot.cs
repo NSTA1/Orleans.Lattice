@@ -51,46 +51,6 @@ internal sealed class TenantResidencySnapshot
     public int Count => _byTenant.Count;
 
     /// <summary>
-    /// Builds a snapshot from the given per-tenant local-region statuses. Later
-    /// entries win on a duplicate key, so the caller may pass an already-deduplicated
-    /// map. This overload is for callers that do not need source-region lookup.
-    /// </summary>
-    /// <remarks>
-    /// A dictionary source already guarantees unique keys, so the defensive dedup
-    /// pass has nothing to do and is skipped outright - which is the shape the
-    /// maintainer always passes, having just scanned the registry into a map. Any
-    /// other source is deduplicated as before, into a map presized from the
-    /// source's own count where that is available without enumerating it.
-    /// </remarks>
-    /// <param name="statuses">The per-tenant local-region statuses of configured tenants.</param>
-    /// <returns>An immutable snapshot over a copy of <paramref name="statuses"/>.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="statuses"/> is <c>null</c>.</exception>
-    public static TenantResidencySnapshot Build(
-        IEnumerable<KeyValuePair<TenantId, TenantRegionStatus>> statuses)
-    {
-        ArgumentNullException.ThrowIfNull(statuses);
-
-        if (statuses is IReadOnlyDictionary<TenantId, TenantRegionStatus>)
-        {
-            return new TenantResidencySnapshot(
-                statuses.ToFrozenDictionary(),
-                FrozenDictionary<TenantId, FrozenDictionary<string, TenantRegionStatus>>.Empty);
-        }
-
-        var deduped = statuses.TryGetNonEnumeratedCount(out var count) && count > 0
-            ? new Dictionary<TenantId, TenantRegionStatus>(count)
-            : [];
-        foreach (var pair in statuses)
-        {
-            deduped[pair.Key] = pair.Value;
-        }
-
-        return new TenantResidencySnapshot(
-            deduped.ToFrozenDictionary(),
-            FrozenDictionary<TenantId, FrozenDictionary<string, TenantRegionStatus>>.Empty);
-    }
-
-    /// <summary>
     /// Builds a residency snapshot from authoritative tenant records, retaining
     /// the lifecycle status of every region for source-authorization checks.
     /// </summary>
@@ -162,18 +122,20 @@ internal sealed class TenantResidencySnapshot
 
     /// <summary>
     /// Whether <paramref name="regionId"/> is a resident region for the tenant.
-    /// An unconfigured tenant is resident everywhere for backwards compatibility.
+    /// A configured region in <see cref="TenantRegionStatus.Draining"/> may ship
+    /// its final accepted writes. An unconfigured tenant is resident everywhere
+    /// for backwards compatibility.
     /// </summary>
-    public bool IsResidentInRegion(TenantId tenant, string regionId)
+    public bool IsReplicationSourceInRegion(TenantId tenant, string? regionId)
     {
-        ArgumentException.ThrowIfNullOrEmpty(regionId);
         if (!_byTenant.ContainsKey(tenant))
         {
             return true;
         }
 
-        return _byRegion.TryGetValue(tenant, out var regions)
+        return !string.IsNullOrWhiteSpace(regionId)
+            && _byRegion.TryGetValue(tenant, out var regions)
             && regions.TryGetValue(regionId, out var status)
-            && TenantRegionLifecycle.IsResident(status);
+            && TenantRegionLifecycle.IsReplicationSource(status);
     }
 }

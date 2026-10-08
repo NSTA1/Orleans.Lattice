@@ -315,6 +315,8 @@ internal sealed partial class ReplicationApplier(
                     {
                         ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
                         ReplicationTenantIsolationDecision.RejectSuspendedTenant => LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant,
+                        ReplicationTenantIsolationDecision.RejectSourceNotResident => LatticeReplicationMetrics.OutcomeRejectedTenantSourceNotResident,
+                        ReplicationTenantIsolationDecision.RejectMissingSourceIdentity => LatticeReplicationMetrics.OutcomeRejectedMissingSourceIdentity,
                         _ => LatticeReplicationMetrics.OutcomeRejectedForeignTenant,
                     };
                     return new ApplyResult
@@ -999,7 +1001,14 @@ internal sealed partial class ReplicationApplier(
                 .ConfigureAwait(false);
             if (tenantDecision != ReplicationTenantIsolationDecision.Admit)
             {
-                return ReplicationSourceLineageGate.Verdict.RefuseTenantSource;
+                return tenantDecision switch
+                {
+                    ReplicationTenantIsolationDecision.RejectSourceNotResident =>
+                        ReplicationSourceLineageGate.Verdict.RefuseTenantSourceNotResident,
+                    ReplicationTenantIsolationDecision.RejectMissingSourceIdentity =>
+                        ReplicationSourceLineageGate.Verdict.RefuseMissingTenantSourceIdentity,
+                    _ => ReplicationSourceLineageGate.Verdict.RefuseTenantSource,
+                };
             }
         }
 
@@ -1517,11 +1526,11 @@ internal sealed partial class ReplicationApplier(
         var (reasonTag, failureReason) = decision switch
         {
             ReplicationTenantIsolationDecision.RejectSourceNotResident =>
-                (LatticeReplicationMetrics.ReasonForeignTenant,
+                (LatticeReplicationMetrics.ReasonTenantSourceNotResident,
                     $"Inbound replicated write for tree '{entry.TreeId}' was delivered by a region that is "
                     + "not resident for the tenant; the write was refused regardless of its original record lineage."),
             ReplicationTenantIsolationDecision.RejectMissingSourceIdentity =>
-                (LatticeReplicationMetrics.ReasonForeignTenant,
+                (LatticeReplicationMetrics.ReasonMissingSourceIdentity,
                     $"Inbound replicated write for tree '{entry.TreeId}' had no authenticated direct-sender "
                     + "identity; the write was refused because tenant source residency could not be verified."),
             ReplicationTenantIsolationDecision.RejectOutOfRegion =>

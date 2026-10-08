@@ -98,12 +98,6 @@ internal sealed class ReplicationTenantIsolationGate(
                 ReplicationTenantIsolationDecision.Admit);
         }
 
-        if (string.IsNullOrWhiteSpace(authenticatedSenderClusterId))
-        {
-            return new ValueTask<ReplicationTenantIsolationDecision>(
-                ReplicationTenantIsolationDecision.RejectMissingSourceIdentity);
-        }
-
         // A well-formed t/{tenantId}/{name} tree naming a real tenant. The tenant
         // must exist here - never auto-create a tenant from an inbound write - and
         // must be resident in this serving region.
@@ -210,19 +204,22 @@ internal sealed class ReplicationTenantIsolationGate(
 
     private bool TryEvaluateSourceResidency(
         TenantId tenant,
-        string authenticatedSenderClusterId,
+        string? authenticatedSenderClusterId,
         out ReplicationTenantIsolationDecision decision)
     {
         if (_residencyConfirmation is not { } confirmation
-            || !confirmation.TryResolveSourceResident(tenant, authenticatedSenderClusterId, out var resident))
+            || !confirmation.TryResolveSourceResidency(
+                tenant, authenticatedSenderClusterId, out var configured, out var allowed))
         {
             decision = default;
             return false;
         }
 
-        decision = resident
+        decision = !configured || allowed
             ? ReplicationTenantIsolationDecision.Admit
-            : ReplicationTenantIsolationDecision.RejectSourceNotResident;
+            : string.IsNullOrWhiteSpace(authenticatedSenderClusterId)
+                ? ReplicationTenantIsolationDecision.RejectMissingSourceIdentity
+                : ReplicationTenantIsolationDecision.RejectSourceNotResident;
         return true;
     }
 
@@ -236,7 +233,7 @@ internal sealed class ReplicationTenantIsolationGate(
     /// </summary>
     private async ValueTask<ReplicationTenantIsolationDecision> EvaluateAgainstRegistryAsync(
         TenantId tenant,
-        string authenticatedSenderClusterId,
+        string? authenticatedSenderClusterId,
         CancellationToken cancellationToken)
     {
         var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
@@ -265,11 +262,20 @@ internal sealed class ReplicationTenantIsolationGate(
             return ReplicationTenantIsolationDecision.RejectOutOfRegion;
         }
 
-        var sourceResident = _residencyConfirmation is { } sourceConfirmation
-            ? sourceConfirmation.IsResident(record, authenticatedSenderClusterId)
-            : !record.HasResidencyConfiguration
-                || TenantRegionLifecycle.IsResident(record.GetRegionStatus(authenticatedSenderClusterId));
-        if (!sourceResident)
+        if (!_residency.IsActive || !record.HasResidencyConfiguration)
+        {
+            return ReplicationTenantIsolationDecision.Admit;
+        }
+
+        if (string.IsNullOrWhiteSpace(authenticatedSenderClusterId))
+        {
+            return ReplicationTenantIsolationDecision.RejectMissingSourceIdentity;
+        }
+
+        var sourceAllowed = _residencyConfirmation is { } sourceConfirmation
+            ? sourceConfirmation.IsReplicationSource(record, authenticatedSenderClusterId)
+            : TenantRegionLifecycle.IsReplicationSource(record.GetRegionStatus(authenticatedSenderClusterId));
+        if (!sourceAllowed)
         {
             return ReplicationTenantIsolationDecision.RejectSourceNotResident;
         }

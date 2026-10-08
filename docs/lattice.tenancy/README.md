@@ -613,14 +613,16 @@ shown today.
 - **Metadata everywhere, data to the residency set.** Tenant definitions
   converge to every region the registry tree replicates to, so any such region
   can fail-closed answer "is this tenant resident here?". A tenant data write is
-  admitted only when the destination is `Backfilling` or `Online` and the
-  authenticated direct sender is resident (`Provisioning`, `Backfilling`, or
-  `Online`). The receiver authorizes the authenticated direct sender, not the
+  admitted only when the destination is `Backfilling` or `Online` and, when
+  residency is configured, the authenticated direct sender is resident
+  (`Provisioning`, `Backfilling`, `Online`, or `Draining`). A draining region may
+  finish shipping writes accepted while it was online, but is not admitted as a
+  destination. The receiver authorizes the authenticated direct sender, not the
   write's original `WalRecord.OriginClusterId`; therefore every relay must itself
-  be resident for the tenant. A tenant-scoped write without an authenticated
-  sender is refused, including a durable entry replayed without its previously
-  stored sender. The same gate refuses and dead-letters writes for an unknown or
-  suspended tenant.
+  be resident for the tenant. A missing sender is refused only when source
+  residency is configured and active; legacy durable entries without a sender
+  replay when residency is unconfigured. The same gate refuses and dead-letters
+  writes for an unknown or suspended tenant.
 - **Symmetric multi-master.** An `Online` region is a full read-write replica; there
   is no primary or leader. Enforcement ties in at the gate (a tenant not `Online` in
   the serving region is refused) and the replication apply path (a tenant's
@@ -672,8 +674,10 @@ registered, each silo watches its own serving region (its cluster id) and, when 
 tenant's status there becomes `Draining`, advances it to `Offline` and then to
 `Removed` without any caller. Nothing needs to be waited for first: a region stops
 serving a tenant and stops admitting its replicated writes the moment its status
-leaves `Online`, and outbound shipping of the writes it accepted while online does not
-depend on the status.
+leaves `Online`, while outbound shipping of writes accepted while online continues
+through `Draining` so the region can ship its final in-flight tail. The replication
+source gate therefore admits `Draining` only as a source; the destination gate still
+refuses it.
 
 The drained region must first **observe the registry change**, and its completion
 must replicate back to the origin. Configure a connected, bidirectional replication

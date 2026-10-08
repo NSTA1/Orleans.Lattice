@@ -60,6 +60,7 @@ internal sealed class ReplicationSourceLineageScope : IDisposable
 
     /// <summary>The authenticated direct sender of the innermost scope, or <see langword="null"/>.</summary>
     public static string? CurrentAuthenticatedSenderClusterId => s_current.Value?.AuthenticatedSenderClusterId;
+
     /// <summary>
     /// Enters a scope whose applies carry <paramref name="stamp"/>. Always
     /// replaces any outer scope, so an unstamped entry applied inside a stamped

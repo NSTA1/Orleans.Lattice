@@ -236,8 +236,35 @@ public partial class ReplicationApplierTests
             Arg.Any<WalRecord>(),
             Arg.Any<string>(),
             0,
-            LatticeReplicationMetrics.ReasonForeignTenant,
+            LatticeReplicationMetrics.ReasonMissingSourceIdentity,
             Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_dead_letters_nonresident_sender_with_source_specific_reason()
+    {
+        var gate = new FuncTenantIsolationGate(
+            isActive: true,
+            (_, _) => ReplicationTenantIsolationDecision.RejectSourceNotResident);
+        var (applier, apply, hwm, dlq, _) = CreateTenantApplier(EnrolledTenantTrees(), gate);
+
+        ApplyResult result;
+        using (ReplicationSourceLineageScope.EnterAuthenticatedDelivery("relay"))
+        {
+            result = await applier.ApplyAsync(EnrollmentEntry(AcmeOrdersTree, "k", Hlc(28)));
+        }
+
+        Assert.That(result.TenantIsolationRefused, Is.True);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        await dlq.Received(1).EnqueueAuthenticatedAsync(
+            Arg.Any<WalRecord>(),
+            Arg.Any<string>(),
+            0,
+            LatticeReplicationMetrics.ReasonTenantSourceNotResident,
+            Arg.Any<CancellationToken>(),
+            "relay",
+            Arg.Any<ReplicationSourceLineageStamp?>());
     }
 
     [Test]

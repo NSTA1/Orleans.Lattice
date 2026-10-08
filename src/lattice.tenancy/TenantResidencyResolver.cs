@@ -86,15 +86,18 @@ internal sealed class TenantResidencyResolver : ITenantResidencyResolver, ITenan
     }
 
     /// <inheritdoc />
-    public bool TryResolveSourceResident(TenantId tenant, string regionId, out bool resident)
+    public bool TryResolveSourceResidency(TenantId tenant, string? regionId, out bool configured, out bool allowed)
     {
         if (!_maintainer.IsSnapshotAuthoritative)
         {
-            resident = false;
+            configured = false;
+            allowed = false;
             return false;
         }
 
-        resident = _maintainer.Current.IsResidentInRegion(tenant, regionId);
+        var snapshot = _maintainer.Current;
+        configured = snapshot.TryGetStatus(tenant, out _);
+        allowed = snapshot.IsReplicationSourceInRegion(tenant, regionId);
         return true;
     }
 
@@ -127,11 +130,11 @@ internal sealed class TenantResidencyResolver : ITenantResidencyResolver, ITenan
     }
 
     /// <inheritdoc />
-    public bool IsResident(TenantRecord record, string regionId)
+    public bool IsReplicationSource(TenantRecord record, string regionId)
     {
         ArgumentNullException.ThrowIfNull(record);
         ArgumentException.ThrowIfNullOrEmpty(regionId);
         return !record.HasResidencyConfiguration
-            || TenantRegionLifecycle.IsResident(record.GetRegionStatus(regionId));
+            || TenantRegionLifecycle.IsReplicationSource(record.GetRegionStatus(regionId));
     }
 }

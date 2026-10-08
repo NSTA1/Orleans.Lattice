@@ -24,6 +24,16 @@ public sealed class ReplicationTenantIsolationGateTests
     private const string SystemInternalTree = "_lattice_meta";
     private const string TenantRegistryTree = "sys-tenant-registry";
 
+    private sealed class LegacyGate : IReplicationTenantIsolationGate
+    {
+        public bool IsActive => true;
+
+        public ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
+            string treeId,
+            CancellationToken cancellationToken = default) =>
+            new(ReplicationTenantIsolationDecision.RejectUnknownTenant);
+    }
+
     private static ReplicationTenantIsolationGate CreateGate(
         ITenantRegistry registry,
         ITenantResidencyResolver? residency = null,
@@ -53,6 +63,82 @@ public sealed class ReplicationTenantIsolationGateTests
         var maintainer = await TenantPolicyEpochTestCluster.LeasedAsync(source);
         await maintainer.RebuildNowAsync();
         return maintainer;
+    }
+
+    [Test]
+    public async Task EvaluateAsync_inactive_residency_admits_without_sender()
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        KnowsActive(registry);
+        var residency = Substitute.For<ITenantResidencyResolver>();
+        residency.IsActive.Returns(false);
+
+        var decision = await CreateGate(registry, residency).EvaluateAsync(AcmeTree);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+    }
+
+    [Test]
+    public async Task EvaluateAsync_unconfigured_tenant_admits_without_sender()
+    {
+        var gate = GateFor(Record(TenantStatus.Active));
+
+        var decision = await gate.EvaluateAsync(AcmeTree);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+    }
+
+    [Test]
+    public async Task EvaluateAsync_unknown_tenant_keeps_existing_rejection_without_sender()
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        KnowsNothing(registry);
+
+        var decision = await CreateGate(registry, ActiveResidency()).EvaluateAsync(AcmeTree);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant));
+    }
+
+    [Test]
+    public async Task EvaluateAsync_suspended_tenant_keeps_existing_rejection_without_sender()
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        KnowsSuspended(registry);
+
+        var decision = await CreateGate(registry, ActiveResidency()).EvaluateAsync(AcmeTree);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectSuspendedTenant));
+    }
+
+    [Test]
+    public async Task EvaluateAsync_destination_out_of_region_keeps_existing_rejection_without_sender()
+    {
+        var gate = GateFor(RecordWithRegions(TenantRegionStatus.Offline, TenantRegionStatus.Online));
+
+        var decision = await gate.EvaluateAsync(AcmeTree);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectOutOfRegion));
+    }
+
+    [Test]
+    public async Task EvaluateAsync_legacy_overload_preserves_unconfigured_tenant_behavior()
+    {
+        var gate = GateFor(Record(TenantStatus.Active));
+
+        var decision = await ((IReplicationTenantIsolationGate)gate)
+            .EvaluateAsync(AcmeTree, authenticatedSenderClusterId: null);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+    }
+
+    [Test]
+    public async Task Sender_aware_default_delegates_to_legacy_gate_implementation()
+    {
+        IReplicationTenantIsolationGate gate = new LegacyGate();
+
+        var decision = await gate.EvaluateAsync(AcmeTree, "relay");
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant));
     }
 
     private static async IAsyncEnumerable<TenantRecord> ToAsync(TenantId[] tenants)
@@ -110,7 +196,7 @@ public sealed class ReplicationTenantIsolationGateTests
                 return !record.HasResidencyConfiguration
                     || record.GetRegionStatus("west") is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
             });
-        confirmation.IsResident(Arg.Any<TenantRecord>(), Arg.Any<string>())
+        confirmation.IsReplicationSource(Arg.Any<TenantRecord>(), Arg.Any<string>())
             .Returns(call =>
             {
                 var record = call.Arg<TenantRecord>();
@@ -118,7 +204,8 @@ public sealed class ReplicationTenantIsolationGateTests
                 return !record.HasResidencyConfiguration
                     || record.GetRegionStatus(regionId) is TenantRegionStatus.Provisioning
                         or TenantRegionStatus.Backfilling
-                        or TenantRegionStatus.Online;
+                        or TenantRegionStatus.Online
+                        or TenantRegionStatus.Draining;
             });
         return residency;
     }
@@ -345,7 +432,7 @@ public sealed class ReplicationTenantIsolationGateTests
                 return record.GetRegionStatus("west")
                     is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
             });
-        confirmation.IsResident(Arg.Any<TenantRecord>(), "origin").Returns(true);
+        confirmation.IsReplicationSource(Arg.Any<TenantRecord>(), "origin").Returns(true);
 
         var decision = await CreateGate(registry, residency).EvaluateAsync(AcmeTree, "origin");
 
@@ -381,7 +468,7 @@ public sealed class ReplicationTenantIsolationGateTests
     }
 
     [Test]
-    public async Task EvaluateAsync_rejects_missing_authenticated_sender_for_tenant()
+    public async Task EvaluateAsync_rejects_missing_authenticated_sender_when_residency_is_configured()
     {
         var gate = GateFor(RecordWithRegions(TenantRegionStatus.Online, TenantRegionStatus.Online));
 
@@ -394,7 +481,8 @@ public sealed class ReplicationTenantIsolationGateTests
     public void Backfilling_region_is_not_online_for_client_serving()
     {
         var snapshot = TenantResidencySnapshot.Build(
-            [new KeyValuePair<TenantId, TenantRegionStatus>(Acme, TenantRegionStatus.Backfilling)]);
+            [RecordWithRegion(TenantRegionStatus.Backfilling)],
+            "west");
 
         Assert.Multiple(() =>
         {

@@ -91,7 +91,7 @@ public class TenancyCompileTrimBenchmarks
     private CrossTenantGrant[] _wideGrants = null!;
 
     private Dictionary<TenantId, TenantPlacement> _placements = null!;
-    private Dictionary<TenantId, TenantRegionStatus> _residency = null!;
+    private List<TenantRecord> _residencyRecords = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -131,14 +131,20 @@ public class TenancyCompileTrimBenchmarks
         }
 
         _placements = new Dictionary<TenantId, TenantPlacement>(TenantCount);
-        _residency = new Dictionary<TenantId, TenantRegionStatus>(TenantCount);
+        _residencyRecords = new List<TenantRecord>(TenantCount);
         for (var t = 0; t < TenantCount; t++)
         {
             var id = TenantId.Parse($"tenant-{t:D4}");
             _placements[id] = t % 8 == 0
                 ? new TenantPlacement { WalProviderName = $"wal-{t % 4}", DedicatedWal = true }
                 : TenantPlacement.Shared;
-            _residency[id] = t % 5 == 0 ? TenantRegionStatus.Draining : TenantRegionStatus.Online;
+            var residency = BuildRecord(t);
+            residency.SetRegionStatus(
+                "region-a",
+                t % 5 == 0 ? TenantRegionStatus.Draining : TenantRegionStatus.Online,
+                Clock(t + 1),
+                "bench");
+            _residencyRecords.Add(residency);
         }
     }
 
@@ -198,7 +204,7 @@ public class TenancyCompileTrimBenchmarks
     [Benchmark(Description = "Grantee index wide (rejected: Array.Resize grow-by-one)")]
     public int GranteeWide_ArrayResize() => CompileGrantsArrayResize(_wideGrants).Count;
 
-    // ---- (3) snapshot Build: defensive dedup copy vs direct freeze ----------
+    // ---- (3) snapshot Build --------------------------------------------------
 
     /// <summary>Placement snapshot built through the defensive dedup copy.</summary>
     [Benchmark(Description = "Placement snapshot (before: defensive dedup copy then freeze)")]
@@ -208,13 +214,9 @@ public class TenancyCompileTrimBenchmarks
     [Benchmark(Description = "Placement snapshot (after: direct freeze of the dictionary source)")]
     public int PlacementSnapshot_Optimized() => TenantPlacementSnapshot.Build(_placements).Count;
 
-    /// <summary>Residency snapshot built through the defensive dedup copy.</summary>
-    [Benchmark(Description = "Residency snapshot (before: defensive dedup copy then freeze)")]
-    public int ResidencySnapshot_Baseline() => BuildResidencyBaseline(_residency).Count;
-
-    /// <summary>Residency snapshot built by the shipped method, which elides the copy for a map source.</summary>
-    [Benchmark(Description = "Residency snapshot (after: direct freeze of the dictionary source)")]
-    public int ResidencySnapshot_Optimized() => TenantResidencySnapshot.Build(_residency).Count;
+    /// <summary>Residency snapshot built from tenant records with all region statuses.</summary>
+    [Benchmark(Description = "Residency snapshot (all region statuses)")]
+    public int ResidencySnapshot_Regional() => TenantResidencySnapshot.Build(_residencyRecords, "region-a").Count;
 
     // ---- the shared shell both compile lanes run ---------------------------
 
@@ -504,18 +506,6 @@ public class TenancyCompileTrimBenchmarks
     {
         var deduped = new Dictionary<TenantId, TenantPlacement>();
         foreach (var pair in placements)
-        {
-            deduped[pair.Key] = pair.Value;
-        }
-
-        return deduped.ToFrozenDictionary();
-    }
-
-    private static FrozenDictionary<TenantId, TenantRegionStatus> BuildResidencyBaseline(
-        IEnumerable<KeyValuePair<TenantId, TenantRegionStatus>> statuses)
-    {
-        var deduped = new Dictionary<TenantId, TenantRegionStatus>();
-        foreach (var pair in statuses)
         {
             deduped[pair.Key] = pair.Value;
         }

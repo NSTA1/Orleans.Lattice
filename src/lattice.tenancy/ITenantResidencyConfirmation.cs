@@ -31,14 +31,16 @@ internal interface ITenantResidencyConfirmation
     bool TryResolveReplicationAdmissible(TenantId tenant, out bool admissible);
 
     /// <summary>
-    /// Answers whether a region is resident for a tenant from the authoritative
-    /// in-memory view.
+    /// Answers whether a region may ship as a source for a tenant from the
+    /// authoritative in-memory view. A draining region may finish shipping writes
+    /// accepted while it was online.
     /// </summary>
     /// <param name="tenant">The tenant to test.</param>
-    /// <param name="regionId">The direct sender's region id.</param>
-    /// <param name="resident">The answer when this returns <c>true</c>.</param>
+    /// <param name="regionId">The direct sender's region id, or <see langword="null"/> when unavailable.</param>
+    /// <param name="configured">Whether residency is configured for the tenant.</param>
+    /// <param name="allowed">The answer when this returns <c>true</c>.</param>
     /// <returns><c>true</c> when the answer is authoritative; otherwise the caller must confirm.</returns>
-    bool TryResolveSourceResident(TenantId tenant, string regionId, out bool resident);
+    bool TryResolveSourceResidency(TenantId tenant, string? regionId, out bool configured, out bool allowed);
 
     /// <summary>
     /// Confirms against the tenant's authoritative registry record whether it is
@@ -68,11 +70,12 @@ internal interface ITenantResidencyConfirmation
     bool IsReplicationAdmissible(TenantRecord record);
 
     /// <summary>
-    /// Whether the given region is resident according to the tenant's authoritative
-    /// registry record.
+    /// Whether the given region may ship tenant writes according to the
+    /// authoritative registry record. A draining region may finish shipping writes
+    /// accepted while it was online.
     /// </summary>
     /// <param name="record">The tenant's authoritative registry record.</param>
     /// <param name="regionId">The direct sender's region id.</param>
-    /// <returns><c>true</c> when the tenant is unconfigured or the region is resident.</returns>
-    bool IsResident(TenantRecord record, string regionId);
+    /// <returns><c>true</c> when the tenant is unconfigured or the region may ship its final writes.</returns>
+    bool IsReplicationSource(TenantRecord record, string regionId);
 }

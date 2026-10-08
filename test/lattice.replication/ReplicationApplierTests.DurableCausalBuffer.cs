@@ -118,7 +118,7 @@ public partial class ReplicationApplierTests
             Arg.Is<WalRecord>(entry => entry.Key == "k"),
             Arg.Any<string>(),
             0,
-            LatticeReplicationMetrics.ReasonForeignTenant,
+            LatticeReplicationMetrics.ReasonTenantSourceNotResident,
             Arg.Any<CancellationToken>(),
             "relay",
             Arg.Any<ReplicationSourceLineageStamp?>());

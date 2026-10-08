@@ -38,6 +38,9 @@ public static class TenantRegionLifecycle
             or TenantRegionStatus.Backfilling
             or TenantRegionStatus.Online;
 
+    internal static bool IsReplicationSource(TenantRegionStatus status) =>
+        IsResident(status) || status == TenantRegionStatus.Draining;
+
     /// <summary>
     /// Returns <c>true</c> when <paramref name="status"/> is
     /// <see cref="TenantRegionStatus.Online"/>: the region serves the tenant's

@@ -303,9 +303,28 @@ internal sealed class CausalApplyBufferGrain(
                         {
                             if (!await TryDeadLetterAsync(
                                     ent,
-                                    "The authenticated sender is not resident for this tenant, or its identity "
-                                    + "is unavailable; the parked entry was not applied.",
+                                    "The tenant is unknown or inactive, or the destination is outside its residency; "
+                                    + "the parked entry was not applied.",
                                     LatticeReplicationMetrics.ReasonForeignTenant,
+                                    AuthenticatedSenderOf(ent),
+                                    LineageOf(ent)).ConfigureAwait(true))
+                            {
+                                (keepParked ??= new List<WalRecord>()).Add(ent);
+                            }
+                        }
+                        else if (lineageVerdict is ReplicationSourceLineageGate.Verdict.RefuseTenantSourceNotResident
+                            or ReplicationSourceLineageGate.Verdict.RefuseMissingTenantSourceIdentity)
+                        {
+                            var sourceRefused = lineageVerdict
+                                == ReplicationSourceLineageGate.Verdict.RefuseTenantSourceNotResident;
+                            if (!await TryDeadLetterAsync(
+                                    ent,
+                                    sourceRefused
+                                        ? "The authenticated sender is not resident for this tenant; the parked entry was not applied."
+                                        : "The configured tenant residency requires an authenticated sender; the parked entry was not applied.",
+                                    sourceRefused
+                                        ? LatticeReplicationMetrics.ReasonTenantSourceNotResident
+                                        : LatticeReplicationMetrics.ReasonMissingSourceIdentity,
                                     AuthenticatedSenderOf(ent),
                                     LineageOf(ent)).ConfigureAwait(true))
                             {
@@ -475,8 +494,8 @@ internal sealed class CausalApplyBufferGrain(
         try
         {
             await EnqueueDeadLetterAsync(
-            grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId),
-            entry,
+                grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId),
+                entry,
                 failureReason,
                 retryCount: 0,
                 reasonTag,

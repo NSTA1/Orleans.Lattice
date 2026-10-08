@@ -1686,6 +1686,8 @@ internal sealed partial class ReplicationApplier
         {
             ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
             ReplicationTenantIsolationDecision.RejectSuspendedTenant => LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant,
+            ReplicationTenantIsolationDecision.RejectSourceNotResident => LatticeReplicationMetrics.OutcomeRejectedTenantSourceNotResident,
+            ReplicationTenantIsolationDecision.RejectMissingSourceIdentity => LatticeReplicationMetrics.OutcomeRejectedMissingSourceIdentity,
             _ => LatticeReplicationMetrics.OutcomeRejectedForeignTenant,
         };
 
