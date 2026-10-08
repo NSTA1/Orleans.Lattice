@@ -245,6 +245,26 @@ public partial class LtTable<TItem>
             _source = Items;
             _rowButtons.Clear();
             ApplySort();
+            if (_hasDetail)
+            {
+                var key = RowKeyOf(_detailItem!);
+                _hasDetail = false;
+                foreach (var row in _rows)
+                {
+                    if (Equals(RowKeyOf(row), key))
+                    {
+                        _detailItem = row;
+                        _hasDetail = true;
+                        break;
+                    }
+                }
+
+                if (!_hasDetail)
+                {
+                    _detailOpen = false;
+                    _detailItem = default;
+                }
+            }
         }
 
         if (!IsCompactList)

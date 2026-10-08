@@ -16,6 +16,12 @@
     </div>
     <span class="lt-visually-hidden" aria-live="polite">@_stageAnnouncement</span>
 
+    @if (_busy)
+    {
+        <LtProgress Label="Saving tenant regions" Phase="@_savePhase"
+                    Detail="Waiting for the cluster to confirm the change. The residency lifecycle continues after the save." />
+    }
+
     @if (_failure is { } failure)
     {
         <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "Regions could not be read")" HeadingLevel="3">
@@ -103,16 +109,15 @@
                         <State><LtStatusPill State="@TenancyFormat.RegionStatusRole(context.Status)" Text="@TenancyFormat.RegionStatusLabel(context.Status, _plan.HasResidency)" /></State>
                     </LtCompactRow>
                 </CompactRow>
-                <DetailActions>
-                    @StepProgress(context)
-                    <p class="lt-tenancy-meaning">@TenancyFormat.RegionStatusMeaning(context.Status, _plan.HasResidency)</p>
-                    @ResidencyControl(context)
-                </DetailActions>
             </LtTable>
 
             @if (_following)
             {
                 <p class="lt-tenancy-quiet lt-tenancy-following">Updating on its own while a region is part-way through a change.</p>
+                <p class="lt-tenancy-note">
+                    The cluster reports lifecycle stages, but not their age or a stall reason.
+                    If a removal stays at the same step, ask a platform operator to check the draining region's silos and replication.
+                </p>
             }
 
             @if (_plan.IsChanged)
