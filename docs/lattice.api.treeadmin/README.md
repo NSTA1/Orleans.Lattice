@@ -237,6 +237,8 @@ Alongside the request/response records the operations use, the facade publishes 
 
 ## See also
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
+
 - [Tree-administration operations](operations.md) - accept-then-poll view, tag-index, WAL-move, orphaned-leaf and fresh storage-usage operations, and migrating from the deprecated blocking verbs.
 - [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) - the schema control facade this surface composes by delegation.
 - [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared control-surface contract package that publishes `ILatticeTreeAdmin`.

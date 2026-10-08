@@ -81,6 +81,12 @@ services.AddExplorerEntraAuth(options =>
 | `EntraTokenRequest` | `sealed record` | Authority, client id, scopes, device-code flag, and optional username for silent renewal. |
 | `EntraTokenResult` | `readonly record struct` | Access token, expiry and optional username. In memory only. |
 
+## Reference
+
+- [API reference](api.md) - public registration, auth method, token seam, request and result types.
+- [Configuration](configuration.md) - every option and its default, plus advertised-value admission rules.
+- [Architecture](architecture.md) - interactive sign-in, account-bound renewal and token lifetime.
+
 ## See also
 
 - [Connecting to an auth-enabled State API](../lattice.explorer/connecting-to-an-auth-enabled-state-api.md)

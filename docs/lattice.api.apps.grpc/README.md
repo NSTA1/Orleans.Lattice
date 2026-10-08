@@ -173,15 +173,17 @@ the facade runs unchanged against a remote cluster.
 
 ### `LatticeAppsApiGrpcOptions`
 
-| Option | Default | Meaning |
-|---|---|---|
-| `RequireAuthorization` | `true` | Enforce the transport authorizer. Disable only behind an outer authentication boundary; the facade's `AppInstall` gate still applies. |
-| `CredentialHeaderName` | `authorization` | The metadata key the caller credential is read from. It is bridged even when transport authorization is disabled. |
-| `CredentialScheme` | `Bearer` | The optional prefix stripped from the credential and recorded as its authentication scheme. |
-| `ActiveTenantHeaderName` | `lattice-active-tenant` (`LatticeActiveTenantAssertion.DefaultHeaderName`) | The asserted active-tenant header; null or empty disables it. The assertion is validated by the facade, never trusted by the binding. |
-| `AdvertisedAuthSchemes` | empty | The public sign-in schemes returned by `GetAuthScheme`, in preference order. Never include credentials or user-specific data. |
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `RequireAuthorization` | `bool` | `true` | Enforce the transport authorizer. Disable only behind an outer authentication boundary; the facade's `AppInstall` gate still applies. |
+| `CredentialHeaderName` | `string` | `authorization` | The metadata key the caller credential is read from. It is bridged even when transport authorization is disabled. |
+| `CredentialScheme` | `string` | `Bearer` | The optional prefix stripped from the credential and recorded as its authentication scheme. |
+| `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` (`LatticeActiveTenantAssertion.DefaultHeaderName`) | The asserted active-tenant header; null or empty disables it. The assertion is validated by the facade, never trusted by the binding. |
+| `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor> (get-only)` | empty | The public sign-in schemes returned by `GetAuthScheme`, in preference order. Never include credentials or user-specific data. |
 
 ## See also
+
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md)
 
 - [App control facade](../lattice.api.apps/README.md)
 - [Installable apps](../lattice.apps/README.md)

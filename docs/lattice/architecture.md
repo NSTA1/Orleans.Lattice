@@ -7,22 +7,22 @@ A request flows through five layers of Orleans grains. Writes are appended to th
 ```mermaid
 flowchart TD
     Client([Client])
-    SR[LatticeGrain<br/>StatelessWorker]
-    S0[ShardRootGrain<br/>Shard 0]
-    S1[ShardRootGrain<br/>Shard 1]
-    SN[ShardRootGrain<br/>Shard N]
-    I0[BPlusInternalGrain<br/>depth > 1 only]
-    I1[BPlusInternalGrain<br/>depth > 1 only]
-    C0[LeafCacheGrain<br/>StatelessWorker]
-    C1[LeafCacheGrain<br/>StatelessWorker]
-    C2[LeafCacheGrain<br/>StatelessWorker]
-    C3[LeafCacheGrain<br/>StatelessWorker]
-    L0[BPlusLeafGrain]
-    L1[BPlusLeafGrain]
-    L2[BPlusLeafGrain]
-    L3[BPlusLeafGrain]
-    W0[(WalShardGrain<br/>partition 0)]
-    W1[(WalShardGrain<br/>partition 1)]
+    SR[Tree router<br/>StatelessWorker]
+    S0[Shard-root router<br/>Shard 0]
+    S1[Shard-root router<br/>Shard 1]
+    SN[Shard-root router<br/>Shard N]
+    I0[Internal-node router<br/>depth > 1 only]
+    I1[Internal-node router<br/>depth > 1 only]
+    C0[Leaf lookup cache<br/>StatelessWorker]
+    C1[Leaf lookup cache<br/>StatelessWorker]
+    C2[Leaf lookup cache<br/>StatelessWorker]
+    C3[Leaf lookup cache<br/>StatelessWorker]
+    L0[Leaf materialiser]
+    L1[Leaf materialiser]
+    L2[Leaf materialiser]
+    L3[Leaf materialiser]
+    W0[(WAL partition owner<br/>partition 0)]
+    W1[(WAL partition owner<br/>partition 1)]
 
     Client --> SR
     SR -->|"ShardMap.Resolve(key): slot = XxHash32(key) % VirtualShardCount"| S0
@@ -41,18 +41,18 @@ flowchart TD
     S0 -.->|"optimistic point read"| L0
     L0 -. "AppendAsync (wal step)" .-> W0
     L2 -. "AppendAsync (wal step)" .-> W1
-    C0 -.->|"GetDeltaSinceCursorAsync"| L0
-    C1 -.->|"GetDeltaSinceCursorAsync"| L1
-    C2 -.->|"GetDeltaSinceCursorAsync"| L2
-    C3 -.->|"GetDeltaSinceCursorAsync"| L3
-    L0 -. "NextSibling" .-> L1
-    L2 -. "NextSibling" .-> L3
+    C0 -.->|"cursor-based delta pull"| L0
+    C1 -.->|"cursor-based delta pull"| L1
+    C2 -.->|"cursor-based delta pull"| L2
+    C3 -.->|"cursor-based delta pull"| L3
+    L0 -. "next-sibling link" .-> L1
+    L2 -. "next-sibling link" .-> L3
 ```
 
-1. **`LatticeGrain`** - a `[StatelessWorker]` grain (many concurrent activations, capped at 256 per silo, which bounds a silo's concurrency of single-key calls). Resolves the key's virtual slot via `XxHash32(key) % VirtualShardCount`, looks up the physical shard index in the cached `ShardMap`, and forwards the request to the corresponding `ShardRootGrain`.
-2. **`ShardRootGrain`** - one per shard (keyed `{treeId}/{shardIndex}`). Manages the root pointer for its sub-tree. When the root is a leaf (small shard), traversal goes directly from `ShardRootGrain` to that leaf; once the shard grows enough to require a `BPlusInternalGrain` root, routing flows through one or more internal levels. Handles root-level splits by creating new internal nodes above the old root, and routes serial reads through the cache layer. Point reads and point writes interleave on it: a point read is first tried optimistically against the primary leaf and validated against the shard root's in-memory routing epoch (and, where required, the leaf's ownership proof), falling back to the serial read when routing moved under it ([`OptimisticShardRootPointReads`](configuration.md#optimisticshardrootpointreads), on by default); a point write is held back while a non-interleaved turn runs, and that turn first waits for the point writes already in flight to drain. A deactivation the shard root requests itself is deferred until its in-flight point and batch writes drain, and a write arriving meanwhile is refused with a retriable fault that the router absorbs.
-3. **`BPlusInternalGrain`** - an internal node holding separator keys and child references. Only allocated once the shard's depth exceeds 1. Routes a key to the correct child and accepts promoted splits from below. Split acceptance is idempotent - duplicate deliveries are detected and skipped.
-4. **`LeafCacheGrain`** - a `[StatelessWorker]` read-through cache. Each silo may have its own activation. On a cache miss, or when its copy is stale, it pulls a `StateDelta` from the primary leaf - only the entries whose per-key delivery sequence is newer than the cursor it last saw, or the whole leaf once the leaf's activation has changed - and merges entries using `LwwValue.Merge`. Because the merge is commutative and idempotent, stale entries are harmlessly overwritten without an invalidation protocol.
+1. **tree router** - a `[StatelessWorker]` grain (many concurrent activations, capped at 256 per silo, which bounds a silo's concurrency of single-key calls). Resolves the key's virtual slot via `XxHash32(key) % VirtualShardCount`, looks up the physical shard index in the cached `ShardMap`, and forwards the request to the corresponding shard-root router.
+2. **shard-root router** - one per shard (keyed `{treeId}/{shardIndex}`). Manages the root pointer for its sub-tree. When the root is a leaf (small shard), traversal goes directly from shard-root router to that leaf; once the shard grows enough to require an internal-node router root, routing flows through one or more internal levels. Handles root-level splits by creating new internal nodes above the old root, and routes serial reads through the cache layer. Point reads and point writes interleave on it: a point read is first tried optimistically against the primary leaf and validated against the shard root's in-memory routing epoch (and, where required, the leaf's ownership proof), falling back to the serial read when routing moved under it ([`OptimisticShardRootPointReads`](configuration.md#optimisticshardrootpointreads), on by default); a point write is held back while a non-interleaved turn runs, and that turn first waits for the point writes already in flight to drain. A deactivation the shard root requests itself is deferred until its in-flight point and batch writes drain, and a write arriving meanwhile is refused with a retriable fault that the router absorbs.
+3. **internal-node router** - an internal node holding separator keys and child references. Only allocated once the shard's depth exceeds 1. Routes a key to the correct child and accepts promoted splits from below. Split acceptance is idempotent - duplicate deliveries are detected and skipped.
+4. **leaf lookup cache** - a `[StatelessWorker]` read-through cache. Each silo may have its own activation. On a cache miss, or when its copy is stale, it pulls a per-key delta from the primary leaf - only the entries whose per-key delivery sequence is newer than the cursor it last saw, or the whole leaf once the leaf's activation has changed - and merges entries using the last-writer-wins merge. Because the merge is commutative and idempotent, stale entries are harmlessly overwritten without an invalidation protocol.
 5. **Leaf node** - holds its key -> value entries, tombstones included, in an in-memory sorted cache, rebuilt on activation from the leaf's snapshot and the canonical WAL (the persisted leaf state row carries topology, clocks and checkpoint metadata, never the entries themselves). Splits when its entry count exceeds the configured maximum or its entries' combined size exceeds `LatticeOptions.MaxLeafBytes`. Advances a `VersionVector` on every foreground write, and numbers its writes with an activation-scoped delivery cursor that the cache layer pulls deltas against. Every commit runs the **`wal -> apply -> observer -> digest`** pipeline: the leaf awaits the append to its WAL partition (the commit point - a WAL failure surfaces to the caller before any in-memory mutation happens), then LWW-merges into its projection, then notifies any registered `IMutationObserver` (the seam the [replication package](#replication) attaches to), then publishes a projection-hash digest to its parent internal node - by default coalesced over a short window (`LatticeOptions.DigestCoalescingWindowMs`, 5 ms), so the commits inside one window share a single publish instead of each awaiting its own.
 
 ## Sharding
@@ -61,7 +61,7 @@ Without sharding, every operation starts at a single root grain - a serialisatio
 
 ```mermaid
 flowchart LR
-    subgraph Router["LatticeGrain (stateless)"]
+    subgraph Router["Tree router (stateless)"]
         H["XxHash32(key) % VirtualShardCount<br/>→ ShardMap.Resolve"]
     end
 
@@ -92,7 +92,7 @@ The hash function (`XxHash32`) is **stable across processes** - unlike `string.G
 
 ### Key distribution is not an adversarial boundary
 
-Both the shard hash (`XxHash32`, key → virtual slot → physical shard) and the WAL-partition hash (FNV-1a, key → `WalShardGrain` partition) are **fast, non-cryptographic, unseeded** functions, deliberately so: the mapping must be byte-for-byte stable across every silo and process in the cluster (`string.GetHashCode()` is rejected precisely because it is process-randomised). That determinism is load-bearing - two activations of a router or producer that hash the same key must always pick the same shard and partition, or per-partition WAL sequence ordering loses its meaning.
+Both the shard hash (`XxHash32`, key -> virtual slot -> physical shard) and the WAL-partition hash (FNV-1a, key -> WAL partition) are **fast, non-cryptographic, unseeded** functions, deliberately so: the mapping must be byte-for-byte stable across every silo and process in the cluster (`string.GetHashCode()` is rejected precisely because it is process-randomised). That determinism is load-bearing - two activations of a router or producer that hash the same key must always pick the same shard and partition, or per-partition WAL sequence ordering loses its meaning.
 
 A consequence of an unseeded, publicly known hash is that anyone who can both **choose key strings** and knows the shard / partition count can precompute keys that all land on a single shard or WAL partition, concentrating load and defeating the even distribution the system relies on. This is a *load-distribution* property, not a correctness or confidentiality one: the worst case is that an N-shard tree behaves like a 1-shard tree for the affected keys (a hot shard / hot partition with the attendant latency and throughput imbalance). It never corrupts data, crosses a tree boundary, or discloses anything, and the per-shard structure remains an ordinary B+ tree - there is no algorithmic-complexity blow-up.
 
@@ -109,7 +109,7 @@ If the shard root crashes between phases, its next operation - every shard-root 
 
 ## Bounded Retry
 
-`ShardRootGrain` wraps its dispatch to a leaf - for `SetAsync` (with or without a TTL), `DeleteAsync`, `GetOrSetAsync`, `SetIfVersionAsync`, CRDT deltas, and the batched write and merge paths - in a bounded retry loop. A transient Orleans, timeout, or I/O fault (e.g. a storage fault or network partition) is retried for up to 3 attempts in total, a fixed bound rather than an option. A write refused by a leaf that empty-leaf reclaim is retiring is instead retried with a short jittered backoff until `LatticeOptions.LeafRetirementRetryDeadline` (default 2 s) expires. Orleans automatically deactivates a failed grain; the retry hits a fresh activation that runs any pending recovery logic before processing the request. This shields callers from transient infrastructure errors without requiring client-side retry code.
+The shard-root router wraps its dispatch to a leaf - for `SetAsync` (with or without a TTL), `DeleteAsync`, `GetOrSetAsync`, `SetIfVersionAsync`, CRDT deltas, and the batched write and merge paths - in a bounded retry loop. A transient Orleans, timeout, or I/O fault (e.g. a storage fault or network partition) is retried for up to 3 attempts in total, a fixed bound rather than an option. A write refused by a leaf that empty-leaf reclaim is retiring is instead retried with a short jittered backoff until `LatticeOptions.LeafRetirementRetryDeadline` (default 2 s) expires. Orleans automatically deactivates a failed grain; the retry hits a fresh activation that runs any pending recovery logic before processing the request. This shields callers from transient infrastructure errors without requiring client-side retry code.
 
 ## Grain-to-Grain Mapping
 
@@ -119,17 +119,17 @@ These grains form the structural B+ tree and handle every read/write request:
 
 | B+ Tree Concept | Orleans Grain | Key Format | Persistent State |
 |---|---|---|---|
-| Shard router | `LatticeGrain` (`[StatelessWorker]`) | `{treeId}` | None (stateless). Caches the resolved `ShardMap` in memory; invalidated on stale-routing detection. |
-| Shard root | `ShardRootGrain` | `{treeId}/{shardIndex}` | The shard root's state - root node ID + leaf/internal flag + pending promotion + pending bulk graft + last completed bulk operation ID, plus deleted, registered and retired flags (retired when an online shard consolidation releases the shard's storage, leaving its moved-away slot table as a routing tombstone), the fixed-size records an online resize or snapshot (shadow-forward state), a shadow-cutover restore (retained redirect) and a cross-cluster saga (write fence) install, the stranded-scan-leaf recovery record, and the bounded bookkeeping [Tree Storage](tree-storage.md#wal-first-storage-model) lists (dirty-leaf map, moved-away slot table, in-flight split record, leaf-access histogram, owed child links and leaf clears) |
-| Internal node | `BPlusInternalGrain` | `Guid` | Internal node state row - tree id, parent, sorted children (and whether they are leaves) + HLC + split state, the separator key, new sibling and handed-over children of a split in progress, the subtree digest fold, the per-child digest table, and the digest-publish sequence |
-| Leaf node | `BPlusLeafGrain` | `Guid` | Leaf state row - topology (sibling pointers, parent, key range, split state) + HLC + version vector + projection checkpoint offsets + 16-byte projection hash (see [State Model](state-model.md) for the full list). Per-key LWW entries are **not** persisted; the per-activation runtime cache is rebuilt on activation from the leaf's snapshot plus a WAL replay beyond it, or by replaying the whole readable WAL window when no snapshot covers it. |
-| Leaf cache | `LeafCacheGrain` (`[StatelessWorker]`) | `{leafGrainId}` | None (in-memory LWW-map, version vector, and delivery cursor) |
+| Shard router | tree router (`[StatelessWorker]`) | `{treeId}` | None (stateless). Caches the resolved `ShardMap` in memory; invalidated on stale-routing detection. |
+| Shard root | shard-root router | `{treeId}/{shardIndex}` | The shard root's state - root node ID + leaf/internal flag + pending promotion + pending bulk graft + last completed bulk operation ID, plus deleted, registered and retired flags (retired when an online shard consolidation releases the shard's storage, leaving its moved-away slot table as a routing tombstone), the fixed-size records an online resize or snapshot (shadow-forward state), a shadow-cutover restore (retained redirect) and a cross-cluster saga (write fence) install, the stranded-scan-leaf recovery record, and the bounded bookkeeping [Tree Storage](tree-storage.md#wal-first-storage-model) lists (dirty-leaf map, moved-away slot table, in-flight split record, leaf-access histogram, owed child links and leaf clears) |
+| Internal node | internal-node router | `Guid` | Internal node state row - tree id, parent, sorted children (and whether they are leaves) + HLC + split state, the separator key, new sibling and handed-over children of a split in progress, the subtree digest fold, the per-child digest table, and the digest-publish sequence |
+| Leaf node | leaf materialiser | `Guid` | Leaf state row - topology (sibling pointers, parent, key range, split state) + HLC + version vector + projection checkpoint offsets + 16-byte projection hash (see [State Model](state-model.md) for the full list). Per-key LWW entries are **not** persisted; the per-activation runtime cache is rebuilt on activation from the leaf's snapshot plus a WAL replay beyond it, or by replaying the whole readable WAL window when no covering snapshot was ever kept (subject to the genuine-loss guard). An unreadable snapshot, or a missing snapshot recorded as previously kept, fails the projection closed instead. |
+| Leaf cache | leaf lookup cache (`[StatelessWorker]`) | `{leafGrainId}` | None (in-memory LWW-map, version vector, and delivery cursor) |
 
 ### Tree registry
 
 | Grain | Key Format | Storage |
 |---|---|---|
-| `LatticeRegistryGrain` | `_lattice_trees` (the `LatticeConstants.RegistryTreeId` constant) | **Self-hosting** - stores its data in a Lattice tree keyed `_lattice_trees`, so registry reads/writes flow through the same shard router -> shard root -> leaf node path as user data. |
+| tree registry | `_lattice_trees` (the registry tree id) | **Self-hosting** - stores its data in a Lattice tree keyed `_lattice_trees`, so registry reads/writes flow through the same shard router -> shard root -> leaf node path as user data. |
 
 The registry holds one entry per user tree, containing:
 
@@ -146,20 +146,20 @@ Long-running or multi-step operations are managed by dedicated coordination grai
 
 | Operation | Orleans Grain | Key Format | Persistent State | Reminder-driven |
 |---|---|---|---|---|
-| Adaptive shard split | `TreeShardSplitGrain` | `{treeId}/{shardIndex}` | Source/dest shard, migrating slots, the pre-split shard map (kept for rollback), drain cursor, phase, operation ID, and in-progress / complete flags | Yes |
+| Adaptive shard split | adaptive shard-split coordinator | `{treeId}/{shardIndex}` | Source/dest shard, migrating slots, the pre-split shard map (kept for rollback), drain cursor, phase, operation ID, and in-progress / complete flags | Yes |
 | Shard consolidation (over-split healing, or a shrinking reshard) | Consolidation coordinator, one per donor shard | `{treeId}/{donorShardIndex}` (healing addresses it by the physical tree id, a shrinking reshard by the logical tree id) | Donor and survivor shard, donor slots, the pre-consolidation shard map, drain cursor and progress counters, phase, cancellation flags, operation ID, in-progress / complete flags, and start / last-update times | Yes |
 | Shard-healing orchestration | Healing orchestrator, one per tree | `{treeId}` | In-flight donor shards, cooldown, and the last decision and observation | Yes |
-| Online reshard | `TreeReshardGrain` | `{treeId}` | Target shard count and the count it started from, whether it shrinks, the donor shards of the folds a shrink has started, operation ID, phase, and in-progress / complete flags; eligible sources and the dispatch budget are recomputed on every tick, not persisted | Yes |
-| Hot-shard monitoring | `HotShardMonitorGrain` | `{treeId}` | `HotShardMonitorState` - first-activation timestamp so the auto-split grace period survives silo restarts (polls `ShardRootGrain.GetHotnessAsync` on each tick) | Yes |
+| Online reshard | tree reshard coordinator | `{treeId}` | Target shard count and the count it started from, whether it shrinks, the donor shards of the folds a shrink has started, operation ID, phase, and in-progress / complete flags; eligible sources and the dispatch budget are recomputed on every tick, not persisted | Yes |
+| Hot-shard monitoring | hot-shard monitor | `{treeId}` | hot-shard monitor state - first-activation timestamp so the auto-split grace period survives silo restarts (polls the shard hotness read on each tick) | Yes |
 | Cluster-wide split admission | Admission gate, a cluster singleton | `0` | Per-tree split footprints (admission and observation-only), each with an expiry | No |
-| Tree merge | `TreeMergeGrain` | `{treeId}` | Source tree, the source and target physical tree ids and source shards captured at the start, per-shard progress and retries, a drain cursor, where the latest generation of source shards begins (re-resolved when a consolidation retires one), and in-progress / complete flags | Yes |
-| Snapshot | `TreeSnapshotGrain` | `{treeId}` | Destination tree, mode, sizing overrides, the source's logical and physical tree ids, shard count, routed shard indices and custom shard map captured at the start, per-shard progress and retries, copy and drain cursors, phase, whether it releases the shadow-forward when the copy completes, operation ID, and in-progress / complete flags | Yes |
-| Resize | `TreeResizeGrain` | `{treeId}` | Old and new physical tree IDs, sizing overrides, phase, the old shards it forwards and rejects, the pre-resize registry entry an undo restores, and the alias reservation it holds on the tree while the resize or its undo runs, which refuses a delete of the tree meanwhile, plus the operation ID, shard count, and in-progress / complete flags; a separate record keeps an accepted undo's intent and outcome (undone, or withdrawn with its reason) | Yes |
+| Tree merge | tree merge coordinator | `{treeId}` | Source tree, the source and target physical tree ids and source shards captured at the start, per-shard progress and retries, a drain cursor, where the latest generation of source shards begins (re-resolved when a consolidation retires one), and in-progress / complete flags | Yes |
+| Snapshot | tree snapshot coordinator | `{treeId}` | Destination tree, mode, sizing overrides, the source's logical and physical tree ids, shard count, routed shard indices and custom shard map captured at the start, per-shard progress and retries, copy and drain cursors, phase, whether it releases the shadow-forward when the copy completes, operation ID, and in-progress / complete flags | Yes |
+| Resize | tree resize coordinator | `{treeId}` | Old and new physical tree IDs, sizing overrides, phase, the old shards it forwards and rejects, the pre-resize registry entry an undo restores, and the alias reservation it holds on the tree while the resize or its undo runs, which refuses a delete of the tree meanwhile, plus the operation ID, shard count, and in-progress / complete flags; a separate record keeps an accepted undo's intent and outcome (undone, or withdrawn with its reason) | Yes |
 | Soft delete / purge | Deletion coordinator, one per tree | `{treeId}` | Deleted flag and timestamp, purge progress (next shard index, the shard count it walks, per-shard retries, and whether the purge was explicitly requested), a purge-complete flag, whether the copy was discarded by an undone resize (and so can never be recovered), and whether the purge must leave the registry entry and compaction schedule in place (set when the deleted copy is a resize's retired physical tree, which carries the live logical tree's id). A delete of an aliased tree also records the live copy it pinned, its own deletion time and its logical delete and purge progress; a copy deleted on a logical tree's behalf is marked as driven by that tree, and it and a copy a resize retires or discards raise no lifecycle events of their own. An alias-change reservation, a pending-delete fence and a pin on an unaliased delete's own id keep an alias change and a delete from overlapping. The soft-delete window is read from `SoftDeleteDuration`, not persisted | Yes |
-| Tombstone compaction | `TombstoneCompactionGrain` | `{treeId}` | The physical tree id and shard indices captured for the current pass, per-shard progress and retries, an in-shard resume key or a position in the dirty-leaf list the shard root nominated (with its clock watermark), per-shard last-trigger times for the trigger cooldown, and an in-progress flag | Yes |
-| Atomic write saga | `AtomicWriteGrain` | `{treeId}/{operationId}` | Saga phase (not started, prepare, prepared, execute, compensate, completed, or precondition-failed), the tree id, the entries with their captured pre-values, per-entry author deltas and delete markers, the batch's author delta and vector clock, the guard predicate, the transaction id, key fingerprint and batch size, the shards the prepare touched, the start time, the failure message, the cross-tree coordinator and participant trees for a cross-tree sub-saga, and per-step progress; the retention period is `AtomicWriteRetention`, applied by the retention reminder | Yes (keepalive + retention) |
-| Per-tree tx registry (sharded) | `TxRegistryGrain` | `_lattice_txshard_{n}_{treeId}` (`{treeId}` for the legacy, pre-sharding registry) | Per-transaction commit/abort decisions with a bounded retention window (a forgotten decision stays queryable as a timestamped tombstone), the shards each transaction's prepare touched, cross-cluster terminal-arrival tallies and expected counts, point-in-time cursor snapshot pins, cross-tree decision delegations (sender and receiver side), and the revision and epoch counters behind the token reader fast paths validate against | No |
-| Tx registry shard high-water | `TxRegistryHighWaterGrain` | `{treeId}` | `TxRegistryHighWaterState` - the highest registry shard index plus one ever written, which bounds tree-wide registry reads | No |
+| Tombstone compaction | tombstone compaction coordinator | `{treeId}` | The physical tree id and shard indices captured for the current pass, per-shard progress and retries, an in-shard resume key or a position in the dirty-leaf list the shard root nominated (with its clock watermark), per-shard last-trigger times for the trigger cooldown, and an in-progress flag | Yes |
+| Atomic write saga | atomic-write coordinator | `{treeId}/{operationId}` | Saga phase (not started, prepare, prepared, execute, compensate, completed, or precondition-failed), the tree id, the entries with their captured pre-values, per-entry author deltas and delete markers, the batch's author delta and vector clock, the guard predicate, the transaction id, key fingerprint and batch size, the shards the prepare touched, the start time, the failure message, the cross-tree coordinator and participant trees for a cross-tree sub-saga, and per-step progress; the retention period is `AtomicWriteRetention`, applied by the retention reminder | Yes (keepalive + retention) |
+| Per-tree tx registry (sharded) | saga decision registry | `_lattice_txshard_{n}_{treeId}` (`{treeId}` for the legacy, pre-sharding registry) | Per-transaction commit/abort decisions with a bounded retention window (a forgotten decision stays queryable as a timestamped tombstone), the shards each transaction's prepare touched, cross-cluster terminal-arrival tallies and expected counts, point-in-time cursor snapshot pins, cross-tree decision delegations (sender and receiver side), and the revision and epoch counters behind the token reader fast paths validate against | No |
+| Tx registry shard high-water | saga ticket allocator | `{treeId}` | saga ticket high-water state - the highest registry shard index plus one ever written, which bounds tree-wide registry reads | No |
 
 The same pattern backs the rest of the library's multi-step features, each described with its feature: [atomic actions](atomic-action.md), cross-tree [atomic writes](atomic-writes.md) and their receiver-side visibility barrier, the [distributed lock](distributed-lock.md), [materialised-view](materialised-views.md) maintenance and its registry, and tag-index reconciliation.
 
@@ -169,12 +169,12 @@ These grains carry the partitioned write-ahead log, leaf-projection replay, curs
 
 | Purpose | Orleans Grain | Key Format | Persistent State |
 |---|---|---|---|
-| WAL partition | `WalShardGrain` | `{treeId}/{partition}` (partition = stable hash of key mod `WalPartitions`) | None as grain state - appends `WalRecord` entries directly to the configured `IWalStorageProvider` (the append is the commit point) and recovers its next offset from the provider on activation |
-| Leaf replay coordinator | `LeafReplayCoordinatorGrain` | `{treeId}/{partition}` (the WAL partition it reads) | None - forwards activation-replay WAL slice reads to the registered commit-log reader, passing each leaf's replay filter down to storage (issue #3565), and caches the last-served slice in memory for five seconds, keyed by window and filter, so back-to-back reads of the same window with the same ownership share one read |
+| WAL partition | WAL partition owner | `{treeId}/{partition}` (partition = stable hash of key mod `WalPartitions`) | None as grain state - appends `WalRecord` entries directly to the configured `IWalStorageProvider` (the append is the commit point) and recovers its next offset from the provider on activation |
+| Leaf replay coordinator | leaf replay coordinator | `{treeId}/{partition}` (the WAL partition it reads) | None - forwards activation-replay WAL slice reads to the registered commit-log reader, passing each leaf's replay filter down to storage (issue #3565), and caches the last-served slice in memory for five seconds, keyed by window and filter, so back-to-back reads of the same window with the same ownership share one read |
 | Leaf snapshot storage | Snapshot store, one per leaf | the leaf's `Guid` | The leaf's snapshot blob (`leaf-snapshot`), or a manifest over separate `leaf-snapshot-segment` rows for a payload above `LeafSnapshotSegmentBytes` - see [Tree Storage](tree-storage.md#sizing-surface-3---leaf-snapshot-blob) |
-| Cursor pagination | `LatticeCursorGrain` | `{treeId}/{cursorId}` | Lifecycle phase, the tree id, the scan spec (range, reverse flag and scan kind), the last yielded key and a range-delete cursor's running delete count, plus the captured saga-decision snapshot and its registry pin for a point-in-time cursor, and the snapshot coordinate and whether its frozen baselines have been persisted for a snapshot cursor; released on `CloseCursorAsync` |
-| Tree stats | `LatticeStatsGrain` | `{treeId}` | None (aggregates over the live shard / leaf grains for `DiagnoseAsync`) |
-| TTL self-cleanup base | `TtlGrain<TSelf>` (abstract) | N/A - each concrete grain keeps its own key | None of its own - registers, slides and dispatches the reminder that deletes a transient grain's state after an idle or retention TTL, for grains such as cursors, atomic-write and atomic-action sagas, locks, and cross-tree transactions |
+| Cursor pagination | durable cursor owner | `{treeId}/{cursorId}` | Lifecycle phase, the tree id, the scan spec (range, reverse flag and scan kind), the last yielded key and a range-delete cursor's running delete count, plus the captured saga-decision snapshot and its registry pin for a point-in-time cursor, and the snapshot coordinate and whether its frozen baselines have been persisted for a snapshot cursor; released on `CloseCursorAsync` |
+| Tree stats | tree statistics aggregator | `{treeId}` | None (aggregates over the live shard / leaf grains for `DiagnoseAsync`) |
+| TTL self-cleanup base | the shared TTL cleanup base (abstract) | N/A - each concrete grain keeps its own key | None of its own - registers, slides and dispatches the reminder that deletes a transient grain's state after an idle or retention TTL, for grains such as cursors, atomic-write and atomic-action sagas, locks, and cross-tree transactions |
 
 ### Interaction diagram
 
@@ -185,27 +185,27 @@ flowchart TD
     Client([Client]) --> ILattice
 
     subgraph "Data path"
-        ILattice --> ShardRoot[ShardRootGrain]
-        ShardRoot --> Internal[BPlusInternalGrain]
-        Internal -->|write| Leaf[BPlusLeafGrain]
-        Internal -->|read| Cache[LeafCacheGrain]
+        ILattice --> ShardRoot[Shard-root router]
+        ShardRoot --> Internal[Internal-node router]
+        Internal -->|write| Leaf[Leaf materialiser]
+        Internal -->|read| Cache[Leaf lookup cache]
         Cache -.->|delta refresh| Leaf
         ShardRoot -.->|optimistic point read| Leaf
-        Leaf -->|"wal: AppendAsync"| Wal[(WalShardGrain)]
+        Leaf -->|"wal: AppendAsync"| Wal[(WAL partition owner)]
     end
 
     subgraph "Coordination"
-        ILattice --> Snapshot[TreeSnapshotGrain]
-        ILattice --> Resize[TreeResizeGrain]
-        ILattice --> Reshard[TreeReshardGrain]
-        ILattice --> Merge[TreeMergeGrain]
-        ILattice --> Delete[TreeDeletionGrain]
-        ILattice --> Compact[TombstoneCompactionGrain]
-        ILattice --> Atomic[AtomicWriteGrain]
+        ILattice --> Snapshot[Snapshot coordinator]
+        ILattice --> Resize[Resize coordinator]
+        ILattice --> Reshard[Reshard coordinator]
+        ILattice --> Merge[Merge coordinator]
+        ILattice --> Delete[Deletion coordinator]
+        ILattice --> Compact[Tombstone compactor]
+        ILattice --> Atomic[Atomic-write coordinator]
         Atomic -->|prepare / terminal| ShardRoot
-        Atomic -->|"per-tx decisions"| TxReg[TxRegistryGrain]
-        Monitor[HotShardMonitorGrain] -->|poll hotness| ShardRoot
-        Monitor -->|trigger| Split[TreeShardSplitGrain]
+        Atomic -->|"per-tx decisions"| TxReg[Transaction decision registry]
+        Monitor[Hot-shard monitor] -->|poll hotness| ShardRoot
+        Monitor -->|trigger| Split[Shard split coordinator]
         Reshard -->|"dispatch per-shard splits (grow)"| Split
         Reshard -->|"start folds (shrink)"| Fold[Shard consolidation coordinator]
         Healing[Shard-healing orchestrator] -->|start folds| Fold
@@ -216,7 +216,7 @@ flowchart TD
     end
 
     subgraph "Registry (self-hosting)"
-        ILattice -->|resolve tree config| Registry[LatticeRegistryGrain]
+        ILattice -->|resolve tree config| Registry[Tree registry]
         Registry -->|read/write via| SelfLattice["ILattice(&quot;_lattice_trees&quot;)"]
         SelfLattice -.->|same data path| ShardRoot
     end

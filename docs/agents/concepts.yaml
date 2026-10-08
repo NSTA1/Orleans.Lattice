@@ -1011,8 +1011,8 @@ concepts:
         - statement: "The Explorer never joins cluster membership."
           source: "FEATURES.md"
       out_of_scope:
-        - statement: "Its surface area and navigation are documented as in progress."
-          source: "FEATURES.md"
+        - statement: "The Explorer has no private path into a cluster; it reaches one only over the cluster's gRPC endpoint."
+          source: "docs/lattice.explorer/README.md"
     operational_envelope:
       limits: []
     sources:

@@ -6,11 +6,98 @@ only after its availability probe succeeds or returns a user-actionable
 Unavailable reason. Every field below that names an existing tree, region, subject,
 tenant or key is a type-ahead [picker](navigation-model.md#pickers).
 
+## Declared route inventory
+
+The complete route inventory below contains the 70 unique `@page` route patterns and the additional attribute-declared tenant Members route in the current UI source. Tenant-scoped pages list both plain and tenant-rooted routes; aliases are kept explicit.
+
+- **Home**
+  - `/`
+  - `/t/{tenant}`
+- **Session reset**
+  - `/reset`
+- **Not found**
+  - `/not-found`
+- **Data**
+  - `/data`
+  - `/t/{tenant}/data`
+  - `/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`
+  - `/t/{tenant}/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`
+- **Apps**
+  - `/apps`
+  - `/t/{tenant}/apps`
+  - `/apps/catalogue`
+  - `/t/{tenant}/apps/catalogue`
+  - `/apps/catalogue/{p2}/{p3}`
+  - `/t/{tenant}/apps/catalogue/{p2}/{p3}`
+  - `/apps/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`
+  - `/t/{tenant}/apps/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`
+- **Access**
+  - `/access`
+  - `/access/rules`
+  - `/t/{tenant}/access`
+  - `/t/{tenant}/access/rules`
+  - `/access/rules/{p1}`
+  - `/t/{tenant}/access/rules/{p1}`
+  - `/access/groups`
+  - `/t/{tenant}/access/groups`
+  - `/t/{tenant}/access/members`
+  - `/access/groups/{p1}`
+  - `/t/{tenant}/access/groups/{p1}`
+  - `/access/explain`
+  - `/t/{tenant}/access/explain`
+- **Schema**
+  - `/schema`
+  - `/t/{tenant}/schema`
+  - `/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`
+  - `/t/{tenant}/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`
+- **Tenancy**
+  - `/tenancy`
+  - `/tenancy/{p1}`
+  - `/tenancy/{p1}/members`
+  - `/tenancy/{p1}/access`
+  - `/tenancy/{p1}/quota`
+  - `/tenancy/{p1}/regions`
+  - `/tenancy/{p1}/sharing`
+  - `/tenancy/{p1}/grants`
+  - `/t/{tenant}/tenancy`
+  - `/t/{tenant}/tenancy/{p1}`
+- **Replication**
+  - `/replication`
+  - `/t/{tenant}/replication`
+  - `/replication/trees`
+  - `/t/{tenant}/replication/trees`
+  - `/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`
+  - `/t/{tenant}/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}`
+- **Backups**
+  - `/backups`
+  - `/t/{tenant}/backups`
+  - `/backups/{p1}`
+  - `/t/{tenant}/backups/{p1}`
+  - `/backups/new`
+  - `/t/{tenant}/backups/new`
+  - `/backups/health`
+  - `/t/{tenant}/backups/health`
+  - `/backups/maintenance`
+  - `/t/{tenant}/backups/maintenance`
+  - `/backups/operations/{p1}`
+  - `/t/{tenant}/backups/operations/{p1}`
+  - `/backups/schedules`
+  - `/t/{tenant}/backups/schedules`
+- **Telemetry**
+  - `/telemetry`
+  - `/t/{tenant}/telemetry`
+  - `/telemetry/{p1}`
+  - `/t/{tenant}/telemetry/{p1}`
+- **Cluster**
+  - `/cluster`
+  - `/t/{tenant}/cluster`
+  - `/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}`
+  - `/t/{tenant}/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}`
 | Area | Key and root address | Facades read or driven | Scope | Visibility probe |
 | --- | --- | --- | --- | --- |
-| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions | Tenant-scoped | Reads one tree-catalogue page. No state reader, no served state API, or a permission denial makes the area Hidden. A disconnected first load is Unavailable with a sign-in or connect reason; other catalogue faults are Unavailable with a fixed sentence. |
+| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
 | Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden. |
-| Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin` | Mixed: `/access` is cluster-wide; the tenant-rooted form lists only that tenant's rules | Reads the smallest group catalogue page. A successful page makes the area Visible. A missing facade hides it. An anonymous denial is Unavailable with "Sign in to administer access on this cluster."; a signed-in denial or any other fault hides it. |
+| Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin`; delegated tenant policy and directory facades | Mixed: `/access` is cluster-wide; `/t/{tenant}/access` is tenant-rooted and filters rules/groups for that tenant, with delegated groups, members and rules available when enabled | The smallest cluster group-catalogue page admits cluster access administrators. Only a Hidden result falls through to delegated access: a valid non-default asserted tenant with delegated access enabled can admit its administrator. Missing both surfaces or a denied/faulted tenant posture hides the area; an anonymous cluster-wide denial is Unavailable with "Sign in to administer access on this cluster." |
 | Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or fault is Hidden. |
 | Tenancy | `tenancy`, `/tenancy` and `/t/{tenant}/tenancy` | Tenant self-service, lifecycle, access, grant, region and quota facades; apps control for installed-app counts | Mixed: the directory is cluster-wide; `/t/{tenant}/tenancy` follows the active tenant | Requires tenancy to be active and the self-service facade to exist. It proves whether the caller is an operator or administers the scoped tenant. Operators and scoped tenant admins see it; refused anonymous callers see Unavailable with "Sign in to see the tenants you administer."; refused signed-in callers and other faults are Hidden. |
 | Replication | `replication`, `/replication` | `ILatticeReplicationStatus`, `ILatticeReplicationControl` | Tenant-scoped addresses, over the caller's admitted replication view | Reads the peer-status report, or falls back to the enrolment report. Status success makes the area Visible. If status fails but enrolment names at least one manageable tree, it is Visible. Missing facades, denied reads and other faults are Hidden. |

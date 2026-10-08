@@ -66,13 +66,11 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 | [Metrics](../../samples/Metrics/README.md) | Reading the `orleans.lattice` meter instruments with a `MeterListener`. |
 | [StateExplorer](../../samples/StateExplorer/README.md) | A console tree-explorer over the read-only state-API gRPC surface from `Orleans.Lattice.Api.State`. |
 
-#### Explorer console (in progress)
-
-**Status: in progress.** The Explorer is under active development, so this sample tracks a surface that is still moving.
+#### Explorer console
 
 | Sample | What it shows |
 |---|---|
-| [Explorer](../../samples/Explorer/README.md) | The opt-in `Orleans.Lattice.Explorer.Web` hosting library co-hosted in one process with a two-region estate - two single-silo clusters with tenancy on, replication between them, and one shared backup sink - so every Explorer area can be browsed against live data; `--minimal` runs a single region with no tenancy and no peer. **In progress** - the Explorer surface is still moving. |
+| [Explorer](../../samples/Explorer/README.md) | The opt-in `Orleans.Lattice.Explorer.Web` hosting library co-hosted in one process with a two-region estate - two single-silo clusters with tenancy on, replication between them, and one shared backup sink - so every Explorer area can be browsed against live data; `--minimal` runs a single region with no tenancy and no peer. |
 
 ### AI and MCP
 

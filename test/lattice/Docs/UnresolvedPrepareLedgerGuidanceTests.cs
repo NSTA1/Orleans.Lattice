@@ -20,7 +20,7 @@ public sealed class UnresolvedPrepareLedgerGuidanceTests
     [TestCase("docs/lattice/metrics.md", "| `orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap`", "\n")]
     [TestCase("docs/lattice.dashboards/metrics-to-panel-map.md", "| `orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap`", "\n")]
     [TestCase("docs/lattice/configuration.md", "The bound applies to **deferred terminals only**.", "\n")]
-    [TestCase("docs/lattice/tree-storage.md", "Only one thing can grow this row past a provider limit", "\n")]
+    [TestCase("docs/lattice/tree-storage.md", "A backlog of unresolved saga work in the leaf's replay-work ledger can grow this row past a provider limit", "\n")]
     [TestCase("src/lattice/BPlusTree/Grains/BPlusLeafGrain.DurableReplayWork.cs", "/// Issue #2183 observability.", "/// </para>")]
     [TestCase("src/lattice/BPlusTree/Grains/BPlusLeafGrain.DurableReplayWork.cs", "\"Leaf {TreeId} has {Count}", "state.State.TreeId, work.Count, thresholdCap")]
     [TestCase("src/lattice/LatticeMetrics.cs", "/// Counter of resident unresolved saga prepares", "/// </summary>")]

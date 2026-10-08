@@ -81,7 +81,7 @@ rollback:
     - action: "Execute another WAL move to the original provider key."
       api: "ILatticeTreeAdminOperations.StartWalMoveAsync"
       source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"
-  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
+  source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"
 concurrency:
   - rule: "Placement mutation must not interleave with another move of the same partition."
     source: "src/lattice/ILatticeAdmin.cs#ExecuteWalMoveAsync"

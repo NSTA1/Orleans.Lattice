@@ -111,6 +111,8 @@ change commits; each session selects from the prebuilt lists.
 
 ## See also
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md)
+
 - [Installable apps](../lattice.apps/README.md)
 - [MCP server](../lattice.api.mcp/README.md)
 - [RepoContext as the pilot app](../lattice.api.mcp.repocontext/README.md)

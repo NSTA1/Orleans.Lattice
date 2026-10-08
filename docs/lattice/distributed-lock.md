@@ -223,13 +223,13 @@ the Overview dashboard's "Distributed lock" row:
 - `orleans.lattice.lock.acquire.wait` (histogram, ms) - the FIFO queue wait before
   a grant, whose p95/p99 tail is the primary contention signal.
 
-See [Metrics](metrics.md#distributed-lock-sourced-from-latticelockgrain) for the
+See [Metrics](metrics.md#distributed-lock-sourced-from-tree-lock-coordinator) for the
 full catalogue.
 
 ## Verification
 
 The lock's fencing and admission decisions are extracted into a pure,
-deterministic core (`LockAdmissionCore`) that both the production grain and a
+deterministic admission core that both the production grain and a
 Coyote concurrency model execute, so its safety properties - monotonic fencing,
 stale-token rejection, mutual exclusion, and expired-lease reclamation - are
 machine-checked on every explored order of the stale-holder race (the reclaim and

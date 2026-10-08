@@ -31,8 +31,10 @@ exists.
 An area that cannot prove you may see it is not shown.
 
 - **Time-boxed.** The Explorer asks every area in parallel and waits at most
-  three seconds for each. An area that throws, is cancelled or does not answer in
-  time is hidden for that navigation. One slow facade never stalls the spine.
+  three seconds for each. A fault, a probe cancellation not caused by the
+  navigation, or a timeout hides that area for the navigation. Cancelling the
+  navigation itself propagates instead of being rendered as Hidden. One slow
+  facade never stalls the spine.
 - **Absent means hidden.** An answer that was never given reads as hidden, and
   an area whose facade is not served by the host or the cluster is hidden.
 - **Nothing before the session.** No area is asked anything until the circuit's
@@ -63,7 +65,7 @@ against a placeholder name that is never read or written.
 
 | Area | Hidden when | Unavailable when |
 |---|---|---|
-| Data | The host has no state connection, or the catalogue read is refused. | The Explorer is disconnected ("Connect to a cluster to browse its data." or "Sign in to browse this cluster's data."), or the catalogue read failed for another reason. |
+| Data | No state-API reader is available, or the caller is refused the catalogue. | Before a catalogue is loaded, a disconnected endpoint or another catalogue-read failure is Unavailable with a reason. A successfully loaded catalogue is memoized for the current caller and endpoint and can keep the area Visible until that memo is invalidated or refreshed. |
 | Apps | The caller has neither a workspace, catalogue access nor permission to list installed apps. | Never. |
 | Access | Neither cluster access administration nor delegated tenant access administration is served, or the caller is signed in and admitted by neither probe. | An anonymous caller is refused by the cluster-wide access probe: "Sign in to administer access on this cluster." |
 | Schema | The schema facade is not served, a signed-in caller holds no schema capability, or the probe faults. | An anonymous caller holds no schema capability: "Sign in to manage schema on this cluster." |

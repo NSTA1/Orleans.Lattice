@@ -11,7 +11,9 @@ projection-digest XOR fold, and a little replay bookkeeping. On every
 activation the cache is rebuilt: the leaf reloads its latest snapshot where
 it has a usable one and replays each WAL partition from just past the offset
 that snapshot covers, or from the start of the partition's readable window
-when no snapshot covers it (see
+when no covering snapshot was ever kept, subject to the genuine-loss guard.
+An unreadable snapshot, or a missing one recorded as previously kept, fails
+closed without replay (see [A vanished leaf snapshot](#a-vanished-leaf-snapshot) and
 [Snapshot-on-fall-off safety net](#snapshot-on-fall-off-safety-net)). These
 operational concerns naturally arise:
 
@@ -130,7 +132,7 @@ upward.
 
 The digest is byte-stable across silos because every input is canonicalised:
 
-- The leaf's entry cache is a `SortedDictionary<string, LwwValue<byte[]>>`
+- The leaf's entry cache is backed by a sorted dictionary of last-writer-wins rows
   built with `StringComparer.Ordinal`, so the per-entry contributions
   are identical on every silo regardless of insertion order.
 - All numeric fields use little-endian framing via `BinaryPrimitives`.
@@ -1054,7 +1056,7 @@ Error surface:
 When a leaf's snapshot cannot be loaded - the store faults, the row
 payload is unreadable, or a segment is missing or unreadable - the
 leaf's replay **fails closed** (issue #4450). Data operations on the
-leaf fail with an internal `LeafSnapshotUnavailableException`, which
+leaf fail with an internal snapshot-unavailable fault, which
 implements `ILatticeLeafUnavailable`, and nothing is replayed. Under
 coverage-gated WAL trimming the WAL GC removes a checkpointed prefix
 precisely because a snapshot covers it, so the snapshot may be the
@@ -1102,7 +1104,7 @@ outside the lattice - the leaf's next cold start finds no snapshot,
 and finds the record set. The snapshot may have been the only durable
 copy of the prefix it covered, so the replay **fails closed** exactly
 as for an unreadable snapshot: data operations fail with
-`LeafSnapshotUnavailableException` and nothing is replayed. Whether the
+a snapshot-unavailable fault and nothing is replayed. Whether the
 WAL tail still starts at offset `0` is not consulted, for the same
 reason as above: the leaf's durable WAL pin was resolved against the
 vanished snapshot's coverage and cannot be lowered, so the WAL GC stays
@@ -1134,7 +1136,7 @@ leaf split creating its sibling, and a bulk load or append creating its
 leaves. The intent is a reserved request-context key, so an external
 client cannot assert it. Any other call to a leaf with no row - a read,
 a write, the write-path re-bind of an unbound leaf - fails **closed**
-with `LeafStateRowLostException`, which implements
+with a lost-leaf-row fault, which implements
 `ILatticeLeafUnavailable`.
 
 As defence in depth a leaf also keeps a small row record, in a separate

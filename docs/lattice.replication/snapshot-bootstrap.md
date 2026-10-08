@@ -15,8 +15,8 @@ before calling `AddLatticeReplication`.
 | Type | Shape | Purpose |
 |------|-------|---------|
 | `ISnapshotProvider` | `Task<SnapshotStream> ExportAsync(string treeName, HybridLogicalClock asOfHlc, CancellationToken ct)` + `Task<SnapshotStream> ExportAsync(string treeName, string sourceClusterId, HybridLogicalClock asOfHlc, CancellationToken ct)` + `Task<SnapshotStream> ExportAsync(string treeName, IReadOnlyList<LeafReReplayRange> ranges, HybridLogicalClock asOfHlc, CancellationToken ct)` | Streaming as-of-HLC export of a tree's primary state. The three-arg overload carries the sender-cluster identifier and is the one the bootstrap coordinator invokes; intra-cluster implementations inherit a default interface method that delegates to the two-arg overload after validating `sourceClusterId`. The range-scoped overload - used by the [bootstrap fallback](anti-entropy-bootstrap-fallback.md) - yields only entries inside the half-open `[StartKey, EndKey)` ranges; its default interface method filters the whole-tree export client-side. |
-| `SnapshotStream` | sealed class with `TreeName`, `AsOfHlc`, `CausalStableFrontier` (`VersionVector`), `Entries` (`IAsyncEnumerable<SnapshotEntry>`) | Carries the export metadata + entry stream produced by `ExportAsync`. |
-| `SnapshotEntry` | `readonly record struct` with `Key`, `Value`, `Timestamp`, `IsPrepared`, `IsTombstone`, `TransactionId`, `SourceShardIndex`, `AtomicBatchSize`, `AtomicBatchIndex`, `ExpiresAtTicks`, `Delta`, `Mode` | A single exported record stamped with its commit-time HLC so the receiver can pin the value at exactly that timestamp. A committed-projection row sets `Key`, `Value`, `Timestamp`, and `ExpiresAtTicks`; a prepared saga row additionally sets `IsPrepared`, `IsTombstone`, `TransactionId`, and the typed CRDT `Delta` / `Mode` (see [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)). `SourceShardIndex` is reserved and always `0`. |
+| `SnapshotStream` | sealed class with `TreeName`, `AsOfHlc`, `CausalStableFrontier` (`VersionVector`), `OpenGeneration`, `CloseGeneration` (`SnapshotSourceGeneration?`), `Entries` (`IAsyncEnumerable<SnapshotEntry>`) | Carries the export metadata + entry stream produced by `ExportAsync`. `OpenGeneration` is available before enumeration; `CloseGeneration` is readable after the stream completes and cannot be assigned by consumers. |
+| `SnapshotEntry` | `readonly record struct` with `Key`, `Value`, `Timestamp`, `IsPrepared`, `IsTombstone`, `TransactionId`, `SourceShardIndex`, `AtomicBatchSize`, `AtomicBatchIndex`, `ExpiresAtTicks`, `Delta`, `Mode`, `SettledDecision`, and computed `IsDecision` | A single exported record stamped with its commit-time HLC so the receiver can pin the value at exactly that timestamp. A committed-projection row sets `Key`, `Value`, `Timestamp`, and `ExpiresAtTicks`; `SettledDecision` carries a committed or aborted saga verdict and `IsDecision` identifies such a row; a prepared saga row additionally sets `IsPrepared`, `IsTombstone`, `TransactionId`, and the typed CRDT `Delta` / `Mode` (see [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)). `SourceShardIndex` is reserved and always `0`. |
 
 `SnapshotEntry` is alias `olr.se`.
 
@@ -60,13 +60,13 @@ before calling `AddLatticeReplication`.
   own HLC, and the bootstrap drain applies it as a delete. Without it a
   receiver that bootstraps in place over an existing copy - a peer that
   fell off the log and is re-bootstrapped by either the receiver-side local
-  detector or the sender-side trim-gap request, or an operator re-seed over existing data - kept the old value of every key
+  detector or the sender-side trim-gap request, or an operator re-seed over existing data - otherwise kept the old value of every key
   the source deleted while it was behind, permanently, because the
   delete's WAL record is behind the source's trim point and the
   incremental stream never delivers it (#4504).
 
   A source tombstone can be physically reaped after
-  `TombstoneGracePeriod`, so an in-place drain also pre-captures the
+  `TombstoneGracePeriod`, so a drain also pre-captures the
   receiver's live source-origin, non-expiring rows before opening the
   export. The sender carries a source-generation tuple at export open and
   close: physical tree id, shard-map version, lineage token, soft-delete
@@ -108,9 +108,15 @@ before calling `AddLatticeReplication`.
   keys carrying an expiry are not captured because they expire on their
   own.
 
-  Rows of any other origin - the receiver's own writes and a third
-  cluster's - converge through the source's applied frontier (#4549). The
-  export carries, when it opens and after its opening generation, the
+  Eligible third-origin rows reconcile through the source's applied
+  frontier (#4549). The receiver's own rows - stored without an origin
+  or explicitly stamped with the receiver's cluster id - are always kept
+  by this absence-based reconciliation (#4768). A foreign snapshot never
+  proves that a receiver-authored row was deleted: the source's watermark
+  for that origin can run ahead of what it applied after a sender-log
+  rebind. This exemption also applies to pending receiver-origin prepares.
+  Explicit exported mutations still follow the ordinary merge semantics.
+  The export carries, when it opens and after its opening generation, the
   source tree's per-origin applied low watermark `S(o)` and the writes
   below it the source holds without applying `H(o)` (lost marks
   included); the source's own origin is never part of it, because its
@@ -134,7 +140,7 @@ before calling `AddLatticeReplication`.
   Every install bumps the tree's **floor epoch**. The applier stamps each
   replicated write with the epoch it was admitted under, the epoch is
   raised in the tree registry
-  (`TreeRegistryEntry.ReplicationFloorEpoch`), and every shard root of the
+  (the tree registry's replication-floor epoch), and every shard root of the
   tree is armed with it. Arming is a serial shard-root turn that returns
   only once the writes the shard admitted under an older epoch have
   finished their leaf merges; from then on the shard refuses an
@@ -143,11 +149,12 @@ before calling `AddLatticeReplication`.
   from the registry before it admits its first stamped write. So no write
   admitted before the floor existed can land after the reconcile scan.
 
-  After the drain the coordinator scans the receiver's live, non-expiring
-  last-writer-wins rows of every origin other than the source (a local
-  row counts as this cluster's id), and deletes, at the row's own HLC and
-  stamped with the source's id, each one whose key the export did not
-  carry and whose write is below `S(o)` and not in `H(o)`. A pending saga
+  After the drain the coordinator scans live, non-expiring
+  last-writer-wins rows on the import destination, excluding both the
+  source's origin and the receiver's own origin (including an absent
+  origin). For each eligible third-origin row whose key the export did not
+  carry and whose write is below `S(o)` and not in `H(o)`, it synthesises a
+  delete at that row's own HLC, stamped with the source's id. A pending saga
   prepare matching the same test belongs to a saga the source had already
   decided - one still open there is exported as prepared rows - so its
   bucket on that leaf is discarded, durably, and its later commit
@@ -250,7 +257,7 @@ disturbing the live tail pipeline.
 | Type | Shape | Purpose |
 |------|-------|---------|
 | `IRemoteSnapshotTransport` | `Task<RemoteSnapshotMetadata> GetMetadataAsync(string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken ct)` + `IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken ct)` | Transport-shaped sub-interface used by a cross-cluster `ISnapshotProvider` adapter to fetch a snapshot from a sender cluster. |
-| `RemoteSnapshotMetadata` | `readonly record struct` with `TreeName`, `SourceClusterId`, `AsOfHlc`, `CausalStableFrontier` | Snapshot cut-point captured atomically with the start of the entry stream; alias `olr.sm`. |
+| `RemoteSnapshotMetadata` | `readonly record struct` with `TreeName`, `SourceClusterId`, `AsOfHlc`, `CausalStableFrontier`, `ExportEpoch`, `OpenGeneration` | Snapshot cut-point plus the source export epoch and opening tree generation; alias `olr.sm`. A legacy sender omits the epoch (`0`) or generation (`null`). |
 
 ### Semantics
 
@@ -791,7 +798,7 @@ readers do not receive `LatticeTreeBootstrappingException` just because a fresh
 snapshot is being imported.
 
 **Persisted legacy in-place imports.** A coordinator state written by an older
-version may already have `ReadFenceArmed` set. Recovery keeps that durable
+version may already have a durable read fence armed. Recovery keeps that
 fence until the import completes, so those legacy readers still receive
 `LatticeTreeBootstrappingException` rather than seeing a partial import. This
 is also the state in which the operator override below applies. It does not
@@ -889,7 +896,7 @@ A refused batch is not accepted. Its ack sets `ReplicationAck.SourceLineageRefus
 - A sender whose binding is stale rebinds and never re-sends the old log.
 - A sender whose binding is current re-seeds the peer, and the new drain records the current lineage.
 
-The check runs at the applier's admission seam (`ReplicationSourceLineageGate.AdmitAsync`), which every apply entry passes through, so it covers more than the push that delivered a batch ([#4707](https://github.com/NSTA1/Orleans.Lattice/issues/4707)). An entry that parks in the causal-apply buffer, or is dead-lettered, keeps the stamp it arrived under. It is checked again when the buffer drains it or an operator replays it, against the lineage the tree has drained by then:
+The check runs at the applier's admission seam (the source-lineage admission gate), which every apply entry passes through, so it covers more than the push that delivered a batch ([#4707](https://github.com/NSTA1/Orleans.Lattice/issues/4707)). An entry that parks in the causal-apply buffer, or is dead-lettered, keeps the stamp it arrived under. It is checked again when the buffer drains it or an operator replays it, against the lineage the tree has drained by then:
 - The drain discards a refused entry. It belongs to a lineage the tree no longer replicates, as a refused push would have.
 - A refused replay returns `ApplyResult.SourceLineageRefused` and leaves the entry parked for the operator to discard.
 - A failure to read the record keeps a drained entry parked, and defers a replay.
@@ -911,7 +918,7 @@ _ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes
 
 ## Operator-driven re-seed
 
-Beyond the receiver-side local auto-bootstrap path (`ILatticeFallOffLogDetector`) and the sender-side trim-gap request path, the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the automatic paths, so every re-seed - operator-driven, detector-driven, or sender-requested - flows through one state machine.
+Beyond the receiver-side local auto-bootstrap path (the receiver-side local WAL fall-off detector) and the sender-side trim-gap request path, the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the automatic paths, so every re-seed - operator-driven, detector-driven, or sender-requested - flows through one state machine.
 
 | Type | Shape | Purpose |
 |------|-------|---------|
@@ -1071,7 +1078,7 @@ in this payload once again means only what it says.
 **The verdict behind an aged-out row is exported, not the mask.** The
 prepared rows pass resolves an `Indeterminate` saga whose decision the
 registry still stores to that recorded verdict
-(`ITxRegistryGrain.GetRecordedStatusAsync`), once per saga, before it
+(the transaction registry recorded-verdict read), once per saga, before it
 emits any of the saga's rows. Both passes then treat the saga as
 decided. A recorded commit ships as committed rows, and a recorded abort
 ships nothing. The prepared rows pass emits a recorded commit's committed
@@ -1299,7 +1306,7 @@ delivered its last source-shard terminal
 export therefore:
 
 1. Records a decision-purge hold on the tree
-   ([`IWalPurgeHoldGrain`](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas))
+   ([the WAL purge hold](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas))
    before snap0, and releases it once the completion has read the log, so a
    saga that decides during the export is still recorded at close. A crashed
    export's hold is released by the tree's next export after 24 hours.

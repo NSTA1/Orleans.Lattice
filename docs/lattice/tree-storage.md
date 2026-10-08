@@ -6,7 +6,7 @@ For the *mechanics* of changing structural sizing on an existing tree, see [Tree
 
 ## WAL-first storage model
 
-Every foreground commit (set / delete / range-delete / saga prepare / saga terminal / cross-migration backstop / merge / tombstone reap) is durably written to the tree's write-ahead log **before** it touches in-memory state. The WAL append is the durability boundary; the leaf grain's persisted state row is a *small, fixed-shape* row carrying topology and lifecycle metadata only - it does **not** carry per-key entries.
+Every foreground commit (set / delete / range-delete / saga prepare / saga terminal / cross-migration backstop / merge / tombstone reap) is durably written to the tree's write-ahead log **before** it touches in-memory state. The WAL append is the durability boundary; the leaf's persisted state row carries topology, lifecycle, checkpoint and recovery metadata, but **not** the per-key projection. It is normally small, not fixed-size: unresolved prepares and durable discard records can enlarge it.
 
 There are therefore three distinct storage surfaces with three distinct sizing models:
 
@@ -24,33 +24,36 @@ Two per-tree grain-state rows grow with the tree rather than with any one leaf, 
 
 ## Sizing surface 1 - Leaf grain state row
 
-`LeafNodeState` carries only topology and lifecycle metadata. The historical `Entries` slot (`Id(0)`) was removed when the leaf state was collapsed onto a per-activation in-memory cache rebuilt from the leaf's snapshot and the WAL; the slot is permanently reserved and the per-key projection no longer lives in this row.
+The leaf state row carries topology, lifecycle, checkpoint and recovery metadata. The historical per-key dictionary slot (`Id(0)`) was removed when the leaf state was collapsed onto a per-activation in-memory cache rebuilt from the leaf's snapshot and the WAL; the slot is permanently reserved and the per-key projection no longer lives in this row.
 
 | Field | Type | Approximate size |
 |---|---|---|
-| `Clock` (HLC) | `HybridLogicalClock` | 12 bytes |
+| Hybrid logical clock | `HybridLogicalClock` | 12 bytes |
 | Version vector (a single entry, keyed by the leaf's own grain identity) | `VersionVector` | ~60-120 bytes |
 | Last-compaction version (a copy of the version vector) | `VersionVector` | ~60-120 bytes |
-| `NextSibling` / `PrevSibling` / `OldNextSibling` | `GrainId?` | ~80 bytes each when present |
-| `ParentId` | `GrainId?` | ~80 bytes when present |
+| Next, previous and pre-split sibling references | `GrainId?` | ~80 bytes each when present |
+| Parent reference | `GrainId?` | ~80 bytes when present |
 | Split metadata (lifecycle state, split key, new sibling's id, and the in-flight marker) | mixed | ~80 bytes total when a split is in flight |
-| `TreeId` | `string?` | 4 bytes + UTF-8 bytes |
-| `ProjectionCheckpointOffset` | `long` | 8 bytes |
-| `ProjectionHash` | `byte[]?` (16-byte XOR fold) | ~20 bytes when present |
-| `ShardIndex` | `int?` | ~5 bytes |
-| `LowKeyInclusive` / `HighKeyExclusive` | `string?` | 4 bytes + UTF-8 bytes each when present |
-| `MovedAwaySlots` | `int[]?` | 0 bytes on a leaf that holds no moved-away seal; 4 bytes per sealed slot otherwise |
-| `MovedAwayVirtualShardCount` | `int?` | ~5 bytes when set |
-| `ProjectionCheckpointOffsetsByPartition` | `long[]?` | 0 bytes on a single-partition tree (`null`); 8 bytes per WAL partition otherwise |
+| Owning tree id | `string?` | 4 bytes + UTF-8 bytes |
+| Partition-0 projection checkpoint | `long` | 8 bytes |
+| Projection hash | `byte[]?` (16-byte XOR fold) | ~20 bytes when present |
+| Physical shard index | `int?` | ~5 bytes |
+| Inclusive low key and exclusive high key | `string?` | 4 bytes + UTF-8 bytes each when present |
+| Moved-away virtual slots | `int[]?` | 0 bytes on a leaf that holds no moved-away seal; 4 bytes per sealed slot otherwise |
+| Virtual slot count for the moved-away seal | `int?` | ~5 bytes when set |
+| Per-partition projection checkpoints | `long[]?` | 0 bytes on a single-partition tree (`null`); 8 bytes per WAL partition otherwise |
 | Partition-0 checkpoint-assigned flag | `bool?` | ~2 bytes |
-| `DigestPublishSequence` | `long` | 8 bytes |
-| `UnresolvedReplayWork` | `List<UnresolvedReplayWorkEntry>?` | 0 bytes in the steady state (`null` or empty); per outstanding entry, ~20 bytes plus the recorded mutation itself (roughly the size of its WAL row) - see the caveat below |
+| Digest publication sequence | `long` | 8 bytes |
+| Unresolved replay-work ledger | an optional list of unresolved replay records | 0 bytes in the steady state (`null` or empty); per outstanding entry, ~20 bytes plus the recorded mutation itself (roughly the size of its WAL row) - see the caveat below |
+| Receiver-side prepare discard records | List of transaction ids with pruning offsets | Variable; retained until the recorded partition checkpoints make pruning safe |
+| Per-partition kept-snapshot flags | `bool[]?` | 0 bytes when absent; one flag per recorded WAL partition otherwise |
+| Separate row-record durability flag | `bool` | 1 byte |
 | Snapshot load hint (the byte size the leaf's last persisted snapshot occupied) | `long` | 8 bytes |
 | Orleans state envelope | - | ~100-200 bytes |
 
 **Steady-state leaf state row size: roughly 0.6 to 1.2 KB**, dominated by the grain-identity fields (sibling, parent, and split pointers). The row does **not** scale with `MaxLeafKeys`, `MaxInternalChildren`, or live-entry count, so the leaf state row is comfortably within every supported storage provider's per-row limit (including DynamoDB at 400 KB) regardless of structural sizing.
 
-Only one thing can grow this row past a provider limit, and it is not structural: a backlog of unresolved saga work in the leaf's replay-work ledger. (The version vectors hold only the leaf's own entry - a replicated write's per-origin causal frontier travels on the entry itself, in the WAL and snapshot rows - so writes from many clusters do not grow this row.) Entries are struck off as each saga resolves, so the list is empty in the steady state, and `LatticeOptions.MaxDurableUnresolvedReplayWork` (default 1 024) bounds the deferred terminals it holds. It does **not** bound resident unresolved prepares: dropping one would pin the leaf's flush ceiling permanently, so past the bound a prepare is still recorded and the row is allowed to grow, with the crossing reported through the `orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap` counter instead. A saga whose terminal never lands therefore leaves its prepare in this row indefinitely, so a leak of such sagas can grow it without limit. Persist risk: Azure Table Storage rejects oversized writes at its ~960 KB grain-state limit (see [Storage provider per-row limits](#storage-provider-per-row-limits)), bounding persisted row growth while leaving the previous row intact. Read risk: the larger SQLite limit on the default `local` profile permits growth that can exhaust memory or the read budget during activation, before grain-level repair can run. Orleans reads this ledger as part of the persistent leaf state before grain code runs; compaction, splitting and other grain-level repair cannot rescue a leaf that cannot activate. A larger storage limit is therefore not a safe read-size bound, and write amplification is not the only cost. Alert on that counter on every profile. See [`MaxDurableUnresolvedReplayWork`](configuration.md#maxdurableunresolvedreplaywork).
+A backlog of unresolved saga work in the leaf's replay-work ledger can grow this row past a provider limit; receiver-side discard records also occupy variable space until they can be pruned. (The version vectors hold only the leaf's own entry - a replicated write's per-origin causal frontier travels on the entry itself, in the WAL and snapshot rows - so writes from many clusters do not grow this row.) Entries are struck off as each saga resolves, so the list is empty in the steady state, and `LatticeOptions.MaxDurableUnresolvedReplayWork` (default 1 024) bounds the deferred terminals it holds. It does **not** bound resident unresolved prepares: dropping one would pin the leaf's flush ceiling permanently, so past the bound a prepare is still recorded and the row is allowed to grow, with the crossing reported through the `orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap` counter instead. A saga whose terminal never lands therefore leaves its prepare in this row indefinitely, so a leak of such sagas can grow it without limit. Persist risk: Azure Table Storage rejects oversized writes at its ~960 KB grain-state limit (see [Storage provider per-row limits](#storage-provider-per-row-limits)), bounding persisted row growth while leaving the previous row intact. Read risk: the larger SQLite limit on the default `local` profile permits growth that can exhaust memory or the read budget during activation, before grain-level repair can run. Orleans reads this ledger as part of the persistent leaf state before grain code runs; compaction, splitting and other grain-level repair cannot rescue a leaf that cannot activate. A larger storage limit is therefore not a safe read-size bound, and write amplification is not the only cost. Alert on that counter on every profile. See [`MaxDurableUnresolvedReplayWork`](configuration.md#maxdurableunresolvedreplaywork).
 
 ## Sizing surface 2 - WAL row
 
@@ -81,14 +84,14 @@ The snapshot blob is written exactly once per snapshot capture and stored as a s
 
 | Field | Approximate size |
 |---|---|
-| `SnapshotOffset` (`long?`) | 8 bytes |
-| `CapturedAtTicks` (`long`) | 8 bytes |
+| Partition-0 snapshot offset (`long?`) | 8 bytes |
+| Capture time in ticks (`long`) | 8 bytes |
 | Byte footprint of the rows, recorded at capture (`long`) | 8 bytes |
 | Per-partition covered WAL offsets (`long[]?`) | 0 bytes on a single-partition tree; 8 bytes per WAL partition otherwise |
-| `Rows` (`IReadOnlyList<LeafSnapshotRow>`) | one `(Key, Value, MergeMode)` row per key the leaf holds, tombstones included |
+| Legacy snapshot entry list | one key, LWW payload and merge-mode row per key the leaf holds, tombstones included |
 | Orleans state envelope | ~100-200 bytes |
 
-Each `LeafSnapshotRow` carries the same per-key surface a pre-collapse leaf row would have carried, minus the version-vector slot:
+Each snapshot entry row carries the same per-key surface a pre-collapse leaf row would have carried, minus the version-vector slot:
 
 | Component | Approximate size |
 |---|---|
@@ -113,10 +116,10 @@ SnapshotBlobSize ~= 200 + Entries * (45 + avgKeySize + avgValueSize)
 
 `Entries` counts every key the leaf holds - live keys plus tombstones not yet compacted. The snapshot blob is the only surface whose size scales with that entry count, and it is the surface to validate against the storage-provider per-row limit when adaptive splits are disabled or `MaxLeafKeys` is large. A snapshot capture against a leaf with 10,000 keys and 4 KB values produces a roughly 40 MB payload, which is well outside the ~960 KB Azure Table Storage and 2 MB Cosmos DB limits and inside the practical Blob Storage limit - although segmentation (below) keeps any single row it writes within `LeafSnapshotSegmentBytes`.
 
-Two operational levers control the snapshot blob's worst-case size:
+Two operational levers guide the snapshot blob's size, without imposing a strict worst-case bound:
 
-- **`MaxLeafKeys`** caps the number of entries per leaf - live keys and not-yet-compacted tombstones alike - via the structural split policy. A leaf cannot exceed `MaxLeafKeys` entries at rest, so the snapshot blob is bounded by `MaxLeafKeys * average row size`.
-- **`LatticeOptions.MaxLeafBytes`** (default 64 MiB) splits a leaf whose keys and values together exceed it, so it bounds the payload a snapshot must carry however large individual values are.
+- **`MaxLeafKeys`** triggers a structural split when the entry count - live keys and not-yet-compacted tombstones alike - exceeds the threshold. Writes are already durable when overflow is checked, and a write does not wait for a contended split gate, so a leaf can temporarily exceed the threshold. `MaxLeafKeys * average row size` is a planning estimate, not a hard snapshot-size limit.
+- **`LatticeOptions.MaxLeafBytes`** (default 64 MiB) triggers splitting when aggregate key and value bytes exceed it; snapshot capture also attempts overflow repair. A single oversized entry cannot be split and remains intact, so this is not a hard limit on individual values or snapshot payloads.
 
 The storage provider is not a third lever. Snapshot rows are written through the same grain storage provider as the leaf state rows and every other Lattice grain that persists grain state - the one `AddLattice` registers under `LatticeOptions.StorageProviderName` (`"lattice"`) - so the provider cannot be chosen separately for snapshots. Choose that provider with the snapshot surface in mind (see the per-provider limits below).
 
@@ -134,7 +137,7 @@ A capture that replaces a segmented snapshot records the superseded segment rows
 
 ## Storage provider per-row limits
 
-The table below lists the per-grain state row limit for each Orleans storage provider. These limits apply to the **leaf state row**, the **internal state row**, **`ShardRootState`**, and the **leaf snapshot blob** - the rows the lattice grain storage provider persists. They are not WAL row limits, even where the WAL provider uses the same backing store: a WAL provider lays out its own rows, and the Azure Table WAL provider stores each entry in a single binary property capped at 64 KiB (see [Sizing the WAL row for a provider](#sizing-the-wal-row-for-a-provider)).
+The table below lists the per-grain state row limit for each Orleans storage provider. These limits apply to the **leaf state row**, the **internal state row**, **shard-root state**, and the **leaf snapshot blob** - the rows the lattice grain storage provider persists. They are not WAL row limits, even where the WAL provider uses the same backing store: a WAL provider lays out its own rows, and the Azure Table WAL provider stores each entry in a single binary property capped at 64 KiB (see [Sizing the WAL row for a provider](#sizing-the-wal-row-for-a-provider)).
 
 | Storage Provider | Max state size per grain | Limiting factor |
 |---|---|---|
@@ -176,7 +179,7 @@ If the application writes values larger than the WAL provider's per-row budget, 
 
 ## Sizing the snapshot blob for a provider
 
-The snapshot blob is bounded by `MaxLeafKeys * average row size`. These figures size a snapshot's whole payload; the largest single row it writes is additionally bounded by `LeafSnapshotSegmentBytes` (see above), which on a provider with a per-row limit below 4 MiB is an alternative to shrinking `MaxLeafKeys`. With the default `MaxLeafKeys = 128`:
+The planning estimate for a snapshot blob is `MaxLeafKeys * average row size`, not a strict bound during overflow. These figures size a snapshot's whole payload; the largest single row it writes is additionally bounded by `LeafSnapshotSegmentBytes` (see above), which on a provider with a per-row limit below 4 MiB is an alternative to shrinking `MaxLeafKeys`. With the default `MaxLeafKeys = 128`:
 
 | Avg key | Avg value | `MaxLeafKeys` | Estimated snapshot blob size |
 |---|---|---|---|
@@ -230,20 +233,20 @@ It does **not** control the leaf state row size and does **not** control the WAL
 
 ## Internal node sizing
 
-`InternalNodeState` carries `MaxInternalChildren` `ChildEntry` records plus per-subtree digest aggregates:
+Internal-node state carries `MaxInternalChildren` child routing entry records plus per-subtree digest aggregates:
 
 | Field | Approximate size |
 |---|---|
-| `Children` (`List<ChildEntry>`) | `MaxInternalChildren * (60-80 bytes GrainId + 4 bytes + separator key UTF-8 + ~10-15 bytes framing)` |
-| `ChildrenAreLeaves` | 1 byte |
-| `Clock` (HLC) | 12 bytes |
-| `ParentId` | ~80 bytes when present |
-| Split metadata (`SplitState`, `SplitKey`, `SplitSiblingId`, `SplitRightChildren`) | ~80 bytes idle; up to `MaxInternalChildren * 90 bytes` during a split |
-| `SubtreeProjectionHash` | ~20 bytes when present |
-| `SubtreeEntryCount` / `SubtreeHighestCheckpointOffset` | 16 bytes |
-| `ChildDigests` (per-child snapshot table) | per child, ~130-170 bytes plus the child's two key bounds (`GrainId` + 16-byte hash + entry, live and tombstone counts + checkpoint offset + publish sequence + subtree depth and fan-out + the child's low and high key bounds + framing) |
-| `DigestPublishSequence` | 8 bytes |
-| `TreeId` | 4 bytes + UTF-8 bytes |
+| Ordered child routing entries | `MaxInternalChildren * (60-80 bytes GrainId + 4 bytes + separator key UTF-8 + ~10-15 bytes framing)` |
+| Leaf-child discriminator | 1 byte |
+| Hybrid logical clock | 12 bytes |
+| Parent reference | ~80 bytes when present |
+| Split metadata (lifecycle, promoted key, new sibling id and right-hand children) | ~80 bytes idle; up to `MaxInternalChildren * 90 bytes` during a split |
+| Subtree projection hash | ~20 bytes when present |
+| Subtree entry count and highest checkpoint offset | 16 bytes |
+| Per-child digest snapshot table | per child, ~130-170 bytes plus the child's two key bounds (`GrainId` + 16-byte hash + entry, live and tombstone counts + checkpoint offset + publish sequence + subtree depth and fan-out + the child's low and high key bounds + framing) |
+| Digest publication sequence | 8 bytes |
+| Owning tree id | 4 bytes + UTF-8 bytes |
 | Orleans state envelope | ~100-200 bytes |
 
 **Internal state row formula:**
@@ -254,7 +257,7 @@ InternalStateSize ~= 200 + MaxInternalChildren * (240 + 3 * avgKeySize)
 
 The `3 * avgKeySize` term is the separator plus the two key bounds each child's digest record carries. With the default `MaxInternalChildren = 128` and 50-byte keys, the internal state row is roughly 50 KB, comfortably under DynamoDB's 400 KB limit; at the default fan-out, keys would need to average around 1 KB before the row approached it. In practice, **`MaxInternalChildren` is tuned for tree depth and fan-out, not storage limits.**
 
-> **Note on `MaintainProjectionDigest`.** `MaintainProjectionDigest = false` zeroes the per-child digest cost (the `ChildDigests` table is left untouched and the upward publish is skipped); see [Configuration - `MaintainProjectionDigest`](configuration.md#maintainprojectiondigest).
+> **Note on `MaintainProjectionDigest`.** `MaintainProjectionDigest = false` zeroes the per-child digest cost (the per-child digest table is left untouched and the upward publish is skipped); see [Configuration - `MaintainProjectionDigest`](configuration.md#maintainprojectiondigest).
 
 ## Default-configuration assessment
 

@@ -744,6 +744,8 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 
 ## See also
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
+
 - [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) - the core multi-tenancy
   companion (isolation, quotas, metering, residency enforcement).
 - [`Orleans.Lattice.Api.TenantAdmin.Grpc`](../lattice.api.tenantadmin.grpc/README.md) -

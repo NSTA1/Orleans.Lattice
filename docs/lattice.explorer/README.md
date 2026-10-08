@@ -160,6 +160,8 @@ for wiring sign-in.
 
 - [Running and hosting the Explorer](running-the-explorer.md) - standalone and embedded hosting, package shape, the app frame route and security headers.
 - [Configuration](configuration.md) - every public options property, its type and its default, plus the launcher environment variables, the persisted configuration document and the connection settings.
+- [API reference](api.md) - the public host entry points, sign-in seam and AppKit frame protocol.
+- [Architecture](architecture.md) - host composition, calls to cluster facades, area gating and the app-frame boundary.
 - [Multi-replica and failover hosting](multi-replica-hosting.md) - durable auth state and graceful re-authentication for a multi-replica deployment.
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md) - selecting a sign-in method and attaching its credential.
 - [Adding a custom auth method](adding-a-custom-auth-method.md) - implementing `IExplorerAuthMethod` for a bespoke sign-in.

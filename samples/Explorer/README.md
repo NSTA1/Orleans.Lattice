@@ -2,13 +2,12 @@
 
 A one-command, self-contained demo of the opt-in `Orleans.Lattice.Explorer.Web`
 hosting library. One process on one machine, with no cloud dependency, runs a
-**two-region estate** and the **Explorer web console**, so every Explorer area
-has live data:
+**two-region estate** and the **Explorer web console**, with live data in every
+area the sample serves:
 
 - two single-silo Orleans clusters, the `east` and `west` regions, each serving
-  every control plane the Explorer has an area for (state, auth, schema, apps,
-  tenancy, tree administration, backup, and replication control and status) on
-  its own h2c gRPC endpoint;
+  the sample's state, auth, schema, apps, tenancy, tree-administration, backup,
+  and replication APIs on its own h2c gRPC endpoint;
 - tenancy on, with two seeded tenants, `acme` and `globex`, and delegated tenant access administration on, so `globex` keeps its own groups, members and rules;
 - replication between the regions over loopback gRPC, with a small background
   writer keeping the links busy and a switch that pauses the link;
@@ -35,11 +34,15 @@ sample runs until you press Ctrl+C.
 
 | Switch | Effect |
 |--------|--------|
-| `--minimal` | One region, no tenancy and no peer: the single-cluster experience. |
-| `--explorer-region west` | Connect the console to the `west` region instead of `east`. |
-| `--sign-in-as <user>` | Sign the console in as another sample identity, such as `acme-admin`. `--sign-in-as none` starts signed out. |
-| `--peer-paused` | Pause the link between the regions as soon as the seeded data has reached `west`. |
-| `--port-offset <n>` | Add `n` to every port, when the defaults are taken (for example by another copy of the sample). |
+| `--minimal` | One region, no tenancy and no peer: the single-cluster experience. Off by default. |
+| `--explorer-region <region>` | Connect the console to `east` or `west`; the default is `east`. |
+| `--sign-in-as <user>` | Sign the console in as another sample identity, such as `acme-admin`; the default is `explorer-admin`. `--sign-in-as none` starts signed out. |
+| `--peer-paused` | Pause the link between the regions as soon as the seeded data has reached `west`. The link stays running by default. |
+| `--port-offset <n>` | Add `n` to every port, when the defaults are taken (for example by another copy of the sample). Accepts whole numbers from `0` through `30000`; the default is `0`. |
+
+`--minimal` cannot be combined with `--peer-paused` or
+`--explorer-region west`; the parser rejects either combination because a
+minimal run has no peer and no `west` region.
 
 Pass switches after `--`, for example
 `dotnet run --project samples/Explorer/Explorer.csproj -- --sign-in-as acme-admin`.

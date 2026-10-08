@@ -178,7 +178,7 @@ and the restore excludes it.
 
 A copy that stays closed defers every replicated write to its tree. Alarm on
 `orleans.lattice.restore.copy_receive_closed_age` (see
-[Metrics](../lattice/metrics.md#restored-copy-receive-fence-sourced-from-copyreceivefencegrain-and-latticegrain)):
+[Metrics](../lattice/metrics.md#restored-copy-receive-fence-sourced-from-copy-receive-fence-owner-and-tree-router)):
 it reports how long each closed copy has been closed, and
 `orleans.lattice.restore.copy_receive_fenced` counts the applies it refused, by
 reason.

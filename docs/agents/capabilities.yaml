@@ -1235,8 +1235,6 @@ capabilities:
       - statement: "Telemetry duration tokens are bounded in their own units before TimeSpan construction, so oversized counts are refused without overflowing."
         source: "src/lattice.explorer/UI/Areas/Telemetry/TelemetryDurations.cs#TelemetryDurations.TryParse"
     non_guarantees:
-      - statement: "The Explorer surface is documented as in progress and its surface area and navigation are still moving."
-        source: "FEATURES.md"
       - statement: "Every Explorer area is compiled in; there is no per-area registration or option, and an area whose facade is not served hides itself."
         source: "docs/lattice.explorer/managing-schema.md"
       - statement: "The Explorer is a Blazor Server application and therefore requires session affinity in a multi-instance deployment."

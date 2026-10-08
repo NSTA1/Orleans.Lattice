@@ -6,25 +6,10 @@ The dashboards package has no options type of its own - it is a delivery vehicle
 
 A dashboard only charts data if the matching meter is exported to the backend Grafana reads from. Register the meters with OpenTelemetry on the silo:
 
-```csharp
-builder.Services.AddOpenTelemetry()
-    .WithMetrics(b => b
-        .AddMeter("orleans.lattice")              // Overview, CommitPath, AtomicWrites, MaterialisedViews, GrainIndex, and Replication's WAL panels
-        .AddMeter("orleans.lattice.replication")  // Replication (only if the replication package is registered)
-        .AddMeter("orleans.lattice.replication.grpc") // ReplicationGrpc (only if the gRPC replication transport is registered)
-        .AddMeter("orleans.lattice.auth")         // Authorization (only if the auth package is registered)
-        .AddMeter("orleans.lattice.membership")   // Authorization (only if the membership package is registered)
-        .AddMeter("orleans.lattice.backup")       // Backup (only if the backup package is registered)
-        .AddMeter("orleans.lattice.scaling")      // Scaling (only if the scaling package is registered)
-        .AddMeter("orleans.lattice.tenancy")      // Tenancy (only if the tenancy package is registered)
-        .AddMeter("Orleans.Lattice.Api.Mcp.RepoContext") // Overview's exact-KNN panels (only if the repository-context package is hosted)
-        .AddMeter("Microsoft.Orleans")            // Orleans runtime: activations, activation latency, directory, messaging
-        .AddMeter("System.Runtime")               // .NET runtime: GC heap, allocation, pause time, working set, thread pool
-        .AddPrometheusExporter());
-```
+In the consuming host, call `AddOpenTelemetry` and configure its `WithMetrics` pipeline. Subscribe with `AddMeter` once for each required meter in the table below, then select an exporter such as `AddPrometheusExporter`. Install the corresponding OpenTelemetry SDK and exporter packages in the host; this package supplies dashboard JSON, not the telemetry pipeline.
 
 `AddMeter` matches a meter name **exactly** and does not cascade to child
-namespaces, so each name above has to be registered in its own right. A silo
+namespaces, so each required name in the table below has to be registered in its own right. A silo
 that registers only `orleans.lattice` exports none of its siblings, and one that
 registers only the `orleans.lattice` family exports no runtime telemetry at all.
 
