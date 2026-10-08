@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice;
 using Orleans.Hosting;
+using Orleans.Lattice.Auth;
+using Orleans.Lattice.Membership;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication;
 using Orleans.TestingHost;
@@ -9,7 +11,8 @@ namespace Orleans.Lattice.Tenancy.Tests;
 
 /// <summary>
 /// Starts the supported optional-package combinations around replication and
-/// tenancy. These exercise the actual Orleans host composition, not only service
+/// tenancy: replication needs neither tenancy nor membership, while tenancy
+/// always runs with membership and auth. These exercise the actual Orleans host composition, not only service
 /// registration descriptors.
 /// </summary>
 [TestFixture]
@@ -23,13 +26,13 @@ public sealed class TenantRegionBackfillOptionalCompositionTests
     }
 
     [Test]
-    public async Task Tenancy_starts_without_membership_or_auth()
+    public async Task Tenancy_starts_without_replication()
     {
         await AssertStartsAsync<TenancyOnlyConfigurator>(tenancy: true, replication: false);
     }
 
     [Test]
-    public async Task Tenancy_and_replication_start_without_membership_or_auth()
+    public async Task Tenancy_and_replication_start_together()
     {
         await AssertStartsAsync<TenancyReplicationConfigurator>(tenancy: true, replication: true);
     }
@@ -50,11 +53,15 @@ public sealed class TenantRegionBackfillOptionalCompositionTests
             {
                 Assert.That(services.GetService<IReplicationApplier>() is not null, Is.EqualTo(replication));
                 Assert.That(services.GetService<ITenantRegistry>() is not null, Is.EqualTo(tenancy));
+            });
+
+            if (!tenancy)
+            {
                 Assert.That(
                     services.GetRequiredService<ILatticeMembershipContext>().GetType().Assembly,
                     Is.EqualTo(typeof(ILatticeMembershipContext).Assembly),
-                    "The core anonymous membership fallback must remain in use.");
-            });
+                    "Replication without tenancy must run on the core anonymous membership fallback.");
+            }
 
             if (replication)
             {
@@ -92,6 +99,9 @@ public sealed class TenantRegionBackfillOptionalCompositionTests
 
             if (tenancy)
             {
+                // Tenancy hard-depends on membership and auth; replication does not.
+                siloBuilder.AddLatticeMembership();
+                siloBuilder.AddLatticeAuth();
                 siloBuilder.AddLatticeTenancy();
             }
         }

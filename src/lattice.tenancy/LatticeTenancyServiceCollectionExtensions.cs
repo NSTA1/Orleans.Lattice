@@ -31,20 +31,24 @@ public static class LatticeTenancyServiceCollectionExtensions
     /// <see cref="ILatticeBackupSink"/>; the default in-cluster sink cannot
     /// support coordinated restore of the replicated registry.
     /// <para>
-    /// Enabling tenancy requires the core, but membership and auth remain optional.
-    /// Without membership, tenant assertions resolve to the core anonymous
-    /// membership context and caller-scoped operations fail closed. Without auth,
-    /// tenant-admin APIs still reject anonymous callers; deployments that need
-    /// tenant status, quota, and grant enforcement must register auth. When this
-    /// method is never called, the add-on registers nothing and the core tenancy
-    /// seams stay inert, so core behaves exactly as it did before tenancy existed.
+    /// Enabling tenancy hard-depends on the core, membership, and auth add-ons,
+    /// so this must be called <i>after</i>
+    /// <see cref="LatticeServiceCollectionExtensions.AddLattice(ISiloBuilder, Action{ISiloBuilder, string})"/>,
+    /// <c>AddLatticeMembership(...)</c>, and <c>AddLatticeAuth(...)</c>: the core
+    /// registration owns the tree registry and options system the registry builds
+    /// on, membership resolves the tenant-admin subjects the registry names, and
+    /// auth is the enforcement seam that acts on tenant status, quotas, and
+    /// grants. Calling it before any of them fails fast with an actionable
+    /// message. When this method is never called, the add-on registers nothing
+    /// and the core tenancy seams stay inert, so core behaves exactly as it did
+    /// before tenancy existed.
     /// </para>
     /// </summary>
     /// <param name="builder">The silo builder.</param>
     /// <param name="configure">Optional delegate that populates <see cref="LatticeTenancyOptions"/>.</param>
     /// <returns>The same <paramref name="builder"/> for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="builder"/> is <c>null</c>.</exception>
-    /// <exception cref="InvalidOperationException"><c>AddLattice(...)</c> was not called first.</exception>
+    /// <exception cref="InvalidOperationException"><c>AddLattice(...)</c>, <c>AddLatticeMembership(...)</c>, or <c>AddLatticeAuth(...)</c> was not called first.</exception>
     public static ISiloBuilder AddLatticeTenancy(
         this ISiloBuilder builder,
         Action<LatticeTenancyOptions>? configure = null)
@@ -60,6 +64,30 @@ public static class LatticeTenancyServiceCollectionExtensions
             throw new InvalidOperationException(
                 "AddLatticeTenancy() must be called after AddLattice(). Register the core " +
                 "lattice (siloBuilder.AddLattice(...)) before adding tenancy.");
+        }
+
+        // Ordering guard: enabling tenancy hard-depends on membership - the
+        // tenant-admin subjects a registry names are resolved through the
+        // membership directory. AddLatticeMembership is the only registrar of
+        // ILatticeMembershipDirectory, so its absence is a misconfiguration.
+        if (!builder.Services.Any(d => d.ServiceType == typeof(ILatticeMembershipDirectory)))
+        {
+            throw new InvalidOperationException(
+                "AddLatticeTenancy() must be called after AddLatticeMembership(). Register " +
+                "membership (siloBuilder.AddLatticeMembership(...)) before adding tenancy so the " +
+                "registry's tenant-admin subjects can be resolved.");
+        }
+
+        // Ordering guard: enabling tenancy hard-depends on auth - the enforcement
+        // seam that acts on tenant status, quotas, and cross-tenant grants.
+        // AddLatticeAuth is the only registrar of ILatticeDecisionEngine, so its
+        // absence means tenancy could never be enforced.
+        if (!builder.Services.Any(d => d.ServiceType == typeof(ILatticeDecisionEngine)))
+        {
+            throw new InvalidOperationException(
+                "AddLatticeTenancy() must be called after AddLatticeAuth(). Register " +
+                "authorization (siloBuilder.AddLatticeAuth(...)) before adding tenancy so tenant " +
+                "status, quotas, and grants can be enforced.");
         }
 
         // A repeat call still layers any supplied configure delegate but performs

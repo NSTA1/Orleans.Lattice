@@ -46,7 +46,11 @@ and its [gRPC binding](../lattice.api.tenantadmin.grpc/README.md).
   backup/restore, replication apply, observability, and Explorer - is
   tenant-scoped. Cross-tenant access exists only where an explicit grant or a
   platform-operator scope authorizes it.
-- **Optional identity and authorization companions.** `AddLatticeTenancy` requires core `AddLattice`, but membership and auth are optional. Without membership, the core anonymous membership context remains and caller-scoped operations fail closed; without auth, caller-authorized tenant-admin operations are denied. Register membership and auth when the deployment needs authenticated identities and policy-based tenant administration.
+- **Hard dependency on identity.** The tenant is a membership attribute, so
+  `AddLatticeTenancy` is guarded: it throws an `InvalidOperationException` at
+  registration time - not at silo start, and never as a silent downgrade to an
+  unenforced state - unless `AddLattice`, `AddLatticeMembership`, and
+  `AddLatticeAuth` have all already run on the same builder.
 - **Coordination-free multi-cluster.** Tenant definitions and usage are convergent
   CRDT state - a registry record merges field by field, and usage enforcement reads a
   convergent sum (no locks, no consensus) with bounded, quantified overshoot - so they
@@ -72,8 +76,8 @@ with the default sink. See [Cross-cluster sink sharing](../lattice.backup/config
 
 ## Quick start
 
-Register the package on the silo after `AddLattice()`. Membership and auth are optional
-companions; include them when the deployment needs authenticated tenant identities and policy enforcement:
+Register the package on the silo, alongside the auth and membership packages it
+depends on:
 
 ```csharp verify
 using Orleans.Lattice.Tenancy;

@@ -85,11 +85,10 @@ siloBuilder
     .AddLatticeTenancy(options => options.SeedDefaultTenant = true);
 ```
 
-Must be registered after `AddLattice()`. Membership and auth are optional
-companions: without membership the core anonymous membership context is used and
-caller-scoped operations fail closed; without auth, caller-authorized tenant-admin
-operations remain denied. Register those packages when the deployment needs
-authenticated tenant administration and policy enforcement.
+Must be registered after `AddLattice()`, `AddLatticeMembership()`, and
+`AddLatticeAuth()`: membership resolves the tenant-admin subjects the registry
+names, and auth is the enforcement seam that acts on tenant status, quotas, and
+grants. Calling it out of order fails fast with an actionable message.
 
 This package carries no operator control surface of its own. Add
 `Orleans.Lattice.Api.TenantAdmin` (and its gRPC or MCP binding) to administer the
