@@ -14,6 +14,38 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal static class WalTrimWatermarkSupport
 {
+    /// <summary>Whether startup has not yet published a manifest for every active silo.</summary>
+    public static bool IsManifestStartingUp(IServiceProvider? services)
+    {
+        var manifests = services?.GetService<IClusterManifestProvider>();
+        if (manifests is null)
+        {
+            return false;
+        }
+
+        var manifest = manifests.Current;
+        if (manifest.Silos.Count == 0)
+        {
+            return true;
+        }
+
+        var membership = services?.GetService<IClusterMembershipService>();
+        if (membership is null)
+        {
+            return false;
+        }
+
+        foreach (var member in membership.CurrentSnapshot.Members.Values)
+        {
+            if (member.Status == SiloStatus.Active && !manifest.Silos.ContainsKey(member.SiloAddress))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// <see langword="true"/> when every silo in the current cluster manifest hosts
     /// <see cref="IWalTrimWatermarkSupportGrain"/>. A host without the Orleans

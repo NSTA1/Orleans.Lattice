@@ -288,18 +288,41 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
             .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
             .ConfigureAwait(false);
 
+        HashSet<string>? participantTrees = stream.CrossTreeParticipantsComplete ? new(StringComparer.Ordinal) : null;
         await foreach (var entry in stream.Entries
             .WithCancellation(cancellationToken)
             .ConfigureAwait(false))
         {
+            if (participantTrees is not null && entry.CrossTreeOperationId is not null)
+            {
+                if (entry.CrossTreeParticipants.IsDefaultOrEmpty)
+                {
+                    // Missing participant metadata must not turn an
+                    // unprovable export into a narrower safety boundary.
+                    participantTrees = null;
+                }
+                else
+                {
+                    participantTrees.UnionWith(entry.CrossTreeParticipants);
+                }
+            }
+
             yield return new RemoteSnapshotStreamItem { Entry = entry };
         }
 
+        // The canonical provider's completed entry stream includes participant
+        // metadata on prepared rows and every decision row, including decisions
+        // discovered by its completion pass. Capturing sibling tails now fences
+        // every cross-tree operation represented by this snapshot. An operation
+        // started after enumeration closes is outside the snapshot; its
+        // incremental terminal still enters ApplyTxTerminalCoreAsync with its
+        // participant set and is held by the receiver's cross-tree barrier.
         // Captured after the last entry, so every sibling record the receiver
         // must have before it serves this tree is below the boundary (#4684).
         var siblings = ExportGate is null || _replicationContext is null
             ? null
-            : await ExportGate.CaptureSiblingBoundariesAsync(treeName, _replicationContext, cancellationToken).ConfigureAwait(false);
+            : await ExportGate.CaptureSiblingBoundariesAsync(
+                treeName, _replicationContext, participantTrees, cancellationToken).ConfigureAwait(false);
         // The exported tree's own tails, likewise after the last entry: every
         // prepare of a saga whose decision the export carried is below them, so
         // the receiver may forget the imported decisions once past them (#4524).

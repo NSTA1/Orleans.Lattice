@@ -48,6 +48,19 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     [Orleans.Concurrency.AlwaysInterleave]
     Task<BootstrapCoordinatorStatus> GetStatusAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Returns test-only descriptions of the cross-tree holds on this import.</summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<string[]> GetPendingCrossTreeHoldsForTestingAsync();
+
+    /// <summary>Re-checks cross-tree holds for deterministic integration tests, optionally expiring their age threshold.</summary>
+    Task<bool> ReleaseCrossTreeHoldForTestingAsync(bool ageSiblingBoundaries);
+
+    /// <summary>Marks a pending sibling as already requested for deterministic integration tests.</summary>
+    Task MarkSiblingReseedRequestedForTestingAsync(string siblingTreeName);
+
+    /// <summary>Requests a fresh snapshot attempt for an aged, mutually held sibling import.</summary>
+    Task<bool> RefreshStuckSiblingImportAsync(string sourceClusterId, string requestingTreeName);
+
     /// <summary>
     /// Re-enters the normal full bootstrap path when a prior delete reconcile
     /// skipped on an unstable source generation and recorded durable owed work.
@@ -133,6 +146,20 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// <param name="sourceClusterId">The sending cluster.</param>
     [Orleans.Concurrency.AlwaysInterleave]
     Task<long?> GetCompletedExportEpochAsync(string sourceClusterId);
+
+    /// <summary>
+    /// Returns the export epoch of the last full bootstrap from
+    /// <paramref name="sourceClusterId"/> whose import was installed under
+    /// <paramref name="receiverLineage"/>, or <see langword="null"/> when none
+    /// was (issue #4768). The sender adopts the lineage the echoing ack carries
+    /// as the one the re-seed produced, so an echo must never vouch for contents
+    /// a later replacement of the tree superseded. A completion recorded before
+    /// lineages were recorded echoes nothing, which costs one more bootstrap.
+    /// </summary>
+    /// <param name="sourceClusterId">The sending cluster.</param>
+    /// <param name="receiverLineage">The tree frontier epoch the ack reports.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<long?> GetCompletedExportEpochAsync(string sourceClusterId, Guid receiverLineage);
 
     /// <summary>
     /// Returns the export epoch of the last snapshot from

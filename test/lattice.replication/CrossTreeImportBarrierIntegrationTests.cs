@@ -240,6 +240,7 @@ public partial class CrossTreeImportBarrierIntegrationTests
         // The held shadow remains unpublished, and every phase tick re-checks
         // the barrier. Sample for more than two ticks to catch an early cutover.
         var (samples, unexpectedSamples) = await SampleOriginalViewAsync(treeA, "k", null, HeldWindow);
+        var pendingHolds = await Coordinator(treeA).GetPendingCrossTreeHoldsForTestingAsync();
 
         await DeliverTreeBAsync(treeA, treeB, operationId);
         var released = await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
@@ -251,6 +252,8 @@ public partial class CrossTreeImportBarrierIntegrationTests
             Assert.That(heldPhase, Is.Not.EqualTo(LatticeBootstrapState.Failed));
             Assert.That(siblingWhileHeld, Is.EqualTo((false, (byte[]?)null)), "precondition: tree B is pre-saga");
             Assert.That(samples, Is.GreaterThanOrEqualTo(MinimumHeldSamples), "precondition: the window was sampled throughout");
+            Assert.That(pendingHolds, Has.Some.Contains($"barrier:{LatticeCrossTreeReceiverGrain.ComputeKey(SiteAClusterId, operationId)}"),
+                "the diagnostic snapshot identifies the undecided barrier holding the import");
             Assert.That(unexpectedSamples, Is.Zero,
                 "tree A must remain readable on its original pre-saga view until tree B's terminal decides the barrier");
             Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "the fence lifts once tree B's terminal decides the barrier");

@@ -8,11 +8,9 @@ using Orleans.Lattice.Replication.Tests.Grains;
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// Issue #4673: only a move between two lineages is a lineage change. A tree
-/// first registered after its shipper bound it, a restart that re-reads the
-/// same lineage, and a backstop re-resolve of an unchanged row must never force
-/// a gap or withhold a record: a gap there skips every record the log holds at
-/// the read, which a peer the gap never re-seeds would then never receive. A
+/// Issue #4673: a restart that re-reads the same lineage and a backstop
+/// re-resolve of an unchanged row must never force a gap. Registering a tree
+/// for the first time after its shipper bound it is not a lineage change. A
 /// recreate that passes through an unregistered tree is still a change. Runs
 /// the real shipper, re-activated over its own persisted state.
 /// </summary>
@@ -87,8 +85,8 @@ public partial class CrossClusterAtomicVisibilityTests
         feeds[0].Append(LocalSet(tree, "first-write", Hlc(ticks, 10)));
         await PumpAsync(before, ticks: 2);
 
-        // Restarted while a record is unshipped: the persisted binding now names
-        // the lineage the registration stamped.
+        // Restart while a record is unshipped: it still ships under the
+        // lineage the registration stamped because no prior lineage existed.
         feeds[1].Append(LocalSet(tree, "unshipped", Hlc(ticks, 11)));
         var (after, transport) = RestartableLineageShipper(tree, feeds, walEncoder, state, registry);
         await PumpAsync(after, ticks: 3);

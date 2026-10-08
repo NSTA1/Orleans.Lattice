@@ -741,6 +741,7 @@ internal sealed partial class ReplicationShipperGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
+        TrackDataAcknowledgementOnEmptyState();
         PublishActivationReadPositions();
         StartPhaseTimer();
         return Task.CompletedTask;
@@ -928,6 +929,9 @@ internal sealed partial class ReplicationShipperGrain(
     /// </summary>
     private async Task PumpOnceAsync(CancellationToken cancellationToken)
     {
+        // Idempotent: marks only still-empty state, and so covers a shipper
+        // whose first tick ran without a fresh activation.
+        TrackDataAcknowledgementOnEmptyState();
         var options = _optionsMonitor.Get(_treeName);
 
         var window = Math.Max(1, options.ShipMaxInFlight);
@@ -1271,6 +1275,7 @@ internal sealed partial class ReplicationShipperGrain(
             // without shipping an empty batch.
             ApplySagaFrontierDelta(sagaDelta);
             RetireTerminalHolds(_mergeBatchId);
+            NoteDataAcknowledged();
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
             state.State.ConsecutiveFailures = 0;
             _nextRetryAtUtc = DateTime.MinValue;
@@ -1424,6 +1429,8 @@ internal sealed partial class ReplicationShipperGrain(
             ApplyBackoff(options, exception: null, reason: "ack-rejected");
             return true;
         }
+
+        NoteDataAcknowledged();
 
         // Trust the receiver's ack frontier. A receiver that fully
         // applied the batch returns the highest entry HLC; a receiver
@@ -2317,6 +2324,7 @@ internal sealed partial class ReplicationShipperGrain(
             return false;
         }
 
+        NoteDataAcknowledged();
         var advancedTo = ack.HighestAppliedHlc;
         if (advancedTo <= state.State.Cursor)
         {
@@ -3471,11 +3479,24 @@ internal sealed partial class ReplicationShipperGrain(
             _partitionPages[partition] = null;
             return;
         }
-        if (page.Entries[0].Sequence > _partitionNextSeq[partition]
-            && await IsTrimmedPastAsync(grain, _partitionNextSeq[partition], cancellationToken))
+        if (page.Entries[0].Sequence > _partitionNextSeq[partition])
         {
-            // A trim removed records this shipper never delivered (#4534).
-            await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
+            var trimmed = await IsTrimmedPastAsync(grain, _partitionNextSeq[partition], cancellationToken);
+            if (trimmed is null)
+            {
+                // The manifest is empty while the silo is starting. Hold the
+                // cursor at the gap until the capability gate can distinguish a
+                // genuine trim from an unwritten offset.
+                _partitionPages[partition] = null;
+                _partitionPageIndex[partition] = 0;
+                return;
+            }
+
+            if (trimmed.Value)
+            {
+                // A trim removed records this shipper never delivered (#4534).
+                await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
+            }
         }
         _partitionPages[partition] = page.Entries;
         _partitionPageIndex[partition] = 0;
@@ -3490,12 +3511,20 @@ internal sealed partial class ReplicationShipperGrain(
     /// its deadline that never lands leaves a permanent hole the allocator has
     /// already moved past. The shard's trusted trim watermark separates the two;
     /// without one (a provider that keeps none, or a silo in the cluster that
-    /// predates it) every jump is treated as a trim, which re-seeds the peer
-    /// needlessly at worst and never skips a trim silently.
+    /// predates it) every jump is treated as a trim. While membership contains
+    /// an active silo whose manifest has not arrived, defer that decision until
+    /// the capability gate can distinguish a genuine trim from an unwritten offset.
     /// </summary>
-    private static async Task<bool> IsTrimmedPastAsync(IWalShardGrain grain, long requested, CancellationToken cancellationToken)
-        => await grain.GetTrimWatermarkAsync(cancellationToken) is not { } trimmedThrough
-            || trimmedThrough >= requested;
+    private async Task<bool?> IsTrimmedPastAsync(IWalShardGrain grain, long requested, CancellationToken cancellationToken)
+    {
+        var trimmedThrough = await grain.GetTrimWatermarkAsync(cancellationToken).ConfigureAwait(true);
+        if (trimmedThrough is null && WalTrimWatermarkSupport.IsManifestStartingUp(Context.ActivationServices))
+        {
+            return null;
+        }
+
+        return trimmedThrough is null || trimmedThrough >= requested;
+    }
 
     /// <summary>
     /// Grows the activation-scoped scratch arrays in lockstep when the

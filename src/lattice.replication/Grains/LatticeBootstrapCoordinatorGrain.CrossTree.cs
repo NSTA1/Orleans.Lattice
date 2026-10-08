@@ -372,9 +372,95 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
 
         state.State.PendingCrossTreeBarriers = [];
         state.State.SiblingReseedsRequested.Clear();
+        state.State.SiblingRefreshesRequested.Clear();
         Logger.LogInformation(
             "Every cross-tree barrier and sibling boundary holding the import of tree '{TreeName}' is settled; its read fence is lifted",
             TreeName);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public Task<string[]> GetPendingCrossTreeHoldsForTestingAsync()
+    {
+        var holds = new List<string>(
+            state.State.PendingCrossTreeBarriers.Count + state.State.PendingSiblingBoundaries.Count);
+        holds.AddRange(state.State.PendingCrossTreeBarriers
+            .Order(StringComparer.Ordinal)
+            .Select(static barrier => $"barrier:{barrier}"));
+        holds.AddRange(state.State.PendingSiblingBoundaries
+            .OrderBy(static entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry =>
+            {
+                var boundary = entry.Value;
+                var tails = string.Join(",", boundary.Tails);
+                var reseedRequested = state.State.SiblingReseedsRequested.Contains(entry.Key);
+                var refreshRequested = state.State.SiblingRefreshesRequested.Contains(entry.Key);
+                return $"sibling:{entry.Key};exportEpoch={boundary.ExportEpoch};physical={boundary.PhysicalTreeId};tails=[{tails}];reseedRequested={reseedRequested};refreshRequested={refreshRequested}";
+            }));
+        return Task.FromResult(holds.ToArray());
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> ReleaseCrossTreeHoldForTestingAsync(bool ageSiblingBoundaries)
+    {
+        if (ageSiblingBoundaries && state.State.PendingSiblingBoundaries.Count > 0)
+        {
+            state.State.SiblingBoundariesSinceUtcTicks =
+                DateTime.UtcNow.Ticks - SiblingBoundaryReseedAfter.Ticks - 1;
+        }
+
+        return await ReleaseCrossTreeHoldAsync().ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    public async Task MarkSiblingReseedRequestedForTestingAsync(string siblingTreeName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(siblingTreeName);
+        if (!state.State.PendingSiblingBoundaries.ContainsKey(siblingTreeName))
+        {
+            throw new InvalidOperationException($"Sibling '{siblingTreeName}' has no pending boundary for tree '{TreeName}'.");
+        }
+
+        state.State.SiblingReseedsRequested.Add(siblingTreeName);
+        await state.WriteStateAsync().ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> RefreshStuckSiblingImportAsync(string sourceClusterId, string requestingTreeName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        ArgumentException.ThrowIfNullOrEmpty(requestingTreeName);
+
+        // Only the lower-named tree may refresh the higher-named side of a
+        // mutual hold. This deterministic choice prevents both coordinators
+        // from repeatedly reopening snapshots at the same time.
+        if (string.CompareOrdinal(requestingTreeName, TreeName) >= 0
+            || !state.State.InProgress
+            || state.State.Phase != LatticeBootstrapState.IncrementalHandoff
+            || !string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+            || state.State.PendingSiblingBoundaries.Count == 0
+            || DateTime.UtcNow.Ticks - state.State.SiblingBoundariesSinceUtcTicks < SiblingBoundaryReseedAfter.Ticks)
+        {
+            return false;
+        }
+
+        var previousPhase = state.State.Phase;
+        state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.Phase = previousPhase;
+            throw;
+        }
+
+        await StartCoordinatorAsync().ConfigureAwait(true);
+
+        Logger.LogWarning(
+            "Tree '{TreeName}' is re-opening its snapshot from '{SourceClusterId}' to break an aged mutual sibling-boundary hold requested by '{RequestingTreeName}'",
+            TreeName, sourceClusterId, requestingTreeName);
         return true;
     }
 
@@ -392,6 +478,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     {
         state.State.PendingSiblingBoundaries = new Dictionary<string, CrossTreeSiblingBoundary>(StringComparer.Ordinal);
         state.State.SiblingReseedsRequested.Clear();
+        state.State.SiblingRefreshesRequested.Clear();
         state.State.SiblingBoundariesSinceUtcTicks = DateTime.UtcNow.Ticks;
         if (snapshot.SiblingBoundaries is not { } boundaries)
         {
@@ -453,7 +540,9 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     /// replication is key-filtered) would otherwise pin the fence until an
     /// operator acts. Its import from an export opened after the capture passes
     /// the boundary. Honours <see cref="LatticeReplicationOptions.AutoBootstrapOnFallOffLog"/>
-    /// as a fall-off does; asks at most once per sibling per import.
+    /// as a fall-off does; starts an idle sibling's bootstrap once, or asks one
+    /// side of an aged mutual handoff to refresh its snapshot without starting a
+    /// competing bootstrap on an active coordinator.
     /// </summary>
     private async Task RequestStuckSiblingReseedsAsync(string? sourceClusterId)
     {
@@ -465,9 +554,31 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
 
         foreach (var sibling in state.State.PendingSiblingBoundaries.Keys.ToList())
         {
-            if (!state.State.SiblingReseedsRequested.Add(sibling))
+            var coordinator = _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling);
+            BootstrapCoordinatorStatus status;
+            try
             {
+                status = await coordinator.GetStatusAsync(CancellationToken.None).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.LogDebug(ex, "Reading the bootstrap status of sibling tree '{Sibling}' failed; its re-seed will be retried on a later tick", sibling);
                 continue;
+            }
+
+            if (status.SourceClusterId is null)
+            {
+                var reseedFinished = state.State.SiblingReseedsRequested.Remove(sibling);
+                var refreshFinished = state.State.SiblingRefreshesRequested.Remove(sibling);
+                if (reseedFinished || refreshFinished)
+                {
+                    // The requested drain finished but did not pass this captured
+                    // boundary. Back off before asking for another export, which
+                    // must open after the boundary rather than merely repeat it.
+                    state.State.SiblingBoundariesSinceUtcTicks = DateTime.UtcNow.Ticks;
+                    await state.WriteStateAsync().ConfigureAwait(true);
+                    continue;
+                }
             }
 
             if (!_optionsMonitor.Get(sibling).AutoBootstrapOnFallOffLog)
@@ -478,20 +589,99 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
                 continue;
             }
 
+            // An active drain should normally finish on its own. If both
+            // imports have reached handoff and each is waiting for the other's
+            // captured epoch, let only the lower-named tree request one fresh
+            // snapshot from the higher-named sibling. This advances a boundary
+            // without dropping the strict epoch comparison or calling
+            // BootstrapAsync on a coordinator that is already active.
+            if (status.SourceClusterId is not null)
+            {
+                if (status.Phase != LatticeBootstrapState.IncrementalHandoff
+                    || !string.Equals(status.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+                    || string.CompareOrdinal(TreeName, sibling) >= 0
+                    || !state.State.SiblingRefreshesRequested.Add(sibling))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await state.WriteStateAsync().ConfigureAwait(true);
+                }
+                catch
+                {
+                    state.State.SiblingRefreshesRequested.Remove(sibling);
+                    throw;
+                }
+
+                try
+                {
+                    if (!await coordinator.RefreshStuckSiblingImportAsync(sourceClusterId, TreeName).ConfigureAwait(true))
+                    {
+                        state.State.SiblingRefreshesRequested.Remove(sibling);
+                        await state.WriteStateAsync().ConfigureAwait(true);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    state.State.SiblingRefreshesRequested.Remove(sibling);
+                    await state.WriteStateAsync().ConfigureAwait(true);
+                    Logger.LogDebug(ex, "The request to refresh stuck sibling import '{Sibling}' failed; retried on a later tick", sibling);
+                }
+
+                continue;
+            }
+
+            if (state.State.SiblingReseedsRequested.Contains(sibling))
+            {
+                continue;
+            }
+
+            if (!state.State.SiblingReseedsRequested.Add(sibling))
+            {
+                continue;
+            }
+
             try
             {
-                await _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling)
-                    .BootstrapAsync(sourceClusterId, CancellationToken.None)
-                    .ConfigureAwait(true);
-                Logger.LogInformation(
-                    "Sibling tree '{Sibling}' has not passed its boundary from {Source} within {Bound}; re-seeding it so tree '{TreeName}' can be served",
-                    sibling, sourceClusterId, SiblingBoundaryReseedAfter, TreeName);
+                // Do not await a sibling coordinator here: it may be making the
+                // same request while its own timer turn is waiting on this one.
+                _ = ObserveSiblingReseedAsync(coordinator.BootstrapAsync(sourceClusterId, CancellationToken.None), sibling, sourceClusterId);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 state.State.SiblingReseedsRequested.Remove(sibling);
-                Logger.LogDebug(ex, "Re-seeding sibling tree '{Sibling}' from {Source} was not accepted; retried on a later tick", sibling, sourceClusterId);
+                Logger.LogDebug(ex, "The request to re-seed sibling tree '{Sibling}' from {Source} failed; retried on a later tick", sibling, sourceClusterId);
             }
+        }
+
+    }
+
+    private async Task ObserveSiblingReseedAsync(Task request, string sibling, string sourceClusterId)
+    {
+        try
+        {
+            await request.ConfigureAwait(true);
+            Logger.LogInformation(
+                "Sibling tree '{Sibling}' has not passed its boundary from {Source} within {Bound}; its re-seed request completed so tree '{TreeName}' can be served",
+                sibling, sourceClusterId, SiblingBoundaryReseedAfter, TreeName);
+        }
+        catch (Exception ex)
+        {
+            state.State.SiblingReseedsRequested.Remove(sibling);
+            try
+            {
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch (Exception writeException)
+            {
+                Logger.LogWarning(writeException,
+                    "Could not persist retry state after the re-seed request for sibling tree '{Sibling}' from {Source} failed",
+                    sibling, sourceClusterId);
+            }
+
+            Logger.LogDebug(ex, "The request to re-seed sibling tree '{Sibling}' from {Source} failed; retried on a later tick", sibling, sourceClusterId);
         }
     }
 

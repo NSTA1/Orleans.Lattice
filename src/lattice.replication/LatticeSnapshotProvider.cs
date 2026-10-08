@@ -172,6 +172,10 @@ internal sealed class LatticeSnapshotProvider(
             OpenGeneration = openGeneration,
             OpenFrontier = frontierAtOpen,
             ExportEpoch = epoch,
+            // EnumerateAsync names prepared, decision, and completion decision
+            // rows through CrossTreeNames, including in-flight/indeterminate
+            // rows that can still bind the snapshot.
+            CrossTreeParticipantsComplete = true,
         };
         return stream;
 

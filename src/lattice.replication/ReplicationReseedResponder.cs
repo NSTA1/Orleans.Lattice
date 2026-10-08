@@ -26,12 +26,19 @@ internal static class ReplicationReseedResponder
         string sourceClusterId,
         long reseedAfterEpoch,
         bool autoBootstrap,
-        ILogger logger)
+        ILogger logger,
+        Guid? receiverLineage = null)
     {
         try
         {
             var coordinator = grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(treeName);
-            var completed = await coordinator.GetCompletedExportEpochAsync(sourceClusterId).ConfigureAwait(false);
+            // The ack reports a frontier epoch: echo only a completion installed
+            // under it, so the sender can adopt that epoch as the one its re-seed
+            // produced (#4768). With no epoch reported, or the empty epoch of a
+            // degraded frontier the sender also treats as none, it adopts none.
+            var completed = receiverLineage is { } lineage && lineage != Guid.Empty
+                ? await coordinator.GetCompletedExportEpochAsync(sourceClusterId, lineage).ConfigureAwait(false)
+                : await coordinator.GetCompletedExportEpochAsync(sourceClusterId).ConfigureAwait(false);
             if ((completed ?? 0) > reseedAfterEpoch)
             {
                 return completed;

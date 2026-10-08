@@ -301,4 +301,16 @@ internal sealed class BootstrapCoordinatorState
 
     /// <summary>Whether the shadow copy has become the logical tree's authoritative alias target.</summary>
     [Id(35)] public bool ShadowCopyCutoverComplete { get; set; }
+
+    /// <summary>The active sibling imports this coordinator has already asked to refresh.</summary>
+    [Id(36)] public HashSet<string> SiblingRefreshesRequested { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per source cluster, the tree frontier epoch the bootstrap recorded in
+    /// <see cref="CompletedExportEpochs"/> installed its import under (issue
+    /// #4768). Absent when the install was refused because the contents were
+    /// replaced during the drain. State written before this slot decodes to an
+    /// empty map, under which a lineage-bound echo is withheld.
+    /// </summary>
+    [Id(37)] public Dictionary<string, Guid> CompletedExportLineages { get; set; } = new(StringComparer.Ordinal);
 }
