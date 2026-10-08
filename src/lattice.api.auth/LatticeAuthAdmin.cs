@@ -747,9 +747,10 @@ internal sealed class LatticeAuthAdmin(
             RulesEnforced = _gate is not NullLatticeAccessGate,
             DirectoryAvailable = DirectoryAvailable,
             DirectoryProviderId = _identityDirectory.ProviderId,
-            // The Explorer's create form is the group form, so surface the
-            // group-scoped guidance; the seam stays kind-aware.
-            DirectoryExplanation = _identityDirectory.DescribeEntry(DirectoryPrincipalKind.Group),
+            // One explanation serves every subject picker (group members, rule
+            // subjects, explain), which accept users and groups alike, so surface
+            // the kind-neutral guidance; the seam stays kind-aware.
+            DirectoryExplanation = _identityDirectory.DescribeEntry(null),
             // Locally-defined membership is inert when the cluster resolves groups
             // solely from the identity-provider token (TokenOnly merge mode).
             LocalMembershipEffective =

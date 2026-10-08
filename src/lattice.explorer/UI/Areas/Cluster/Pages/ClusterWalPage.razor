@@ -117,7 +117,8 @@ else
     <form class="lt-cluster-form" @onsubmit="ContinuePlan">
         <LtComboBox @ref="_planTreeBox" Label="Tree" @bind-Value="_planTree" Error="@_planTreeError" Source="@Suggestions.ClusterTrees" Noun="tree" />
         <LtTextInput Label="Partition" Mono="true" @bind-Value="_planPartition" Error="@_planPartitionError" inputmode="numeric" />
-        <LtComboBox @ref="_planTargetBox" Label="Target provider key" @bind-Value="_planTarget" Error="@_planTargetError" Hint="@TargetHint" Source="@_providerKeys" Noun="provider key" />
+        <LtComboBox @ref="_planTargetBox" Label="Target provider key" @bind-Value="_planTarget" Error="@_planTargetError" Hint="@TargetHint" Source="@_providerKeys" Noun="provider key"
+                    Mode="LtComboBoxMode.Suggest" ExistingMessage="This silo lists this provider key." />
         <div class="lt-dialog__actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _planOpen = false">Cancel</LtButton>
             <LtButton Type="LtButtonType.Submit">Plan</LtButton>

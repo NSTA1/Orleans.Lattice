@@ -35,7 +35,7 @@ public sealed class ClusterPickerFieldsTests : ClusterTestContext
     }
 
     [Test]
-    public void The_wal_plan_offers_the_known_provider_keys_and_refuses_an_unknown_one()
+    public void The_wal_plan_offers_the_known_provider_keys_and_accepts_an_unlisted_one()
     {
         UseTrees(Tree(Orders));
         Admin.AuditWalPlacementAsync(Orders, Arg.Any<CancellationToken>())
@@ -52,7 +52,7 @@ public sealed class ClusterPickerFieldsTests : ClusterTestContext
         SuggestionFields.Box(cut, "Target provider key").Input("blob-z");
         cut.Find(".lt-dialog form").Submit();
 
-        cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Target provider key"), Is.EqualTo("No provider key is named blob-z. Choose one from the list.")));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/cluster/wal?tree=a%2Fcrm%2Forders&partition=0&target=blob-z")));
     }
 
     [Test]
