@@ -146,7 +146,7 @@ internal sealed partial class ReplicationShipperGrain
             _latestAckLineageUnreported = true;
             if (ack.Accepted && !frontier.LineageObserved)
             {
-                var acknowledgedBefore = state.State.PartitionCursors.Values.Any(cursor => cursor > 0);
+                var acknowledgedBefore = DataAcknowledgedBefore();
                 if (ack.SupportedWireVersion is not null && !acknowledgedBefore)
                 {
                     frontier.ModernAcceptedBeforeFirstLineage = true;
@@ -162,21 +162,64 @@ internal sealed partial class ReplicationShipperGrain
 
         _latestAckLineageUnreported = false;
         var differs = !frontier.LineageObserved || frontier.Lineage != lineage;
-        if (differs && (!_tickAckLineageReported || _tickAckLineage != lineage))
+        if (differs && (!_tickAckLineageReported || _tickAckLineage != lineage) && DataAcknowledgedBefore())
         {
-            // Called before this acknowledgement's batch folds its cursors.
-            foreach (var cursor in state.State.PartitionCursors.Values)
-            {
-                if (cursor > 0)
-                {
-                    _acknowledgedBeforeLineageChange = true;
-                    break;
-                }
-            }
+            // Called before this acknowledgement's batch is recorded as delivered.
+            _acknowledgedBeforeLineageChange = true;
         }
 
         _tickAckLineage = lineage;
         _tickAckLineageReported = true;
+    }
+
+    /// <summary>
+    /// Starts authoritative tracking of acknowledged data on a shipper whose state
+    /// is still empty, so cursors later advanced only past filtered entries are not
+    /// mistaken for data the peer received (issue #4768).
+    /// </summary>
+    private void TrackDataAcknowledgementOnEmptyState()
+    {
+        var frontier = state.State.Frontier;
+        if (frontier.DataAcknowledgementTracked || frontier.LineageObserved || state.State.Cursor != HybridLogicalClock.Zero)
+        {
+            return;
+        }
+
+        foreach (var cursor in state.State.PartitionCursors.Values)
+        {
+            if (cursor > 0)
+            {
+                return;
+            }
+        }
+
+        frontier.DataAcknowledgementTracked = true;
+    }
+
+    /// <summary>Records that the peer accepted (or already held) a data batch.</summary>
+    private void NoteDataAcknowledged() => state.State.Frontier.DataAcknowledged = true;
+
+    /// <summary>
+    /// Whether the peer may already hold data from this shipper. Untracked legacy
+    /// state conservatively reads any advanced partition cursor as acknowledged.
+    /// </summary>
+    private bool DataAcknowledgedBefore()
+    {
+        var frontier = state.State.Frontier;
+        if (frontier.DataAcknowledgementTracked)
+        {
+            return frontier.DataAcknowledged;
+        }
+
+        foreach (var cursor in state.State.PartitionCursors.Values)
+        {
+            if (cursor > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Captures the saga records of the batch about to ship.</summary>
@@ -397,11 +440,16 @@ internal sealed partial class ReplicationShipperGrain
     /// A move to a new non-empty receiver lineage - from a different one, from an
     /// empty one, or from none seen - is a forced gap once anything was
     /// acknowledged: the peer's contents may lack writes already shipped. The
-    /// re-seed waits for the peer's pacing slot.
+    /// re-seed waits for the peer's pacing slot. Two moves are not gaps (issue
+    /// #4768): one while a re-seed is outstanding, which only an import installed
+    /// under the peer's then-current lineage settles, and the move to the lineage
+    /// whose import settled the re-seed this tick.
     /// </summary>
     private async Task ApplyReceiverLineageAsync()
     {
         var frontier = state.State.Frontier;
+        var settledLineage = _settledLineageThisTick;
+        _settledLineageThisTick = null;
         if (_tickAckLineageReported)
         {
             _tickAckLineageReported = false;
@@ -412,6 +460,12 @@ internal sealed partial class ReplicationShipperGrain
             {
                 var forced = seen != Guid.Empty && acknowledgedBefore;
                 if (!frontier.LineageObserved && frontier.ModernAcceptedBeforeFirstLineage)
+                {
+                    forced = false;
+                }
+
+                var coveredByReseed = forced && (ReseedRequired || seen == settledLineage);
+                if (coveredByReseed)
                 {
                     forced = false;
                 }
@@ -430,6 +484,13 @@ internal sealed partial class ReplicationShipperGrain
                     Logger.LogWarning(
                         "{Context}: the peer's lineage of the tree changed to {Lineage}; its contents may lack writes already "
                         + "shipped, so it will be re-seeded.",
+                        LogContext, seen);
+                }
+                else if (coveredByReseed)
+                {
+                    Logger.LogInformation(
+                        "{Context}: the peer's lineage of the tree changed to {Lineage} under a re-seed; the re-seed's own "
+                        + "import covers it.",
                         LogContext, seen);
                 }
             }

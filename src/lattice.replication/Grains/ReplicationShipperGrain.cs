@@ -741,6 +741,7 @@ internal sealed partial class ReplicationShipperGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
+        TrackDataAcknowledgementOnEmptyState();
         PublishActivationReadPositions();
         StartPhaseTimer();
         return Task.CompletedTask;
@@ -928,6 +929,9 @@ internal sealed partial class ReplicationShipperGrain(
     /// </summary>
     private async Task PumpOnceAsync(CancellationToken cancellationToken)
     {
+        // Idempotent: marks only still-empty state, and so covers a shipper
+        // whose first tick ran without a fresh activation.
+        TrackDataAcknowledgementOnEmptyState();
         var options = _optionsMonitor.Get(_treeName);
 
         var window = Math.Max(1, options.ShipMaxInFlight);
@@ -1271,6 +1275,7 @@ internal sealed partial class ReplicationShipperGrain(
             // without shipping an empty batch.
             ApplySagaFrontierDelta(sagaDelta);
             RetireTerminalHolds(_mergeBatchId);
+            NoteDataAcknowledged();
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
             state.State.ConsecutiveFailures = 0;
             _nextRetryAtUtc = DateTime.MinValue;
@@ -1424,6 +1429,8 @@ internal sealed partial class ReplicationShipperGrain(
             ApplyBackoff(options, exception: null, reason: "ack-rejected");
             return true;
         }
+
+        NoteDataAcknowledged();
 
         // Trust the receiver's ack frontier. A receiver that fully
         // applied the batch returns the highest entry HLC; a receiver
@@ -2317,6 +2324,7 @@ internal sealed partial class ReplicationShipperGrain(
             return false;
         }
 
+        NoteDataAcknowledged();
         var advancedTo = ack.HighestAppliedHlc;
         if (advancedTo <= state.State.Cursor)
         {

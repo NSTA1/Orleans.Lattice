@@ -490,6 +490,13 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // origin and poison that stream's cursor.
         EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(Push));
 
+        // Record the sender's applied low watermark, if it shipped one, and learn
+        // the frontier epoch every ack below reports (#4586 part 2b). Learnt
+        // before the re-seed answer, which is bound to it (#4768).
+        var receiverLineage = await ObserveSourceFrontierAsync(
+            context, request.TreeName, request.OriginClusterId).ConfigureAwait(false);
+        await ObservePurgeFrontierAsync(context, request.OriginClusterId).ConfigureAwait(false);
+
         // A sender that lost records to a WAL trim before shipping them asks
         // this receiver to re-seed past an export epoch (#4534). The origin was
         // just verified against the caller, so the bootstrap source is the
@@ -507,14 +514,9 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 request.OriginClusterId,
                 reseedAfter,
                 _options?.Get(request.TreeName).AutoBootstrapOnFallOffLog ?? true,
-                _logger).ConfigureAwait(false);
+                _logger,
+                receiverLineage).ConfigureAwait(false);
         }
-
-        // Record the sender's applied low watermark, if it shipped one, and learn
-        // the frontier epoch every ack below reports (#4586 part 2b).
-        var receiverLineage = await ObserveSourceFrontierAsync(
-            context, request.TreeName, request.OriginClusterId).ConfigureAwait(false);
-        await ObservePurgeFrontierAsync(context, request.OriginClusterId).ConfigureAwait(false);
 
         var entries = request.Entries;
 

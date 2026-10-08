@@ -76,6 +76,49 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
     }
 
     [Test]
+    public async Task A_receiver_write_the_source_lacks_survives_a_frontier_that_vouches_for_the_receiver_origin()
+    {
+        const string tree = "rsdr-4768-receiver-origin";
+        const string localKey = "receiver-unshipped";
+        const string thirdKey = "third-deleted";
+
+        var siteA = _siteA.Client.GetGrain<ILattice>(tree);
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await siteA.SetAsync("anchor", new byte[] { 1 });
+        await BootstrapSiteBAsync(tree);
+
+        // A third-origin row the source applied then deleted proves the
+        // reconcile ran; the receiver's own write the source has not received
+        // must survive even though the frontier names the receiver's origin
+        // with a watermark above it (#4768: a watermark derived from the
+        // receiver's own shipper is no proof the source applied the write).
+        var thirdWrite = PastHlc(5);
+        Assert.That((await ApplyFromSiteCAsync(_siteB, tree, thirdKey, thirdWrite)).Applied, Is.True);
+        await siteB.SetAsync(localKey, new byte[] { 9 });
+        Assert.That((await ExportSiteAAsync(tree)).Select(e => e.Key), Has.No.Member(localKey),
+            "precondition: the source does not hold the receiver's write");
+
+        var aboveAll = HybridLogicalClock.Tick(new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.AddMinutes(1).Ticks });
+        await RebootstrapSiteBAsync(tree, metadata => new SnapshotSourceFrontier
+        {
+            Lineage = metadata.OpenGeneration?.Lineage,
+            LowWatermarks = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+            {
+                [SiteCClusterId] = HybridLogicalClock.Tick(thirdWrite),
+                [SiteBClusterId] = aboveAll,
+            },
+            Held = new Dictionary<string, HybridLogicalClock[]>(StringComparer.Ordinal),
+        });
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await siteB.GetAsync(thirdKey), Is.Null, "precondition: the reconcile ran and deleted the third-origin orphan");
+            Assert.That(await siteB.GetAsync(localKey), Is.EqualTo(new byte[] { 9 }),
+                "a re-seed must never delete the receiver's own write: the source may simply not have received it yet");
+        });
+    }
+
+    [Test]
     public async Task The_export_carries_no_watermark_for_the_source_origin_even_when_its_frontier_holds_one()
     {
         const string tree = "rsdr-4549-own-origin-export";

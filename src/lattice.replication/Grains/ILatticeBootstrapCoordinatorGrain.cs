@@ -148,6 +148,20 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     Task<long?> GetCompletedExportEpochAsync(string sourceClusterId);
 
     /// <summary>
+    /// Returns the export epoch of the last full bootstrap from
+    /// <paramref name="sourceClusterId"/> whose import was installed under
+    /// <paramref name="receiverLineage"/>, or <see langword="null"/> when none
+    /// was (issue #4768). The sender adopts the lineage the echoing ack carries
+    /// as the one the re-seed produced, so an echo must never vouch for contents
+    /// a later replacement of the tree superseded. A completion recorded before
+    /// lineages were recorded echoes nothing, which costs one more bootstrap.
+    /// </summary>
+    /// <param name="sourceClusterId">The sending cluster.</param>
+    /// <param name="receiverLineage">The tree frontier epoch the ack reports.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<long?> GetCompletedExportEpochAsync(string sourceClusterId, Guid receiverLineage);
+
+    /// <summary>
     /// Returns the export epoch of the last snapshot from
     /// <paramref name="sourceClusterId"/> whose drain applied every entry -
     /// including one whose bootstrap still holds its read fence - or

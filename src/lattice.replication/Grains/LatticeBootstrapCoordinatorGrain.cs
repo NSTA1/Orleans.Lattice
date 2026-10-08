@@ -180,6 +180,19 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     }
 
     /// <inheritdoc />
+    public Task<long?> GetCompletedExportEpochAsync(string sourceClusterId, Guid receiverLineage)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        return Task.FromResult<long?>(
+            receiverLineage != Guid.Empty
+            && state.State.CompletedExportLineages.TryGetValue(sourceClusterId, out var lineage)
+            && lineage == receiverLineage
+            && state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var epoch)
+                ? epoch
+                : null);
+    }
+
+    /// <inheritdoc />
     public async Task BootstrapAsync(string sourceClusterId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
@@ -1686,14 +1699,14 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 return false;
             }
 
-            // A local write is stored without an origin; the source keys it by this cluster's id.
-            var origin = string.IsNullOrEmpty(rowOrigin) ? localClusterId : rowOrigin;
-            if (string.Equals(origin, sourceClusterId, StringComparison.Ordinal))
+            // The source's own rows are re-shipped with their deletes, and the
+            // receiver's own rows are never inferred deleted (#4768).
+            if (string.Equals(rowOrigin, sourceClusterId, StringComparison.Ordinal))
             {
                 return false;
             }
 
-            switch (BootstrapForeignDeleteReconcile.Classify(frontier, origin, timestamp))
+            switch (BootstrapForeignDeleteReconcile.ClassifyForReceiver(frontier, localClusterId, rowOrigin, timestamp))
             {
                 case ForeignOrphanVerdict.Delete:
                     return true;
@@ -2193,6 +2206,16 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 || previous < state.State.SnapshotExportEpoch)
             {
                 state.State.CompletedExportEpochs[source] = state.State.SnapshotExportEpoch;
+                if (pinned && state.State.FrontierEpoch != Guid.Empty)
+                {
+                    // The pin succeeded only under an unchanged epoch, so this
+                    // is the lineage the sender's acks now carry (#4768).
+                    state.State.CompletedExportLineages[source] = state.State.FrontierEpoch;
+                }
+                else
+                {
+                    state.State.CompletedExportLineages.Remove(source);
+                }
             }
         }
         await state.WriteStateAsync().ConfigureAwait(true);

@@ -103,6 +103,28 @@ public class BootstrapForeignDeleteReconcileTests
     }
 
     [Test]
+    public void ClassifyForReceiver_never_deletes_a_receiver_origin_or_local_row()
+    {
+        const string receiver = "site-b";
+        var frontier = new SnapshotSourceFrontier
+        {
+            Lineage = Lineage,
+            LowWatermarks = new Dictionary<string, HybridLogicalClock> { [Origin] = At(100), [receiver] = At(100) },
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BootstrapForeignDeleteReconcile.ClassifyForReceiver(frontier, receiver, receiver, At(1)), Is.EqualTo(ForeignOrphanVerdict.Keep),
+                "the receiver's own origin is kept even below a watermark that names it");
+            Assert.That(BootstrapForeignDeleteReconcile.ClassifyForReceiver(frontier, receiver, "", At(1)), Is.EqualTo(ForeignOrphanVerdict.Keep),
+                "a local write carries no origin and is the receiver's own");
+            Assert.That(BootstrapForeignDeleteReconcile.ClassifyForReceiver(frontier, receiver, Origin, At(1)), Is.EqualTo(ForeignOrphanVerdict.Delete),
+                "a third origin below its watermark is still deleted");
+            Assert.That(BootstrapForeignDeleteReconcile.ClassifyForReceiver(frontier, receiver, Origin, At(100)), Is.EqualTo(ForeignOrphanVerdict.Owed));
+        });
+    }
+
+    [Test]
     public void ShouldDelete_ignores_a_zero_low_watermark()
     {
         var frontier = new SnapshotSourceFrontier
