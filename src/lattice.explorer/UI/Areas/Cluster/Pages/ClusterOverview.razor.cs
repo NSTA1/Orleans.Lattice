@@ -108,6 +108,10 @@ public partial class ClusterOverview : IDisposable
         {
             // Picking up a running re-measure only restores context; the page works without it.
         }
+        catch (Exception) when (_lifetime.IsLeft)
+        {
+            // The best-effort read can fail after navigation aborts its transport call.
+        }
     }
 
     private Task<ClusterInfo> ReadInfoAsync(CancellationToken cancellationToken) =>
