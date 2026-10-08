@@ -52,15 +52,25 @@ apportioned across live silos and enforced silo-locally by a token bucket, so
 rate limiting needs no per-request cross-silo hop. Usage above a steady-state cap
 is accrued as billable overage on every metering tick.
 
+Replication backfill bypasses tenant quota and request-rate admission so a
+target-region quota cannot prevent existing data from converging. It does not
+bypass accounting: metering includes the target's locally held tenant trees, and
+`GlobalConverged` usage sums each region's published footprint. Backfill does not
+consume client rate tokens, but it uses shared storage, WAL, CPU, and network
+capacity and can contend with client work.
+
 ## Region residency and observability
 
 An optional per-tenant residency policy confines a tenant's data to a residency
-set within an operator-authorized set of regions, refusing the tenant's requests and
-its replicated writes in any region where the tenant is not `Online`. With the tenant-admin control API
-registered, a region dropped from residency completes its drain on its own, but no
-shipped component advances an added region past `Provisioning`, so read the
-region-residency guide before configuring one. A separate placement binding on the
-tenant record can pin its
+set within an operator-authorized set of regions. Client requests are served only
+in `Online` regions, while receiver replication is admitted during `Backfilling`.
+With the tenant-admin and replication packages registered, an added region
+automatically backfills from an `Online` peer and becomes `Online` only after
+every tenant-tree bootstrap and parked offline entry is verified complete; an
+empty tenant can go directly online. A dropped region completes its drain on its
+own. The region-residency guide describes progress and the explicit
+data-in-place operator override. A separate placement binding on the tenant
+record can pin its
 trees to a dedicated WAL provider. Every
 tenant is observable through the `orleans.lattice.tenancy` OpenTelemetry meter,
 which publishes per-tenant usage, quota, and overage gauges tagged by tenant.
@@ -75,10 +85,11 @@ siloBuilder
     .AddLatticeTenancy(options => options.SeedDefaultTenant = true);
 ```
 
-Must be registered after `AddLattice()`, `AddLatticeMembership()`, and
-`AddLatticeAuth()`: membership resolves the tenant-admin subjects the registry
-names, and auth is the enforcement seam that acts on tenant status, quotas, and
-grants. Calling it out of order fails fast with an actionable message.
+Must be registered after `AddLattice()`. Membership and auth are optional
+companions: without membership the core anonymous membership context is used and
+caller-scoped operations fail closed; without auth, caller-authorized tenant-admin
+operations remain denied. Register those packages when the deployment needs
+authenticated tenant administration and policy enforcement.
 
 This package carries no operator control surface of its own. Add
 `Orleans.Lattice.Api.TenantAdmin` (and its gRPC or MCP binding) to administer the

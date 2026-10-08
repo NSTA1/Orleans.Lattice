@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// set the new tenant's allowed regions and initial residency, and a "Set
 /// regions" picker, the visible control of the palette's set-regions command.
 /// Creating a tenant with a residency is confirmed, because its regions start
-/// Provisioning and the tenant is served nowhere until one is promoted to
+/// Provisioning and the tenant is served nowhere until backfill completes to
 /// Online; each region step after the creation reports its own outcome. The
 /// active tenant is marked as current. A caller without operator standing is
 /// sent, replacing the history entry, to its own tenant's workspace.
@@ -306,7 +306,7 @@ public partial class TenancyDirectoryPage
         _pendingResidency = residency;
         if (residency.Length > 0)
         {
-            // A new tenant's residency starts Provisioning, so the tenant is served nowhere until one is promoted.
+            // A new tenant's residency starts Provisioning, so it is served nowhere until verified backfill completes.
             _createOpen = false;
             _confirmCreate = true;
             return;
@@ -414,4 +414,3 @@ public partial class TenancyDirectoryPage
         }
     }
 }
-

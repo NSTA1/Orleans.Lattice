@@ -180,6 +180,27 @@ public sealed partial class TenantUsageMeteringServiceTests
         Assert.That(store.Published, Has.Count.EqualTo(2));
     }
 
+    [Test]
+    public async Task A_metering_cycle_counts_data_held_by_a_backfilled_tenant_tree()
+    {
+        var store = new RecordingStore();
+        var service = Create(
+            new FakeRegistry(Acme) { Quotas = new TenantQuotas { MaxBytes = 100 } },
+            store,
+            GrainFactoryWith(["t/acme/orders"], bytesPerTree: 400, keysPerTree: 40));
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        var local = store.Published.Single().LocalSample("cluster-a");
+        Assert.Multiple(() =>
+        {
+            Assert.That(local.Bytes, Is.EqualTo(400),
+                "quota accounting samples the tree's actual local footprint, including a replica being backfilled");
+            Assert.That(local.Keys, Is.EqualTo(40));
+            Assert.That(local.TreeCount, Is.EqualTo(1));
+        });
+    }
+
     // ---- Overage accrual -------------------------------------------------
 
     /// <summary>

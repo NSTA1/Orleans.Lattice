@@ -12,11 +12,9 @@ namespace Orleans.Lattice.Tenancy.Tests;
 /// <summary>
 /// Registration-time unit tests for
 /// <see cref="LatticeTenancyServiceCollectionExtensions.AddLatticeTenancy"/> that
-/// do not require a live silo: the three ordering guards (core, membership, and
-/// auth must each be registered first, so enabling tenancy without auth or
-/// membership fails fast), the success path (all deps present wires the registry
-/// once), and the idempotent repeat-call path (a second call layers a supplied
-/// configure delegate but performs the structural wiring only once).
+/// do not require a live silo: core is required, membership and auth are optional,
+/// the success path wires the registry once, and the idempotent repeat-call path
+/// layers a supplied configure delegate without duplicating structural wiring.
 /// </summary>
 [TestFixture]
 public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
@@ -32,26 +30,36 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
     }
 
     [Test]
-    public void AddLatticeTenancy_without_membership_throws()
+    public void AddLatticeTenancy_without_membership_or_auth_is_supported()
     {
         var builder = new CovSiloBuilder();
         builder.Services.AddSingleton(Substitute.For<IValidateOptions<LatticeOptions>>());
 
-        Assert.That(
-            () => builder.AddLatticeTenancy(),
-            Throws.InvalidOperationException.With.Message.Contains("AddLatticeMembership"));
+        Assert.That(builder.AddLatticeTenancy(), Is.SameAs(builder));
+        Assert.That(builder.Services.Any(d => d.ServiceType == typeof(TenancyRegistrationMarker)), Is.True);
     }
 
     [Test]
-    public void AddLatticeTenancy_without_auth_throws()
+    public void AddLatticeTenancy_with_membership_and_replication_without_auth_is_supported()
     {
         var builder = new CovSiloBuilder();
         builder.Services.AddSingleton(Substitute.For<IValidateOptions<LatticeOptions>>());
         builder.Services.AddSingleton(Substitute.For<ILatticeMembershipDirectory>());
+        builder.AddLatticeReplication(options => options.ClusterId = "without-auth");
 
-        Assert.That(
-            () => builder.AddLatticeTenancy(),
-            Throws.InvalidOperationException.With.Message.Contains("AddLatticeAuth"));
+        Assert.That(builder.AddLatticeTenancy(), Is.SameAs(builder));
+        Assert.That(builder.Services.Any(d => d.ServiceType == typeof(TenancyRegistrationMarker)), Is.True);
+    }
+
+    [Test]
+    public void AddLatticeTenancy_with_replication_without_membership_or_auth_is_supported()
+    {
+        var builder = new CovSiloBuilder();
+        builder.Services.AddSingleton(Substitute.For<IValidateOptions<LatticeOptions>>());
+        builder.AddLatticeReplication(options => options.ClusterId = "without-membership");
+
+        Assert.That(builder.AddLatticeTenancy(), Is.SameAs(builder));
+        Assert.That(builder.Services.Any(d => d.ServiceType == typeof(TenancyRegistrationMarker)), Is.True);
     }
 
     [Test]

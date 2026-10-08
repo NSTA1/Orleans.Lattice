@@ -74,13 +74,13 @@ public interface ILatticeTenantRegionAdmin
     /// on its own (<see cref="TenantRegionLifecycleStatus.Draining"/>, then
     /// <see cref="TenantRegionLifecycleStatus.Offline"/>, then
     /// <see cref="TenantRegionLifecycleStatus.Removed"/>) on the silos of that
-    /// region. An added region does <b>not</b> advance on its own: nothing
-    /// backfills the tenant's existing data into it, so it stays
-    /// <see cref="TenantRegionLifecycleStatus.Provisioning"/> until an operator of
-    /// the hosting deployment promotes it one step at a time to
-    /// <see cref="TenantRegionLifecycleStatus.Online"/>. Once a tenant has any
-    /// residency configured it is served only in a region that reports
-    /// <see cref="TenantRegionLifecycleStatus.Online"/>.
+    /// region. An added region advances automatically from Provisioning to
+    /// Backfilling and then to Online only after all configured tenant trees have
+    /// completed receiver bootstrap. Until Online it refuses client serving even
+    /// though inbound replication is admitted to fill the replica.
+    /// <see cref="GetTenantRegionStatusAsync"/> reports progress. A platform
+    /// operator may use <see cref="AdvanceRegionAsync"/> to override a step after
+    /// explicitly acknowledging that data is already present in the region.
     /// </para>
     /// </remarks>
     /// <param name="tenantId">The tenant id. Must be a valid, non-empty tenant id.</param>
@@ -99,7 +99,10 @@ public interface ILatticeTenantRegionAdmin
     /// <summary>
     /// Reads a tenant's per-region residency status (a <b>tenant-admin</b> action):
     /// one row per region that is either allowed or carries a non-<c>None</c>
-    /// status, ordered by region id.
+    /// status, ordered by region id. The local region's <see
+    /// cref="TenantRegionStatusDescriptor.BackfillProgress"/> reports per-tree
+    /// bootstrap state and a visible stall reason while that region is
+    /// <see cref="TenantRegionLifecycleStatus.Backfilling"/>.
     /// </summary>
     /// <param name="tenantId">The tenant id. Must be a valid, non-empty tenant id.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -109,4 +112,22 @@ public interface ILatticeTenantRegionAdmin
     /// <exception cref="Orleans.Lattice.LatticeAuthorizationDeniedException">The caller is neither a platform operator nor a tenant admin.</exception>
     Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(
         string tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Advances one legal step of a tenant region's add lifecycle. This is a
+    /// platform-operator override for deployments that have independently placed
+    /// the tenant's data in the region; the caller must explicitly acknowledge
+    /// that data is already present. Normal deployments should allow automatic
+    /// replication backfill to complete instead.
+    /// </summary>
+    /// <param name="tenantId">The tenant id. Must be a valid, non-empty tenant id.</param>
+    /// <param name="regionId">The region to advance. Must not be null or empty.</param>
+    /// <param name="acknowledgeDataInPlace">Must be true to acknowledge that the tenant data is already present.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The updated per-region status report.</returns>
+    /// <exception cref="ArgumentException">An id is invalid, or data-in-place acknowledgement is false.</exception>
+    /// <exception cref="TenantNotFoundException">No tenant with that id is registered.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeAuthorizationDeniedException">The caller is not a platform operator.</exception>
+    Task<TenantRegionStatusReport> AdvanceRegionAsync(
+        string tenantId, string regionId, bool acknowledgeDataInPlace, CancellationToken cancellationToken = default);
 }

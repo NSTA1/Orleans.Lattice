@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// <summary>
 /// Follows a tenant's regions while any of them is part-way along a residency
 /// path, so the Regions page shows the drain the region's own silos complete, or
-/// a promotion an operator makes, without a manual refresh. It reads again after
+/// an automatic lifecycle transition, without a manual refresh. It reads again after
 /// <see cref="Interval"/> on the circuit's clock; each read that brings no change,
 /// or fails, doubles the wait up to <see cref="MaximumInterval"/>, and a read that
 /// shows a change returns it to <see cref="Interval"/>. It stops when the read

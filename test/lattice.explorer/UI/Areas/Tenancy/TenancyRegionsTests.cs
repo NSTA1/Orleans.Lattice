@@ -187,6 +187,76 @@ public sealed partial class TenancyRegionsTests : TenancyTestContext
     }
 
     [Test]
+    public void Backfill_progress_is_shown_in_the_residency_lifecycle_row()
+    {
+        var cut = RenderRegions();
+        var tenant = Cluster.Tenants["acme"];
+        var index = tenant.Regions.FindIndex(region => region.RegionId == "us-east");
+        tenant.Regions[index] = tenant.Regions[index] with
+        {
+            Status = TenantRegionLifecycleStatus.Backfilling,
+            BackfillProgress = new TenantRegionBackfillProgress
+            {
+                Phase = "Importing",
+                Trees =
+                [
+                    new TenantRegionBackfillTreeProgress
+                    {
+                        TreeId = "t/acme/orders",
+                        Phase = "LiveIncremental",
+                        EntriesApplied = 12,
+                        SourceClusterId = "eu-west",
+                        ReadFenced = false,
+                    },
+                ],
+            },
+        };
+
+        TenancyForms.Button(cut, "Refresh").Click();
+        cut.WaitUntil(() => cut.Find(".lt-tenancy-backfill-progress"));
+
+        Assert.Multiple(() =>
+        {
+            var progress = cut.Find(".lt-tenancy-backfill-progress");
+            Assert.That(progress.TextContent, Does.Contain("Backfill: Importing"));
+            Assert.That(progress.TextContent, Does.Contain("t/acme/orders: LiveIncremental (12 entries applied)"));
+        });
+    }
+
+    [Test]
+    public void Only_platform_operator_can_override_backfill_and_acknowledgement_is_required()
+    {
+        var tenantAdmin = RenderRegions(canAuthorize: false);
+        tenantAdmin.WaitUntil(() => Checkbox(tenantAdmin, "eu-west"));
+        var tenant = Cluster.Tenants["acme"];
+        var index = tenant.Regions.FindIndex(region => region.RegionId == "eu-west");
+        tenant.Regions[index] = tenant.Regions[index] with { Status = TenantRegionLifecycleStatus.Backfilling };
+        TenancyForms.Button(tenantAdmin, "Refresh").Click();
+        tenantAdmin.WaitUntil(() => Assert.That(Pill(tenantAdmin, "eu-west"), Is.EqualTo("Backfilling")));
+        Assert.That(tenantAdmin.FindAll("button").Any(button => button.TextContent.Contains("Override backfill", StringComparison.Ordinal)), Is.False);
+        tenantAdmin.Dispose();
+
+        var cut = RenderRegions(canAuthorize: true);
+        tenant = Cluster.Tenants["acme"];
+        index = tenant.Regions.FindIndex(region => region.RegionId == "eu-west");
+        tenant.Regions[index] = tenant.Regions[index] with { Status = TenantRegionLifecycleStatus.Backfilling };
+        TenancyForms.Button(cut, "Refresh").Click();
+        cut.WaitUntil(() => cut.FindAll("button").Any(button => button.TextContent.Contains("Override backfill", StringComparison.Ordinal)));
+        TenancyForms.Button(cut, "Override backfill for eu-west...").Click();
+        cut.WaitUntil(() => cut.Find("[role=alertdialog]"));
+
+        cut.Find(".lt-tenancy-acknowledgement input[type=checkbox]").Change(true);
+        cut.WaitUntil(() => Assert.That(TenancyForms.Button(cut, "Acknowledge and advance").HasAttribute("disabled"), Is.False));
+        TenancyForms.Button(cut, "Acknowledge and advance").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Cluster.Tenants["acme"].Regions.Single(region => region.RegionId == "eu-west").Status, Is.EqualTo(TenantRegionLifecycleStatus.Online));
+            Assert.That(Cluster.Calls, Does.Contain(nameof(FakeTenancyCluster.AdvanceRegionAsync)));
+        });
+    }
+
+    [Test]
     public void While_a_saved_allowed_set_is_read_again_the_residency_controls_stay_disabled()
     {
         var cut = RenderRegions(canAuthorize: true);
@@ -251,7 +321,7 @@ public sealed partial class TenancyRegionsTests : TenancyTestContext
     }
 
     [Test]
-    public void Each_lifecycle_status_says_what_it_means_and_a_provisioning_region_waits_for_promotion()
+    public void Each_lifecycle_status_says_what_it_means_and_provisioning_starts_automatic_backfill()
     {
         var tenant = Cluster.Tenants["acme"];
         tenant.Regions.Clear();
@@ -275,7 +345,7 @@ public sealed partial class TenancyRegionsTests : TenancyTestContext
             Assert.That(rows.Select(row => row.Children[1].QuerySelector(".lt-tenancy-meaning")!.TextContent.Trim()),
                 Is.EqualTo(statuses.Select(status => TenancyFormat.RegionStatusMeaning(status))));
             Assert.That(rows[0].Children[1].QuerySelector(".lt-tenancy-meaning")!.TextContent.Trim(),
-                Is.EqualTo("Not served here until it is Online. Nothing in Lattice advances an added region: a platform operator of the hosting deployment promotes it once the tenant's data is in place."));
+                Is.EqualTo("Not served here until it is Online. The region automatically enters Backfilling, where configured replicated tenant trees are copied from an Online peer."));
         });
     }
 
@@ -316,8 +386,8 @@ public sealed partial class TenancyRegionsTests : TenancyTestContext
         cut.WaitUntil(() =>
         {
             Assert.That(cut.Find("[role=alertdialog] .lt-dialog__title").TextContent, Is.EqualTo("Stop serving tenant acme?"));
-            Assert.That(cut.Find("[role=alertdialog] .lt-tenancy-consequence").TextContent, Does.Contain("is not served anywhere until a platform operator of the")
-                .And.Contain("promotes one of us-east to Online"));
+            Assert.That(cut.Find("[role=alertdialog] .lt-tenancy-consequence").TextContent,
+                Does.Contain("is not served anywhere until backfill is verified in one of"));
             Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.SetResidencyAsync)));
         });
 

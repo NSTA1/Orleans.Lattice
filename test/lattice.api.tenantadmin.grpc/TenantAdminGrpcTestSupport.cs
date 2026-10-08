@@ -152,6 +152,10 @@ internal sealed class FakeTenantRegionAdmin : ILatticeTenantRegionAdmin
 
     public IReadOnlyCollection<string>? LastResidencyRegions { get; private set; }
 
+    public string? LastAdvancedRegionId { get; private set; }
+
+    public bool? LastAcknowledgedDataInPlace { get; private set; }
+
     public Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(
         string tenantId, IReadOnlyCollection<string> allowedRegions, CancellationToken cancellationToken = default)
     {
@@ -205,9 +209,38 @@ internal sealed class FakeTenantRegionAdmin : ILatticeTenantRegionAdmin
                         RegionId = "eu-west",
                         Status = TenantRegionLifecycleStatus.Online,
                         IsAllowed = true,
+                        BackfillProgress = new TenantRegionBackfillProgress
+                        {
+                            Phase = "Running",
+                            StallReason = "Waiting for receiver bootstrap.",
+                            Trees =
+                            [
+                                new TenantRegionBackfillTreeProgress
+                                {
+                                    TreeId = "t/acme/orders",
+                                    Phase = "Exporting",
+                                    EntriesApplied = 42,
+                                    SourceClusterId = "east",
+                                    ReadFenced = true,
+                                    PendingDeadLetters = 3,
+                                },
+                            ],
+                        },
                     },
                 ],
             });
+    }
+
+    public Task<TenantRegionStatusReport> AdvanceRegionAsync(
+        string tenantId,
+        string regionId,
+        bool acknowledgeDataInPlace,
+        CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        LastAdvancedRegionId = regionId;
+        LastAcknowledgedDataInPlace = acknowledgeDataInPlace;
+        return GetTenantRegionStatusAsync(tenantId, cancellationToken);
     }
 }
 
@@ -492,6 +525,7 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
             "AuthorizeAllowedRegions" => await service.AuthorizeAllowedRegions((TenantAdminRegionSetRequest)(object)wireRequest, context),
             "SetTenantResidency" => await service.SetTenantResidency((TenantAdminRegionSetRequest)(object)wireRequest, context),
             "GetTenantRegionStatus" => await service.GetTenantRegionStatus((TenantAdminTenantRequest)(object)wireRequest, context),
+            "AdvanceTenantRegion" => await service.AdvanceTenantRegion((TenantAdminRegionSetRequest)(object)wireRequest, context),
             "GetTenantQuotaUsage" => await service.GetTenantQuotaUsage((TenantAdminTenantRequest)(object)wireRequest, context),
             "ListTenantAdminSubjects" => await service.ListTenantAdminSubjects((TenantAdminTenantRequest)(object)wireRequest, context),
             "AddTenantAdminSubject" => await service.AddTenantAdminSubject((TenantAdminSubjectRequest)(object)wireRequest, context),

@@ -72,7 +72,7 @@ On a cluster running the tenancy add-on, what `lattice_list_regions` returns dep
 
 In the shipped registrations the two validated-tenant cases are not reached. The discovery tool runs without the caller's credential, so on a co-hosted head the validating resolver sees an anonymous caller and refuses every non-default assertion, and a remote head registers no validating resolver at all. A non-default tenant assertion is therefore currently answered with the current region alone and no `tenantScope` annotation - or, by a remote head without the `TenantAdmin` endpoint, with the full unscoped topology.
 
-A region reported with `isResident: false` is a legitimate `lattice_tenant_set_residency` destination but **not** yet a routing destination: targeting it with a `region` argument is refused by the residency gate until its status reaches `Online`, and no shipped component advances a region to `Online` (see [Tenant region residency](#tenant-region-residency-lattice_tenant_authorize_regions-lattice_tenant_set_residency-lattice_tenant_region_status)). See [the region sets](../lattice.tenancy/README.md#the-region-sets).
+A region reported with `isResident: false` is a legitimate `lattice_tenant_set_residency` destination but **not** yet a routing destination: targeting it with a `region` argument is refused by the residency gate until its status reaches `Online`. Receiver replication is admitted while it is `Backfilling`; the local lifecycle driver makes it routable only after bootstrap and parked tenant-offline entries are verified complete (see [Tenant region residency](#tenant-region-residency-lattice_tenant_authorize_regions-lattice_tenant_set_residency-lattice_tenant_region_status)). See [the region sets](../lattice.tenancy/README.md#the-region-sets).
 
 ## State tools (`lattice_state_*`)
 
@@ -395,17 +395,20 @@ Authorization is **two-tier and inherited from the facade**, which the tools do 
 
 - `lattice_tenant_authorize_regions` is **operator-only** - the server authorizes it as cluster-wide admin on the reserved auth policy tree and denies every non-operator caller, including a tenant admin. The allowed set is the operator's containment boundary.
 - `lattice_tenant_set_residency` and `lattice_tenant_region_status` are **operator-or-tenant-admin** - the caller is authorized as the platform operator or as a live admin subject on the tenant record.
+- `lattice_tenant_advance_region` is **operator-only** and requires explicit acknowledgement that data was independently placed in the target region. It is an override, not approval required for automatic backfill.
 
 Both tiers are independent of the data-plane `DefaultEffect`, so an unmatched request resolves to deny even under `DefaultEffect = Allow`.
 
-Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. A newly added region reports `Provisioning`, not `Online`, and no shipped component advances it further: nothing backfills the tenant's existing data into an added region, so promoting it through `Backfilling` to `Online` is an operator step the host takes on a silo, one lifecycle step at a time with `TenantRecord.TryPromoteRegionStatus`. A dropped region's drain completes on its own, `Draining` -> `Offline` -> `Removed`, on each silo of that region that registers the tenant-admin control API (see [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)). Once a tenant's residency is set it is served only in a region whose status is exactly `Online`, so until an operator has advanced one it is served in none.
+Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. Adding an allowed region does not add it to residency or imply its data is present. When a region is added to residency, its local driver starts automatic backfill: receiver replication is admitted in `Backfilling`, while client requests remain refused until every configured tree bootstrap and parked tenant-offline entry is verified complete. An empty tenant can advance directly to `Online`. The operator-only `lattice_tenant_advance_region` is an acknowledged override only for data independently placed in the target region; it is not part of the normal backfill workflow. A dropped region's drain completes on its own, `Draining` -> `Offline` -> `Removed`, on each silo of that region that registers the tenant-admin control API (see [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)). Once a tenant's residency is set it is served only in a region whose status is exactly `Online`.
 
 The typical workflow is:
 
 1. An operator calls `lattice_tenant_authorize_regions` to widen the allowed set.
 2. A tenant admin calls `lattice_tenant_region_status` and sees the new region as `isAllowed: true` with status `None`.
-3. The tenant admin calls `lattice_tenant_set_residency` to move into it; it reports `Provisioning`.
-4. The region stays `Provisioning` until an operator of the host advances it, one lifecycle step at a time, to `Online`; no shipped component does. Only then does a `region`-targeted call routed there succeed.
+3. The tenant admin calls `lattice_tenant_set_residency` to move into it. The region enters `Provisioning`, and the local driver begins `Backfilling` without a separate approval.
+4. The tenant admin follows `lattice_tenant_region_status` or the Explorer Replication view until each tree bootstrap is verified and the region reaches `Online`; only then do tenant client calls route there.
+
+An operator may instead call `lattice_tenant_advance_region` one legal lifecycle step at a time when data was placed out of band, with `acknowledgeDataInPlace` set to `true` only after independently verifying that data. This override does not copy or verify the data.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted region-residency facade directly; over the remote topology `AddLatticeMcpRemote` wires a region-residency gRPC adapter off the same `LatticeApiMcpRemoteOptions.TenantAdmin` endpoint.
 

@@ -152,6 +152,10 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             ReadFenced = state.State.ReadFenceArmed,
             EntriesApplied = state.State.EntriesApplied,
             RedriveAttempts = state.State.RedriveAttempts,
+            CompletedSourceClusterId = !state.State.InProgress
+                && state.State.Phase == LatticeBootstrapState.LiveIncremental
+                    ? state.State.SourceClusterId
+                    : null,
         });
     }
 

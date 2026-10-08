@@ -58,17 +58,13 @@ public sealed class TenancyRegionsSmokeTests
         await admin.CreateTenantAsync(Tenant);
         await east.AuthorizeAllowedRegionsAsync(Tenant, [East, West]);
         await east.SetResidencyAsync(Tenant, [East, West]);
-        var registry = _sample.East.Services.GetRequiredService<ITenantRegistry>();
-        foreach (var region in new[] { East, West })
-        {
-            await SampleSeeder.PromoteToOnlineAsync(registry, TenantId.Parse(Tenant), region, East);
-        }
-
         var seeded = await ObserveConvergenceAsync(async () =>
         {
-            var remote = await _sample.West.Services.GetRequiredService<ITenantRegistry>().GetAsync(TenantId.Parse(Tenant));
-            return remote?.GetRegionStatus(West) == TenantRegionStatus.Online;
-        }, Tenant, "pre-pause registry convergence");
+            var origin = await east.GetTenantRegionStatusAsync(Tenant);
+            var remote = await west.GetTenantRegionStatusAsync(Tenant);
+            return origin.Regions.Single(row => row.RegionId == West).Status == TenantRegionLifecycleStatus.Online
+                && remote.Regions.Single(row => row.RegionId == West).Status == TenantRegionLifecycleStatus.Online;
+        }, Tenant, "automatic empty-tenant backfill");
         if (!seeded)
         {
             await PrintReplicationAsync();

@@ -396,6 +396,13 @@ public sealed class LatticeMcpTenantRegionWorkflowEndToEndTests
         public Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(
             string tenantId, CancellationToken cancellationToken = default)
             => Task.FromResult(new TenantRegionStatusReport { TenantId = tenantId, Regions = state.Rows() });
+
+        public Task<TenantRegionStatusReport> AdvanceRegionAsync(
+            string tenantId,
+            string regionId,
+            bool acknowledgeDataInPlace,
+            CancellationToken cancellationToken = default)
+            => GetTenantRegionStatusAsync(tenantId, cancellationToken);
     }
 
     private sealed class WorkflowVisibilityResolver(WorkflowRegionState state) : ITenantRegionVisibilityResolver

@@ -20,4 +20,10 @@ public sealed record TenantAdminRegionSetRequest
     /// revoked (for the allowed set) or drained (for the residency set).
     /// </summary>
     [Id(1)] public IReadOnlyList<string> Regions { get; init; } = Array.Empty<string>();
+
+    /// <summary>The single region targeted by the acknowledged operator-advance RPC.</summary>
+    [Id(2)] public string? RegionId { get; init; }
+
+    /// <summary>Whether the operator acknowledges that the region's data is already in place.</summary>
+    [Id(3)] public bool AcknowledgeDataInPlace { get; init; }
 }

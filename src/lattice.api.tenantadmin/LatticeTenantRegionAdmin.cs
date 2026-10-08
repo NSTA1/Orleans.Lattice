@@ -59,6 +59,8 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
     private readonly TenantRegionResidencyAuthorizer _authorizer;
     private readonly ITenantAdminClock _clock;
     private readonly string? _writerId;
+    private readonly TenantRegionLifecycleDriver _lifecycle;
+    private readonly TenantRegionBackfillService? _backfill;
 
     /// <summary>
     /// Initializes a new <see cref="LatticeTenantRegionAdmin"/>.
@@ -72,7 +74,9 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
         ITenantRegistry registry,
         TenantRegionResidencyAuthorizer authorizer,
         ITenantAdminClock clock,
-        IOptions<ClusterOptions> clusterOptions)
+        IOptions<ClusterOptions> clusterOptions,
+        TenantRegionLifecycleDriver? lifecycle = null,
+        TenantRegionBackfillService? backfill = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -83,6 +87,8 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
         _authorizer = authorizer;
         _clock = clock;
         _writerId = clusterOptions.Value.ClusterId;
+        _lifecycle = lifecycle ?? new TenantRegionLifecycleDriver(registry, clusterOptions);
+        _backfill = backfill;
     }
 
     /// <inheritdoc />
@@ -286,11 +292,43 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         var record = await _authorizer.AuthorizeTenantAdminAsync(tenant, cancellationToken).ConfigureAwait(false);
 
+        var regions = TenantLifecycleMapping.DescribeRegions(record).ToArray();
+        if (_backfill is not null)
+        {
+            for (var i = 0; i < regions.Length; i++)
+            {
+                var region = regions[i];
+                if (region.Status == TenantRegionLifecycleStatus.Backfilling)
+                {
+                    regions[i] = region with
+                    {
+                        BackfillProgress = await _backfill.GetProgressAsync(
+                            tenant, region.RegionId, cancellationToken).ConfigureAwait(false),
+                    };
+                }
+            }
+        }
+
         return new TenantRegionStatusReport
         {
             TenantId = tenant.Value,
-            Regions = TenantLifecycleMapping.DescribeRegions(record),
+            Regions = regions,
         };
+    }
+
+    /// <inheritdoc />
+    public async Task<TenantRegionStatusReport> AdvanceRegionAsync(
+        string tenantId,
+        string regionId,
+        bool acknowledgeDataInPlace,
+        CancellationToken cancellationToken = default)
+    {
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        await _authorizer.AuthorizeOperatorAsync(cancellationToken).ConfigureAwait(false);
+        await _lifecycle.AdvanceForOperatorAsync(
+            tenant, regionId, acknowledgeDataInPlace, cancellationToken).ConfigureAwait(false);
+        return await GetTenantRegionStatusAsync(tenant.Value, cancellationToken).ConfigureAwait(false);
     }
 
     private static HashSet<string> ValidateRegionSet(IReadOnlyCollection<string> regions, string parameterName)

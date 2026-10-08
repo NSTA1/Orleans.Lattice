@@ -93,11 +93,11 @@ internal static class TenancyFormat
 
     /// <summary>What a region in the Provisioning state is waiting for, and what it means for the tenant.</summary>
     public const string ProvisioningMeaning =
-        "Not served here until it is Online. Nothing in Lattice advances an added region: a platform operator of the hosting deployment promotes it once the tenant's data is in place.";
+        "Not served here until it is Online. The region automatically enters Backfilling, where configured replicated tenant trees are copied from an Online peer.";
 
     /// <summary>What a region in the Backfilling state means for the tenant.</summary>
     public const string BackfillingMeaning =
-        "Not served here until it is Online. Lattice copies no data into an added region; the hosting deployment fills it in, and a platform operator promotes it.";
+        "Not served here until it is Online. Lattice is copying the tenant's configured replicated trees; the region becomes Online only after every tree bootstrap and parked offline entry is verified.";
 
     /// <summary>What a region in the Draining state means for the tenant, and what it means when it stays there.</summary>
     public const string DrainingMeaning =
@@ -123,17 +123,16 @@ internal static class TenancyFormat
     public const string NotServedLabel = "Not served";
 
     /// <summary>
-    /// Where a platform operator of the hosting deployment learns how to promote a
-    /// tenant's region to Online. The facade has no promotion call, so the
-    /// Explorer cannot offer the action itself.
+    /// Documentation for tenant-region lifecycle, automatic backfill and the
+    /// acknowledged operator override.
     /// </summary>
     public const string PromotionHelpUrl = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.tenancy/README.html#lifecycle-states";
 
     /// <summary>
     /// What a region's residency lifecycle means for the tenant, following the
-    /// tenancy engine: an added region stays Provisioning, and then Backfilling,
-    /// until a platform operator of the hosting deployment promotes it, because
-    /// nothing in Lattice copies the tenant's data in; a removed region's own silos
+    /// tenancy engine: an added region advances through Provisioning and
+    /// Backfilling automatically, reaching Online only after the replica is
+    /// verified; a removed region's own silos
     /// step it from Draining to Offline to Removed on their own; and once a tenant
     /// has residency only an Online region serves it. With none set, every region
     /// does.
@@ -168,8 +167,8 @@ internal static class TenancyFormat
     /// <param name="regions">The per-region status.</param>
     public static string ServedNowhereReason(IReadOnlyList<TenantRegionStatusDescriptor> regions) =>
         ResidentRegions(regions).Count > 0
-            ? "it has residency set and none of its regions is Online yet. It is served again once a platform operator of the hosting deployment promotes one to Online."
-            : "it has residency set and every region has left it. It is served again once a region is added to its residency and a platform operator of the hosting deployment promotes it to Online.";
+            ? "it has residency set and none of its regions is Online yet. It is served again after an added region's backfill is verified, or an operator explicitly acknowledges that its data is already in place."
+            : "it has residency set and every region has left it. It is served again after a region is added and its backfill is verified, or an operator explicitly acknowledges that its data is already in place.";
 
     /// <summary>
     /// Whether a tenant has residency set: any region carries a lifecycle status,

@@ -89,6 +89,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
             CreateAuthorizeRegionsTool(),
             CreateSetResidencyTool(),
             CreateRegionStatusTool(),
+            CreateAdvanceRegionTool(),
         ];
     }
 
@@ -316,11 +317,12 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                     + "TENANT-ADMIN action: the server authorizes the caller as the platform operator OR a live admin "
                     + "subject on the tenant record, independent of the data-plane default effect. residencyRegions is "
                     + "the complete desired set, not a delta - newly listed regions are marked Provisioning, and "
-                    + "currently-resident regions absent from it are marked Draining. A newly added region reports "
-                    + "Provisioning here, not Online, and nothing promotes it further: no shipped component backfills "
-                    + "the tenant's existing data into an added region, so advancing it through Backfilling to Online "
-                    + "is an operator step the hosting deployment takes on a silo (TenantRecord.TryPromoteRegionStatus, "
-                    + "one step at a time). A dropped region's drain completes on its own (Draining, then Offline, then "
+                    + "currently-resident regions absent from it are marked Draining. Replication automatically "
+                    + "backfills configured tenant trees, moving the region to Online only after every bootstrap and "
+                    + "parked offline entry is verified. Check lattice_tenant_region_status for progress. A platform "
+                    + "operator can override one lifecycle step with lattice_tenant_advance_region only after "
+                    + "acknowledging that the data is already present in the target region. A dropped region's drain "
+                    + "completes on its own (Draining, then Offline, then "
                     + "Removed). Once a tenant has residency configured it is served in a region only while "
                     + "that region reports Online, so check lattice_tenant_region_status before routing traffic there. "
                     + "Every region in the set must already be allowed "
@@ -353,13 +355,41 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                     + "tenant's operator-authorized allowed set or carries a non-None status, ordered by region id. "
                     + "Read-only, and a TENANT-ADMIN action: the server authorizes the caller as the platform operator "
                     + "OR a live admin subject on the tenant record. Use it to see where each region stands in the "
-                    + "residency lifecycle after lattice_tenant_set_residency (this server marks a newly added region "
-                    + "Provisioning; it reaches Online only when an operator of the hosting deployment promotes it), and to "
+                    + "residency lifecycle after lattice_tenant_set_residency, including per-tree backfill progress, and to "
                     + "see which regions an operator has authorized but the "
                     + "tenant has not yet moved into. Fails closed if the tenant is not registered. Requires "
                     + "tenant-admin control to be enabled on the server.",
                 ReadOnly = true,
                 Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateAdvanceRegionTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The registered tenant id.")] string tenantId,
+                [Description("The target region id.")] string regionId,
+                [Description("Must be true to acknowledge that tenant data is already present in the target region.")] bool acknowledgeDataInPlace,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
+                var regionAdmin = context.Services!.GetRequiredService<ILatticeTenantRegionAdmin>();
+                return TenantAdminToolInvocations.AdvanceRegionAsync(
+                    regionAdmin, tenantId, regionId, acknowledgeDataInPlace, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_advance_region",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Override tenant region lifecycle",
+                Description =
+                    "Advances exactly one legal tenant-region add-path step. Operator-only and fail-closed. "
+                    + "Requires acknowledgeDataInPlace=true: this does not copy tenant data and must only be used "
+                    + "after an operator independently verifies the data is already present in the target region. "
+                    + "Normal deployments should wait for automatic backfill and inspect lattice_tenant_region_status.",
+                ReadOnly = false,
+                Destructive = true,
                 UseStructuredContent = true,
             });
 }

@@ -105,4 +105,16 @@ internal sealed class TenantResidencySnapshot
     /// <returns><c>true</c> when the tenant is online in the local region.</returns>
     public bool IsOnlineLocally(TenantId tenant) =>
         !_byTenant.TryGetValue(tenant, out var status) || status == TenantRegionStatus.Online;
+
+    /// <summary>
+    /// The inbound replication decision: unconfigured tenants remain compatible
+    /// with pre-residency behavior; configured tenants admit replicated writes
+    /// during backfill and while online, but not before backfill starts or after
+    /// draining begins.
+    /// </summary>
+    /// <param name="tenant">The tenant to test.</param>
+    /// <returns><c>true</c> when inbound replication may be applied locally.</returns>
+    public bool IsReplicationAdmissibleLocally(TenantId tenant) =>
+        !_byTenant.TryGetValue(tenant, out var status)
+        || status is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
 }

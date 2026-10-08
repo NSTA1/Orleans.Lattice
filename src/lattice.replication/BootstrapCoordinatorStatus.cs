@@ -54,4 +54,12 @@ public readonly record struct BootstrapCoordinatorStatus(
     /// one failed attempt.
     /// </summary>
     [Id(4)] public int RedriveAttempts { get; init; }
+
+    /// <summary>
+    /// The source cluster whose bootstrap most recently reached
+    /// <see cref="LatticeBootstrapState.LiveIncremental"/>. Unlike
+    /// <see cref="SourceClusterId"/>, this remains available after the in-flight
+    /// coordinator has completed.
+    /// </summary>
+    [Id(5)] public string? CompletedSourceClusterId { get; init; }
 }

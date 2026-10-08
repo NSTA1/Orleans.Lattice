@@ -25,4 +25,10 @@ public sealed record TenantRegionStatusDescriptor
     /// allowed set (residency may only be set on an allowed region).
     /// </summary>
     [Id(2)] public bool IsAllowed { get; init; }
+
+    /// <summary>
+    /// Backfill progress when this is the region serving the status request and
+    /// the tenant-admin host has replication registered; otherwise <see langword="null"/>.
+    /// </summary>
+    [Id(3)] public TenantRegionBackfillProgress? BackfillProgress { get; init; }
 }

@@ -79,6 +79,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only tenant-admin per-region status RPC method name.</summary>
     public const string GetTenantRegionStatusMethodName = "GetTenantRegionStatus";
 
+    /// <summary>The unary operator-only tenant-region lifecycle override RPC method name.</summary>
+    public const string AdvanceTenantRegionMethodName = "AdvanceTenantRegion";
+
     /// <summary>The unary, read-only tenant-admin usage-against-quota RPC method name.</summary>
     public const string GetTenantQuotaUsageMethodName = "GetTenantQuotaUsage";
 
@@ -348,6 +351,8 @@ internal sealed class LatticeTenantAdminGrpcMethods
             requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(regionStatusReportSerializer));
 
+        AdvanceTenantRegion = Unary(AdvanceTenantRegionMethodName, regionSetRequestSerializer, regionStatusReportSerializer);
+
         GetTenantQuotaUsage = new Method<TenantAdminTenantRequest, TenantQuotaUsageReport>(
             type: MethodType.Unary,
             serviceName: ServiceName,
@@ -479,6 +484,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
 
     /// <summary>The unary, read-only tenant-admin per-region status RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantRegionStatusReport> GetTenantRegionStatus { get; }
+
+    /// <summary>The unary operator-only acknowledged tenant-region lifecycle override RPC.</summary>
+    public Method<TenantAdminRegionSetRequest, TenantRegionStatusReport> AdvanceTenantRegion { get; }
 
     /// <summary>The unary, read-only tenant-admin usage-against-quota RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantQuotaUsageReport> GetTenantQuotaUsage { get; }

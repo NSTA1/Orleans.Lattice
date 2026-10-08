@@ -22,13 +22,11 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// completing it automatically cannot fail open.
 /// </para>
 /// <para>
-/// <b>Why the add path is not driven here.</b> Promoting an added region to
-/// <see cref="TenantRegionStatus.Online"/> widens both what it serves and what it
-/// admits, and is only correct once the tenant's existing data has been copied into
-/// the region. No shipped component performs that backfill, so this listener
-/// never advances <see cref="TenantRegionStatus.Provisioning"/> or
-/// <see cref="TenantRegionStatus.Backfilling"/>: that remains the explicit operator
-/// step the tenancy documentation names.
+/// <b>The add path has a separate recoverable driver.</b> Promoting an added region
+/// to <see cref="TenantRegionStatus.Online"/> widens what it serves, so the
+/// backfill coordinator advances it only after each receiver bootstrap is live,
+/// unfenced, and has no parked tenant-offline entries. This listener remains
+/// drain-only; the backfill service handles the add path.
 /// </para>
 /// <para>
 /// Each step is chained off the next snapshot rebuild its own registry write

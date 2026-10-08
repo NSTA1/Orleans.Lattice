@@ -93,6 +93,9 @@ internal abstract partial class LatticeTenantAdminGrpcServiceBase
     /// </summary>
     public abstract Task<TenantRegionStatusReport> GetTenantRegionStatus(TenantAdminTenantRequest request, ServerCallContext context);
 
+    /// <summary>Advances one tenant-region lifecycle step after operator acknowledgement.</summary>
+    public abstract Task<TenantRegionStatusReport> AdvanceTenantRegion(TenantAdminRegionSetRequest request, ServerCallContext context);
+
     /// <summary>
     /// Reads a tenant's current usage against its quota ceilings. Read-only, and an
     /// <b>operator-or-tenant-admin</b> action enforced fail-closed by the facade
@@ -191,6 +194,7 @@ internal abstract partial class LatticeTenantAdminGrpcServiceBase
             binder.AddMethod(methods.AuthorizeAllowedRegions, (UnaryServerMethod<TenantAdminRegionSetRequest, TenantRegionAuthorizationResult>?)null);
             binder.AddMethod(methods.SetTenantResidency, (UnaryServerMethod<TenantAdminRegionSetRequest, TenantResidencyChangeResult>?)null);
             binder.AddMethod(methods.GetTenantRegionStatus, (UnaryServerMethod<TenantAdminTenantRequest, TenantRegionStatusReport>?)null);
+            binder.AddMethod(methods.AdvanceTenantRegion, (UnaryServerMethod<TenantAdminRegionSetRequest, TenantRegionStatusReport>?)null);
             binder.AddMethod(methods.GetTenantQuotaUsage, (UnaryServerMethod<TenantAdminTenantRequest, TenantQuotaUsageReport>?)null);
             binder.AddMethod(methods.ListTenantAdminSubjects, (UnaryServerMethod<TenantAdminTenantRequest, TenantAdminSubjectReport>?)null);
             binder.AddMethod(methods.AddTenantAdminSubject, (UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>?)null);
@@ -216,6 +220,7 @@ internal abstract partial class LatticeTenantAdminGrpcServiceBase
         binder.AddMethod(methods.AuthorizeAllowedRegions, new UnaryServerMethod<TenantAdminRegionSetRequest, TenantRegionAuthorizationResult>(serviceImpl.AuthorizeAllowedRegions));
         binder.AddMethod(methods.SetTenantResidency, new UnaryServerMethod<TenantAdminRegionSetRequest, TenantResidencyChangeResult>(serviceImpl.SetTenantResidency));
         binder.AddMethod(methods.GetTenantRegionStatus, new UnaryServerMethod<TenantAdminTenantRequest, TenantRegionStatusReport>(serviceImpl.GetTenantRegionStatus));
+        binder.AddMethod(methods.AdvanceTenantRegion, new UnaryServerMethod<TenantAdminRegionSetRequest, TenantRegionStatusReport>(serviceImpl.AdvanceTenantRegion));
         binder.AddMethod(methods.GetTenantQuotaUsage, new UnaryServerMethod<TenantAdminTenantRequest, TenantQuotaUsageReport>(serviceImpl.GetTenantQuotaUsage));
         binder.AddMethod(methods.ListTenantAdminSubjects, new UnaryServerMethod<TenantAdminTenantRequest, TenantAdminSubjectReport>(serviceImpl.ListTenantAdminSubjects));
         binder.AddMethod(methods.AddTenantAdminSubject, new UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>(serviceImpl.AddTenantAdminSubject));
@@ -402,6 +407,11 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
     /// <inheritdoc />
     public override Task<TenantRegionStatusReport> GetTenantRegionStatus(TenantAdminTenantRequest request, ServerCallContext context)
         => InvokeRegionAdminAsync(request, context, static (admin, req, ct) => admin.GetTenantRegionStatusAsync(req.TenantId, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantRegionStatusReport> AdvanceTenantRegion(TenantAdminRegionSetRequest request, ServerCallContext context)
+        => InvokeRegionAdminAsync(request, context, static (admin, req, ct) =>
+            admin.AdvanceRegionAsync(req.TenantId, req.RegionId ?? string.Empty, req.AcknowledgeDataInPlace, ct));
 
     /// <inheritdoc />
     public override async Task<TenantQuotaUsageReport> GetTenantQuotaUsage(TenantAdminTenantRequest request, ServerCallContext context)
