@@ -1771,7 +1771,7 @@ invariants:
       - "docs/lattice.tenancy/README.md"
   - id: tenant-region-residency
     name: "Tenant region residency invariants"
-    description: "A tenant's resident regions are non-empty, are a subset of allowed regions, and cannot be revoked while resident; an added region stays Provisioning and non-serving until promoted to Online, and a dropped region drains through Offline to Removed."
+    description: "A tenant's resident regions are non-empty, are a subset of allowed regions, and cannot be revoked while resident; an added region advances automatically from Provisioning through Backfilling and remains non-serving until every tenant tree is live and unfenced and tenant_offline dead letters have replayed, then becomes Online, and a dropped region drains through Offline to Removed."
     scope:
       packages:
         - "Orleans.Lattice.Tenancy"

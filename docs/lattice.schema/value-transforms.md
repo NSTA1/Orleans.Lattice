@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Value transforms
 
 `LatticeValueTransform` is a small, serializable intermediate representation (IR)

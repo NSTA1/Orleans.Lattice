@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/telemetry.json"
+---
+
 # Dashboards Public API Reference
 
 This document is the contract for the public `Orleans.Lattice.Dashboards` surface. The package exposes a single accessor type and a kind enum; everything else (the embedded JSON resources, the resource-name resolution) is an internal detail described by behaviour in [Architecture](architecture.md).

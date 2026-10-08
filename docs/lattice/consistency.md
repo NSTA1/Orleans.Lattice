@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # Consistency Guarantees
 
 This document is the **contract** for what a caller of `ILattice` is

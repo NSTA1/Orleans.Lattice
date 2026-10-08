@@ -54,6 +54,13 @@ internal static class PreparedBucketSweep
     /// plain write at its source stamp, and an online resize copy, whose mirror
     /// does the same. Both pass <see langword="true"/>.
     /// </param>
+    /// <param name="decisionTreeId">The tree containing transaction decisions.</param>
+    /// <param name="firstLeafId">The first leaf in the source chain to sweep.</param>
+    /// <param name="grainFactory">The factory used to resolve participating grains.</param>
+    /// <param name="progress">The resumable sweep progress.</param>
+    /// <param name="sortedSlots">The sorted virtual slots included in the sweep.</param>
+    /// <param name="target">The destination shard receiving prepared buckets and decided backstops.</param>
+    /// <param name="virtualShardCount">The number of virtual slots in the routing map.</param>
     internal static async Task RunAsync(
         IGrainFactory grainFactory,
         string decisionTreeId,

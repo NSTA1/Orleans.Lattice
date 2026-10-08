@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Migrating from an External Store
 
 This page is the operational playbook for a one-way import: taking a dataset

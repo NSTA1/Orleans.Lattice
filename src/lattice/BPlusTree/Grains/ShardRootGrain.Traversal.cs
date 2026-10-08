@@ -746,7 +746,7 @@ internal sealed partial class ShardRootGrain
     /// and a separator delivered to a parent whose range no longer covers it is
     /// accepted and routed to by nothing (issue #3523). Every link instead runs
     /// under <see cref="_splitLinkGate"/> and re-descends from the current root;
-    /// see <see cref="LinkSplitAsync"/>. A parent that divides while accepting
+    /// see <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.LinkSplitAsync(Orleans.Lattice.BPlusTree.SplitResult)"/>. A parent that divides while accepting
     /// has its own division recorded before the landed link is retired, one
     /// level at a time, so a resume never has to rediscover a chain.
     /// </para>
@@ -771,7 +771,7 @@ internal sealed partial class ShardRootGrain
     /// for the batch write paths, which capture each leaf's parent path as a
     /// root-first list rather than a descent stack. The list is used only to
     /// group keys by leaf; linking re-descends (see
-    /// <see cref="LinkSplitAsync"/>).
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.LinkSplitAsync(Orleans.Lattice.BPlusTree.SplitResult)"/>).
     /// </summary>
     private Task<SplitResult?> PropagateSplitAsync(SplitResult? splitResult, IReadOnlyList<GrainId> parentsRootFirst)
         => splitResult is null ? NullSplitTask : LinkSplitAsync(splitResult);
@@ -1192,7 +1192,7 @@ internal sealed partial class ShardRootGrain
     /// here is genuinely stranded rather than a concurrent turn's link in
     /// flight - re-delivering one of those against its own captured topology is
     /// how a resume used to race the link it was meant to back up. Each entry
-    /// re-descends like any other link (<see cref="LinkSplitAsync"/>), so the
+    /// re-descends like any other link (<see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.LinkSplitAsync(Orleans.Lattice.BPlusTree.SplitResult)"/>), so the
     /// ancestors it recorded are not trusted.
     /// </para>
     /// </remarks>
@@ -1627,7 +1627,7 @@ internal sealed partial class ShardRootGrain
     /// Links a split a caller could not propagate against an ancestor path -
     /// a division of a single-leaf root, or of the root itself - and always
     /// returns <see langword="null"/>. Routed through
-    /// <see cref="LinkSplitAsync"/> so it serialises with every other link.
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.LinkSplitAsync(Orleans.Lattice.BPlusTree.SplitResult)"/> so it serialises with every other link.
     /// </summary>
     /// <remarks>
     /// A leaf-level split that arrives here after an interleaved turn has

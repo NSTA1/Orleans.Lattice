@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # Verified Atomic-Commit Protocol
 
 The all-or-nothing guarantees behind [atomic writes](atomic-writes.md) and

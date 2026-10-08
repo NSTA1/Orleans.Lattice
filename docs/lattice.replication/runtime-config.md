@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-enrollment.yaml"
+---
+
 # Runtime replication configuration
 
 Cross-cluster replication can be turned on and off **per tree at runtime**, without a redeploy, and the decision converges across every enrolled peer on its own. This page covers the engine-side machinery; the operator-facing control surface (the facade, its gRPC binding, and the MCP tools) is documented under [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/README.md).

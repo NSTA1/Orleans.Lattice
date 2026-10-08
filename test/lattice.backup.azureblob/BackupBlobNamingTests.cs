@@ -294,7 +294,7 @@ public class BackupBlobNamingTests
     /// <summary>
     /// A malformed percent-escape is not a traversal vector, so it must not be
     /// rejected on that basis - and, critically, it must not fault.
-    /// <see cref="Uri.UnescapeDataString"/> leaves an unparsable escape verbatim on
+    /// <see cref="Uri.UnescapeDataString(string)"/> leaves an unparsable escape verbatim on
     /// this runtime rather than throwing, so an id carrying one is validated on its
     /// literal spelling and accepted when that spelling is a legal blob-name suffix.
     /// </summary>

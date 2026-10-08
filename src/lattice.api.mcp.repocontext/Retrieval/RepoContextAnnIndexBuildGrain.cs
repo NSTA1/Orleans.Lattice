@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </para>
 /// <para>
 /// <b>One bounded step per tick.</b>
-/// <see cref="RepoContextAnnIndexRegistry.BuildStepAsync"/> does exactly one
+/// <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextAnnIndexRegistry.BuildStepAsync(string, Orleans.Lattice.Api.Mcp.RepoContext.EmbeddingSpaceTag, System.Threading.CancellationToken)"/> does exactly one
 /// bounded slice and reports where it got to, so the phase pump needs nothing but
 /// to call it, and the turn is released between slices.
 /// </para>

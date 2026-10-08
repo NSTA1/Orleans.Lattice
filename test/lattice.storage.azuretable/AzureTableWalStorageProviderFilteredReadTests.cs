@@ -121,7 +121,8 @@ public class AzureTableWalStorageProviderFilteredReadTests
 
         Assert.That(read.Select(e => e.Offset), Is.EqualTo(new[] { 1L, 3L }));
         Assert.That(read.Select(e => e.Mutation.Key), Is.EqualTo(new[] { "m1", "m3" }));
-        Assert.That(read[0].Mutation.Value.ToArray(), Is.EqualTo(new byte[] { 1, 0x2B }));
+        Assert.That(read[0].Mutation.Value, Is.Not.Null);
+        Assert.That(read[0].Mutation.Value!.ToArray(), Is.EqualTo(new byte[] { 1, 0x2B }));
     }
 
     [Test]
@@ -300,7 +301,8 @@ public class AzureTableWalStorageProviderFilteredReadTests
         var read = await ReadFilteredAsync(compressed, new WalKeyFilter("m", "n"), toOffsetInclusive: 4);
 
         Assert.That(read.Select(e => e.Offset), Is.EqualTo(new[] { 1L, 3L, 4L }));
-        Assert.That(read[0].Mutation.Value.ToArray(), Is.EqualTo(new byte[] { 1, 0x2B }));
+        Assert.That(read[0].Mutation.Value, Is.Not.Null);
+        Assert.That(read[0].Mutation.Value!.ToArray(), Is.EqualTo(new byte[] { 1, 0x2B }));
         Assert.That(read[^1].Mutation.Value, Is.Null);
     }
 

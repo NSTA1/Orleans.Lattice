@@ -71,7 +71,7 @@ internal enum ShadowedReadDecision : byte
 /// <see cref="AtomicVisibilityGate.ResolveKey"/> consumes as its
 /// <c>alreadyTerminal</c> input. The leaf grain
 /// (<c>BPlusLeafGrain.IsShadowedReadSafeAsync</c>) executes these rules through
-/// <see cref="IsSagaSafe"/>. They are pinned by the
+/// <see cref="Orleans.Lattice.BPlusTree.ShadowedMigrationReadGuard.IsSagaSafe(Orleans.Lattice.BPlusTree.TxStatus, bool)"/>. They are pinned by the
 /// <c>ShadowedMigrationReadGuardTests</c> unit tests, not by a Coyote model: the
 /// reshard model (<c>ReshardMigrationModel</c>) proves its no-split-view and
 /// no-orphan-shadow properties over <see cref="TxRegistryDecisionCore"/>,

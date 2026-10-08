@@ -436,7 +436,7 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
 
     /// <summary>
     /// The silo's runtime response timeout. The configured
-    /// <see cref="SiloMessagingOptions.ResponseTimeout"/> is only read once, when the
+    /// <c>SiloMessagingOptions.ResponseTimeout</c> is only read once, when the
     /// runtime client is built, so relaxing it for setup has to go through the
     /// runtime client, which Orleans keeps internal. Grain calls sent from the silo
     /// take both their deadline and their message expiry from this value.

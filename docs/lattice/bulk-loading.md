@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Bulk Loading
 
 Orleans.Lattice offers a dedicated bulk-load path for populating a tree from a

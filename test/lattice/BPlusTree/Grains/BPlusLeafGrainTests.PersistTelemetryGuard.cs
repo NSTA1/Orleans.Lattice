@@ -168,7 +168,7 @@ public partial class BPlusLeafGrainTests
     /// <summary>
     /// Persistent-state decorator that models the field sequence behind #2312:
     /// the durable write completes, and the activation is invalid by the time
-    /// anything reads <see cref="IStorage{TState}.State"/> afterwards.
+    /// anything reads <c>IStorage{TState}.State</c> afterwards.
     /// <para>
     /// Invalidation is applied in a <c>finally</c> around the inner write, so
     /// it holds whether the write succeeded or failed - the two arms of the

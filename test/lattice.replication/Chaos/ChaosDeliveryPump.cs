@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// Per-edge delivery pump that drives the chaos suite's "wire format
 /// is in your head" loop: for every <c>(sender, receiver)</c> pair
 /// where <c>sender != receiver</c>, polls
-/// <see cref="IChangeFeed.Subscribe"/> on the sender (with
+/// <see cref="Orleans.Lattice.Replication.IChangeFeed.Subscribe(string, Orleans.Lattice.HybridLogicalClock, bool, System.Threading.CancellationToken)"/> on the sender (with
 /// <c>includeLocalOrigin: true</c> so locally-originated entries are
 /// observed and the per-target cycle-break filter below decides
 /// whether to forward them), applies each entry through the receiver's

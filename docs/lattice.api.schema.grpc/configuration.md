@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Orleans.Lattice.Api.Schema.Grpc configuration
 
 The package has one public server-side options type, `LatticeSchemaApiGrpcOptions`, bound through `AddLatticeSchemaApiGrpc(configure)`. The client (`LatticeSchemaApiGrpcClient`) carries no options of its own - transport concerns live on the `CallInvoker` / `GrpcChannel` the caller supplies.

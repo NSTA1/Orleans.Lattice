@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Queues
 
 `ILatticeQueue<T>` is a typed, cluster-internal, single-cluster FIFO queue embedded in your Orleans cluster. Each logical queue is one coordinator grain over a reserved system tree; entries are appended at the tail and consumed from the head in insertion order. It is the consolidation point for every system-tree-backed FIFO buffer in the library - the replication dead-letter queue runs on the same engine.

@@ -311,6 +311,105 @@
         }
       ],
       "source": "src/lattice.api.mcp/Serialization/LatticeApiMcpToolSerialization.cs#LatticeApiMcpToolSerialization"
+    },
+    "McpTenantRegionStatusResult": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Regions",
+          "type": "IReadOnlyList<McpTenantRegionStatusRow>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.mcp/Tools/TenantAdmin/McpTenantRegionStatusResult.cs"
+    },
+    "McpTenantRegionStatusRow": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "RegionId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Status",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "IsAllowed",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "BackfillProgress",
+          "type": "TenantRegionBackfillProgress?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.mcp/Tools/TenantSelfAwareness/McpTenantRegionStatusRow.cs"
+    },
+    "TenantRegionBackfillProgress": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Phase",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "StallReason",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Trees",
+          "type": "IReadOnlyList<TenantRegionBackfillTreeProgress>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionBackfillProgress.cs"
+    },
+    "TenantRegionBackfillTreeProgress": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Phase",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "EntriesApplied",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "SourceClusterId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ReadFenced",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "PendingDeadLetters",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionBackfillTreeProgress.cs"
     }
   },
   "operations": [
@@ -8074,12 +8173,93 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "concurrency": {
-        "rule": "Reports one row per region that is either allowed or carries a non-None status.",
+        "rule": "Reports one row per allowed or non-None region. Backfilling rows carry BackfillProgress when the backfill service is registered. A nonlocal row reports NotLocal; local progress includes phase, stall reason and per-tree bootstrap state, source, entries applied, read fence and pending dead letters.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolInvocations.cs#TenantAdminToolInvocations.GetTenantRegionStatusAsync",
         "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_tenant_advance_region",
+      "in_process": "TenantAdminToolInvocations.AdvanceRegionAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/tenantadmin.json#advance-tenant-region",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs"
+      },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
+      },
+      "request": [
+        {
+          "name": "tenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "regionId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "acknowledgeDataInPlace",
+          "type": "bool",
+          "required": true,
+          "notes": "Must be true after independent verification that tenant data is already present; does not copy data."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpTenantRegionStatusResult",
+        "shape": "Structured JSON projection of McpTenantRegionStatusResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Read the current region status before retrying; a repeated call may advance another legal lifecycle step.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "Each call advances one lifecycle step, so repeating a successful call may advance the region again.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Platform-operator-only and requires acknowledgement that data is already in place; it bypasses verified backfill. Normal region enablement backfills automatically.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs",
+        "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolInvocations.cs#AdvanceRegionAsync"
       ]
     },
     {
@@ -8363,7 +8543,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "concurrency": {
-        "rule": "The last-resident-region guard runs before the write and again after the CRDT join; added regions start Provisioning until operator promotion, and dropped regions drain automatically through Offline to Removed.",
+        "rule": "The last-resident-region guard runs before the write and after the committed CRDT join. Added regions automatically advance Provisioning to Backfilling to Online only after every discovered tenant tree finishes bootstrap from an Online source, is unfenced and has no tenant_offline dead letters. Dropped regions automatically drain through Offline to Removed; an operator advance is an explicit data-in-place override.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "sources": [
@@ -18519,7 +18699,7 @@
       "request": [
         {
           "name": "pageToken",
-          "type": "string",
+          "type": "string?",
           "required": false,
           "notes": "The previous page token."
         },
@@ -18671,7 +18851,7 @@
         },
         {
           "name": "operationId",
-          "type": "string",
+          "type": "string?",
           "required": false,
           "notes": "Optional idempotency id; omit to generate one."
         },
@@ -18749,7 +18929,7 @@
         },
         {
           "name": "operationId",
-          "type": "string",
+          "type": "string?",
           "required": false,
           "notes": "Optional idempotency id; omit to generate one."
         },
@@ -18827,7 +19007,7 @@
         },
         {
           "name": "operationId",
-          "type": "string",
+          "type": "string?",
           "required": false,
           "notes": "Optional idempotency id; omit to generate one."
         },
@@ -18905,7 +19085,7 @@
         },
         {
           "name": "operationId",
-          "type": "string",
+          "type": "string?",
           "required": false,
           "notes": "Optional idempotency id; omit to generate one."
         },
@@ -18983,7 +19163,7 @@
         },
         {
           "name": "operationId",
-          "type": "string",
+          "type": "string?",
           "required": false,
           "notes": "Optional idempotency id; omit to generate one."
         },
@@ -19091,7 +19271,7 @@
         },
         {
           "name": "operationId",
-          "type": "string",
+          "type": "string?",
           "required": false,
           "notes": "Optional idempotency id; omit to generate one."
         },

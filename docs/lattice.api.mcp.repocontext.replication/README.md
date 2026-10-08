@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Orleans.Lattice.Api.Mcp.RepoContext.Replication
 
 Turn on cross-cluster replication for the repository-context store with one guardrailed call.

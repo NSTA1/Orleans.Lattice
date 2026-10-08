@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # The Explorer navigation model
 
 In the Explorer, the address is the navigation. Every page has one canonical

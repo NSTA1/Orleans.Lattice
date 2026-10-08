@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # G-Set (Grow-Only Set)
 
 `tree.GSet(key)` -> `GSetAccessor`, merge mode `LatticeMergeMode.GSet`.

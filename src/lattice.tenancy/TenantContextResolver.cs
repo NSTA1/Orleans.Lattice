@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Tenancy;
 /// <para>
 /// The active tenant is a caller-supplied <em>assertion</em> (it arrives on the
 /// <c>lattice-active-tenant</c> header), never a fact, so it is re-validated
-/// here through <see cref="ITenantPolicyEngine.ValidateActiveTenant"/> exactly as
+/// here through <see cref="Orleans.Lattice.Tenancy.ITenantPolicyEngine.ValidateActiveTenant(string, Orleans.Lattice.TenantId)"/> exactly as
 /// <see cref="TenantGateEnforcer"/> re-validates it on the enforcement path. A
 /// subject that may not act as the asserted tenant resolves the uninitialised
 /// "no tenant" value, which

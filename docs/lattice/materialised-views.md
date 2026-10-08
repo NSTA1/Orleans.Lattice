@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/view-rebuild.yaml"
+---
+
 # Materialised views
 
 A materialised view is an asynchronous, eventually-consistent projection of a

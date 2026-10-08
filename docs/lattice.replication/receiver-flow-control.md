@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Receiver-side flow control
 
 The replication sender ships a configured `LatticeReplicationOptions.ShipBatchSize` worth of WAL entries per pump tick by default. That blind-push shape is fine when the receiver keeps up; under load it is the wrong shape because a struggling receiver has no in-band way to ask the sender to slow down short of letting RPCs time out. The receiver-side flow-control seam closes that gap by letting the receiver stamp optional hints onto every `ReplicationAck`:

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Adding a custom auth method
 
 The Explorer sign-in challenge is provider based. A sign-in mechanism is an

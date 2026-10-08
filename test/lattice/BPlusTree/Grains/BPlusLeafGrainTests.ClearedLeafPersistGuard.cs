@@ -170,7 +170,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.InitializeSiblingAsync(new SiblingInitialization
         {
-            TreeId = null,
+            TreeId = null!,
             ShardIndex = 4,
             LowKeyInclusive = "m",
             HighKeyExclusive = "z",

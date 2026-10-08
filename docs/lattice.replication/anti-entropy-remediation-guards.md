@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Anti-entropy remediation guards (opt-in, rate cap, circuit breaker)
 
 The anti-entropy chain detects drift (the [digest probe](anti-entropy-digest-probe.md) and the read-only [Merkle walk](anti-entropy-merkle-walk.md)) and, optionally, repairs it ([targeted leaf re-replay](anti-entropy-leaf-rereplay.md) and the [bootstrap-snapshot fallback](anti-entropy-bootstrap-fallback.md)). The remediation guards wrap the **repair** stage with operator controls so automatic repair is opt-in, rate-limited, and self-fencing. Detection is never gated by these controls - an operator can watch drift telemetry without opting into automatic repair.

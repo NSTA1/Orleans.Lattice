@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Api.Replication.Grpc architecture
 
 This binding adapts the transport-agnostic [`ILatticeReplicationControl`](../lattice.api.replication/README.md) facade, and the read-only `ILatticeReplicationStatus` peer-status facade, onto gRPC without a hand-written `.proto`. It adds transport and authentication concerns and nothing else: the control semantics stay in the facade and the engine.

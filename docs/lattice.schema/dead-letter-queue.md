@@ -1,10 +1,17 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Dead-letter queue
 
-The dead-letter queue (DLQ) is where a tree's schema machinery parks an item it
-rejected *without failing the operation that produced it*. Its purpose is
-fail-open ingest: a schema violation arriving as system-origin ingest, or an
-ingested value that cannot be upcast, must never stall the stream or crash the
-silo - it is diverted here for an operator to inspect and act on out of band. Only
+The dead-letter queue (DLQ) is where a tree's schema machinery parks a rejected
+system-origin item instead of applying it to the governed tree. After the
+append succeeds, the interceptor returns a dead-letter decision rather than a
+schema-violation exception, so the offending value need not be repaired before
+other ingest can proceed. This is not an unconditional liveness guarantee:
+the store write is awaited, and storage failure or cancellation propagates to
+the intercepted write. Diversion does not acknowledge an item that could not
+be recorded. An operator inspects the recorded item out of band. Only
 ingest that reaches a tree's write operations can land here, which in practice is
 a replicated typed-CRDT entry or an entry of a replicated atomic batch; a plain
 (non-atomic) last-writer-wins replication apply and a backup restore write below

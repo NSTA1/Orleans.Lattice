@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication.Tests.Coyote;
 /// A Coyote model of a coordinated restore's all-or-nothing outcome across
 /// three clusters, driving the <b>production</b>
 /// <see cref="CrossClusterSagaDecisionCore"/> - the fold
-/// <see cref="Grains.CrossClusterSagaCoordinatorGrain"/> routes its collected votes
+/// <see cref="Orleans.Lattice.Replication.Grains.CrossClusterSagaCoordinatorGrain"/> routes its collected votes
 /// through - under schedule exploration. It is the implementation-level companion
 /// of <c>spec/backup/BackupRestore.tla</c>'s <c>RestoreAllOrNothing</c>.
 /// <para>

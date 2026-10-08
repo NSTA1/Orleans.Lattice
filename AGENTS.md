@@ -11,6 +11,14 @@ specifications in [docs/agents/index.json](docs/agents/index.json) instead. They
 describe every surface Lattice ships, while a given host exposes only the
 packages it registers, so each surface and tool states its `availability`.
 
+For new regions, use [region backfill](docs/agents/procedures/region-backfill.yaml),
+which has separate tenant and non-tenant paths. Tenant removal follows
+[region drain](docs/agents/procedures/tenant-region-drain.yaml); replication
+recovery follows [re-seed](docs/agents/procedures/replication-reseed.yaml) and
+[peer management](docs/agents/procedures/replication-peer-management.yaml).
+The [MCP contracts](docs/agents/api/mcp.json) describe registered tools, their
+parameters and opt-ins, not a promise that every host exposes them.
+
 ## What this project is
 
 Orleans.Lattice is a platform for building durable, distributed state systems on
@@ -170,6 +178,10 @@ several `Orleans.Lattice.Explorer.*` assemblies.
 - Keep XML `<summary>` docs on all public types and members; they ship in the
   NuGet packages.
 - Every public type and member must have at least one test.
+- User-facing docs carry `agent_spec` YAML front matter naming a manifest-listed
+  path under `docs/agents/`. The site retains the pointer in Markdown alternates
+  and emits a page-specific `rel="describedby"` link; pages without a pointer
+  fall back to `docs/agents/index.json`.
 - Detailed naming, testing, documentation, and long-Markdown-editing rules live
   as skills under `.github/skills/` and instructions under
   `.github/instructions/`. Read the relevant one before large changes.

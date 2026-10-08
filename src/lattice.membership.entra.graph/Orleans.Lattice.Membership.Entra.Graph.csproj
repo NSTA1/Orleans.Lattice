@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Membership.Entra.Graph</PackageId>
-    <Version>9.9.0</Version>
+    <Version>10.0.0</Version>
     <Description>Microsoft Graph-backed group resolver and identity directory for Orleans.Lattice.Membership.Entra. Resolves a caller's full transitive Entra group membership when a token's groups claim overflows, and supplies EntraGraphIdentityDirectory, which admin surfaces use to search and validate Entra user and group ids; both share one app-only Microsoft Graph client, authenticated either through the MSAL confidential-client token cache, with its access token cached and transparently refreshed through a single shared in-flight refresh, or from a supplied token credential with no client secret. Isolates the Microsoft Graph and MSAL dependencies from the core Entra authenticator package.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

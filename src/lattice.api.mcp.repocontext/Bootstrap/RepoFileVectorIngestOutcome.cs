@@ -23,6 +23,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// deferred work was indistinguishable from one that had none to do (issue #2272).
 /// The deferred sources stay unmarked and are retried on the next reconcile, so this
 /// reports incompleteness, not loss.</param>
+/// <param name="GapScanSkipped">Whether the pass skipped the embedding-coverage gap scan.</param>
 internal readonly record struct RepoFileVectorIngestOutcome(
     int FilesEmbedded,
     int GapsSelected,

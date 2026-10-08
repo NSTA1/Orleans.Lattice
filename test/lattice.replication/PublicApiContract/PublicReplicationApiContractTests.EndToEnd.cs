@@ -158,7 +158,7 @@ public partial class PublicReplicationApiContractTests
     /// <summary>
     /// Regression for issue #894: the explorer / state API "Data"
     /// catalog lists trees via
-    /// <see cref="ILatticeRegistry.GetAllTreeIdsAsync"/>. A tree authored
+    /// <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry.GetAllTreeIdsAsync()"/>. A tree authored
     /// only in the peer cluster - never locally registered or written on
     /// the receiver - must still appear in the receiver's registry catalog
     /// once the replication apply path materialises it, otherwise the

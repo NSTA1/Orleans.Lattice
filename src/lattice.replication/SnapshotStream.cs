@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Carries the metadata + entry stream produced by an
-/// <see cref="ISnapshotProvider.ExportAsync"/> call. The stream
+/// <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> call. The stream
 /// completes when every live key in the source tree has been emitted
 /// or the supplied cancellation token fires.
 /// <para>

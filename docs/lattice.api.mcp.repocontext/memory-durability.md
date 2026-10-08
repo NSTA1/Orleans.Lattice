@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Memory durability
 
 What survives destroying a repository-context deployment's state, what does not,

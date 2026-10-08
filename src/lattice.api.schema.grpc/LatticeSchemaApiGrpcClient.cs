@@ -182,17 +182,6 @@ public sealed class LatticeSchemaApiGrpcClient
         return response.Config;
     }
 
-    /// <summary>Advances <paramref name="treeId"/>'s target version and eagerly migrates.</summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
-    /// <param name="newTargetVersion">The new target version. Must be greater than the current target.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The terminal migration report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
-    /// <summary>Migrates <paramref name="treeId"/> to its current target version.</summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The terminal migration report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     /// <summary>Opts <paramref name="treeId"/> back out of envelope versioning.</summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -208,14 +197,6 @@ public sealed class LatticeSchemaApiGrpcClient
         return response.Removed;
     }
 
-    /// <summary>Starts (or idempotently resumes) a background remediation of <paramref name="treeId"/>.</summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
-    /// <param name="transform">The per-value remediation transform.</param>
-    /// <param name="targetPolicy">The policy the transformed values must satisfy. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The terminal remediation report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
-    /// <exception cref="ArgumentNullException"><paramref name="targetPolicy"/> is <c>null</c>.</exception>
     /// <summary>Reads the current or last-known remediation status for <paramref name="treeId"/>.</summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -232,14 +213,6 @@ public sealed class LatticeSchemaApiGrpcClient
         return response.Report;
     }
 
-    /// <summary>
-    /// Scans every current value of <paramref name="treeId"/> against its current
-    /// compiled policy and returns a per-tree compliance report. A pure read.
-    /// </summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The compliance report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     /// <summary>
     /// Starts an accept-then-poll compliance scan of <paramref name="treeId"/> and
     /// returns its handle at once; poll <see cref="GetComplianceScanStatusAsync"/>

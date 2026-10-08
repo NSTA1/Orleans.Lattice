@@ -3,7 +3,7 @@ using Orleans.Lattice.Views;
 namespace Orleans.Lattice.Tests.Views;
 
 /// <summary>
-/// Tests for the <c>changed</c> flag <see cref="HistoryRetentionShaper.Shape"/>
+/// Tests for the <c>changed</c> flag <see cref="Orleans.Lattice.Views.HistoryRetentionShaper.Shape(Orleans.Lattice.HistoryRow, Orleans.Lattice.Views.HistoryRetentionPolicy, long)"/>
 /// reports, which the view maintainer uses to keep the bytes it already holds
 /// instead of re-serialising a row that shaping did not alter.
 /// <para>

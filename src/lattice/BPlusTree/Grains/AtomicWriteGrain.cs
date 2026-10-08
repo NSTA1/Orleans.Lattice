@@ -841,7 +841,7 @@ internal sealed partial class AtomicWriteGrain(
     /// write. No compensation path reads them - an abort drops the prepared
     /// writes rather than restoring pre-values.
     /// <para>
-    /// Routing is resolved once via the public <see cref="ILattice.GetRoutingAsync"/>
+    /// Routing is resolved once via the public <see cref="Orleans.Lattice.ILattice.GetRoutingAsync(System.Threading.CancellationToken)"/>
     /// hook (which returns routing metadata only, no CRDT internals) and the
     /// saga then addresses <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> directly. This keeps
     /// the raw <see cref="LwwEntry"/> traffic on guarded internal grain
@@ -1431,7 +1431,7 @@ internal sealed partial class AtomicWriteGrain(
     /// prepare and broadcast) and
     /// <see cref="StaleTreeRoutingException"/> (a tree alias was
     /// swapped mid-saga, e.g. by online resize). The retry refreshes
-    /// the routing snapshot via <see cref="ILattice.GetRoutingAsync"/>
+    /// the routing snapshot via <see cref="Orleans.Lattice.ILattice.GetRoutingAsync(System.Threading.CancellationToken)"/>
     /// and re-broadcasts under the new physical tree id; re-delivery
     /// to a shard that already saw the terminal is a no-op via the
     /// leaf-side recently-terminal dedup, so retries on the happy
@@ -2395,7 +2395,8 @@ internal sealed partial class AtomicWriteGrain(
         await FlushPendingTerminalsAsync(await Task.WhenAll(redelivered));
         return null;
     }
-    /// retry. Encapsulates the stale-routing recovery so the
+    /// <summary>
+    /// Marks one shard with retry. Encapsulates the stale-routing recovery so the
     /// <see cref="BroadcastTerminalsAsync(bool)"/> fan-out body stays
     /// linear. Catches both <see cref="StaleShardRoutingException"/>
     /// (a slot moved between prepare and broadcast) and
@@ -4019,7 +4020,7 @@ internal sealed partial class AtomicWriteGrain(
     /// <see cref="LatticeAtomicBatchContext"/> as a saga-wide
     /// <c>(Size, Index=0)</c> default at the head of every
     /// <see cref="RunSagaAsync"/> entry. The execute phase overrides it
-    /// inside its own <see cref="LatticeAtomicBatchContext.With"/> scope
+    /// inside its own <see cref="Orleans.Lattice.LatticeAtomicBatchContext.With(System.Nullable{System.ValueTuple{int, int}})"/> scope
     /// around each batched dispatch (adding the key-to-global-index map);
     /// the saga-wide stamp is what reminder-driven re-entry observes
     /// before that dispatch runs and what an uncaught throw out of the

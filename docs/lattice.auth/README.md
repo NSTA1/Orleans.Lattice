@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/authorization.json"
+---
+
 # Orleans.Lattice.Auth
 
 Authorization and enforcement add-on for [Orleans.Lattice](../../README.md).

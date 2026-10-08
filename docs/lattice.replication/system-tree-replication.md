@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-enrollment.yaml"
+---
+
 # System-Tree Replication (membership and auth)
 
 `Orleans.Lattice.Membership` and `Orleans.Lattice.Auth` dogfood ordinary `ILattice`

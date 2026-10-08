@@ -1,7 +1,7 @@
 namespace Orleans.Lattice;
 
 /// <summary>
-/// The result of an <see cref="ILatticeAdmin.ExecuteWalMoveAsync"/> (or
+/// The result of an <see cref="Orleans.Lattice.ILatticeAdmin.ExecuteWalMoveAsync(string, int, string, System.Nullable{Orleans.Lattice.WalMoveOptions}, System.Threading.CancellationToken)"/> (or
 /// <see cref="ILatticeAdmin.ReclaimMovedWalSourceAsync"/>) operation. Records
 /// the copied range, the source and target tails, and the new placement version
 /// so an operator can audit the cutover.

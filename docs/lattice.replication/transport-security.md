@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Transport Security
 
 `Orleans.Lattice.Replication` ships a secure-by-default shared-secret authenticator. The receiver rejects every Lattice replication call that does not carry a valid secret, and the sender refuses to connect to non-`https://` peers unless the host opts in explicitly. The surface is transport-agnostic: the secret-source seam lives in the core replication package, so the same primitives can be wired into a future non-gRPC transport without change.

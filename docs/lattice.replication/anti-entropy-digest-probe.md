@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Anti-entropy digest probe
 
 Cross-cluster replication in `Orleans.Lattice.Replication` is eventually consistent: every mutation rides the per-tree WAL to each peer, the receiver applies it HLC-monotonically, and concurrent edits converge through the per-tree `LatticeMergeMode`. In the steady state every cluster eventually holds the same data for a given shard. Silent divergence - two clusters that have applied different effective state for the same shard and stay that way - should never happen, but a transport bug, a partial GC, or an operator mistake can produce it. The **digest probe** is the *detection* half of the anti-entropy pipeline: a low-frequency, read-only background pass that compares the local content digest of each shard the tree's live shard map routes to against every peer's digest and surfaces a metric when they disagree.

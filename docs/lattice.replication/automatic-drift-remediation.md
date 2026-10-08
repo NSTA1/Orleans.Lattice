@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Automatic drift remediation (operator playbook)
 
 Cross-cluster replication in `Orleans.Lattice.Replication` is eventually consistent: every mutation rides the per-tree write-ahead log to each peer, the receiver applies it HLC-monotonically, and concurrent edits converge through the per-tree `LatticeMergeMode`. In the steady state every cluster eventually holds the same data for a given shard. **Silent divergence** - two clusters that have applied different effective state for the same shard and stay that way - should never happen, but a transport bug, a partial garbage-collection of the WAL, or an operator mistake can produce it.

@@ -33,7 +33,7 @@ internal sealed class FakeStateClient : ILatticeStateClient
     /// <summary>Each key's revisions, oldest first.</summary>
     public Dictionary<(string Tree, string Key), List<EntryRevisionRecord>> History { get; } = [];
 
-    /// <summary>Each key's history bound and earliest retained revision, when not <see cref="EntryHistoryBound.Complete"/>.</summary>
+    /// <summary>Each key's history bound and earliest retained revision, when not <c>EntryHistoryBound.Complete</c>.</summary>
     public Dictionary<(string Tree, string Key), (EntryHistoryBound Bound, HybridLogicalClock Earliest)> HistoryBounds { get; } = [];
 
     /// <summary>Each tree's dead letters.</summary>

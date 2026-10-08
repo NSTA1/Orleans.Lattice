@@ -122,7 +122,7 @@ public class TtlIntegrationTests
 }
 
 /// <summary>
-/// Multi-shard TTL tests that exercise <see cref="ILattice.CountAsync"/>,
+/// Multi-shard TTL tests that exercise <see cref="Orleans.Lattice.ILattice.CountAsync(System.Threading.CancellationToken)"/>,
 /// <see cref="ILattice.CountPerShardAsync"/>, merge, and the drain path on a
 /// four-shard cluster.
 /// </summary>

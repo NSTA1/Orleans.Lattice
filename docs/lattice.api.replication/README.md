@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Api.Replication
 
 A transport-agnostic control facade for runtime per-tree cross-cluster replication, layered over [Orleans.Lattice.Replication](../lattice.replication/README.md).

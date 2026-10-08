@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Schema enforcement and versioning (`Orleans.Lattice.Schema`)
 
 Orleans.Lattice stores every value as an opaque `byte[]`: the silo attaches no
@@ -14,7 +18,8 @@ independent, composable, strictly opt-in capabilities:
   predicate over a JSON document). A rejected local write fails fast; in strict
   mode a rejected *ingested* item that reaches the check (a replicated
   typed-CRDT entry, or an entry of a replicated atomic batch) is dead-lettered
-  rather than dropped, so ingest never blocks. A plain (non-atomic)
+  rather than applied to the governed tree. The dead-letter write is awaited;
+  storage failure or cancellation can still fail that intercepted write. A plain (non-atomic)
   last-writer-wins replication apply, a backup restore and a tree merge write
   below the check, so their values are not validated (see
   [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). Existing
@@ -126,6 +131,10 @@ the body.
 
 | Document | What it covers |
 |---|---|
+| [Public API](api.md) | Public services, models, declared members and overloads. |
+| [Configuration](configuration.md) | Every option/default and registration-order constraint. |
+| [Architecture](architecture.md) | Interception, version decoding, control and remediation pipelines. |
+| [Chaos tests](chaos-tests.md) | The concrete concurrency/fault scenarios in the schema suite. |
 | [Schema enforcement](schema-enforcement.md) | Per-tree policies, rule kinds, strict-mode ingest, background remediation. |
 | [Schema versioning](schema-versioning.md) | The per-value version envelope, read-time upcasting, monotonic target-version advance. |
 | [Value transforms](value-transforms.md) | The shared `LatticeValueTransform` IR used by remediation and upcasters. |

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Api.Backup architecture
 
 This page describes how the control facade drives the backup engine. The facade (`ILatticeBackupControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) is a single silo singleton that every transport binding adapts over, so it is described here by behaviour. The public model records it returns and accepts are named.

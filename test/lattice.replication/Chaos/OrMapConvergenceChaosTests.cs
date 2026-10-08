@@ -126,7 +126,7 @@ public class OrMapConvergenceChaosTests
     }
 
     /// <summary>
-    /// Wraps <see cref="OrMapAccessor{TKey, TValue}.SetAsync"/> in a
+    /// Wraps <see cref="Orleans.Lattice.OrMapAccessor{TKey, TValue}.SetAsync(TKey, string, TValue, System.Threading.CancellationToken, int)"/> in a
     /// bounded retry loop. CAS-budget exhaustion under chaos contention
     /// is not a correctness failure - the chaos pump is concurrently
     /// merging foreign-origin states onto the same key, racing the

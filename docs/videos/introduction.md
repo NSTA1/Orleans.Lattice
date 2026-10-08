@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Orleans.Lattice in three minutes
 
 Why Orleans.Lattice exists, what it is, and where to start. This is the front

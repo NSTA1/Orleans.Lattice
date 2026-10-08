@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 /// deserialize fast path is exercised by every transport test; this fixture drives
 /// the multi-segment path - a payload split across several buffer segments, which a
 /// real gRPC stack produces for larger messages - through a hand-built
-/// <see cref="DeserializationContext"/>, proving the pooled-array copy reassembles
+/// <see cref="global::Grpc.Core.DeserializationContext"/>, proving the pooled-array copy reassembles
 /// the message intact.
 /// </summary>
 [TestFixture]

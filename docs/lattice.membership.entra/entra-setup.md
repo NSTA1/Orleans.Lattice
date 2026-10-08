@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Entra ID setup guide (Azure CLI)
 
 This guide provisions everything a silo needs to authenticate real Microsoft

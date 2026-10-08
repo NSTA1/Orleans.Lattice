@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/wal-tuning.yaml"
+---
+
 # WAL tuning for durable backends
 
 This document explains how the WAL partition grain's concurrency knobs

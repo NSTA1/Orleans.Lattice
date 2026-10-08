@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Tools
 
 The module contributes the `repocontext_*` MCP tools in two host-selected shapes. In the default **single-repository** mode it offers the read-only tools, offered to any caller whose data read-or-write permission unlocks the repository-context group, plus the mutating tools, contributed only when the host calls `AddRepoContextTools(enableWrites: true)`. In **workspace** mode - what the bundled container runs - the read-only `repocontext_list_repos` is added and the mutating `repocontext_bootstrap` is replaced by `repocontext_add_repo`, `repocontext_remove_repo`, and `repocontext_reset_index`, so the client manages many repositories under one mounted root and can repair a wedged code index without destroying the memory attached to that repository. Every tool, in either mode, clears the same fail-closed authorization gate at both advertisement and invocation.

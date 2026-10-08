@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # Verified Distributed Lock
 
 The safety of the [distributed lock](distributed-lock.md) rests on three

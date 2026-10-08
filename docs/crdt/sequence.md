@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Sequence (Replicated Growable Array / RGA)
 
 `tree.Sequence<T>(key)` -> `RgaAccessor<T>`, merge mode `LatticeMergeMode.Sequence`.

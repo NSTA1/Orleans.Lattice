@@ -65,7 +65,7 @@ internal sealed class BootstrapCoordinatorState
     /// been applied during the current bootstrap. Folded into the
     /// source-origin seal pinned at the incremental handoff. It is
     /// deliberately <b>not</b> passed to
-    /// <see cref="ISnapshotProvider.ExportAsync"/> on a resume: the export
+    /// <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> on a resume: the export
     /// treats that argument as a strict upper bound, so a resumed drain
     /// would silently drop every unapplied entry stamped above it.
     /// </summary>
@@ -73,7 +73,7 @@ internal sealed class BootstrapCoordinatorState
 
     /// <summary>
     /// The <see cref="SnapshotStream.AsOfHlc"/> reported by the most
-    /// recent <see cref="ISnapshotProvider.ExportAsync"/> call. Pinned
+    /// recent <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> call. Pinned
     /// on <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
     /// during <see cref="LatticeBootstrapState.IncrementalHandoff"/>.
     /// </summary>
@@ -81,7 +81,7 @@ internal sealed class BootstrapCoordinatorState
 
     /// <summary>
     /// The <see cref="SnapshotStream.CausalStableFrontier"/> reported
-    /// by the most recent <see cref="ISnapshotProvider.ExportAsync"/>
+    /// by the most recent <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/>
     /// call. Pinned alongside <see cref="SnapshotAsOfHlc"/> during
     /// <see cref="LatticeBootstrapState.IncrementalHandoff"/>.
     /// Defaults to an empty <see cref="VersionVector"/> so the field

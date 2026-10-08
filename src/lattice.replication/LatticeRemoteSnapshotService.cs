@@ -18,10 +18,10 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// Point-in-time consistency is provided by the underlying
 /// <see cref="ISnapshotProvider"/>: <see cref="GetMetadataAsync"/>
-/// invokes <see cref="ISnapshotProvider.ExportAsync"/> and returns the
+/// invokes <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> and returns the
 /// resulting cut-point metadata; a paired
 /// <see cref="RequestSnapshotAsync"/> call invokes
-/// <see cref="ISnapshotProvider.ExportAsync"/> again with the same
+/// <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> again with the same
 /// receiver-supplied <c>fromAsOfHlc</c> filter and drains the entry
 /// stream. The canonical
 /// <c>LatticeSnapshotProvider</c> reads the producer's causal-stable

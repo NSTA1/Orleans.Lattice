@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Orleans.Lattice.Api.Apps
 
 The transport-agnostic **control facade** for
@@ -272,16 +276,18 @@ later window can succeed. Failures are the closed `AppBridgeFailure` set: `Denie
 
 Configured through the `AddLatticeAppBridgeApi(options => ...)` delegate.
 
-| Option | Default | Meaning |
-|---|---|---|
-| `RateLimitPermitLimit` | 100 (`DefaultRateLimitPermitLimit`) | The requests each caller, active tenant and app slug may make in one window. Must be at least 1. |
-| `RateLimitWindow` | 1 second (`DefaultRateLimitWindow`) | The length of one fixed window, which starts at that partition's first request. Must be positive. |
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `RateLimitPermitLimit` | `int` | 100 (`DefaultRateLimitPermitLimit`) | The requests each caller, active tenant and app slug may make in one window. Must be at least 1. |
+| `RateLimitWindow` | `TimeSpan` | 1 second (`DefaultRateLimitWindow`) | The length of one fixed window, which starts at that partition's first request. Must be positive. |
 
 An invalid value fails when the bridge is first resolved, not at registration. The
 limiter tracks at most 10,000 partitions at once; when the table is full and holds no
 expired window, a request from a new partition is refused as `Unavailable`.
 
 ## See also
+
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md)
 
 - [Installable apps](../lattice.apps/README.md)
 - [gRPC binding](../lattice.api.apps.grpc/README.md)

@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Explorer.Core</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.Core</PackageId>
-    <Version>9.4.2</Version>
+    <Version>10.0.0</Version>
     <Description>Head-agnostic core of the Orleans.Lattice Explorer: the read-only state-API connection seam, active-tenant assertion, configuration store, session, sign-in and credential seam, tenant-aware view scoping, shared vocabulary, and the catalog / metrics / data / dead-letter / history services the Explorer's web head composes. Its direct cluster dependencies are the public state-API gRPC client and the abstractions needed to stamp active-tenant calls.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

@@ -130,6 +130,10 @@ internal sealed partial class BPlusLeafGrain
     /// The partition checkpoint this activation's replay window opened at, which
     /// is the value <paramref name="consumedBelowOffset"/> is seeded from.
     /// </param>
+    /// <param name="cap">The maximum number of durable unresolved-work entries.</param>
+    /// <param name="mutation">The unresolved mutation to retain for replay.</param>
+    /// <param name="offset">The mutation offset in the partition.</param>
+    /// <param name="partition">The WAL partition containing the mutation.</param>
     private bool TryRecordUnresolvedReplayWork(
         int partition,
         long offset,

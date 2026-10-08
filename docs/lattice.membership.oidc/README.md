@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Membership.Oidc
 
 Generic OpenID Connect credential authenticator for [Orleans.Lattice.Membership](../lattice.membership/README.md).

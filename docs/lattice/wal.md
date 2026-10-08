@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Write-Ahead Log
 
 This document describes how Orleans.Lattice uses a **write-ahead log (WAL)** as the
@@ -131,13 +135,13 @@ and the observer publish must happen after both, inside a commit-log scope.
    foreground path.
 
 4. **observer** - If any `IMutationObserver` is registered, publish the
-   post-commit mutation inside a `LatticeCommitLogContext` scope. The scope
+   post-commit mutation inside an ambient commit-log context scope. The scope
    marker lets a replication-aware observer detect that the source of this
    mutation was the local commit log and short-circuit its loop-prevention
    logic so it doesn't re-append its own input back into the WAL.
 
 The pipeline is implemented in
-[`BPlusLeafGrain.CommitSetAsync`](../../src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs)
+[the leaf point-write commit path](../../src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs)
 and the mirror paths for `DeleteAsync`, `DeleteRangeAsync`, `MergeEntriesAsync`,
 `MergeManyAsync`, and `CompactTombstonesAsync`. The `wal`, `apply` and
 `observer` steps - plus `digest`, which hands the write's projection-digest
@@ -204,7 +208,7 @@ replication change feed.
 |---|---|
 | `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-partition sequence number. |
 | `AppendBatchAsync(IReadOnlyList<WalRecord>, CancellationToken)` | Append a contiguous batch of captured mutations under a single grain hop. Returns the dense per-input offsets (`result[i]` is the offset assigned to `entries[i]`) in input order. Empty input returns an empty list and performs no provider work. The whole batch coalesces into one provider flush when under `WalMaxBatchEntries` / `WalMaxBatchBytes`; over-budget batches cut over across multiple flushes using the same in-flight cap as `AppendAsync`. |
-| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight, or whose abandoned flush may still land, is returned, so a cursor-advancing reader never skips a prefix hole a write can still fill. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
+| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight, or whose abandoned flush may still land, is returned, so a cursor-advancing reader never skips a prefix hole a write can still fill. Returns a WAL page with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
 | `ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken)` | The leaf replay read (issue #3565). Examines at most `maxEntries` entries of `[fromSequence, toSequenceInclusive]`, clamped like `ReadAsync` to the durable gap-free prefix, and returns those the filter does not exclude, plus the last examined entry routing-only (key and kind, no payload) when it is excluded. `NextSequence` therefore still moves past everything examined, and an empty page still means an empty window. The grain re-applies the rule to whatever the storage provider yields, so no excluded payload crosses the grain boundary. Validates its arguments like `ReadAsync`. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
 | `GetReadableHeadAsync(CancellationToken)` | Returns the head a reader may resume from: one past the highest sequence a read would expose. Lower than `GetNextSequenceAsync` while a flush is in flight, while an abandoned flush may still land, or while a trailing hole sits above every stored entry (issue #4621). |
@@ -234,14 +238,14 @@ are idempotent on the apply side.
 registry at first `RegisterAsync` and is tree-immutable thereafter, so
 the writer-side routing and the activation-time materialiser can never
 disagree on the partition fan-out shape. The pinned value is exposed
-through `LatticeOptionsResolver.GetWalPartitionsAsync(treeId)`, a
+through the cached per-tree WAL partition lookup, a
 hot-path-optimised entry point that returns an already-completed
 `ValueTask<int>` on a cache hit and falls back to a one-shot
-`ILatticeRegistry.GetEntryAsync` grain RPC only on the first call per
+the tree registry lookup grain RPC only on the first call per
 tree per silo. The foreground commit-log writer uses this fast path on
-every `AppendAsync` / `AppendManyAsync`, so `WalCommitLogWriter` never
+every `AppendAsync` / `AppendManyAsync`, so the WAL commit-log writer never
 serialises through the cluster-singleton registry activation on the
-write path. The full `LatticeOptionsResolver.ResolveAsync` (used by
+write path. The full the resolved per-tree options lookup (used by
 admin grains and the activation-time materialiser) also populates the
 fast-path cache as a side effect, so any tree touched by any caller
 becomes cache-warm for subsequent writer calls.
@@ -253,7 +257,7 @@ The leaf grain's activation-time materialiser is partition-aware. When
 `[0, WalPartitions)` and, for each partition, runs an independent
 fall-off-log classification, slice read loop, and projection-checkpoint
 advance. Per-partition state lives on the additive
-`LeafNodeState.ProjectionCheckpointOffsetsByPartition` slot (`long[]?`);
+the persisted per-partition leaf checkpoints slot (`long[]?`);
 partition 0 is mirrored into the legacy scalar
 `ProjectionCheckpointOffset` slot for downgrade safety. The per-leaf
 saga pending-tx clamp is also partition-scoped: each prepared mutation
@@ -290,7 +294,7 @@ the committed-but-not-yet-checkpointed tail the leaf still needs to
 replay.
 
 In-memory cursor reporting is always on (the lightweight
-`InMemoryLeafCursorReporter` wired by `AddLattice`), but the durable
+in-memory leaf cursor reporter wired by `AddLattice`), but the durable
 backstop below is the opt-in layer: it engages only when the host adds
 the durable-pin-aware reporter through `AddWalCursorRegistry` (directly,
 or transitively via durable WAL storage / views / replication). To close
@@ -373,10 +377,10 @@ writer routes the record to its WAL partition:
 
 `ILatticeOriginClusterIdResolver` is a public seam in the `Orleans.Lattice`
 namespace. The core ships
-`DefaultLatticeOriginClusterIdResolver` (returns `string.Empty`) so a
+default origin resolver (returns `string.Empty`) so a
 single-cluster host gets an empty stamp and downstream consumers ignore
 it. Hosts that register `Orleans.Lattice.Replication` get
-`ConfiguredLatticeOriginClusterIdResolver` swapped in via the same
+configured origin resolver swapped in via the same
 remove-then-`TryAdd` pattern that the replication package uses for
 `ILatticeMergeModeResolver`. The configured resolver reads
 `LatticeReplicationOptions.ClusterId` and caches the per-tree result with
@@ -384,7 +388,7 @@ remove-then-`TryAdd` pattern that the replication package uses for
 a single dictionary lookup.
 
 The same resolver is consulted on the read-back path
-(`WalShardGrain.ReadAsync`) so the change feed projects the same origin
+(the WAL partition page read) so the change feed projects the same origin
 the producer recorded - required for the replication-side loop-prevention
 filter that drops batches whose `OriginClusterId` matches the local
 cluster.
@@ -528,18 +532,18 @@ trim.
 
 Bulk-write entry points on the leaf collapse their per-key WAL grain
 hops into a single batched dispatch through
-`ICommitLogWriter.AppendManyAsync`, which the default
-`WalCommitLogWriter` implementation groups by WAL partition and forwards
-to `IWalShardGrain.AppendBatchAsync`. The leaf entry points that flow
+the batched commit-log append, which the default
+WAL commit-log writer implementation groups by WAL partition and forwards
+to the WAL partition batch append. The leaf entry points that flow
 through this path are:
 
 | Entry point | Caller |
 |---|---|
-| `BPlusLeafGrain.SetManyAsync` | Foreground `ILattice.SetManyAsync` / `TypedLatticeExtensions.SetManyAsync`. |
+| the leaf batch-write path | Foreground `ILattice.SetManyAsync` / `TypedLatticeExtensions.SetManyAsync`. |
 | The leaf's conditional batch write | Foreground `ILattice.SetManyWherePredicateAsync`, and the predicate overloads of `TypedLatticeExtensions.SetManyAsync` that call it. |
 | The leaf's batched CRDT delta apply | Foreground `ILattice.ApplyCrdtDeltaManyAsync`, and helpers built on it such as `CrdtLatticeExtensions.EnableManyAsync`. |
-| `BPlusLeafGrain.MergeEntriesAsync` | Leaf split completion (the right half moving into the new sibling), and the bulk-load topology assembly invoked by `ShardRootGrain.BulkLoadAsync` / `BulkLoadRawAsync` / `BulkAppendAsync`. |
-| `BPlusLeafGrain.MergeManyAsync` | Every shard-level merge: replication apply, snapshot copy and restore, backup restore, tree merge, and cross-shard migration on shard split, online reshard and shard consolidation (including writes shadow-forwarded during a split). |
+| the leaf entry merge path | Leaf split completion (the right half moving into the new sibling), and the bulk-load topology assembly invoked by the shard bulk-load path / `BulkLoadRawAsync` / `BulkAppendAsync`. |
+| the leaf batch merge path | Every shard-level merge: replication apply, snapshot copy and restore, backup restore, tree merge, and cross-shard migration on shard split, online reshard and shard consolidation (including writes shadow-forwarded during a split). |
 
 For an N-key batch routed to a single WAL partition the grain-hop count
 drops from O(N) to one. Multi-partition batches fan out one
@@ -611,12 +615,12 @@ unbounded-drain behaviour.
 
 The shard-grain deactivation drain above bounds the **shard-side**
 shutdown surface: it releases callers parked inside
-`WalShardGrain.FlushAsync` waiting on a provider call. A symmetric
+the WAL partition flush waiting on a provider call. A symmetric
 **writer-side** drain surface exists for callers parked one layer up,
-inside `WalCommitLogWriter.PartitionTracker.AcquireAsync` waiting
+inside the writer partition admission wait waiting
 on the per-(tree, partition) admission semaphore.
 
-The library handles this automatically: `WalCommitLogWriter` exposes
+The library handles this automatically: WAL commit-log writer exposes
 a per-silo drain entry that the host's `StopAsync` lifecycle stage
 invokes via a registered `IHostedService`. The drain signals every
 parked `AcquireAsync` caller on the owning silo's writer; each
@@ -634,10 +638,10 @@ drained admission gate. See
 for the caller contract.
 
 The drain is **per-silo, local-only**. Each silo process in a
-multi-silo cluster has its own `WalCommitLogWriter` singleton with
+multi-silo cluster has its own WAL commit-log writer singleton with
 its own drain state; a drain on silo A does not touch silo B's
 admission semaphore and does not interrupt any in-flight
-`IWalShardGrain` activation that silo B is dispatching to. Rolling
+WAL partition seam activation that silo B is dispatching to. Rolling
 restarts settle cleanly because each silo drains its own writer
 independently when its turn arrives. The writer-side drain
 complements the shard-side `WalDrainBudget` force-fault path:
@@ -728,8 +732,11 @@ Three cases:
   so the leaf applies only its own records - and a provider that classifies
   records before decoding them decodes only those (see below). The read
   itself still walks the whole retained window, in `WalReplaySliceBudget`-sized
-  slices. A leaf that has checkpointed but has no usable snapshot replays the
-  same whole window, because its cache starts empty; for it a separate guard
+  slices. A leaf that has checkpointed but never kept a covering snapshot
+  replays the same whole window, because its cache starts empty. An unreadable
+  snapshot, or an absent one recorded as previously kept, instead fails the
+  projection closed without replay (see [A vanished leaf snapshot](projection-rebuild.md#a-vanished-leaf-snapshot)).
+  For a permitted cold rebuild, a separate guard
   compares the oldest readable offset with its durable checkpoint and refuses
   the leaf when an offset it still needs has been trimmed (the genuine-loss
   case below).
@@ -758,8 +765,8 @@ A WAL partition is shared by every leaf whose keys hash to it, so a leaf
 replaying a partition would otherwise read its neighbours' records as well as
 its own. The leaf therefore passes its ownership - its key range and, when the
 tree's shard map is known, the slots of its shard - down the read path as a
-`WalKeyFilter`: the slice reader hands it to `ILeafReplayCoordinatorGrain`,
-which reads through `IWalShardGrain.ReadFilteredAsync` and, beneath that,
+`WalKeyFilter`: the slice reader hands it to leaf replay coordination seam,
+which reads through the WAL partition filtered read and, beneath that,
 `IWalStorageProvider.ReadFilteredAsync`. A provider that can classify a record
 before decoding it skips every record the leaf does not own, so a replay
 allocates in proportion to the leaf's own records rather than to the partition
@@ -897,7 +904,7 @@ its next read. A registered consumer that has read nothing holds the whole
 log, and a member whose position cannot be read counts as position 0. Before
 the TTL ceiling trims an entry at or past a consumer's position, the pass
 durably records that consumer's saga decision-purge hold in the tree's
-`IWalPurgeHoldGrain` (issue #4534), so the transaction registry keeps every
+WAL purge-hold coordination seam (issue #4534), so the transaction registry keeps every
 decision the consumer's peer may need to be re-seeded with; a failed hold
 write skips the trim, and so does a pass that cannot read the set of
 registered consumers at all. See
@@ -1010,7 +1017,7 @@ await registry.UnregisterAsync("orders", "peer:site-b", cancellationToken);
 ```
 
 `AddLattice` always registers both the default `InMemoryWalCursorRegistry`
-and a lightweight `InMemoryLeafCursorReporter`, so the registry the GC and
+and a lightweight in-memory leaf cursor reporter, so the registry the GC and
 the saturation sampler read is never absent *and* every leaf publishes its
 applied frontier into it - the materialiser drain-lag back-pressure is live
 for every write workload out of the box, not only on materialiser /
@@ -1267,7 +1274,7 @@ Each WAL partition of a replicated tree keeps a durable **clock floor** ([#4586]
 
 That keeps the floor between one and one and a half lags behind the wall clock, at the cost of at most two storage writes per lag per partition while it is being shipped.
 
-**What it refuses.** From then on, the partition refuses any freshly authored local write stamped below the floor, with `WalStampBelowFloorException` (counted on `orleans.lattice.wal.append.floor_refusals`). The check runs under the same state gate that assigns the offset, so a refused write is never assigned one.
+**What it refuses.** From then on, the partition refuses any freshly authored local write stamped below the floor, with below-floor WAL stamp fault (counted on `orleans.lattice.wal.append.floor_refusals`). The check runs under the same state gate that assigns the offset, so a refused write is never assigned one.
 
 **Why.** The floor-and-offset pair is a promise: every fresh local write at or above that offset carries a stamp at or above the floor. So once a peer has acknowledged everything below the offset, it holds every write of this cluster, in that partition, that is stamped below the floor. That is a low watermark that is downward-closed, which the max-HLC high-water mark is not ([#1060](https://github.com/NSTA1/Orleans.Lattice/issues/1060)). The replication package's causal low watermark is built on this promise.
 
@@ -1295,7 +1302,7 @@ Two overrides are minted for the operation itself, so the floor governs them: a 
 
 ### Rolling upgrades and trees that are not replicated
 
-A partition advances its floor only while every active silo's grain manifest advertises `IWalClockFloorCapable`. That marker is the capability of a build that both enforces the floor and re-stamps a refused write. So during a rolling upgrade, no floor moves until the last older silo has left; the gate opens by itself, and there is no option to forget to enable.
+A partition advances its floor only while every active silo's grain manifest advertises provider clock-floor capability. That marker is the capability of a build that both enforces the floor and re-stamps a refused write. So during a rolling upgrade, no floor moves until the last older silo has left; the gate opens by itself, and there is no option to forget to enable.
 
 A floor already published stays enforced, because it is durable. If the gate closes again, the floor only stops moving. Downgrading to a build without the marker after a floor was published is unsupported.
 

@@ -118,7 +118,7 @@ public sealed class RepoContextCoverageProbeStandDownTests
     /// Captures the ingestor's warnings so a test can attribute a stand-down to the
     /// gate-pruning branch specifically.
     /// <para>
-    /// <see cref="RepoContextIngestPassCensus.CoverageEstablished"/> is too weak to serve
+    /// <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoFileVectorIngestOutcome.CoverageEstablished"/> is too weak to serve
     /// as that precondition: it is computed as "neither probe-failed nor gate-pruned", so
     /// a probe failure satisfies it just as well. A test that used it alone could pass
     /// while exercising a different stand-down than the one it names, which is the

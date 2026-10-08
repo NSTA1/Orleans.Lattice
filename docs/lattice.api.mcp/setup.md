@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Setup
 
 Registering the `Orleans.Lattice.Api.Mcp` server on a silo host, configuring the options, and mapping the endpoint.

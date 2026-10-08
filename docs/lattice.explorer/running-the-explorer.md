@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Running and hosting the Explorer
 
 The Orleans.Lattice Explorer is an auth-aware Blazor Server console for a

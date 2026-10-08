@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-dead-letters.yaml"
+---
+
 # Dead-letter queue (DLQ)
 
 When the inbound apply pipeline cannot install a `WalRecord` after exhausting `LatticeReplicationOptions.MaxApplyRetries` consecutive attempts, the entry is *parked* on a per-tree dead-letter queue. A saga record is the exception: a prepare or a `TxCommit` / `TxAbort` terminal is never parked alone, because parking acknowledges it and the sender would then release the saga's terminal, so the receiver would commit the saga without that key, or a parked terminal would strand the saga's staged writes (#4591). It is *deferred* instead: the receiver answers with a not-accepted ack, the sender keeps and re-ships the record, no later record of the same saga in that batch is applied, and the stream from that origin for that tree waits until the failure clears (counted on `apply.saga_deferred`; see [Observability](observability.md#dlq-enqueue-reason-classification)). Parking unblocks the apply stream so a single poison entry cannot stall the pipeline forever, while preserving the failed entry plus diagnostic context for an operator to triage, replay, or discard. Several other paths park entries on the same per-tree queue with no retry budget (`RetryCount = 0`): a blocked entry evicted from a full causal-apply buffer, a buffered entry whose drained apply throws, and an inbound entry rejected by the receiver's merge-mode or tenant-isolation gate. A batch the sender cannot encode is not parked: the sender quarantines it and has the peer re-seeded (see [Unencodable batches](replication-drivers.md#unencodable-batches)). The `reason` tag on `dead_letter.enqueued` tells them apart - see [Metrics](#metrics).
@@ -42,14 +46,14 @@ The queue never evicts. Every parked entry was acknowledged to its sender withou
 | Causal-apply buffer overflow | The park fails, so the receiver does not acknowledge and the sender re-ships, as for any other DLQ enqueue failure. |
 | Causal-apply buffer drain (apply failure, lost dependency) | The entry stays parked in the buffer and the drain stops; the next drain retries it. |
 
-The replication link that is being held back reports **Stalled** on the peer-status path (`ReplicationPeerStatusRow.DeadLetterFullSeconds` is non-null - `direction="outbound"` on the sender, `direction="inbound"` on the receiver) until a park succeeds again. Free capacity by replaying or discarding parked entries, or raise `DeadLetterQueueCapacity` for the tree.
+The replication link that is being held back reports **Stalled** on the peer-status path (the full-queue stall age is non-null - `direction="outbound"` on the sender, `direction="inbound"` on the receiver) until a park succeeds again. Free capacity by replaying or discarding parked entries, or raise `DeadLetterQueueCapacity` for the tree.
 
 ### Alarm and operator escape for a stalled link
 
 A full queue is a deliberate stall, not a silent one. Alarm on either signal:
 
 - `orleans.lattice.replication.dead_letter.refused` - any sustained non-zero rate for a tree means parks are being refused and an entry is being held back. A useful rule is `sum by (tree) (rate(orleans_lattice_replication_dead_letter_refused_total[5m])) > 0` for 5 minutes. The series is emitted only on a refusal, so it is absent rather than zero on a healthy tree.
-- the replication link health reported through peer status - a link held back by a full queue classifies as **Stalled**, and its `ReplicationPeerStatusRow.DeadLetterFullSeconds` is how long it has been held.
+- the replication link health reported through peer status - a link held back by a full queue classifies as **Stalled**, and its full-queue stall age reports how long it has been held.
 
 The escape is to make room in the tree's queue; nothing has to be restarted, and the held-back entries are re-shipped and parked (or applied) on the next attempt once a slot is free:
 
@@ -58,11 +62,11 @@ The escape is to make room in the tree's queue; nothing has to be restarted, and
 3. **Discard** (the per-entry purge - there is no bulk purge) with `DiscardAsync(treeId, entryId)` each entry you have validated should never apply. A discard of a foreign-origin entry records it as a lost write, so its dependents are dead-lettered with `reason=dependency_lost` rather than applied; budget for those when you purge.
 4. **Or raise `DeadLetterQueueCapacity`** for the tree. The queue reads the capacity on every enqueue, so a raised limit is honoured by the next park once the options change is visible to the silo.
 
-The link leaves Stalled - `DeadLetterFullSeconds` returns to null and `dead_letter.refused` stops rising - as soon as a park succeeds again.
+The link leaves Stalled - the full-queue stall age clears and `dead_letter.refused` stops rising - as soon as a park succeeds again.
 
 ## Lost writes and their dependents
 
-Discarding a parked entry whose origin is another cluster gives that write up: it was acknowledged and will never be applied here. Before the row is removed, the queue records a durable **lost mark** for the write's identity `(origin, HLC)` on the origin's causal frontier (`IReplicationOriginFrontierGrain`, shared by every tree because a dependency names an origin's write, not a tree - issue #4586); if that write fails, the discard fails and the entry stays parked. A later entry that names a lost write as a causal dependency is never released - neither by the applier nor by the causal-apply buffer drain - and is dead-lettered with `reason=dependency_lost` (apply outcome `rejected-dependency-lost`) instead, so an operator sees exactly which writes were affected. Lost marks are never pruned; their population is bounded by operator discards. Discarding a local-origin entry (one this cluster's sender parked because it could not encode it) records no lost mark, because the receiver's dependency check never names the local cluster. While a foreign-origin entry is parked here, the queue lists it as held on the same frontier - before the enqueue returns - so a dependent of it stays parked until it is replayed and applied.
+Discarding a parked entry whose origin is another cluster gives that write up: it was acknowledged and will never be applied here. Before the row is removed, the queue records a durable **lost mark** for the write's identity `(origin, HLC)` on the origin's causal frontier (shared by every tree because a dependency names an origin's write, not a tree - issue #4586); if that write fails, the discard fails and the entry stays parked. A later entry that names a lost write as a causal dependency is never released - neither by the applier nor by the causal-apply buffer drain - and is dead-lettered with `reason=dependency_lost` (apply outcome `rejected-dependency-lost`) instead, so an operator sees exactly which writes were affected. Lost marks are never pruned; their population is bounded by operator discards. Discarding a local-origin entry (one this cluster's sender parked because it could not encode it) records no lost mark, because the receiver's dependency check never names the local cluster. While a foreign-origin entry is parked here, the queue lists it as held on the same frontier - before the enqueue returns - so a dependent of it stays parked until it is replayed and applied.
 
 ## Configuration
 

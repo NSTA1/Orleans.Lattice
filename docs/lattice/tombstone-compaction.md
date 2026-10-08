@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/compaction.yaml"
+---
+
 # Tombstone Compaction
 
 Deleted keys are represented as **tombstones** - `LwwValue` entries with `IsTombstone = true`. Tombstones participate in LWW merge and delta replication like any other entry, so all replicas and caches eventually learn about the delete. However, tombstones are never removed by normal operations, leading to unbounded storage and scan overhead.

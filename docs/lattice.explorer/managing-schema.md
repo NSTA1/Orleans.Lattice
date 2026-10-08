@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Managing schema from the Explorer
 
 The **Schema** area is a native compiled-in Explorer area. No extra registration is needed. It appears when the schema control facade's capability probe grants the caller at least one schema capability.

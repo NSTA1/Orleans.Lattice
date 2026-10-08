@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-reseed.yaml"
+---
+
 # Auto-bootstrap on fall-off-the-log
 
 When a receiver cluster has fallen so far behind a sender that the sender has

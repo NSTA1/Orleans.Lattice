@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Orleans.Lattice.Api.Mcp.Apps
 
 The MCP tool surface for [installable apps](../lattice.apps/README.md): every
@@ -110,6 +114,8 @@ The tool catalogue is rebuilt whenever the app registry changes, shortly after t
 change commits; each session selects from the prebuilt lists.
 
 ## See also
+
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md)
 
 - [Installable apps](../lattice.apps/README.md)
 - [MCP server](../lattice.api.mcp/README.md)

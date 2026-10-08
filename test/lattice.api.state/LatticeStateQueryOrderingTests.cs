@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Api.State.Tests;
 /// <see cref="CatalogTopSelector"/> bounded selection whenever nothing
 /// downstream of the ordering can thin the candidate set, and fall back to
 /// buffering plus a full sort when a per-entry filter (auth-backed visibility, a
-/// source-tree filter) is in play. <see cref="GetShardSummariesAsync"/>'s
+/// source-tree filter) is in play. <see cref="Orleans.Lattice.Api.State.ILatticeStateQuery.GetShardSummariesAsync(string, bool, System.Threading.CancellationToken)"/>'s
 /// ordering is now an exact-width projection plus a stable insertion sort rather
 /// than a LINQ ordering chain.
 /// </para>

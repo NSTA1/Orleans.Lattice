@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.State.Grpc</PackageId>
-    <Version>9.9.0</Version>
+    <Version>10.0.0</Version>
     <Description>gRPC transport binding and strongly typed client for Orleans.Lattice.Api.State. Exposes the read-only cluster state API (tree, view and tag-index discovery, tag-member scans, tree structure, entry scans, point reads, per-key history, scan cancellation, metrics snapshots, cluster information, dead letters, and the auth-scheme advertisement) as seventeen unary RPCs plus server-streaming change and metrics subscriptions, over a code-first, Orleans-serialized contract, with a pluggable authorization seam and a default-deny posture. Registered with AddLatticeStateApiGrpc(...) and mapped with MapLatticeStateApiGrpc().</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

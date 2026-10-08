@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # What the Explorer remembers
 
 The Explorer remembers only declared preferences. The sign-in credential is not a

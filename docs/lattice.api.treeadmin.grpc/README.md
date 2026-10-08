@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/treeadmin.json"
+---
+
 # Orleans.Lattice.Api.TreeAdmin.Grpc
 
 Code-first gRPC binding for [Orleans.Lattice.Api.TreeAdmin](../lattice.api.treeadmin/README.md) - projects the whole-tree administration control facade onto a gRPC service and a public typed client, marshalled with the Orleans binary serializer over code-first request and response records, with no hand-written `.proto`.

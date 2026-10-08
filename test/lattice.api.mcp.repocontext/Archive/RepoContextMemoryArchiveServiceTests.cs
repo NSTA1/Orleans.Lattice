@@ -323,8 +323,10 @@ public sealed class RepoContextMemoryArchiveServiceTests
 
         // The state a destroyed data volume leaves behind.
         var prefix = RepoContextKeys.AllReposPrefix();
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+        Assert.That(endExclusive, Is.Not.Null);
         await rig.MemoryTree.DeleteRangeAsync(
-            prefix, RepoContextPortability.PrefixUpperBound(prefix), Ct);
+            prefix, endExclusive!, Ct);
         Assert.That(await CountMemoryAsync(rig.MemoryTree), Is.Zero);
 
         await StartAndRestoreAsync(rig);
@@ -413,7 +415,9 @@ public sealed class RepoContextMemoryArchiveServiceTests
 
         var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Memory);
         var prefix = RepoContextKeys.AllReposPrefix();
-        await tree.DeleteRangeAsync(prefix, RepoContextPortability.PrefixUpperBound(prefix), Ct);
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+        Assert.That(endExclusive, Is.Not.Null);
+        await tree.DeleteRangeAsync(prefix, endExclusive!, Ct);
 
         using var rig = CreateRig(harness);
         await StartAndRestoreAsync(rig);
@@ -444,7 +448,9 @@ public sealed class RepoContextMemoryArchiveServiceTests
         using var rig = CreateRig(harness);
         var tree = rig.MemoryTree;
         var prefix = RepoContextKeys.AllReposPrefix();
-        await tree.DeleteRangeAsync(prefix, RepoContextPortability.PrefixUpperBound(prefix), Ct);
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+        Assert.That(endExclusive, Is.Not.Null);
+        await tree.DeleteRangeAsync(prefix, endExclusive!, Ct);
 
         await StartAndRestoreAsync(rig);
 
@@ -537,8 +543,10 @@ public sealed class RepoContextMemoryArchiveServiceTests
         var good = await File.ReadAllBytesAsync(SnapshotPath, Ct);
 
         var prefix = RepoContextKeys.AllReposPrefix();
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+        Assert.That(endExclusive, Is.Not.Null);
         await rig.MemoryTree.DeleteRangeAsync(
-            prefix, RepoContextPortability.PrefixUpperBound(prefix), Ct);
+            prefix, endExclusive!, Ct);
 
         await StartAndRestoreAsync(rig);
         await rig.Service.StopAsync(Ct);

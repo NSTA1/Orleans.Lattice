@@ -404,15 +404,15 @@ internal sealed class InMemoryWalTable
 
         protected override IEnumerable<HttpHeader> EnumerateHeaders() => [];
 
-        protected override bool TryGetHeader(string name, out string? value)
+        protected override bool TryGetHeader(string name, out string value)
         {
-            value = null;
+            value = string.Empty;
             return false;
         }
 
-        protected override bool TryGetHeaderValues(string name, out IEnumerable<string>? values)
+        protected override bool TryGetHeaderValues(string name, out IEnumerable<string> values)
         {
-            values = null;
+            values = Array.Empty<string>();
             return false;
         }
     }

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup.AzureBlob API reference
 
 The package has two public types: the options class and the registration extension. The sink implementation itself is internal and is reached only through the core `ILatticeBackupSink` seam; its behaviour is described in [Architecture](architecture.md).

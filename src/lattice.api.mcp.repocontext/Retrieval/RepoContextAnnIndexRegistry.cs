@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// unindexed forever, and its in-place retry loop existed only because a process
 /// death forgot everything. Orleans' single-threaded activation and a durable
 /// reminder replace all of it, so what is left here is the deterministic
-/// <see cref="BuildStepAsync"/> the coordinator pumps.
+/// <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextAnnIndexRegistry.BuildStepAsync(string, Orleans.Lattice.Api.Mcp.RepoContext.EmbeddingSpaceTag, System.Threading.CancellationToken)"/> the coordinator pumps.
 /// </para>
 /// </summary>
 internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDisposable

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Version Vector
 
 `tree.VersionVector(key)` -> `VersionVectorAccessor`, merge mode `LatticeMergeMode.VersionVector`.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Orleans.Lattice.Api.Mcp.Telemetry.Azure
 
 Azure managed-identity backend-token provider for the telemetry proxy in [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md), most often used with [`Orleans.Lattice.Api.Mcp.Telemetry`](../lattice.api.mcp.telemetry/README.md). It satisfies the proxy's `DynamicBearer` backend-auth mode with a rotating Entra (Azure AD) access token, so any telemetry binding - the MCP cluster-telemetry tools, or a host running the curated facade directly - can query an **Azure Monitor workspace (managed Prometheus)** endpoint - which authenticates callers with a short-lived AAD bearer token rather than a static credential.

@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Public-surface forwarders for the projection rebuild and
 /// materialiser-lag operator tooling. Resolves the per-tree
 /// <see cref="ShardMap"/> via the existing
-/// <see cref="LatticeGrain.GetRoutingAsync"/> helper, validates the
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain.GetRoutingAsync(System.Threading.CancellationToken)"/> helper, validates the
 /// physical shard index, and dispatches to the
 /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> admin seams. Guarded by
 /// <see cref="LatticeGrain.ThrowIfSystemTree"/> so reserved system

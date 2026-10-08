@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Replication Public API Reference
 
 This document is the **contract** for the public `Orleans.Lattice.Replication` surface. It describes behaviour in caller-visible terms: what each public type is for, which members matter to callers, and where to find the operational detail. It does not name internal grains or implementation classes that are not public. For the how, follow the topic cross-references in each section.
@@ -303,3 +307,1749 @@ The saga service-provider interfaces let a host join the coordinated cross-clust
 ## Azure Table WAL durability
 
 The durable Azure Table WAL backend ships as the separate `Orleans.Lattice.Storage.AzureTable` package. Use `AddAzureTableWalStorage` when the replication WAL must survive silo restarts and support production retention, bootstrap, and replay windows. Its public surface (`AzureTableWalStorageProvider`, `AzureTableWalStorageOptions`, and the retry policies) and configuration are documented in [Orleans.Lattice.Storage.AzureTable](../lattice.storage.azuretable/README.md) - see its [API Reference](../lattice.storage.azuretable/api.md) and [Configuration](../lattice.storage.azuretable/configuration.md). For the core WAL provider seam, see [WAL](wal.md) and [core WAL Storage Providers](../lattice/wal-storage-providers.md).
+
+## Public declaration reference
+
+The following inventory includes directly declared public members and overloads, enum values, and record positional members. Inherited framework members and compiler-generated record equality helpers are not additional package operations. Each source link identifies the declaration that defines its signature.
+
+### `Orleans.Lattice.Replication.AdvertisedCompressionDictionary`
+
+[Source](../../src/lattice.replication/SharedDictionaryNegotiation.cs) (line 203).
+
+`public readonly record struct AdvertisedCompressionDictionary( uint Id, ulong Fingerprint)`
+
+- `Primary constructor / positional members: ( [property: Id(0)] uint Id, [property: Id(1)] ulong Fingerprint)`
+
+### `Orleans.Lattice.Replication.ApplyResult`
+
+[Source](../../src/lattice.replication/ApplyResult.cs) (line 13).
+
+`public readonly record struct ApplyResult`
+
+- `public bool Applied { get; init; }`
+- `public HybridLogicalClock HighWaterMark { get; init; }`
+- `public bool Deferred { get; init; }`
+- `public bool SourceLineageRefused { get; init; }`
+
+### `Orleans.Lattice.Replication.BootstrapCoordinatorStatus`
+
+[Source](../../src/lattice.replication/BootstrapCoordinatorStatus.cs) (line 30).
+
+`public readonly record struct BootstrapCoordinatorStatus( LatticeBootstrapState Phase, string? SourceClusterId)`
+
+- `Primary constructor / positional members: ( [property: Id(0)] LatticeBootstrapState Phase, [property: Id(1)] string? SourceClusterId)`
+- `public bool ReadFenced { get; init; }`
+- `public long EntriesApplied { get; init; }`
+- `public int RedriveAttempts { get; init; }`
+- `public string? CompletedSourceClusterId { get; init; }`
+
+### `Orleans.Lattice.Replication.BootstrapFallbackOutcome`
+
+[Source](../../src/lattice.replication/BootstrapFallbackOutcome.cs) (line 9).
+
+`public readonly record struct BootstrapFallbackOutcome`
+
+- `public bool Attempted { get; init; }`
+- `public int RangesProcessed { get; init; }`
+- `public int EntriesShipped { get; init; }`
+- `public BootstrapFallbackSkipReason SkipReason { get; init; }`
+- `public static BootstrapFallbackOutcome NotAttempted`
+
+### `Orleans.Lattice.Replication.BootstrapFallbackSkipReason`
+
+[Source](../../src/lattice.replication/BootstrapFallbackSkipReason.cs) (line 10).
+
+`public enum BootstrapFallbackSkipReason`
+
+- `None = 0`
+- `Disabled = 1`
+- `RangeEmpty = 2`
+- `Empty = 3`
+
+### `Orleans.Lattice.Replication.ChangeFeedCursor`
+
+[Source](../../src/lattice.replication/ChangeFeedCursor.cs) (line 35).
+
+`public readonly struct ChangeFeedCursor : IEquatable<ChangeFeedCursor>`
+
+- `public static ChangeFeedCursor Initial { get; }`
+- `public ChangeFeedCursor(IReadOnlyDictionary<int, long>? partitionOffsets)`
+- `public long GetOffsetForPartition(int partition)`
+- `public IReadOnlyDictionary<int, long> PartitionOffsets`
+- `public bool Equals(ChangeFeedCursor other)`
+- `public override bool Equals(object? obj)`
+- `public override int GetHashCode()`
+- `public static bool operator ==(ChangeFeedCursor left, ChangeFeedCursor right)`
+- `public static bool operator !=(ChangeFeedCursor left, ChangeFeedCursor right)`
+
+### `Orleans.Lattice.Replication.CompressionDictionaryAdvertisement`
+
+[Source](../../src/lattice.replication/SharedDictionaryNegotiation.cs) (line 218).
+
+`public static class CompressionDictionaryAdvertisement`
+
+- `public static AdvertisedCompressionDictionary[]? Build( ILatticeCompressionDictionaryProvider? provider)`
+
+### `Orleans.Lattice.Replication.CompressionDictionaryConvergence`
+
+[Source](../../src/lattice.replication/CompressionDictionaryConvergence.cs) (line 27).
+
+`public static class CompressionDictionaryConvergence`
+
+- `public static async Task<int> ConvergeAsync( IReplicationDigestProbeTransport transport, ILatticeCompressionDictionaryProvider provider, string targetClusterId, IReadOnlyCollection<AdvertisedCompressionDictionary>? peerAdvertised, string treeId, CancellationToken cancellationToken)`
+
+### `Orleans.Lattice.Replication.CompressionDictionaryFingerprint`
+
+[Source](../../src/lattice.replication/SharedDictionaryNegotiation.cs) (line 305).
+
+`public static class CompressionDictionaryFingerprint`
+
+- `public static ulong Compute(ReadOnlySpan<byte> dictionaryBytes)`
+
+### `Orleans.Lattice.Replication.CompressionDictionaryPullRequest`
+
+[Source](../../src/lattice.replication/CompressionDictionaryPullRequest.cs) (line 14).
+
+`public readonly record struct CompressionDictionaryPullRequest`
+
+- `public uint DictionaryId { get; init; }`
+
+### `Orleans.Lattice.Replication.CompressionDictionaryPullResponse`
+
+[Source](../../src/lattice.replication/CompressionDictionaryPullResponse.cs) (line 15).
+
+`public readonly record struct CompressionDictionaryPullResponse`
+
+- `public bool ExchangeSupported { get; init; }`
+- `public bool Found { get; init; }`
+- `public uint DictionaryId { get; init; }`
+- `public ulong Fingerprint { get; init; }`
+- `public ReadOnlyMemory<byte> Dictionary { get; init; }`
+- `public static CompressionDictionaryPullResponse NotSupported`
+- `public static CompressionDictionaryPullResponse NotHeld`
+
+### `Orleans.Lattice.Replication.ConfigurationBindingSecretSource`
+
+[Source](../../src/lattice.replication/Security/ConfigurationBindingSecretSource.cs) (line 31).
+
+`public sealed class ConfigurationBindingSecretSource : ILatticeReplicationSecretSource`
+
+- `public ConfigurationBindingSecretSource(IConfiguration section)`
+- `public ValueTask<string?> GetOutboundSecretAsync(string peerClusterId, CancellationToken cancellationToken)`
+- `public ValueTask<LatticeReplicationAcceptedSecrets> GetAcceptedSecretsAsync(CancellationToken cancellationToken)`
+
+### `Orleans.Lattice.Replication.ContentManifestEntry`
+
+[Source](../../src/lattice.replication/ContentManifestEntry.cs) (line 20).
+
+`public readonly record struct ContentManifestEntry`
+
+- `public int EntryIndex { get; init; }`
+- `public string Key { get; init; }`
+- `public ulong ContentHash { get; init; }`
+- `public HybridLogicalClock Hlc { get; init; }`
+
+### `Orleans.Lattice.Replication.ContentManifestRequest`
+
+[Source](../../src/lattice.replication/ContentManifestRequest.cs) (line 10).
+
+`public readonly record struct ContentManifestRequest`
+
+- `public string TreeName { get; init; }`
+- `public string OriginClusterId { get; init; }`
+- `public IReadOnlyList<ContentManifestEntry> Entries { get; init; }`
+
+### `Orleans.Lattice.Replication.ContentManifestResponse`
+
+[Source](../../src/lattice.replication/ContentManifestResponse.cs) (line 11).
+
+`public readonly record struct ContentManifestResponse`
+
+- `public bool ExchangeSupported { get; init; }`
+- `public IReadOnlyList<int> MissingEntryIndices { get; init; }`
+- `public HybridLogicalClock AdvancedHlc { get; init; }`
+- `public static ContentManifestResponse NotSupported`
+
+### `Orleans.Lattice.Replication.DeadLetterEntry`
+
+[Source](../../src/lattice.replication/DeadLetterEntry.cs) (line 11).
+
+`public readonly record struct DeadLetterEntry`
+
+- `public long EntryId { get; init; }`
+- `public WalRecord Entry { get; init; }`
+- `public string FailureReason { get; init; }`
+- `public int RetryCount { get; init; }`
+- `public long EnqueuedAtTicks { get; init; }`
+- `public string? SourceLineageClusterId { get; init; }`
+- `public Guid? SourceLineage { get; init; }`
+- `public string? ReasonTag { get; init; }`
+
+### `Orleans.Lattice.Replication.DigestProbeComparer`
+
+[Source](../../src/lattice.replication/DigestProbeComparer.cs) (line 9).
+
+`public static class DigestProbeComparer`
+
+- `public static DigestProbeOutcome Compare(LeafProjectionDigest local, DigestProbeResponse remote)`
+
+### `Orleans.Lattice.Replication.DigestProbeOutcome`
+
+[Source](../../src/lattice.replication/DigestProbeOutcome.cs) (line 9).
+
+`public enum DigestProbeOutcome`
+
+- `Match`
+- `Mismatch`
+- `VersionSkew`
+- `RemoteUnavailable`
+
+### `Orleans.Lattice.Replication.DigestProbeRequest`
+
+[Source](../../src/lattice.replication/DigestProbeRequest.cs) (line 15).
+
+`public readonly record struct DigestProbeRequest`
+
+- `public string TreeName { get; init; }`
+- `public int ShardIndex { get; init; }`
+
+### `Orleans.Lattice.Replication.DigestProbeResponse`
+
+[Source](../../src/lattice.replication/DigestProbeResponse.cs) (line 18).
+
+`public readonly record struct DigestProbeResponse`
+
+- `public bool DigestAvailable { get; init; }`
+- `public LeafProjectionDigest Digest { get; init; }`
+
+### `Orleans.Lattice.Replication.DoubleTier`
+
+[Source](../../src/lattice.replication/LatticeReplicationHealthCheckOptions.cs) (line 174).
+
+`public readonly record struct DoubleTier(double Degraded, double Unhealthy)`
+
+- `Primary constructor / positional members: (double Degraded, double Unhealthy)`
+
+### `Orleans.Lattice.Replication.EncodedBatchHeader`
+
+[Source](../../src/lattice.replication/EncodedBatchHeader.cs) (line 35).
+
+`public readonly record struct EncodedBatchHeader`
+
+- `public const int WireSize`
+- `public const uint MagicValue`
+- `public const int CurrentWireVersion`
+- `public uint Magic { get; init; }`
+- `public int WireVersion { get; init; }`
+- `public ulong OriginClusterIdHash { get; init; }`
+- `public int EntryCount { get; init; }`
+- `public long BatchSequence { get; init; }`
+- `public int AtomicBatchSpanCount { get; init; }`
+- `public LatticeMergeMode Mode { get; init; }`
+- `public LatticeCompression Compression { get; init; }`
+- `public uint DictionaryId { get; init; }`
+- `public void WriteTo(Span<byte> destination)`
+- `public static EncodedBatchHeader ReadFrom(ReadOnlySpan<byte> source)`
+- `public static ulong HashClusterId(string clusterId)`
+
+### `Orleans.Lattice.Replication.FallOffLogDecision`
+
+[Source](../../src/lattice.replication/FallOffLogDecision.cs) (line 60).
+
+`public readonly record struct FallOffLogDecision( bool FellOffLog, HybridLogicalClock LocalHighWaterMark, bool BootstrapTriggered, bool Suppressed)`
+
+- `Primary constructor / positional members: ( bool FellOffLog, HybridLogicalClock LocalHighWaterMark, bool BootstrapTriggered, bool Suppressed)`
+
+### `Orleans.Lattice.Replication.IBootstrapSnapshotSource`
+
+[Source](../../src/lattice.replication/IBootstrapSnapshotSource.cs) (line 25).
+
+`public interface IBootstrapSnapshotSource : ISnapshotProvider`
+
+
+### `Orleans.Lattice.Replication.IChangeFeed`
+
+[Source](../../src/lattice.replication/IChangeFeed.cs) (line 67).
+
+`public interface IChangeFeed`
+
+- `IAsyncEnumerable<WalRecord> Subscribe( string treeName, HybridLogicalClock cursor, bool includeLocalOrigin = true, CancellationToken cancellationToken = default)`
+- `IAsyncEnumerable<WalRecord> Subscribe( string treeName, ChangeFeedCursor cursor, bool includeLocalOrigin = true, CancellationToken cancellationToken = default)`
+- `Task<ChangeFeedCursor> GetCurrentCursorAsync( string treeName, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ILatticeBootstrapCoordinator`
+
+[Source](../../src/lattice.replication/ILatticeBootstrapCoordinator.cs) (line 33).
+
+`public interface ILatticeBootstrapCoordinator`
+
+- `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken cancellationToken = default)`
+- `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken cancellationToken = default)`
+- `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ILatticeFallOffLogDetector`
+
+[Source](../../src/lattice.replication/ILatticeFallOffLogDetector.cs) (line 48).
+
+`public interface ILatticeFallOffLogDetector`
+
+- `Task<FallOffLogDecision> CheckAndTriggerAsync( string treeName, string sourceClusterId, HybridLogicalClock senderOldestAvailableHlc, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ILatticeReplicationAdmin`
+
+[Source](../../src/lattice.replication/ILatticeReplicationAdmin.cs) (line 30).
+
+`public interface ILatticeReplicationAdmin`
+
+- `Task<OperatorReseedDecision> RequestSnapshotAsync( string treeName, string sourceClusterId, CancellationToken cancellationToken = default)`
+- `Task<OperatorReseedDecision> ForceRequestSnapshotAsync( string treeName, string sourceClusterId, CancellationToken cancellationToken = default)`
+- `Task<bool> ForceLiftBootstrapReadFenceAsync( string treeName, string reason, CancellationToken cancellationToken = default)`
+- `Task<bool> ResolveCrossClusterSagaParticipantAsync( string sagaId, bool commit, string reason, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ILatticeReplicationConfigAuthority`
+
+[Source](../../src/lattice.replication/ILatticeReplicationConfigAuthority.cs) (line 36).
+
+`public interface ILatticeReplicationConfigAuthority`
+
+- `Task<LatticeReplicationEnableResult> EnableReplicationAsync( string treeId, LatticeMergeMode mode, string? bootstrapSourceClusterId = null, CancellationToken cancellationToken = default)`
+- `Task<LatticeReplicationDisableResult> DisableReplicationAsync( string treeId, CancellationToken cancellationToken = default)`
+- `Task<LatticeReplicationTreeStatus?> GetTreeStatusAsync( string treeId, CancellationToken cancellationToken = default)`
+- `Task<IReadOnlyDictionary<string, LatticeReplicationTreeStatus>> GetAllTreeStatusesAsync( CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ILatticeReplicationDeadLetters`
+
+[Source](../../src/lattice.replication/ILatticeReplicationDeadLetters.cs) (line 9).
+
+`public interface ILatticeReplicationDeadLetters`
+
+- `Task<IReadOnlyList<DeadLetterEntry>> ListAsync(string treeId, CancellationToken cancellationToken = default)`
+- `Task<int> CountAsync(string treeId, CancellationToken cancellationToken = default)`
+- `Task<bool> DiscardAsync(string treeId, long entryId, CancellationToken cancellationToken = default)`
+- `Task<ApplyResult?> ReplayAsync(string treeId, long entryId, CancellationToken cancellationToken = default)`
+- `Task<bool> PoisonSagaAsync( string treeId, string originClusterId, Guid transactionId, CancellationToken cancellationToken = default)`
+- `Task<bool> ReleaseQuarantinedSagaAsync( string treeId, string originClusterId, Guid transactionId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ILatticeReplicationPeerDecommissioner`
+
+[Source](../../src/lattice.replication/ILatticeReplicationPeerDecommissioner.cs) (line 27).
+
+`public interface ILatticeReplicationPeerDecommissioner`
+
+- `Task<LatticeReplicationPeerDecommissionOutcome> DecommissionPeerAsync(string peerClusterId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ILatticeReplicationPreconditionValidator`
+
+[Source](../../src/lattice.replication/ILatticeReplicationPreconditionValidator.cs) (line 20).
+
+`public interface ILatticeReplicationPreconditionValidator`
+
+- `LatticeReplicationPreconditionResult Validate(string treeId, LatticeMergeMode mode)`
+
+### `Orleans.Lattice.Replication.ILatticeReplicationSecretSource`
+
+[Source](../../src/lattice.replication/Security/ILatticeReplicationSecretSource.cs) (line 28).
+
+`public interface ILatticeReplicationSecretSource`
+
+- `ValueTask<string?> GetOutboundSecretAsync(string peerClusterId, CancellationToken cancellationToken)`
+- `ValueTask<LatticeReplicationAcceptedSecrets> GetAcceptedSecretsAsync(CancellationToken cancellationToken)`
+
+### `Orleans.Lattice.Replication.ILatticeSagaControlHandler`
+
+[Source](../../src/lattice.replication/ILatticeSagaControlHandler.cs) (line 19).
+
+`public interface ILatticeSagaControlHandler`
+
+- `Task<SagaControlResponse> PrepareAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaControlResponse> CommitAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaControlResponse> AbortAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaControlResponse> GetDecisionAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ILatticeWalIntrospection`
+
+[Source](../../src/lattice.replication/ILatticeWalIntrospection.cs) (line 25).
+
+`public interface ILatticeWalIntrospection`
+
+- `Task<HybridLogicalClock?> GetOldestAvailableHlcAsync( string treeName, CancellationToken cancellationToken = default)`
+- `Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetOldestAvailableHlcByOriginAsync( string treeName, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.IReceiverFlowControlPolicy`
+
+[Source](../../src/lattice.replication/IReceiverFlowControlPolicy.cs) (line 29).
+
+`public interface IReceiverFlowControlPolicy`
+
+- `ValueTask<ReceiverFlowControlHint> EvaluateAsync( ReceiverFlowControlContext context, CancellationToken cancellationToken)`
+
+### `Orleans.Lattice.Replication.IRemoteSnapshotItemTransport`
+
+[Source](../../src/lattice.replication/IRemoteSnapshotItemTransport.cs) (line 9).
+
+`public interface IRemoteSnapshotItemTransport : IRemoteSnapshotTransport`
+
+- `IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.IRemoteSnapshotTransport`
+
+[Source](../../src/lattice.replication/IRemoteSnapshotTransport.cs) (line 57).
+
+`public interface IRemoteSnapshotTransport`
+
+- `Task<RemoteSnapshotMetadata> GetMetadataAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+- `IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.IReplicationApplier`
+
+[Source](../../src/lattice.replication/IReplicationApplier.cs) (line 32).
+
+`public interface IReplicationApplier`
+
+- `Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)`
+- `async Task<ApplyResult> ApplyBatchAsync( IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.IReplicationBatchEncoder`
+
+[Source](../../src/lattice.replication/IReplicationBatchEncoder.cs) (line 48).
+
+`public interface IReplicationBatchEncoder`
+
+- `string ContentType { get; }`
+- `int CurrentWireVersion { get; }`
+- `void Encode(ReplicationBatchEnvelope envelope, IBufferWriter<byte> writer)`
+- `ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload)`
+- `void EncodeFraming( in EncodedBatchHeader header, string treeName, string originClusterId, ReadOnlyMemory<ArraySegment<byte>> entries, IBufferWriter<byte> writer)`
+- `bool TryDecodeFraming( ReadOnlyMemory<byte> payload, out EncodedBatchHeader header, out string treeName, out string originClusterId, out ReadOnlyMemory<ArraySegment<byte>> entries)`
+
+### `Orleans.Lattice.Replication.IReplicationDigestProbeTransport`
+
+[Source](../../src/lattice.replication/IReplicationDigestProbeTransport.cs) (line 18).
+
+`public interface IReplicationDigestProbeTransport`
+
+- `Task<DigestProbeResponse> ProbeDigestAsync( string targetClusterId, DigestProbeRequest request, CancellationToken cancellationToken)`
+- `Task<MerkleWalkProbeResponse> ProbeMerkleWalkAsync( string targetClusterId, MerkleWalkProbeRequest request, CancellationToken cancellationToken)`
+- `Task<Orleans.Lattice.HybridLogicalClock> GetPeerHighWaterMarkAsync( string targetClusterId, string treeName, string originClusterId, CancellationToken cancellationToken)`
+- `Task<ContentManifestResponse> ExchangeContentManifestAsync( string targetClusterId, ContentManifestRequest request, CancellationToken cancellationToken)`
+- `Task<CompressionDictionaryPullResponse> PullCompressionDictionaryAsync( string targetClusterId, CompressionDictionaryPullRequest request, CancellationToken cancellationToken)`
+
+### `Orleans.Lattice.Replication.IReplicationLocalVcSeeder`
+
+[Source](../../src/lattice.replication/IReplicationLocalVcSeeder.cs) (line 62).
+
+`public interface IReplicationLocalVcSeeder`
+
+- `Task<LocalVcSeedReport> SeedFromTreeAsync(string treeName, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.IReplicationTenantIsolationGate`
+
+[Source](../../src/lattice.replication/IReplicationTenantIsolationGate.cs) (line 31).
+
+`public interface IReplicationTenantIsolationGate`
+
+- `bool IsActive { get; }`
+- `ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync( string treeId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.IReplicationTopology`
+
+[Source](../../src/lattice.replication/IReplicationTopology.cs) (line 64).
+
+`public interface IReplicationTopology`
+
+- `IReadOnlyCollection<string> CurrentPeers { get; }`
+- `IDisposable Subscribe(Action<PeerChanged> onChange)`
+
+### `Orleans.Lattice.Replication.IReplicationTransport`
+
+[Source](../../src/lattice.replication/IReplicationTransport.cs) (line 52).
+
+`public interface IReplicationTransport`
+
+- `Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)`
+
+### `Orleans.Lattice.Replication.ISagaControlChannel`
+
+[Source](../../src/lattice.replication/ISagaControlChannel.cs) (line 13).
+
+`public interface ISagaControlChannel`
+
+- `Task<SagaControlResponse> PrepareAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaControlResponse> CommitAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaControlResponse> AbortAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaControlResponse> GetStatusAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaControlResponse> GetDecisionAsync(string coordinatorClusterId, SagaControlRequest request, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ISagaParticipant`
+
+[Source](../../src/lattice.replication/ISagaParticipant.cs) (line 70).
+
+`public interface ISagaParticipant`
+
+- `Task<SagaParticipantPrepareResult> PrepareAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task CommitAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task AbortAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `Task<SagaPhase> GetStatusAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ISagaPeerAuthorizer`
+
+[Source](../../src/lattice.replication/ISagaPeerAuthorizer.cs) (line 19).
+
+`public interface ISagaPeerAuthorizer`
+
+- `Task<bool> IsAuthorizedAsync(string? originClusterId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.ISnapshotProvider`
+
+[Source](../../src/lattice.replication/ISnapshotProvider.cs) (line 22).
+
+`public interface ISnapshotProvider`
+
+- `Task<SnapshotStream> ExportAsync( string treeName, HybridLogicalClock asOfHlc, CancellationToken cancellationToken = default)`
+- `Task<SnapshotStream> ExportAsync( string treeName, string sourceClusterId, HybridLogicalClock asOfHlc, CancellationToken cancellationToken = default)`
+- `Task<SnapshotStream> ExportAsync( string treeName, IReadOnlyList<LeafReReplayRange> ranges, HybridLogicalClock asOfHlc, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.LatticeBootstrapState`
+
+[Source](../../src/lattice.replication/LatticeBootstrapState.cs) (line 14).
+
+`public enum LatticeBootstrapState`
+
+- `Idle = 0`
+- `RequestingSnapshot = 1`
+- `ApplyingSnapshot = 2`
+- `IncrementalHandoff = 3`
+- `LiveIncremental = 4`
+- `Failed = 5`
+
+### `Orleans.Lattice.Replication.LatticeBootstrapTransientFaultClassifier`
+
+[Source](../../src/lattice.replication/LatticeBootstrapTransientFaultClassifier.cs) (line 72).
+
+`public static class LatticeBootstrapTransientFaultClassifier`
+
+- `public static bool IsTransient(Exception exception)`
+
+### `Orleans.Lattice.Replication.LatticeRemoteSnapshotService`
+
+[Source](../../src/lattice.replication/LatticeRemoteSnapshotService.cs) (line 52).
+
+`public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport`
+
+- `public LatticeRemoteSnapshotService( ISnapshotProvider provider, ILogger<LatticeRemoteSnapshotService> logger)`
+- `public LatticeRemoteSnapshotService( ISnapshotProvider provider, ILatticeReplicationContext replicationContext, ILogger<LatticeRemoteSnapshotService> logger)`
+- `public async Task<RemoteSnapshotMetadata> GetMetadataAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+- `public async IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+- `public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationAcceptedSecrets`
+
+[Source](../../src/lattice.replication/Security/LatticeReplicationSecrets.cs) (line 20).
+
+`public sealed class LatticeReplicationAcceptedSecrets`
+
+- `public LatticeReplicationAcceptedSecrets(IReadOnlyList<string> secrets, string version)`
+- `public IReadOnlyList<string> Secrets { get; }`
+- `public string Version { get; }`
+- `public static LatticeReplicationAcceptedSecrets Empty { get; }`
+
+### `Orleans.Lattice.Replication.LatticeReplicationConfigEntry`
+
+[Source](../../src/lattice.replication/LatticeReplicationConfigEntry.cs) (line 60).
+
+`public sealed class LatticeReplicationConfigEntry : ICrdt<LatticeReplicationConfigEntry>`
+
+- `public RwFlag Enabled { get; set; }`
+- `public MvRegister Mode { get; set; }`
+- `public bool IsEnabled`
+- `public bool HasAmbiguousMode`
+- `public IReadOnlyList<LatticeMergeMode> Modes { get; }`
+- `public bool IsBottom`
+- `public void Enable(string replicaId, long counter)`
+- `public void Disable(string replicaId, long counter)`
+- `public void SetMode(string replicaId, LatticeMergeMode mode)`
+- `public bool TryGetMode(out LatticeMergeMode mode)`
+- `public void MergeFrom(LatticeReplicationConfigEntry other)`
+- `public LatticeReplicationConfigEntry Clone()`
+- `public static byte[] EncodeMode(LatticeMergeMode mode)`
+- `public static LatticeMergeMode DecodeMode(byte[] value)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationDisableResult`
+
+[Source](../../src/lattice.replication/LatticeReplicationDisableResult.cs) (line 19).
+
+`public readonly record struct LatticeReplicationDisableResult( string TreeId, bool AlreadyDisabled)`
+
+- `Primary constructor / positional members: ( string TreeId, bool AlreadyDisabled)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationEnableResult`
+
+[Source](../../src/lattice.replication/LatticeReplicationEnableResult.cs) (line 27).
+
+`public readonly record struct LatticeReplicationEnableResult( string TreeId, LatticeMergeMode Mode, bool AlreadyEnabled, bool BootstrapRequested)`
+
+- `Primary constructor / positional members: ( string TreeId, LatticeMergeMode Mode, bool AlreadyEnabled, bool BootstrapRequested)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationEnrollmentSource`
+
+[Source](../../src/lattice.replication/LatticeReplicationEnrollmentSource.cs) (line 20).
+
+`public enum LatticeReplicationEnrollmentSource`
+
+- `Runtime = 0`
+- `Static = 1`
+- `RuntimeAndStatic = 2`
+
+### `Orleans.Lattice.Replication.LatticeReplicationEnvironmentVariables`
+
+[Source](../../src/lattice.replication/Security/LatticeReplicationEnvironmentVariables.cs) (line 18).
+
+`public static class LatticeReplicationEnvironmentVariables`
+
+- `public const string Prefix`
+- `public const string Secret`
+- `public const string AcceptedSecrets`
+- `public const string PeerSecretPrefix`
+- `public const string AllowSourceTreeSecrets`
+
+### `Orleans.Lattice.Replication.LatticeReplicationHealthCheckOptions`
+
+[Source](../../src/lattice.replication/LatticeReplicationHealthCheckOptions.cs) (line 25).
+
+`public sealed class LatticeReplicationHealthCheckOptions`
+
+- `public LongTier? EntriesBehind { get; set; }`
+- `public DoubleTier? LastContactSeconds { get; set; }`
+- `public LongTier? ConsecutiveErrors { get; set; }`
+- `public TimeSpan UnhealthyAfter { get; set; }`
+- `public TimeSpan InboundDegradedAfter { get; set; }`
+- `public TimeSpan InboundCriticalAfter { get; set; }`
+- `public static readonly LongTier DefaultEntriesBehind`
+- `public static readonly DoubleTier DefaultLastContactSeconds`
+- `public static readonly LongTier DefaultConsecutiveErrors`
+- `public static readonly TimeSpan DefaultUnhealthyAfter`
+- `public static readonly TimeSpan DefaultInboundDegradedAfter`
+- `public static readonly TimeSpan DefaultInboundCriticalAfter`
+- `public const string DefaultName`
+
+### `Orleans.Lattice.Replication.LatticeReplicationMetrics`
+
+[Source](../../src/lattice.replication/LatticeReplicationMetrics.cs) (line 35).
+
+`public static class LatticeReplicationMetrics`
+
+- `public const string MeterName`
+- `public const string TagTree`
+- `public const string TagPeer`
+- `public const string TagOutcome`
+- `public const string TagDirection`
+- `public const string DirectionOutbound`
+- `public const string DirectionInbound`
+- `public const string OutcomeSuccess`
+- `public const string OutcomeDedup`
+- `public const string OutcomeFailure`
+- `public const string OutcomeParkedCausalBuffer`
+- `public const string OutcomeRejectedDependencyLost`
+- `public const string OutcomeBootstrapFloorDropped`
+- `public const string OutcomeBootstrapFloorDeferred`
+- `public const string OutcomeShadowForwardDedup`
+- `public const string OutcomeRejectedNotReplicated`
+- `public const string OutcomeRejectedModeMismatch`
+- `public const string OutcomeRejectedForeignTenant`
+- `public const string OutcomeRejectedTenantOffline`
+- `public const string OutcomeRejectedSuspendedTenant`
+- `public const string TagReason`
+- `public const string TagShard`
+- `public const string TagOrigin`
+- `public const string ReasonDiscarded`
+- `public const string ReasonReplayed`
+- `public const string ReasonEvicted`
+- `public const string ReasonSchema`
+- `public const string ReasonHlcSkew`
+- `public const string ReasonOversized`
+- `public const string ReasonModeMismatch`
+- `public const string ReasonForeignTenant`
+- `public const string ReasonTenantOffline`
+- `public const string ReasonSuspendedTenant`
+- `public const string ReasonUnknown`
+- `public static readonly Meter Meter`
+- `public static readonly Histogram<double> ShipDuration`
+- `public static readonly Histogram<double> ApplyDuration`
+- `public static readonly Histogram<double> ApplyLag`
+- `public static readonly Counter<long> WalEntriesShipped`
+- `public static readonly Counter<long> ShipRedundantPayloads`
+- `public static readonly Counter<long> ShipRedundantPayloadBytes`
+- `public const string ShipRedundantPayloadsName`
+- `public const string ShipRedundantPayloadBytesName`
+- `public static readonly Counter<long> ShipWireVersionDownStamp`
+- `public const string ShipWireVersionDownStampName`
+- `public const string DownStampReasonCompressionDropped`
+- `public const string DownStampReasonBlockedCrdtMode`
+- `public const string DownStampReasonBlockedUnsupportedVersion`
+- `public static readonly Counter<long> CompressDictionaryBytesIn`
+- `public static readonly Counter<long> CompressDictionaryBytesOut`
+- `public const string CompressDictionaryBytesInName`
+- `public const string CompressDictionaryBytesOutName`
+- `public static readonly Counter<long> CoalesceEntriesElided`
+- `public static readonly Counter<long> CoalesceBytesElided`
+- `public const string CoalesceEntriesElidedName`
+- `public const string CoalesceBytesElidedName`
+- `public static readonly Counter<long> DoorbellRung`
+- `public static readonly Counter<long> DoorbellCoalesced`
+- `public const string DoorbellRungName`
+- `public const string DoorbellCoalescedName`
+- `public static readonly Counter<long> CoalesceDeltasMerged`
+- `public const string CoalesceDeltasMergedName`
+- `public static readonly Counter<long> ShipElidedPayloads`
+- `public static readonly Counter<long> ShipElidedPayloadBytes`
+- `public static readonly Counter<long> ManifestExchanges`
+- `public const string ShipElidedPayloadsName`
+- `public const string ShipElidedPayloadBytesName`
+- `public const string ManifestExchangesName`
+- `public static readonly Counter<long> ReceiverContentManifestExchanges`
+- `public static readonly Counter<long> ReceiverContentEntriesElided`
+- `public static readonly Counter<long> ReceiverContentHwmAdvances`
+- `public const string ReceiverContentManifestExchangesName`
+- `public const string ReceiverContentEntriesElidedName`
+- `public const string ReceiverContentHwmAdvancesName`
+- `public static readonly Counter<long> DeadLetterEnqueued`
+- `public static readonly Counter<long> DeadLetterRemoved`
+- `public static readonly Counter<long> SagaApplyDeferred`
+- `public static readonly Counter<long> ReceiverSagaPoisoned`
+- `public const string ReasonPoisonedSaga`
+- `public const string ReceiverSagaPoisonedName`
+- `public const string OutcomeReceiverSagaPoisonedTimeout`
+- `public const string OutcomeReceiverSagaPoisonedTerminalTimeout`
+- `public const string OutcomeReceiverSagaQuarantined`
+- `public const string OutcomeReceiverSagaQuarantineFull`
+- `public const string OutcomeReceiverSagaQuarantineReleased`
+- `public const string OutcomeReceiverSagaPoisonedOperator`
+- `public const string OutcomeReceiverSagaPoisonRefusedDecided`
+- `public const string OutcomeReceiverSagaPoisonRefusedFull`
+- `public const string ReasonDependencyLost`
+- `public static readonly Counter<long> DeadLetterRefused`
+- `public const string EntriesBehindName`
+- `public const string BytesBehindName`
+- `public const string ConsecutiveErrorsName`
+- `public const string LastContactSecondsName`
+- `public const string ShipInFlightName`
+- `public const string WireVersionNegotiatedName`
+- `public const string WireVersionDowngradeActiveName`
+- `public const string ApplyLagName`
+- `public const string ApplyDurationName`
+- `public const string WalEntriesShippedName`
+- `public static readonly UpDownCounter<long> CausalFrontierOrigins`
+- `public static readonly Counter<long> SourceRestoreUncoordinated`
+- `public static readonly Counter<long> TombstoneReapBound`
+- `public const string TombstoneReapBoundName`
+- `public const string ReapBoundDegradedOrigin`
+- `public const string ReapBoundOriginFrontier`
+- `public const string ReapBoundHeldEntry`
+- `public const string ReapBoundPeerFrontier`
+- `public static readonly Counter<long> ApplySourceLineageRefused`
+- `public const string ApplySourceLineageRefusedName`
+- `public const string SourceLineageRefusedStale`
+- `public const string SourceLineageRefusedReplaced`
+- `public static readonly UpDownCounter<long> ApplyBufferedEntries`
+- `public static readonly UpDownCounter<long> ApplyBufferBytes`
+- `public static readonly Histogram<double> ApplyDependencyWaitMs`
+- `public static readonly Counter<long> ApplyCausalViolationsBlocked`
+- `public const string ApplyBufferedEntriesName`
+- `public const string ApplyBufferBytesName`
+- `public const string ApplyDependencyWaitMsName`
+- `public const string ApplyCausalViolationsBlockedName`
+- `public static readonly Counter<long> ApplyFifoViolations`
+- `public const string ApplyFifoViolationsName`
+- `public static readonly Histogram<int> ApplyParallelRuns`
+- `public const string ApplyParallelRunsName`
+- `public static readonly Counter<long> PeerFellOffLog`
+- `public const string PeerFellOffLogName`
+- `public static readonly Counter<long> PeerFellOffLogSuppressed`
+- `public const string PeerFellOffLogSuppressedName`
+- `public static readonly Counter<long> BootstrapEntriesReceived`
+- `public const string BootstrapEntriesReceivedName`
+- `public static readonly Counter<long> BootstrapBytesReceived`
+- `public const string BootstrapBytesReceivedName`
+- `public static readonly Histogram<double> BootstrapDuration`
+- `public const string BootstrapDurationName`
+- `public const string BootstrapOutcomeLive`
+- `public const string BootstrapOutcomeFailed`
+- `public const string BootstrapOutcomeTimedOut`
+- `public const string BootstrapReconcileOutcomeReconciled`
+- `public const string BootstrapReconcileOutcomeSkippedScoped`
+- `public const string BootstrapReconcileOutcomeSkippedUnstable`
+- `public const string BootstrapReconcileOutcomeSkippedDeleted`
+- `public const string BootstrapReconcileOutcomeSkippedUnknown`
+- `public const string BootstrapReconcileOutcomeSkippedLineageMismatch`
+- `public const string BootstrapReconcileOutcomeSkippedNeverAligned`
+- `public const string BootstrapReconcileOutcomeSkippedNotLww`
+- `public const string BootstrapReconcileOutcomeOwedRetry`
+- `public const string BootstrapReconcileOutcomeAligned`
+- `public static readonly Counter<long> BootstrapTransientRetries`
+- `public const string BootstrapTransientRetriesName`
+- `public static readonly Counter<long> BootstrapReadFenceForceLifted`
+- `public const string BootstrapReadFenceForceLiftedName`
+- `public static readonly Counter<long> BootstrapReconcile`
+- `public const string BootstrapReconcileName`
+- `public static readonly Counter<long> DigestProbeMismatch`
+- `public const string DigestProbeMismatchName`
+- `public static readonly Counter<long> DigestProbeCompared`
+- `public const string DigestProbeComparedName`
+- `public const string DigestProbeOutcomeMatch`
+- `public const string DigestProbeOutcomeMismatch`
+- `public const string DigestProbeOutcomeVersionSkew`
+- `public const string DigestProbeOutcomeRemoteUnavailable`
+- `public static string DigestProbeOutcomeTag(DigestProbeOutcome outcome)`
+- `public static readonly Histogram<int> ShipEffectiveBatchSize`
+- `public const string ShipEffectiveBatchSizeName`
+- `public static readonly Histogram<double> ShipAckLatency`
+- `public const string ShipAckLatencyName`
+- `public const string TagDepth`
+- `public static readonly Counter<long> MerkleWalkLocalised`
+- `public const string MerkleWalkLocalisedName`
+- `public static readonly Counter<long> MerkleWalkAborted`
+- `public const string MerkleWalkAbortedName`
+- `public const string MerkleWalkAbortDepthCap`
+- `public const string MerkleWalkAbortByteBudget`
+- `public const string MerkleWalkAbortRemoteUnavailable`
+- `public const string MerkleWalkAbortVersionSkew`
+- `public static string MerkleWalkAbortReasonTag(MerkleWalkAbortReason reason)`
+- `public static readonly Counter<long> LeafReReplayEntries`
+- `public const string LeafReReplayEntriesName`
+- `public static readonly Counter<long> LeafReReplaySkipped`
+- `public const string LeafReReplaySkippedName`
+- `public const string LeafReReplaySkipDisabled`
+- `public const string LeafReReplaySkipRangeEmpty`
+- `public const string LeafReReplaySkipWalTrimmed`
+- `public static string LeafReReplaySkipReasonTag(LeafReReplaySkipReason reason)`
+- `public static readonly Counter<long> BootstrapFallbackTriggered`
+- `public const string BootstrapFallbackTriggeredName`
+- `public static readonly Counter<long> BootstrapFallbackEntries`
+- `public const string BootstrapFallbackEntriesName`
+- `public static readonly Counter<long> BootstrapFallbackSkipped`
+- `public const string BootstrapFallbackSkippedName`
+- `public const string BootstrapFallbackSkipDisabled`
+- `public const string BootstrapFallbackSkipRangeEmpty`
+- `public const string BootstrapFallbackSkipEmpty`
+- `public static string BootstrapFallbackSkipReasonTag(BootstrapFallbackSkipReason reason)`
+- `public static readonly Counter<long> DigestRemediationSkipped`
+- `public const string DigestRemediationSkippedName`
+- `public const string DigestRemediationDisabledName`
+- `public const string DigestRemediationReasonOptOut`
+- `public const string DigestRemediationReasonBudgetExhausted`
+- `public const string DigestRemediationReasonCircuitOpen`
+- `public static string DigestRemediationDisabledReasonTag(RemediationDisabledReason reason)`
+- `public const string TagDictionary`
+- `public static readonly Counter<long> DictionaryNegotiation`
+- `public const string DictionaryNegotiationName`
+- `public static readonly Counter<long> DictionaryBatches`
+- `public const string DictionaryBatchesName`
+- `public const string DictionaryNegotiationOutcomeMatched`
+- `public const string DictionaryNegotiationOutcomeFellBack`
+- `public const string DictionaryNegotiationOutcomeUnknown`
+- `public const string DictionaryNegotiationOutcomeFingerprintMismatch`
+- `public const string DictionaryBatchWith`
+- `public const string DictionaryBatchWithout`
+- `public static string DictionaryNegotiationOutcomeTag(SharedDictionaryNegotiationResult result)`
+- `public static readonly Counter<long> DictionaryConvergence`
+- `public const string DictionaryConvergenceName`
+- `public const string DictionaryConvergenceOutcomeInstalled`
+- `public const string DictionaryConvergenceOutcomeRejected`
+- `public const string DictionaryConvergenceOutcomeUnavailable`
+- `public const string TagPhase`
+- `public const string TagCause`
+- `public const string TagMode`
+- `public const string SagaPhasePrepare`
+- `public const string SagaPhaseCommit`
+- `public const string SagaPhaseAbort`
+- `public const string SagaCauseVoteAbort`
+- `public const string SagaCauseCoordinatorLoss`
+- `public const string SagaReasonCommit`
+- `public const string SagaReasonEngineUnavailable`
+- `public const string SagaReasonInfeasible`
+- `public const string SagaReasonPrecondition`
+- `public const string SagaReasonBuildFailed`
+- `public const string SagaReasonNotReplicated`
+- `public const string SagaReasonSingle`
+- `public const string SagaReasonSet`
+- `public static readonly Histogram<double> SagaPhaseDuration`
+- `public const string SagaPhaseDurationName`
+- `public static readonly Counter<long> SagaParticipantVotes`
+- `public const string SagaParticipantVotesName`
+- `public static readonly Counter<long> SagaParticipantCommits`
+- `public const string SagaParticipantCommitsName`
+- `public static readonly Counter<long> SagaParticipantAborts`
+- `public const string SagaParticipantAbortsName`
+- `public static readonly Histogram<double> SagaFenceDuration`
+- `public const string SagaFenceDurationName`
+- `public static readonly Counter<long> SagaCompensations`
+- `public const string SagaCompensationsName`
+
+### `Orleans.Lattice.Replication.LatticeReplicationModeChangeRejectedException`
+
+[Source](../../src/lattice.replication/LatticeReplicationModeChangeRejectedException.cs) (line 36).
+
+`public sealed class LatticeReplicationModeChangeRejectedException : InvalidOperationException, ILatticeDomainFault`
+
+- `public string TreeId { get; }`
+- `public LatticeMergeMode RequestedMode { get; }`
+- `public LatticeMergeMode CurrentMode { get; }`
+- `public bool CurrentModeAmbiguous { get; }`
+- `public LatticeReplicationModeChangeRejectedException()`
+- `public LatticeReplicationModeChangeRejectedException(string message)`
+- `public LatticeReplicationModeChangeRejectedException(string message, Exception innerException)`
+- `public LatticeReplicationModeChangeRejectedException( string message, string treeId, LatticeMergeMode requestedMode, LatticeMergeMode currentMode, bool currentModeAmbiguous)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationOptions`
+
+[Source](../../src/lattice.replication/LatticeReplicationOptions.cs) (line 15).
+
+`public class LatticeReplicationOptions`
+
+- `public string ClusterId { get; set; }`
+- `public IReadOnlyDictionary<string, LatticeMergeMode>? ReplicatedTrees { get; set; }`
+- `public Func<string, bool>? KeyFilter { get; set; }`
+- `public IReadOnlyCollection<string>? KeyPrefixes { get; set; }`
+- `public int ReplogPartitions { get; set; }`
+- `public Func<string, IWalStorageProvider>? WalStorageProvider { get; set; }`
+- `public int WalMaxBatchEntries { get; set; }`
+- `public long WalMaxBatchBytes { get; set; }`
+- `public int WalMaxPendingBatches { get; set; }`
+- `public int MaxApplyRetries { get; set; }`
+- `public TimeSpan SagaDeferralTimeout { get; set; }`
+- `public int DeadLetterQueueCapacity { get; set; }`
+- `public int CausalBufferMaxEntries { get; set; }`
+- `public int CausalAppliedIdentityCapacity { get; set; }`
+- `public const int DefaultCausalAppliedIdentityCapacity`
+- `public long CausalBufferMaxBytes { get; set; }`
+- `public int ShadowForwardDedupeCacheSize { get; set; }`
+- `public int ApplyMaxParallelRuns { get; set; }`
+- `public bool ContentHashDedupEnabled { get; set; }`
+- `public int ContentHashDedupCacheSize { get; set; }`
+- `public bool PreShipCoalescingEnabled { get; set; }`
+- `public bool ContentHashDedupElisionEnabled { get; set; }`
+- `public TimeSpan? WalRetention { get; set; }`
+- `public bool AllowWalRetentionWithoutAntiEntropy { get; set; }`
+- `public bool AutoBootstrapOnFallOffLog { get; set; }`
+- `public TimeSpan OperatorReseedMinInterval { get; set; }`
+- `public BoundedExponentialRetryPolicyOptions? BootstrapTransientRetry { get; set; }`
+- `public IReadOnlyCollection<string>? ReplicationPeers { get; set; }`
+- `public int ShipBatchSize { get; set; }`
+- `public int ShipPartitionPageSize { get; set; }`
+- `public int ShipCursorWriteInterval { get; set; }`
+- `public TimeSpan ShipCursorWriteMaxDelay { get; set; }`
+- `public int ShipMaxInFlight { get; set; }`
+- `public TimeSpan ShipBackoffInitial { get; set; }`
+- `public TimeSpan ShipPhaseTimerPeriod { get; set; }`
+- `public TimeSpan ShipSourceIdentityBackstopInterval { get; set; }`
+- `public TimeSpan LivenessProbeInterval { get; set; }`
+- `public TimeSpan ShipBackoffMax { get; set; }`
+- `public double ShipBackoffJitter { get; set; }`
+- `public TimeSpan MaintenanceGcInterval { get; set; }`
+- `public TimeSpan MaintenanceFallOffCheckInterval { get; set; }`
+- `public bool DigestProbeEnabled { get; set; }`
+- `public TimeSpan DigestProbeInterval { get; set; }`
+- `public double DigestProbeJitter { get; set; }`
+- `public bool MerkleWalkEnabled { get; set; }`
+- `public int MerkleWalkMaxDepth { get; set; }`
+- `public long MerkleWalkMaxBytes { get; set; }`
+- `public bool LeafReReplayEnabled { get; set; }`
+- `public int LeafReReplayMaxEntries { get; set; }`
+- `public long LeafReReplayMaxBytes { get; set; }`
+- `public bool BootstrapFallbackEnabled { get; set; }`
+- `public int BootstrapFallbackMaxEntries { get; set; }`
+- `public long BootstrapFallbackMaxBytes { get; set; }`
+- `public bool ShipDoorbellEnabled { get; set; }`
+- `public LatticeCompression FramingCompression { get; set; }`
+- `public int FramingCompressionLevel { get; set; }`
+- `public long MaxInboundDecompressedBytes { get; set; }`
+- `public int FramingCompressionMinBatchBytes { get; set; }`
+- `public uint FramingCompressionDictionaryId { get; set; }`
+- `public bool DictionaryNegotiationEnabled { get; set; }`
+- `public bool AutoSharedDictionaryEnabled { get; set; }`
+- `public bool WireVersionNegotiationEnabled { get; set; }`
+- `public int MinimumSupportedWireVersion { get; set; }`
+- `public int UnknownPeerWireVersionFloor { get; set; }`
+- `public bool AdaptiveBatchSizingEnabled { get; set; }`
+- `public int AdaptiveBatchIncrement { get; set; }`
+- `public double AdaptiveBatchDecreaseFactor { get; set; }`
+- `public TimeSpan AdaptiveBatchLatencyThreshold { get; set; }`
+- `public int AdaptiveBatchWindowLength { get; set; }`
+- `public bool AutoRemediateOnDigestMismatch { get; set; }`
+- `public double RemediationTrafficBudgetFraction { get; set; }`
+- `public TimeSpan RemediationTrafficWindow { get; set; }`
+- `public int RemediationFailureThreshold { get; set; }`
+- `public TimeSpan RemediationCircuitResetInterval { get; set; }`
+- `public const string DefaultClusterId`
+- `public const int DefaultReplogPartitions`
+- `public const int DefaultWalMaxBatchEntries`
+- `public const long DefaultWalMaxBatchBytes`
+- `public const long DefaultMaxInboundDecompressedBytes`
+- `public const int DefaultWalMaxPendingBatches`
+- `public const int DefaultMaxApplyRetries`
+- `public static readonly TimeSpan DefaultSagaDeferralTimeout`
+- `public const int DefaultDeadLetterQueueCapacity`
+- `public const int DefaultCausalBufferMaxEntries`
+- `public const long DefaultCausalBufferMaxBytes`
+- `public const int DefaultShadowForwardDedupeCacheSize`
+- `public const int DefaultApplyMaxParallelRuns`
+- `public const bool DefaultContentHashDedupEnabled`
+- `public const int DefaultContentHashDedupCacheSize`
+- `public const bool DefaultContentHashDedupElisionEnabled`
+- `public const bool DefaultPreShipCoalescingEnabled`
+- `public const bool DefaultAutoBootstrapOnFallOffLog`
+- `public static readonly TimeSpan DefaultOperatorReseedMinInterval`
+- `public const int DefaultBootstrapMaxAttempts`
+- `public static readonly TimeSpan DefaultBootstrapInitialRetryDelay`
+- `public static readonly TimeSpan DefaultBootstrapMaxRetryDelay`
+- `public const int DefaultShipBatchSize`
+- `public const int DefaultShipPartitionPageSize`
+- `public const int DefaultShipCursorWriteInterval`
+- `public static readonly TimeSpan DefaultShipCursorWriteMaxDelay`
+- `public const int DefaultShipMaxInFlight`
+- `public static readonly TimeSpan DefaultShipBackoffInitial`
+- `public static readonly TimeSpan DefaultShipPhaseTimerPeriod`
+- `public static readonly TimeSpan DefaultShipSourceIdentityBackstopInterval`
+- `public static readonly TimeSpan DefaultLivenessProbeInterval`
+- `public static readonly TimeSpan DefaultShipBackoffMax`
+- `public const double DefaultShipBackoffJitter`
+- `public static readonly TimeSpan DefaultMaintenanceGcInterval`
+- `public static readonly TimeSpan DefaultMaintenanceFallOffCheckInterval`
+- `public const bool DefaultDigestProbeEnabled`
+- `public const bool DefaultAllowWalRetentionWithoutAntiEntropy`
+- `public static readonly TimeSpan DefaultDigestProbeInterval`
+- `public const double DefaultDigestProbeJitter`
+- `public const bool DefaultMerkleWalkEnabled`
+- `public const int DefaultMerkleWalkMaxDepth`
+- `public const long DefaultMerkleWalkMaxBytes`
+- `public const bool DefaultLeafReReplayEnabled`
+- `public const int DefaultLeafReReplayMaxEntries`
+- `public const long DefaultLeafReReplayMaxBytes`
+- `public const bool DefaultBootstrapFallbackEnabled`
+- `public const int DefaultBootstrapFallbackMaxEntries`
+- `public const long DefaultBootstrapFallbackMaxBytes`
+- `public const bool DefaultShipDoorbellEnabled`
+- `public const LatticeCompression DefaultFramingCompression`
+- `public const int DefaultFramingCompressionLevel`
+- `public const int DefaultFramingCompressionMinBatchBytes`
+- `public const uint DefaultFramingCompressionDictionaryId`
+- `public const bool DefaultDictionaryNegotiationEnabled`
+- `public const bool DefaultAutoSharedDictionaryEnabled`
+- `public const bool DefaultWireVersionNegotiationEnabled`
+- `public const int DefaultMinimumSupportedWireVersion`
+- `public const int DefaultUnknownPeerWireVersionFloor`
+- `public const bool DefaultAdaptiveBatchSizingEnabled`
+- `public const int DefaultAdaptiveBatchIncrement`
+- `public const double DefaultAdaptiveBatchDecreaseFactor`
+- `public static readonly TimeSpan DefaultAdaptiveBatchLatencyThreshold`
+- `public const int DefaultAdaptiveBatchWindowLength`
+- `public const bool DefaultAutoRemediateOnDigestMismatch`
+- `public const double DefaultRemediationTrafficBudgetFraction`
+- `public static readonly TimeSpan DefaultRemediationTrafficWindow`
+- `public const int DefaultRemediationFailureThreshold`
+- `public static readonly TimeSpan DefaultRemediationCircuitResetInterval`
+
+### `Orleans.Lattice.Replication.LatticeReplicationPeerDecommissionOutcome`
+
+[Source](../../src/lattice.replication/ILatticeReplicationPeerDecommissioner.cs) (line 74).
+
+`public readonly record struct LatticeReplicationPeerDecommissionOutcome(string PeerClusterId, int TreeCount, bool AlreadyDecommissioned)`
+
+- `Primary constructor / positional members: (string PeerClusterId, int TreeCount, bool AlreadyDecommissioned)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationPeerStillConfiguredException`
+
+[Source](../../src/lattice.replication/LatticeReplicationPeerStillConfiguredException.cs) (line 27).
+
+`public sealed class LatticeReplicationPeerStillConfiguredException : InvalidOperationException, ILatticeDomainFault`
+
+- `public string PeerClusterId { get; }`
+- `public LatticeReplicationPeerStillConfiguredException()`
+- `public LatticeReplicationPeerStillConfiguredException(string message)`
+- `public LatticeReplicationPeerStillConfiguredException(string message, Exception innerException)`
+- `public LatticeReplicationPeerStillConfiguredException(string message, string peerClusterId)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationPreconditionFailedException`
+
+[Source](../../src/lattice.replication/LatticeReplicationPreconditionFailedException.cs) (line 35).
+
+`public sealed class LatticeReplicationPreconditionFailedException : InvalidOperationException, ILatticeDomainFault`
+
+- `public string TreeId { get; }`
+- `public LatticeMergeMode RequestedMode { get; }`
+- `public LatticeReplicationPreconditionFailedException()`
+- `public LatticeReplicationPreconditionFailedException(string message)`
+- `public LatticeReplicationPreconditionFailedException(string message, Exception innerException)`
+- `public LatticeReplicationPreconditionFailedException( string message, string treeId, LatticeMergeMode requestedMode)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationPreconditionResult`
+
+[Source](../../src/lattice.replication/LatticeReplicationPreconditionResult.cs) (line 10).
+
+`public readonly record struct LatticeReplicationPreconditionResult`
+
+- `public bool IsSatisfied { get; init; }`
+- `public string? FailureReason { get; init; }`
+- `public static LatticeReplicationPreconditionResult Satisfied { get; }`
+- `public static LatticeReplicationPreconditionResult Rejected(string reason)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationSecurityOptions`
+
+[Source](../../src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs) (line 30).
+
+`public sealed class LatticeReplicationSecurityOptions`
+
+- `public bool RequireAuthentication { get; set; }`
+- `public bool BindCredentialToOriginCluster { get; set; }`
+- `public TimeSpan SecretRefreshInterval { get; set; }`
+- `public bool ScanConfigurationForSecrets { get; set; }`
+
+### `Orleans.Lattice.Replication.LatticeReplicationSecurityServiceCollectionExtensions`
+
+[Source](../../src/lattice.replication/Security/LatticeReplicationSecurityServiceCollectionExtensions.cs) (line 16).
+
+`public static class LatticeReplicationSecurityServiceCollectionExtensions`
+
+- `public static ISiloBuilder AddLatticeReplicationSecrets<TSource>(this ISiloBuilder builder) where TSource : class, ILatticeReplicationSecretSource`
+- `public static ISiloBuilder AddLatticeReplicationSecrets<TSource>( this ISiloBuilder builder, Func<IServiceProvider, TSource> factory) where TSource : class, ILatticeReplicationSecretSource`
+- `public static ISiloBuilder AddLatticeReplicationSecretsFromConfiguration( this ISiloBuilder builder, IConfiguration section)`
+- `public static ISiloBuilder ConfigureLatticeReplicationSecurity( this ISiloBuilder builder, Action<LatticeReplicationSecurityOptions> configure)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationServiceCollectionExtensions`
+
+[Source](../../src/lattice.replication/LatticeReplicationServiceCollectionExtensions.HealthChecks.cs) (line 7).
+
+`public static partial class LatticeReplicationServiceCollectionExtensions`
+
+- `public static IHealthChecksBuilder AddLatticeReplicationHealthCheck( this IHealthChecksBuilder builder, string? name = null, HealthStatus? failureStatus = null, IEnumerable<string>? tags = null)`
+
+[Source](../../src/lattice.replication/LatticeReplicationServiceCollectionExtensions.ReplicationConfig.cs) (line 11).
+
+`public static partial class LatticeReplicationServiceCollectionExtensions`
+
+
+[Source](../../src/lattice.replication/LatticeReplicationServiceCollectionExtensions.SystemTrees.cs) (line 6).
+
+`public static partial class LatticeReplicationServiceCollectionExtensions`
+
+- `public static ISiloBuilder ReplicateLatticeSystemTrees( this ISiloBuilder builder, bool includeAudit = false)`
+
+[Source](../../src/lattice.replication/LatticeReplicationServiceCollectionExtensions.WalSaturationFlowControl.cs) (line 6).
+
+`public static partial class LatticeReplicationServiceCollectionExtensions`
+
+- `public static Orleans.Hosting.ISiloBuilder AddWalSaturationReceiverFlowControl( this Orleans.Hosting.ISiloBuilder builder, Action<WalSaturationReceiverFlowControlOptions>? configure = null)`
+
+[Source](../../src/lattice.replication/LatticeReplicationServiceCollectionExtensions.cs) (line 16).
+
+`public static partial class LatticeReplicationServiceCollectionExtensions`
+
+- `public static ISiloBuilder AddLatticeReplication( this ISiloBuilder builder, Action<LatticeReplicationOptions> configure, bool enableRuntimeConfig = false)`
+- `public static ISiloBuilder ConfigureLatticeReplication( this ISiloBuilder builder, Action<LatticeReplicationOptions> configure)`
+- `public static ISiloBuilder ConfigureLatticeReplication( this ISiloBuilder builder, string treeName, Action<LatticeReplicationOptions> configure)`
+- `public static ISiloBuilder AddLatticeAutoSharedDictionary( this ISiloBuilder builder, Action<CompressionDictionaryTrainingOptions>? configureTraining = null)`
+
+[Source](../../src/lattice.replication/LatticeSagaParticipantRegistrationExtensions.cs) (line 7).
+
+`public static partial class LatticeReplicationServiceCollectionExtensions`
+
+- `public static ISiloBuilder AddLatticeSagaParticipant<TParticipant>( this ISiloBuilder builder, string? name = null) where TParticipant : class, ISagaParticipant`
+
+### `Orleans.Lattice.Replication.LatticeReplicationSharedSecret`
+
+[Source](../../src/lattice.replication/Security/LatticeReplicationSharedSecret.cs) (line 14).
+
+`public static class LatticeReplicationSharedSecret`
+
+- `public const int MinimumLength`
+- `public static string Generate(int byteLength = 32)`
+- `public static bool IsWellFormed(string? secret)`
+- `public static bool FixedTimeEquals(string? a, string? b)`
+
+### `Orleans.Lattice.Replication.LatticeReplicationTreeStatus`
+
+[Source](../../src/lattice.replication/LatticeReplicationTreeStatus.cs) (line 37).
+
+`public readonly record struct LatticeReplicationTreeStatus( string TreeId, bool Enabled, LatticeMergeMode? Mode, bool Ambiguous)`
+
+- `Primary constructor / positional members: ( string TreeId, bool Enabled, LatticeMergeMode? Mode, bool Ambiguous)`
+- `public LatticeReplicationEnrollmentSource Source { get; init; }`
+
+### `Orleans.Lattice.Replication.LatticeSystemTreeNames`
+
+[Source](../../src/lattice.replication/LatticeSystemTreeNames.cs) (line 38).
+
+`public static class LatticeSystemTreeNames`
+
+- `public const string MembershipGroups`
+- `public const string MembershipEdges`
+- `public const string AuthPolicy`
+- `public const string AuthAudit`
+- `public const string ReplicationConfig`
+- `public const string ReplicationConfigMapKey`
+- `public static IReadOnlyDictionary<string, LatticeMergeMode> BuildReplicationConfigEnrolmentMap()`
+- `public static IReadOnlyDictionary<string, LatticeMergeMode> BuildEnrolmentMap(bool includeAudit)`
+
+### `Orleans.Lattice.Replication.LeafReReplayOutcome`
+
+[Source](../../src/lattice.replication/LeafReReplayOutcome.cs) (line 9).
+
+`public readonly record struct LeafReReplayOutcome`
+
+- `public bool Attempted { get; init; }`
+- `public int RangesProcessed { get; init; }`
+- `public int EntriesReReplayed { get; init; }`
+- `public LeafReReplaySkipReason SkipReason { get; init; }`
+- `public static LeafReReplayOutcome NotAttempted`
+
+### `Orleans.Lattice.Replication.LeafReReplayRange`
+
+[Source](../../src/lattice.replication/LeafReReplayRange.cs) (line 17).
+
+`public readonly record struct LeafReReplayRange`
+
+- `public string? StartKey { get; init; }`
+- `public string? EndKey { get; init; }`
+- `public bool Contains(string? key)`
+
+### `Orleans.Lattice.Replication.LeafReReplaySkipReason`
+
+[Source](../../src/lattice.replication/LeafReReplaySkipReason.cs) (line 10).
+
+`public enum LeafReReplaySkipReason`
+
+- `None = 0`
+- `Disabled = 1`
+- `RangeEmpty = 2`
+- `WalTrimmed = 3`
+
+### `Orleans.Lattice.Replication.LocalVcSeedReport`
+
+[Source](../../src/lattice.replication/LocalVcSeedReport.cs) (line 45).
+
+`public readonly record struct LocalVcSeedReport( string TreeName, VersionVector? Frontier, long EntriesScanned, bool SeedApplied)`
+
+- `Primary constructor / positional members: ( string TreeName, VersionVector? Frontier, long EntriesScanned, bool SeedApplied)`
+
+### `Orleans.Lattice.Replication.LongTier`
+
+[Source](../../src/lattice.replication/LatticeReplicationHealthCheckOptions.cs) (line 164).
+
+`public readonly record struct LongTier(long Degraded, long Unhealthy)`
+
+- `Primary constructor / positional members: (long Degraded, long Unhealthy)`
+
+### `Orleans.Lattice.Replication.MerkleWalkAbortReason`
+
+[Source](../../src/lattice.replication/MerkleWalkAbortReason.cs) (line 8).
+
+`public enum MerkleWalkAbortReason`
+
+- `None = 0`
+- `DepthCapExceeded = 1`
+- `ByteBudgetExceeded = 2`
+- `RemoteUnavailable = 3`
+- `VersionSkew = 4`
+
+### `Orleans.Lattice.Replication.MerkleWalkOutcome`
+
+[Source](../../src/lattice.replication/MerkleWalkOutcome.cs) (line 9).
+
+`public readonly record struct MerkleWalkOutcome`
+
+- `public bool Localised { get; init; }`
+- `public int LeavesLocalised { get; init; }`
+- `public IReadOnlyList<LeafReReplayRange> LocalisedRanges { get; init; }`
+- `public int DepthReached { get; init; }`
+- `public MerkleWalkAbortReason AbortReason { get; init; }`
+- `public long BytesInspected { get; init; }`
+- `public static MerkleWalkOutcome NotLocalised`
+
+### `Orleans.Lattice.Replication.MerkleWalkProbeRequest`
+
+[Source](../../src/lattice.replication/MerkleWalkProbeRequest.cs) (line 11).
+
+`public readonly record struct MerkleWalkProbeRequest`
+
+- `public string TreeName { get; init; }`
+- `public int ShardIndex { get; init; }`
+- `public string? RangeStartKey { get; init; }`
+- `public string? RangeEndKey { get; init; }`
+- `public int Depth { get; init; }`
+
+### `Orleans.Lattice.Replication.MerkleWalkProbeResponse`
+
+[Source](../../src/lattice.replication/MerkleWalkProbeResponse.cs) (line 12).
+
+`public readonly record struct MerkleWalkProbeResponse`
+
+- `public bool Available { get; init; }`
+- `public LeafProjectionDigest Digest { get; init; }`
+- `public static MerkleWalkProbeResponse Unavailable`
+
+### `Orleans.Lattice.Replication.NoOpReceiverFlowControlPolicy`
+
+[Source](../../src/lattice.replication/NoOpReceiverFlowControlPolicy.cs) (line 12).
+
+`public sealed class NoOpReceiverFlowControlPolicy : IReceiverFlowControlPolicy`
+
+- `public static NoOpReceiverFlowControlPolicy Instance { get; }`
+- `public ValueTask<ReceiverFlowControlHint> EvaluateAsync( ReceiverFlowControlContext context, CancellationToken cancellationToken)`
+
+### `Orleans.Lattice.Replication.NoParticipantSagaControlHandler`
+
+[Source](../../src/lattice.replication/NoParticipantSagaControlHandler.cs) (line 13).
+
+`public sealed class NoParticipantSagaControlHandler : ILatticeSagaControlHandler`
+
+- `public Task<SagaControlResponse> PrepareAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `public Task<SagaControlResponse> CommitAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `public Task<SagaControlResponse> AbortAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+- `public Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.OperatorReseedDecision`
+
+[Source](../../src/lattice.replication/OperatorReseedDecision.cs) (line 36).
+
+`public readonly record struct OperatorReseedDecision( bool Triggered, DateTimeOffset? LastRequestedAt, TimeSpan? RetryAfter)`
+
+- `Primary constructor / positional members: ( bool Triggered, DateTimeOffset? LastRequestedAt, TimeSpan? RetryAfter)`
+
+### `Orleans.Lattice.Replication.PeerChangeKind`
+
+[Source](../../src/lattice.replication/PeerChangeKind.cs) (line 13).
+
+`public enum PeerChangeKind`
+
+- `Added = 0`
+- `Removed = 1`
+
+### `Orleans.Lattice.Replication.PeerChanged`
+
+[Source](../../src/lattice.replication/PeerChanged.cs) (line 27).
+
+`public readonly record struct PeerChanged(string PeerClusterId, PeerChangeKind Kind)`
+
+- `Primary constructor / positional members: (string PeerClusterId, PeerChangeKind Kind)`
+
+### `Orleans.Lattice.Replication.PeerHighWaterMarkRequest`
+
+[Source](../../src/lattice.replication/PeerHighWaterMarkRequest.cs) (line 12).
+
+`public readonly record struct PeerHighWaterMarkRequest`
+
+- `public string TreeName { get; init; }`
+- `public string OriginClusterId { get; init; }`
+
+### `Orleans.Lattice.Replication.PeerHighWaterMarkResponse`
+
+[Source](../../src/lattice.replication/PeerHighWaterMarkResponse.cs) (line 15).
+
+`public readonly record struct PeerHighWaterMarkResponse`
+
+- `public HybridLogicalClock Clock { get; init; }`
+
+### `Orleans.Lattice.Replication.ReceiverFlowControlContext`
+
+[Source](../../src/lattice.replication/ReceiverFlowControlContext.cs) (line 16).
+
+`public readonly record struct ReceiverFlowControlContext`
+
+- `public string TreeName { get; init; }`
+- `public string OriginClusterId { get; init; }`
+- `public int EntryCount { get; init; }`
+- `public double ApplyDurationMs { get; init; }`
+
+### `Orleans.Lattice.Replication.ReceiverFlowControlHint`
+
+[Source](../../src/lattice.replication/ReceiverFlowControlHint.cs) (line 21).
+
+`public readonly record struct ReceiverFlowControlHint`
+
+- `public int? SuggestedBatchSize { get; init; }`
+- `public int? PauseForMs { get; init; }`
+- `public static ReceiverFlowControlHint None`
+
+### `Orleans.Lattice.Replication.RemediationDisabledReason`
+
+[Source](../../src/lattice.replication/RemediationDisabledReason.cs) (line 16).
+
+`public enum RemediationDisabledReason`
+
+- `OptOut = 0`
+- `BudgetExhausted = 1`
+- `CircuitOpen = 2`
+
+### `Orleans.Lattice.Replication.RemediationGuard`
+
+[Source](../../src/lattice.replication/RemediationGuard.cs) (line 39).
+
+`public sealed class RemediationGuard`
+
+- `public RemediationGuard()`
+- `public bool TryBeginRemediation(string peer, int windowBudget, long windowTicks, long nowTicks)`
+- `public void RecordEntriesShipped(string peer, int entries)`
+- `public bool IsCircuitBlocking(string peer, long cooldownTicks, long nowTicks)`
+- `public void RecordSuccess(string peer)`
+- `public bool RecordFailure(string peer, int failureThreshold, long nowTicks)`
+- `public static void PublishDisabled(string tree, string peer, RemediationDisabledReason reason)`
+- `public static void ClearDisabled(string tree, string peer)`
+
+### `Orleans.Lattice.Replication.RemoteSnapshotMetadata`
+
+[Source](../../src/lattice.replication/RemoteSnapshotMetadata.cs) (line 33).
+
+`public readonly record struct RemoteSnapshotMetadata`
+
+- `public string TreeName { get; init; }`
+- `public string SourceClusterId { get; init; }`
+- `public HybridLogicalClock AsOfHlc { get; init; }`
+- `public VersionVector CausalStableFrontier { get; init; }`
+- `public long ExportEpoch { get; init; }`
+- `public SnapshotSourceGeneration? OpenGeneration { get; init; }`
+
+### `Orleans.Lattice.Replication.RemoteSnapshotMetadataRequest`
+
+[Source](../../src/lattice.replication/RemoteSnapshotMetadataRequest.cs) (line 21).
+
+`public readonly record struct RemoteSnapshotMetadataRequest`
+
+- `public string TreeName { get; init; }`
+- `public string SourceClusterId { get; init; }`
+- `public HybridLogicalClock FromAsOfHlc { get; init; }`
+
+### `Orleans.Lattice.Replication.RemoteSnapshotProvider`
+
+[Source](../../src/lattice.replication/RemoteSnapshotProvider.cs) (line 45).
+
+`public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource`
+
+- `public RemoteSnapshotProvider( IRemoteSnapshotTransport transport, ILogger<RemoteSnapshotProvider> logger)`
+- `public Task<SnapshotStream> ExportAsync( string treeName, HybridLogicalClock asOfHlc, CancellationToken cancellationToken = default)`
+- `public async Task<SnapshotStream> ExportAsync( string treeName, string sourceClusterId, HybridLogicalClock asOfHlc, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.RemoteSnapshotStreamItem`
+
+[Source](../../src/lattice.replication/RemoteSnapshotStreamItem.cs) (line 20).
+
+`public readonly record struct RemoteSnapshotStreamItem`
+
+- `public SnapshotEntry Entry { get; init; }`
+- `public SnapshotSourceGeneration? CloseGeneration { get; init; }`
+
+### `Orleans.Lattice.Replication.ReplicationAck`
+
+[Source](../../src/lattice.replication/ReplicationAck.cs) (line 13).
+
+`public readonly record struct ReplicationAck`
+
+- `public bool Accepted { get; init; }`
+- `public HybridLogicalClock HighestAppliedHlc { get; init; }`
+- `public HybridLogicalClock? BlockedAtHlc { get; init; }`
+- `public int? SuggestedBatchSize { get; init; }`
+- `public int? PauseForMs { get; init; }`
+- `public int? SupportedWireVersion { get; init; }`
+- `public uint[]? AdvertisedDictionaryIds { get; init; }`
+- `public AdvertisedCompressionDictionary[]? AdvertisedDictionaries { get; init; }`
+- `public long? BootstrapEpoch { get; init; }`
+- `public Guid? ReceiverLineage { get; init; }`
+- `public bool SourceLineageRefused { get; init; }`
+
+### `Orleans.Lattice.Replication.ReplicationBatch`
+
+[Source](../../src/lattice.replication/ReplicationBatch.cs) (line 17).
+
+`public readonly record struct ReplicationBatch`
+
+- `public string TargetClusterId { get; init; }`
+- `public string TreeName { get; init; }`
+- `public string OriginClusterId { get; init; }`
+- `public ReadOnlyMemory<byte> Payload { get; init; }`
+- `public ReplicationBatchEnvelope? Envelope { get; init; }`
+- `public ReplicationBatchEncodedEnvelope? EncodedEnvelope { get; init; }`
+
+### `Orleans.Lattice.Replication.ReplicationBatchEncodedEnvelope`
+
+[Source](../../src/lattice.replication/ReplicationBatchEncodedEnvelope.cs) (line 31).
+
+`public readonly record struct ReplicationBatchEncodedEnvelope`
+
+- `public EncodedBatchHeader Header { get; init; }`
+- `public System.ReadOnlyMemory<System.ArraySegment<byte>> EncodedEntries { get; init; }`
+
+### `Orleans.Lattice.Replication.ReplicationBatchEnvelope`
+
+[Source](../../src/lattice.replication/ReplicationBatchEnvelope.cs) (line 22).
+
+`public readonly record struct ReplicationBatchEnvelope`
+
+- `public int WireVersion { get; init; }`
+- `public string TreeName { get; init; }`
+- `public string OriginClusterId { get; init; }`
+- `public IReadOnlyList<WalRecord> Entries { get; init; }`
+- `public const int CurrentVersion`
+- `public const int CurrentMinorVersion`
+
+### `Orleans.Lattice.Replication.ReplicationContactDirection`
+
+[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 13).
+
+`public enum ReplicationContactDirection`
+
+- `Outbound = 0`
+- `Inbound = 1`
+
+### `Orleans.Lattice.Replication.ReplicationPeerSnapshot`
+
+[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 556).
+
+`public readonly record struct ReplicationPeerSnapshot( string Tree, string Peer, long EntriesBehind, long BytesBehind, long ConsecutiveErrors, double LastContactSeconds)`
+
+- `Primary constructor / positional members: ( string Tree, string Peer, long EntriesBehind, long BytesBehind, long ConsecutiveErrors, double LastContactSeconds)`
+- `public ReplicationContactDirection Direction { get; init; }`
+- `public long InFlight { get; init; }`
+
+### `Orleans.Lattice.Replication.ReplicationPeerStats`
+
+[Source](../../src/lattice.replication/ReplicationPeerStats.StatusRead.cs) (line 3).
+
+`public partial class ReplicationPeerStats`
+
+
+[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 52).
+
+`public partial class ReplicationPeerStats`
+
+- `public ReplicationPeerStats()`
+- `public void RecordBacklog(string tree, string peer, long entriesBehind, long bytesBehind)`
+- `public void RecordInFlight(string tree, string peer, long depth)`
+- `public void RecordSuccess(string tree, string peer)`
+- `public void RecordError(string tree, string peer)`
+- `public void RecordInboundSuccess(string tree, string originPeer)`
+- `public void RecordInboundError(string tree, string originPeer)`
+- `public IReadOnlyCollection<ReplicationPeerSnapshot> Snapshot()`
+
+### `Orleans.Lattice.Replication.ReplicationTenantIsolationDecision`
+
+[Source](../../src/lattice.replication/ReplicationTenantIsolationDecision.cs) (line 18).
+
+`public enum ReplicationTenantIsolationDecision`
+
+- `Admit = 0`
+- `RejectUnknownTenant = 1`
+- `RejectOutOfRegion = 2`
+- `RejectSuspendedTenant = 3`
+
+### `Orleans.Lattice.Replication.ReplicationTypeAliases`
+
+[Source](../../src/lattice.replication/ReplicationTypeAliases.cs) (line 12).
+
+`public static class ReplicationTypeAliases`
+
+
+### `Orleans.Lattice.Replication.SagaControlRequest`
+
+[Source](../../src/lattice.replication/SagaControlRequest.cs) (line 18).
+
+`public readonly record struct SagaControlRequest`
+
+- `public string SagaId { get; init; }`
+- `public string TargetTree { get; init; }`
+- `public string ManifestId { get; init; }`
+- `public string CoordinatorClusterId { get; init; }`
+- `public string? SetId { get; init; }`
+- `public string? RequesterClusterId { get; init; }`
+
+### `Orleans.Lattice.Replication.SagaControlResponse`
+
+[Source](../../src/lattice.replication/SagaControlResponse.cs) (line 15).
+
+`public readonly record struct SagaControlResponse`
+
+- `public string SagaId { get; init; }`
+- `public SagaPhase Phase { get; init; }`
+- `public SagaVote Vote { get; init; }`
+- `public string Detail { get; init; }`
+
+### `Orleans.Lattice.Replication.SagaParticipantPrepareResult`
+
+[Source](../../src/lattice.replication/SagaParticipantPrepareResult.cs) (line 19).
+
+`public readonly record struct SagaParticipantPrepareResult(SagaVote Vote, string? Detail = null)`
+
+- `Primary constructor / positional members: (SagaVote Vote, string? Detail = null)`
+
+### `Orleans.Lattice.Replication.SagaPhase`
+
+[Source](../../src/lattice.replication/SagaPhase.cs) (line 10).
+
+`public enum SagaPhase`
+
+- `None = 0`
+- `Prepared = 1`
+- `Committed = 2`
+- `Aborted = 3`
+
+### `Orleans.Lattice.Replication.SagaVote`
+
+[Source](../../src/lattice.replication/SagaVote.cs) (line 9).
+
+`public enum SagaVote`
+
+- `None = 0`
+- `Commit = 1`
+- `Abort = 2`
+
+### `Orleans.Lattice.Replication.SharedDictionaryNegotiation`
+
+[Source](../../src/lattice.replication/SharedDictionaryNegotiation.cs) (line 15).
+
+`public static class SharedDictionaryNegotiation`
+
+- `public static SharedDictionaryNegotiationResult Negotiate( uint configuredDictionaryId, IReadOnlyCollection<uint>? peerAdvertisedIds)`
+- `public static SharedDictionaryNegotiationResult Negotiate( uint configuredDictionaryId, ulong configuredFingerprint, IReadOnlyCollection<AdvertisedCompressionDictionary>? peerAdvertised)`
+
+### `Orleans.Lattice.Replication.SharedDictionaryNegotiationResult`
+
+[Source](../../src/lattice.replication/SharedDictionaryNegotiationResult.cs) (line 44).
+
+`public readonly record struct SharedDictionaryNegotiationResult( uint EffectiveDictionaryId, bool Matched, bool PeerCapabilityKnown, bool FellBack, bool FingerprintMismatch = false)`
+
+- `Primary constructor / positional members: ( uint EffectiveDictionaryId, bool Matched, bool PeerCapabilityKnown, bool FellBack, bool FingerprintMismatch = false)`
+
+### `Orleans.Lattice.Replication.SharedDictionaryNegotiationSnapshot`
+
+[Source](../../src/lattice.replication/SharedDictionaryNegotiationSnapshot.cs) (line 31).
+
+`public readonly record struct SharedDictionaryNegotiationSnapshot( string Tree, string Peer, uint EffectiveDictionaryId, bool Matched, bool PeerCapabilityKnown, bool FellBack, bool FingerprintMismatch = false)`
+
+- `Primary constructor / positional members: ( string Tree, string Peer, uint EffectiveDictionaryId, bool Matched, bool PeerCapabilityKnown, bool FellBack, bool FingerprintMismatch = false)`
+
+### `Orleans.Lattice.Replication.SharedDictionaryNegotiationState`
+
+[Source](../../src/lattice.replication/SharedDictionaryNegotiationState.cs) (line 23).
+
+`public sealed class SharedDictionaryNegotiationState`
+
+- `public void Record(string tree, string peer, SharedDictionaryNegotiationResult result)`
+- `public IReadOnlyCollection<SharedDictionaryNegotiationSnapshot> Snapshot()`
+
+### `Orleans.Lattice.Replication.SnapshotEntry`
+
+[Source](../../src/lattice.replication/SnapshotEntry.cs) (line 55).
+
+`public readonly record struct SnapshotEntry`
+
+- `public string Key { get; init; }`
+- `public byte[] Value { get; init; }`
+- `public HybridLogicalClock Timestamp { get; init; }`
+- `public bool IsPrepared { get; init; }`
+- `public bool IsTombstone { get; init; }`
+- `public Guid TransactionId { get; init; }`
+- `public int SourceShardIndex { get; init; }`
+- `public int AtomicBatchSize { get; init; }`
+- `public int AtomicBatchIndex { get; init; }`
+- `public long ExpiresAtTicks { get; init; }`
+- `public byte[]? Delta { get; init; }`
+- `public Orleans.Lattice.LatticeMergeMode Mode { get; init; }`
+- `public bool? SettledDecision { get; init; }`
+- `public bool IsDecision`
+- `public bool Equals(SnapshotEntry other)`
+- `public override int GetHashCode()`
+
+### `Orleans.Lattice.Replication.SnapshotSourceGeneration`
+
+[Source](../../src/lattice.replication/SnapshotSourceGeneration.cs) (line 8).
+
+`public readonly record struct SnapshotSourceGeneration`
+
+- `public string? PhysicalTreeId { get; init; }`
+- `public long? ShardMapVersion { get; init; }`
+- `public Guid? Lineage { get; init; }`
+- `public long? DeleteEpoch { get; init; }`
+- `public bool? IsDeleted { get; init; }`
+
+### `Orleans.Lattice.Replication.SnapshotStream`
+
+[Source](../../src/lattice.replication/SnapshotStream.cs) (line 18).
+
+`public sealed class SnapshotStream`
+
+- `public string TreeName { get; }`
+- `public HybridLogicalClock AsOfHlc { get; }`
+- `public VersionVector CausalStableFrontier { get; }`
+- `public SnapshotSourceGeneration? OpenGeneration { get; init; }`
+- `public SnapshotSourceGeneration? CloseGeneration { get; internal set; }`
+- `public IAsyncEnumerable<SnapshotEntry> Entries { get; }`
+- `public SnapshotStream( string treeName, HybridLogicalClock asOfHlc, VersionVector causalStableFrontier, IAsyncEnumerable<SnapshotEntry> entries)`
+
+### `Orleans.Lattice.Replication.WalSaturationReceiverFlowControlOptions`
+
+[Source](../../src/lattice.replication/WalSaturationReceiverFlowControlOptions.cs) (line 24).
+
+`public sealed class WalSaturationReceiverFlowControlOptions`
+
+- `public const double DefaultThrottledBatchRatio`
+- `public const int DefaultThrottledPauseMs`
+- `public const int DefaultSaturatedBatchSize`
+- `public const int DefaultSaturatedPauseMs`
+- `public double ThrottledBatchRatio { get; set; }`
+- `public int ThrottledPauseMs { get; set; }`
+- `public int SaturatedBatchSize { get; set; }`
+- `public int SaturatedPauseMs { get; set; }`
+
+### `Orleans.Lattice.Replication.WalSaturationReceiverFlowControlPolicy`
+
+[Source](../../src/lattice.replication/WalSaturationReceiverFlowControlPolicy.cs) (line 43).
+
+`public sealed class WalSaturationReceiverFlowControlPolicy : IReceiverFlowControlPolicy`
+
+- `public WalSaturationReceiverFlowControlPolicy( IWalSaturationSignal? signal, IOptionsMonitor<LatticeReplicationOptions> replicationOptions, IOptionsMonitor<WalSaturationReceiverFlowControlOptions> flowControlOptions)`
+- `public ValueTask<ReceiverFlowControlHint> EvaluateAsync( ReceiverFlowControlContext context, CancellationToken cancellationToken)`
+
+### `Orleans.Lattice.Replication.WireVersionDownEncoder`
+
+[Source](../../src/lattice.replication/ReplicationAck.cs) (line 520).
+
+`public static class WireVersionDownEncoder`
+
+- `public const int MinimumDownEncodableWireVersion`
+- `public static void EnsureDownEncodable( int effectiveWireVersion, LatticeMergeMode mode, LatticeCompression compression)`
+- `public static EncodedBatchHeader PrepareHeader( in EncodedBatchHeader header, int effectiveWireVersion)`
+
+### `Orleans.Lattice.Replication.WireVersionNegotiation`
+
+[Source](../../src/lattice.replication/ReplicationAck.cs) (line 284).
+
+`public static class WireVersionNegotiation`
+
+- `public static WireVersionNegotiationResult Negotiate( int localCurrentVersion, int minimumSupportedVersion, int unknownPeerFloorVersion, int? peerAdvertisedVersion)`
+
+### `Orleans.Lattice.Replication.WireVersionNegotiationResult`
+
+[Source](../../src/lattice.replication/ReplicationAck.cs) (line 408).
+
+`public readonly record struct WireVersionNegotiationResult`
+
+- `public int EffectiveWireVersion { get; init; }`
+- `public bool DowngradeActive { get; init; }`
+- `public bool PeerCapabilityKnown { get; init; }`
+
+### `Orleans.Lattice.Replication.WireVersionNegotiationSnapshot`
+
+[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 752).
+
+`public readonly record struct WireVersionNegotiationSnapshot( string Tree, string Peer, int NegotiatedVersion, bool DowngradeActive, bool PeerCapabilityKnown)`
+
+- `Primary constructor / positional members: ( string Tree, string Peer, int NegotiatedVersion, bool DowngradeActive, bool PeerCapabilityKnown)`
+
+### `Orleans.Lattice.Replication.WireVersionNegotiationState`
+
+[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 605).
+
+`public class WireVersionNegotiationState`
+
+- `public WireVersionNegotiationState()`
+- `public void Record(string tree, string peer, WireVersionNegotiationResult result)`
+- `public IReadOnlyCollection<WireVersionNegotiationSnapshot> Snapshot()`

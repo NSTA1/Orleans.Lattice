@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # PN-Counter (Positive-Negative Counter)
 
 `tree.PnCounter(key)` -> `PnCounterAccessor`, merge mode `LatticeMergeMode.PnCounter`.

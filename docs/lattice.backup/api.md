@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup API reference
 
 Every public type and member of `Orleans.Lattice.Backup`, grouped by role. Types not listed here are internal and are described by behaviour in [Architecture](architecture.md).
@@ -529,3 +533,935 @@ Thrown by `ILatticeBackupTenantScope.AuthorizeCapture` / `AuthorizeRestoreTarget
 ### `LatticeRestoreValidationException` : `InvalidOperationException`
 
 Thrown by `RestoreAsync` when a backup fails pre-apply validation (for example an artifact whose bytes do not match its recorded content digest), and by the other restore entry points - `ColdRestoreAsync`, `RestoreSetAsync`'s per-member restores, `RevertRestoreAsync` (a named physical tree that does not belong to the target), and the `ILatticeCoordinatedRestoreEngine` seams. The replication package's coordinated restore path also throws it when a replicated restore is refused before it starts or aborts. Constructors: `(string message)` and `(string message, Exception innerException)`.
+
+## Public declaration reference
+
+The following inventory includes directly declared public members and overloads, enum values, and record positional members. Inherited framework members and compiler-generated record equality helpers are not additional package operations. Each source link identifies the declaration that defines its signature.
+
+### `Orleans.Lattice.Backup.BackupCatalogIndexProjection`
+
+[Source](../../src/lattice.backup/BackupCatalogIndexProjection.cs) (line 33).
+
+`public sealed class BackupCatalogIndexProjection : ILatticeViewProjection`
+
+- `public const string Version`
+- `public string ProjectionVersion`
+- `public IEnumerable<ViewWrite> Project(LatticeMutation mutation)`
+
+### `Orleans.Lattice.Backup.BackupCatalogIndexRow`
+
+[Source](../../src/lattice.backup/BackupCatalogIndexRow.cs) (line 17).
+
+`public sealed record BackupCatalogIndexRow`
+
+- `public string BackupId { get; init; }`
+- `public string Name { get; init; }`
+- `public BackupKind Kind { get; init; }`
+- `public string TreeId { get; init; }`
+- `public DateTimeOffset CreatedAtUtc { get; init; }`
+- `public string? SetId { get; init; }`
+- `public string? SetName { get; init; }`
+- `public string? BaseBackupId { get; init; }`
+- `public string DisplayName`
+
+### `Orleans.Lattice.Backup.BackupCatalogRebuildReport`
+
+[Source](../../src/lattice.backup/BackupCatalogRebuildReport.cs) (line 13).
+
+`public sealed record BackupCatalogRebuildReport`
+
+- `public BackupCatalogRebuildReport(long scannedCount, long registeredCount, long reconciledCount)`
+- `public long ScannedCount { get; init; }`
+- `public long RegisteredCount { get; init; }`
+- `public long ReconciledCount { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupCatalogScrubReport`
+
+[Source](../../src/lattice.backup/BackupCatalogScrubReport.cs) (line 15).
+
+`public sealed record BackupCatalogScrubReport`
+
+- `public BackupCatalogScrubReport( long scannedCount, long orphanCount, long removedCount, bool pruned, IReadOnlyList<string> orphanBackupIds)`
+- `public long ScannedCount { get; init; }`
+- `public long OrphanCount { get; init; }`
+- `public long RemovedCount { get; init; }`
+- `public bool Pruned { get; init; }`
+- `public IReadOnlyList<string> OrphanBackupIds { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupCompressionDictionaryRef`
+
+[Source](../../src/lattice.backup/BackupCompressionDictionaryRef.cs) (line 9).
+
+`public sealed record BackupCompressionDictionaryRef`
+
+- `public BackupCompressionDictionaryRef(string dictionaryId, string digest)`
+- `public string DictionaryId { get; init; }`
+- `public string Digest { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupConsistencyCut`
+
+[Source](../../src/lattice.backup/BackupConsistencyCut.cs) (line 11).
+
+`public sealed record BackupConsistencyCut`
+
+- `public BackupConsistencyCut( long walSequence, long hlcTimestamp, IReadOnlyDictionary<string, long>? perOriginFrontier = null, IReadOnlyDictionary<int, long>? walPartitionOffsets = null, IReadOnlyList<Guid>? undecidedSagaIds = null)`
+- `public long WalSequence { get; init; }`
+- `public long HlcTimestamp { get; init; }`
+- `public IReadOnlyDictionary<string, long>? PerOriginFrontier { get; init; }`
+- `public IReadOnlyDictionary<int, long>? WalPartitionOffsets { get; init; }`
+- `public IReadOnlyList<Guid>? UndecidedSagaIds { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupContentDescriptor`
+
+[Source](../../src/lattice.backup/BackupContentDescriptor.cs) (line 18).
+
+`public sealed record BackupContentDescriptor`
+
+- `public BackupContentDescriptor( string artifactId, string contentHash, long byteLength, int chunkCount, BackupScopeSelector scope)`
+- `public string ArtifactId { get; init; }`
+- `public string ContentHash { get; init; }`
+- `public long ByteLength { get; init; }`
+- `public int ChunkCount { get; init; }`
+- `public BackupScopeSelector Scope { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupContentHash`
+
+[Source](../../src/lattice.backup/BackupContentHash.cs) (line 14).
+
+`public static class BackupContentHash`
+
+- `public static string Compute(ReadOnlySpan<byte> content)`
+- `public static string Compute(IEnumerable<ReadOnlyMemory<byte>> chunks)`
+
+### `Orleans.Lattice.Backup.BackupHealthConfig`
+
+[Source](../../src/lattice.backup/BackupHealthConfig.cs) (line 16).
+
+`public sealed record BackupHealthConfig`
+
+- `public BackupHealthConfig(bool monitoringEnabled, TimeSpan interval)`
+- `public bool MonitoringEnabled { get; init; }`
+- `public TimeSpan Interval { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupHealthReport`
+
+[Source](../../src/lattice.backup/BackupHealthReport.cs) (line 20).
+
+`public sealed record BackupHealthReport`
+
+- `public BackupHealthReport( string backupId, BackupHealthStatus status, bool manifestPresent, IReadOnlyList<string> missingArtifactIds, IReadOnlyList<string> hashMismatchArtifactIds, DateTimeOffset checkedAtUtc, string explanation, BackupSinkSharingStatus peerVisibility = BackupSinkSharingStatus.NotApplicable, IReadOnlyList<string>? peerUnconfirmedClusterIds = null)`
+- `public string BackupId { get; init; }`
+- `public BackupHealthStatus Status { get; init; }`
+- `public bool ManifestPresent { get; init; }`
+- `public IReadOnlyList<string> MissingArtifactIds { get; init; }`
+- `public IReadOnlyList<string> HashMismatchArtifactIds { get; init; }`
+- `public DateTimeOffset CheckedAtUtc { get; init; }`
+- `public string Explanation { get; init; }`
+- `public BackupSinkSharingStatus PeerVisibility { get; init; }`
+- `public IReadOnlyList<string> PeerUnconfirmedClusterIds { get; init; }`
+- `public bool IsHealthy`
+
+### `Orleans.Lattice.Backup.BackupHealthStatus`
+
+[Source](../../src/lattice.backup/BackupHealthStatus.cs) (line 11).
+
+`public enum BackupHealthStatus`
+
+- `Unknown = 0`
+- `Healthy = 1`
+- `Warning = 2`
+- `Missing = 3`
+
+### `Orleans.Lattice.Backup.BackupKeyDescriptor`
+
+[Source](../../src/lattice.backup/BackupKeyDescriptor.cs) (line 9).
+
+`public sealed record BackupKeyDescriptor`
+
+- `public BackupKeyDescriptor(string key, BackupKeyMergeMode mergeMode, string? originId = null)`
+- `public string Key { get; init; }`
+- `public BackupKeyMergeMode MergeMode { get; init; }`
+- `public string? OriginId { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupKeyMergeMode`
+
+[Source](../../src/lattice.backup/BackupKeyMergeMode.cs) (line 9).
+
+`public enum BackupKeyMergeMode`
+
+- `LastWriterWins = 0`
+- `Crdt = 1`
+
+### `Orleans.Lattice.Backup.BackupKind`
+
+[Source](../../src/lattice.backup/BackupKind.cs) (line 7).
+
+`public enum BackupKind`
+
+- `Full = 0`
+- `Incremental = 1`
+
+### `Orleans.Lattice.Backup.BackupManifest`
+
+[Source](../../src/lattice.backup/BackupManifest.cs) (line 14).
+
+`public sealed record BackupManifest`
+
+- `public BackupManifest( string id, string name, DateTimeOffset createdAtUtc, BackupKind kind, BackupScopeSelector scope, BackupConsistencyCut consistencyCut, BackupTopologySnapshot topology, string structuralDigest, IReadOnlyList<BackupKeyDescriptor> keyDescriptors, IReadOnlyList<BackupContentDescriptor> contentDescriptors, IReadOnlyList<BackupOriginProvenance> provenance, string? baseBackupId = null, BackupCompressionDictionaryRef? compressionDictionary = null, string? capturingClusterId = null)`
+- `public string Id { get; init; }`
+- `public string Name { get; init; }`
+- `public DateTimeOffset CreatedAtUtc { get; init; }`
+- `public BackupKind Kind { get; init; }`
+- `public BackupScopeSelector Scope { get; init; }`
+- `public BackupConsistencyCut ConsistencyCut { get; init; }`
+- `public BackupTopologySnapshot Topology { get; init; }`
+- `public string StructuralDigest { get; init; }`
+- `public IReadOnlyList<BackupKeyDescriptor> KeyDescriptors { get; init; }`
+- `public IReadOnlyList<BackupContentDescriptor> ContentDescriptors { get; init; }`
+- `public IReadOnlyList<BackupOriginProvenance> Provenance { get; init; }`
+- `public string? BaseBackupId { get; init; }`
+- `public BackupCompressionDictionaryRef? CompressionDictionary { get; init; }`
+- `public string? SetId { get; init; }`
+- `public string? SetName { get; init; }`
+- `public DateTimeOffset? SetCreatedAtUtc { get; init; }`
+- `public string? CapturingClusterId { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupMetrics`
+
+[Source](../../src/lattice.backup/BackupMetrics.cs) (line 13).
+
+`public static class BackupMetrics`
+
+- `public const string MeterName`
+- `public const string TagTreeCount`
+- `public static readonly Meter Meter`
+- `public static readonly Counter<long> CrossTreeFenceSelections`
+- `public static readonly Counter<long> CrossTreeFenceDrainedInFlight`
+- `public static readonly Counter<long> CrossTreeFenceRetries`
+- `public static readonly Histogram<double> CrossTreeFenceDrainWaitMilliseconds`
+
+### `Orleans.Lattice.Backup.BackupOperationKinds`
+
+[Source](../../src/lattice.backup/BackupOperationKinds.cs) (line 8).
+
+`public static class BackupOperationKinds`
+
+- `public const string Prefix`
+- `public const string Capture`
+- `public const string IncrementalCapture`
+- `public const string SetCapture`
+- `public const string Restore`
+- `public const string ColdRestore`
+- `public const string HealthCheck`
+- `public const string CatalogRebuild`
+- `public const string CatalogScrub`
+
+### `Orleans.Lattice.Backup.BackupOperationPhases`
+
+[Source](../../src/lattice.backup/BackupOperationPhases.cs) (line 8).
+
+`public static class BackupOperationPhases`
+
+- `public const string Capturing`
+- `public const string CapturingMembers`
+- `public const string Cataloguing`
+- `public const string Bootstrapping`
+- `public const string Validating`
+- `public const string Applying`
+- `public const string Replaying`
+- `public const string Verifying`
+- `public const string RebuildingCatalog`
+- `public const string ScrubbingCatalog`
+- `public const string PruningOrphans`
+
+### `Orleans.Lattice.Backup.BackupOperationResultKeys`
+
+[Source](../../src/lattice.backup/BackupOperationResultKeys.cs) (line 7).
+
+`public static class BackupOperationResultKeys`
+
+- `public const string BackupId`
+- `public const string SetId`
+- `public const string MemberBackupIds`
+- `public const string TargetTreeId`
+- `public const string Mode`
+- `public const string RestoreOperationId`
+- `public const string ManifestChain`
+- `public const string EntriesApplied`
+- `public const string ShadowPhysicalTreeId`
+- `public const string PreviousPhysicalTreeId`
+- `public const string DeadLetteredCrossTenant`
+- `public const string DeadLetteredOverQuota`
+- `public const string HealthStatus`
+- `public const string MissingArtifactCount`
+- `public const string HashMismatchArtifactCount`
+- `public const string ScannedCount`
+- `public const string RegisteredCount`
+- `public const string ReconciledCount`
+- `public const string OrphanCount`
+- `public const string RemovedCount`
+- `public const string Pruned`
+- `public const string OrphanBackupIds`
+
+### `Orleans.Lattice.Backup.BackupOperationResults`
+
+[Source](../../src/lattice.backup/BackupOperationResults.cs) (line 10).
+
+`public static class BackupOperationResults`
+
+- `public static bool TryReadRestoreResult( IReadOnlyDictionary<string, string> result, out LatticeRestoreResult? restore)`
+- `public static IReadOnlyList<string> ReadMemberBackupIds(IReadOnlyDictionary<string, string> result)`
+- `public static bool TryReadCatalogRebuildReport( IReadOnlyDictionary<string, string> result, out BackupCatalogRebuildReport? report)`
+- `public static bool TryReadCatalogScrubReport( IReadOnlyDictionary<string, string> result, out BackupCatalogScrubReport? report)`
+
+### `Orleans.Lattice.Backup.BackupOperationUnits`
+
+[Source](../../src/lattice.backup/BackupOperationUnits.cs) (line 6).
+
+`public static class BackupOperationUnits`
+
+- `public const string Entries`
+- `public const string Shards`
+- `public const string Members`
+- `public const string Manifests`
+- `public const string Artifacts`
+
+### `Orleans.Lattice.Backup.BackupOriginProvenance`
+
+[Source](../../src/lattice.backup/BackupOriginProvenance.cs) (line 9).
+
+`public sealed record BackupOriginProvenance`
+
+- `public BackupOriginProvenance(string originId, long highWaterSequence)`
+- `public string OriginId { get; init; }`
+- `public long HighWaterSequence { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupRestoreRecordDisposition`
+
+[Source](../../src/lattice.backup/BackupRestoreRecordDisposition.cs) (line 10).
+
+`public enum BackupRestoreRecordDisposition`
+
+- `Admit = 0`
+- `CrossTenant = 1`
+- `OverQuota = 2`
+
+### `Orleans.Lattice.Backup.BackupRetentionReport`
+
+[Source](../../src/lattice.backup/BackupRetentionReport.cs) (line 11).
+
+`public sealed record BackupRetentionReport`
+
+- `public BackupRetentionReport(int retainedCount, IReadOnlyList<string> prunedBackupIds)`
+- `public int RetainedCount { get; init; }`
+- `public IReadOnlyList<string> PrunedBackupIds { get; init; }`
+- `public int PrunedCount`
+- `public static BackupRetentionReport Empty { get; }`
+
+### `Orleans.Lattice.Backup.BackupSchedulerRuntimeStatus`
+
+[Source](../../src/lattice.backup/BackupSchedulerRuntimeStatus.cs) (line 11).
+
+`public sealed record BackupSchedulerRuntimeStatus`
+
+- `public BackupSchedulerRuntimeStatus( bool fullScheduleRegistered, bool incrementalScheduleRegistered, DateTimeOffset? lastFullRunUtc, DateTimeOffset? lastFullSuccessUtc, DateTimeOffset? lastIncrementalRunUtc, DateTimeOffset? lastIncrementalSuccessUtc, BackupScopeRunOutcome lastRunOutcome, TimeSpan? runtimeFullBackupInterval = null, TimeSpan? runtimeIncrementalBackupInterval = null)`
+- `public bool FullScheduleRegistered { get; init; }`
+- `public bool IncrementalScheduleRegistered { get; init; }`
+- `public DateTimeOffset? LastFullRunUtc { get; init; }`
+- `public DateTimeOffset? LastFullSuccessUtc { get; init; }`
+- `public DateTimeOffset? LastIncrementalRunUtc { get; init; }`
+- `public DateTimeOffset? LastIncrementalSuccessUtc { get; init; }`
+- `public BackupScopeRunOutcome LastRunOutcome { get; init; }`
+- `public TimeSpan? RuntimeFullBackupInterval { get; init; }`
+- `public TimeSpan? RuntimeIncrementalBackupInterval { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupScopeKey`
+
+[Source](../../src/lattice.backup/BackupScopeKey.cs) (line 13).
+
+`public static class BackupScopeKey`
+
+- `public static string For(BackupScopeSelector scope)`
+
+### `Orleans.Lattice.Backup.BackupScopeKind`
+
+[Source](../../src/lattice.backup/BackupScopeKind.cs) (line 8).
+
+`public enum BackupScopeKind`
+
+- `WholeTree = 0`
+- `Prefix = 1`
+- `Key = 2`
+
+### `Orleans.Lattice.Backup.BackupScopeRunOutcome`
+
+[Source](../../src/lattice.backup/BackupScopeRunOutcome.cs) (line 9).
+
+`public enum BackupScopeRunOutcome`
+
+- `None = 0`
+- `Success = 1`
+- `Failure = 2`
+- `Denied = 3`
+
+### `Orleans.Lattice.Backup.BackupScopeSelector`
+
+[Source](../../src/lattice.backup/BackupScopeSelector.cs) (line 14).
+
+`public sealed record BackupScopeSelector`
+
+- `public BackupScopeSelector(BackupScopeKind kind, string treeId, string? keyOrPrefix = null)`
+- `public BackupScopeKind Kind { get; init; }`
+- `public string TreeId { get; init; }`
+- `public string? KeyOrPrefix { get; init; }`
+- `public static BackupScopeSelector WholeTree(string treeId)`
+- `public static BackupScopeSelector Prefix(string treeId, string prefix)`
+- `public static BackupScopeSelector Key(string treeId, string key)`
+
+### `Orleans.Lattice.Backup.BackupSetFence`
+
+[Source](../../src/lattice.backup/BackupSetFence.cs) (line 20).
+
+`public sealed record BackupSetFence`
+
+- `public BackupSetFence( long hlcTimestamp, int drainedInFlightCount, double drainWaitMilliseconds, int attempts)`
+- `public long HlcTimestamp { get; init; }`
+- `public int DrainedInFlightCount { get; init; }`
+- `public double DrainWaitMilliseconds { get; init; }`
+- `public int Attempts { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupSetManifest`
+
+[Source](../../src/lattice.backup/BackupSetManifest.cs) (line 12).
+
+`public sealed record BackupSetManifest`
+
+- `public BackupSetManifest( string? setId, string name, DateTimeOffset createdAtUtc, bool crossTreeConsistent, BackupSetFence? fence, IReadOnlyList<string> memberBackupIds)`
+- `public string? SetId { get; init; }`
+- `public string Name { get; init; }`
+- `public DateTimeOffset CreatedAtUtc { get; init; }`
+- `public bool CrossTreeConsistent { get; init; }`
+- `public BackupSetFence? Fence { get; init; }`
+- `public IReadOnlyList<string> MemberBackupIds { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupSetMember`
+
+[Source](../../src/lattice.backup/BackupSetMember.cs) (line 12).
+
+`public readonly record struct BackupSetMember(string BackupId, string TreeId)`
+
+- `Primary constructor / positional members: (string BackupId, string TreeId)`
+
+### `Orleans.Lattice.Backup.BackupSinkResolution`
+
+[Source](../../src/lattice.backup/BackupSinkResolution.cs) (line 19).
+
+`public sealed record BackupSinkResolution`
+
+- `public BackupSinkResolution(string backupId, bool manifestPresent, IReadOnlyList<string> missingArtifactIds)`
+- `public string BackupId { get; init; }`
+- `public bool ManifestPresent { get; init; }`
+- `public IReadOnlyList<string> MissingArtifactIds { get; init; }`
+- `public bool IsResolvable`
+
+### `Orleans.Lattice.Backup.BackupSinkSharingEnforcement`
+
+[Source](../../src/lattice.backup/BackupSinkSharingEnforcement.cs) (line 9).
+
+`public enum BackupSinkSharingEnforcement`
+
+- `Disabled = 0`
+- `Warn = 1`
+- `FailFast = 2`
+
+### `Orleans.Lattice.Backup.BackupSinkSharingReport`
+
+[Source](../../src/lattice.backup/BackupSinkSharingReport.cs) (line 19).
+
+`public sealed record BackupSinkSharingReport`
+
+- `public BackupSinkSharingReport( BackupSinkSharingStatus status, string clusterId, int peerCount, IReadOnlyList<string> unconfirmedPeerClusterIds, DateTimeOffset probedAtUtc, string explanation)`
+- `public BackupSinkSharingStatus Status { get; init; }`
+- `public string ClusterId { get; init; }`
+- `public int PeerCount { get; init; }`
+- `public IReadOnlyList<string> UnconfirmedPeerClusterIds { get; init; }`
+- `public DateTimeOffset ProbedAtUtc { get; init; }`
+- `public string Explanation { get; init; }`
+- `public bool IsRefuted`
+
+### `Orleans.Lattice.Backup.BackupSinkSharingStatus`
+
+[Source](../../src/lattice.backup/BackupSinkSharingStatus.cs) (line 17).
+
+`public enum BackupSinkSharingStatus`
+
+- `NotApplicable = 0`
+- `Shared = 1`
+- `Unverified = 2`
+- `NotShared = 3`
+
+### `Orleans.Lattice.Backup.BackupTopologySnapshot`
+
+[Source](../../src/lattice.backup/BackupTopologySnapshot.cs) (line 10).
+
+`public sealed record BackupTopologySnapshot`
+
+- `public BackupTopologySnapshot( int shardCount, int virtualShardCount, IReadOnlyList<string> shardRootDigests)`
+- `public int ShardCount { get; init; }`
+- `public int VirtualShardCount { get; init; }`
+- `public IReadOnlyList<string> ShardRootDigests { get; init; }`
+
+### `Orleans.Lattice.Backup.IBackupRestoreAdmission`
+
+[Source](../../src/lattice.backup/IBackupRestoreAdmission.cs) (line 19).
+
+`public interface IBackupRestoreAdmission`
+
+- `long AdmittedCount { get; }`
+- `long DeadLetteredCrossTenant { get; }`
+- `long DeadLetteredOverQuota { get; }`
+- `BackupRestoreRecordDisposition Admit(string key)`
+
+### `Orleans.Lattice.Backup.IBackupSinkSharingProbe`
+
+[Source](../../src/lattice.backup/IBackupSinkSharingProbe.cs) (line 31).
+
+`public interface IBackupSinkSharingProbe`
+
+- `BackupSinkSharingReport? LastReport { get; }`
+- `Task<BackupSinkSharingReport> ProbeAsync(CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupCaptureService`
+
+[Source](../../src/lattice.backup/ILatticeBackupCaptureService.cs) (line 18).
+
+`public interface ILatticeBackupCaptureService`
+
+- `Task<LatticeBackupCaptureResult> CaptureAsync( LatticeBackupCaptureRequest request, CancellationToken cancellationToken = default)`
+- `Task<LatticeBackupSetCaptureResult> CaptureSetAsync( LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupCatalogRebuildService`
+
+[Source](../../src/lattice.backup/ILatticeBackupCatalogRebuildService.cs) (line 20).
+
+`public interface ILatticeBackupCatalogRebuildService`
+
+- `Task<BackupCatalogRebuildReport> RebuildFromSinkAsync(CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupCatalogScrubService`
+
+[Source](../../src/lattice.backup/ILatticeBackupCatalogScrubService.cs) (line 20).
+
+`public interface ILatticeBackupCatalogScrubService`
+
+- `Task<BackupCatalogScrubReport> ScrubAsync( bool pruneOrphans = false, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupCatalogStore`
+
+[Source](../../src/lattice.backup/ILatticeBackupCatalogStore.cs) (line 17).
+
+`public interface ILatticeBackupCatalogStore`
+
+- `Task RegisterAsync(BackupManifest manifest, CancellationToken cancellationToken = default)`
+- `Task<BackupManifest?> GetAsync(string backupId, CancellationToken cancellationToken = default)`
+- `Task<bool> RemoveAsync(string backupId, CancellationToken cancellationToken = default)`
+- `IAsyncEnumerable<BackupManifest> ListAsync(CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupColdRestoreService`
+
+[Source](../../src/lattice.backup/ILatticeBackupColdRestoreService.cs) (line 25).
+
+`public interface ILatticeBackupColdRestoreService`
+
+- `Task<LatticeRestoreResult> ColdRestoreAsync( LatticeRestoreRequest request, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupHealthService`
+
+[Source](../../src/lattice.backup/ILatticeBackupHealthService.cs) (line 11).
+
+`public interface ILatticeBackupHealthService`
+
+- `Task<BackupHealthReport> VerifyAsync(string backupId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupHealthStore`
+
+[Source](../../src/lattice.backup/ILatticeBackupHealthStore.cs) (line 12).
+
+`public interface ILatticeBackupHealthStore`
+
+- `Task SetReportAsync(BackupHealthReport report, CancellationToken cancellationToken = default)`
+- `Task<BackupHealthReport?> GetReportAsync(string backupId, CancellationToken cancellationToken = default)`
+- `IAsyncEnumerable<BackupHealthReport> ListReportsAsync(CancellationToken cancellationToken = default)`
+- `Task<bool> RemoveAsync(string backupId, CancellationToken cancellationToken = default)`
+- `Task SetConfigAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)`
+- `Task<BackupHealthConfig?> GetConfigAsync(string backupId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupIncrementalCaptureService`
+
+[Source](../../src/lattice.backup/ILatticeBackupIncrementalCaptureService.cs) (line 22).
+
+`public interface ILatticeBackupIncrementalCaptureService`
+
+- `Task<LatticeBackupCaptureResult> CaptureIncrementalAsync( LatticeBackupIncrementalCaptureRequest request, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupRestoreService`
+
+[Source](../../src/lattice.backup/ILatticeBackupRestoreService.cs) (line 19).
+
+`public interface ILatticeBackupRestoreService`
+
+- `Task<LatticeRestoreResult> RestoreAsync( LatticeRestoreRequest request, CancellationToken cancellationToken = default)`
+- `Task<IReadOnlyList<LatticeRestoreResult>> RestoreSetAsync( string setId, CancellationToken cancellationToken = default)`
+- `Task RevertRestoreAsync( LatticeRestoreResult restore, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupScheduler`
+
+[Source](../../src/lattice.backup/ILatticeBackupScheduler.cs) (line 16).
+
+`public interface ILatticeBackupScheduler`
+
+- `Task<string?> TriggerFullBackupAsync(BackupScopeSelector scope)`
+- `Task<string?> TriggerIncrementalBackupAsync(BackupScopeSelector scope)`
+- `Task ScheduleRecurringBackupAsync(LatticeBackupScheduleRequest request)`
+- `Task CancelScheduleAsync(BackupScopeSelector scope, bool incremental)`
+- `Task EnsureScheduleAsync(BackupScopeSelector scope)`
+- `Task<BackupRetentionReport> PruneAsync(BackupScopeSelector scope)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupSetResolver`
+
+[Source](../../src/lattice.backup/ILatticeBackupSetResolver.cs) (line 19).
+
+`public interface ILatticeBackupSetResolver`
+
+- `Task<IReadOnlyList<BackupSetMember>> ResolveMembersAsync( string setId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupSink`
+
+[Source](../../src/lattice.backup/ILatticeBackupSink.cs) (line 19).
+
+`public interface ILatticeBackupSink`
+
+- `bool IsDurable { get; }`
+- `Task WriteArtifactAsync( string artifactId, IAsyncEnumerable<ReadOnlyMemory<byte>> content, CancellationToken cancellationToken = default)`
+- `IAsyncEnumerable<ReadOnlyMemory<byte>> ReadArtifactAsync( string artifactId, CancellationToken cancellationToken = default)`
+- `Task<bool> DeleteArtifactAsync(string artifactId, CancellationToken cancellationToken = default)`
+- `IAsyncEnumerable<string> ListArtifactIdsAsync(CancellationToken cancellationToken = default)`
+- `Task WriteManifestAsync(BackupManifest manifest, CancellationToken cancellationToken = default)`
+- `Task<BackupManifest?> ReadManifestAsync(string backupId, CancellationToken cancellationToken = default)`
+- `IAsyncEnumerable<BackupManifest> ListManifestsAsync(CancellationToken cancellationToken = default)`
+- `Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default)`
+- `Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default)`
+- `Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeBackupTenantScope`
+
+[Source](../../src/lattice.backup/ILatticeBackupTenantScope.cs) (line 29).
+
+`public interface ILatticeBackupTenantScope`
+
+- `bool IsActive { get; }`
+- `void AuthorizeCapture(string treeId)`
+- `void AuthorizeRestoreTarget(string treeId)`
+- `ValueTask<IBackupRestoreAdmission> BeginRestoreAsync( string targetTreeId, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.ILatticeCoordinatedRestoreEngine`
+
+[Source](../../src/lattice.backup/ILatticeCoordinatedRestoreEngine.cs) (line 20).
+
+`public interface ILatticeCoordinatedRestoreEngine`
+
+- `Task<RestoreAdmissionReport> ProbeAdmissionAsync( LatticeRestoreRequest request, CancellationToken cancellationToken = default)`
+- `Task<LatticeRestoreResult> BuildShadowAsync( LatticeRestoreRequest request, CancellationToken cancellationToken = default)`
+- `Task CommitShadowAsync( LatticeRestoreResult shadow, CancellationToken cancellationToken = default)`
+- `Task DeleteShadowAsync( string shadowPhysicalTreeId, CancellationToken cancellationToken = default)`
+- `string ResolveShadowTreeId(LatticeRestoreRequest request)`
+
+### `Orleans.Lattice.Backup.IReplicatedTreeMembership`
+
+[Source](../../src/lattice.backup/IReplicatedTreeMembership.cs) (line 18).
+
+`public interface IReplicatedTreeMembership`
+
+- `bool IsReplicated(string treeId)`
+- `IReadOnlyCollection<string> ReplicatedTrees { get; }`
+
+### `Orleans.Lattice.Backup.IRestoreSagaDispatcher`
+
+[Source](../../src/lattice.backup/IRestoreSagaDispatcher.cs) (line 23).
+
+`public interface IRestoreSagaDispatcher`
+
+- `Task<LatticeRestoreResult?> TryDispatchAsync( LatticeRestoreRequest request, CancellationToken cancellationToken = default)`
+- `Task<IReadOnlyList<LatticeRestoreResult>?> TryDispatchSetAsync( string setId, LatticeRestoreMode mode, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Backup.LatticeBackupCaptureRequest`
+
+[Source](../../src/lattice.backup/LatticeBackupCaptureRequest.cs) (line 12).
+
+`public sealed record LatticeBackupCaptureRequest`
+
+- `public const int DefaultPageSize`
+- `public LatticeBackupCaptureRequest(string name, BackupScopeSelector scope, int pageSize = DefaultPageSize)`
+- `public string Name { get; init; }`
+- `public BackupScopeSelector Scope { get; init; }`
+- `public int PageSize { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupCaptureResult`
+
+[Source](../../src/lattice.backup/LatticeBackupCaptureResult.cs) (line 9).
+
+`public sealed record LatticeBackupCaptureResult`
+
+- `public LatticeBackupCaptureResult(string backupId, BackupManifest manifest)`
+- `public string BackupId { get; init; }`
+- `public BackupManifest Manifest { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupCrossTreeFenceException`
+
+[Source](../../src/lattice.backup/LatticeBackupCrossTreeFenceException.cs) (line 14).
+
+`public sealed class LatticeBackupCrossTreeFenceException : Exception`
+
+- `public LatticeBackupCrossTreeFenceException(string message)`
+- `public LatticeBackupCrossTreeFenceException(string message, Exception innerException)`
+
+### `Orleans.Lattice.Backup.LatticeBackupHealthOptions`
+
+[Source](../../src/lattice.backup/LatticeBackupHealthOptions.cs) (line 17).
+
+`public sealed class LatticeBackupHealthOptions`
+
+- `public static readonly TimeSpan MinimumInterval`
+- `public static readonly TimeSpan DefaultSweepInterval`
+- `public bool Enabled { get; set; }`
+- `public TimeSpan DefaultInterval { get; set; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupIncrementalCaptureRequest`
+
+[Source](../../src/lattice.backup/LatticeBackupIncrementalCaptureRequest.cs) (line 11).
+
+`public sealed record LatticeBackupIncrementalCaptureRequest`
+
+- `public LatticeBackupIncrementalCaptureRequest( string name, BackupScopeSelector scope, string baseBackupId, int pageSize = LatticeBackupCaptureRequest.DefaultPageSize)`
+- `public string Name { get; init; }`
+- `public BackupScopeSelector Scope { get; init; }`
+- `public string BaseBackupId { get; init; }`
+- `public int PageSize { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupMetrics`
+
+[Source](../../src/lattice.backup/LatticeBackupMetrics.cs) (line 33).
+
+`public static class LatticeBackupMetrics`
+
+- `public const string TagScope`
+- `public const string TagPhase`
+- `public const string TagReason`
+- `public const string TagKind`
+- `public const string PhaseSnapshotOpen`
+- `public const string PhaseExport`
+- `public const string PhaseSinkWrite`
+- `public const string PhaseManifestCommit`
+- `public const string PhaseRead`
+- `public const string PhaseMerge`
+- `public const string PhaseVerify`
+- `public const string ReasonPermissionDenied`
+- `public const string ReasonSaturation`
+- `public const string ReasonSinkIoError`
+- `public const string ReasonIntegrityMismatch`
+- `public const string ReasonCancellation`
+- `public const string ReasonUnknown`
+- `public const string ReasonIncrementalFallback`
+- `public static readonly Counter<long> Captures`
+- `public static readonly Histogram<long> BackupBytes`
+- `public static readonly Histogram<long> BackupArtifacts`
+- `public static readonly Histogram<long> BackupEntries`
+- `public static readonly Counter<long> EntriesProcessed`
+- `public static readonly Counter<long> BytesProcessed`
+- `public static readonly Counter<long> RetentionBytesReclaimed`
+- `public static readonly Counter<long> RetentionPruned`
+- `public static readonly Histogram<double> CaptureDuration`
+- `public static readonly Histogram<double> RestoreDuration`
+- `public static readonly Counter<long> RestoreEntriesApplied`
+- `public static readonly Histogram<long> IncrementalLagEntries`
+- `public static readonly Histogram<double> IncrementalLagAge`
+- `public static readonly Counter<long> CaptureFailures`
+- `public static readonly Counter<long> RestoreFailures`
+- `public static readonly Counter<long> CaptureRetries`
+- `public static readonly Counter<long> SchedulerSkipped`
+- `public static readonly Counter<long> SchedulerOverruns`
+- `public static readonly Counter<long> SchedulerFailures`
+- `public static KeyValuePair<string, object?> KindTag(BackupKind kind)`
+- `public static void RecordCaptureSuccess( BackupManifest manifest, double durationMs, long byteLength, int artifactCount, int entryCount)`
+- `public static void RecordIncrementalLag(long deltaEntries, double baseCutAgeMs)`
+- `public static void RecordRestoreSuccess(double durationMs, long entriesApplied)`
+- `public static void RecordRetention(string scopeKey, long bytesReclaimed, int prunedCount)`
+- `public static void RecordSchedulerSkipped(string scopeKey)`
+- `public static void RecordSchedulerOverrun(string scopeKey)`
+- `public static void RecordSchedulerFailure(string scopeKey, string reason)`
+- `public static void RecordCaptureRetry(string reason)`
+- `public static bool EmitCaptureFailure(BackupKind kind, string phase, Exception exception)`
+- `public static bool EmitRestoreFailure(string phase, Exception exception)`
+- `public static string MapReason(Exception exception)`
+
+### `Orleans.Lattice.Backup.LatticeBackupOptions`
+
+[Source](../../src/lattice.backup/LatticeBackupOptions.cs) (line 9).
+
+`public sealed class LatticeBackupOptions`
+
+- `public HistoryRetentionMode HistoryRetentionMode { get; set; }`
+- `public TimeSpan? HistoryRetentionWindow { get; set; }`
+- `public bool EnableDurableHistoryView { get; set; }`
+- `public bool EnableBackupCatalogIndexView { get; set; }`
+- `public TimeSpan CrossTreeFenceDrainTimeout { get; set; }`
+- `public TimeSpan CrossTreeFencePollInterval { get; set; }`
+- `public int MaxCrossTreeFenceAttempts { get; set; }`
+- `public BackupSinkSharingEnforcement SinkSharingEnforcement { get; set; }`
+- `public TimeSpan SinkSharingProbeTimeout { get; set; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupReservedTrees`
+
+[Source](../../src/lattice.backup/LatticeBackupReservedTrees.cs) (line 11).
+
+`public static class LatticeBackupReservedTrees`
+
+- `public static string Prefix`
+- `public static bool IsReserved(string treeId)`
+- `public static void ThrowIfReserved(string treeId, string? paramName = null)`
+
+### `Orleans.Lattice.Backup.LatticeBackupScheduleOptions`
+
+[Source](../../src/lattice.backup/LatticeBackupScheduleOptions.cs) (line 22).
+
+`public sealed class LatticeBackupScheduleOptions`
+
+- `public static readonly TimeSpan MinimumInterval`
+- `public static readonly TimeSpan DefaultFullBackupInterval`
+- `public static readonly TimeSpan DefaultIncrementalBackupInterval`
+- `public bool FullBackupScheduleEnabled { get; set; }`
+- `public TimeSpan FullBackupInterval { get; set; }`
+- `public bool IncrementalBackupScheduleEnabled { get; set; }`
+- `public TimeSpan IncrementalBackupInterval { get; set; }`
+- `public bool RetentionEnabled { get; set; }`
+- `public int? RetentionKeepLast { get; set; }`
+- `public TimeSpan? RetentionMaxAge { get; set; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupScheduleRequest`
+
+[Source](../../src/lattice.backup/LatticeBackupScheduleRequest.cs) (line 12).
+
+`public sealed record LatticeBackupScheduleRequest`
+
+- `public LatticeBackupScheduleRequest(BackupScopeSelector scope, bool incremental, TimeSpan interval)`
+- `public BackupScopeSelector Scope { get; init; }`
+- `public bool Incremental { get; init; }`
+- `public TimeSpan Interval { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupServiceCollectionExtensions`
+
+[Source](../../src/lattice.backup/LatticeBackupServiceCollectionExtensions.cs) (line 13).
+
+`public static class LatticeBackupServiceCollectionExtensions`
+
+- `public static ISiloBuilder AddLatticeBackup( this ISiloBuilder builder, Action<LatticeBackupOptions>? configure = null)`
+- `public static ISiloBuilder ConfigureLatticeBackup( this ISiloBuilder builder, Action<LatticeBackupOptions> configure)`
+- `public static ISiloBuilder ConfigureLatticeBackupSchedule( this ISiloBuilder builder, Action<LatticeBackupScheduleOptions> configure)`
+- `public static ISiloBuilder ConfigureLatticeBackupSchedule( this ISiloBuilder builder, string scopeKey, Action<LatticeBackupScheduleOptions> configure)`
+- `public static ISiloBuilder ConfigureLatticeBackupHealth( this ISiloBuilder builder, Action<LatticeBackupHealthOptions> configure)`
+
+### `Orleans.Lattice.Backup.LatticeBackupSetCaptureRequest`
+
+[Source](../../src/lattice.backup/LatticeBackupSetCaptureRequest.cs) (line 15).
+
+`public sealed record LatticeBackupSetCaptureRequest`
+
+- `public LatticeBackupSetCaptureRequest( string name, IReadOnlyList<BackupScopeSelector> scopes, bool crossTreeConsistent = false, int pageSize = LatticeBackupCaptureRequest.DefaultPageSize)`
+- `public string Name { get; init; }`
+- `public IReadOnlyList<BackupScopeSelector> Scopes { get; init; }`
+- `public bool CrossTreeConsistent { get; init; }`
+- `public int PageSize { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupSetCaptureResult`
+
+[Source](../../src/lattice.backup/LatticeBackupSetCaptureResult.cs) (line 9).
+
+`public sealed record LatticeBackupSetCaptureResult`
+
+- `public LatticeBackupSetCaptureResult( BackupSetManifest setManifest, IReadOnlyList<LatticeBackupCaptureResult> members)`
+- `public BackupSetManifest SetManifest { get; init; }`
+- `public IReadOnlyList<LatticeBackupCaptureResult> Members { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupTenantIsolationException`
+
+[Source](../../src/lattice.backup/LatticeBackupTenantIsolationException.cs) (line 17).
+
+`public sealed class LatticeBackupTenantIsolationException : InvalidOperationException`
+
+- `public LatticeBackupTenantIsolationException(string message)`
+- `public LatticeBackupTenantIsolationException(string message, Exception innerException)`
+
+### `Orleans.Lattice.Backup.LatticeRestoreMode`
+
+[Source](../../src/lattice.backup/LatticeRestoreMode.cs) (line 6).
+
+`public enum LatticeRestoreMode`
+
+- `InPlace = 0`
+- `ShadowCutover = 1`
+
+### `Orleans.Lattice.Backup.LatticeRestoreRequest`
+
+[Source](../../src/lattice.backup/LatticeRestoreRequest.cs) (line 13).
+
+`public sealed record LatticeRestoreRequest`
+
+- `public const int DefaultApplyBatchSize`
+- `public LatticeRestoreRequest( string backupId, string? targetTreeId = null, BackupScopeSelector? scope = null, LatticeRestoreMode mode = LatticeRestoreMode.InPlace, string? operationId = null, int applyBatchSize = DefaultApplyBatchSize)`
+- `public string BackupId { get; init; }`
+- `public string? TargetTreeId { get; init; }`
+- `public BackupScopeSelector? Scope { get; init; }`
+- `public LatticeRestoreMode Mode { get; init; }`
+- `public string? OperationId { get; init; }`
+- `public int ApplyBatchSize { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeRestoreResult`
+
+[Source](../../src/lattice.backup/LatticeRestoreResult.cs) (line 11).
+
+`public sealed record LatticeRestoreResult`
+
+- `public LatticeRestoreResult( string backupId, string targetTreeId, LatticeRestoreMode mode, string operationId, IReadOnlyList<string> manifestChain, long entriesApplied, string? shadowPhysicalTreeId = null, string? previousPhysicalTreeId = null, long deadLetteredCrossTenant = 0, long deadLetteredOverQuota = 0)`
+- `public string BackupId { get; init; }`
+- `public string TargetTreeId { get; init; }`
+- `public LatticeRestoreMode Mode { get; init; }`
+- `public string OperationId { get; init; }`
+- `public IReadOnlyList<string> ManifestChain { get; init; }`
+- `public long EntriesApplied { get; init; }`
+- `public string? ShadowPhysicalTreeId { get; init; }`
+- `public string? PreviousPhysicalTreeId { get; init; }`
+- `public long DeadLetteredCrossTenant { get; init; }`
+- `public long DeadLetteredOverQuota { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeRestoreValidationException`
+
+[Source](../../src/lattice.backup/LatticeRestoreValidationException.cs) (line 12).
+
+`public sealed class LatticeRestoreValidationException : InvalidOperationException`
+
+- `public LatticeRestoreValidationException(string message)`
+- `public LatticeRestoreValidationException(string message, Exception innerException)`
+
+### `Orleans.Lattice.Backup.RestoreAdmissionReport`
+
+[Source](../../src/lattice.backup/RestoreAdmissionReport.cs) (line 11).
+
+`public sealed class RestoreAdmissionReport`
+
+- `public RestoreAdmissionReport( string backupId, string targetTreeId, long totalByteLength, long totalChunkCount, int shardCount, IReadOnlyList<string> manifestChain)`
+- `public string BackupId { get; }`
+- `public string TargetTreeId { get; }`
+- `public long TotalByteLength { get; }`
+- `public long TotalChunkCount { get; }`
+- `public int ShardCount { get; }`
+- `public IReadOnlyList<string> ManifestChain { get; }`

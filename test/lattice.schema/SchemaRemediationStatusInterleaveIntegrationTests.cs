@@ -93,7 +93,7 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
     }
 
     /// <summary>
-    /// Holds the first <see cref="ILattice.SetAsync"/> into an armed tree's
+    /// Holds the first <see cref="Orleans.Lattice.ILattice.SetAsync(string, byte[], System.Threading.CancellationToken)"/> into an armed tree's
     /// remediation destination (<c>{treeId}/remediated/{operationId}</c>) until the
     /// test releases it, keeping the coordinator inside its build phase.
     /// </summary>

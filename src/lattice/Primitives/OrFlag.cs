@@ -98,7 +98,7 @@ public sealed class OrFlag : ICrdt<OrFlag>
     /// Tombstoning the observed dots is sufficient even though
     /// <see cref="Enable(string, long)"/> may have compacted a replica's
     /// earlier dots away: cancellation is coverage-based
-    /// (<see cref="OrSetDotCompaction.Covers"/>), so a tombstone at a
+    /// (<see cref="Orleans.Lattice.OrSetDotCompaction.Covers(System.Collections.Generic.List{Orleans.Lattice.OrSetDot}, in Orleans.Lattice.OrSetDot)"/>), so a tombstone at a
     /// replica's highest observed counter also cancels every lower dot from
     /// that replica - including one this replica compacted away but a peer
     /// still holds.

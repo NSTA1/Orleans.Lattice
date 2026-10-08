@@ -29,10 +29,10 @@ public sealed class CoalescingClusterFixture
     /// <summary>The configured coalescing window, in milliseconds.</summary>
     public const int CoalescingWindowMs = 5;
 
-    /// <summary>Default per-tree leaf-key cap used by <see cref="CreateTreeAsync"/>.</summary>
+    /// <summary>Default per-tree leaf-key cap used by <see cref="Orleans.Lattice.Tests.BPlusTree.CoalescingClusterFixture.CreateTreeAsync(string)"/>.</summary>
     public const int SmallMaxLeafKeys = 4;
 
-    /// <summary>Default shard count used by <see cref="CreateTreeAsync"/>.</summary>
+    /// <summary>Default shard count used by <see cref="Orleans.Lattice.Tests.BPlusTree.CoalescingClusterFixture.CreateTreeAsync(string)"/>.</summary>
     public const int TestShardCount = 1;
 
     /// <summary>The currently-active test cluster.</summary>

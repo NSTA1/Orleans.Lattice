@@ -104,7 +104,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
     /// <summary>
     /// Row-key prefix for entry rows. Sorts before <see cref="HeadRowKey"/>
-    /// so a <see cref="TableClient.QueryAsync{T}"/> filtering on
+    /// so a <see cref="Azure.Data.Tables.TableClient.QueryAsync{T}(System.Linq.Expressions.Expression{System.Func{T, bool}}, System.Nullable{int}, System.Collections.Generic.IEnumerable{string}, System.Threading.CancellationToken)"/> filtering on
     /// <c>RowKey ge 'E' and RowKey lt 'F'</c> returns only entries.
     /// </summary>
     internal const string EntryRowKeyPrefix = "E";

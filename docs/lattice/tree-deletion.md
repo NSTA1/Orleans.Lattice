@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/tree-delete-recover.yaml"
+---
+
 # Tree Deletion
 
 ## Overview

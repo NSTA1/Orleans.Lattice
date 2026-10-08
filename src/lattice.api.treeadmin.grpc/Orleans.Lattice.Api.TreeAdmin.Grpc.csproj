@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.TreeAdmin.Grpc</PackageId>
-    <Version>9.9.0</Version>
+    <Version>10.0.0</Version>
     <Description>Code-first gRPC transport binding and strongly typed client for Orleans.Lattice.Api.TreeAdmin. Exposes the tree-administration control facade over a remote gRPC surface with a default-deny authorization interceptor, credential bridging, and auth-scheme discovery, including capability probes, diagnostics, the WAL reclamation read, lifecycle operations, bulk load, resize, reshard, snapshots, restore, WAL placement and moves, views, tag indexes, retention, shard compaction, the orphaned-leaf audit and repair, accept-then-poll maintenance operations, and schema-capability delegation.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

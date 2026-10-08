@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Api.Backup configuration
 
 The facade package has one public options type, `LatticeApiBackupOptions`, bound through `AddLatticeBackupApi(configure)` and resolvable via `IOptions<LatticeApiBackupOptions>`. The sibling gRPC package exposes `LatticeBackupApiGrpcOptions`, and the underlying backup engine exposes `LatticeBackupHealthOptions` for periodic health monitoring.

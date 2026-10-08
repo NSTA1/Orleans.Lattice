@@ -135,7 +135,7 @@ public class BootstrapTransientRetryIntegrationTests
     /// faults, the bounded retry policy on the receiver re-issues
     /// the call, and the channel has recovered by the time the
     /// second attempt runs. Thread-safe via
-    /// <see cref="Interlocked.Increment"/>.
+    /// <see cref="System.Threading.Interlocked.Increment(ref int)"/>.
     /// </summary>
     private sealed class FlakyRemoteSnapshotTransport(
         IRemoteSnapshotTransport inner,

@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests.Policy;
 [TestFixture]
 public sealed partial class LatticeTenantPolicyAdminTests
 {
-    /// <summary>Every facade operation, invoked for <paramref name="tenantId"/> with valid other arguments.</summary>
+    /// <summary>Every facade operation, invoked for <c>tenantId</c> with valid other arguments.</summary>
     private static readonly (string Name, Func<ILatticeTenantPolicyAdmin, string, Task> Call)[] Operations =
     [
         ("PutRule", (f, t) => f.PutRuleAsync(t, Draft())),

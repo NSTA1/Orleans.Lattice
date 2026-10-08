@@ -125,7 +125,7 @@ deployment target, not a degraded development mode.
   [RepoContext container](samples/RepoContextContainer/README.md) does. The
   in-memory WAL is the default if you do not need durability yet.
 - **Inspection.** The [Explorer console](docs/lattice.explorer/running-the-explorer.md)
-  (in progress) browses trees, topology, data and history over the cluster's
+  browses trees, topology, data and history over the cluster's
   gRPC APIs.
 - **AI access.** The [MCP server](docs/lattice.api.mcp/README.md) exposes the
   cluster's API facades as Model Context Protocol tools an agent can call.
@@ -185,7 +185,7 @@ nothing it leaves out is present at runtime.
 flowchart TD
     App["Applications<br/>knowledge systems, AI memory, digital twins, search,<br/>control planes, multi-tenant SaaS, collaboration"]
 
-    App --> Explorer["Explorer console<br/>(in progress)"]
+    App --> Explorer["Explorer console"]
     App --> Apis["API facades<br/>state, data, auth, schema, backup, replication,<br/>telemetry, tree admin, tenant admin, apps"]
     App --> Mcp["MCP server<br/>tools for AI agents"]
 
@@ -377,7 +377,7 @@ Use these documents for day-to-day use and operations:
 For internals (the "how"):
 
 - [Architecture](docs/lattice/architecture.md) - grain layers, sharding, root promotion, grain mapping, capacity.
-- [State Model](docs/lattice/state-model.md) - how tree state is laid out on disk and in memory, why the leaf state row stays small, and what an activation replays.
+- [State Model](docs/lattice/state-model.md) - how tree state is laid out on disk and in memory, why the leaf state row omits per-key entries, and what an activation replays.
 - [State Primitives](docs/lattice/state-primitives.md) - the monotonic state primitives (hybrid logical clock, last-writer-wins register, version vector) and the opt-in CRDT value types.
 - [Tree Structure](docs/lattice/tree-structure.md) - internal/leaf node layout, two-phase leaf splits, idempotent split propagation.
 - [Tree Storage](docs/lattice/tree-storage.md) - per-provider storage limits, node size estimation, sizing recommendations.

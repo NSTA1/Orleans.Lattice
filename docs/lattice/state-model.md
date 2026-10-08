@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # State Model
 
 This document describes how Orleans.Lattice represents tree state on
@@ -13,7 +17,7 @@ distinct durability boundaries and growth rates:
 | Layer | Lives in | Grows with | Durability boundary |
 |---|---|---|---|
 | Write-ahead log (WAL) | Per-partition `IWalStorageProvider` rows (the mutation key's hash picks the partition, not the tree's physical shard) | Total mutation count since last GC | Foreground commit: a mutation is durable once its WAL append returns |
-| Leaf state row | Leaf persistent state | Fixed-shape topology + checkpoint metadata. **Does not grow** with live-key count. | Periodic checkpoint persist (see [Configuration: `MaterialiserCheckpointInterval` / `MaterialiserCheckpointEntries`](configuration.md)) |
+| Leaf state row | Leaf persistent state | Topology, checkpoint and recovery metadata, including variable-length replay-work and discarded-prepare ledgers. No per-key projection is persisted here; unresolved prepares can grow the row without limit. | Periodic checkpoint persist (see [Configuration: `MaterialiserCheckpointInterval` / `MaterialiserCheckpointEntries`](configuration.md)) |
 | Snapshot blob | The leaf's snapshot row (a separate `leaf-snapshot` grain state), plus separate segment rows when a capture exceeds `LeafSnapshotSegmentBytes` | Entry count (live keys plus uncompacted tombstones) * canonical row size | Each snapshot capture - whenever the leaf's durable coverage lags its checkpoint (the WAL GC trims only covered prefixes) and when a checkpoint nears the WAL retention horizon; see [Projection Rebuild: snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) |
 
 The **WAL is canonical.** Everything else is derived. A leaf's
@@ -24,9 +28,9 @@ the projection, persisted separately both to bound activation cost
 and as the durable coverage that lets the WAL GC trim the prefix it
 covers.
 
-## Why the leaf state row stays small
+## Why the leaf state row omits per-key entries
 
-The pre-collapse leaf state row carried the per-key `Entries`
+The pre-collapse leaf state row carried the per-key entry
 dictionary inline. That coupled the persisted row size to
 `MaxLeafKeys` * average per-entry overhead - a leaf could carry
 hundreds of KB of LWW state in its state row, which forced the
@@ -39,8 +43,8 @@ The collapsed leaf state row carries only:
   including the durable marker of a split still in flight), plus the
   moved-away slot seal an adaptive shard split records (a later shard
   consolidation that folds those slots back lifts it).
-- The projection-digest XOR fold (`ProjectionHash`, 16 bytes).
-- The `ProjectionCheckpointOffset` pointing into the WAL, plus a
+- The projection-digest XOR fold (16 bytes).
+- The scalar projection checkpoint pointing into the WAL, plus a
   per-partition offset array on a multi-partition tree and a flag
   recording that partition 0's checkpoint was actually assigned rather
   than defaulted.
@@ -52,10 +56,16 @@ The collapsed leaf state row carries only:
   terminals the flush ceiling has advanced past - which is empty in the
   steady state and lets a partition bank forward progress instead of
   re-reading the same WAL range on every activation.
+- Receiver-side saga prepares deliberately discarded during recovery, with
+  partition offsets used to prune their durable discard records when safe.
+- A per-partition record that a covering snapshot has been kept, so a missing
+  snapshot cannot silently be treated as a fresh leaf after coverage-gated WAL
+  trimming.
+- A flag recording that the leaf's separate row record is durable.
 - The byte size the leaf's persisted snapshot last occupied, a hint
   the next activation uses to reserve hydration budget up front.
 
-See [Tree Storage](tree-storage.md) for exact byte-level sizing.
+The row is not fixed-size. `MaxDurableUnresolvedReplayWork` (default 1 024) bounds deferred terminals, not resident unresolved prepares: prepares remain durable even beyond the cap, so a saga backlog can exceed a storage limit or prevent activation. See [Tree Storage](tree-storage.md) for sizing and this failure mode.
 
 The per-activation entry cache - the actual per-key
 last-writer-wins rows - is rebuilt on every activation from the
@@ -86,12 +96,17 @@ order:
    fresh snapshot once its tail replay has re-advanced that
    checkpoint, in the same activation, so it does not reload the
    same stale snapshot every time.
-2. **Choose where the replay starts.** A leaf that rehydrated from a
-   snapshot resumes above it (a *warm* activation). A leaf with no
-   usable snapshot starts with an empty cache, which the persisted
-   checkpoint cannot anchor - replaying only past it would drop
-   every entry at or below it - so it replays the whole readable
-   WAL window instead (a *cold* activation).
+2. **Choose where the replay starts, or fail closed.** A leaf that
+   rehydrated from a snapshot resumes above it (a *warm* activation).
+   A leaf that never kept a covering snapshot starts with an empty
+   cache and replays the whole readable WAL window (a *cold* activation),
+   subject to the genuine-loss guard below. An unreadable snapshot,
+   or an absent snapshot whose durable coverage record proves it once
+   existed, instead leaves the projection unavailable: data operations
+   fail without replay, even if the current WAL tail appears intact.
+   Restore the snapshot or explicitly accept loss through
+   `ILattice.RebuildLeafProjectionAsync`. See
+   [Projection Rebuild](projection-rebuild.md#a-vanished-leaf-snapshot).
 3. **Classify, then replay, each WAL partition.** Before reading a
    partition, the fall-off-log detector classifies the gap between
    the checkpoint and the WAL. Only a WAL trimmed past the
@@ -128,7 +143,7 @@ The activation path therefore tolerates any combination of:
   the WAL has been trimmed (snapshot rehydrate, then tail replay
   from the snapshot offset).
 
-The one case it does not tolerate is genuine loss: a checkpoint the
+Another case it does not tolerate is genuine WAL loss: a checkpoint the
 WAL has been trimmed past with no snapshot covering the gap. Under
 every `ProjectionRebuildPolicy` value (`SnapshotThenWal`,
 `FullRebuildFromWal`, or `Fail`) the activation then fails with

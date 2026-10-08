@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Replication;
 /// <remarks>
 /// <para>
 /// The apply path reads <see cref="IsActive"/> first and calls
-/// <see cref="EvaluateAsync"/> only when it is <c>true</c>, so the tenancy-off path
+/// <see cref="EvaluateAsync(string, string?, CancellationToken)"/> only when it is <c>true</c>, so the tenancy-off path
 /// is a single bool read that adds no allocation and no grain call to the apply hot
 /// path. When active, the gate is consulted once per inbound run (a run shares one
 /// tree id, hence one owning tenant), after the enrollment / merge-mode gate and
@@ -33,7 +33,7 @@ public interface IReplicationTenantIsolationGate
     /// <summary>
     /// <c>true</c> when a real tenancy gate is wired in (the tenancy add-on
     /// replaced the null default); <c>false</c> for the null default. The apply
-    /// path reads this first and consults <see cref="EvaluateAsync"/> only when it
+    /// path reads this first and consults <see cref="EvaluateAsync(string, string?, CancellationToken)"/> only when it
     /// is <c>true</c>, so replication behaves exactly as it did before tenancy when
     /// this is <c>false</c>.
     /// </summary>

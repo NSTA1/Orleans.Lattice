@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Local deployment runbook
 
 How the tuned, long-lived local RepoContext container deployment is built, pinned,

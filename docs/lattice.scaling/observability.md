@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Observability
 
 The `Orleans.Lattice.Scaling` package emits its signal as OpenTelemetry metrics

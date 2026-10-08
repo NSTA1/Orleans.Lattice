@@ -1,0 +1,79 @@
+schema: lattice.agents/procedure/v1
+id: tenant-region-drain
+name: "Drain and revoke a tenant region"
+surfaces:
+  in_process:
+    api: "ILatticeTenantRegionAdmin"
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+  grpc:
+    api: "/orleans.lattice.api.tenantadmin/SetTenantResidency, /orleans.lattice.api.tenantadmin/GetTenantRegionStatus, /orleans.lattice.api.tenantadmin/AuthorizeAllowedRegions"
+    source: "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs"
+  mcp_tool:
+    api: "lattice_tenant_set_residency, lattice_tenant_region_status, lattice_tenant_authorize_regions"
+    source: "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Read api/tenantadmin.json availability and each named tool's api/mcp.json availability; confirm the tools in the session tools/list."
+    source: "docs/agents/api/tenantadmin.json"
+  - id: resident-remains
+    check: "Keep at least one resident region, and verify the intended replacement is Online using region-backfill.yaml before withdrawing traffic from the old region."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs#SetResidencyAsync"
+  - id: caller-authorized
+    check: "Residency changes and status reads require a platform operator or tenant administrator; revoking allowed regions requires a platform operator."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+steps:
+  - n: 1
+    action: "Read the current status, then set the complete desired residency set without the region to drain."
+    api: "ILatticeTenantRegionAdmin.SetResidencyAsync / lattice_tenant_set_residency"
+    expects: "RemovedRegions reports the drop; its lifecycle status becomes Draining."
+    source: "src/lattice.api.tenantadmin/LatticeTenantRegionAdmin.cs#SetResidencyAsync"
+  - n: 2
+    action: "Poll status until the dropped region is Removed; no operator advance is needed."
+    api: "ILatticeTenantRegionAdmin.GetTenantRegionStatusAsync / lattice_tenant_region_status"
+    expects: "Local listeners drive Draining to Offline to Removed. Leaving Online stops client serving and inbound tenant replication immediately; outbound writes accepted while Online can still ship."
+    source: "src/lattice.api.tenantadmin/TenantRegionDrainCompletionListener.cs"
+  - n: 3
+    action: "If the region must no longer be allowed, have a platform operator replace the complete allowed set without it after drain completion."
+    api: "ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync / lattice_tenant_authorize_regions"
+    expects: "A still-resident region cannot be revoked; after removal it can be."
+    source: "src/lattice.api.tenantadmin/LatticeTenantRegionAdmin.cs#AuthorizeAllowedRegionsAsync"
+postconditions:
+  - check: "The tenant is no longer served in the removed region; removing residency is not a cluster-wide peer decommission or a data purge."
+    source: "src/lattice.api.tenantadmin/TenantRegionDrainCompletionListener.cs"
+failure_modes:
+  - id: last-region
+    signal: "TenantLastRegionException."
+    effect: "The operation is refused; a failed post-join guard repairs only this call's removed regions."
+    response: "Backfill a replacement region first and resubmit a complete non-empty residency set."
+  - id: revoke-before-drain
+    signal: "TenantRegionNotAllowedException when revoking an allowed region."
+    effect: "A resident region remains allowed."
+    response: "Drop it from residency and wait for Removed before revoking it."
+  - id: drain-interrupted
+    signal: "The dropped region remains Draining or Offline after a silo fault."
+    effect: "The tenant remains non-serving there."
+    response: "Restore the region's lifecycle listener; the first residency snapshot after restart redrives the step. Do not use the add-path override."
+  - id: surface-not-available
+    signal: "The tenant facade is not registered or the tool is absent."
+    effect: "Tenant residency cannot be changed on this host."
+    response: "Report the availability requirement; non-tenant peer removal is a different operation described by replication-peer-management.yaml."
+rollback:
+  supported: true
+  mechanism: "Reauthorize the region if necessary, then include it in the complete residency set. Re-add starts Provisioning and must backfill again before serving."
+  steps:
+    - action: "Re-add through the verified backfill procedure, not by forcing Online."
+      api: "ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync / SetResidencyAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+  source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+concurrency:
+  - rule: "The last-region guard runs before write and after the committed CRDT join; concurrent removals cannot empty residency."
+    source: "src/lattice.api.tenantadmin/LatticeTenantRegionAdmin.cs#SetResidencyAsync"
+  - rule: "Drain-only promotion is a no-op when a concurrent re-add supersedes the old status; the listener never promotes an added region Online."
+    source: "src/lattice.api.tenantadmin/TenantRegionLifecycleDriver.cs#CompleteDrainStepAsync"
+sources:
+  - "docs/agents/procedures/region-backfill.yaml"
+  - "docs/agents/procedures/replication-peer-management.yaml"
+  - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+  - "src/lattice.api.tenantadmin/LatticeTenantRegionAdmin.cs"
+  - "src/lattice.api.tenantadmin/TenantRegionDrainCompletionListener.cs"
+  - "src/lattice.api.tenantadmin/TenantRegionLifecycleDriver.cs"

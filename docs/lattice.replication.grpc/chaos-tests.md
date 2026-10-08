@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Chaos tests
 
 The gRPC transport package has a focused chaos suite for the network binding between the replication shipper and receiver endpoint. It complements the broader replication [chaos tests](../lattice.replication/chaos-tests.md), which cover multi-cluster convergence, WAL trim, liveness, and Azure Table WAL durability.

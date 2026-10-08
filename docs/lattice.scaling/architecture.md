@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Architecture
 
 How the autoscaling signal is collected, aggregated, smoothed, and gated, and why

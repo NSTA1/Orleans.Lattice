@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Membership.Entra.Graph configuration
 
 The package documents `LatticeEntraGraphOptions`, which configures the Microsoft Graph-backed group resolver: the Entra application credentials it authenticates with, the Graph scopes it requests, and how it shapes the transitive-group query. It is bound by the `AddEntraGraphGroupResolver` registration extension. The app-only access token is acquired and refreshed transparently, so operators never manage a Graph token directly.

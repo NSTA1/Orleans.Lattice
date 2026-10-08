@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Replication
 
 Cross-cluster replication for [Orleans.Lattice](../../README.md) - captures every mutation at commit time, ships it between Orleans clusters under the source cluster's HLC, and applies it on the receiver with CRDT-aware merges, causal delivery, snapshot bootstrap, and dead-letter quarantine.

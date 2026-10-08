@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Schema versioning
 
 Schema versioning lets an opted-in tree stamp each value with a self-describing
@@ -54,14 +58,7 @@ is ignored.
 
 ### Versioning options
 
-`LatticeSchemaVersioningOptions` holds the silo-wide switches; per-tree behaviour
-(the schema id, the target version, and the per-tree strict flag) lives in each
-tree's `LatticeSchemaVersionConfig`.
-
-| Option | Type | Default | Effect |
-|---|---|---|---|
-| `StrictIngest` | `bool` | `false` | The global half of strict-mode ingest (see [Ingest trust model](#ingest-trust-model), which also says which ingest paths reach the stage at all). While it is `false` the versioning stage does not ask to see system-origin writes. |
-| `DeadLetterPreviewMaxBytes` | `int` | `4096` | The maximum number of leading value bytes copied into the `ValuePreview` of a dead-letter entry the versioning stage writes. A value below `1` is treated as `1`. An eager migration's abort preview is bounded by `LatticeSchemaEnforcementOptions.DeadLetterPreviewMaxBytes` instead. |
+See [configuration](configuration.md) for every silo-wide option, its default, registration-only switches and the composition order.
 
 ## Opting a tree in
 
@@ -226,7 +223,10 @@ Replication apply and backup restore are trusted by default: an ingested item is
 stored with whatever version tag it carries, and read-time upcasting brings it to
 the target when it is later read. Opt into `StrictIngest` to re-validate ingest: an
 item whose version is newer than the target, or which cannot be upcast, is
-[dead-lettered](dead-letter-queue.md) rather than applied, so ingest never blocks.
+[dead-lettered](dead-letter-queue.md) rather than applied. The dead-letter append
+is awaited; storage failure or cancellation can still fail the intercepted
+write. Diversion avoids waiting for the offending value to be repaired, not
+every possible ingestion failure.
 
 Strict mode only sees ingest that reaches the tree's write operations as a
 system-origin write, which in practice is the typed-CRDT replication path (a

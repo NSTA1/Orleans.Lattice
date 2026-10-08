@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Chaos tests
 
 The replication subsystem ships its own chaos-test suites that exercise

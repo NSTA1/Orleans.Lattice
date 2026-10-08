@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Surfaces
 
 The state API exposes read-only surfaces: discovery, structure, entry inspection, change history, dead letters, change observation, metrics, and cluster info. The gRPC binding exposes RPCs for the remotely supported read surfaces; facade-only summary helpers such as `GetTreeSummaryAsync`, `GetShardSummariesAsync`, and `GetPhysicalShardCountAsync` are available only to in-process consumers. The examples below drive the remote surface through `LatticeStateApiGrpcClient`; the facade DTOs flow directly or inside gRPC wrapper records when you consume the facade remotely.

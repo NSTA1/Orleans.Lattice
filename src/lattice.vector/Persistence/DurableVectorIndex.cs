@@ -150,7 +150,7 @@ public sealed partial class DurableVectorIndex
     /// <summary>
     /// Creates the index object without reading anything, so a caller that drives
     /// the load itself can <b>keep the instance across a load that faults</b> and
-    /// call <see cref="LoadOrResumeAsync"/> again to continue it.
+    /// call <see cref="Orleans.Lattice.Vector.Persistence.DurableVectorIndex.LoadOrResumeAsync(System.Threading.CancellationToken)"/> again to continue it.
     /// <para>
     /// <b>Why this is separate from <see cref="OpenAsync"/>.</b> The factory builds
     /// into a local and returns only on success, so a faulted load discards the
@@ -161,7 +161,7 @@ public sealed partial class DurableVectorIndex
     /// construction from loading is what lets the progress survive the fault.
     /// </para>
     /// <para>
-    /// The index is <b>not usable</b> until a <see cref="LoadOrResumeAsync"/> call
+    /// The index is <b>not usable</b> until a <see cref="Orleans.Lattice.Vector.Persistence.DurableVectorIndex.LoadOrResumeAsync(System.Threading.CancellationToken)"/> call
     /// returns successfully; <see cref="IsLoaded"/> reports when that has happened.
     /// Prefer <see cref="OpenAsync"/> unless you are implementing the retry.
     /// </para>
@@ -288,7 +288,7 @@ public sealed partial class DurableVectorIndex
 
     /// <summary>
     /// Whether an interrupted load banked progress that a further
-    /// <see cref="LoadOrResumeAsync"/> will continue from rather than re-read.
+    /// <see cref="Orleans.Lattice.Vector.Persistence.DurableVectorIndex.LoadOrResumeAsync(System.Threading.CancellationToken)"/> will continue from rather than re-read.
     /// <para>
     /// A resumed load and a restarted one reach the same final state, so this is
     /// the only witness that the resume happened at all. Reported here so the

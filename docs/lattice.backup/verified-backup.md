@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Verified backup and restore
 
 Backup and restore meet concurrent atomic writes, replication and failures at
@@ -80,14 +84,14 @@ The checks reach production through four extracted cores, each executed by the
 code that runs and by a test that drives it:
 
 - the cross-tree set's drain gate, re-check under the decision gate and
-  post-capture re-observation (`CrossTreeFenceWindow`), also driven by a Coyote
+  post-capture re-observation, also driven by a Coyote
   model;
 - the origin normalisation, per-origin high-water and consistency-cut frontier
-  rules of every capture (`BackupChainFrontier`);
+  rules of every capture;
 - how an incremental backup resolves the atomic batches in its window against
-  the decision gate (`IncrementalSagaStaging`);
+  the decision gate;
 - the coordinated restore's single commit-or-abort decision
-  (`CrossClusterSagaDecisionCore`), also driven by a Coyote model.
+  (shared production/test decision logic), also driven by a Coyote model.
 
 Everything else the specifications describe - the decision gate's registry leases, routing,
 redirects, the alias reservation, the write and receive fences - is mapped to

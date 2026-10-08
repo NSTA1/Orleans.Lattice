@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// head-of-line-block behind a long non-reentrant turn on the shard-root
 /// activation.
 /// <para>
-/// <see cref="IsSplittingAsync"/> is one of three probes the split and
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.IsSplittingAsync()"/> is one of three probes the split and
 /// healing coordinators fan out per shard and then await together:
 /// </para>
 /// <list type="bullet">

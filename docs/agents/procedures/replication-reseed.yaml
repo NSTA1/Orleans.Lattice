@@ -7,7 +7,7 @@ surfaces:
     source: "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin.RequestSnapshotAsync"
 preconditions:
   - id: surface-available
-    check: "Every surface this procedure uses is registered on the host: read the availability of api/replication.json. An MCP tool must also be listed in the session's tools/list."
+    check: "Read api/replication.json availability. Re-seed and bootstrap status are host-code in-process operations, not MCP or operator gRPC tools; the remote snapshot gRPC service is the internal data transport."
     source: "docs/agents/api/replication.json"
   - id: source-cluster-selected
     check: "The operator names a non-empty source cluster id to produce the snapshot."
@@ -33,15 +33,21 @@ steps:
     expects: "Routine re-seed can return Triggered false with RetryAfter; force returns Triggered true when the coordinator call succeeds."
     source: "src/lattice.replication/LatticeReplicationAdmin.cs#LatticeReplicationAdmin.RequestSnapshotAsync"
   - n: 3
-    action: "Poll bootstrap status until LiveIncremental or Failed."
+    action: "Poll bootstrap status until LiveIncremental and unfenced. If Failed, inspect ReadFenced and whether a shadow was already published before choosing recovery; legacy fenced and published-shadow completion attempts automatically re-drive, so Failed alone is not a terminal safe serving state."
     api: "ILatticeBootstrapCoordinator.GetStatusAsync / GetStateAsync"
-    expects: "LiveIncremental means the snapshot frontier is pinned and incremental replication is live."
-    source: "docs/lattice.replication/snapshot-bootstrap.md"
+    expects: "LiveIncremental with ReadFenced false means the complete snapshot is published and incremental replication is live. Inspect EntriesApplied, RedriveAttempts and CompletedSourceClusterId; Triggered true alone is only kickoff."
+    source: "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
 postconditions:
-  - check: "After the snapshot drain, the receiver pins the snapshot causal-stable frontier as both high-water-mark vector and pinned causal floor."
-    source: "docs/lattice.replication/snapshot-bootstrap.md"
-  - check: "Incremental entries at or below the pinned frontier are no-ops, preserving an exactly-once snapshot-to-incremental handoff."
-    source: "docs/lattice.replication/snapshot-bootstrap.md"
+  - check: "Fresh attempts build a shadow copy and atomically publish it after a complete drain, preserving the prior serving view; legacy partially imported read-fenced attempts resume in place and retain the fence until completion."
+    source: "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs"
+  - check: "Handoff merges the exported frontier by pointwise maximum and clears the legacy pinned floor. Exact identity dedup and per-key merge absorb duplicates; a genuinely new point write is not dropped solely because its HLC is older than a snapshot coordinate."
+    source: "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#PinAndCompleteAsync"
+  - check: "An applier-deferred snapshot row fails the attempt before handoff; no frontier is sealed past an unapplied row."
+    source: "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#DrainSnapshotAsync"
+  - check: "Reaped source deletes reconcile only with stable known source generation, aligned lineage and unscoped LwwRegister export; uncertainty keeps rows and records an owed retry. Receiver-origin rows are never inferred deleted from a foreign snapshot."
+    source: "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs"
+  - check: "The source export lineage is recorded durably at drain open; stale-lineage pushes are refused. Do not treat skipped delete reconciliation as proof that old rows were removed."
+    source: "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#RecordDrainedLineage"
   - check: "A fall-off probe for the same source while bootstrap is active is suppressed and counted separately."
     source: "docs/lattice.replication/auto-bootstrap.md"
 failure_modes:
@@ -68,14 +74,14 @@ failure_modes:
   - id: unreachable-peer
     signal: "Remote snapshot transport returns Unavailable, DeadlineExceeded, Aborted or an equivalent transient network fault."
     effect: "The drain retries within the transient budget, then the bootstrap transitions to Failed if the budget is exhausted."
-    response: "Restore peer reachability and request or force the re-seed again."
+    response: "Restore peer reachability. An unpublished failed shadow is discarded without exposing a partial copy; a published shadow handoff or legacy fenced partial import re-drives automatically. Inspect status before requesting another source."
   - id: surface-not-available
-    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    signal: "The host-code admin or bootstrap interface cannot be resolved, or the source's internal remote-snapshot transport is not mapped."
     effect: "The operation cannot be carried out through that surface on this host."
     response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: false
-  mechanism: "Snapshot re-seed applies data and pins a new frontier; there is no re-seed undo. Re-seed again from another source or restore from backup if the chosen source was wrong."
+  mechanism: "No undo exists after publication. Before publication a failed shadow is discarded and the prior serving view remains; after publication re-seed from the correct source or restore from backup. ForceLiftBootstrapReadFenceAsync is an alarmed host-code-only override, not rollback: it stops legacy re-drive and can expose a partial import."
   steps: []
   source: "docs/lattice.replication/snapshot-bootstrap.md"
 concurrency:
@@ -88,6 +94,8 @@ concurrency:
   - rule: "Remote snapshot transports are safe to invoke concurrently across distinct tree and source-cluster pairs; receivers serialize a single pair through the bootstrap coordinator."
     source: "docs/lattice.replication/snapshot-bootstrap.md"
 sources:
+  - "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+  - "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs"
   - "docs/lattice.replication/snapshot-bootstrap.md"
   - "docs/lattice.replication/auto-bootstrap.md"
   - "docs/lattice.replication/transport-security.md"

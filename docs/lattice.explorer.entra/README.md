@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra
 
 `Orleans.Lattice.Explorer.Entra` adds an interactive Microsoft Entra ID sign-in
@@ -80,6 +84,12 @@ services.AddExplorerEntraAuth(options =>
 | `MsalEntraInteractiveTokenAcquirer` | Default acquirer | MSAL public-client implementation. MSAL owns the in-memory token cache; the Explorer configuration store is not used for tokens. |
 | `EntraTokenRequest` | `sealed record` | Authority, client id, scopes, device-code flag, and optional username for silent renewal. |
 | `EntraTokenResult` | `readonly record struct` | Access token, expiry and optional username. In memory only. |
+
+## Reference
+
+- [API reference](api.md) - public registration, auth method, token seam, request and result types.
+- [Configuration](configuration.md) - every option and its default, plus advertised-value admission rules.
+- [Architecture](architecture.md) - interactive sign-in, account-bound renewal and token lifetime.
 
 ## See also
 

@@ -45,3 +45,7 @@ Behaviour:
   composed physical tree id crosses the facade.
 - Uninstall soft-deletes an app's structural trees and never purges them itself;
   the core purges each soft-deleted tree once its soft-delete window elapses.
+
+Part of [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). See the
+[Apps API documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.apps/README.md)
+for the full control surface and security model.

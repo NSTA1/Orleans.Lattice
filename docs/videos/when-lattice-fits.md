@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # When Lattice fits, and when it doesn't
 
 What Orleans.Lattice takes the place of in a system, the three positions it

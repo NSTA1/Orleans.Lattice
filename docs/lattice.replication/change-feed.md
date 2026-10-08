@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Change feed (`IChangeFeed`)
 
 `IChangeFeed` is the public, in-process subscriber API over a tree's partitioned write-ahead log. It lets in-process consumers - custom bridges and transports, integration tests, and in-process projections - read every locally-authored `WalRecord` for a tree without touching the primary state and without depending on transport-shaped acks. Entries installed on this cluster by inbound replication apply are filtered out; decorate `IReplicationApplier` to observe those.

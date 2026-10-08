@@ -392,8 +392,8 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     /// When it did not - no explicit target and a backup id the manifest lookup
     /// missed - the scope falls back to the reserved catalog tree, carrying the same
     /// cluster-wide <see cref="LatticeOperation.Restore"/> authority
-    /// <see cref="RebuildCatalogFromSinkAsync"/> and
-    /// <see cref="ScrubCatalogAgainstSinkAsync"/> require. Previously the gate was
+    /// <see cref="ILatticeBackupOperations.StartCatalogRebuildAsync"/> and
+    /// <see cref="ILatticeBackupOperations.StartCatalogScrubAsync"/> require. Previously the gate was
     /// simply skipped on that branch, which is a bypass rather than a deferral: the
     /// catalog is a disposable projection over the sink - which is exactly why the
     /// rebuild and scrub paths exist - so a sink-resident, catalog-absent backup id

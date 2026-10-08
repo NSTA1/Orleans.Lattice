@@ -1325,11 +1325,11 @@ internal static class RepoContextToolHandlers
     }
 
     /// <summary>
-    /// Resolves the <see cref="RepoContextSearchService"/> from the MCP request's
-    /// service provider, failing with a clear message when the provider is absent.
+    /// Executes a foreground operation while signalling the indexing pacer to yield.
     /// </summary>
     /// <param name="context">The MCP request context.</param>
-    /// <returns>The resolved search service.</returns>
+    /// <param name="operation">The foreground operation to execute while indexing yields.</param>
+    /// <returns>The result of the foreground operation.</returns>
     internal static async Task<T> RunInForegroundAsync<T>(
         RequestContext<CallToolRequestParams> context, Func<Task<T>> operation)
     {

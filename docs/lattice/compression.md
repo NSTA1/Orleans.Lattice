@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Compression
 
 This document is the source of truth for everything related to compression in Orleans.Lattice: the public seam, the registration pattern, the on-wire tag space, the configuration knobs, and the worked examples for plugging in a custom algorithm. Sibling docs (`wire-format.md`, `configuration.md`, `api.md`) link here instead of repeating the material.

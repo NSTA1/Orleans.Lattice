@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # gRPC Contract
 
 `Orleans.Lattice.Api.State.Grpc` is a **code-first** gRPC binding. There is no hand-written `.proto`: the service and its methods are defined in C#, and its request / response messages are Orleans-serialized C# records. Most RPCs reuse the facade DTOs directly; RPCs that need a transport-specific envelope wrap the facade arguments or results in binding-owned records. The server binds the methods; the public `LatticeStateApiGrpcClient` calls them; both sides share identical marshallers, so the wire format stays in lock-step by construction.

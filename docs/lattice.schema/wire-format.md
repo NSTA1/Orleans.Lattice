@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Wire format
 
 Schema [versioning](schema-versioning.md) stamps each stored value with a small,

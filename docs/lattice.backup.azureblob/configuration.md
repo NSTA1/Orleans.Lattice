@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup.AzureBlob configuration
 
 The package has a single public options type, `LatticeBackupAzureBlobOptions`, bound through `AddLatticeBackupAzureBlob(configure)`.

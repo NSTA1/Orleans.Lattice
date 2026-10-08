@@ -131,6 +131,7 @@ public sealed class ShardRootGrainSnapshotBaselineCaptureTests
     /// </param>
     /// <param name="stallDuration">The hard ceiling to arm, or infinite.</param>
     /// <param name="parkFreezeAtLeaf">A leaf whose freeze never returns, or -1.</param>
+    /// <param name="leafCount">The number of leaves in the chain.</param>
     private static CaptureHarness CreateChain(
         int leafCount,
         Func<int, IReadOnlyList<LeafSnapshotRow>> rowsPerLeaf,

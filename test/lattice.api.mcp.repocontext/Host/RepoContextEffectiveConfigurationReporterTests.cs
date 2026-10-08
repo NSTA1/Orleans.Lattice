@@ -348,7 +348,7 @@ public sealed partial class RepoContextEffectiveConfigurationReporterTests
     /// <summary>
     /// Covers <see cref="RepoContextEffectiveConfiguration.ReadProcessEnvironment"/>,
     /// the seam that supplies the real report its input. Every other test here hands
-    /// <see cref="RepoContextEffectiveConfiguration.DescribeUnreadVariables"/> a
+    /// <see cref="Orleans.Lattice.Api.Mcp.RepoContext.Host.RepoContextEffectiveConfiguration.DescribeUnreadVariables(System.Collections.Generic.IEnumerable{System.Collections.Generic.KeyValuePair{string, string}}, System.Collections.Generic.IEnumerable{string})"/> a
     /// hand-built list, so the whole "supplied but not read" arm of #2279 could work
     /// perfectly in this fixture while reading nothing at run time.
     /// <para>
@@ -395,7 +395,7 @@ public sealed partial class RepoContextEffectiveConfigurationReporterTests
     /// <summary>
     /// The read drops non-string environment keys. Nothing downstream can render one,
     /// and a null name would otherwise be carried as far as the prefix test in
-    /// <see cref="RepoContextEffectiveConfiguration.DescribeUnreadVariables"/>.
+    /// <see cref="Orleans.Lattice.Api.Mcp.RepoContext.Host.RepoContextEffectiveConfiguration.DescribeUnreadVariables(System.Collections.Generic.IEnumerable{System.Collections.Generic.KeyValuePair{string, string}}, System.Collections.Generic.IEnumerable{string})"/>.
     /// </summary>
     [Test]
     public void The_process_environment_read_never_yields_a_null_name()

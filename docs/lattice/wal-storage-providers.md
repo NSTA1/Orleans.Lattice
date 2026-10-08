@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # WAL Storage Providers
 
 The write-ahead log (WAL) is the per-WAL-partition, durable, ordered record of every committed mutation. `IWalStorageProvider` is the pluggable seam that lets a host swap the WAL's underlying storage backend - in-memory for tests and single-process samples, a local disk file for a durable deployment with no cloud dependency, Azure Table Storage for cross-region replicated production deployments, or a custom backend - without touching the rest of the commit-log pipeline.

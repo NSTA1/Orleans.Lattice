@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests;
 
 /// <summary>
 /// Guards the rule behind issues #4146, #4176 and #4180: a caller of
-/// <see cref="Orleans.Lattice.BPlusTree.ILattice.GetRoutingAsync(CancellationToken)"/>
+/// <c>Orleans.Lattice.BPlusTree.ILattice.GetRoutingAsync(CancellationToken)</c>
 /// that does not force a refresh reads the routing the tree's stateless worker
 /// cached for its activation, and nothing invalidates that cache when a resize,
 /// snapshot or restore swaps the alias or a reshard, split or fold changes the

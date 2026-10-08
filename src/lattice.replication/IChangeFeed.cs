@@ -39,7 +39,7 @@ namespace Orleans.Lattice.Replication;
 /// downstream consumer sees it. A custom bridge that shipped this feed and
 /// re-emitted remote applies would ship a peer's writes back across the wire and
 /// loop the cluster. The
-/// <c>includeLocalOrigin=false</c> filter on <see cref="Subscribe"/>
+/// <c>includeLocalOrigin=false</c> filter on <see cref="Orleans.Lattice.Replication.IChangeFeed.Subscribe(string, Orleans.Lattice.HybridLogicalClock, bool, System.Threading.CancellationToken)"/>
 /// is an *additional* filter for consumers that explicitly want to suppress
 /// local-origin observer entries; it is orthogonal to the foreign-origin guard.
 /// The <see cref="IMutationObserver"/> hook in the core library has the same

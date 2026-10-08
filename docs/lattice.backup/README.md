@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup
 
 Causally-consistent backup and restore for [Orleans.Lattice](../../README.md).
@@ -115,6 +119,7 @@ The backup API facade now exposes accept-then-poll backup and restore operations
 - [API reference](api.md) - every public type and member, by name, with signatures.
 - [Configuration](configuration.md) - every public options property, its type, and its default.
 - [Architecture](architecture.md) - the capture, incremental, restore, scheduling, and sink pipelines and the core seams they attach to.
+| [Chaos tests](chaos-tests.md) | Live restore, atomic visibility, tag reconciliation and routing fault scenarios. |
 - [Disaster recovery](disaster-recovery.md) - the sink-is-truth model, catalog rebuild and scrub, cold restore into a fresh cluster, and periodic health monitoring.
 - [Observability](observability.md) - the `orleans.lattice.backup` meter and its instruments.
 - [Verified backup and restore](verified-backup.md) - what the backup and restore specifications check, which guarantees are still open defects, and what is not covered.

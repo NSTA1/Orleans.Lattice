@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra.Web
 
 `Orleans.Lattice.Explorer.Entra.Web` adds hosted-web Microsoft Entra ID sign-in

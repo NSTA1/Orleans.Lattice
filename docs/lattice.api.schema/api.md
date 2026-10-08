@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Orleans.Lattice.Api.Schema API reference
 
 The public surface is the registration extension, the options type, and the facade interfaces published in the shared `Orleans.Lattice.Api.Abstractions` package under the `Orleans.Lattice.Api.Schema` namespace: `ILatticeSchemaControl`, `ILatticeSchemaComplianceOperations`, and `ILatticeSchemaOperations`, alongside `LatticeSchemaCapabilities`, the shared long-running operation records, and the `ApiSchemaTypeAliases` alias table. These facade interfaces are the contracts the gRPC binding adapts over, and are described by their operations below and in [Architecture](architecture.md).

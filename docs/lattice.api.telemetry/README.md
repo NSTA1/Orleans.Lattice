@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/telemetry.json"
+---
+
 # Orleans.Lattice.Api.Telemetry
 
 A **backend-neutral telemetry facade** for a Lattice cluster. It answers a small,

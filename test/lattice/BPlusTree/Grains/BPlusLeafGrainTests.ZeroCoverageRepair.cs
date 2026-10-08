@@ -125,6 +125,8 @@ public partial class BPlusLeafGrainTests
     /// gate first; issue #3575's timer-admission fixtures use it to put the GC
     /// share at a known width on any machine.
     /// </param>
+    /// <param name="walPartitions">The number of WAL partitions.</param>
+    /// <param name="detectorDecision">The detector classification provider shared by all partitions.</param>
     private static (BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
         ILeafSnapshotStorageGrain SnapshotStub,
@@ -550,7 +552,8 @@ public partial class BPlusLeafGrainTests
             + "would turn min(checkpoint, covered) from -1 into 0 and authorise trimming a prefix no "
             + "consumer has read");
     }
-    /// <c>exists p: checkpoint(p) &gt;= 0 AND coverage(p) &lt; 0</c>, and the
+    /// <summary>
+    /// The repair predicate is <c>exists p: checkpoint(p) &gt;= 0 AND coverage(p) &lt; 0</c>, and the
     /// <c>checkpoint &gt;= 0</c> conjunct is what makes it self-extinguishing:
     /// <c>BuildCheckpointCoverage</c> derives each partition's coverage FROM its
     /// checkpoint, so a checkpointed partition necessarily lands <c>&gt;= 0</c>,

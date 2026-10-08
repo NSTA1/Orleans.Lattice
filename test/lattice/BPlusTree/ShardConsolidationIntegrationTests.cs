@@ -179,7 +179,7 @@ public partial class ShardConsolidationIntegrationTests
                 catch (OperationCanceledException)
                 {
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                 }
             }

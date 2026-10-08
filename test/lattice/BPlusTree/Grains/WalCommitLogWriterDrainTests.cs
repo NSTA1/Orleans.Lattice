@@ -457,9 +457,10 @@ public class WalCommitLogWriterDrainTests
 
         heldRelease.TrySetResult(0L);
     }
-    /// must record a counter sample for every drain-triggered release
+    /// <summary>
+    /// The writer must record a counter sample for every drain-triggered release
     /// so a dashboard can graph "how often did we hit this on shutdown"
-    /// and so the regression test for the §32.6 wedge has an
+    /// and so the regression test for the section 32.6 wedge has an
     /// instrument-based gate. Tag scheme mirrors
     /// <see cref="LatticeMetrics.WalAppendDispatchTimeouts"/>
     /// (<c>tree</c>, <c>partition</c>) so dashboards can join across

@@ -79,7 +79,7 @@ internal static class BackupBlobNaming
     /// percent-decoding: <c>%2E%2E/secrets</c> resolves exactly as
     /// <c>../secrets</c> does. One decode matches the platform, which does not
     /// decode a second time, so a double-encoded id is inert. A <em>malformed</em>
-    /// escape is not decoded at all - <see cref="Uri.UnescapeDataString"/> leaves it
+    /// escape is not decoded at all - <see cref="Uri.UnescapeDataString(string)"/> leaves it
     /// verbatim rather than throwing - so such an id is validated on its literal
     /// spelling and accepted when that spelling is a legal blob-name suffix, which
     /// it is: a bare <c>%</c> cannot move the resolved address. A backslash is
@@ -109,7 +109,7 @@ internal static class BackupBlobNaming
     /// <remarks>
     /// There is no explicit empty-string test: both entry points run
     /// <see cref="ArgumentException.ThrowIfNullOrEmpty(string?, string?)"/> before
-    /// this point, and <see cref="Uri.UnescapeDataString"/> never maps a non-empty
+    /// this point, and <see cref="Uri.UnescapeDataString(string)"/> never maps a non-empty
     /// id to an empty one, so an empty spelling cannot arrive here. Were one to,
     /// the segment rules below would still reject it, because splitting an empty
     /// string yields a single empty segment.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Orleans.Lattice.Api.State.Grpc
 
 Code-first gRPC binding for [Orleans.Lattice.Api.State](../lattice.api.state/README.md) - projects the read-only state-API facade onto a long-lived gRPC service and a public typed client, over Orleans-serialized C# records that wrap or reuse facade DTOs, with no hand-written `.proto`.

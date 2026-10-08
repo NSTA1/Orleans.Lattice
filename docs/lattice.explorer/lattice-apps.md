@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/app-lifecycle.yaml"
+---
+
 # Lattice Apps in the Explorer
 
 The Explorer treats [Lattice Apps](../lattice.apps/README.md) as first-class. Browsing

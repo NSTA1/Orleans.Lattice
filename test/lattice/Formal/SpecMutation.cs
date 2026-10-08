@@ -122,7 +122,7 @@ public sealed record SpecMutation
     /// reports it. Running it on the smallest instance that still exhibits the
     /// violation saves that cost without weakening anything the experiment
     /// asserts: the control arm, which is where "the property holds on the
-    /// base" is decided, is built by <see cref="BuildConfig"/> and never sees
+    /// base" is decided, is built by <see cref="Orleans.Lattice.Tests.Formal.SpecMutation.BuildConfig(string)"/> and never sees
     /// these assignments, so it still checks the module's own bounds; and the
     /// mutant arm still has to report exactly its target, so an override that
     /// shrinks the instance below the violation leaves the mutant clean and
@@ -229,10 +229,10 @@ public sealed record SpecMutation
     public string BuildConfig(string baseConfig) => BuildConfig(baseConfig, []);
 
     /// <summary>
-    /// Builds the cfg for the mutant arm: <see cref="BuildConfig"/> plus a
+    /// Builds the cfg for the mutant arm: <see cref="Orleans.Lattice.Tests.Formal.SpecMutation.BuildConfig(string)"/> plus a
     /// <c>CONSTANTS</c> block holding <see cref="Bounds"/>, so the mutant runs
     /// on the smaller instance its header declares while the control arm keeps
-    /// the module's own bounds. Identical to <see cref="BuildConfig"/> for a
+    /// the module's own bounds. Identical to <see cref="Orleans.Lattice.Tests.Formal.SpecMutation.BuildConfig(string)"/> for a
     /// mutation that declares no bounds.
     /// </summary>
     public string BuildMutantConfig(string baseConfig) => BuildConfig(baseConfig, Bounds);

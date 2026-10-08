@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Orleans.Lattice.Scaling
 
 Opt-in autoscaling signal for Orleans.Lattice: a read-only, cluster-aggregate,

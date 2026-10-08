@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Architecture
 
 How a grain index is stored, how entries get written, and what consistency it

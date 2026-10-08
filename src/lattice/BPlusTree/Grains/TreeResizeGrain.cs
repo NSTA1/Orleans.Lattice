@@ -256,7 +256,7 @@ internal sealed class TreeResizeGrain(
                 }
                 catch (Exception unwindException)
                 {
-                    logger.LogError(unwindException,
+                    Logger.LogError(unwindException,
                         "Failed to discard bootstrap copy '{OperationId}' after its coordinator could not start",
                         operationId);
                     throw new AggregateException(

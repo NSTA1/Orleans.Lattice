@@ -10,11 +10,9 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// <c>GrpcBackupControlClient</c>. Faults map through <see cref="ShellTransportFaults"/>.
 /// </summary>
 /// <remarks>
-/// The catalogue-maintenance and cold-restore verbs
-/// (<see cref="GetInventoryAsync"/>, <see cref="RebuildCatalogFromSinkAsync"/>,
-/// <see cref="ScrubCatalogAgainstSinkAsync"/> and <see cref="ColdRestoreAsync"/>)
-/// are in-cluster operator verbs the backup binding does not serve over the wire,
-/// so they fail with <see cref="NotSupportedException"/> - the same shape the
+/// The synchronous inventory read (<see cref="GetInventoryAsync"/>) is an
+/// in-cluster operator verb the backup binding does not serve over the wire,
+/// so it fails with <see cref="NotSupportedException"/> - the same shape the
 /// shared fault table gives a verb a cluster answers <c>Unimplemented</c> for.
 /// A cold restore, a catalogue rebuild and a catalogue scrub are served over the
 /// wire only as tracked operations, through <see cref="StartColdRestoreAsync"/>,

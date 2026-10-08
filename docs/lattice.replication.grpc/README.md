@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Replication.Grpc
 
 Canonical gRPC transport binding for [Orleans.Lattice.Replication](../lattice.replication/README.md) - wires the public `IReplicationTransport` seam to ASP.NET Core gRPC endpoints so clusters can push live batches, exchange replication acks, and use the same peer endpoints for bootstrap and anti-entropy traffic.

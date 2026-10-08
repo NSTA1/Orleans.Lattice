@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # G-Counter (Grow-Only Counter)
 
 `tree.GCounter(key)` -> `GCounterAccessor`, merge mode `LatticeMergeMode.GCounter`.

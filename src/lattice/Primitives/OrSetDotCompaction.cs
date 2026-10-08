@@ -27,7 +27,7 @@ namespace Orleans.Lattice;
 /// information, <b>provided cancellation is coverage-based rather than
 /// exact-match</b>: a cancelling dot from R at counter <c>t</c> must cancel
 /// every dot from R at counter <c>&lt;= t</c>, not only the one it equals.
-/// <see cref="Covers"/> is that predicate, and it is what lets
+/// <see cref="Orleans.Lattice.OrSetDotCompaction.Covers(System.Collections.Generic.List{Orleans.Lattice.OrSetDot}, in Orleans.Lattice.OrSetDot)"/> is that predicate, and it is what lets
 /// <see cref="CompactMaxPerReplica"/> discard a superseded dot without the
 /// cancellation ever missing it.
 /// </para>
@@ -407,7 +407,7 @@ internal static class OrSetDotCompaction
     /// its dots carries plus that replica's highest counter, or returns
     /// <see langword="null"/> when the collapse does not apply.
     /// <para>
-    /// Cancellation is coverage-based, not exact-match (see <see cref="Covers"/>),
+    /// Cancellation is coverage-based, not exact-match (see <see cref="Orleans.Lattice.OrSetDotCompaction.Covers(System.Collections.Generic.List{Orleans.Lattice.OrSetDot}, in Orleans.Lattice.OrSetDot)"/>),
     /// so a cancelling list confined to one replica is fully characterised by
     /// its maximum counter: a dot is cancelled exactly when it carries that
     /// replica id and a counter at or below the maximum. Substituting that

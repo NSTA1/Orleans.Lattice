@@ -24,16 +24,16 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <para>
 /// <b>Job.</b> Four fidelity levels are recognised via <c>BENCH_MICROBENCH_FIDELITY</c>:
 /// <list type="bullet">
-///   <item><c>dry</c> &mdash; <see cref="Job.Dry"/> + <see cref="InProcessEmitToolchain"/>.
+///   <item><c>dry</c> - <see cref="Job.Dry"/> + <see cref="InProcessEmitToolchain"/>.
 ///     1 warmup, 1 measurement, single iteration. Use for fast smoke-test runs and for
 ///     optimisation cohorts where the n=3 cohort-average already provides the statistical
 ///     guard. Per-method wall time drops by roughly an order of magnitude vs <c>quick</c>.</item>
-///   <item><c>quick</c> &mdash; <see cref="Job.ShortRun"/> + <see cref="InProcessEmitToolchain"/>.
+///   <item><c>quick</c> - <see cref="Job.ShortRun"/> + <see cref="InProcessEmitToolchain"/>.
 ///     Default. 1 launch, 3 warmup, 3 measurement iterations. Standard cohort fidelity.</item>
-///   <item><c>quick-oop</c> &mdash; <see cref="Job.ShortRun"/> + default forking toolchain.
+///   <item><c>quick-oop</c> - <see cref="Job.ShortRun"/> + default forking toolchain.
 ///     Same iteration shape as <c>quick</c>, but each benchmark runs in its own child
 ///     process for gate-enabled configurations that BenchmarkDotNet refuses in-process.</item>
-///   <item><c>full</c> &mdash; <see cref="Job.Default"/> + default forking toolchain.
+///   <item><c>full</c> - <c>Job.Default</c> + default forking toolchain.
 ///     Gold-standard rigour; ~30+ minutes per run.</item>
 /// </list>
 /// </para>

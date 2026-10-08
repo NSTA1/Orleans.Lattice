@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>await</c> boundaries, and the two in-memory readers hold no
 /// <c>await</c> at all, so there is no point at which they could be
 /// interleaved regardless of what else is queued on the activation.
-/// <see cref="NoYieldPointGuard"/> enforces that rather than asserting it in
+/// <c>NoYieldPointGuard</c> enforces that rather than asserting it in
 /// prose, so a future edit that introduces an <c>await</c> - and with it a
 /// real interleaving point - fails here instead of silently acquiring one.
 /// </para>

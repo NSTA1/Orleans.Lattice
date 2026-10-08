@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/telemetry.json"
+---
+
 # Dashboards Architecture
 
 This document describes how the dashboards package is built and kept honest. It covers behaviour and packaging, not the names of internal types - the only public surface is described in [the API reference](api.md).

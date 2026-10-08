@@ -20,6 +20,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>#2746</c> and its reproduction ships here <c>[Ignore]</c>d; the four
 /// arms that DO run are the controls that isolate it, the tripwire that
 /// bounds it, and the measured bound on its reachability.
+/// </para>
 /// <para>
 /// For a PREPARE the clamp is retired - #2165's
 /// <c>EnsureUnresolvedPrepareRecorded</c> records unconditionally and

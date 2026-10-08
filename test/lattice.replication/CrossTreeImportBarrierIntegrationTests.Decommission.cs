@@ -86,6 +86,7 @@ public partial class CrossTreeImportBarrierIntegrationTests
         Assert.That(heldPhase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff), "precondition: the import is held by the barrier");
         var drainedBefore = await Coordinator(treeA).GetDrainedExportEpochAsync(SiteAClusterId);
         Assert.That(drainedBefore, Is.Not.Null, "precondition: tree A was drained once");
+        var initialDrainedEpoch = drainedBefore!.Value;
 
         var registry = _siteB.Client.GetGrain<IReplicationDecommissionedPeerRegistryGrain>(IReplicationDecommissionedPeerRegistryGrain.SingletonKey);
         try
@@ -97,9 +98,9 @@ public partial class CrossTreeImportBarrierIntegrationTests
 
             SiteBTopology.EmitAdded(SiteAClusterId);
 
-            long? drainedAfter = drainedBefore;
+            long? drainedAfter = initialDrainedEpoch;
             var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
-            while ((drainedAfter is null || drainedAfter <= drainedBefore) && Environment.TickCount64 < deadline)
+            while ((drainedAfter is null || drainedAfter <= initialDrainedEpoch) && Environment.TickCount64 < deadline)
             {
                 await Task.Delay(250);
                 drainedAfter = await Coordinator(treeA).GetDrainedExportEpochAsync(SiteAClusterId);
@@ -112,7 +113,7 @@ public partial class CrossTreeImportBarrierIntegrationTests
 
             Assert.Multiple(async () =>
             {
-                Assert.That(drainedAfter, Is.GreaterThan(drainedBefore),
+                Assert.That(drainedAfter, Is.GreaterThan(initialDrainedEpoch),
                     "the runtime re-add re-drives tree A's held import from a fresh export");
                 Assert.That(await registry.IsDecommissionedAsync(SiteAClusterId), Is.False, "the re-add clears the decommissioned mark");
                 Assert.That(bPhase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));

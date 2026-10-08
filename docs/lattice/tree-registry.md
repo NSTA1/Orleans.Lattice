@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Tree Registry
 
 Lattice maintains an internal **tree registry** - a Lattice tree (`_lattice_trees`) that tracks all user trees and their per-tree configuration overrides.

@@ -18,7 +18,7 @@
 # every page's source link names a file in the repository, llms.txt, sitemap.xml
 # and the footer's docs version are all in place (see stage.ps1 for what they
 # are), and every file under docs/agents reached the site as a raw resource with
-# none rendered as a page, and every page's head links to its manifest.
+# none rendered as a page, and every page's head links to its agent specification.
 
 param(
     [switch]$Serve,
@@ -107,8 +107,7 @@ try {
 
     # docs/agents: the agent-only specifications, published by docfx.json as raw
     # YAML and JSON resources. Every one must reach the site, none may render as a
-    # page, and every page's head points at the manifest, so an agent that lands
-    # anywhere can find them while a human reader sees nothing.
+    # page. Each page points at its agent_spec, or at the manifest as a fallback.
     $agentSpecRoot = Join-Path (Split-Path $PSScriptRoot) 'docs/agents'
     $agentSpecLink = $null
     $siteUrl = [string](Get-Content (Join-Path $PSScriptRoot 'docfx.json') -Raw | ConvertFrom-Json).build.sitemap.baseUrl
@@ -139,6 +138,9 @@ try {
     $notesFile = Join-Path $PSScriptRoot 'obj/page-notes.json'
     if (-not (Test-Path $notesFile)) { throw "No page notes at $notesFile; stage.ps1 writes them, so it did not run to completion." }
     $notes = [System.IO.File]::ReadAllText($notesFile) | ConvertFrom-Json
+    $pageSpecsFile = Join-Path $PSScriptRoot 'obj/page-agent-specs.json'
+    if (-not (Test-Path $pageSpecsFile)) { throw "No page agent specs at $pageSpecsFile; stage.ps1 did not run to completion." }
+    $pageSpecs = [System.IO.File]::ReadAllText($pageSpecsFile) | ConvertFrom-Json
     # The note cannot be seen, so nothing in it may take keyboard focus.
     $focusable = @($notes.PSObject.Properties | Where-Object { [regex]::IsMatch([string]$_.Value, '<a\b(?![^>]*\btabindex="-1")') } | ForEach-Object { $_.Name })
     if ($focusable.Count -gt 0) {
@@ -162,8 +164,16 @@ try {
             $link = "<link rel=`"alternate`" type=`"text/markdown`" href=`"$([System.IO.Path]::GetFileName($alternate))`" title=`"This page as markdown`">`n  "
             $updated = $updated.Insert($head, $link)
         }
-        if ($agentSpecLink -and -not $updated.Contains($agentSpecLink)) {
-            $updated = $updated.Insert($updated.IndexOf('</head>'), "$agentSpecLink`n  ")
+        $pageSpec = $pageSpecs.PSObject.Properties[[System.IO.Path]::ChangeExtension($relative, '.md')]
+        $pageSpecLink = $agentSpecLink
+        if ($pageSpec) {
+            $specPath = [string]$pageSpec.Value
+            if (-not (Test-Path -LiteralPath (Join-Path $site $specPath) -PathType Leaf)) { throw "Agent specification '$specPath' for '$relative' was not published." }
+            $specType = if ($specPath.EndsWith('.json', [StringComparison]::Ordinal)) { 'application/json' } else { 'application/yaml' }
+            $pageSpecLink = "<link rel=`"describedby`" type=`"$specType`" href=`"${siteUrl}$specPath`" title=`"Machine-readable specification for this page`">"
+        }
+        if ($pageSpecLink -and -not $updated.Contains($pageSpecLink)) {
+            $updated = $updated.Insert($updated.IndexOf('</head>'), "$pageSpecLink`n  ")
         }
         if (-not $updated.Contains($llmsLink)) {
             $updated = $updated.Insert($updated.IndexOf('</head>'), "$llmsLink`n  ")

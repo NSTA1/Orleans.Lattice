@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Chaos Tests
 
 Orleans.Lattice ships a suite of integration tests that bombard a running

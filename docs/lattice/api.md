@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Lattice Public API Reference
 
 This document is the **contract** for what each public type and method

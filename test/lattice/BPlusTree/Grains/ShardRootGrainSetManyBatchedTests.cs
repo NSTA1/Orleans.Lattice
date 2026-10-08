@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Pins the contract that <see cref="ShardRootGrain.SetManyAsync"/>
 /// routes the local apply through <see cref="IBPlusLeafGrain.SetManyAsync"/>
-/// per target leaf, not through per-key <see cref="IBPlusLeafGrain.SetAsync"/>.
+/// per target leaf, not through per-key <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/>.
 /// This is the foreground bulk-write seam that has to reach the batched
 /// commit-log path the leaf already exposes; the regression that motivated
 /// this fixture was a foreground bulk write that silently degraded to N

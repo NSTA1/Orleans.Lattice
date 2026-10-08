@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Configuration
 
 Every knob on `FileWalStorageOptions`, its default, and the validation rules the paired validator enforces at first resolve. Options are populated through the `AddFileWalStorage` callback and read once at provider construction.

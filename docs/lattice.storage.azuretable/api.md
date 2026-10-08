@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Azure Table WAL Public API Reference
 
 This document describes the public `Orleans.Lattice.Storage.AzureTable` surface in caller-visible terms. It does not name library-internal product types; implementation details are described by behaviour. For the core WAL contract, see [WAL Storage Providers](../lattice/wal-storage-providers.md).

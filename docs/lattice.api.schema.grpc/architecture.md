@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Orleans.Lattice.Api.Schema.Grpc architecture
 
 This page describes the code-first gRPC binding and its two-layer, fail-closed authorization model. The gRPC service, method definitions, marshallers, interceptor, and default auth-scheme plumbing are internal and are described here by behaviour; the public client, options, and wire records are named.

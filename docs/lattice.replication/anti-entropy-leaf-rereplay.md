@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Anti-entropy targeted leaf re-replay
 
 The [Merkle walk](anti-entropy-merkle-walk.md) is the *localisation* stage of the anti-entropy pipeline: once the [digest probe](anti-entropy-digest-probe.md) reports a shard-level `Mismatch`, the walk narrows the divergence to a single leaf or a small set of leaves and reports each leaf's cluster-stable `[StartKey, EndKey)` covering range. **Targeted leaf re-replay** is the *repair* stage: a strictly opt-in pass that re-ships the retained write-ahead-log entries covering those ranges to the diverged peer, so the missing writes converge.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Architecture
 
 How `Orleans.Lattice.Vector` is built, why the index structure was chosen, and

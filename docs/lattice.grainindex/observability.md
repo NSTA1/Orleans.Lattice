@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Observability
 
 Every grain index publishes metrics on the shared `orleans.lattice` meter and

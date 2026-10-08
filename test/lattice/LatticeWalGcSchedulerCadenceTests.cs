@@ -952,7 +952,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     /// unlike <see cref="InstrumentRecorder"/> this one exposes
     /// <see cref="Scrape"/> rather than accumulating passively. Matching is by
     /// instrument <i>name</i> on the Lattice meter: the gauge is created inside
-    /// <see cref="SnapshotPinCensus"/> and is not reachable as a static field,
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.SnapshotPinCensus"/> and is not reachable as a static field,
     /// and a name-based match is also what keeps the listener clear of the
     /// static-initialiser re-entrancy hazard documented on
     /// <see cref="Orleans.Lattice.Testing.MeterListening"/>.

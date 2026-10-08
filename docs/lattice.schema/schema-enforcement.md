@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Schema enforcement
 
 Schema enforcement adds per-tree, server-side validation of the values an
@@ -30,14 +34,7 @@ siloBuilder.AddLatticeSchemaEnforcement(options =>
 
 ### Enforcement options
 
-`LatticeSchemaEnforcementOptions` holds the silo-wide switches; per-tree behaviour
-(the rules and the per-tree strict flag) lives in each tree's policy.
-
-| Option | Type | Default | Effect |
-|---|---|---|---|
-| `StrictIngest` | `bool` | `false` | The global half of [strict-mode ingest](#strict-mode-ingest). While it is `false` the enforcement stage does not ask to see system-origin writes (that section says which ingest paths reach the stage at all), so trusted ingest pays nothing - but see the caveat there for a silo that also registers schema versioning. |
-| `ValidateCrdtMergeResults` | `bool` | `false` | Registers a post-merge observer that validates each merged value against the tree's policy. It never rejects or rewrites a merge: a violation becomes a non-mutating `LatticeMergeOutcome.AcceptWithEvent` annotation, which the core does not currently surface to any log, metric, or event sink. The flag is read only from the delegate passed to the first `AddLatticeSchemaEnforcement` call; setting it through `ConfigureLatticeSchemaEnforcement` or a repeat `AddLatticeSchemaEnforcement` call does not register the observer. |
-| `DeadLetterPreviewMaxBytes` | `int` | `4096` | The maximum number of leading value bytes copied into the `ValuePreview` of a dead-letter entry the enforcement stage writes, and into a remediation (or eager version migration) abort's `OffendingValuePreview`. A value below `1` is treated as `1`. |
+See [configuration](configuration.md) for every silo-wide option, its default, registration-only switches and the composition order.
 
 ## Setting a policy on a tree
 
@@ -119,7 +116,7 @@ await admin.SetPolicyAsync("orders", policy, cancellationToken);
 
 Replication apply and backup restore are **trusted by default**: their bytes are
 stored verbatim, because a peer or a backup is assumed to have been validated at
-its origin. That keeps ingest fail-open - it must never block.
+its origin. This avoids rejecting trusted ingest merely because it does not meet a local schema policy; it is not a storage-liveness guarantee.
 
 Opt into re-validation with `StrictIngest`. In strict mode an ingested item that
 violates the policy is diverted to the tree's [dead-letter

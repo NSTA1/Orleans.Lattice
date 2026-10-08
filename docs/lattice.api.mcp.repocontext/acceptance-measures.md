@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Acceptance-measure register
 
 The measures a scored deployment run of epic #2368 is graded against, one row

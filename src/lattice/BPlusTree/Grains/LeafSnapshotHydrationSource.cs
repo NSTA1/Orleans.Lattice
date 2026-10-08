@@ -25,7 +25,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <list type="number">
 /// <item><description>
 /// A block is only installed for a frame whose rows are in <em>strictly</em>
-/// ascending ordinal key order (<see cref="LeafSnapshotCodec.IsAscendingByKey"/>).
+/// ascending ordinal key order (<see cref="Orleans.Lattice.BPlusTree.State.LeafSnapshotCodec.IsAscendingByKey(System.ReadOnlySpan{byte})"/>).
 /// A seek over an unsorted or duplicate-bearing frame would silently miss rows
 /// that are present, which is a data-invisibility bug rather than a slow path,
 /// so such a frame is refused outright and the caller falls back to a full
@@ -122,7 +122,7 @@ internal sealed class LeafSnapshotHydrationSource
 
     /// <summary>
     /// Summed logical payload footprint of every row in the frame, using the
-    /// same formula as <see cref="LeafEntryCache.EntryBytes"/>.
+    /// same formula as <see cref="Orleans.Lattice.BPlusTree.Grains.LeafEntryCache.EntryBytes(string, byte[])"/>.
     /// </summary>
     internal long TotalStateBytes { get; }
 

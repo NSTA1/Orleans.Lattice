@@ -77,6 +77,11 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
     /// </param>
     /// <param name="entries">Rows the leaf comes online already holding.</param>
     /// <param name="bytesEach">Value size per row.</param>
+    /// <param name="maxLeafBytes">The leaf byte-size bound.</param>
+    /// <param name="maxLeafKeys">The leaf key-count bound.</param>
+    /// <param name="decision">The fall-off-log classification returned by the detector.</param>
+    /// <param name="materialiserCheckpointInterval">The interval between materialiser checkpoints; null uses zero.</param>
+    /// <param name="reClassifyEveryNCheckpoints">The checkpoint cadence for detector reclassification.</param>
     private static CaptureSeamHarness CreateOversizedLeaf(
         long maxLeafBytes,
         int entries,

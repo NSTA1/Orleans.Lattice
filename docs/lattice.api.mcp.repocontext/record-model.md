@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Record model
 
 The repository-context store is a set of named Lattice trees, one per CRDT family, addressed by a stable hierarchical key grammar. This is the layout contract: keys and tree names do not change once shipped.

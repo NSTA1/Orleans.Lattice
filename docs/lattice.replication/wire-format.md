@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Replication wire format (`IReplicationBatchEncoder`)
 
 `IReplicationBatchEncoder` is the public, pluggable seam over the on-the-wire bytes of a replication batch. It is the encode/decode counterpart to [`IReplicationTransport`](transport.md): the transport delivers opaque bytes between clusters, and the encoder is the only component that knows how to translate a batch of [`WalRecord`](change-feed.md) records to and from those bytes.

@@ -153,7 +153,7 @@ public readonly record struct OrFlagAccessor
     /// alone. A batched read reports an absent key by omission, so a row it did
     /// not return is indistinguishable from a row that does not exist, and both
     /// decode as an empty flag whose next dot is counter 1. OR-Flag cancellation
-    /// is coverage-based (<see cref="OrSetDotCompaction.Covers"/>), so that dot
+    /// is coverage-based (<see cref="Orleans.Lattice.OrSetDotCompaction.Covers(System.Collections.Generic.List{Orleans.Lattice.OrSetDot}, in Orleans.Lattice.OrSetDot)"/>), so that dot
     /// is cancelled outright by any tombstone the unread row already carries:
     /// the write reports success and the flag stays disabled, permanently,
     /// because the next attempt repeats the read and mints the same dead dot

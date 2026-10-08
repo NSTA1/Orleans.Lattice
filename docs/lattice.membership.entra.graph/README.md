@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Membership.Entra.Graph
 
 Microsoft Graph-backed group-overflow resolver for [Orleans.Lattice.Membership.Entra](../lattice.membership.entra/README.md).

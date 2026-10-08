@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <b>Two-tier fail-closed authorization.</b> Authorizing the allowed region set is
 /// an operator action (<see cref="TenantRegionResidencyAuthorizer.AuthorizeOperatorAsync"/>);
 /// setting residency and reading status are tenant-admin actions
-/// (<see cref="TenantRegionResidencyAuthorizer.AuthorizeTenantAdminAsync"/>). Both
+/// (<see cref="Orleans.Lattice.Api.TenantAdmin.TenantRegionResidencyAuthorizer.AuthorizeTenantAdminAsync(Orleans.Lattice.TenantId, System.Threading.CancellationToken)"/>). Both
 /// tiers are independent of the data-plane default effect.
 /// </para>
 /// <para>
@@ -70,6 +70,8 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
     /// <param name="clock">The monotonic clock supplying last-writer-wins stamps. Must not be <c>null</c>.</param>
     /// <param name="clusterOptions">The cluster options supplying the writer id stamped on registry writes. Must not be <c>null</c>.</param>
     /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    /// <param name="backfill">The optional region backfill service.</param>
+    /// <param name="lifecycle">The optional region lifecycle driver.</param>
     public LatticeTenantRegionAdmin(
         ITenantRegistry registry,
         TenantRegionResidencyAuthorizer authorizer,

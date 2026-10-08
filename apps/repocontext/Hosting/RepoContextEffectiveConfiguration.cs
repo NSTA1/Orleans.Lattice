@@ -477,7 +477,7 @@ public static class RepoContextEffectiveConfiguration
     }
 
     /// <summary>
-    /// Reads the process environment into the shape <see cref="DescribeUnreadVariables"/>
+    /// Reads the process environment into the shape <see cref="Orleans.Lattice.Api.Mcp.RepoContext.Host.RepoContextEffectiveConfiguration.DescribeUnreadVariables(System.Collections.Generic.IEnumerable{System.Collections.Generic.KeyValuePair{string, string}}, System.Collections.Generic.IEnumerable{string})"/>
     /// accepts.
     /// </summary>
     /// <returns>The current process environment as name/value pairs.</returns>

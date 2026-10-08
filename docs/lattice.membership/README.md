@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Membership
 
 Identity and subject-resolution add-on for [Orleans.Lattice](../../README.md).

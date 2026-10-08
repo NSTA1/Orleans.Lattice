@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Orleans.Lattice.Api.Mcp.RepoContext
 
 Optional, opt-in **repository-context** add-on for the [Orleans.Lattice.Api.Mcp](../lattice.api.mcp/README.md) server. It gives an AI agent a durable, conflict-free place to capture and maintain detailed context about a codebase - structural facts, notes, and short-lived working memory - served as Model Context Protocol tools over dedicated Lattice trees.

@@ -3,7 +3,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// Public-surface forwarder for
 /// <see cref="ILattice.GetLeafProjectionDigestAsync"/>. Resolves the per-tree
-/// <see cref="ShardMap"/> via the existing <see cref="LatticeGrain.GetRoutingAsync"/>
+/// <see cref="ShardMap"/> via the existing <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain.GetRoutingAsync(System.Threading.CancellationToken)"/>
 /// helper, validates that <c>shardIndex</c> corresponds to a physical shard
 /// owned by this tree, and dispatches to <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetShardProjectionDigestAsync"/>.
 /// Guarded by <see cref="LatticeGrain.ThrowIfSystemTree"/> so reserved

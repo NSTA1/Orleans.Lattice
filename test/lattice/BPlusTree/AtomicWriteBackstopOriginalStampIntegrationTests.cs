@@ -513,7 +513,7 @@ public sealed class AtomicWriteBackstopOriginalStampIntegrationTests
         public async Task Invoke(IOutgoingGrainCallContext context)
         {
             var fromCoordinator = context.SourceId is { } source
-                && source.Type.ToString().Contains("atomicwrite", StringComparison.OrdinalIgnoreCase);
+                && source.Type.ToString()?.Contains("atomicwrite", StringComparison.OrdinalIgnoreCase) == true;
             if (fromCoordinator)
             {
                 switch (context.InterfaceMethod?.Name)

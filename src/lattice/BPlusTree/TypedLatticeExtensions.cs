@@ -246,7 +246,7 @@ public static class TypedLatticeExtensions
 
     /// <summary>
     /// Serializes and atomically writes multiple key-value pairs via the
-    /// saga. See <see cref="ILattice.SetManyAtomicAsync"/> for full semantics
+    /// saga. See <see cref="Orleans.Lattice.ILattice.SetManyAtomicAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}}, System.Threading.CancellationToken)"/> for full semantics
     /// (all-or-nothing commit, atomic visibility, abort with no per-key rollback writes).
     /// </summary>
     public static Task SetManyAtomicAsync<T>(

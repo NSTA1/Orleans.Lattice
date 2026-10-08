@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Coverage for deterministic pre-shard guard clauses on
 /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/>: the materialised-view write/read protection
 /// (<c>ThrowIfProtectedView</c> / <c>ThrowIfProtectedViewRead</c>) and the TTL
-/// range validation on the <see cref="ILattice.ApplyCrdtDeltaAsync"/> TTL
+/// range validation on the <see cref="Orleans.Lattice.ILattice.ApplyCrdtDeltaAsync(string, Orleans.Lattice.LatticeMergeMode, byte[], System.TimeSpan, System.Threading.CancellationToken)"/> TTL
 /// overload. Each throws before any shard grain is consulted, so no cluster or
 /// shard-root wiring is required.
 /// </summary>

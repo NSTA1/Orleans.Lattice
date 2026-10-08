@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Snapshots
 
 Orleans.Lattice supports copying a tree into a new destination tree: an offline

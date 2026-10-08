@@ -127,10 +127,11 @@ public sealed class RestoreSagaDispatcherSetRestoreTests
         var results = await h.Dispatcher.TryDispatchSetAsync(SetId, LatticeRestoreMode.ShadowCutover);
 
         Assert.That(results, Is.Not.Null);
-        Assert.That(results!, Has.Count.EqualTo(2));
-        Assert.That(results.Select(r => r.TargetTreeId), Is.EquivalentTo(new[] { TargetTree, OtherTree }));
-        Assert.That(results.Select(r => r.BackupId), Is.EquivalentTo(new[] { BackupId, "backup-2" }));
-        Assert.That(results, Has.All.Matches<LatticeRestoreResult>(
+        var restoreResults = results!;
+        Assert.That(restoreResults, Has.Count.EqualTo(2));
+        Assert.That(restoreResults.Select(r => r.TargetTreeId), Is.EquivalentTo(new[] { TargetTree, OtherTree }));
+        Assert.That(restoreResults.Select(r => r.BackupId), Is.EquivalentTo(new[] { BackupId, "backup-2" }));
+        Assert.That(restoreResults, Has.All.Matches<LatticeRestoreResult>(
             r => r.Mode == LatticeRestoreMode.ShadowCutover && r.EntriesApplied == 0));
 
         // Exactly one saga, carrying the set id on every argument that names it.

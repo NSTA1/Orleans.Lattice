@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/tenantadmin.json"
+---
+
 # Orleans.Lattice.Api.TenantAdmin
 
 Transport-agnostic **tenant administration** and **region-residency** control
@@ -743,6 +747,8 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `ApiTenantAdminTypeAliases` | static class | The stable `oitn.`-prefixed Orleans serialization aliases of the tenant-admin contract types. |
 
 ## See also
+
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
 
 - [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) - the core multi-tenancy
   companion (isolation, quotas, metering, residency enforcement).

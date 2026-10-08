@@ -91,7 +91,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     // supply one. Never defaulted to a no-op: a drain with no fence to arm is
     // refused (fails closed) rather than run unfenced (issue #4526).
     private IBootstrapReadFence ReadFence =>
-        _readFence ??= context.ActivationServices?.GetService(typeof(IBootstrapReadFence)) as IBootstrapReadFence
+        _readFence ??= Context.ActivationServices?.GetService(typeof(IBootstrapReadFence)) as IBootstrapReadFence
             ?? throw new InvalidOperationException(
                 $"No {nameof(IBootstrapReadFence)} is registered; a snapshot bootstrap cannot drain into tree '{TreeName}' without a read fence. Register replication with AddLatticeReplication.");
 

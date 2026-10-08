@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// shared: a retrieval call can be inside
 /// <see cref="RepoContextAnnIndexHandle.EnsureBuiltAsync"/> on one thread while
 /// the coordinator's tick is inside
-/// <see cref="RepoContextAnnIndexHandle.AdvanceAsync"/> on another. A phase field
+/// <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextAnnIndexHandle.AdvanceAsync(System.Threading.CancellationToken)"/> on another. A phase field
 /// on the handle would be written by both and read by one, so the coordinator
 /// could attribute its own fault to a phase some other caller's step happened to
 /// be in. A box the coordinator allocates and passes only on its own call cannot

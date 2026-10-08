@@ -11,7 +11,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// <b>Why this is a type rather than a constant.</b> Every WAL replay in this
 /// library reads its commit log through
-/// <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/> in fixed-width
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.ILeafReplayCoordinatorGrain.ReadSliceAsync(long, long, int, System.Threading.CancellationToken)"/> in fixed-width
 /// slices, and the width is the second of the two factors that set peak replay
 /// memory - peak is the product of how many replays run at once and how much
 /// each one buffers (issue #2867). Issue #2742 taught the activation-time

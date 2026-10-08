@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Memory and TTL
 
 Beyond the structural model of a codebase, the store holds agent-authored **memory**: notes, observations, and decisions an agent captures as it works. Memory is organised under topics and can optionally expire.

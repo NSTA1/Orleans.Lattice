@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # WAL Design - Causal+ Ready (with Performance Notes)
 
 > **Status:** partially shipped, and not everywhere in the shape sections 3-8

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup architecture
 
 This page describes the end-to-end capture, incremental, restore, scheduling, and sink pipelines by behaviour, and the core Lattice seams they attach to. Public types are named; the engine, coordination grains, collectors, authorizer, and inventory registry are internal and are described by their effect.

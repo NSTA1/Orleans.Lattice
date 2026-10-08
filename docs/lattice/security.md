@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/authorization.json"
+---
+
 # Security: identity, authorization, and enforcement
 
 Orleans.Lattice ships an **opt-in** security layer that turns an anonymous,

@@ -660,7 +660,7 @@ public partial class TombstoneCompactionGrainTests
         SetupShardRoot(h.GrainFactory, 1);
         h.State.State.InProgress = true;
         h.State.State.NextShardIndex = 0;
-        h.State.State.PhysicalShardIndices = null;
+        h.State.State.PhysicalShardIndices = null!;
 
         await h.Grain.ProcessNextShardAsync();
 

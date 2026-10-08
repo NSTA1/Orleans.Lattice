@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Formal Coverage
 
 Orleans.Lattice checks its most concurrency-sensitive protocols formally, not

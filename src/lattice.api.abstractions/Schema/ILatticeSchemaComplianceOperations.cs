@@ -5,9 +5,8 @@ namespace Orleans.Lattice.Api.Schema;
 
 /// <summary>
 /// Accept-then-poll schema compliance scans. <see cref="StartComplianceScanAsync"/>
-/// authorizes exactly as the deprecated blocking
-/// <see cref="ILatticeSchemaControl.ScanComplianceAsync"/> (read over the tree,
-/// fail-closed), records the operation durably, starts the scan in the background
+/// authorizes read over the tree fail-closed, records the operation durably,
+/// starts the scan in the background
 /// and returns a <see cref="LatticeOperationHandle"/> at once; the caller then
 /// polls <see cref="ILatticeOperations.GetOperationStatusAsync"/> for progress
 /// (entries scanned against the tree's live entry count) and the outcome, and

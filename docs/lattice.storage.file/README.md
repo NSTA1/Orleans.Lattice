@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Orleans.Lattice.Storage.File
 
 Durable, cloud-free **local disk** WAL provider for [Orleans.Lattice](../../README.md). It plugs into the public `IWalStorageProvider` seam so a single-cluster deployment can persist its commit log to a mounted directory - crash-safe across silo restarts - without an external storage account.

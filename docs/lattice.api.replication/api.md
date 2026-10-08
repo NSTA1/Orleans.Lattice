@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Api.Replication API reference
 
 The package exposes the registration entry points below (extension methods on the public static `LatticeApiReplicationServiceCollectionExtensions` class) and the public options types `LatticeApiReplicationOptions` and `LatticeReplicationStatusOptions`. The control contract `ILatticeReplicationControl`, the read-only peer-status contract `ILatticeReplicationStatus`, and the model records they return are defined in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package.

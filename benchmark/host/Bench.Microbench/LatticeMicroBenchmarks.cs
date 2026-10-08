@@ -39,14 +39,14 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// Tuning knobs come from environment variables read in
 /// <see cref="GlobalSetup"/>:
 /// <list type="bullet">
-///   <item><c>BENCH_MICROBENCH_KEY_COUNT</c> &mdash; pre-seeded keyspace size (default 10 000).</item>
-///   <item><c>BENCH_MICROBENCH_VALUE_BYTES</c> &mdash; payload size for writes (default 128).</item>
-///   <item><c>BENCH_MICROBENCH_BULK_BATCH</c> &mdash; entries per <see cref="BulkLoad"/> invocation (default 1 000).</item>
-///   <item><c>BENCH_MICROBENCH_DEEPER_MAX_LEAF_KEYS</c> &mdash; <see cref="BuildDeeperTree"/> leaf fan-out cap (default 4).</item>
-///   <item><c>BENCH_MICROBENCH_DEEPER_MAX_INTERNAL_CHILDREN</c> &mdash; <see cref="BuildDeeperTree"/> internal fan-out cap (default 4).</item>
-///   <item><c>BENCH_MICROBENCH_DEEPER_KEY_COUNT</c> &mdash; <see cref="BuildDeeperTree"/> seeded keyspace (default 256, yields 3 internal levels at fan-out 4).</item>
-///   <item><c>BENCH_MICROBENCH_DEEPER_BULK_BATCH</c> &mdash; <see cref="BulkLoad_DeeperTree"/> batch size (default 32).</item>
-///   <item><c>BENCH_MICROBENCH_ATOMIC_BATCH</c> &mdash; <see cref="SetManyAtomic"/> entries per saga (default 16).</item>
+///   <item><c>BENCH_MICROBENCH_KEY_COUNT</c> - pre-seeded keyspace size (default 10 000).</item>
+///   <item><c>BENCH_MICROBENCH_VALUE_BYTES</c> - payload size for writes (default 128).</item>
+///   <item><c>BENCH_MICROBENCH_BULK_BATCH</c> - entries per <see cref="BulkLoad"/> invocation (default 1 000).</item>
+///   <item><c>BENCH_MICROBENCH_DEEPER_MAX_LEAF_KEYS</c> - <see cref="BuildDeeperTree"/> leaf fan-out cap (default 4).</item>
+///   <item><c>BENCH_MICROBENCH_DEEPER_MAX_INTERNAL_CHILDREN</c> - <see cref="BuildDeeperTree"/> internal fan-out cap (default 4).</item>
+///   <item><c>BENCH_MICROBENCH_DEEPER_KEY_COUNT</c> - <see cref="BuildDeeperTree"/> seeded keyspace (default 256, yields 3 internal levels at fan-out 4).</item>
+///   <item><c>BENCH_MICROBENCH_DEEPER_BULK_BATCH</c> - <see cref="BulkLoad_DeeperTree"/> batch size (default 32).</item>
+///   <item><c>BENCH_MICROBENCH_ATOMIC_BATCH</c> - <see cref="SetManyAtomic"/> entries per saga (default 16).</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -1067,7 +1067,7 @@ public class LatticeMicroBenchmarks
         return witness;
     }
     /// <summary>
-    /// Lazily constructs and caches a real <see cref="BPlusInternalGrain"""
+    /// Lazily constructs and caches a real <see cref="BPlusInternalGrain"/>
     /// for the given <see cref="GrainId"/>. Used by the deep-tree benchmarks
     /// that force a depth-2 tree shape (single internal root + multiple
     /// leaves). Mirrors the leaf / shard / leaf-cache constructors above.
@@ -1918,7 +1918,7 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
-    /// 70% read / 30% write mix &mdash; a single op per invocation that picks
+    /// 70% read / 30% write mix - a single op per invocation that picks
     /// read or write based on the rotating cursor.
     /// </summary>
     [Benchmark(Description = "Mixed 70R/30W")]
@@ -2027,7 +2027,7 @@ public class LatticeMicroBenchmarks
 
     /// <summary>
     /// Paginated key scan over the 4-shard fanout tree. Drains the
-    /// <see cref="ILattice.KeysAsync(string, string, bool, bool?, CancellationToken)"""
+    /// <see cref="ILattice.KeysAsync(string, string, bool, System.Nullable{bool}, CancellationToken)"/>
     /// async-enumerable so the per-shard cursor open + reconciliation paths
     /// in LatticeGrain.Keys.cs are walked end-to-end.
     /// </summary>
@@ -2982,7 +2982,7 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
-    /// Drives <see cref="AzureTableWalStorageProvider.EncodeEntriesForBatch"/>
+    /// Drives <see cref="Orleans.Lattice.Storage.AzureTable.AzureTableWalStorageProvider.EncodeEntriesForBatch(string, System.Collections.Generic.IReadOnlyList{Orleans.Lattice.WalEntry}, System.Collections.Generic.List{Azure.Data.Tables.TableTransactionAction})"/>
     /// over a pre-built <see cref="WalEntry"/> array of length
     /// <paramref name="entryCount"/>. Each invocation encodes the same
     /// pre-built entries into a fresh
@@ -3030,7 +3030,7 @@ public class LatticeMicroBenchmarks
     /// <summary>
     /// Compression-enabled counterpart to
     /// <see cref="EncodeWalBatch_AzureTable"/>. Drives the same
-    /// <see cref="AzureTableWalStorageProvider.EncodeEntriesForBatch"/>
+    /// <see cref="Orleans.Lattice.Storage.AzureTable.AzureTableWalStorageProvider.EncodeEntriesForBatch(string, System.Collections.Generic.IReadOnlyList{Orleans.Lattice.WalEntry}, System.Collections.Generic.List{Azure.Data.Tables.TableTransactionAction})"/>
     /// helper over the identical pre-built entries, but through a provider
     /// configured with per-row Zstd payload compression and a zero
     /// threshold so every row takes the <c>CompressPayload</c> path. The
@@ -4098,7 +4098,8 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "OrMap count (append-only)")]
     public int OrMap_Count() => _orMapCountTarget.Count;
-    /// each new node under the previous one, into a fresh sequence. With the
+    /// <summary>
+    /// Inserts each new node under the previous one, into a fresh sequence. With the
     /// per-replica dot-context cache each insert mints its counter in O(1), so
     /// the whole build is O(N); before the cache every insert rescanned every
     /// existing node to find the highest counter, making the build O(N^2). A

@@ -38,8 +38,7 @@ public interface ILatticeTreeAdminOperations : ILatticeOperations
 {
     /// <summary>
     /// Starts a shadow-swap rebuild of a materialised view (kind
-    /// <see cref="TreeAdminOperationKinds.ViewRebuild"/>), authorized exactly as
-    /// <see cref="ILatticeTreeAdmin.RebuildViewAsync"/>: whole-tree
+    /// <see cref="TreeAdminOperationKinds.ViewRebuild"/>), requiring whole-tree
     /// <see cref="LatticeOperation.Admin"/> over the view's source tree.
     /// </summary>
     /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>

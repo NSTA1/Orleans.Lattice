@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # Verified WAL Concurrency
 
 The write-ahead log (WAL) is Orleans.Lattice's durability boundary: every

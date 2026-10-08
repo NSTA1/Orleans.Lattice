@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Unit tests for the strongly-consistent scan surface added to
 /// <see cref="ShardRootGrain"/>: <see cref="IShardRootGrain.CountWithMovedAwayAsync"/>,
-/// <see cref="IShardRootGrain.CountForSlotsAsync"/>, the slot-filtered scan
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CountForSlotsAsync(int[], int)"/>, the slot-filtered scan
 /// methods, and the <c>MovedAwaySlots</c> reporting on the existing scan
 /// methods.
 /// </summary>

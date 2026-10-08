@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # API
 
 The public surface of `Orleans.Lattice.Vector`, in the order you meet it.

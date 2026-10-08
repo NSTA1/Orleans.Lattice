@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Both tests park a real <c>GetAllTreeIdsAsync</c> call on a real Orleans
 /// activation and assert a concurrent caller still completes. The parking is
 /// done with an incoming grain-call filter that awaits a gate before
-/// <see cref="IIncomingGrainCallContext.Invoke"/>, which is the only mechanism
+/// <see cref="Orleans.IGrainCallContext.Invoke()"/>, which is the only mechanism
 /// that works here. The obvious alternative - gating the backing
 /// <c>IGrainStorage</c>, as
 /// <c>ShardRootGrainIsSplittingInterleaveTests</c> does - cannot discriminate,
@@ -238,7 +238,7 @@ public sealed class LatticeRegistryEnumerationHeadOfLineTests
 
     /// <summary>
     /// Parks <c>ILatticeRegistry.GetAllTreeIdsAsync</c> before
-    /// <see cref="IIncomingGrainCallContext.Invoke"/> while the gate is armed.
+    /// <see cref="Orleans.IGrainCallContext.Invoke()"/> while the gate is armed.
     /// An incoming grain-call filter runs as part of the request's execution on
     /// the activation, so awaiting here holds the activation's turn for exactly
     /// as long as the scheduler would have held it for a real long-running

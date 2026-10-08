@@ -31,7 +31,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <b>Why the writes must stay exclusive.</b> Most mutators are
 /// read-modify-writes over a single registry entry
 /// (<see cref="SetAliasAsync"/>, <see cref="SetShardMapAsync"/>,
-/// <see cref="ReassignSlotsAsync"/>, <see cref="AllocateNextShardIndexAsync"/>,
+/// <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry.ReassignSlotsAsync(string, int[], int, Orleans.Lattice.ShardMap)"/>, <see cref="AllocateNextShardIndexAsync"/>,
 /// <see cref="UpdateWalPlacementAsync(string, long, int, string)"/> and its batch
 /// overload, and the per-field <c>Set*</c> upserts), and
 /// <see cref="RegisterAsync"/> is a read-then-write on an existence check. Each
@@ -50,7 +50,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// "a read cannot land between a mutator's own read and its own write" property
 /// costs nothing a caller could rely on, because two <em>separate</em> registry
 /// calls were never atomic with respect to each other in the first place - which
-/// is precisely why <see cref="ReassignSlotsAsync"/> and
+/// is precisely why <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry.ReassignSlotsAsync(string, int[], int, Orleans.Lattice.ShardMap)"/> and
 /// <see cref="AllocateNextShardIndexAsync"/> exist as single calls.
 /// </para>
 /// <para>

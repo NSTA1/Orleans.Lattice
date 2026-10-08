@@ -4,7 +4,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Snapshot of the effective routing context for a Lattice tree at a point
-/// in time. Returned by <see cref="ILattice.GetRoutingAsync"/> for callers
+/// in time. Returned by <see cref="Orleans.Lattice.ILattice.GetRoutingAsync(System.Threading.CancellationToken)"/> for callers
 /// - typically infrastructure helpers such as the streaming bulk loader -
 /// that need to address shard grains directly without re-implementing
 /// alias resolution and shard-map fetching.

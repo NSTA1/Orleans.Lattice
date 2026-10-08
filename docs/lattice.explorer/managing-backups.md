@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Managing backups from the Explorer
 
 The **Backups** area is the Explorer surface for listing, capturing, restoring, checking, scheduling, and maintaining Lattice backups. It drives the backup control facade. The Explorer probes capabilities to shape the UI, but the cluster authorizes every real operation when it runs.

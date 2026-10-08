@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Anti-entropy Merkle-walk drift localisation
 
 The [digest probe](anti-entropy-digest-probe.md) is the *detection* half of the anti-entropy pipeline: it surfaces a metric when a shard's content digest disagrees with a peer's. But a shard-level mismatch tells you only *that* two clusters diverged for a shard, not *where*. The **Merkle walk** is the *localisation* stage: a strictly read-only, opt-in pass that, once the probe reports a `Mismatch`, descends the local cluster's B+ tree top-down and narrows the divergence to a single leaf or a small set of leaves. It performs no repair - that is a later stage.

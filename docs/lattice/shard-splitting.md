@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Adaptive Shard Splitting
 
 Adaptive shard splitting allows a hot physical shard to split into two **at

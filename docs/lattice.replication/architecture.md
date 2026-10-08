@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Architecture
 
 `Orleans.Lattice.Replication` layers cross-cluster replication on top of an
@@ -211,8 +215,8 @@ below open prepares, the capability gate, the writes held back unapplied, and
 the bootstrap pin.
 
 The specification is tied to the code three ways. The decisions it checks run
-in production through pure cores (`ReplicationShipEligibility` for the
-shipper's cycle-break and cursor filter, `ReplicationReceiveDedup` for the
+in production through shared pure decision logic (for the
+shipper's cycle-break and cursor filter, and for the
 receiver's cycle-break and high-water mark), which Coyote models in
 `test/lattice.replication/Coyote/` execute under systematic interleaving. Every
 spec action and property is mapped to the production seam it abstracts, and to

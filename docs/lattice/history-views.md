@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Durable per-key history views
 
 A **history view** is an opt-in, append-only materialised view that records every

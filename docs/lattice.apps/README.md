@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/app-lifecycle.yaml"
+---
+
 # Orleans.Lattice.Apps
 
 Opt-in **installable apps** for Orleans.Lattice: an app declares its trees, roles,
@@ -10,8 +14,9 @@ second enforcement engine.
 An **app** is an installable unit of state and behaviour - a CRM, a work queue, or
 a repository-memory store such as RepoContext - whose footprint on the cluster is
 declared up front in a JSON **manifest**. Installing the app records who may use it
-and what it may do; enabling it provisions its trees and grants its roles; disabling
-or uninstalling it takes both away again.
+and what it may do; enabling it provisions its trees and grants its roles.
+Disabling withdraws its grants but keeps its trees and data. Uninstalling also
+withdraws grants and soft-deletes its structural trees; adopted trees are kept.
 
 The central design point is that an app's role-to-permission mapping is a
 **compiler, not an enforcement engine**. Roles in the manifest compile into ordinary
@@ -21,8 +26,7 @@ remains the single enforcement seam: an app never evaluates a permission itself,
 installing one changes nothing about how the data path is authorized.
 
 It is a **companion package**. A host that does not reference it pays nothing: core
-carries only the `LatticeOperation.AppInstall` flag, two internal constants naming
-the app tree namespace and the app-registry tree prefix, and the `ITreeOwnershipGuard`
+retains the `LatticeOperation.AppInstall` capability and the `ITreeOwnershipGuard`
 alias seam, whose default allows every alias (see [Tree ownership](#tree-ownership)).
 
 The package is the engine. Operators reach it through companion packages:
@@ -217,7 +221,7 @@ is rejected before any per-entry work.
 ## Install, consent and the ceiling
 
 An install is recorded in the **app registry**, a reserved system tree
-(`sys-app-registry`) keyed `{tenantId}/{appSlug}`. With tenancy off every install
+keyed `{tenantId}/{appSlug}`. With tenancy off every install
 uses the default tenant, which is the per-cluster behaviour. Each record carries the
 app's slug, version, provenance, isolation context (tenant and cluster), the
 capability ceiling and the version it was consented for, the role-to-group bindings,
@@ -258,7 +262,7 @@ consenting to unseen roles, trees, bridge grants or UI assets.
 
 The registry is **control-plane read isolated** exactly like the tenant registry: a
 data-plane read grant, including a cluster-wide all-trees wildcard, cannot read
-`sys-app-*`. Every lifecycle transition (install, upgrade, enable, disable,
+reserved app control-plane records. Every lifecycle transition (install, upgrade, enable, disable,
 uninstall) requires `LatticeOperation.AppInstall`, a scopeless cluster-wide
 capability granted over `LatticeScope.ClusterWide()` and excluded from
 `LatticeAuthOperations.All`.
@@ -282,10 +286,9 @@ install that adopted it releases it. Two installs can never share a tree, whiche
 and whatever the operator approves, so one app's data is never readable or writable
 under another app's name.
 
-Ownership is recorded in a third reserved system tree, the **tree ownership ledger**
-(`sys-app-trees`), keyed by the tenant-composed tree id. It sits under the same
-`sys-app-` prefix as the registry, so it has the same control-plane read isolation
-and user-origin write guard. The owner of a tree is an install identity: the tenant,
+Ownership is recorded in a reserved system-owned tree-ownership ledger keyed by
+the tenant-composed tree id. Like the app registry, it is control-plane read isolated
+and guarded against user-origin writes. The owner of a tree is an install identity: the tenant,
 the app slug, and the publisher recorded from the app's provenance, so a different
 publisher shipping the same slug is a different owner.
 
@@ -386,8 +389,8 @@ drops a tree from the `replication` section unenrols it. Reconciling an app in a
 other state withdraws its owned rules; reconcile never changes the registry state.
 
 Each run records its outcome, and the manifest whose trees and rules are currently
-applied, as the app's `AppActivationStatus` in a second reserved system tree,
-`sys-app-activation`, keyed like the registry; a run that cannot read the existing
+applied, as the app's `AppActivationStatus` in separate reserved system-owned activation-status
+storage, keyed per install; a run that cannot read the existing
 status leaves it untouched rather than overwrite it, and a failed status write is
 only logged. That record is the evidence the
 control facade reports as a `Failed` state; a disabled registry state alone is never
@@ -531,9 +534,7 @@ which is registered as the single `IAppSource`. Register further sources with
 `in-image` with the registration's `Publisher` (`first-party` unless the
 registration sets another), and each manifest is parsed once and cached. It lists
 exactly the apps registered with `AddLatticeApp`, in slug order. It serves UI assets from
-embedded resources named `{manifestResourceNamespace}.ui.{path}`, or from an
-explicit prefix passed to the `AddLatticeApp` overload that takes one, with every
-`/` in the path mapped to `.`.
+embedded resources named `{manifestResourceNamespace}.ui.{path}` when stripping the manifest resource name's final two dot-separated segments leaves a non-empty prefix, or `ui.{path}` otherwise. An explicit prefix passed to the `AddLatticeApp` overload that takes one overrides that default; every `/` in the path maps to `.`.
 
 The seam is designed so that a runtime source (a NuGet feed, a blob container, a
 container registry) is a provider swap. The XML documentation on `IAppSource` and
@@ -684,13 +685,13 @@ composed for its own install's tenant.
 - `AppInstall` is required for every lifecycle transition and every control-facade
   verb except the advisory capability probe, and is never part of
   `LatticeAuthOperations.All`.
-- The registry (`sys-app-*`) is control-plane read isolated; the evaluator excludes
+- The registry and ownership records are control-plane read isolated; the evaluator excludes
   it from all-trees wildcards, and an unmatched request fails closed even under a
   permissive default effect.
 - App rules are ordinary rules evaluated by the existing gate; this package adds no
   enforcement path of its own.
 - App-owned rule ids cannot be edited or deleted except under system origin.
-- Each tree belongs to exactly one install, recorded in the `sys-app-trees` ledger,
+- Each tree belongs to exactly one install, recorded in the tree-ownership ledger,
   and core aliasing cannot cross that ownership - see
   [Tree ownership](#tree-ownership).
 - The role and subscription compilers never grant or observe the cluster-wide
@@ -709,19 +710,21 @@ composed for its own install's tenant.
 
 ### `LatticeAppsOptions`
 
-| Option | Default | Meaning |
-|---|---|---|
-| `ReconcileOnStartup` | `true` | Reconcile every enabled app once, in the background, when the silo starts. |
-| `StartupRetryDelay` | 250 ms (`DefaultStartupRetryDelay`) | Initial delay before retrying the startup registry read while the silo cannot yet serve it; doubles on each retry. Must be positive. |
-| `StartupRetryMaxDelay` | 30 s (`DefaultStartupRetryMaxDelay`) | Upper bound on that retry delay. Must be positive and not less than `StartupRetryDelay`. Every retry delay is held to the timer ceiling (about 49.7 days), so `TimeSpan.MaxValue` leaves the doubling uncapped up to it. |
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `ReconcileOnStartup` | `bool` | `true` | Reconcile every enabled app once, in the background, when the silo starts. |
+| `StartupRetryDelay` | `TimeSpan` | 250 ms (`DefaultStartupRetryDelay`) | Initial delay before retrying the startup registry read while the silo cannot yet serve it; doubles on each retry. Must be positive. |
+| `StartupRetryMaxDelay` | `TimeSpan` | 30 s (`DefaultStartupRetryMaxDelay`) | Upper bound on that retry delay. Must be positive and not less than `StartupRetryDelay`. Every retry delay is held to the timer ceiling (about 49.7 days), so `TimeSpan.MaxValue` leaves the doubling uncapped up to it. |
 
 ### `InImageAppSourceOptions`
 
-| Option | Default | Meaning |
-|---|---|---|
-| `Registrations` | empty | The apps present in the image, in registration order, each an `InImageAppRegistration` (slug, assembly, manifest resource name, a `Publisher` that defaults to `first-party`, and an `AssetResourcePrefix` for the UI bundle's embedded resources that defaults to `{manifestResourceNamespace}.ui.`). `AddLatticeApp` appends one, and `Register(slug, assembly, manifestResourceName)` adds one directly. Read once, when the source is constructed; a slug registered twice resolves as `DuplicateRegistration`. |
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `Registrations` | `IList<InImageAppRegistration> (get-only)` | empty | The apps present in the image, in registration order, each an `InImageAppRegistration` (slug, assembly, manifest resource name, a `Publisher` that defaults to `first-party`, and an `AssetResourcePrefix` for the UI bundle's embedded resources that defaults to `{manifestResourceNamespace}.ui.` when stripping the manifest resource name's final two dot-separated segments leaves a non-empty prefix, or `ui.` otherwise). `AddLatticeApp` appends one, and `Register(slug, assembly, manifestResourceName)` adds one directly. Read once, when the source is constructed; a slug registered twice resolves as `DuplicateRegistration`. |
 
 ## See also
+
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md)
 
 - [Control facade](../lattice.api.apps/README.md) and its
   [gRPC binding](../lattice.api.apps.grpc/README.md)

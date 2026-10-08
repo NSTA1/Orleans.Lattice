@@ -440,7 +440,7 @@ internal sealed partial class ShardRootGrain
     /// so the damage is not even confined to this shard. And because the
     /// caller has already been told to retry, the retry contends with the
     /// wreckage of its own predecessor, which makes the next stall likelier
-    /// still. Hence <see cref="StandDownIfCeilingFired"/>: every bounded leaf
+    /// still. Hence <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.StandDownIfCeilingFired(Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.ScanPageWalk)"/>: every bounded leaf
     /// walk checks the same deadline the ceiling is watching, so a stall costs
     /// at most the one read already in flight rather than the length of the
     /// chain.

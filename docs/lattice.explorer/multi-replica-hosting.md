@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Multi-replica and failover hosting
 
 When the Explorer runs as a Blazor Server web app behind more than one replica,
@@ -17,6 +21,18 @@ of auth state must survive that move:
 
 Both fixes are opt-in. Single-instance hosting keeps the default framework
 behaviour.
+
+## Live circuits still need session affinity
+
+Shared auth storage does not transfer a live Blazor Server circuit between
+replicas. The web head uses interactive server components, and each circuit
+owns its scoped cluster connection and in-memory UI state. Route a live
+circuit's requests to the same replica with session affinity. If that replica
+is lost, the browser must establish a fresh circuit; a shared key ring and
+token cache let that new circuit recover sign-in, not resume the old circuit.
+
+Keep the Explorer in a separate deployment where possible, or scope affinity
+to its mount path. See [Deployment: prefer an isolated head](running-the-explorer.md#deployment-prefer-an-isolated-head).
 
 ## Durable auth state: a shared Data Protection key ring
 
@@ -110,6 +126,9 @@ When `ChallengePath` is unset, the interstitial falls back to a plain full-page
 reload. That is useful only for methods that can recover on reload.
 
 ## Checklist
+
+- Keep live Blazor Server circuits on one replica with session affinity;
+  shared auth storage is not a replacement for sticky routing.
 
 - Persist the Data Protection key ring to shared storage with
   `DataProtectionKeyRingBlobUri` and `DataProtectionKeyRingCredential`.

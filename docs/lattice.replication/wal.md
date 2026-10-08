@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Partitioned replication WAL (write-ahead log)
 
 Every replicated mutation in `Orleans.Lattice.Replication` is committed to the tree's partitioned write-ahead log before any downstream replication consumer observes it. The WAL is the source of truth for incremental replication: shipping and recovery read from the WAL, never from the primary tree. Snapshot bootstrap is the exception - the default snapshot provider exports a point-in-time view of the tree's committed leaf projections, plus the prepared rows of any saga still undecided at the export, rather than replaying the WAL.

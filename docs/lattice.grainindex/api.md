@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # API Reference
 
 The public surface of `Orleans.Lattice.GrainIndex`. Types live in the

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Security
 
 The state API is a read-only surface, but read-only is not the same as public. Tree ids, key ranges, value previews, and live mutation feeds are sensitive, so the gRPC binding **fails closed**: every protected state read or observation call is authorized, and the default posture denies all protected traffic. The `GetAuthScheme` advertisement RPC is intentionally unauthenticated so a client can discover how to sign in.

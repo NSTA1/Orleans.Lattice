@@ -1135,6 +1135,7 @@ internal sealed class LatticeWalGcScheduler(
     /// <paramref name="LastAttempt"/> applies (issue #3575). Cleared when the
     /// next touch is issued.
     /// </param>
+    /// <param name="PinStateClassified">Whether the blocking consumer has already been classified by its pin state.</param>
     private readonly record struct ConsumerReactivationBudget(
         DateTimeOffset FirstObserved,
         DateTimeOffset LastObserved,
@@ -3922,6 +3923,12 @@ internal sealed class LatticeWalGcScheduler(
     /// floor-blocked arm's caller - grades every drive on the leaf's verdict, as
     /// before.
     /// </param>
+    /// <param name="blockingConsumerIds">The consumers preventing this tree from being trimmed.</param>
+    /// <param name="preClassified">Whether the blocking consumers were already classified before this call.</param>
+    /// <param name="stoppingToken">The scheduler shutdown token.</param>
+    /// <param name="tenantTag">The tenant metric tag.</param>
+    /// <param name="treeId">The tree whose blocking consumers are being processed.</param>
+    /// <param name="treeTag">The tree metric tag.</param>
     private async Task ObserveAndHealBlockedTreeAsync(
         string treeId,
         IReadOnlyList<string> blockingConsumerIds,
@@ -5116,6 +5123,11 @@ internal sealed class LatticeWalGcScheduler(
     /// own durable pin offset advancing rather than on the leaf's verdict
     /// (issue #3185).
     /// </param>
+    /// <param name="blockingConsumerId">The consumer preventing trimming and selected for reactivation.</param>
+    /// <param name="stoppingToken">The scheduler shutdown token.</param>
+    /// <param name="tenantTag">The tenant metric tag.</param>
+    /// <param name="treeId">The tree whose blocking consumers are being processed.</param>
+    /// <param name="treeTag">The tree metric tag.</param>
     private async Task<ReactivationTouchResult> TryReactivateBlockedLeafAsync(
         string treeId,
         string blockingConsumerId,

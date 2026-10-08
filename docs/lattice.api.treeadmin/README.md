@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/treeadmin.json"
+---
+
 # Orleans.Lattice.Api.TreeAdmin
 
 A transport-agnostic whole-tree administration control facade for [Orleans.Lattice](../../README.md).
@@ -236,6 +240,8 @@ Alongside the request/response records the operations use, the facade publishes 
 - `StorageUsageRefreshResults` - the refresh's result keys, `ToResultMap`, and `TryReadSummary`, which rebuilds the cluster totals as a deep `ClusterStorageUsageSummary` with no per-tree rows.
 
 ## See also
+
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
 
 - [Tree-administration operations](operations.md) - accept-then-poll view, tag-index, WAL-move, orphaned-leaf and fresh storage-usage operations, and migrating from the deprecated blocking verbs.
 - [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) - the schema control facade this surface composes by delegation.

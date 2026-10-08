@@ -390,7 +390,7 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     /// retained redirect, deleted, moved-away slot) would reject <paramref name="key"/>.
     /// <para>
     /// The optimistic read never raises those rejections itself. It defers to the
-    /// serial read, which runs <see cref="PrepareForOperationAsync"/> first and then
+    /// serial read, which runs <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.PrepareForOperationAsync()"/> first and then
     /// raises (or repairs) them against settled state. Raising them here instead
     /// would let the caller's stale-routing retry loop re-enter the optimistic read
     /// indefinitely without ever reaching the serial path that settles the
@@ -422,7 +422,7 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
 
     /// <summary>
     /// Returns <c>true</c> when an optimistic read may proceed: no routing mutation
-    /// is in flight, <see cref="PrepareForOperationAsync"/> owes no work (so the
+    /// is in flight, <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.PrepareForOperationAsync()"/> owes no work (so the
     /// serial prepare would be a no-op), and no split / move-away is in progress.
     /// </summary>
     private bool CanServeOptimisticRead()

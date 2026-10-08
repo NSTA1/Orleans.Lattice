@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Orleans.Lattice.Api.Schema.Grpc
 
 Code-first gRPC binding for [Orleans.Lattice.Api.Schema](../lattice.api.schema/README.md) - projects the schema-management control facade onto a gRPC service and a public typed client, using code-first Orleans-serialized request and response records that wrap or carry the facade DTOs, with no hand-written `.proto`.

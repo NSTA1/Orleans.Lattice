@@ -4235,7 +4235,7 @@ internal sealed partial class LatticeGrain(
     /// <summary>
     /// Owner-partitions <paramref name="slots"/> through hashed dictionaries.
     /// Fallback for the (non-production) maps whose physical indices are
-    /// negative or too sparse for <see cref="BuildOwnedSlotMap"/>'s dense
+    /// negative or too sparse for <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain.BuildOwnedSlotMap(Orleans.Lattice.ShardMap)"/>'s dense
     /// buckets; produces an identical result for any input.
     /// </summary>
     private static Dictionary<int, int[]> BuildOwnedSlotMapSparse(int[] slots)
@@ -5461,7 +5461,7 @@ internal sealed partial class LatticeGrain(
     /// <summary>
     /// Computes a stable shard index for the given key using XxHash32.
     /// Provided for backward compatibility; new routing should go through
-    /// the per-tree <see cref="ShardMap"/> via <see cref="GetRoutingAsync"/>.
+    /// the per-tree <see cref="ShardMap"/> via <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain.GetRoutingAsync(System.Threading.CancellationToken)"/>.
     /// </summary>
     internal static int GetShardIndex(string key, int shardCount) =>
         LatticeSharding.GetShardIndex(key, shardCount);

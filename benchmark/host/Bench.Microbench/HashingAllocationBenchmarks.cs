@@ -22,12 +22,12 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// (1) <c>AggregationRowCodec.Slot</c> - the per-contribution accumulator-shard
 /// routing hash (<see cref="XxHash32"/>);
 /// (2) <c>AggregationApplier.OperationId</c> - the per-contribution atomic-flip
-/// idempotency-id hash (<see cref="XxHash64"/>). Both lanes build the identical
+/// idempotency-id hash (<see cref="T:System.IO.Hashing.XxHash64"/>). Both lanes build the identical
 /// payload string, so the sole per-lane difference is the encode <c>byte[]</c>
 /// the baseline allocates;
 /// (3) <c>ViewMaintainerGrain.ComputeTreeDigestAsync</c> - the per-entry key
 /// encode inside the order-independent view-tree drift digest
-/// (<see cref="XxHash128"/>), where the optimized lane reuses one pooled buffer
+/// (<see cref="T:System.IO.Hashing.XxHash128"/>), where the optimized lane reuses one pooled buffer
 /// across the whole scan so N per-entry allocations collapse to a single rental.
 /// </para>
 /// <para>

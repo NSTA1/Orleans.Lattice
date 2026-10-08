@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra.Web API reference
 
 The public surface is the options type and cache enum, the service-registration
@@ -174,6 +178,34 @@ var innerException = new ExplorerWebReauthRequiredException(
 ```
 
 The exception is sealed and derives directly from `System.Exception`.
+
+## Complete exported symbol index
+
+This index lists every effectively public type and each member declared directly on that type in the current package builds. Overloaded members are listed once with their overload count. The preceding sections describe the supported integration contracts; feature-specific UI behavior is documented in the linked area guides.
+
+### Orleans.Lattice.Explorer.Entra.Web
+
+#### `Orleans.Lattice.Explorer.Entra.Web` (8 exported types)
+- `Orleans.Lattice.Explorer.Entra.Web.EntraWebExplorerAuthMethod`
+  - `constructors (1)`; `CanHandle`; `ChallengeAsync`; `SchemeId`
+- `Orleans.Lattice.Explorer.Entra.Web.ExplorerEntraWebEndpointRouteBuilderExtensions`
+  - `DefaultReauthPattern`; `DefaultReauthPrompt`; `DefaultReturnUrlParameter`; `DefaultSignOutPattern`; `MapLatticeExplorerEntraWebReauth`
+    `MapLatticeExplorerEntraWebSignOut`
+- `Orleans.Lattice.Explorer.Entra.Web.ExplorerEntraWebOptions`
+  - `constructors (1)`; `AllowedAudiences`; `AutoSignIn`; `CallbackPath`; `ClientId`; `ClientSecret`; `ConfigureCookieOptions`
+    `ConfigureMicrosoftIdentityOptions`; `DefaultCallbackPath`; `DefaultInstance`; `DefaultSignedOutCallbackPath`; `Instance`; `ReauthChallengePath`
+    `RequireAuthenticatedUser`; `Scopes`; `SignedOutCallbackPath`; `SignOutPath`; `TenantId`; `TokenCache`
+- `Orleans.Lattice.Explorer.Entra.Web.ExplorerEntraWebServiceCollectionExtensions`
+  - `AddLatticeExplorerEntraWebAuth`
+- `Orleans.Lattice.Explorer.Entra.Web.ExplorerWebReauthRequiredException`
+  - `constructors (3)`
+- `Orleans.Lattice.Explorer.Entra.Web.ExplorerWebToken`
+  - `AccessToken`; `Equals (2 overloads)`; `ExpiresOn`; `GetHashCode`; `op_Equality`; `op_Inequality`; `ToString`; `Username`
+- `Orleans.Lattice.Explorer.Entra.Web.ExplorerWebTokenCacheKind`
+  - `Distributed`; `InMemory`; `value__`
+- `Orleans.Lattice.Explorer.Entra.Web.IExplorerWebTokenAcquirer`
+  - `AcquireTokenAsync`
+
 
 ## See also
 

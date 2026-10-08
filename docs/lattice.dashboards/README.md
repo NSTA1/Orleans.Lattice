@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/telemetry.json"
+---
+
 # Orleans.Lattice.Dashboards
 
 `Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters, and its `Overview` dashboard also charts the exact-KNN gather instruments of the repository-context `Orleans.Lattice.Api.Mcp.RepoContext` meter. Install it when you want operator dashboards bundled with the library version - the core library has no dependency on it.
@@ -42,15 +46,7 @@ Install the package:
 
 Wire up the meters the core dashboards read. `AddMeter` matches a meter name exactly and does not cascade, so each add-on dashboard (`ReplicationGrpc`, `Authorization`, `Backup`, `Scaling`, `Tenancy`) also needs its own meter registered by name, as do the `Overview` dashboard's exact-KNN panels (`Orleans.Lattice.Api.Mcp.RepoContext`) - see [Configuration](configuration.md#1-register-the-meters):
 
-```csharp
-builder.Services.AddOpenTelemetry()
-    .WithMetrics(b => b
-        .AddMeter("orleans.lattice")
-        .AddMeter("orleans.lattice.replication")  // omit if no replication
-        .AddMeter("Microsoft.Orleans")            // Orleans runtime: activations, activation latency, directory
-        .AddMeter("System.Runtime")               // .NET runtime: GC heap, working set, thread pool
-        .AddPrometheusExporter());
-```
+In the consuming host, configure OpenTelemetry metrics with `AddOpenTelemetry` and `WithMetrics`, subscribe with `AddMeter` to `orleans.lattice`, `orleans.lattice.replication` (when replication is registered), `Microsoft.Orleans` and `System.Runtime`, and choose an exporter such as `AddPrometheusExporter`. The OpenTelemetry SDK and exporter packages belong to that host; they are not supplied by the dashboards package.
 
 The two runtime meters back no bundled panel, but without them the endpoint
 carries no heap, process-memory, or activation-latency series at all - see

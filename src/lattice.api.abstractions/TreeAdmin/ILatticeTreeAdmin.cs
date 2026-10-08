@@ -869,7 +869,7 @@ public interface ILatticeTreeAdmin
 
     /// <summary>
     /// <b>Reclaims</b> the orphaned source tail left behind by a completed
-    /// <see cref="ExecuteWalMoveAsync"/> - discarding partition
+    /// <see cref="ILatticeTreeAdminOperations.StartWalMoveAsync"/> operation - discarding partition
     /// <paramref name="partition"/>'s retained log on
     /// <paramref name="sourceProviderKey"/> - after authorizing the whole-tree
     /// <see cref="LatticeOperation.TreeLifecycle"/> capability fail-closed. This is the

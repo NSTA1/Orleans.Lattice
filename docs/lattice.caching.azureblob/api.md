@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Orleans.Lattice.Caching.AzureBlob API reference
 
 The package's public surface is deliberately small: one options type and one registration extension. The cache implementation itself is internal and reached only through the `IDistributedCache` abstraction.

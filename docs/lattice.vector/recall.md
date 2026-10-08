@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Recall and accuracy
 
 `Orleans.Lattice.Vector` is an **approximate** index. This page states the

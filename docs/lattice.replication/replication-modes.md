@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-enrollment.yaml"
+---
+
 # Replication modes
 
 Every tree replicated by `Orleans.Lattice.Replication` declares a

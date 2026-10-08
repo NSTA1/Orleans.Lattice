@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Performance: multi-silo scaling guide
 
 > [!IMPORTANT]

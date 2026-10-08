@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Backup observability
 
 `Orleans.Lattice.Backup` publishes its telemetry on a single [.NET meter](https://learn.microsoft.com/dotnet/core/diagnostics/metrics) so an OpenTelemetry pipeline can subscribe once and receive every backup metric. Two public static classes own the surface: `BackupMetrics` (the meter and the cross-tree-fence instruments) and `LatticeBackupMetrics` (the capture, restore, retention, and scheduler instruments, the tag / phase / reason constants, and the emission helpers; it also registers the inventory gauges, which are not exposed as public fields).

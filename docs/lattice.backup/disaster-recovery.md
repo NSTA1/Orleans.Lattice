@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/restore.yaml"
+---
+
 # Disaster recovery
 
 How to recover Orleans.Lattice backups after catastrophic loss of the cluster

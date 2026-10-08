@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Api.Replication.Grpc API reference
 
 The package exposes public typed clients for the control and peer-status services, their registration entry points, public authorization, credential-bridge, and auth-scheme seams, the public wire message records, the binding's serialization-alias constants, and a public options type. The services, marshallers, method definitions, and interceptor are internal.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # WAL saturation back-pressure signal
 
 This document is the design reference for the per-tree saturation signal exposed by `IWalSaturationSignal`, `IWalSaturationObserver`, and `WalSaturationStateChange`. It complements the call-site reference in [`api.md`](api.md#wal-saturation-back-pressure) and the operational sizing context in [`wal-tuning.md`](wal-tuning.md#when-lifting-the-cap-stops-helping).

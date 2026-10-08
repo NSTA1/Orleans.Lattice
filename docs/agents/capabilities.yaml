@@ -857,7 +857,7 @@ capabilities:
         source: "docs/lattice.replication/README.md"
       - statement: "Replication applies deliveries for different tree and origin pairs independently, with no total order across them."
         source: "docs/lattice.replication/replication-apply.md"
-      - statement: "A bootstrap snapshot stream is not delivered in HLC order, so the receiver skips the pinned-causal-floor check and high-water-mark advance while it drains and relies on per-key last-writer-wins for convergence."
+      - statement: "A bootstrap snapshot stream is not delivered in HLC order. Fresh attempts import into a shadow copy while the prior view serves; legacy partial imports stay read-fenced. The drain bypasses steady-state high-water-mark advancement, and handoff merges the frontier by maximum and clears the legacy pinned floor rather than suppressing new point writes solely for an older HLC."
         source: "docs/lattice.replication/snapshot-bootstrap.md"
     unsafe_sequences:
       - sequence:
@@ -1235,8 +1235,6 @@ capabilities:
       - statement: "Telemetry duration tokens are bounded in their own units before TimeSpan construction, so oversized counts are refused without overflowing."
         source: "src/lattice.explorer/UI/Areas/Telemetry/TelemetryDurations.cs#TelemetryDurations.TryParse"
     non_guarantees:
-      - statement: "The Explorer surface is documented as in progress and its surface area and navigation are still moving."
-        source: "FEATURES.md"
       - statement: "Every Explorer area is compiled in; there is no per-area registration or option, and an area whose facade is not served hides itself."
         source: "docs/lattice.explorer/managing-schema.md"
       - statement: "The Explorer is a Blazor Server application and therefore requires session affinity in a multi-instance deployment."
