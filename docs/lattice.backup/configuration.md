@@ -46,6 +46,16 @@ The guard costs nothing when it cannot apply. A deployment with no replicated tr
 
 Two faults are distinguished. A replicated tree backed by the default in-cluster sink is rejected outright at start regardless of `SinkSharingEnforcement`, because an in-cluster sink dogfoods a per-cluster reserved tree and is provably invisible to a peer - that needs no probe. An external sink is what the probe tests.
 
+**10.0 tenancy upgrade:** When both tenancy and replication are registered,
+`sys-tenant-registry` is enrolled automatically, including hosts with an empty
+user-tree map. A v9.9.0 host combining tenancy, replication and backup with the
+default in-cluster sink will now fail to start. Register a shared external
+`ILatticeBackupSink` reachable by every region (for example the Azure Blob sink).
+System trees are not exempt: their backup chains must also resolve during a
+coordinated restore. The startup error explains tenancy's automatic enrolment.
+Without replication registration, tenancy does not enrol the registry and the
+default in-cluster sink remains supported.
+
 The verdict is refreshed once per backup-health sweep (`LatticeBackupHealthOptions.DefaultInterval`, six hours by default) - so only while that monitor runs, against a durable sink with `LatticeBackupHealthOptions.Enabled` - which is what resolves the cold-start case where every cluster starts at once, nobody has written a marker yet, and the first verdict is necessarily `Unverified`. See [Disaster recovery](disaster-recovery.md#un-restorable-backups-a-sink-that-is-not-shared) for how the verdict reaches each backup's health report.
 
 ## `LatticeBackupHealthOptions`

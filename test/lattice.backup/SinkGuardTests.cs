@@ -68,6 +68,19 @@ public sealed class SinkGuardTests
     }
 
     [Test]
+    public void StartAsync_replicated_tenant_registry_explains_automatic_enrolment()
+    {
+        var validator = CreateValidator(
+            new InClusterLatticeBackupSink(Substitute.For<IGrainFactory>()),
+            new FakeReplicatedTreeMembership("sys-tenant-registry"));
+
+        Assert.That(async () => await validator.StartAsync(CancellationToken.None),
+            Throws.InvalidOperationException.With.Message.Contains("enrolled automatically by tenancy")
+                .And.Message.Contains("shared external")
+                .And.Message.Not.Contains("remove this tree"));
+    }
+
+    [Test]
     public async Task StartAsync_replicated_tree_with_shared_external_sink_passes()
     {
         var probe = new FakeSharingProbe(Report(BackupSinkSharingStatus.Shared));

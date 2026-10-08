@@ -27,6 +27,9 @@ public static class LatticeTenancyServiceCollectionExtensions
     /// When replication is also registered, the definition registry is enrolled
     /// automatically on every region as a last-writer-wins tree, independently
     /// of registration order. Usage and overage trees remain opt-in.
+    /// A host combining tenancy, replication and backup must supply a shared external
+    /// <see cref="ILatticeBackupSink"/>; the default in-cluster sink cannot
+    /// support coordinated restore of the replicated registry.
     /// <para>
     /// Enabling tenancy hard-depends on the core, membership, and auth add-ons,
     /// so this must be called <i>after</i>
@@ -106,6 +109,13 @@ public static class LatticeTenancyServiceCollectionExtensions
         // unlike independent runtime enrolments, which can become ambiguous.
         builder.Services.PostConfigureAll<LatticeReplicationOptions>(options =>
         {
+            // Inspect the completed registrations when options resolve, not the
+            // registration order, and do not instantiate the options-dependent applier.
+            if (!builder.Services.Any(d => d.ServiceType == typeof(IReplicationApplier)))
+            {
+                return;
+            }
+
             var trees = options.ReplicatedTrees is null
                 ? new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
                 : new Dictionary<string, LatticeMergeMode>(options.ReplicatedTrees, StringComparer.Ordinal);

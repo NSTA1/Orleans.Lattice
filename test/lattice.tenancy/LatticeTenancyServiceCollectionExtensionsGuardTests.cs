@@ -336,6 +336,24 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
         }
     }
 
+    [Test]
+    public void AddLatticeTenancy_without_replication_does_not_enrol_registry()
+    {
+        var builder = NewBuilderWithDependencies();
+        builder.AddLatticeTenancy();
+        builder.Services.ConfigureAll<LatticeReplicationOptions>(options =>
+            options.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
+            {
+                ["application"] = LatticeMergeMode.OrSet,
+            });
+        using var services = builder.Services.BuildServiceProvider();
+        var options = services.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
+        foreach (var name in new[] { Options.DefaultName, TenantTreeNames.RegistryTree, "application" })
+        {
+            Assert.That(options.Get(name).ReplicatedTrees!.Keys, Is.EquivalentTo(new[] { "application" }));
+        }
+    }
+
     /// <summary>A minimal <see cref="ISiloBuilder"/> backed by a plain service collection.</summary>
     private sealed class CovSiloBuilder : ISiloBuilder
     {

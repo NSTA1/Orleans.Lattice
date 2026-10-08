@@ -56,14 +56,23 @@ and its [gRPC binding](../lattice.api.tenantadmin.grpc/README.md).
   convergent sum (no locks, no consensus) with bounded, quantified overshoot - so they
   converge across every cluster the `sys-tenant-*` trees replicate to.
   `AddLatticeTenancy` automatically declares `sys-tenant-registry` in the static
-  replication map as `LwwRegister` on every host, regardless of whether
-  `AddLatticeReplication` runs before or after it. With replication absent the
-  declaration is inert. Usage and overage trees remain explicitly enrolled by the
+  replication map as `LwwRegister` only when replication is registered, regardless
+  of whether `AddLatticeReplication` runs before or after it. Without replication
+  registration it adds no replicated-tree declaration. Usage and overage trees remain explicitly enrolled by the
   deployment; `ReplicateLatticeSystemTrees` covers membership and authorization.
   Local registry writes join fields before persisting; cross-region transport
   resolves whole serialized records by last-writer-wins, not a field-wise join.
   Seed tenant definitions once and let them replicate rather than creating
   independent copies in each region.
+
+**10.0 upgrade note:** A host registering tenancy, replication and backup now
+replicates `sys-tenant-registry` automatically, even with an empty user-tree map.
+An existing v9.9.0 host using the default in-cluster backup sink will refuse to
+start after upgrading. Register a shared external `ILatticeBackupSink` reachable
+by every region (for example the Azure Blob sink). The registry is not exempt
+from the backup shared-sink rule: a coordinated restore must resolve its backup
+chain in every region. Tenancy plus backup without replication still starts
+with the default sink. See [Cross-cluster sink sharing](../lattice.backup/configuration.md#cross-cluster-sink-sharing).
 
 ## Quick start
 
