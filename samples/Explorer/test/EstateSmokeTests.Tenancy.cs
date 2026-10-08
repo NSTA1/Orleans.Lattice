@@ -15,7 +15,7 @@ public sealed partial class EstateSmokeTests
     [Test]
     public async Task Acme_is_resident_and_online_in_both_regions_and_globex_has_no_residency_in_either()
     {
-        // Each region keeps its own tenant registry, so each is asked for itself (issue #4078).
+        // Definitions are seeded in east and replicated, so check each region's own registry.
         using var _ = LatticeCredentialContext.Use(SampleSeeder.BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme);
         foreach (var region in new[] { _sample.East, _sample.West! })
         {
@@ -38,6 +38,26 @@ public sealed partial class EstateSmokeTests
                     Is.All.EqualTo(Orleans.Lattice.Api.TenantAdmin.TenantRegionLifecycleStatus.None),
                     $"globex in region {region.Id}");
             });
+        }
+    }
+
+    [Test]
+    public async Task Tenant_orders_and_invoices_seeded_in_east_reach_west()
+    {
+        var grains = _sample.West!.Services.GetRequiredService<IGrainFactory>();
+        var entries = new[]
+        {
+            (Tree: SampleSeeder.OrdersTree(SampleIdentities.AcmeTenant), Key: "order-1005"),
+            (Tree: SampleSeeder.OrdersTree(SampleIdentities.GlobexTenant), Key: "order-1010"),
+            (Tree: SampleSeeder.InvoicesTree, Key: "invoice-003"),
+        };
+        foreach (var (tree, key) in entries)
+        {
+            Assert.That(await SampleTestHost.EventuallyAsync(async () =>
+            {
+                using var system = LatticeSystemOrigin.Enter();
+                return await grains.GetGrain<ILattice>(tree).GetAsync(key) is not null;
+            }, ReplicationBudget), Is.True, $"'{tree}/{key}' replicates after the peer observes tenant residency");
         }
     }
 

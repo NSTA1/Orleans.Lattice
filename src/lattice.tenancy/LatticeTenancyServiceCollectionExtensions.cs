@@ -24,6 +24,12 @@ public static class LatticeTenancyServiceCollectionExtensions
     /// that sets history retention and seeds the reserved default tenant with an
     /// unbounded quota. Also ensures the view infrastructure is present so the
     /// registry tree gets durable per-key history out of the box.
+    /// When replication is also registered, the definition registry is enrolled
+    /// automatically on every region as a last-writer-wins tree, independently
+    /// of registration order. Usage and overage trees remain opt-in.
+    /// A host combining tenancy, replication and backup must supply a shared external
+    /// <see cref="ILatticeBackupSink"/>; the default in-cluster sink cannot
+    /// support coordinated restore of the replicated registry.
     /// <para>
     /// Enabling tenancy hard-depends on the core, membership, and auth add-ons,
     /// so this must be called <i>after</i>
@@ -99,6 +105,24 @@ public static class LatticeTenancyServiceCollectionExtensions
 
         builder.Services.AddSingleton<TenancyRegistrationMarker>();
 
+        // A static floor is present on every receiver before the first write,
+        // unlike independent runtime enrolments, which can become ambiguous.
+        builder.Services.PostConfigureAll<LatticeReplicationOptions>(options =>
+        {
+            // Inspect the completed registrations when options resolve, not the
+            // registration order, and do not instantiate the options-dependent applier.
+            if (!builder.Services.Any(d => d.ServiceType == typeof(IReplicationApplier)))
+            {
+                return;
+            }
+
+            var trees = options.ReplicatedTrees is null
+                ? new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+                : new Dictionary<string, LatticeMergeMode>(options.ReplicatedTrees, StringComparer.Ordinal);
+            trees[TenantTreeNames.RegistryTree] = LatticeMergeMode.LwwRegister;
+            options.ReplicatedTrees = trees;
+        });
+
         // Durable per-key history for the sys-tenant-* trees rides on the view
         // infrastructure; ensure it is present (idempotent).
         builder.AddLatticeViews();
@@ -166,6 +190,8 @@ public static class LatticeTenancyServiceCollectionExtensions
         // (guarded by TenancyRegistrationMarker above).
         builder.Services.TryAddSingleton<CompiledTenantPolicySnapshotMaintainer>();
         builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>());
+        builder.Services.AddSingleton<ITreeAliasObserver>(
             sp => sp.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>());
 
         // Cross-silo currency for that snapshot (issue #4030): the change-feed hook

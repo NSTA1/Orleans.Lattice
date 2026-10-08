@@ -54,9 +54,25 @@ and its [gRPC binding](../lattice.api.tenantadmin.grpc/README.md).
 - **Coordination-free multi-cluster.** Tenant definitions and usage are convergent
   CRDT state - a registry record merges field by field, and usage enforcement reads a
   convergent sum (no locks, no consensus) with bounded, quantified overshoot - so they
-  converge across every cluster the `sys-tenant-*` trees replicate to. The package
-  does not enroll those trees for replication itself, and
-  `ReplicateLatticeSystemTrees` covers only the membership and authorization trees.
+  converge across every cluster the `sys-tenant-*` trees replicate to.
+  `AddLatticeTenancy` automatically declares `sys-tenant-registry` in the static
+  replication map as `LwwRegister` only when replication is registered, regardless
+  of whether `AddLatticeReplication` runs before or after it. Without replication
+  registration it adds no replicated-tree declaration. Usage and overage trees remain explicitly enrolled by the
+  deployment; `ReplicateLatticeSystemTrees` covers membership and authorization.
+  Local registry writes join fields before persisting; cross-region transport
+  resolves whole serialized records by last-writer-wins, not a field-wise join.
+  Seed tenant definitions once and let them replicate rather than creating
+  independent copies in each region.
+
+**10.0 upgrade note:** A host registering tenancy, replication and backup now
+replicates `sys-tenant-registry` automatically, even with an empty user-tree map.
+An existing v9.9.0 host using the default in-cluster backup sink will refuse to
+start after upgrading. Register a shared external `ILatticeBackupSink` reachable
+by every region (for example the Azure Blob sink). The registry is not exempt
+from the backup shared-sink rule: a coordinated restore must resolve its backup
+chain in every region. Tenancy plus backup without replication still starts
+with the default sink. See [Cross-cluster sink sharing](../lattice.backup/configuration.md#cross-cluster-sink-sharing).
 
 ## Quick start
 
@@ -655,9 +671,29 @@ tenant's status there becomes `Draining`, advances it to `Offline` and then to
 `Removed` without any caller. Nothing needs to be waited for first: a region stops
 serving a tenant and stops admitting its replicated writes the moment its status
 leaves `Online`, and outbound shipping of the writes it accepted while online does not
-depend on the status. A dropped region whose silos never run again (a decommissioned
-region) keeps the `Draining` it was given, which is harmless - it is already neither
-resident nor serving.
+depend on the status.
+
+The drained region must first **observe the registry change**, and its completion
+must replicate back to the origin. Configure a connected, bidirectional replication
+topology on every tenancy region; the automatically enrolled definition registry
+is control-plane metadata and is not filtered by a tenant's residency. Do not
+independently runtime-enrol it in each region: concurrent runtime enrolments can
+be ambiguous and override the static floor. Existing runtime overrides must be
+removed or resolved to the same `LwwRegister` mode.
+
+A registry snapshot import publishes a logical-tree alias cutover. Tenancy observes
+that cutover and advances the same cluster policy epoch as a registry mutation,
+invalidating policy, residency and placement snapshots on every local silo. This
+lets the drained region observe imported lifecycle changes even when bootstrap
+writes only to a shadow copy of the registry.
+
+A lasting `Draining` means the origin is still awaiting the region's confirmation:
+check that the drained region's silos run the tenant-admin API and that
+`sys-tenant-registry` ships in **both** directions. This status is not evidence
+that the remote region has stopped serving: a disconnected region may still hold
+`Online` until it observes the removal. Explorer explains this uncertainty rather
+than claiming a remote acknowledgment. A decommissioned region that never runs
+again cannot acknowledge the drain and remains `Draining`.
 
 **The add path needs an operator step.** No shipped component backfills a region a
 tenant is added to. While the tenant is not `Online` in a region, that region refuses

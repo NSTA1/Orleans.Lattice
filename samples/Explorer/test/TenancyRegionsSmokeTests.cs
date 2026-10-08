@@ -1,7 +1,10 @@
 using Bunit;
+using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Replication;
+using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Samples.Explorer.Tests;
 
@@ -19,11 +22,17 @@ namespace Orleans.Lattice.Samples.Explorer.Tests;
 public sealed class TenancyRegionsSmokeTests
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ReplicationBudget = TimeSpan.FromMinutes(7);
 
     private ExplorerSample _sample = null!;
+    private readonly HashSet<string> _observedTenants = new(StringComparer.Ordinal);
 
     [OneTimeSetUp]
-    public async Task StartAsync() => _sample = await SampleTestHost.StartAsync(minimal: false);
+    public async Task StartAsync()
+    {
+        _sample = await SampleTestHost.StartAsync(minimal: false);
+        Assert.That(await RegistryRowsMatchAsync(), Is.True, "seeded registry rows must match before either drain");
+    }
 
     [OneTimeTearDown]
     public async Task StopAsync()
@@ -33,6 +42,62 @@ public sealed class TenancyRegionsSmokeTests
             await _sample.DisposeAsync();
             File.Delete(_sample.Console.ConfigPath);
         }
+    }
+
+    [Test]
+    public async Task A_drain_waits_for_the_remote_region_and_completes_when_registry_shipping_resumes()
+    {
+        const string Tenant = "delayed-drain";
+        const string East = SampleIdentities.EastRegion;
+        const string West = SampleIdentities.WestRegion;
+        using var caller = LatticeCredentialContext.Use(
+            SampleSeeder.BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme);
+        var admin = _sample.East.Services.GetRequiredService<ILatticeTenantAdmin>();
+        var east = _sample.East.Services.GetRequiredService<ILatticeTenantRegionAdmin>();
+        var west = _sample.West!.Services.GetRequiredService<ILatticeTenantRegionAdmin>();
+        await admin.CreateTenantAsync(Tenant);
+        await east.AuthorizeAllowedRegionsAsync(Tenant, [East, West]);
+        await east.SetResidencyAsync(Tenant, [East, West]);
+        var registry = _sample.East.Services.GetRequiredService<ITenantRegistry>();
+        foreach (var region in new[] { East, West })
+        {
+            await SampleSeeder.PromoteToOnlineAsync(registry, TenantId.Parse(Tenant), region, East);
+        }
+
+        var seeded = await ObserveConvergenceAsync(async () =>
+        {
+            var remote = await _sample.West.Services.GetRequiredService<ITenantRegistry>().GetAsync(TenantId.Parse(Tenant));
+            return remote?.GetRegionStatus(West) == TenantRegionStatus.Online;
+        }, Tenant, "pre-pause registry convergence");
+        if (!seeded)
+        {
+            await PrintReplicationAsync();
+        }
+        Assert.That(seeded, Is.True, "the tenant definition must reach the peer without a second seed");
+
+        _sample.PeerLink.Pause();
+        try
+        {
+            await east.SetResidencyAsync(Tenant, [East]);
+            Assert.That((await east.GetTenantRegionStatusAsync(Tenant)).Regions.Single(row => row.RegionId == West).Status,
+                Is.EqualTo(TenantRegionLifecycleStatus.Draining));
+            Assert.That((await west.GetTenantRegionStatusAsync(Tenant)).Regions.Single(row => row.RegionId == West).Status,
+                Is.EqualTo(TenantRegionLifecycleStatus.Online), "a disconnected peer has not observed the removal");
+        }
+        finally
+        {
+            _sample.PeerLink.Resume();
+        }
+
+        Assert.That(await ObserveConvergenceAsync(async () =>
+        {
+            var origin = await east.GetTenantRegionStatusAsync(Tenant);
+            var remote = await west.GetTenantRegionStatusAsync(Tenant);
+            return origin.Regions.Single(row => row.RegionId == West).Status == TenantRegionLifecycleStatus.Removed
+                && remote.Regions.Single(row => row.RegionId == West).Status == TenantRegionLifecycleStatus.Removed
+                && origin.Regions.Single(row => row.RegionId == East).Status == TenantRegionLifecycleStatus.Online;
+        }, Tenant, "resumed drain", requireHealthyReplication: true), Is.True,
+            "the remote drain completion returns to its origin and bootstrap/shipping recover after the link resumes");
     }
 
     [Test]
@@ -85,13 +150,18 @@ public sealed class TenancyRegionsSmokeTests
             $"{West} starts draining, and stops being served there.",
         }));
         Assert.That(cut.FindAll(".lt-tenancy-served-nowhere"), Is.Empty);
+        var operatorLatency = System.Diagnostics.Stopwatch.StartNew();
+        NUnit.Framework.TestContext.Out.WriteLine($"{DateTimeOffset.UtcNow:O} ordinary operator submits residency removal");
         Button(cut, "Apply residency").Click();
         Wait(cut, () => cut.FindAll("[role=alertdialog] .lt-dialog__title").Count == 1);
         Assert.That(cut.Find("[role=alertdialog] .lt-dialog__title").TextContent, Is.EqualTo("Remove regions from the residency?"));
         Button(cut, "Drain and apply").Click();
 
         toasts.WaitForState(() => Toasts(toasts).Contains($"Tenant {Acme} is draining {West}."), Budget);
-        Wait(cut, () => cut.FindAll("tbody tr").Any(row => row.Children[0].TextContent.Trim() == West && row.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim() == "Draining"));
+        Wait(cut, () => cut.FindAll("tbody tr").Any(row => row.Children[0].TextContent.Trim() == West && row.Children[2].TextContent.Trim() == "Not served"));
+        operatorLatency.Stop();
+        NUnit.Framework.TestContext.Out.WriteLine($"{DateTimeOffset.UtcNow:O} ordinary operator local UI/registry reports Draining, elapsed={operatorLatency.Elapsed}");
+        Assert.That(operatorLatency.Elapsed, Is.LessThan(Budget), "the local operator update remains responsive independently of remote recovery");
         var eastRow = cut.FindAll("tbody tr").Single(row => row.Children[0].TextContent.Trim() == East);
         Assert.Multiple(() =>
         {
@@ -103,19 +173,166 @@ public sealed class TenancyRegionsSmokeTests
 
         using (LatticeCredentialContext.Use(SampleSeeder.BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme))
         {
+            var observed = new Dictionary<string, TenantRegionLifecycleStatus>();
+            var removed = await ObserveConvergenceAsync(async () =>
+            {
+                foreach (var region in _sample.Regions)
+                {
+                    var status = await region.Services.GetRequiredService<ILatticeTenantRegionAdmin>().GetTenantRegionStatusAsync(Acme);
+                    observed[region.Id] = status.Regions.Single(row => row.RegionId == West).Status;
+                }
+
+                return observed.Values.All(status => status == TenantRegionLifecycleStatus.Removed);
+            }, Acme, "ordinary operator drain", requireHealthyReplication: true);
+            if (!removed)
+            {
+                await PrintReplicationAsync();
+            }
+            Assert.That(removed, Is.True, "west observes east's registry change, completes its drain and replicates Removed back to east; last statuses: "
+                + string.Join(", ", observed.Select(entry => $"{entry.Key}: {entry.Value}")));
             var report = await _sample.East.Services.GetRequiredService<ILatticeTenantRegionAdmin>().GetTenantRegionStatusAsync(Acme);
             Assert.Multiple(() =>
             {
                 Assert.That(report.Regions.Where(region => region.IsAllowed).Select(region => region.RegionId), Is.EqualTo(new[] { East, West }));
                 Assert.That(report.Regions.Single(region => region.RegionId == East).Status, Is.EqualTo(TenantRegionLifecycleStatus.Online));
-                Assert.That(report.Regions.Single(region => region.RegionId == West).Status, Is.EqualTo(TenantRegionLifecycleStatus.Draining));
+                Assert.That(report.Regions.Single(region => region.RegionId == West).Status, Is.EqualTo(TenantRegionLifecycleStatus.Removed));
             });
         }
 
         // And east still serves acme: its admin reads acme's orders there.
+        Wait(cut, () => cut.FindAll("tbody tr").Any(row => row.Children[0].TextContent.Trim() == West
+            && row.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim() == "Removed"));
         await using var acme = await ConsoleCircuit.OpenAsync(_sample, SampleIdentities.AcmeAdmin, Acme);
         var read = await acme.ReadAsync(SampleSeeder.OrdersTree(Acme), "order-1001");
         Assert.That(read.Status, Is.EqualTo(Orleans.Lattice.Api.State.StateQueryStatus.Found), "acme is still served in east");
+    }
+
+    private async Task PrintReplicationAsync()
+    {
+        using var system = LatticeSystemOrigin.Enter();
+        foreach (var region in _sample.Regions)
+        {
+            var bootstrap = await region.Services.GetRequiredService<ILatticeBootstrapCoordinator>()
+                .GetStatusAsync("sys-tenant-registry");
+            NUnit.Framework.TestContext.Out.WriteLine(
+                $"{region.Id} bootstrap: phase={bootstrap.Phase}, source={bootstrap.SourceClusterId}, "
+                + $"read-fenced={bootstrap.ReadFenced}, entries-applied={bootstrap.EntriesApplied}, redrives={bootstrap.RedriveAttempts}");
+            var status = await region.Services.GetRequiredService<ILatticeReplicationStatus>()
+                .GetPeerStatusAsync(new ReplicationPeerStatusQuery { TreeId = "sys-tenant-registry" });
+            foreach (var link in status.Peers)
+            {
+                NUnit.Framework.TestContext.Out.WriteLine(
+                    $"{region.Id} {link.Direction} {link.PeerRegionId}: {link.Health}, stall={link.StallReason}, "
+                    + $"backlog={link.EntriesBehind}, errors={link.ConsecutiveErrors}, last contact={link.TimeSinceLastContact}");
+            }
+        }
+    }
+
+    private async Task<bool> ObserveConvergenceAsync(
+        Func<Task<bool>> condition, string tenant, string stage, bool requireHealthyReplication = false)
+    {
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var nextObservation = TimeSpan.Zero;
+        string? previous = null;
+        var converged = await SampleTestHost.EventuallyAsync(async () =>
+        {
+            var states = new List<string>();
+            using (LatticeSystemOrigin.Enter())
+            {
+                foreach (var region in _sample.Regions)
+                {
+                    var record = await region.Services.GetRequiredService<ITenantRegistry>().GetAsync(TenantId.Parse(tenant));
+                    states.Add($"{region.Id}:{record?.GetRegionStatus(SampleIdentities.WestRegion)}:"
+                        + region.Services.GetRequiredService<ITenantResidencyResolver>().IsOnlineInServingRegion(TenantId.Parse(tenant)));
+                }
+            }
+
+            var observed = string.Join(",", states);
+            if (observed != previous || elapsed.Elapsed >= nextObservation)
+            {
+                await PrintConvergenceAsync(tenant, stage, elapsed.Elapsed);
+                previous = observed;
+                if (elapsed.Elapsed >= nextObservation)
+                {
+                    nextObservation += TimeSpan.FromSeconds(60);
+                }
+            }
+
+            return await condition() && (!requireHealthyReplication || await RegistryReplicationIsHealthyAsync());
+        }, ReplicationBudget);
+        await PrintConvergenceAsync(tenant, $"{stage}: converged={converged}", elapsed.Elapsed);
+        return converged;
+    }
+
+    private async Task<bool> RegistryReplicationIsHealthyAsync()
+    {
+        using var system = LatticeSystemOrigin.Enter();
+        foreach (var region in _sample.Regions)
+        {
+            var bootstrap = await region.Services.GetRequiredService<ILatticeBootstrapCoordinator>()
+                .GetStatusAsync("sys-tenant-registry");
+            if (bootstrap.ReadFenced
+                || bootstrap.Phase is not (LatticeBootstrapState.Idle or LatticeBootstrapState.LiveIncremental))
+            {
+                return false;
+            }
+
+            var status = await region.Services.GetRequiredService<ILatticeReplicationStatus>()
+                .GetPeerStatusAsync(new ReplicationPeerStatusQuery { TreeId = "sys-tenant-registry" });
+            var outbound = status.Peers.Where(link => link.Direction == ReplicationLinkDirection.Outbound).ToArray();
+            if (outbound.Length != 1 || outbound.Any(link => link.Health != ReplicationLinkHealth.Healthy
+                || link.StallReason is not null || link.ConsecutiveErrors != 0))
+            {
+                return false;
+            }
+        }
+
+        return await RegistryRowsMatchAsync();
+    }
+
+    private async Task<bool> RegistryRowsMatchAsync()
+    {
+        using var system = LatticeSystemOrigin.Enter();
+        var sets = new Dictionary<string, SortedSet<string>>();
+        foreach (var region in _sample.Regions)
+        {
+            var rows = new SortedSet<string>(StringComparer.Ordinal);
+            await foreach (var record in region.Services.GetRequiredService<ITenantRegistry>().ListAsync())
+            {
+                rows.Add(record.Id.ToString());
+            }
+
+            sets[region.Id] = rows;
+        }
+
+        var lost = _observedTenants.Where(tenant => sets.Values.Any(rows => !rows.Contains(tenant))).ToArray();
+        _observedTenants.UnionWith(sets.Values.SelectMany(rows => rows));
+        Assert.That(lost, Is.Empty, "a registry row previously observed in a region was lost; rows: "
+            + string.Join("; ", sets.Select(entry => $"{entry.Key}=[{string.Join(",", entry.Value)}]")));
+        var first = sets.Values.First();
+        var match = sets.Values.All(rows => rows.SetEquals(first));
+        if (!match)
+        {
+            NUnit.Framework.TestContext.Out.WriteLine("registry rows differ: "
+                + string.Join("; ", sets.Select(entry => $"{entry.Key}=[{string.Join(",", entry.Value)}]")));
+        }
+
+        return match;
+    }
+
+    private async Task PrintConvergenceAsync(string tenant, string stage, TimeSpan elapsed)
+    {
+        NUnit.Framework.TestContext.Out.WriteLine($"{DateTimeOffset.UtcNow:O} {stage}, elapsed={elapsed}");
+        using var system = LatticeSystemOrigin.Enter();
+        foreach (var region in _sample.Regions)
+        {
+            var record = await region.Services.GetRequiredService<ITenantRegistry>().GetAsync(TenantId.Parse(tenant));
+            var residency = region.Services.GetRequiredService<ITenantResidencyResolver>();
+            NUnit.Framework.TestContext.Out.WriteLine($"{region.Id} tenant={tenant}: registry-west={record?.GetRegionStatus(SampleIdentities.WestRegion)}, "
+                + $"local-residency-allows-serving={residency.IsOnlineInServingRegion(TenantId.Parse(tenant))}");
+        }
+
+        await PrintReplicationAsync();
     }
 
     private static string[] Chips(IRenderedComponent<TenancyRegions> cut) =>
