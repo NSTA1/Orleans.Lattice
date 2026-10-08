@@ -275,14 +275,18 @@ public sealed class LatticeAuthAdminDirectoryTests
     // ----- GetAccessModelAsync -----
 
     [Test]
-    public async Task GetAccessModelAsync_requests_the_group_scoped_directory_guidance()
+    public async Task GetAccessModelAsync_requests_the_kind_neutral_directory_guidance()
     {
         var directory = new FakeIdentityDirectory();
         var admin = CreateAdmin(directory);
 
         await admin.GetAccessModelAsync();
 
-        Assert.That(directory.LastDescribeKind, Is.EqualTo(DirectoryPrincipalKind.Group));
+        Assert.Multiple(() =>
+        {
+            Assert.That(directory.DescribeCount, Is.EqualTo(1));
+            Assert.That(directory.LastDescribeKind, Is.Null);
+        });
     }
 
     [Test]
@@ -314,7 +318,7 @@ public sealed class LatticeAuthAdminDirectoryTests
         {
             Assert.That(model.DirectoryAvailable, Is.False);
             Assert.That(model.DirectoryProviderId, Is.EqualTo(NullIdentityDirectory.NullProviderId));
-            Assert.That(model.DirectoryExplanation, Is.EqualTo(directory.DescribeEntry(DirectoryPrincipalKind.Group)));
+            Assert.That(model.DirectoryExplanation, Is.EqualTo(directory.DescribeEntry(null)));
         });
     }
 
@@ -462,8 +466,11 @@ public sealed class LatticeAuthAdminDirectoryTests
 
         public DirectoryPrincipalKind? LastDescribeKind { get; private set; }
 
+        public int DescribeCount { get; private set; }
+
         public string DescribeEntry(DirectoryPrincipalKind? kind)
         {
+            DescribeCount++;
             LastDescribeKind = kind;
             return Guidance;
         }
