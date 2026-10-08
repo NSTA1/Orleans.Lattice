@@ -450,8 +450,8 @@ public sealed class ShardRootGrainBulkLoadGraftTests
     /// <summary>
     /// Builds a four-level tree whose two upper internal nodes split the
     /// keyspace at <c>"m"</c>: the rightmost-edge descent a graft takes reaches
-    /// <paramref name="rightMid"/> under <paramref name="upperRight"/>, while a
-    /// separator below <c>"m"</c> belongs under <paramref name="upperLeft"/>.
+    /// <c>rightMid</c> under <c>upperRight</c>, while a
+    /// separator below <c>"m"</c> belongs under <c>upperLeft</c>.
     /// A division linked against the captured rightmost path would therefore
     /// land on the wrong parent, which is what makes a link by descent
     /// observable here.

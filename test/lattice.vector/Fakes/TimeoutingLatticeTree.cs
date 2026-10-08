@@ -38,7 +38,7 @@ internal sealed class TimeoutingLatticeTree
         Tree = Build();
     }
 
-    /// <summary>The tree to hand to a <see cref="Persistence.LatticeVectorIndexStore"/>.</summary>
+    /// <summary>The tree to hand to a <see cref="Orleans.Lattice.Vector.Persistence.LatticeVectorIndexStore"/>.</summary>
     internal ILattice Tree { get; }
 
     /// <summary>

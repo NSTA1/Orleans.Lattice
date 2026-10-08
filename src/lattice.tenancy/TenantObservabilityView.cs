@@ -102,7 +102,7 @@ internal sealed class TenantObservabilityView(
     /// The active tenant is a caller-supplied assertion lifted from the
     /// <c>lattice-active-tenant</c> header, never a fact. Every other consumer
     /// re-validates it - <see cref="TenantGateEnforcer"/> calls
-    /// <see cref="ITenantPolicyEngine.ValidateActiveTenant"/> before admitting
+    /// <see cref="Orleans.Lattice.Tenancy.ITenantPolicyEngine.ValidateActiveTenant(string, Orleans.Lattice.TenantId)"/> before admitting
     /// anything - and this read path previously did not, so the "fail-closed"
     /// fall-through this class documents was itself the unvalidated path: a caller
     /// could name any tenant and read its usage, quota, and overage series.

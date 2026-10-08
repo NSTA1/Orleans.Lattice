@@ -241,7 +241,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Routes a typed CRDT delta apply for <paramref name="key"/> to the
     /// owning leaf. Returns the <see cref="HybridLogicalClock"/> stamped
     /// on the committed entry. See
-    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.ApplyCrdtDeltaAsync"/> for the
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.ApplyCrdtDeltaAsync(string, Orleans.Lattice.LatticeMergeMode, byte[])"/> for the
     /// full apply contract.
     /// </summary>
     Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes);
@@ -1513,7 +1513,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<bool> HasPendingBulkOperationAsync();
 
     /// <summary>
-    /// Strongly-consistent variant of <see cref="CountAsync"/> for use by
+    /// Strongly-consistent variant of <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CountAsync()"/> for use by
     /// <c>ILattice.CountAsync</c>. Returns the live key count plus the set of
     /// virtual slots this shard filtered out because they have been (or are
     /// being) moved to another physical shard by an adaptive split.
@@ -1829,7 +1829,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Optional cross-migration LWW backstop payload. When non-null and
     /// <paramref name="committed"/> is <c>true</c>, the shard root groups the
     /// dictionary by leaf grain id (via the per-key traversal used by
-    /// <see cref="SetAsync"/>) and passes each leaf its subset to
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetAsync(string, byte[])"/>) and passes each leaf its subset to
     /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.ApplyTxTerminalAsync"/>. The leaf applies
     /// the values as a LWW-safe write only when it holds no pending bucket
     /// under <paramref name="transactionId"/> - i.e. when a prepare-phase

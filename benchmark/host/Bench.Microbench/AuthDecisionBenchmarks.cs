@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// a tree-wide allow, and the primary tree additionally carrying a prefix-scope
 /// and an exact-key allow, so the three scope tiers (exact, prefix, tree-wide)
 /// are all exercised. The three per-tier benchmarks each measure a single
-/// <see cref="PolicyEvaluator.Evaluate"/> so the per-decision cost is attributed
+/// <see cref="Orleans.Lattice.Auth.PolicyEvaluator.Evaluate(Orleans.Lattice.Auth.CompiledPolicy, Orleans.Lattice.Auth.LatticeAuthOptions, in Orleans.Lattice.LatticeSubject, string, Orleans.Lattice.LatticeOperation, string, string, string)"/> so the per-decision cost is attributed
 /// to the tier it resolves at; the <see cref="Decide_Mixed"/> workload folds a
 /// representative batch into one invocation so the aggregate cost is measured
 /// with a tight relative confidence interval.

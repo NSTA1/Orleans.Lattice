@@ -10203,7 +10203,7 @@ public static class LatticeMetrics
     /// them, while every per-seam counter read zero. Each seam already
     /// knows its <see cref="LatticeSaturationSource"/>, so the source is
     /// recorded here at the refusal itself rather than reconstructed from logs.
-    /// Every refusal is recorded through <see cref="RecordSaturationRefusal"/>
+    /// Every refusal is recorded through <see cref="Orleans.Lattice.LatticeMetrics.RecordSaturationRefusal(string, Orleans.Lattice.LatticeSaturationSource)"/>
     /// immediately before the seam throws or returns its refused result. A saga
     /// quiesce-budget refusal is recorded once where it is raised and again by
     /// the saga saturation fast path, so one caller-visible refusal can add two

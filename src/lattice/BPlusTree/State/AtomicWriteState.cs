@@ -179,7 +179,7 @@ internal sealed class AtomicWriteState
     /// <c>Entries</c>'s <c>Count</c> and re-stamped - together
     /// with each per-key index - onto Orleans
     /// <see cref="Runtime.RequestContext"/> via
-    /// <see cref="LatticeAtomicBatchContext.With"/> on every per-key
+    /// <see cref="Orleans.Lattice.LatticeAtomicBatchContext.With(System.Nullable{System.ValueTuple{int, int}})"/> on every per-key
     /// call the saga issues during
     /// <see cref="AtomicWritePhase.Execute"/> so every emitted
     /// <see cref="LatticeMutation"/> in the batch carries the
@@ -197,7 +197,7 @@ internal sealed class AtomicWriteState
     /// Distinct physical-shard indices the saga's prepare phase routed
     /// per-key writes onto, captured during <see cref="AtomicWritePhase.Prepare"/>
     /// against the routing snapshot resolved up-front via
-    /// <see cref="ILattice.GetRoutingAsync"/>. Drives the post-execute
+    /// <see cref="Orleans.Lattice.ILattice.GetRoutingAsync(System.Threading.CancellationToken)"/>. Drives the post-execute
     /// terminal broadcast loop in
     /// <see cref="Grains.AtomicWriteGrain"/>: one
     /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/>

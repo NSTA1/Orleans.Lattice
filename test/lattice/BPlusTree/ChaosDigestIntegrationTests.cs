@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// digests across successive calls. Non-determinism here would invalidate the
 /// digest as a divergence-detection primitive.</description></item>
 /// <item><description>Total-entry consistency - the sum of <see cref="LeafProjectionDigest.EntryCount"/>
-/// across all shards equals <see cref="ILattice.CountAsync"/>, so the digest's
+/// across all shards equals <see cref="Orleans.Lattice.ILattice.CountAsync(System.Threading.CancellationToken)"/>, so the digest's
 /// per-shard counts are accountable against the tree's own population view.</description></item>
 /// </list>
 ///

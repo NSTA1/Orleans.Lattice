@@ -53,7 +53,7 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// <para>
 /// <b>The id is escaped, not slugged.</b> A tree id is cluster-owned and may
 /// contain a slash (a tenant-owned tree is <c>t/acme/orders</c>) or mixed case,
-/// so it round-trips through <see cref="Uri.EscapeDataString"/> rather than
+/// so it round-trips through <see cref="Uri.EscapeDataString(string)"/> rather than
 /// being folded to a slug. That is also why the shell parses the address itself
 /// rather than leaning on Blazor route-parameter binding, which would split such
 /// an id across segments.

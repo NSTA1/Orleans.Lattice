@@ -449,7 +449,7 @@ public sealed class SpecMutationCatalogueTests
     /// separate violations. That produced a confidently wrong headline which
     /// took four independent routes to overturn.
     /// <para>
-    /// <see cref="SpecMutation.BuildConfig"/> writes each cfg whole rather than
+    /// <see cref="Orleans.Lattice.Tests.Formal.SpecMutation.BuildConfig(string)"/> writes each cfg whole rather than
     /// editing one, so the fault is currently unreachable by construction. That
     /// is exactly the claim this epic exists to distrust: "true by
     /// construction" and "asserted" are different states, and only the second

@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.State.Tests;
 /// Regression coverage for <see cref="LatticeStateQuery.GetTreeSummaryAsync"/>
 /// reporting the registry-pinned <see cref="TreeConfigSummary.WalPartitions"/>
 /// rather than the configured <see cref="LatticeOptions.WalPartitions"/>, as
-/// <see cref="LatticeStateQuery.GetTreeCatalogAsync"/>'s own
+/// <c>LatticeStateQuery.GetTreeCatalogAsync</c>'s own
 /// <c>MapCatalogEntry</c> already does for the same field.
 /// </summary>
 [TestFixture]

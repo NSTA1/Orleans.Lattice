@@ -98,7 +98,7 @@ public interface ILattice : IGrainWithStringKey
     /// Inserts or updates the value for <paramref name="key"/> with a time-to-live.
     /// The entry is treated as tombstoned on all reads
     /// (<see cref="GetAsync"/>, <see cref="ExistsAsync"/>, <see cref="GetManyAsync"/>,
-    /// <see cref="KeysAsync"/>, <see cref="EntriesAsync"/>, <see cref="CountAsync"/>, 
+    /// <see cref="KeysAsync"/>, <see cref="EntriesAsync"/>, <see cref="Orleans.Lattice.ILattice.CountAsync(System.Threading.CancellationToken)"/>,
     /// etc.) once <paramref name="ttl"/> has elapsed since the server-side write.
     /// Expired entries are reaped by background tombstone compaction after the
     /// configured <see cref="LatticeOptions.TombstoneGracePeriod"/>.
@@ -195,7 +195,7 @@ public interface ILattice : IGrainWithStringKey
     /// Inserts or updates multiple key-value pairs, fanning out to shards in parallel.
     /// <para>
     /// <b>Not atomic.</b> A partial failure leaves the batch half-applied with no
-    /// compensating rollback. Use <see cref="SetManyAtomicAsync"/> when all-or-nothing
+    /// compensating rollback. Use <see cref="Orleans.Lattice.ILattice.SetManyAtomicAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}}, System.Threading.CancellationToken)"/> when all-or-nothing
     /// semantics are required.
     /// </para>
     /// <para>
@@ -431,7 +431,7 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="ArgumentException"/> or
     /// <see cref="LatticeQuotaExceededException"/> without evaluating the
     /// predicate. Genuine write failures still throw and compensate exactly as
-    /// in <see cref="SetManyAtomicAsync"/>.
+    /// in <see cref="Orleans.Lattice.ILattice.SetManyAtomicAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}}, System.Threading.CancellationToken)"/>.
     /// <para>
     /// Intended to be reached through the typed
     /// <c>SetManyAtomicAsync&lt;T&gt;</c> extension, which compiles the
@@ -618,7 +618,7 @@ public interface ILattice : IGrainWithStringKey
     /// internal nodes bottom-up without any splits. This is a one-shot
     /// initial-import primitive: it requires every shard to be empty at call
     /// time and is not safe to call repeatedly against a continuously-fed
-    /// tree. Significantly faster than individual <see cref="SetAsync"/>
+    /// tree. Significantly faster than individual <see cref="Orleans.Lattice.ILattice.SetAsync(string, byte[], System.Threading.CancellationToken)"/>
     /// calls for initial data seeding. Entries do not need to be pre-sorted;
     /// the implementation sorts them internally.
     /// <para>

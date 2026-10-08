@@ -304,7 +304,7 @@ public sealed class RepoContextSelfIndexGrainTests
             "A spoke never drives the runner, so no indexing job runs on this cluster.");
     }
 
-    /// <summary>
+    /// <summary>Fails the first vector-ingest attempt, then returns an empty outcome for subsequent attempts.</summary>
     private sealed class FailOnceVectorIngestor : IRepoContextVectorIngestor
     {
         private int _invocations;

@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// a re-run detect "nothing changed" and skip the write and the re-embed.
 /// <para>
 /// <b>Non-cryptographic by design.</b> The digest is content-change detection only,
-/// never a security boundary, so the default algorithm is <see cref="XxHash128"/> -
+/// never a security boundary, so the default algorithm is <see cref="T:System.IO.Hashing.XxHash128"/> -
 /// the same non-cryptographic, roughly ten-times-cheaper-than-SHA-256 fingerprint
 /// the core library already uses for its projection digests. On a large cold walk,
 /// where the read-and-hash dominates, this is the difference that keeps ingestion

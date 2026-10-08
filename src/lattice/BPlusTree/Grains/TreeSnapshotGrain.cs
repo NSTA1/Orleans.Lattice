@@ -212,6 +212,13 @@ internal sealed class TreeSnapshotGrain(
     /// standalone snapshot; <see langword="false"/> for a coordinator that
     /// manages the shadow-forward itself.
     /// </param>
+    /// <param name="destinationTreeId">The physical destination tree id.</param>
+    /// <param name="logicalTreeId">The optional logical source tree id.</param>
+    /// <param name="maxInternalChildren">The optional destination internal-node fan-out limit.</param>
+    /// <param name="maxLeafKeys">The optional destination leaf key-count limit.</param>
+    /// <param name="mode">The snapshot mode.</param>
+    /// <param name="operationId">The optional operation id for the snapshot.</param>
+    /// <param name="shardCount">The number of destination shards.</param>
     internal async Task InitiateSnapshotStateAsync(string destinationTreeId, SnapshotMode mode,
         int shardCount, int? maxLeafKeys = null, int? maxInternalChildren = null,
         string? operationId = null, string? logicalTreeId = null,

@@ -157,7 +157,7 @@ public sealed class EmbeddingRepoContextVectorIngestorFailureAccountingInvariant
     /// <para>
     /// The method name is load-bearing and must track the writer: the durable vector
     /// write batches, so a whole source's metadata lands in one
-    /// <see cref="ILattice.SetManyAsync"/> and no <see cref="ILattice.SetAsync"/> is
+    /// <see cref="ILattice.SetManyAsync"/> and no <see cref="Orleans.Lattice.ILattice.SetAsync(string, byte[], System.Threading.CancellationToken)"/> is
     /// ever issued. Faulting the single-key setter injects nothing, and the fixture
     /// then fails in its own arrange step - which is the intended outcome, because a
     /// fault that silently stopped firing would leave these accounting invariants

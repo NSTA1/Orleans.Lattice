@@ -6,10 +6,10 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
 /// Regression fixture: an online reshard (grow or shrink) raced by a
-/// continuous stream of <see cref="ILattice.SetManyAtomicAsync"/> batches
+/// continuous stream of <see cref="Orleans.Lattice.ILattice.SetManyAtomicAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}}, System.Threading.CancellationToken)"/> batches
 /// over a fixed key universe must leave every surviving shard structurally
-/// consistent - <see cref="ILattice.CountAsync"/> equals the number of
-/// distinct keys and <see cref="ILattice.ScanKeysAsync"/> returns each key
+/// consistent - <see cref="Orleans.Lattice.ILattice.CountAsync(System.Threading.CancellationToken)"/> equals the number of
+/// distinct keys and <c>ILattice.ScanKeysAsync</c> returns each key
 /// exactly once.
 /// </summary>
 [TestFixture]

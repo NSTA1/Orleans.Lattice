@@ -159,7 +159,7 @@ internal sealed record TreeRegistryEntry
     /// exactly matching pre-placement behaviour. Seeded to the default pin at
     /// first <see cref="ILatticeRegistry.RegisterAsync"/> and mutated only
     /// through the managed <see cref="ILatticeAdmin"/> move surface via
-    /// <see cref="ILatticeRegistry.UpdateWalPlacementAsync"/>, which version-
+    /// <see cref="Orleans.Lattice.BPlusTree.ILatticeRegistry.UpdateWalPlacementAsync(string, long, int, string)"/>, which version-
     /// stamps each change for fail-closed fencing.
     /// </summary>
     [Id(10)] public WalPlacementPin? WalPlacement { get; init; }

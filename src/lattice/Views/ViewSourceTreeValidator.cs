@@ -15,7 +15,7 @@ internal static class ViewSourceTreeValidator
     /// <summary>
     /// Throws <see cref="InvalidOperationException"/> when <paramref name="sourceTreeId"/>
     /// names a materialised-view tree, whether or not the id has been
-    /// tenant-composed (see <see cref="LatticeViewTrees.IsViewTree"/> - testing
+    /// tenant-composed (see <see cref="Orleans.Lattice.Views.LatticeViewTrees.IsViewTree(string)"/> - testing
     /// the leading prefix alone would let a composed
     /// <c>t/{tenant}/view-x</c> through and silently retire this guard).
     /// </summary>

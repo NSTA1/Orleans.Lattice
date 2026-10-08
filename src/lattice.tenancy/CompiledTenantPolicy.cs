@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Tenancy;
 /// An immutable, in-memory compilation of the tenant registry: the per-subject
 /// tenant membership, and per-tenant status, admin set, and cross-tenant grants,
 /// arranged for allocation-light lookup on the decision path. Built by
-/// <see cref="Compile"/> from every <see cref="TenantRecord"/> in the registry
+/// <see cref="Orleans.Lattice.Tenancy.CompiledTenantPolicy.Compile(System.Collections.Generic.IEnumerable{Orleans.Lattice.Tenancy.TenantRecord})"/> from every <see cref="TenantRecord"/> in the registry
 /// and swapped atomically by the snapshot maintainer whenever the registry tree
 /// changes, so a warm tenant-policy decision is a pure in-memory lookup.
 /// </summary>
@@ -528,7 +528,7 @@ internal sealed class CompiledTenantPolicy
     /// Every <em>live</em> grant is indexed regardless of its
     /// <see cref="CrossTenantGrant.State"/>. The lifecycle gate that admits only
     /// an active grant belongs on the decision path
-    /// (<see cref="LatticeTenantPolicyEngine.ResolveCrossTenantGrant"/>), so
+    /// (<see cref="Orleans.Lattice.Tenancy.LatticeTenantPolicyEngine.ResolveCrossTenantGrant(Orleans.Lattice.TenantId, Orleans.Lattice.TenantId, string, Orleans.Lattice.Tenancy.TenantGrantOperations)"/>), so
     /// pre-filtering here would split that authorization rule across two places;
     /// this projection stays a faithful view of the record.
     /// </para>

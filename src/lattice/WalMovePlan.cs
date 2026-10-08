@@ -1,8 +1,8 @@
 namespace Orleans.Lattice;
 
 /// <summary>
-/// A read-only preview of an <see cref="ILatticeAdmin.ExecuteWalMoveAsync"/>
-/// operation, returned by <see cref="ILatticeAdmin.PlanWalMoveAsync"/>. Computes
+/// A read-only preview of an <see cref="Orleans.Lattice.ILatticeAdmin.ExecuteWalMoveAsync(string, int, string, System.Nullable{Orleans.Lattice.WalMoveOptions}, System.Threading.CancellationToken)"/>
+/// operation, returned by <see cref="Orleans.Lattice.ILatticeAdmin.PlanWalMoveAsync(string, int, string, System.Threading.CancellationToken)"/>. Computes
 /// what the move would copy without quiescing the partition or changing any
 /// placement, so an operator can review the work (and confirm the target key
 /// resolves) before committing.

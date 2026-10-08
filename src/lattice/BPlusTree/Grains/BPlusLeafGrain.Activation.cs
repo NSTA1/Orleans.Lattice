@@ -5496,6 +5496,7 @@ internal sealed partial class BPlusLeafGrain
     /// The tree's cumulative <c>(cold, warm)</c> totals when a line is due,
     /// otherwise <see langword="null"/>.
     /// </returns>
+    /// <param name="leafId">The leaf activation whose replay temperature is observed.</param>
     internal static ActivationTemperatureSample? ObserveLeafActivationReplay(
         string treeId, bool cold, GrainId leafId, long now)
     {

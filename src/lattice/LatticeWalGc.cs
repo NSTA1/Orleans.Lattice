@@ -1589,6 +1589,8 @@ public sealed class LatticeWalGc(
     /// Whether it was specifically the durable <em>pin</em> read that failed.
     /// Diagnostic only; it names the plane in the skipped-pass log.
     /// </param>
+    /// <param name="UncoveredPinFloors">The lowest uncovered durable pin timestamp in each partition.</param>
+    /// <param name="ZeroPinPartitions">The partitions with durable pins that have not advanced beyond zero.</param>
     private readonly record struct DurableMaterialiserFloor(
         HybridLogicalClock? Floor,
         bool[]? BlockedPartitions,
@@ -2253,6 +2255,7 @@ public sealed class LatticeWalGc(
     /// RunOnceAsync fails the whole pass closed on it; see
     /// <see cref="Unreadable"/>.
     /// </param>
+    /// <param name="FloorsByPartition">The materialiser offset floor for each covered partition.</param>
     private readonly record struct MaterialiserOffsetCoverage(
         long? Floor,
         IReadOnlySet<string>? CoveredConsumerIds,

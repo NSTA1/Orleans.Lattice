@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// key.
 /// <para>
 /// Both <see cref="TreeReshardGrain"/> and <see cref="TreeResizeGrain"/>
-/// previously answered that boolean with <see cref="ILattice.CountAsync"/>, a
+/// previously answered that boolean with <see cref="Orleans.Lattice.ILattice.CountAsync(System.Threading.CancellationToken)"/>, a
 /// strongly-consistent whole-tree fan-out that walks every leaf chain, then
 /// discards its result and retries whenever the shard map moves under it,
 /// giving up only once <see cref="LatticeOptions.MaxScanRetries"/> is

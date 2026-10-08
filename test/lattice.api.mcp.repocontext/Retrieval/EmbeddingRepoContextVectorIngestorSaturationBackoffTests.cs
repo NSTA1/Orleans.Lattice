@@ -151,8 +151,12 @@ public sealed class EmbeddingRepoContextVectorIngestorSaturationBackoffTests
         var membership = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
         var membershipPrefix = RepoContextKeys.VectorMembershipsPrefix(RepoId);
 
-        async Task LoseTheFlagsAsync() => await membership.DeleteRangeAsync(
-            membershipPrefix, RepoContextPortability.PrefixUpperBound(membershipPrefix), Ct);
+        async Task LoseTheFlagsAsync()
+        {
+            var endExclusive = RepoContextPortability.PrefixUpperBound(membershipPrefix);
+            Assert.That(endExclusive, Is.Not.Null);
+            await membership.DeleteRangeAsync(membershipPrefix, endExclusive!, Ct);
+        }
 
         var first = await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
         Assert.That(first, Is.EqualTo(SymbolCount),

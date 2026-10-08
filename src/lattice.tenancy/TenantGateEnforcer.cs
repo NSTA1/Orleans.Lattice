@@ -47,7 +47,7 @@ namespace Orleans.Lattice.Tenancy;
 /// <item>Active-tenant-owns-tree: the active tenant may touch a tree it owns,
 /// once its selection is validated by the engine.</item>
 /// <item>Multi-membership / active-tenant switch: the engine's
-/// <see cref="ITenantPolicyEngine.ValidateActiveTenant"/> decides whether the
+/// <see cref="Orleans.Lattice.Tenancy.ITenantPolicyEngine.ValidateActiveTenant(string, Orleans.Lattice.TenantId)"/> decides whether the
 /// subject may act as the selected active tenant (and fails closed when none is
 /// selected). The active tenant is a caller-supplied assertion, so this check
 /// gates <b>every</b> branch that consumes it - the owned-tree branch and the

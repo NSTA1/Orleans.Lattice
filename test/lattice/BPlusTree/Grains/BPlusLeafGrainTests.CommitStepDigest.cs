@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <see cref="LatticeMetrics.LeafCommitDuration"/> histogram. The label
 /// is recorded once per foreground write that reaches the awaited
 /// <c>PublishDigestUpwardAsync</c> hop (single-key
-/// <see cref="IBPlusLeafGrain.SetAsync"/> /
+/// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/> /
 /// <see cref="IBPlusLeafGrain.DeleteAsync"/>, and per-leaf
 /// <see cref="IBPlusLeafGrain.DeleteRangeAsync"/>); cold / structural
 /// digest publishes (split topology, projection-checkpoint flush, saga

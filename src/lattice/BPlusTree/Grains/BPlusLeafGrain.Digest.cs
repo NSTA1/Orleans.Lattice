@@ -78,7 +78,7 @@ internal sealed partial class BPlusLeafGrain
     private const int LengthPrefixBytes = 4;
 
     /// <summary>
-    /// Cached <see cref="XxHash128"/> reused across every per-entry
+    /// Cached <see cref="T:System.IO.Hashing.XxHash128"/> reused across every per-entry
     /// contribution computed inside this grain activation. Lazily
     /// created on first use and reset (not recreated) between
     /// contributions via <c>TryGetHashAndReset</c>.
@@ -92,7 +92,7 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Internal hook invoked from <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain"/>'s
     /// <c>OnDeactivateAsync</c> to release the cached hasher.
-    /// <see cref="XxHash128"/> is not <see cref="IDisposable"/>, so this
+    /// <see cref="T:System.IO.Hashing.XxHash128"/> is not <see cref="IDisposable"/>, so this
     /// helper merely drops the reference to allow it to be collected
     /// alongside the activation.
     /// </summary>

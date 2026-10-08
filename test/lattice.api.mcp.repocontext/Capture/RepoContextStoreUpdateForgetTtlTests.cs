@@ -7,9 +7,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Capture;
 
 /// <summary>
 /// Integration tests for the time-to-live-preserving branches of
-/// <see cref="RepoContextStore.UpdateAsync"/> and
-/// <see cref="RepoContextStore.ForgetAsync"/>, and the per-repository default TTL
-/// path of <see cref="RepoContextStore.RememberAsync"/>. They pin that a patch of a
+/// <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextStore.UpdateAsync(string, System.Collections.Generic.IReadOnlyDictionary{string, string}, System.Collections.Generic.IReadOnlyList{string}, System.Collections.Generic.IReadOnlyList{string}, System.Collections.Generic.IReadOnlyDictionary{string, System.Collections.Generic.IReadOnlyList{string}}, System.Collections.Generic.IReadOnlyDictionary{string, System.Collections.Generic.IReadOnlyList{string}}, System.Threading.CancellationToken)"/> and
+/// <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextStore.ForgetAsync(string, bool, System.Nullable{long}, System.Threading.CancellationToken)"/>, and the per-repository default TTL
+/// path of <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextStore.RememberAsync(string, string, string, Orleans.Lattice.Api.Mcp.RepoContext.MemoryKind, string, string, string, string, System.Collections.Generic.IReadOnlyList{string}, System.Collections.Generic.IReadOnlyDictionary{string, System.Collections.Generic.IReadOnlyList{string}}, System.Collections.Generic.IReadOnlyDictionary{string, System.Collections.Generic.IReadOnlyList{string}}, System.Nullable{long}, System.Threading.CancellationToken)"/>. They pin that a patch of a
 /// record carrying a remaining TTL (memory entry or structural node) rewrites it
 /// with that remaining life rather than dropping the expiry, that a patch of a
 /// durable node leaves it durable, that a lapse of a non-memory record sets a short

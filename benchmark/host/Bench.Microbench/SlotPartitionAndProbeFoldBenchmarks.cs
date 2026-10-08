@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// </para>
 /// <para>
 /// The pairs mirror the production edits:
-/// (1) <see cref="LatticeGrain.BuildOwnedSlotMap"/>, which partitions the
+/// (1) <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain.BuildOwnedSlotMap(Orleans.Lattice.ShardMap)"/>, which partitions the
 /// virtual slot space by owning physical shard for every <c>CountAsync</c> /
 /// <c>CountPerShardAsync</c> fan-out. The prior form hashed each virtual slot
 /// five times (a counting <c>TryGetValue</c> plus indexer set, then a cursor

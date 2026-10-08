@@ -232,6 +232,9 @@ public partial class BPlusLeafGrainTests
     /// entered replay and applied nothing. The two differ only in distance
     /// travelled, which is what makes them a pair for issue #2411.
     /// </param>
+    /// <param name="persistedCheckpoints">Initial persisted checkpoint offsets, by partition.</param>
+    /// <param name="snapshotStore">The snapshot store used by the activation.</param>
+    /// <param name="loggerFactory">The logger factory supplied to the leaf.</param>
     private static async Task<LeafSnapshotBlob?> RunCancelledColdReplayAndLoadBankedBlobAsync(
         long[]? persistedCheckpoints = null,
         LeafSnapshotStorageGrain? snapshotStore = null,

@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Views;
 /// row at drain time. The history projection is a pure function of a single
 /// mutation and cannot read the runtime-tunable policy, so it emits the maximal
 /// row (full LWW value, full CRDT delta) and the maintainer calls
-/// <see cref="Shape"/> to stamp the age-bound expiry and strip LWW value bytes to
+/// <see cref="Orleans.Lattice.Views.HistoryRetentionShaper.Shape(Orleans.Lattice.HistoryRow, Orleans.Lattice.Views.HistoryRetentionPolicy, long)"/> to stamp the age-bound expiry and strip LWW value bytes to
 /// metadata per the active <see cref="HistoryRetentionMode"/>.
 /// <para>
 /// CRDT delta rows are never stripped (the delta is the compact history), and

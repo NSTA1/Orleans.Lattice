@@ -122,8 +122,8 @@ public interface ILatticeBackupOperations : ILatticeOperations
 
     /// <summary>
     /// Starts a rebuild of the in-cluster backup catalog from the durable sink, a
-    /// cluster-wide administrative action authorized as
-    /// <see cref="ILatticeBackupControl.RebuildCatalogFromSinkAsync"/> is. Progress
+    /// cluster-wide administrative action requiring
+    /// <see cref="LatticeOperation.Restore"/> over the catalog tree. Progress
     /// counts the sink's manifests re-registered; the result is read with
     /// <see cref="BackupOperationResults.TryReadCatalogRebuildReport"/>.
     /// </summary>
@@ -139,8 +139,8 @@ public interface ILatticeBackupOperations : ILatticeOperations
 
     /// <summary>
     /// Starts a scrub of the in-cluster backup catalog against the durable sink, a
-    /// cluster-wide administrative action authorized as
-    /// <see cref="ILatticeBackupControl.ScrubCatalogAgainstSinkAsync"/> is. Progress
+    /// cluster-wide administrative action requiring
+    /// <see cref="LatticeOperation.Restore"/> over the catalog tree. Progress
     /// counts the catalog rows probed and, when pruning, the orphans removed; the
     /// result is read with <see cref="BackupOperationResults.TryReadCatalogScrubReport"/>.
     /// </summary>

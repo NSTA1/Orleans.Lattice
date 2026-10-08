@@ -321,7 +321,7 @@ public partial class BPlusLeafGrainTests
     private static Func<LeafSnapshotBlob?> StoreUntilCleared(ILeafSnapshotStorageGrain snapshot, LeafSnapshotBlob stored)
     {
         LeafSnapshotBlob? current = stored;
-        snapshot.LoadAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(current));
+        snapshot.LoadAsync(Arg.Any<CancellationToken>()).Returns<Task<LeafSnapshotBlob?>>(_ => Task.FromResult<LeafSnapshotBlob?>(current));
         snapshot.ClearAsync(Arg.Any<CancellationToken>()).Returns(_ =>
         {
             current = null;

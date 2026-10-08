@@ -3050,17 +3050,17 @@ internal sealed partial class ShardRootGrain(
     private bool IsRetiredForRangeRead => state.State.IsRetired && !state.State.IsDeleted;
 
     /// <summary>
-    /// <see cref="PrepareForOperationAsync"/> for an entry point that writes
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.PrepareForOperationAsync()"/> for an entry point that writes
     /// data. A write is the deliberate reuse of an id that issue #3940 defines:
     /// when this shard seeds and the tree has no registry row - a tree never
     /// created, or one that was purged - the seed registers it without the
     /// read-side purge guard (issue #4219). Identical to
-    /// <see cref="PrepareForOperationAsync"/> on a seeded shard.
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.PrepareForOperationAsync()"/> on a seeded shard.
     /// </summary>
     private Task<bool> PrepareForWriteAsync() => PrepareForOperationAsync(forWrite: true, purgedAnswersEmpty: false);
 
     /// <summary>
-    /// <see cref="PrepareForOperationAsync"/> for an entry point that reads
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.PrepareForOperationAsync()"/> for an entry point that reads
     /// data, or deletes it. Answers <see langword="false"/> when the tree has
     /// been purged and this shard was never seeded again, and the caller then
     /// answers as the empty tree the purge left: a purged tree holds no data, so
@@ -3068,7 +3068,7 @@ internal sealed partial class ShardRootGrain(
     /// registered, so the read never recreates the tree, and a flow that purges
     /// a tree and reads it before writing - the repo-context re-derivation reset,
     /// or any reader after a soft-delete window's reminder-driven purge - keeps
-    /// working. Identical to <see cref="PrepareForOperationAsync"/> on a seeded
+    /// working. Identical to <see cref="Orleans.Lattice.BPlusTree.Grains.ShardRootGrain.PrepareForOperationAsync()"/> on a seeded
     /// shard.
     /// </summary>
     private Task<bool> PrepareForReadAsync() => PrepareForOperationAsync(forWrite: false, purgedAnswersEmpty: true);

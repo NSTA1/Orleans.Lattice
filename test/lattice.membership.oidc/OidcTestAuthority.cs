@@ -70,6 +70,7 @@ internal sealed class OidcTestAuthority : IDisposable
     /// <param name="expires">The token expiry.</param>
     /// <param name="algorithm">The signature algorithm advertised in the header.</param>
     /// <param name="signingKey">The key to sign with; defaults to this authority's key.</param>
+    /// <param name="notBefore">The earliest time at which the token is valid.</param>
     public string MintToken(
         string? subject = SubjectId,
         IEnumerable<string>? groups = null,

@@ -269,7 +269,7 @@ public interface ILatticeAdmin : IGrainWithStringKey
     Task<WalMoveBatchReceipt> ExecuteWalMoveAsync(string treeId, IEnumerable<(int Partition, string TargetProviderKey)> moves, WalMoveOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Discards the orphaned tail a completed <see cref="ExecuteWalMoveAsync"/>
+    /// Discards the orphaned tail a completed <see cref="Orleans.Lattice.ILatticeAdmin.ExecuteWalMoveAsync(string, int, string, System.Nullable{Orleans.Lattice.WalMoveOptions}, System.Threading.CancellationToken)"/>
     /// left on a partition's former source provider. This is the explicit,
     /// irreversible second step of a move: after calling it the move can no
     /// longer be reverted by moving the partition back, because the source no

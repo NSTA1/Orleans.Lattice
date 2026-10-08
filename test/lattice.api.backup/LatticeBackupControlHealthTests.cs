@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Api.Backup.Tests;
 /// <summary>
 /// Coverage for the backup-health surface on the <see cref="ILatticeBackupControl"/>
 /// facade: <see cref="ILatticeBackupControl.IsHealthMonitoringAvailableAsync"/>
-/// reflects the sink's durability, <see cref="ILatticeBackupControl.CheckBackupHealthAsync"/>
+/// reflects the sink's durability, <c>ILatticeBackupControl.CheckBackupHealthAsync</c>
 /// verifies a captured backup and persists the report,
 /// <see cref="ILatticeBackupControl.GetBackupHealthAsync"/> reads it back, and
 /// <see cref="ILatticeBackupControl.ConfigureBackupHealthAsync"/> stores a per-backup

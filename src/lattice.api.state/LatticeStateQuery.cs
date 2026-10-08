@@ -1876,6 +1876,11 @@ internal sealed class LatticeStateQuery(
     /// revision on the page, or <see langword="null"/> when no shape registry is
     /// available and no decode can occur.
     /// </param>
+    /// <param name="treeId">The tree containing the retained revision.</param>
+    /// <param name="revision">The retained entry revision to map.</param>
+    /// <param name="previewBudget">The maximum number of value bytes retained in the preview.</param>
+    /// <param name="shapeRegistry">The optional CRDT shape registry used to decode retained deltas.</param>
+    /// <param name="decoderRegistry">The provenance decoders used for CRDT member changes.</param>
     private static EntryRevisionRecord MapRevision(
         string treeId,
         in EntryRevision revision,

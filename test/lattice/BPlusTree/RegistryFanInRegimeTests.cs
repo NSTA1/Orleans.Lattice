@@ -106,6 +106,11 @@ public class RegistryFanInRegimeTests
     /// <c>Below_the_bound_the_rig_cannot_see_the_bound_at_all</c> for why this
     /// replaced a sub-millisecond <see cref="MaxWaitMs"/> assertion.
     /// </param>
+    /// <param name="PeakGateWidth">The highest number of trees admitted by the gate concurrently.</param>
+    /// <param name="PeakOfferedDepth">The highest offered queue depth.</param>
+    /// <param name="PeakBatchSize">The largest dispatched batch.</param>
+    /// <param name="MaxWaitMs">The longest admission wait, in milliseconds.</param>
+    /// <param name="BatchedProportion">The proportion of dispatched work carried by batches.</param>
     private sealed record GateReading(
         int PeakRegistryCalls,
         int PeakRegistryKeys,
@@ -205,6 +210,8 @@ public class RegistryFanInRegimeTests
     /// that reaches the bounded regime but produces the same numbers with and
     /// without the bound has measured the workload, not the bound.
     /// </param>
+    /// <param name="width">The number of trees offered in the wave.</param>
+    /// <param name="staggerMillis">The delay between successive arrivals, in milliseconds.</param>
     private static async Task<GateReading> RunWaveAsync(int width, bool gated, int staggerMillis = 0)
     {
         var widths = new List<int>();

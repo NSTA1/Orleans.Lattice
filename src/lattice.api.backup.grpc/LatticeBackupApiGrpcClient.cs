@@ -476,14 +476,6 @@ public sealed class LatticeBackupApiGrpcClient
     }
 
     /// <summary>
-    /// Runs a fresh health verification of the backup identified by
-    /// <paramref name="backupId"/>, persists the report server-side, and returns it.
-    /// </summary>
-    /// <param name="backupId">The backup id to verify. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The fresh health report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
-    /// <summary>
     /// Reads the latest stored health report for the backup identified by
     /// <paramref name="backupId"/>, or <see langword="null"/> when no verification
     /// has run for it yet.

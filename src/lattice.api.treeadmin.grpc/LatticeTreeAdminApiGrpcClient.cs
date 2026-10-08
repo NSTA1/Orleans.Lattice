@@ -932,18 +932,6 @@ public sealed class LatticeTreeAdminApiGrpcClient
     }
 
     /// <summary>
-    /// Executes an online move of WAL partition <paramref name="partition"/> of
-    /// <paramref name="treeId"/> to <paramref name="targetProviderKey"/>. Requires
-    /// whole-tree tree-lifecycle authority.
-    /// </summary>
-    /// <param name="treeId">The tree whose partition to move. Must not be <c>null</c> or empty.</param>
-    /// <param name="partition">The WAL partition index to move.</param>
-    /// <param name="targetProviderKey">The target storage provider key. Must not be <c>null</c> or empty.</param>
-    /// <param name="options">Optional move tunables; <c>null</c> takes the conventional defaults.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The move receipt.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c> or empty.</exception>
-    /// <summary>
     /// Reclaims the orphaned source tail left behind by a completed WAL move of
     /// partition <paramref name="partition"/> of <paramref name="treeId"/>. Requires
     /// whole-tree tree-lifecycle authority.
@@ -1036,22 +1024,6 @@ public sealed class LatticeTreeAdminApiGrpcClient
     }
 
     /// <summary>
-    /// Rebuilds the materialised view named <paramref name="viewName"/> from current
-    /// source state. Requires admin authority over the view's source tree.
-    /// </summary>
-    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The view's status after the rebuild.</returns>
-    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
-    /// <summary>
-    /// Reconciles the materialised view named <paramref name="viewName"/> against
-    /// current source state. Requires admin authority over the view's source tree.
-    /// </summary>
-    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The reconcile result.</returns>
-    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
-    /// <summary>
     /// Drops the materialised view named <paramref name="viewName"/>. Requires admin
     /// authority over the view's source tree.
     /// </summary>
@@ -1087,15 +1059,6 @@ public sealed class LatticeTreeAdminApiGrpcClient
         return UnaryAsync(_methods.GetTagIndexStatus, new TreeAdminTagIndexRequest { IndexName = indexName }, cancellationToken);
     }
 
-    /// <summary>
-    /// Reconciles the tag index named <paramref name="indexName"/> against current source
-    /// state. Requires admin authority over the index's backing membership tree
-    /// (<c>tag-{indexName}</c>).
-    /// </summary>
-    /// <param name="indexName">The logical tag-index name. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The reconcile report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="indexName"/> is <c>null</c> or empty.</exception>
     /// <summary>
     /// Triggers an out-of-cycle tombstone-compaction pass scoped to a single physical
     /// shard of <paramref name="treeId"/>. Requires admin authority over the tree. The

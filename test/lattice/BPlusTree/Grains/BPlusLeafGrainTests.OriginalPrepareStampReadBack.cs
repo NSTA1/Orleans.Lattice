@@ -28,7 +28,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(stamps, Is.Not.Null);
         Assert.That(stamps!, Has.Count.EqualTo(1));
-        Assert.That(stamps["k"], Is.EqualTo((HybridLogicalClock?)prepared.Timestamp));
+        Assert.That(stamps!["k"], Is.EqualTo((HybridLogicalClock?)prepared.Timestamp));
     }
 
     [Test]

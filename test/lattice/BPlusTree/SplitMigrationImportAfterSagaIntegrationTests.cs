@@ -176,7 +176,7 @@ public sealed class SplitMigrationImportAfterSagaIntegrationTests
         {
             if (context.InterfaceMethod?.Name == nameof(IShardRootGrain.AppendTxTerminalAsync)
                 && context.SourceId is { } sourceId
-                && sourceId.Type.ToString().Contains("atomicwrite", StringComparison.OrdinalIgnoreCase))
+                && sourceId.Type.ToString()?.Contains("atomicwrite", StringComparison.OrdinalIgnoreCase) == true)
             {
                 await SagaTerminalHold.WaitIfArmedAsync();
             }

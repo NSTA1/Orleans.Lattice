@@ -173,6 +173,8 @@ public sealed partial class ShardRootGrainLeafReclaimWallClockBoundTests
     /// snapshot. It lets a test land the deadline between the descent and the
     /// probe that follows it.
     /// </param>
+    /// <param name="backgroundDrainMaxDuration">The background drain wall-clock ceiling.</param>
+    /// <param name="candidateIndex">The chain index of the reclaim candidate, or null for no candidate.</param>
     private static ChainHarness CreateHarness(
         TimeSpan backgroundDrainMaxDuration,
         int? candidateIndex = CandidateIndex,

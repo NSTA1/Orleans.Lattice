@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// <remarks>
 /// The probe runs detached from any one caller's token, so a waiter that gives up
 /// (the directory's time box) does not poison the memo for the next one.
-/// <see cref="Invalidate"/> drops the memo after a lifecycle change.
+/// <see cref="Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue.AppsAccess.Invalidate()"/> drops the memo after a lifecycle change.
 /// Every memo is keyed on the caller (<see cref="AppsFacades.Caller"/>: the
 /// sign-in, the endpoint and the asserted tenant), so a sign-in, a sign-out, a new
 /// connection or a tenant switch re-probes, and an answer read for one caller is
@@ -44,12 +44,12 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
     private Task<ImmutableArray<AvailableAppSummary>>? _index;
     private ShellCallerKey _indexCaller;
 
-    /// <summary>Raised after <see cref="Invalidate"/>, so a page can reload what it shows.</summary>
+    /// <summary>Raised after <see cref="Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue.AppsAccess.Invalidate()"/>, so a page can reload what it shows.</summary>
     public event Action? Changed;
 
     /// <summary>
     /// The most recent completed snapshot for the caller now - the previous one while
-    /// a re-probe after <see cref="Invalidate"/> is still running - or
+    /// a re-probe after <see cref="Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue.AppsAccess.Invalidate()"/> is still running - or
     /// <see langword="null"/> before the first probe for that caller completes. A
     /// snapshot read for another caller is never returned.
     /// </summary>

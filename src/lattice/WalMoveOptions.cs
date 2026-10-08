@@ -1,7 +1,7 @@
 namespace Orleans.Lattice;
 
 /// <summary>
-/// Tunables for <see cref="ILatticeAdmin.ExecuteWalMoveAsync"/>.
+/// Tunables for <see cref="Orleans.Lattice.ILatticeAdmin.ExecuteWalMoveAsync(string, int, string, System.Nullable{Orleans.Lattice.WalMoveOptions}, System.Threading.CancellationToken)"/>.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.WalMoveOptions)]

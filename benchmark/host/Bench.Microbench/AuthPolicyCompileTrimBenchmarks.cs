@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// identical frozen output - and differ only in the bodies under test. That
 /// symmetry is the point: a baseline arm that skips part of the optimized arm's
 /// shell fabricates a regression. <see cref="Compile_Production"/> pins the lanes
-/// to reality by running the real shipped <see cref="CompiledPolicy.Compile"/>
+/// to reality by running the real shipped <see cref="Orleans.Lattice.Auth.CompiledPolicy.Compile(System.Collections.Generic.IEnumerable{Orleans.Lattice.Auth.LatticeAuthorizationRule})"/>
 /// over the same ruleset.
 /// </para>
 /// <para>
@@ -162,7 +162,7 @@ public class AuthPolicyCompileTrimBenchmarks
     public int Compile_Optimized() => CompileShell(_rules, optimized: true).Count;
 
     /// <summary>
-    /// The real shipped <see cref="CompiledPolicy.Compile"/> over the same
+    /// The real shipped <see cref="Orleans.Lattice.Auth.CompiledPolicy.Compile(System.Collections.Generic.IEnumerable{Orleans.Lattice.Auth.LatticeAuthorizationRule})"/> over the same
     /// ruleset. Not an A/B arm - it pins the copied shell above to the production
     /// path so a drift between them is visible rather than silent.
     /// </summary>

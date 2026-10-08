@@ -8,8 +8,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// WAL placement and managed-move surface of <see cref="LatticeAdminGrain"/>.
 /// Implements the read-only inspection methods
 /// (<see cref="GetWalPlacementAsync"/>, <see cref="AuditWalPlacementAsync"/>,
-/// <see cref="PlanWalMoveAsync"/>) and the mutating move saga
-/// (<see cref="ExecuteWalMoveAsync"/>, <see cref="ReclaimMovedWalSourceAsync"/>).
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeAdminGrain.PlanWalMoveAsync(string, int, string, System.Threading.CancellationToken)"/>) and the mutating move saga
+/// (<see cref="Orleans.Lattice.BPlusTree.Grains.LatticeAdminGrain.ExecuteWalMoveAsync(string, int, string, System.Nullable{Orleans.Lattice.WalMoveOptions}, System.Threading.CancellationToken)"/>, <see cref="ReclaimMovedWalSourceAsync"/>).
 /// </summary>
 internal sealed partial class LatticeAdminGrain
 {

@@ -109,7 +109,7 @@ public sealed partial class LatticeTenantDirectoryAdminTests
         bool validationRequired = false) =>
         new(new LatticeSubject(caller, groups), enabled, identityDirectory, validationRequired);
 
-    /// <summary>One invocation of every facade member against <paramref name="tenantId"/>, with valid arguments.</summary>
+    /// <summary>One invocation of every facade member against <c>tenantId</c>, with valid arguments.</summary>
     private static IEnumerable<TestCaseData> EveryOperation()
     {
         yield return Op("ListGroups", (a, t) => a.ListGroupsAsync(t, new TenantAccessPageRequest()));

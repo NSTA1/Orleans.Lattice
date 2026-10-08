@@ -84,7 +84,7 @@ public class PnCounterConvergenceChaosTests
     }
 
     /// <summary>
-    /// Wraps <see cref="PnCounterAccessor.IncrementAsync"/> in a bounded
+    /// Wraps <see cref="Orleans.Lattice.PnCounterAccessor.IncrementAsync(string, long, System.Threading.CancellationToken, int)"/> in a bounded
     /// retry loop that backs off on an <see cref="InvalidOperationException"/>
     /// reporting an exhausted CAS budget. The accessor no longer has a CAS
     /// loop (it reads once and applies one delta), so on the current path the

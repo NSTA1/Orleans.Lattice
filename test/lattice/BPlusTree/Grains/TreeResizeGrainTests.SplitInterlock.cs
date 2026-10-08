@@ -26,7 +26,7 @@ public partial class TreeResizeGrainTests
 
         Assert.That(ex!.Message, Does.Contain("split or consolidation is in progress on shard 1"));
         await grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId).DidNotReceiveWithAnyArgs()
-            .SnapshotWithOperationIdAsync(default!, default, default, default, default!, default);
+            .SnapshotWithOperationIdAsync(default!, default, default, default, default!, default!);
         Assert.Multiple(async () =>
         {
             Assert.That(state.State.InProgress, Is.False, "a refused resize must leave nothing in flight");

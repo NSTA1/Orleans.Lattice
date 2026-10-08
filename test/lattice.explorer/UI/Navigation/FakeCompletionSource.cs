@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Navigation;
 
 /// <summary>
 /// A completion source a test drives: it answers immediately, answers when the
-/// test completes its <see cref="Gate"/>, throws, or never answers at all, and
+/// test completes its <c>Gate</c>, throws, or never answers at all, and
 /// records every query and whether it was cancelled.
 /// </summary>
 internal sealed class FakeCompletionSource : IAddressCompletionSource

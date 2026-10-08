@@ -129,7 +129,7 @@ public sealed class LatticeTenantAdminGrpcMarshallersTests
     }
 
     /// <summary>
-    /// A <see cref="DeserializationContext"/> that replays a caller-supplied
+    /// A <see cref="global::Grpc.Core.DeserializationContext"/> that replays a caller-supplied
     /// <see cref="ReadOnlySequence{T}"/>, so the marshaller's single-segment and
     /// multi-segment branches can each be driven deterministically.
     /// </summary>

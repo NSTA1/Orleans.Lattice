@@ -135,7 +135,7 @@ internal static class LatticeEventPublisher
     /// The per-event <see cref="PublishAsync"/> entry point re-does all of
     /// that work for every event even when the whole batch targets one tree
     /// and one stream: a keyed-service DI resolution, a
-    /// <see cref="StreamId.Create"/> (which UTF8-encodes the namespace and
+    /// <see cref="Orleans.Runtime.StreamId.Create(System.ReadOnlySpan{byte}, System.ReadOnlySpan{byte})"/> (which UTF8-encodes the namespace and
     /// key into fresh byte arrays), a stream-handle construction, and a
     /// <see cref="RequestContext"/> read. Batch callers that publish one
     /// event per written entry pay all of it N times for an identical

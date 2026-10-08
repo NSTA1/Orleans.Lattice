@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
 /// End-to-end lifecycle coverage for materialised views: durable runtime-view
-/// registration (a runtime <see cref="ILatticeViewFactory.Create"/> survives a
+/// registration (a runtime <see cref="Orleans.Lattice.ILatticeViewFactory.Create(Orleans.Lattice.ILattice, string, Orleans.Lattice.LatticeViewDefinition)"/> survives a
 /// silo restart / catalog loss) and the view deletion API
 /// (<see cref="ILatticeViewFactory.DeleteAsync"/>). A single silo registers a
 /// startup-declared view (used only to prove that deleting a declared view is

@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Vector.Persistence;
 public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
 {
     /// <summary>
-    /// How many times <see cref="ScanAsync"/> resumes a walk abandoned by the
+    /// How many times <see cref="Orleans.Lattice.Vector.Persistence.LatticeVectorIndexStore.ScanAsync(string, System.Threading.CancellationToken)"/> resumes a walk abandoned by the
     /// Orleans response timeout before giving up.
     /// <para>
     /// Deliberately small, and chosen on the same reasoning as

@@ -468,6 +468,13 @@ internal sealed partial class BPlusLeafGrain
     /// unmarked, the pre-#4522 behaviour, so a path that cannot vouch for its
     /// stamp keeps the old drain.
     /// </param>
+    /// <param name="batch">The prepared batch size and entry index.</param>
+    /// <param name="capacityHint">The initial capacity hint for the prepared bucket.</param>
+    /// <param name="delta">The optional CRDT delta bytes.</param>
+    /// <param name="incoming">The prepared value and its timestamp.</param>
+    /// <param name="key">The key modified by the prepared mutation.</param>
+    /// <param name="mode">The value merge mode.</param>
+    /// <param name="transactionId">The transaction owning the prepared mutation.</param>
     private void AddPreparedMutation(
         Guid transactionId,
         string key,
@@ -1101,7 +1108,7 @@ internal sealed partial class BPlusLeafGrain
     /// registered <see cref="CrdtShape"/>, applies the delta through the
     /// primitive's instance <c>MergeDelta</c>, and re-serialises. The fold is
     /// the terminal-commit complement of the producer-side
-    /// <see cref="ApplyCrdtDeltaAsync"/> path and uses the same type-erased
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.ApplyCrdtDeltaAsync(string, Orleans.Lattice.LatticeMergeMode, byte[])"/> path and uses the same type-erased
     /// shape registry, so OrSet / PnCounter / VersionVector / MvRegister /
     /// OrFlag / RwFlag / Sequence resolve through the global closed-shape
     /// descriptors and OrMap through the per-tree registration.

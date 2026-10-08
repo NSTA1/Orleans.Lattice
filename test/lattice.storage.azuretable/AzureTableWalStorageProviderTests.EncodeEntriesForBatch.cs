@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 
 /// <summary>
 /// Behavioural and allocation-shape tests for
-/// <see cref="AzureTableWalStorageProvider.EncodeEntriesForBatch"/>.
+/// <see cref="Orleans.Lattice.Storage.AzureTable.AzureTableWalStorageProvider.EncodeEntriesForBatch(string, System.Collections.Generic.IReadOnlyList{Orleans.Lattice.WalEntry}, System.Collections.Generic.List{Azure.Data.Tables.TableTransactionAction})"/>.
 /// The helper is the per-entry encode hot path beneath
 /// <see cref="AzureTableWalStorageProvider.AppendBatchAsync"/>; these
 /// tests pin two contracts:
@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 ///   </item>
 ///   <item>
 ///     <b>Allocation shape</b> - encoding an N-entry batch via one
-///     <see cref="AzureTableWalStorageProvider.EncodeEntriesForBatch"/>
+///     <see cref="Orleans.Lattice.Storage.AzureTable.AzureTableWalStorageProvider.EncodeEntriesForBatch(string, System.Collections.Generic.IReadOnlyList{Orleans.Lattice.WalEntry}, System.Collections.Generic.List{Azure.Data.Tables.TableTransactionAction})"/>
 ///     call allocates strictly less than encoding the same N entries
 ///     across N single-entry calls. This pins the
 ///     shared-<see cref="ArrayBufferWriter{T}"/>-per-batch optimisation:

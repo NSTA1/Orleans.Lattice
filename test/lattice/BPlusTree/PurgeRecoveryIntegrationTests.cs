@@ -478,7 +478,7 @@ public sealed class PurgeRecoveryIntegrationTests
                 && method == nameof(ILeafSnapshotStorageGrain.ClearAsync)
                 && context.TargetId.TryGetGuidKey(out var key, out _)
                 && key == snapshotLeaf
-                && context.TargetId.Type.ToString().Contains("snapshot", StringComparison.OrdinalIgnoreCase)
+                && context.TargetId.Type.ToString()?.Contains("snapshot", StringComparison.OrdinalIgnoreCase) == true
                 && Interlocked.Exchange(ref _fired, 1) == 0)
             {
                 throw new TimeoutException("test: the purge was interrupted at this leaf's snapshot clear");

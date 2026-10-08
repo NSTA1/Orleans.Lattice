@@ -14,10 +14,8 @@ namespace Orleans.Lattice.Api.Mcp;
 /// semantics, and cancellation flows through every call.
 /// </summary>
 /// <remarks>
-/// Four backup facade members have no gRPC binding yet and throw
-/// <see cref="NotSupportedException"/>: <see cref="GetInventoryAsync"/>,
-/// <see cref="RebuildCatalogFromSinkAsync"/>,
-/// <see cref="ScrubCatalogAgainstSinkAsync"/>, and <see cref="ColdRestoreAsync"/>.
+/// The inventory read (<see cref="GetInventoryAsync"/>) has no gRPC binding and
+/// throws <see cref="NotSupportedException"/>.
 /// The remaining members are wire-backed.
 /// </remarks>
 internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl

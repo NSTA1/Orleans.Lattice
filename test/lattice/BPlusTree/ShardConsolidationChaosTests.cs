@@ -52,6 +52,10 @@ public class ShardConsolidationChaosTests
     }
 
     /// <param name="timeouts">Records a saturation timeout; see the fixture's timeout note.</param>
+    /// <param name="treeId">The tree being consolidated.</param>
+    /// <param name="donor">The donor shard index.</param>
+    /// <param name="survivor">The surviving shard index.</param>
+    /// <param name="ct">The cancellation token for the fold.</param>
     private async Task<bool> TryFoldAsync(
         string treeId, int donor, int survivor, ConcurrentBag<string> timeouts, CancellationToken ct)
     {

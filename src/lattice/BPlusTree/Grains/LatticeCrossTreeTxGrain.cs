@@ -453,7 +453,7 @@ internal sealed class LatticeCrossTreeTxGrain(
     /// </summary>
     private async Task StampDecisionAsync()
     {
-        if (context.ActivationServices?.GetService<ICrossTreeDecisionStamper>() is not { } stamper)
+        if (GrainContext.ActivationServices?.GetService<ICrossTreeDecisionStamper>() is not { } stamper)
         {
             return;
         }

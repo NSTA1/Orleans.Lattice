@@ -18,7 +18,7 @@ public readonly record struct WalPlacement
 
     /// <summary>
     /// Monotonic placement version. Pass this to
-    /// <see cref="ILatticeAdmin.ExecuteWalMoveAsync"/> via the plan so a move
+    /// <see cref="Orleans.Lattice.ILatticeAdmin.ExecuteWalMoveAsync(string, int, string, System.Nullable{Orleans.Lattice.WalMoveOptions}, System.Threading.CancellationToken)"/> via the plan so a move
     /// aborts if the placement changed underneath the caller.
     /// </summary>
     [Id(1)] public long Version { get; init; }

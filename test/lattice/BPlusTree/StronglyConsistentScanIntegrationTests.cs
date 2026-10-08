@@ -6,7 +6,7 @@ using System.Text;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// integration tests: <see cref="ILattice.CountAsync"/>,
+/// integration tests: <see cref="Orleans.Lattice.ILattice.CountAsync(System.Threading.CancellationToken)"/>,
 /// <see cref="ILattice.KeysAsync"/>, and <see cref="ILattice.EntriesAsync"/>
 /// must produce strongly-consistent results - exact key set, exact count -
 /// even when adaptive shard splits are happening concurrently.

@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
 /// End-to-end verification that a segmented tenant tree id
-/// (<c>t/{tenantId}/{name}</c>, composed by <see cref="LatticeTenantTrees.Compose"/>)
+/// (<c>t/{tenantId}/{name}</c>, composed by <see cref="Orleans.Lattice.LatticeTenantTrees.Compose(Orleans.Lattice.TenantId, string)"/>)
 /// routes, shards, and round-trips through a live cluster exactly like any other
 /// opaque tree id, and that the reserved <c>t/</c> namespace is guarded on the
 /// public <see cref="ILattice"/> data plane just as <c>sys-</c> is: a direct

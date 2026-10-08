@@ -58,7 +58,7 @@ namespace Orleans.Lattice.BPlusTree.State;
 /// table gives every row an absolute start offset, so a reader holding the
 /// frame can seek directly to row <c>i</c> without decoding rows
 /// <c>0..i-1</c> - the seam a bounded, key-range-scoped partial hydration
-/// needs. <see cref="TryFindFirstRowAtOrAfter"/> is the binary search built on
+/// needs. <see cref="Orleans.Lattice.BPlusTree.State.LeafSnapshotCodec.TryFindFirstRowAtOrAfter(System.ReadOnlySpan{byte}, System.ReadOnlySpan{byte}, out int)"/> is the binary search built on
 /// it; <see cref="CompareKeysUtf8"/> is the comparison that keeps that search
 /// consistent with the ordinal string order the leaf cache is sorted by.
 /// </para>
@@ -116,7 +116,7 @@ internal static class LeafSnapshotCodec
     /// The caller is expected to supply the rows in ascending ordinal key
     /// order (which is the order the leaf entry cache enumerates in). The
     /// codec preserves the order verbatim and records it in the index table;
-    /// <see cref="TryFindFirstRowAtOrAfter"/> is only meaningful for a frame
+    /// <see cref="Orleans.Lattice.BPlusTree.State.LeafSnapshotCodec.TryFindFirstRowAtOrAfter(System.ReadOnlySpan{byte}, System.ReadOnlySpan{byte}, out int)"/> is only meaningful for a frame
     /// whose rows were supplied sorted.
     /// </para>
     /// <para>

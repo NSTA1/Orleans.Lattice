@@ -211,7 +211,7 @@ public class ShardRootGrainScanPageAggregateBankingTests
             // the sweep actually reached it.
             leaf.GetProjectionCheckpointOffsetAsync().Returns(_ => chain!.ReadCheckpoint(
                 index == 0 ? LaggingCheckpointOffset : LaggingCheckpointOffset + 100));
-            leaf.DeleteRangeAsync(Arg.Any<string?>(), Arg.Any<string?>())
+            leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>())
                 .Returns(_ => chain!.ReadDelete(new RangeDeleteResult
                 {
                     Deleted = liveKeysPerLeaf,
@@ -517,7 +517,7 @@ public class ShardRootGrainScanPageAggregateBankingTests
         chain.BeginAttempt();
 
         Assert.ThrowsAsync<ScanPageStalledException>(
-            async () => await chain.Grain.DeleteRangeBoundedAsync(Key(0), null),
+            async () => await chain.Grain.DeleteRangeBoundedAsync(Key(0), null!),
             "a range delete must still fault: its replication publish happens after the "
             + "walk, so a banked resume key would orphan the notification for the prefix "
             + "it already tombstoned");

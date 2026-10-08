@@ -294,7 +294,7 @@ public sealed class ResizeMirrorOriginalStampIntegrationTests
         {
             if (context.InterfaceMethod?.Name == "AppendTxTerminalAsync"
                 && context.SourceId is { } source
-                && source.Type.ToString().Contains("atomicwrite", StringComparison.OrdinalIgnoreCase))
+                && source.Type.ToString()?.Contains("atomicwrite", StringComparison.OrdinalIgnoreCase) == true)
             {
                 await TerminalHold.WaitIfArmedAsync();
             }

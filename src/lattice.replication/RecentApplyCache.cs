@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication;
 /// high-water-mark check (both deliveries observe the same pre-advance
 /// HWM and both apply before either advances it). The cache provides
 /// the missing in-memory dedupe seam: a successful
-/// <see cref="TryAdd"/> wins the race; a losing call short-circuits
+/// <see cref="Orleans.Lattice.Replication.RecentApplyCache.TryAdd(Orleans.Lattice.WalRecord)"/> wins the race; a losing call short-circuits
 /// the apply.
 /// <para>
 /// Correctness is shared with the receiver's other idempotency seams. The cache

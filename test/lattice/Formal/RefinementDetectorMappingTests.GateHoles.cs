@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// A regression that perturbs the note on disk would either have to mutate a
 /// tracked file or would drift the moment a sibling item rewrites the row it
 /// picked; the rule under test is the same either way, because
-/// <see cref="Every_row_claiming_detection_names_a_resolvable_test"/> runs it
+/// <c>Every_row_claiming_detection_names_a_resolvable_test</c> runs it
 /// over the real note.
 /// </para>
 /// </summary>

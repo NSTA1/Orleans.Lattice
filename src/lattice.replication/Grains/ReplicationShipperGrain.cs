@@ -635,7 +635,7 @@ internal sealed partial class ReplicationShipperGrain(
     /// <summary>
     /// Highest HLC reported to the registry (i.e. successfully
     /// persisted in a previous flush). Used to suppress redundant
-    /// <see cref="IWalCursorRegistry.ReportCursorAsync"/>
+    /// <see cref="Orleans.Lattice.IWalCursorRegistry.ReportCursorAsync(string, string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/>
     /// calls when a flush did not actually advance the durable cursor
     /// (e.g. only partition cursors changed since the last flush).
     /// </summary>

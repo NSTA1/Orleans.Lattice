@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.Views;
 
 /// <summary>
 /// Integration tests for the fold-view path and the runtime view lifecycle
-/// (<see cref="ILatticeViewFactory.Create"/> / <see cref="ILatticeViewFactory.GetAsync"/> /
+/// (<see cref="Orleans.Lattice.ILatticeViewFactory.Create(Orleans.Lattice.ILattice, string, Orleans.Lattice.LatticeViewDefinition)"/> / <see cref="ILatticeViewFactory.GetAsync"/> /
 /// <see cref="ILatticeViewFactory.DeleteAsync"/>), reusing the shared cluster fixture.
 /// </summary>
 public partial class ViewMaintainerIntegrationTests

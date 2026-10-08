@@ -33,7 +33,7 @@ public partial class BPlusLeafGrainTests
 
     /// <summary>
     /// Prepares <paramref name="key"/> under <paramref name="transactionId"/> the
-    /// way the routing tier dispatches it: when <paramref name="routeToThisShard"/>
+    /// way the routing tier dispatches it: when <paramref name="route"/> names this shard,
     /// the prepared route names this leaf's own shard, so the stamp the leaf mints
     /// is the prepare's original stamp and the prepare is marked.
     /// </summary>

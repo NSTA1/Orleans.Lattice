@@ -18,7 +18,7 @@ public enum LatticeBootstrapState
 
     /// <summary>
     /// The coordinator has called
-    /// <see cref="ISnapshotProvider.ExportAsync"/> and is waiting for
+    /// <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> and is waiting for
     /// the producer to return the <see cref="SnapshotStream"/>
     /// metadata + entry stream handle.
     /// </summary>

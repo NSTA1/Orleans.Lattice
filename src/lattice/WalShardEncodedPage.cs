@@ -27,7 +27,7 @@ public readonly record struct WalShardEncodedPage
     /// so a caller can either (a) hand the segments straight through
     /// to an outbound framing encoder (the gRPC marshaller's
     /// one-encode shipper path) or (b) decode them element-wise via
-    /// <see cref="IWalRecordEncoder.Decode"/>.
+    /// <see cref="Orleans.Lattice.IWalRecordEncoder.Decode(System.ReadOnlySpan{byte})"/>.
     /// </summary>
     public ReadOnlyMemory<ArraySegment<byte>> EncodedEntries { get; init; }
 

@@ -115,7 +115,7 @@ public partial class BPlusLeafGrainTests
     /// <summary>
     /// Fills <paramref name="leaf"/> with <paramref name="rowCount"/> rows of
     /// <paramref name="valueBytes"/> each, checkpoints partition 0, and
-    /// captures through <paramref name="store"/>.
+    /// captures through the snapshot store.
     /// </summary>
     private static async Task FillAndCaptureAsync(
         BPlusLeafGrain leaf,

@@ -122,6 +122,10 @@ public sealed class LatticeWalGcDurabilityHoldTests
     /// separability case whose whole point is that the hold must decline.
     /// </para>
     /// </param>
+    /// <param name="provider">The WAL storage provider used by the collector.</param>
+    /// <param name="checkpointOffset">The leaf materialiser checkpoint offset.</param>
+    /// <param name="holdCeiling">The local durability-hold ceiling, or null when unavailable.</param>
+    /// <param name="useDefaultCeiling">Whether to leave the durability ceiling at its default.</param>
     private static async Task<LatticeWalGc> CollectorAsync(
         IWalStorageProvider provider,
         long? checkpointOffset,

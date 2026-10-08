@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// <summary>
 /// White-box tests for the per-row payload compression seam on
 /// <see cref="AzureTableWalStorageProvider"/>. These exercise the
-/// encode hot path (<see cref="AzureTableWalStorageProvider.EncodeEntriesForBatch"/>
+/// encode hot path (<see cref="Orleans.Lattice.Storage.AzureTable.AzureTableWalStorageProvider.EncodeEntriesForBatch(string, System.Collections.Generic.IReadOnlyList{Orleans.Lattice.WalEntry}, System.Collections.Generic.List{Azure.Data.Tables.TableTransactionAction})"/>
 /// -&gt; <c>BuildEntryEntity</c> -&gt; <c>CompressPayload</c>) and the
 /// construction-time compressor wiring without touching an Azure Tables
 /// endpoint. The decode half of the round-trip is covered end-to-end by

@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// Unit coverage of the pure <see cref="SharedDictionaryNegotiation.Negotiate"/>
+/// Unit coverage of the pure <see cref="Orleans.Lattice.Replication.SharedDictionaryNegotiation.Negotiate(uint, System.Collections.Generic.IReadOnlyCollection{uint})"/>
 /// branch logic: no configured dictionary, unknown peer capability, a matching
 /// advertisement, a non-matching advertisement, and an empty advertisement.
 /// </summary>

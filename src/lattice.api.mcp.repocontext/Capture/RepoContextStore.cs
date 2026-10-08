@@ -16,13 +16,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// the core <see cref="ILattice"/> read/write and cursor primitives. It adds no
 /// storage or traversal primitive of its own.
 /// <para>
-/// Reads (<see cref="RecallAsync"/>, <see cref="ScanAsync"/>,
+/// Reads (<see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextStore.RecallAsync(string, System.Threading.CancellationToken)"/>, <see cref="ScanAsync"/>,
 /// <see cref="ListTopicsAsync"/>) honour TTL-expiry and tombstone hiding because
 /// the core read and cursor surfaces do. Writes go through the record model's
 /// static <c>Merge</c> - never a blind overwrite - so concurrent authors
-/// converge: <see cref="RememberAsync"/> and <see cref="UpdateAsync"/> read the
+/// converge: <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextStore.RememberAsync(string, string, string, Orleans.Lattice.Api.Mcp.RepoContext.MemoryKind, string, string, string, string, System.Collections.Generic.IReadOnlyList{string}, System.Collections.Generic.IReadOnlyDictionary{string, System.Collections.Generic.IReadOnlyList{string}}, System.Collections.Generic.IReadOnlyDictionary{string, System.Collections.Generic.IReadOnlyList{string}}, System.Nullable{long}, System.Threading.CancellationToken)"/> and <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextStore.UpdateAsync(string, System.Collections.Generic.IReadOnlyDictionary{string, string}, System.Collections.Generic.IReadOnlyList{string}, System.Collections.Generic.IReadOnlyList{string}, System.Collections.Generic.IReadOnlyDictionary{string, System.Collections.Generic.IReadOnlyList{string}}, System.Collections.Generic.IReadOnlyDictionary{string, System.Collections.Generic.IReadOnlyList{string}}, System.Threading.CancellationToken)"/> read the
 /// stored record, fold the change in at a fresh hybrid logical clock, and write
-/// the merged result back; <see cref="ForgetAsync"/> either hard-deletes or
+/// the merged result back; <see cref="Orleans.Lattice.Api.Mcp.RepoContext.RepoContextStore.ForgetAsync(string, bool, System.Nullable{long}, System.Threading.CancellationToken)"/> either hard-deletes or
 /// re-writes the entry with a short time-to-live so it lapses on its own.
 /// </para>
 /// </summary>

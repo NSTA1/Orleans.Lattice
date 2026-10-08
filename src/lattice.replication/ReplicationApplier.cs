@@ -1645,7 +1645,7 @@ internal sealed partial class ReplicationApplier(
 
     /// <summary>
     /// Forwards a steady-state delta-carrying CRDT entry through the public
-    /// <see cref="ILattice.ApplyCrdtDeltaAsync"/> seam - the same path a
+    /// <see cref="Orleans.Lattice.ILattice.ApplyCrdtDeltaAsync(string, Orleans.Lattice.LatticeMergeMode, byte[], System.Threading.CancellationToken)"/> seam - the same path a
     /// locally-authored CRDT write takes - so the receiver records a
     /// <c>CrdtDelta</c> revision (member changes + origin) instead of
     /// flattening the merge to a full-value <see cref="MutationKind.Set"/>.

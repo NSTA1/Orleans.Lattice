@@ -94,7 +94,7 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     /// <remarks>
     /// The latch needs the leaf's snapshot coverage to fall at least two offsets
     /// below the trimmed tail, with no recapture or stop in between
-    /// (<see cref="WalFallOffCore.IsPrefixLost"/>; a checkpoint of 0 counts since
+    /// (<see cref="Orleans.Lattice.BPlusTree.WalFallOffCore.IsPrefixLost(long, long)"/>; a checkpoint of 0 counts since
     /// issue #4433). The measured per-run detection rate is p ~ 8.5e-3 (40 Coyote
     /// explorations, 4723 paths, every one reported by [RecoveryNeverFallsOffLog];
     /// it was ~ 2.0e-3 while the core exempted a checkpoint of 0), so the default

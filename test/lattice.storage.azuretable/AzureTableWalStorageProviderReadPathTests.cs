@@ -99,7 +99,8 @@ public class AzureTableWalStorageProviderReadPathTests
 
         Assert.That(read.Select(e => e.Offset), Is.EqualTo(new[] { 0L, 1L, 2L, 3L }));
         Assert.That(read.Select(e => e.Mutation.Key), Is.EqualTo(new[] { "k0", "k1", "k2", "k3" }));
-        Assert.That(read[2].Mutation.Value.ToArray(), Is.EqualTo(new byte[] { 2, 0x5A }));
+        Assert.That(read[2].Mutation.Value, Is.Not.Null);
+        Assert.That(read[2].Mutation.Value!.ToArray(), Is.EqualTo(new byte[] { 2, 0x5A }));
     }
 
     [Test]
@@ -221,7 +222,9 @@ public class AzureTableWalStorageProviderReadPathTests
 
         var read = await DrainAsync(provider.ReadAsync(TreeId, ShardIndex, -1L, 10, CancellationToken.None));
         Assert.That(read, Has.Count.EqualTo(1));
-        Assert.That(read[0].Mutation.Value.ToArray(), Is.EqualTo(entries[0].Mutation.Value.ToArray()));
+        Assert.That(read[0].Mutation.Value, Is.Not.Null);
+        Assert.That(entries[0].Mutation.Value, Is.Not.Null);
+        Assert.That(read[0].Mutation.Value!.ToArray(), Is.EqualTo(entries[0].Mutation.Value!.ToArray()));
     }
 
     [Test]

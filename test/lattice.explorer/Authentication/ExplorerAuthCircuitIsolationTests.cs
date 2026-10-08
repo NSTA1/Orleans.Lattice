@@ -195,7 +195,7 @@ public class ExplorerAuthCircuitIsolationTests
     // ---- the default store's own lifetime ---------------------------------
 
     /// <summary>
-    /// Builds a provider exactly as a head that calls <see cref="AddExplorerAuth"/>
+    /// Builds a provider exactly as a head that calls <see cref="Orleans.Lattice.Explorer.Core.Authentication.ExplorerAuthServiceCollectionExtensions.AddExplorerAuth(Microsoft.Extensions.DependencyInjection.IServiceCollection)"/>
     /// and registers <b>no</b> credential store of its own - deliberately without
     /// the per-circuit override the other fixtures install, so what is exercised is
     /// the package default rather than the test's substitute for it.
@@ -212,7 +212,7 @@ public class ExplorerAuthCircuitIsolationTests
 
     /// <summary>
     /// Security regression: the isolation this fixture pins must hold on
-    /// <see cref="AddExplorerAuth"/>'s own default, not only when a test (or a
+    /// <see cref="Orleans.Lattice.Explorer.Core.Authentication.ExplorerAuthServiceCollectionExtensions.AddExplorerAuth(Microsoft.Extensions.DependencyInjection.IServiceCollection)"/>'s own default, not only when a test (or a
     /// head) happens to register a per-circuit store first.
     /// <para>
     /// The default was a <b>singleton</b> <see cref="InMemoryCredentialStore"/>,
@@ -268,7 +268,7 @@ public class ExplorerAuthCircuitIsolationTests
 
     /// <summary>
     /// The scoping must not displace a head-supplied store: the web head registers
-    /// an encrypted-cookie store before calling <see cref="AddExplorerAuth"/>, and
+    /// an encrypted-cookie store before calling <see cref="Orleans.Lattice.Explorer.Core.Authentication.ExplorerAuthServiceCollectionExtensions.AddExplorerAuth(Microsoft.Extensions.DependencyInjection.IServiceCollection)"/>, and
     /// <c>TryAdd</c> matches on service type regardless of lifetime, so that
     /// registration still wins at whatever lifetime the head chose.
     /// </summary>

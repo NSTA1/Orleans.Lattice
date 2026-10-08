@@ -43,6 +43,12 @@ internal static class StalePendingClearer
     /// every leftover saga, which is sound only after a re-seed the sender held
     /// saga records back for.
     /// </param>
+    /// <param name="cancellationToken">The token cancelling this operation.</param>
+    /// <param name="carriedSagas">The sagas carried by the incoming snapshot.</param>
+    /// <param name="decidedSagas">The known saga decisions, keyed by transaction id.</param>
+    /// <param name="grainFactory">The factory used to resolve participating grains.</param>
+    /// <param name="sourceClusterId">The source cluster whose pending sagas are being settled.</param>
+    /// <param name="treeName">The tree whose pending transactions are being settled.</param>
     public static async Task<int> ClearAsync(
         IGrainFactory grainFactory,
         string treeName,

@@ -194,8 +194,8 @@ internal sealed class HarnessJsonExporter : IExporter
     }
 
     /// <summary>
-    /// Lower-snake-case slug for a method name. Example: <c>"PointRead"</c> &rarr;
-    /// <c>"point_read"</c>; <c>"Mixed_70R_30W"</c> &rarr; <c>"mixed_70_r_30_w"</c>
+    /// Lower-snake-case slug for a method name. Example: <c>"PointRead"</c> -&gt;
+    /// <c>"point_read"</c>; <c>"Mixed_70R_30W"</c> -&gt; <c>"mixed_70_r_30_w"</c>
     /// (an underscore is inserted at every digit-to-letter boundary because the
     /// preceding digit isn't itself uppercase).
     /// </summary>

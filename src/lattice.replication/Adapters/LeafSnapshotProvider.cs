@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Replication.Adapters;
 /// without exporting the whole tree.
 /// <para>
 /// The current adapter consumes the streaming
-/// <see cref="ISnapshotProvider.ExportAsync"/> output and applies a
+/// <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> output and applies a
 /// client-side <c>[start, end)</c> filter; a future revision can route
 /// the range hint into the producer side once a richer export shape is
 /// available.

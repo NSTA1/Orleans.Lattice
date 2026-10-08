@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Caching.AzureBlob.Tests;
 /// depends on - its content, its metadata, and an <see cref="ETag"/> that changes
 /// on every write - and the conditional semantics the cache relies on are modelled
 /// faithfully: a read of a missing blob raises 404, and a conditional write whose
-/// <see cref="BlobRequestConditions.IfMatch"/> no longer matches raises 412.
+/// <c>BlobRequestConditions.IfMatch</c> no longer matches raises 412.
 /// <para>
 /// This exists because every behavioural fixture for
 /// <see cref="AzureBlobDistributedCache"/> is <c>[Category("AzureStorageEmulator")]</c>

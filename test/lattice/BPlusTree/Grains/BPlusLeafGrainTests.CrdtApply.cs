@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Unit-level coverage for the producer-side typed CRDT delta-apply
-/// seam on the leaf grain (<see cref="BPlusLeafGrain.ApplyCrdtDeltaAsync"/>).
+/// seam on the leaf grain (<see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.ApplyCrdtDeltaAsync(string, Orleans.Lattice.LatticeMergeMode, byte[])"/>).
 /// Complements the cluster-hosted
 /// <c>CrdtApplyIntegrationTests</c>: these tests instantiate the leaf
 /// directly through the existing <c>CreateGrain</c> factory and

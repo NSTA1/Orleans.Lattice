@@ -68,7 +68,7 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
 
 /// <summary>
 /// One entry in a commit-log slice returned by
-/// <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync"/>. Named record
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.ILeafReplayCoordinatorGrain.ReadSliceAsync(long, long, int, System.Threading.CancellationToken)"/>. Named record
 /// rather than tuple because Orleans serialisation prefers a stable wire
 /// shape.
 /// </summary>

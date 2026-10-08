@@ -61,7 +61,7 @@ internal static class TxRegistryWriteRetry
 
     /// <summary>
     /// Records <paramref name="txid"/>'s terminal decision on
-    /// <paramref name="registry"/> under <see cref="RunAsync{TState}"/>.
+    /// <paramref name="registry"/> under <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryWriteRetry.RunAsync{TState}(TState, System.Func{TState, System.Threading.Tasks.Task})"/>.
     /// </summary>
     /// <param name="registry">The registry that owns the transaction.</param>
     /// <param name="txid">The transaction id.</param>

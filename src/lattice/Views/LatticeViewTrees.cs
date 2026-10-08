@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Views;
 /// Every ad-hoc <c>treeId.StartsWith(ViewTreePrefix)</c> therefore turns silently
 /// negative for a tenant's view - retiring, among others, the guards that stop a
 /// caller writing to a view tree directly. Routing every decision through
-/// <see cref="IsViewTree"/> (which classifies the tenant-local name) makes the
+/// <see cref="Orleans.Lattice.Views.LatticeViewTrees.IsViewTree(string)"/> (which classifies the tenant-local name) makes the
 /// answer independent of whether the id has been composed.
 /// </para>
 /// <para>

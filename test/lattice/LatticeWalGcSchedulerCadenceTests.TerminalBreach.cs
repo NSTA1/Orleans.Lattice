@@ -27,7 +27,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         return gc;
     }
 
-    /// <summary>Runs <paramref name="passes"/> passes (the first included) of whatever <paramref name="current"/> reports.</summary>
+    /// <summary>Runs <paramref name="passes"/> passes (the first included) of whatever <c>current</c> reports.</summary>
     private static async Task RunPassesAsync(LatticeWalGcScheduler scheduler, VirtualTimeProvider time, int passes, bool started)
     {
         var remaining = passes;

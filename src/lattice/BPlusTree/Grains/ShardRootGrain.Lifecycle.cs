@@ -364,7 +364,8 @@ internal sealed partial class ShardRootGrain
             }
             catch
             {
-                state.State.MovedAwaySlots = previousSlots;
+                // Null persisted slot maps are equivalent to an empty map; the state field stays non-null.
+                state.State.MovedAwaySlots = previousSlots ?? new Dictionary<int, int>();
                 state.State.MovedAwayVirtualShardCount = previousVsc;
                 throw;
             }

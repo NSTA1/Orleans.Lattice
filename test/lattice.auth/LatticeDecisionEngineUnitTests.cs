@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Auth.Tests;
 /// Direct unit tests for <see cref="LatticeDecisionEngine"/> over an in-memory
 /// policy store, focused on the structural "any grant" existence-hiding probe
 /// (<c>HasAnyGrant</c>) and its argument guards. Exercising the engine here also
-/// drives <see cref="PolicyEvaluator.HasAnyGrant"/> and
+/// drives <see cref="Orleans.Lattice.Auth.PolicyEvaluator.HasAnyGrant(Orleans.Lattice.Auth.CompiledPolicy, Orleans.Lattice.Auth.LatticeAuthOptions, in Orleans.Lattice.LatticeSubject, string, Orleans.Lattice.LatticeOperation)"/> and
 /// <see cref="CompiledTree.HasAnyResolvedAllow"/> across the whole-tree, exact-key,
 /// and prefix scope tiers.
 /// </summary>
