@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Security
 
 The MCP server exposes read, write, and control facades to an AI agent, so it is built to **fail closed**: an unauthenticated or unauthorized session can enumerate nothing and call nothing until the host explicitly opts in. Three layers combine to deliver that posture.

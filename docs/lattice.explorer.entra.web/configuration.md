@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra.Web configuration
 
 `Orleans.Lattice.Explorer.Entra.Web` exposes one options type,

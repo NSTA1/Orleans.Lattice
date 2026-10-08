@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/auth.json"
+---
+
 # Orleans.Lattice.Api.Auth configuration
 
 The facade package (`Orleans.Lattice.Api.Auth`) documents `LatticeApiAuthOptions`, the configuration and control facade for membership and authorization policy administration. It is bound through the `AddLatticeAuthApi` registration extension and resolvable via `IOptions<LatticeApiAuthOptions>`. The sibling gRPC binding package (`Orleans.Lattice.Api.Auth.Grpc`) adds one more public options type, `LatticeAuthApiGrpcOptions`, documented in [gRPC binding options](#grpc-binding-options) below.

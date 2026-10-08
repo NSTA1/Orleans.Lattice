@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/treeadmin.json"
+---
+
 # Tree-administration operations
 
 Accept-then-poll tree maintenance for [`Orleans.Lattice.Api.TreeAdmin`](README.md). `ILatticeTreeAdminOperations` starts a materialised-view rebuild or reconcile, a tag-index reconcile sweep, a WAL partition move, or a whole-tree orphaned-leaf audit or repair in the background and returns a handle at once; the caller polls the operation's status for its phase, the units completed and the outcome. The facade's fresh storage-usage measure (`ILatticeStorageUsageOperations`) is a tracked operation too; see [Fresh storage usage](#fresh-storage-usage). It is the tree-administration facade's adoption of the shared [long-running operation contract](../lattice.api.abstractions/operations.md), which documents the status fields, the scoping rules, cancellation, retention and what happens when a silo is lost.

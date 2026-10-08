@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Api.Backup.Grpc
 
 Code-first gRPC binding for [Orleans.Lattice.Api.Backup](../lattice.api.backup/README.md) - projects the backup / restore control facade onto a gRPC service and a public typed client, using Orleans-serialized request / response records that wrap the facade DTOs, with no hand-written `.proto`.

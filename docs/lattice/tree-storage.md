@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Tree Storage
 
 This document explains how Lattice grain state is persisted and how the three sizing surfaces that actually grow with data interact with storage-provider per-row limits.

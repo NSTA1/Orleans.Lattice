@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # The Explorer areas
 
 The Explorer is made from nine built-in areas. Each area owns one top-level

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Orleans.Lattice.Caching.AzureBlob configuration
 
 The package has a single public options type, `LatticeAzureBlobCacheOptions`, bound through `AddAzureBlobDistributedCache(configure)`.

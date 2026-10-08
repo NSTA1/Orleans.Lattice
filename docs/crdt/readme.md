@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # CRDTs in Orleans.Lattice
 
 A beginner-friendly tour of the conflict-free replicated data types (CRDTs)

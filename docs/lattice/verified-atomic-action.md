@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # Verified Atomic Action
 
 The safety of the [atomic action](atomic-action.md) coordinator rests on three

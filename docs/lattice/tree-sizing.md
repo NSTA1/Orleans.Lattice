@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/resize.yaml"
+---
+
 # Tree Sizing
 
 This document covers how to change the structural sizing

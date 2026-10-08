@@ -36,7 +36,10 @@
     "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs#PeerMapSagaPeerAuthorizer",
     "src/lattice.replication.grpc/Security/GrpcChannelHardening.cs#GrpcChannelHardening",
     "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor",
+    "src/lattice.replication/BootstrapCoordinatorStatus.cs",
     "src/lattice.replication/DefaultShardCountProvider.cs#GetShardRootKeysAsync",
+    "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs",
+    "src/lattice.replication/ILatticeBootstrapCoordinator.cs",
     "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin",
     "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#ILatticeReplicationConfigAuthority",
     "src/lattice.replication/ILatticeReplicationDeadLetters.cs",
@@ -112,7 +115,8 @@
         "package": "Orleans.Lattice.Replication",
         "provides": [
           "ILatticeReplicationAdmin",
-          "ILatticeReplicationDeadLetters"
+          "ILatticeReplicationDeadLetters",
+          "ILatticeBootstrapCoordinator"
         ],
         "source": "src/lattice.replication/LatticeReplicationServiceCollectionExtensions.cs#LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"
       }
@@ -1067,6 +1071,54 @@
         }
       ],
       "source": "src/lattice.replication/SnapshotEntry.cs#SnapshotEntry"
+    },
+    "BootstrapCoordinatorStatus": {
+      "kind": "record struct",
+      "fields": [
+        {
+          "name": "Phase",
+          "type": "LatticeBootstrapState",
+          "required": true
+        },
+        {
+          "name": "SourceClusterId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ReadFenced",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "EntriesApplied",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "RedriveAttempts",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "CompletedSourceClusterId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.replication/BootstrapCoordinatorStatus.cs"
+    },
+    "LatticeBootstrapState": {
+      "kind": "enum",
+      "values": [
+        "Idle",
+        "RequestingSnapshot",
+        "ApplyingSnapshot",
+        "IncrementalHandoff",
+        "LiveIncremental",
+        "Failed"
+      ],
+      "source": "src/lattice.replication/LatticeBootstrapState.cs"
     }
   },
   "operations": [
@@ -1443,7 +1495,7 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Transient bootstrap drain retries and crash resumes re-open the full snapshot with no upper HLC bound; per-key LWW reconciliation makes re-applying overlap a no-op. Rate-limited RequestSnapshot returns Triggered false with RetryAfter and starts no bootstrap.",
+        "policy": "Kickoff is not completion; poll GetStatusAsync. Transient retries and crash resumes export the full snapshot with no upper HLC bound. Fresh attempts drain into a shadow copy, preserving the serving view until atomic publication; legacy fenced partial imports remain fenced and re-drive. RequestSnapshot may return Triggered=false with RetryAfter; ForceRequestSnapshot bypasses only the process-local rate limit.",
         "source": "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#DrainSnapshotAsync"
       },
       "idempotency": {
@@ -1452,8 +1504,8 @@
         "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
       },
       "concurrency": {
-        "rule": "The bootstrap coordinator remains per-tree idempotent for the same source cluster id; local vector-clock seeding enumerates live shard-root keys from routing rather than pinned shard count so resized, restored, and split shards are included.",
-        "source": "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync"
+        "rule": "Single coordinator activation per tree absorbs same-source kickoff and refuses a different concurrent source. Incremental handoff merges frontier coordinates by maximum and clears the legacy pinned floor; it never drops a genuinely new point write solely for an older HLC.",
+        "source": "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs"
       },
       "sources": [
         "src/lattice.replication/ILatticeReplicationAdmin.cs#ForceRequestSnapshotAsync",
@@ -1954,8 +2006,8 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Receivers must call GetMetadata first and record the cut point; retries/resumes in the bootstrap coordinator re-open the full stream, merge the frontier after the drain, and rely on per-key LWW reconciliation for overlap.",
-        "source": "src/lattice.replication/IRemoteSnapshotTransport.cs#RequestSnapshotAsync"
+        "policy": "Capture metadata first. Bootstrap retries re-open the full stream without an upper HLC resume bound. Only a complete successful drain installs the handoff frontier; deferred entries fail the attempt rather than sealing past unapplied data.",
+        "source": "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs"
       },
       "idempotency": {
         "idempotent": "conditional",
@@ -1998,7 +2050,7 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Transient bootstrap drain retries and crash resumes re-open the full snapshot with no upper HLC bound; per-key LWW reconciliation makes re-applying overlap a no-op. Rate-limited RequestSnapshot returns Triggered false with RetryAfter and starts no bootstrap.",
+        "policy": "Kickoff is not completion; poll GetStatusAsync. Transient retries and crash resumes export the full snapshot with no upper HLC bound. Fresh attempts drain into a shadow copy, preserving the serving view until atomic publication; legacy fenced partial imports remain fenced and re-drive. RequestSnapshot may return Triggered=false with RetryAfter; ForceRequestSnapshot bypasses only the process-local rate limit.",
         "source": "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs#DrainSnapshotAsync"
       },
       "idempotency": {
@@ -2007,8 +2059,8 @@
         "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin"
       },
       "concurrency": {
-        "rule": "The bootstrap coordinator remains per-tree idempotent for the same source cluster id; local vector-clock seeding enumerates live shard-root keys from routing rather than pinned shard count so resized, restored, and split shards are included.",
-        "source": "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync"
+        "rule": "Single coordinator activation per tree absorbs same-source kickoff and refuses a different concurrent source. Incremental handoff merges frontier coordinates by maximum and clears the legacy pinned floor; it never drops a genuinely new point write solely for an older HLC.",
+        "source": "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs"
       },
       "sources": [
         "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync",
@@ -2280,6 +2332,203 @@
         "src/lattice.replication/Grains/CrossClusterSagaParticipantGrain.cs#CrossClusterSagaParticipantGrain",
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
       ]
+    },
+    {
+      "id": "bootstrap",
+      "in_process": "ILatticeBootstrapCoordinator.BootstrapAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeName, string sourceClusterId",
+      "response": "Task (kickoff only)",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Tree or source id is empty."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Another source owns the in-flight bootstrap."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The request was cancelled."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Read current status before retrying. Same-source in-flight kickoff is absorbed; repeating after completion starts another attempt.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Same-source in-flight kickoff is a no-op; different-source kickoff is refused. After completion, another call starts a new attempt.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "concurrency": {
+        "rule": "Single activation per tree; same-source concurrent kickoff is a no-op, different-source kickoff is refused. Fresh attempts import into a shadow copy and publish only after a complete drain; legacy partial fenced imports resume in place.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      ]
+    },
+    {
+      "id": "force-lift-bootstrap-read-fence",
+      "in_process": "ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeName, string reason",
+      "response": "bool (whether a fence was lifted)",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Tree or audit reason is empty."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "A drain is active or the required grain factory is absent."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The request was cancelled."
+        },
+        {
+          "error_id": "not-supported",
+          "condition": "A custom admin implementation retained the unsupported default interface method."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Never automate this override; confirm the partial-import exposure, read fence status and record the reason. A failed shard lift leaves the fence armed and throws.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "After a successful lift, repeating when no fence is armed returns false; no bootstrap phase is advanced.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Alarmed host-code-only override; refused during an active drain. Stops automatic re-drive and can expose a partial import. Not a network API.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeReplicationAdmin.cs"
+      ]
+    },
+    {
+      "id": "get-bootstrap-state",
+      "in_process": "ILatticeBootstrapCoordinator.GetStateAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeName",
+      "response": "LatticeBootstrapState",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Tree id is null or empty."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The request was cancelled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status may be retried.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only point-in-time observation.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "concurrency": {
+        "rule": "Phase is persisted and resumes across activation restart; an observation may see an intermediate phase.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeBootstrapCoordinator.cs",
+        "src/lattice.replication/LatticeBootstrapCoordinator.cs"
+      ]
+    },
+    {
+      "id": "get-bootstrap-status",
+      "in_process": "ILatticeBootstrapCoordinator.GetStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeName",
+      "response": "BootstrapCoordinatorStatus",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Tree id is null or empty."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The request was cancelled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only status may be retried.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only point-in-time observation.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "concurrency": {
+        "rule": "Reports progress, fence and re-drive attempts; SourceClusterId names only an in-flight attempt, while CompletedSourceClusterId survives LiveIncremental.",
+        "source": "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeBootstrapCoordinator.cs",
+        "src/lattice.replication/LatticeBootstrapCoordinator.cs"
+      ]
+    },
+    {
+      "id": "resolve-cross-cluster-saga-participant",
+      "in_process": "ILatticeReplicationAdmin.ResolveCrossClusterSagaParticipantAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string sagaId, bool commit, string reason",
+      "response": "bool (whether an unresolved participant was resolved)",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Saga id or audit reason is empty."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "The coordinator is still deciding, contradicts the request, or the required grain factory is absent."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The request was cancelled."
+        },
+        {
+          "error_id": "not-supported",
+          "condition": "A custom admin implementation retained the unsupported default interface method."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Never automate the commit-or-compensate choice. Verify the coordinator decision and every participant before retrying; retain the same decision and audit reason.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Repeating the same terminal decision is a no-op; a reachable contradicting or undecided coordinator refuses the override.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Alarmed host-code-only override. A reachable coordinator's decision wins; only an unreachable coordinator permits the requested choice. Resolve all participants consistently or restore cutovers diverge. Not a network API.",
+        "source": "src/lattice.replication/ILatticeReplicationAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeReplicationAdmin.cs"
+      ]
     }
   ],
   "error_taxonomy": [
@@ -2322,6 +2571,14 @@
       "retryable": false,
       "meaning": "Client-side transport configuration is missing or invalid, or the bootstrap coordinator rejected the re-seed.",
       "source": "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync"
+    },
+    {
+      "id": "not-supported",
+      "type": "NotSupportedException",
+      "grpc_status": null,
+      "retryable": false,
+      "meaning": "The host-code admin implementation does not implement the alarmed override; no network mapping exists.",
+      "source": "src/lattice.replication/ILatticeReplicationAdmin.cs"
     },
     {
       "id": "permission-denied",

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Architecture
 
 ## High-Level Architecture

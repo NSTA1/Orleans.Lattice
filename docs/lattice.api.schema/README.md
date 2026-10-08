@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Orleans.Lattice.Api.Schema
 
 A transport-agnostic schema-management control facade for [Orleans.Lattice.Schema](../lattice.schema/README.md).

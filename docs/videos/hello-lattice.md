@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Hello, Lattice
 
 Register Lattice on a silo, resolve a tree by name, and write and read typed

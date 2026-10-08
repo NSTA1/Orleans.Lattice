@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/tenantadmin.json"
+---
+
 # Orleans.Lattice.Api.TenantAdmin
 
 Transport-agnostic **tenant administration** and **region-residency** control

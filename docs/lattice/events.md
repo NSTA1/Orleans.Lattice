@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Tree Events
 
 Orleans.Lattice publishes metadata-only event notifications on a per-tree Orleans stream so that caches, projections, audit pipelines, and dashboards can react to tree mutations without polling.

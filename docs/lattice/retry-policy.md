@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Idempotency Keys and Retry Policy
 
 Orleans.Lattice exposes an **opt-in** retry surface for transient storage

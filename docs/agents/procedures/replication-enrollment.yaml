@@ -39,10 +39,10 @@ steps:
     expects: "Returns the effective tree id, fixed mode, AlreadyEnabled, and BootstrapRequested."
     source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#EnableReplicationAsync"
   - n: 3
-    action: "Re-read the config report and confirm the tree is enabled with a non-ambiguous mode."
-    api: "ILatticeReplicationControl.GetReplicationConfigAsync / GetReplicationConfig / lattice_replication_get_config"
-    expects: "The tree is present only if the caller may manage it; Ambiguous false means one mode resolves."
-    source: "docs/lattice.api.replication/api.md"
+    action: "Re-read the config report and confirm the tree is enabled with a non-ambiguous mode. If BootstrapRequested was true, use host-code status polling from replication-reseed.yaml before declaring the replica ready or shifting traffic."
+    api: "ILatticeReplicationControl.GetReplicationConfigAsync / GetReplicationConfig / lattice_replication_get_config; ILatticeBootstrapCoordinator.GetStatusAsync"
+    expects: "The tree is present only if the caller may manage it; Ambiguous false means one mode resolves. BootstrapRequested is only kickoff, not completion; wait for LiveIncremental with ReadFenced false. Bootstrap status is not an MCP or operator gRPC tool."
+    source: "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
   - n: 4
     action: "When disabling is intended, disable the runtime enrollment for the tree."
     api: "ILatticeReplicationControl.DisableReplicationAsync / DisableReplication / lattice_replication_disable"
@@ -106,6 +106,7 @@ concurrency:
   - rule: "Permission-scoped config reads silently omit trees the caller may not manage."
     source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#GetReplicationConfigAsync"
 sources:
+  - "docs/agents/procedures/replication-reseed.yaml"
   - "docs/lattice.api.replication/README.md"
   - "docs/lattice.api.replication/api.md"
   - "docs/lattice.replication/runtime-config.md"

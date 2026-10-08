@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Client
 
 `LatticeStateApiGrpcClient` is the public, strongly-typed client for the state-API gRPC surface. It is the consumer half of the [gRPC contract](grpc-contract.md): one method per RPC, over Orleans-serialized C# request/response records that either reuse facade DTOs directly or wrap facade arguments and results for transport.

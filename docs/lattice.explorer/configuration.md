@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Orleans.Lattice.Explorer configuration
 
 The Explorer rewrite exposes these public options types in the core web packages:

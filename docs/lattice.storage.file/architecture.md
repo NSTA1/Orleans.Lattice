@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Architecture
 
 How `FileWalStorageProvider` lays out, commits, recovers, and compacts the write-ahead log on disk. The provider implements the core `IWalStorageProvider` contract; see [WAL Storage Providers](../lattice/wal-storage-providers.md) for the seam and its invariants.

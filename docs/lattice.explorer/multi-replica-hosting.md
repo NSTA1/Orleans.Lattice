@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Multi-replica and failover hosting
 
 When the Explorer runs as a Blazor Server web app behind more than one replica,

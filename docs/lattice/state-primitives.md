@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Monotonic State Primitives
 
 All state in the tree is designed to advance monotonically - it can move forward but never backwards. This makes operations idempotent and crash-safe.

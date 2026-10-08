@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/telemetry.json"
+---
+
 # Metric-to-panel coverage map
 
 Almost every instrument on the `orleans.lattice` and `orleans.lattice.replication` meters is referenced by at least one panel in the bundled dashboards; the exceptions are listed as **not charted** in the tables below. The drift-guard test in `Orleans.Lattice.Dashboards.Tests` enforces the inverse direction unconditionally: every metric name a dashboard references must resolve to an instrument declared in source.

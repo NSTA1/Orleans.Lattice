@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/auth.json"
+---
+
 # Orleans.Lattice.Api.Auth.Grpc
 
 Code-first gRPC binding for [Orleans.Lattice.Api.Auth](../lattice.api.auth/README.md) - projects the membership and authorization-policy admin facade onto a long-lived gRPC service and a public typed client, marshalled with the Orleans binary serializer over code-first request and response records (which wrap the facade DTOs), with no hand-written `.proto`.

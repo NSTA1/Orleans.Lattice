@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/region-backfill.yaml"
+---
+
 # Orleans.Lattice.Tenancy
 
 Opt-in **multi-tenancy** for Orleans.Lattice: complete tenant isolation and

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Diagnostics
 
 `ILattice.DiagnoseAsync` returns a point-in-time health snapshot of a tree. It is an admin-rate API intended for dashboards, health probes, and post-mortem investigation - not for hot-path application logic.

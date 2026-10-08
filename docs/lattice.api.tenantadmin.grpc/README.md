@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/tenantadmin.json"
+---
+
 # Orleans.Lattice.Api.TenantAdmin.Grpc
 
 The code-first gRPC **binding** and public **clients** for the

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/authorization.json"
+---
+
 # Orleans.Lattice.Auth configuration
 
 The package documents `LatticeAuthOptions`, which configures the policy store and decision engine: the closed-world fallback and tie-break rules, the durable per-key history retention applied to the reserved `sys-auth-policy` tree, the optional strict-consistency policy-epoch fence, and the optional audit sink and durable audit trail. It is bound through the `AddLatticeAuth` registration extension.

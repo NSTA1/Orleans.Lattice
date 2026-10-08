@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Orleans.Lattice.Api.Apps
 
 The transport-agnostic **control facade** for

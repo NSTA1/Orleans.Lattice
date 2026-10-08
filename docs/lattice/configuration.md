@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Configuration
 
 > **Compression** has no core `LatticeOptions` knobs. The seam itself - the `ILatticeCompressor` contract, the registration helpers, the tag-space partitioning, and the shared-dictionary opt-in - is documented in [`compression.md`](compression.md); the knobs of its opt-in auto-trained dictionary are listed under [Compression dictionary training options](#compression-dictionary-training-options) below. The per-consumer option keys live in their owning project's configuration doc: replication framing-tail compression in [Orleans.Lattice.Replication configuration](../lattice.replication/configuration.md#efficiency-bundle-dedup-and-compression), and stored WAL payload compression in [Orleans.Lattice.Storage.AzureTable configuration](../lattice.storage.azuretable/configuration.md#compression-options). The compression **algorithm and Zstd level are safe to change after data already exists**: stored payloads are self-describing and read back by their own per-row tag, so a level/algorithm change applies only to newly written data while existing rows decode unchanged.

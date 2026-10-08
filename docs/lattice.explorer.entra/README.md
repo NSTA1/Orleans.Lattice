@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra
 
 `Orleans.Lattice.Explorer.Entra` adds an interactive Microsoft Entra ID sign-in

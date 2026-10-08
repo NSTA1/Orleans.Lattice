@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/authorization.json"
+---
+
 # Security posture
 
 This page describes the security posture of the Orleans.Lattice authorization

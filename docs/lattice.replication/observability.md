@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-peer-status.yaml"
+---
+
 # Observability
 
 `Orleans.Lattice.Replication` publishes every replication-side instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The headline instrument families are:

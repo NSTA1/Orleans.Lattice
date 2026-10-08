@@ -1,0 +1,72 @@
+schema: lattice.agents/procedure/v1
+id: replication-peer-management
+name: "Attach, detach or permanently decommission a replication peer"
+surfaces:
+  in_process:
+    api: "LatticeReplicationOptions.ReplicationPeers and ILatticeReplicationPeerAdmin.DecommissionPeerAsync"
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs"
+  grpc:
+    api: "/orleans.lattice.api.replication/DecommissionPeer"
+    source: "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs"
+preconditions:
+  - id: surface-available
+    check: "Read api/replication.json availability. Peer topology is deployment configuration; DecommissionPeer is an in-process or operator gRPC facade operation. The built-in replication MCP group offers config, enable and disable only, not peer decommission or bootstrap status."
+    source: "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs"
+  - id: decision-explicit
+    check: "Choose reversible detach or permanent decommission deliberately. Detach retains durable per-tree enrollment and decision holds; decommission removes enrollment and releases holds."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs#DecommissionPeerAsync"
+steps:
+  - n: 1
+    action: "For attach, configure the peer id, endpoint and transport secrets consistently; ensure both trees are enrolled. A new or previously decommissioned peer must bootstrap; a merely detached peer resumes its durable state subject to retention-gap recovery."
+    api: "LatticeReplicationOptions.ReplicationPeers; replication-enrollment.yaml and region-backfill.yaml"
+    expects: "The replication driver discovers the topology change and establishes shippers."
+    source: "src/lattice.replication/ReplicationDriverActivationService.cs"
+  - n: 2
+    action: "For reversible detach, remove the peer from ReplicationPeers and verify the live topology no longer includes it."
+    api: "LatticeReplicationOptions.ReplicationPeers / IReplicationTopology.CurrentPeers"
+    expects: "Shipping detaches, but durable enrollment remains and a cross-tree decision hold waiting on that peer remains held."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs"
+  - n: 3
+    action: "Only for permanent retirement, call DecommissionPeer after removing the peer from configured topology."
+    api: "ILatticeReplicationPeerAdmin.DecommissionPeerAsync / DecommissionPeer"
+    expects: "Returns the peer id, affected tree count and AlreadyDecommissioned; per-tree enrollment is removed and the shipper is force-detached synchronously."
+    source: "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
+  - n: 4
+    action: "Read peer status, confirm the desired topology and decision-hold recovery, and retain evidence of the decommission result."
+    api: "ILatticeReplicationStatus.GetPeerStatusAsync"
+    expects: "Status is a point-in-time telemetry projection, not proof that a durable peer enrollment was erased."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs"
+postconditions:
+  - check: "A decommissioned peer id re-added later always takes a fresh bootstrap rather than resuming its former enrollment."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs"
+failure_modes:
+  - id: still-configured
+    signal: "LatticeReplicationPeerStillConfiguredException / gRPC FailedPrecondition."
+    effect: "Decommission is refused."
+    response: "Remove the peer from ReplicationPeers first, verify the effective topology and retry."
+  - id: engine-not-hosted
+    signal: "LatticeReplicationEngineNotHostedException."
+    effect: "A remote API head with no local replication engine cannot execute the verb."
+    response: "Route to a host where the replication engine and peer-admin facade are registered."
+  - id: partial-fanout
+    signal: "A tree fails during the decommission fan-out."
+    effect: "The operation is not atomic across all trees; completed tree removals remain."
+    response: "Repair the failing tree and retry the idempotent decommission, then verify the result."
+  - id: surface-not-available
+    signal: "The peer-admin facade is absent or its operator gRPC service is not mapped."
+    effect: "Permanent decommission cannot run through that surface."
+    response: "Report the missing registration; do not invent a decommission MCP tool or substitute per-tree disable."
+rollback:
+  supported: false
+  mechanism: "Permanent decommission has no enrollment undo. Re-add the peer and perform a fresh bootstrap. A detach alone is reversible by restoring the configured peer."
+  steps: []
+  source: "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs"
+concurrency:
+  - rule: "Decommission iterates trees, not a cluster-wide atomic transaction; an already-decommissioned peer can be retried safely."
+    source: "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
+sources:
+  - "docs/agents/procedures/region-backfill.yaml"
+  - "docs/agents/procedures/replication-enrollment.yaml"
+  - "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs"
+  - "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs"
+  - "src/lattice.replication/ReplicationDriverActivationService.cs"

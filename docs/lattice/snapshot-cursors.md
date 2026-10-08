@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Snapshot cursors (zero observable writes)
 
 `ILattice.OpenSnapshotKeyCursorAsync(...)` and

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Api.Replication configuration
 
 The package's public options types are `LatticeApiReplicationOptions`, bound through `AddLatticeReplicationApi(configure)`, and `LatticeReplicationStatusOptions`, bound through `AddLatticeReplicationStatusApi(configure)`. Each is resolvable via `IOptions<T>`.

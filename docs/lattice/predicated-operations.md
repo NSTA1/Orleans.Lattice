@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Predicate Operations
 
 Server-side **predicate push-down** lets a caller filter a typed operation with

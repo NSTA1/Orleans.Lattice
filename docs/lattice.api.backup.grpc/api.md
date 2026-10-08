@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Api.Backup.Grpc API reference
 
 The public surface is the typed client, the server-side options, the authorization and identity seams, the operation enum and authorization-context struct, the registration extensions, and the wire message records. The gRPC service, method definitions, marshallers, interceptor, and the default header credential bridge / options auth-scheme source are internal and are described by behaviour in [Architecture](architecture.md).

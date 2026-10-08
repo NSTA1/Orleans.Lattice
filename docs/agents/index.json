@@ -59,7 +59,8 @@
       "mcp_tool": "api/mcp.json operations[].availability is {module, package, opt_in, requires, source}: module is the registration that contributes the tool, opt_in names the parameter or option that must also be set (null when registering the module is enough), requires lists the facade registrations the tool delegates to, and source is the code that declares the tool. The session's tools/list is further filtered to the caller's effective permissions.",
       "procedure": "The first precondition of every procedure has id surface-available, and its failure_modes include surface-not-available."
     },
-    "json_schemas": "schemas/<kind>.schema.json is the JSON Schema (draft 2020-12) of every artifact whose schema id is lattice.agents/<kind>/v1, including index.json (kind index). YAML artifacts validate after YAML 1.2 core-schema typing of plain scalars; a quoted scalar is a string."
+    "json_schemas": "schemas/<kind>.schema.json is the JSON Schema (draft 2020-12) of every artifact whose schema id is lattice.agents/<kind>/v1, including index.json (kind index). YAML artifacts validate after YAML 1.2 core-schema typing of plain scalars; a quoted scalar is a string.",
+    "page_agent_spec": "User-facing Markdown pages declare agent_spec in YAML front matter: a site-root-relative path beginning docs/agents/ to a manifest-listed raw specification. The site preserves it as an absolute URL in Markdown alternates and announces it with rel=describedby and the correct JSON or YAML media type. Pages without a pointer use docs/agents/index.json."
   },
   "coverage": {
     "api_surfaces_covered": [
@@ -250,6 +251,13 @@
       "summary": "Operational procedure (compaction): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
     },
     {
+      "path": "procedures/region-backfill.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Backfill a region with or without tenancy: enrollment, authenticated snapshot transport, verified automatic tenant Online promotion, progress, blocked states and operator override."
+    },
+    {
       "path": "procedures/replication-dead-letters.yaml",
       "kind": "procedure",
       "format": "yaml",
@@ -262,6 +270,13 @@
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
       "summary": "Operational procedure (replication-enrollment): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/replication-peer-management.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Attach, detach or decommission replication peers: retained enrollment, decision holds, permanent retirement, fresh bootstrap on re-add and safe retry."
     },
     {
       "path": "procedures/replication-peer-status.yaml",
@@ -318,6 +333,13 @@
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
       "summary": "Operational procedure (tenant-access): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/tenant-region-drain.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Drain tenant residency through Draining, Offline and Removed, revoke allowed regions only after drain, preserve the last region and re-add through verified backfill."
     },
     {
       "path": "procedures/tree-delete-recover.yaml",

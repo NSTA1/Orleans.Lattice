@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Dead-letter queue
 
 The dead-letter queue (DLQ) is where a tree's schema machinery parks a rejected

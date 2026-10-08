@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Backup operations
 
 Accept-then-poll backup and restore for [`Orleans.Lattice.Api.Backup`](README.md). `ILatticeBackupOperations` starts a capture or restore in the background and returns a handle at once; the caller polls the operation's status for progress and the outcome. It is the backup facade's adoption of the shared [long-running operation contract](../lattice.api.abstractions/operations.md), which documents the status fields, the scoping rules, cancellation, retention and what happens when a silo is lost.

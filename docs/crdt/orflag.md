@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # OR-Flag (Observed-Remove Flag, enable-wins)
 
 `tree.OrFlag(key)` -> `OrFlagAccessor`, merge mode `LatticeMergeMode.OrFlag`.

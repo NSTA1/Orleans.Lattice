@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup API reference
 
 Every public type and member of `Orleans.Lattice.Backup`, grouped by role. Types not listed here are internal and are described by behaviour in [Architecture](architecture.md).

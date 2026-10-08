@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # MV-Register (Multi-Value Register)
 
 `tree.MvRegister<T>(key)` -> `MvRegisterAccessor<T>`, merge mode `LatticeMergeMode.MvRegister`.

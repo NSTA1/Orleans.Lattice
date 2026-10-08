@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra.Web API reference
 
 The public surface is the options type and cache enum, the service-registration

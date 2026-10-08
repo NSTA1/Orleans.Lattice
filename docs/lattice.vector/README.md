@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Orleans.Lattice.Vector
 
 An allocation-lean approximate nearest-neighbour (ANN) vector index for

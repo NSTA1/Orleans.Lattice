@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Typed CRDT delta records
 
 The core `Orleans.Lattice` assembly exposes a small set of typed delta records - one per replicable primitive - that form the wire contract between a producer cluster's commit-time change feed and a receiver cluster's apply pipeline. The replication package writes and reads those records through `WalRecord.Delta`. Each delta is the minimum information needed to merge the originating mutation into a remote replica without re-reading the primary.

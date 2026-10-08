@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/authorization.json"
+---
+
 # Authorization observability
 
 `Orleans.Lattice.Auth` publishes its telemetry on a single [.NET meter](https://learn.microsoft.com/dotnet/core/diagnostics/metrics) and offers an optional durable audit trail. This page catalogues both.

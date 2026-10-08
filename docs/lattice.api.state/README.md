@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Orleans.Lattice.Api.State
 
 A read-only cluster state-API add-on for [Orleans.Lattice](../../README.md) - query, observe, and subscribe to the live trees, structure, entries, and metrics of a running lattice cluster, over a transport-agnostic facade with a code-first gRPC binding.

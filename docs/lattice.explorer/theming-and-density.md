@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Theming and density
 
 The Explorer draws in the documentation site's visual world and adds an operator-console layer for density, focus, state roles, and app frames. Appearance is made of three choices: theme, contrast, and density.

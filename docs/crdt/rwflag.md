@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # RW-Flag (Remove-Wins Flag, disable-wins)
 
 `tree.RwFlag(key)` -> `RwFlagAccessor`, merge mode `LatticeMergeMode.RwFlag`.

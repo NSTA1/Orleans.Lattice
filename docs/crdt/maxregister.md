@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Max-Register (Monotone High-Water Mark)
 
 `tree.MaxRegister<T>(key, orderKeySelector)` -> `MaxRegisterAccessor<T>`, merge

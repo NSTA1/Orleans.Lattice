@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/authorization.json"
+---
+
 # Managing access from the Explorer
 
 The **Access** area is the Explorer surface for the cluster's authorization rule store, local membership groups, delegated tenant groups and member sets, and access explanations. It drives the auth administration facade and, on delegated tenant pages, the tenant directory and tenant policy facades; the Explorer presents and submits the data, but the cluster remains the enforcement point for every read and mutation.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Verified backup and restore
 
 Backup and restore meet concurrent atomic writes, replication and failures at

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Api.Backup API reference
 
 This package's own public surface is the registration extension and the options type. The control facade interfaces (`ILatticeBackupControl` and `ILatticeBackupOperations`), the model records they return and accept, and their `ApiBackupTypeAliases` constant class are published in the shared `Orleans.Lattice.Api.Abstractions` package under the same `Orleans.Lattice.Api.Backup` namespace; this package implements both interfaces and registers them on one singleton. The facade interfaces are the contracts the gRPC binding adapts over, and are described by their operations below, in [Backup operations](operations.md), and in [Architecture](architecture.md).

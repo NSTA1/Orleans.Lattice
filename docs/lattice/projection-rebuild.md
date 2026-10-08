@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/view-rebuild.yaml"
+---
+
 # Leaf-Projection Rebuild & Digest
 
 Orleans.Lattice's partitioned write-ahead log (WAL) is, in a fully replicated

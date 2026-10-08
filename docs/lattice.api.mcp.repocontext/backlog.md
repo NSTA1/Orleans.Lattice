@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # The agent-operated backlog
 
 An **agent-operated backlog** lets a fleet of agents pick up, execute, and close

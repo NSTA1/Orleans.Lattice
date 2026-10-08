@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/telemetry.json"
+---
+
 # Dashboards Configuration
 
 The dashboards package has no options type of its own - it is a delivery vehicle for JSON. "Configuring" the dashboards means three things: registering the meters whose instruments the panels query, choosing which dashboards to surface, and wiring the JSON into Grafana (by import or by provisioning template).

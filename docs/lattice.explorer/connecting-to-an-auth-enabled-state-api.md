@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Connecting to an auth-enabled State API
 
 The Explorer connects to one Lattice API endpoint. When that endpoint requires

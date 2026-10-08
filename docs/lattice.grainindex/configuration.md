@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Configuration
 
 How to declare a grain index, tune it, and understand the guardrails that stop a

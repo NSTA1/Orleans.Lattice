@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Api.Replication.Grpc
 
 Code-first gRPC binding for [Orleans.Lattice.Api.Replication](../lattice.api.replication/README.md) - projects the runtime replication control facade onto a gRPC service and a public typed client, over the same Orleans-serialized records, with no hand-written `.proto`.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Configuration
 
 Every option in `Orleans.Lattice.Vector`, what it does, and when to change it.

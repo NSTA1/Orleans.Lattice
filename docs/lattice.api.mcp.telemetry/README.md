@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Orleans.Lattice.Api.Mcp.Telemetry
 
 An optional, opt-in telemetry add-on for [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md). It exposes the cluster's OpenTelemetry metrics to an AI agent over MCP as a **read-only** proxy in front of a Prometheus / PromQL-compatible backend, so an agent can ask the cluster "how is it doing?" the same way it drives every other Lattice MCP tool.

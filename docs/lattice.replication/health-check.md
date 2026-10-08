@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-peer-status.yaml"
+---
+
 # Back-pressure health check
 
 `Orleans.Lattice.Replication` ships an ASP.NET Core `IHealthCheck` that turns the per-peer telemetry maintained by `ReplicationPeerStats` (see [observability](observability.md)) into a single `Healthy` / `Degraded` / `Unhealthy` verdict suitable for a Kubernetes readiness probe, an Azure App Service health endpoint, or any other host that consumes `Microsoft.Extensions.Diagnostics.HealthChecks`.

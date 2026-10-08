@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Orleans.Lattice.Caching.AzureBlob architecture
 
 The package is a single internal `IDistributedCache` implementation, blob-backed, plus two internal helpers that keep the blob-name and expiry logic pure and testable.

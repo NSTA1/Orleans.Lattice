@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Storage pressure
 
 The storage axis reports whether any write-ahead-log storage account is hot and,

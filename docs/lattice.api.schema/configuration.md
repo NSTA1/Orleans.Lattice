@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Orleans.Lattice.Api.Schema configuration
 
 The transport-agnostic package exposes `LatticeApiSchemaOptions`, bound through `AddLatticeSchemaApi(configure)` and resolvable via `IOptions<LatticeApiSchemaOptions>`. The sibling gRPC binding also exposes `LatticeSchemaApiGrpcOptions` for transport authorization and credential settings.

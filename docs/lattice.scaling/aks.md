@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # KEDA and HPA on AKS
 
 Autoscaling an Orleans.Lattice cluster on Azure Kubernetes Service (AKS), or any

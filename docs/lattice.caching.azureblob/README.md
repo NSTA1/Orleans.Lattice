@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Orleans.Lattice.Caching.AzureBlob
 
 A durable [Azure Blob Storage](https://learn.microsoft.com/azure/storage/blobs/) [`IDistributedCache`](https://learn.microsoft.com/dotnet/api/microsoft.extensions.caching.distributed.idistributedcache) for the Orleans.Lattice family.

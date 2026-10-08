@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Backfill
 
 A grain enrols itself in the index when it activates or writes state. That

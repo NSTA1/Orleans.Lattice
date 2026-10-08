@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Orleans.Lattice.Api.State configuration
 
 The state facade and its gRPC binding expose public options types. `LatticeApiStateOptions` carries the read-bounding knobs the read-only cluster state facade honours and is bound through `AddLatticeStateApi`. `LatticeStateApiGrpcOptions` carries the server-side gRPC binding knobs and is bound through `AddLatticeStateApiGrpc`. `EnvVarCredentialAuthorizerOptions` carries the reference environment-variable credential authorizer knobs and is bound through `AddEnvVarCredentialAuthorizer`.

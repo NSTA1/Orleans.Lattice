@@ -1711,6 +1711,14 @@ foreach ($relative in $stagedPages) {
 # package's page, which version of that package, since a package can be on a
 # different patch from the release the site is named for.
 $agentRoot = Join-Path $Intermediate 'agent'
+$agentManifest = Get-Content (Join-Path $RepoRoot 'docs/agents/index.json') -Raw | ConvertFrom-Json
+$agentArtifacts = @('docs/agents/index.json') + @($agentManifest.artifacts | ForEach-Object { 'docs/agents/' + $_.path })
+$splitAgentSpecs = @{}
+foreach ($result in $splits.Values) {
+    $original = Split-FrontMatter ([System.IO.File]::ReadAllText((Join-Path $Staging $result.Page)))
+    $originalSpec = Get-FrontMatterValue $original.Lines 'agent_spec'
+    foreach ($entry in $result.Pages) { $splitAgentSpecs[$entry.Path] = $originalSpec }
+}
 $pageInfo = @{}
 $pageByLower = @{}
 foreach ($relative in $stagedPages) {
@@ -1724,7 +1732,15 @@ foreach ($relative in $stagedPages) {
         $h1 = $headings | Where-Object { $_.Level -eq 1 } | Select-Object -First 1
         $title = if ($h1) { Get-HeadingPlainText $h1.Text } else { [System.IO.Path]::GetFileNameWithoutExtension($relative) }
     }
-    $pageInfo[$relative] = [pscustomobject]@{ Title = $title; Body = (ConvertTo-AgentMarkdown $front.Body) }
+    $agentSpec = Get-FrontMatterValue $front.Lines 'agent_spec'
+    if ($null -ne $agentSpec -and [string]::IsNullOrWhiteSpace($agentSpec)) {
+        throw "Empty agent_spec on '$relative': omit the key for the manifest fallback."
+    }
+    if (-not $agentSpec) { $agentSpec = $splitAgentSpecs[$relative] }
+    if ($agentSpec -and ($agentSpec -cnotin $agentArtifacts -or -not (Test-Path -LiteralPath (Join-Path $RepoRoot $agentSpec) -PathType Leaf))) {
+        throw "Invalid agent_spec '$agentSpec' on '$relative': expected a published docs/agents manifest artifact."
+    }
+    $pageInfo[$relative] = [pscustomobject]@{ Title = $title; Body = (ConvertTo-AgentMarkdown $front.Body); AgentSpec = $agentSpec }
     $pageByLower[$relative.ToLowerInvariant()] = $relative
 }
 
@@ -1825,6 +1841,7 @@ function Get-BundlePath([string]$Relative) {
 }
 
 $pageNotes = [ordered]@{}
+$pageAgentSpecs = [ordered]@{}
 foreach ($relative in $stagedPages) {
     $info = $pageInfo[$relative]
     $package = Get-PagePackage $relative
@@ -1833,6 +1850,10 @@ foreach ($relative in $stagedPages) {
     $header.Add("title: $(ConvertTo-QuotedYaml $info.Title)")
     $header.Add("url: $(ConvertTo-QuotedYaml ($site.Url + [System.IO.Path]::ChangeExtension($relative, '.html')))")
     $header.Add("source: $(ConvertTo-QuotedYaml $origins[$relative])")
+    if ($info.AgentSpec) {
+        $header.Add("agent_spec: $(ConvertTo-QuotedYaml ($site.Url + $info.AgentSpec))")
+        $pageAgentSpecs[$relative] = $info.AgentSpec
+    }
     if ($package) {
         $packageName = if ($package.Exact) { $package.Id } else { $package.Id + '.*' }
         $header.Add('package: ' + (ConvertTo-QuotedYaml $packageName))
@@ -1862,6 +1883,7 @@ foreach ($relative in $stagedPages) {
     $pageNotes[$relative] = Get-PageNote $relative $package
 }
 [System.IO.File]::WriteAllText((Join-Path $Intermediate 'page-notes.json'), ($pageNotes | ConvertTo-Json -Compress), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $Intermediate 'page-agent-specs.json'), ($pageAgentSpecs | ConvertTo-Json -Compress), $utf8)
 Write-Host "Wrote $($stagedPages.Count) markdown alternate(s) under $agentRoot, and each page's note"
 
 # --- llms.txt: the site's entry point for agents and LLM tooling ---

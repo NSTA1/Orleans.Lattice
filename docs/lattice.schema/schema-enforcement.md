@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Schema enforcement
 
 Schema enforcement adds per-tree, server-side validation of the values an

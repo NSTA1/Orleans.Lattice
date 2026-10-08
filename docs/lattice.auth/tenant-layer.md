@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/tenant-access.yaml"
+---
+
 # The tenant rule layer
 
 With [delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration)

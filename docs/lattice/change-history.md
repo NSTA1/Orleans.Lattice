@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Change history
 
 **Change history** is the per-key revision timeline of a lattice tree: for any

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/data.json"
+---
+
 # Orleans.Lattice.Api.Data configuration
 
 The facade package exposes `LatticeApiDataOptions`, which carries the read-bounding knobs for a bounded range read and the drain-step knob for a bounded range delete. It is bound through the `AddLatticeDataApi` registration extension and resolvable via `IOptions<LatticeApiDataOptions>`. The sibling gRPC package also exposes `LatticeDataApiGrpcOptions` for server-side transport authorization and credential bridging.

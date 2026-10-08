@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Long-running operations
 
 The shared **long-running operation contract** of the Orleans.Lattice API facades, in the `Orleans.Lattice.Api.Operations` namespace of [`Orleans.Lattice.Api.Abstractions`](README.md). Any facade verb whose work can outlast a caller's request timeout - a backup capture or restore, schema remediation or migration, a compliance scan, a view rebuild or reconcile, a tag-index reconcile, a WAL move, an orphaned-leaf pass, or a fresh storage-usage measure - is exposed as **accept-then-poll**: a start verb records the operation, starts the work in the background and returns a handle at once, and the caller polls a status read for progress and the outcome.

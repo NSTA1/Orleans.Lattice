@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # Verified Shard Ownership
 
 Every read and write in Orleans.Lattice is routed to the one shard that owns its

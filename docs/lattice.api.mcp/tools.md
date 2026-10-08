@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Tools
 
 The MCP server exposes its capabilities as **tools**, grouped into opt-in modules plus a `lattice_capabilities` and a `lattice_list_regions` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.

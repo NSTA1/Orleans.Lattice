@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # Atomic Multi-Key Writes
 
 `ILattice.SetManyAtomicAsync(entries)` commits a batch of key-value pairs with

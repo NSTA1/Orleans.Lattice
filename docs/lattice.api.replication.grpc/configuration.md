@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Api.Replication.Grpc configuration
 
 The package has one public options type, `LatticeReplicationApiGrpcOptions`, bound through `AddLatticeReplicationApiGrpc(configure)` and resolvable via `IOptions<LatticeReplicationApiGrpcOptions>`. The peer-status service that `AddLatticeReplicationStatusApiGrpc()` adds takes no options of its own: it is governed by the same instance, so `RequireAuthorization`, the credential headers, and `ActiveTenantHeaderName` apply to `GetPeerStatus` exactly as to the control RPCs.

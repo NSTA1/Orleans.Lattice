@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Orleans.Lattice.Storage.AzureTable
 
 Durable Azure Table Storage-backed WAL provider for [Orleans.Lattice](../../README.md). It plugs into the public `IWalStorageProvider` seam so replicated WAL entries can survive silo restarts, support retention windows, and run against Azure Table Storage or Azurite.

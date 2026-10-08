@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Orleans.Lattice.Api.Schema architecture
 
 This page describes how the control facade drives the schema engine. The facade (`ILatticeSchemaControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) is implemented by an internal silo singleton that every transport binding adapts over, so it is described here by behaviour. The public model records it returns and accepts are named.

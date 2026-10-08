@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Orleans.Lattice.Explorer
 
 A web console for a running [Orleans.Lattice](../../README.md) cluster. It browses

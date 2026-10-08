@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/treeadmin.json"
+---
+
 # Orleans.Lattice.Api.TreeAdmin
 
 A transport-agnostic whole-tree administration control facade for [Orleans.Lattice](../../README.md).

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/restore.yaml"
+---
+
 # Coordinated multi-cluster restore
 
 Restoring a backup into a tree that is **replicated** across clusters is not a

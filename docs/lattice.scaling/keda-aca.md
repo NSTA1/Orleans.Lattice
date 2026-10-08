@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # KEDA on Azure Container Apps
 
 An end-to-end walkthrough for autoscaling an Orleans.Lattice cluster on Azure

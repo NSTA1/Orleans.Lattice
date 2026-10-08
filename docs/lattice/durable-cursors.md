@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Durable Cursors
 
 Durable cursors are server-side, checkpointed iterators for long-running key

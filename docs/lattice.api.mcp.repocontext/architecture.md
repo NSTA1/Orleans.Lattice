@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Architecture
 
 A map of the module's constituent parts and how a request or a file moves through

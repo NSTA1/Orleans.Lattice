@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Orleans.Lattice.Api.Abstractions
 
 The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the API facades (state, data, auth, backup, schema, replication, telemetry, tree administration, tenant administration, and installable apps), their request / response models, and the typed exceptions those interfaces document, and nothing else.

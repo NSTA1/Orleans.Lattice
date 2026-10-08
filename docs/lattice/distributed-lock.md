@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Distributed Lock
 
 `ILatticeLockGrain` is a **single-cluster**, FIFO-fair distributed lock / lease keyed by

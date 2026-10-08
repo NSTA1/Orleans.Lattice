@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Identity-directory providers
 
 `Orleans.Lattice.Membership` separates two directories that are easy to confuse:

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Remote hosting
 
 The MCP server can run **in the silo** (co-hosted with the facades it binds, resolving them in-process) or **out of the silo** as a standalone host that reaches the cluster over the network. `AddLatticeMcpRemote(...)` wires the out-of-silo topology: the same built-in tool modules, bound over the `Orleans.Lattice.Api.*.Grpc` clients instead of the in-process facades.

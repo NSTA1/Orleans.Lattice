@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup
 
 Causally-consistent backup and restore for [Orleans.Lattice](../../README.md).

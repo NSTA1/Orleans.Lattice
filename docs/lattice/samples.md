@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Samples
 
 Each sample lives in its own directory under [`samples/`](../../samples); nearly all are self-contained runnable projects, and the exceptions are called out below.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Schema versioning
 
 Schema versioning lets an opted-in tree stamp each value with a self-describing

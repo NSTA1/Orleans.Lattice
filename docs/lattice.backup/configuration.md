@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup configuration
 
 The package has three public options types: `LatticeBackupOptions` (catalog history and cross-tree-set fence behaviour), `LatticeBackupScheduleOptions` (per-scope scheduling and retention), and `LatticeBackupHealthOptions` (cluster-wide periodic health monitoring). All three are bound through the `AddLatticeBackup` / `ConfigureLatticeBackupSchedule` / `ConfigureLatticeBackupHealth` registration extensions. `LatticeBackupOptions` and `LatticeBackupScheduleOptions` carry validators that reject the out-of-range values noted in the tables below when the options are first resolved (a scope's schedule options when that scope's scheduler first reads them); `LatticeBackupHealthOptions` has no validator - an interval below its `MinimumInterval` is clamped up rather than rejected.

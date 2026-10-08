@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Orleans.Lattice.Api.Mcp.Apps
 
 The MCP tool surface for [installable apps](../lattice.apps/README.md): every

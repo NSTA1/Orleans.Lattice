@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Orleans.Lattice.Api.Mcp
 
 A Model Context Protocol (MCP) server for [Orleans.Lattice](../../README.md) - it exposes a running lattice cluster's transport-agnostic API facades as MCP tools an AI agent can discover and drive over a standard, authenticated MCP endpoint.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Configuration
 
 This document covers `AzureTableWalStorageOptions`, the public configuration surface for `Orleans.Lattice.Storage.AzureTable`. Register the provider with `AddAzureTableWalStorage`; see [API Reference](api.md) for public types and [Architecture](architecture.md) for behavioural details.

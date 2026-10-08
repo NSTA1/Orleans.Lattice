@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-reseed.yaml"
+---
+
 # Snapshot / bootstrap export
 
 `Orleans.Lattice.Replication` ships an `ISnapshotProvider` seam used by

@@ -857,7 +857,7 @@ capabilities:
         source: "docs/lattice.replication/README.md"
       - statement: "Replication applies deliveries for different tree and origin pairs independently, with no total order across them."
         source: "docs/lattice.replication/replication-apply.md"
-      - statement: "A bootstrap snapshot stream is not delivered in HLC order, so the receiver skips the pinned-causal-floor check and high-water-mark advance while it drains and relies on per-key last-writer-wins for convergence."
+      - statement: "A bootstrap snapshot stream is not delivered in HLC order. Fresh attempts import into a shadow copy while the prior view serves; legacy partial imports stay read-fenced. The drain bypasses steady-state high-water-mark advancement, and handoff merges the frontier by maximum and clears the legacy pinned floor rather than suppressing new point writes solely for an older HLC."
         source: "docs/lattice.replication/snapshot-bootstrap.md"
     unsafe_sequences:
       - sequence:

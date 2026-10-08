@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # OR-Set (Observed-Remove Set)
 
 `tree.OrSet(key)` -> `OrSetAccessor`, merge mode `LatticeMergeMode.OrSet`.

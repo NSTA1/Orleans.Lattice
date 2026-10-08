@@ -1,0 +1,98 @@
+schema: lattice.agents/procedure/v1
+id: region-backfill
+name: "Backfill a new region, with or without tenancy"
+surfaces:
+  in_process:
+    api: "ILatticeTenantRegionAdmin for tenancy; ILatticeReplicationControl and ILatticeBootstrapCoordinator for every replicated deployment"
+    source: "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+  grpc:
+    api: "/orleans.lattice.api.tenantadmin/AuthorizeAllowedRegions, /orleans.lattice.api.tenantadmin/SetTenantResidency, /orleans.lattice.api.tenantadmin/GetTenantRegionStatus; replication enrollment through /orleans.lattice.api.replication/EnableReplication"
+    source: "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs"
+  mcp_tool:
+    api: "lattice_tenant_authorize_regions, lattice_tenant_set_residency, lattice_tenant_region_status; lattice_replication_enable and lattice_replication_get_config"
+    source: "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Read api/replication.json availability and the session tools/list. Only for the tenant branch also read api/tenantadmin.json availability; do not require tenancy for an ordinary region bootstrap. Bootstrap status and operator re-seed are host-code in-process operations, not MCP or operator gRPC tools."
+    source: "docs/agents/api/replication.json"
+  - id: authenticated-peers
+    check: "The receiver hosts AddLatticeReplication and a remote snapshot transport addressing the source cluster; the source exports the tree through its locally enrolled replication snapshot service. Peer credentials, origin binding and endpoints must agree."
+    source: "src/lattice.replication/RemoteSnapshotProvider.cs"
+  - id: tenant-registration-order
+    check: "For tenancy only, register AddLattice, AddLatticeMembership and AddLatticeAuth before AddLatticeTenancy, then AddLatticeTenantAdminApi. Do not register tenancy merely to bootstrap a non-tenant tree."
+    source: "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs"
+  - id: replication-enrolled
+    check: "Every target tree must have an unambiguous replication merge mode at source and receiver. For tenants the configured and registered tenant trees, including configured aliases, are discovered; an unenrolled tenant tree blocks Online promotion."
+    source: "src/lattice.api.tenantadmin/TenantRegionBackfillService.cs#GetTenantTreesAsync"
+  - id: source-online
+    check: "For tenant backfill at least one other resident region must be Online; adding the new region must not drain the only usable source before backfill finishes."
+    source: "src/lattice.api.tenantadmin/TenantRegionBackfillService.cs#AdvanceTenantAsync"
+steps:
+  - n: 1
+    action: "Choose the branch from actual host configuration. Without tenancy, enroll each required tree and request receiver bootstrap from the selected source using host code; continue with replication-reseed.yaml for kickoff and polling, skip tenant steps 2-4 and verify completion at step 5. Do not call tenant tools."
+    api: "ILatticeReplicationControl.EnableReplicationAsync; ILatticeBootstrapCoordinator.BootstrapAsync"
+    expects: "Replication enrollment and snapshot backfill work without any tenant registry or tenant lifecycle."
+    source: "src/lattice.replication/ILatticeBootstrapCoordinator.cs#BootstrapAsync"
+  - n: 2
+    action: "With tenancy, have a platform operator authorize the complete desired allowed-region set, retaining the current resident regions."
+    api: "ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync / lattice_tenant_authorize_regions"
+    expects: "The new region is allowed; revoking a still-resident region is refused."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs#AuthorizeAllowedRegionsAsync"
+  - n: 3
+    action: "As an operator or tenant administrator, set the complete residency set including the new region and the existing Online source."
+    api: "ILatticeTenantRegionAdmin.SetResidencyAsync / lattice_tenant_set_residency"
+    expects: "The added region begins Provisioning and automatically advances to Backfilling. It accepts inbound replication but refuses client serving until Online."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs#SetResidencyAsync"
+  - n: 4
+    action: "Poll tenant region status in the target region, using the MCP region argument where available. Inspect BackfillProgress.Phase, StallReason and per-tree Phase, EntriesApplied, SourceClusterId, ReadFenced and PendingDeadLetters."
+    api: "ILatticeTenantRegionAdmin.GetTenantRegionStatusAsync / lattice_tenant_region_status"
+    expects: "Local Backfilling progress is visible. The driver promotes Online only after every discovered tree reaches LiveIncremental from the selected Online source, is unfenced, and its tenant_offline dead letters have replayed."
+    source: "src/lattice.api.tenantadmin/TenantRegionBackfillService.cs#GetProgressAsync"
+  - n: 5
+    action: "Confirm the target region is Online and verify incremental peer health before shifting traffic or draining a prior region. For the non-tenant branch, verify every tree's bootstrap completion instead; there is no tenant Online promotion."
+    api: "ILatticeTenantRegionAdmin.GetTenantRegionStatusAsync; ILatticeBootstrapCoordinator.GetStatusAsync; ILatticeReplicationStatus.GetPeerStatusAsync"
+    expects: "The region can serve complete replicas through its configured surfaces."
+    source: "src/lattice.api.tenantadmin/TenantRegionBackfillService.cs#AdvanceTenantAsync"
+postconditions:
+  - check: "Provisioning and Backfilling tenants do not serve clients; a successful verified backfill promotes the tenant region to Online."
+    source: "src/lattice.tenancy/TenantRegionLifecycle.cs"
+  - check: "A tenant with no discovered trees can complete backfill immediately; discovery failure or a missing replication dependency never counts as an empty successful result."
+    source: "src/lattice.api.tenantadmin/TenantRegionBackfillService.cs#AdvanceTenantAsync"
+failure_modes:
+  - id: source-unavailable
+    signal: "BackfillProgress is Blocked or Unavailable with a StallReason, or a per-tree bootstrap is Failed."
+    effect: "The region remains non-serving and durable reconciliation retries."
+    response: "Restore an Online source, snapshot transport, storage and replication enrollment; poll progress again. Do not force Online to hide a stall."
+  - id: parked-entries
+    signal: "PendingDeadLetters is non-zero, or replay is Deferred or SourceLineageRefused."
+    effect: "Online promotion is withheld."
+    response: "Resolve the receive fence or lineage mismatch and let the driver's tenant_offline replay complete; inspect replication-dead-letters.yaml."
+  - id: manual-override
+    signal: "An operator proposes lattice_tenant_advance_region."
+    effect: "The override advances one add-path step without copying or verifying data."
+    response: "Use only after independently verifying data is already present, with acknowledgeDataInPlace=true. Read status before every call; repeated calls can advance another step."
+  - id: surface-not-available
+    signal: "The required facade cannot be resolved or an intended tool is absent from tools/list."
+    effect: "That branch cannot run through that surface."
+    response: "Report the missing registration or opt-in. A non-tenant deployment uses the explicitly documented replication branch, not an emulation of tenant residency."
+rollback:
+  supported: true
+  mechanism: "For tenants, remove the added region from the complete residency set while preserving at least one resident region; tenant-region-drain.yaml describes the drain. Already copied data is not undone. For a non-tenant bootstrap there is no snapshot undo; use replication-reseed.yaml recovery."
+  steps:
+    - action: "Drop only the unwanted tenant region from residency, preserving the intended source."
+      api: "ILatticeTenantRegionAdmin.SetResidencyAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs#SetResidencyAsync"
+  source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+concurrency:
+  - rule: "Backfill scheduling is durable per tenant and region; retries and silo restarts resume reconciliation."
+    source: "src/lattice.api.tenantadmin/TenantRegionBackfillCoordinatorGrain.cs"
+  - rule: "Bootstrap is single-activation per tree; same-source kickoffs are absorbed and different-source concurrent kickoffs are refused."
+    source: "src/lattice.replication/ILatticeBootstrapCoordinator.cs"
+sources:
+  - "docs/agents/procedures/replication-reseed.yaml"
+  - "docs/agents/procedures/tenant-region-drain.yaml"
+  - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+  - "src/lattice.api.tenantadmin/TenantRegionBackfillService.cs"
+  - "src/lattice.api.tenantadmin/TenantRegionBackfillCoordinatorGrain.cs"
+  - "src/lattice.tenancy/TenantRegionLifecycle.cs"
+  - "src/lattice.replication/ILatticeBootstrapCoordinator.cs"

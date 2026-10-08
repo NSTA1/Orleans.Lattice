@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/data.json"
+---
+
 # Orleans.Lattice.Api.Data.Grpc
 
 Code-first gRPC binding for [Orleans.Lattice.Api.Data](../lattice.api.data/README.md) - projects the write-capable data-API facade onto a gRPC service and a public typed client, using Orleans-serialized request / response records that wrap the facade DTOs, with no hand-written `.proto`.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/data.json"
+---
+
 # Orleans.Lattice.Api.Data
 
 A write-capable external data-plane add-on for [Orleans.Lattice](../../README.md) - set, delete, read, and atomically batch-mutate the entries of a running lattice cluster from a non-.NET client, over a transport-agnostic facade with a code-first gRPC binding.

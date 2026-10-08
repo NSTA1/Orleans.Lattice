@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Orleans.Lattice.Api.Replication architecture
 
 This facade is a thin, fail-closed control layer over the replication config authority. It owns three responsibilities and nothing else: resolve the tree name and authorize the caller, delegate to the engine, and scope discovery to the caller's grant. The package's separate, read-only peer-status facade is described in [The peer-status read path](#the-peer-status-read-path).

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # API
 
 The public surface of `Orleans.Lattice.Scaling`.

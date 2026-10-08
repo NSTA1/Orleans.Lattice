@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/state.json"
+---
+
 # Setup
 
 `Orleans.Lattice.Api.State` layers on top of an existing `Orleans.Lattice` silo. The registration steps below include optional remote-exposure pieces.

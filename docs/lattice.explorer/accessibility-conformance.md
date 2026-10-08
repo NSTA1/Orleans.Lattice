@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Accessibility conformance
 
 This is an honest statement of what the Orleans.Lattice Explorer targets, how

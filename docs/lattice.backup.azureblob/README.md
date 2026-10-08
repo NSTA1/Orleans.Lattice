@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup.AzureBlob
 
 A durable [Azure Blob Storage](https://learn.microsoft.com/azure/storage/blobs/) sink for [Orleans.Lattice.Backup](../lattice.backup/README.md).

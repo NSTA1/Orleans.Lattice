@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Membership observability
 
 `Orleans.Lattice.Membership` publishes its telemetry on a single [.NET meter](https://learn.microsoft.com/dotnet/core/diagnostics/metrics), so an OpenTelemetry pipeline can subscribe once and receive every membership metric.

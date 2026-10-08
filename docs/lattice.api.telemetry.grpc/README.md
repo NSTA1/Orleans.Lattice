@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/telemetry.json"
+---
+
 # Orleans.Lattice.Api.Telemetry.Grpc
 
 The **gRPC binding** for [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md).

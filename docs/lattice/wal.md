@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Write-Ahead Log
 
 This document describes how Orleans.Lattice uses a **write-ahead log (WAL)** as the

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Area availability
 
 The Explorer compiles in its native areas, but you only see the ones you can

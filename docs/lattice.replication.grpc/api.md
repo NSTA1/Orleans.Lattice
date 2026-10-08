@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # gRPC Transport Public API Reference
 
 This document is the contract for the public `Orleans.Lattice.Replication.Grpc` surface. It describes caller-visible behaviour: what to register, which options shape the binding, and which replication seams the package connects. It does not name product-internal implementation types.

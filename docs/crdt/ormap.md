@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # OR-Map (Observed-Remove Map)
 
 `tree.OrMap<TKey,TValue>(key)` -> `OrMapAccessor<TKey,TValue>`, merge mode `LatticeMergeMode.OrMap`.

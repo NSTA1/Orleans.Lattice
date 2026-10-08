@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-enrollment.yaml"
+---
+
 # Replication drivers
 
 This document describes the **production drivers** that turn the dormant

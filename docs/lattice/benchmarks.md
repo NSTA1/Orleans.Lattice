@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Lattice Benchmarks
 
 The Orleans.Lattice benchmark suite is the project's regression alarm. Every

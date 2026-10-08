@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Per-entry TTL (time-to-live)
 
 Orleans.Lattice supports **per-entry time-to-live (TTL)** on writes. An entry written with a TTL is visible to every read until its absolute expiry instant, after which it becomes invisible to reads and is eventually reaped by tombstone compaction. TTL is available on the last-writer-wins `SetAsync` path (below) and on typed CRDT writes ([Per-entry TTL on CRDT writes](#per-entry-ttl-on-crdt-writes)); both share the same absolute-expiry storage and read-filtering rules.

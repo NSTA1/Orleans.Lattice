@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra.Web architecture
 
 The package bridges two authentication layers: the browser's OpenID Connect

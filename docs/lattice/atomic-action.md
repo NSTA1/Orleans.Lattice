@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/invariants.yaml"
+---
+
 # Atomic Action (saga / TCC coordinator)
 
 `IAtomicActionGrain` is a public, generic, all-or-nothing **atomic-action

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Api.Backup.Grpc configuration
 
 The package has one public server-side options type, `LatticeBackupApiGrpcOptions`, bound through `AddLatticeBackupApiGrpc(configure)`. The client (`LatticeBackupApiGrpcClient`) carries no options of its own - transport concerns live on the `CallInvoker` / `GrpcChannel` the caller supplies.

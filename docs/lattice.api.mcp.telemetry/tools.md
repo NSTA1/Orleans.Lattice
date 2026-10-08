@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Tools
 
 The telemetry module exposes **read-only** tools, all named `lattice_telemetry_<verb>`. They appear only when the host has called `AddTelemetryTools(...)`, the registered MCP authorizer admits them (the default `DenyAllMcpAuthorizer` admits no group tool - see [MCP security](../lattice.api.mcp/security.md#2-the-coarse-authorizer-seam)), and the authenticated caller holds a cluster-wide `LatticeOperation.Telemetry` grant, and each tool re-checks that capability at call time before its range guardrails, its metric-access checks, or any backend call (see [Security](security.md#the-two-halves)). Every tool carries `readOnlyHint = true` and `destructiveHint = false`; there are no write, delete, or control verbs.

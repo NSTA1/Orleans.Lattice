@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Setup
 
 Registering the `Orleans.Lattice.Api.Mcp.Telemetry` tool module on an MCP host, pointing it at a metrics backend, and configuring the credential, guardrails, and metric-access allow-list.

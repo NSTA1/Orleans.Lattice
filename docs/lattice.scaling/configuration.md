@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Configuration
 
 Every knob on `LatticeScalingSignalOptions` (bound through `AddLatticeScalingSignal`)

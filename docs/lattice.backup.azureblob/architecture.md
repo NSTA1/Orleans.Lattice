@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Backup.AzureBlob architecture
 
 This page describes how the Azure Blob Storage sink attaches to the backup engine and how it lays out and commits blobs. The sink implementation is internal; it is described here by behaviour and reached only through the core `ILatticeBackupSink` seam.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Replication apply seam (`IReplicationApplier`)
 
 `IReplicationApplier` is the public, in-process inbound seam over the per-tree apply pipeline. It installs a single `WalRecord` authored on a remote cluster onto the local tree while preserving the remote cluster's origin id end-to-end and, except where [Source-HLC and origin preservation](#1-source-hlc-and-origin-preservation) notes otherwise, its `HybridLogicalClock`, and it absorbs re-delivery through a shadow-forward identity cache plus per-key last-writer-wins idempotence, so at-least-once transports converge without a per-origin HLC drop threshold.

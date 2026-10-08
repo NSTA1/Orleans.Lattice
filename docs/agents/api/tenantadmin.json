@@ -69,6 +69,24 @@
         "kind": "registration",
         "reason": "The tenant-admin facade operates on the tenancy engine tenant registry and fails fast when AddLatticeTenancy has not registered it.",
         "source": "src/lattice.api.tenantadmin/LatticeApiTenantAdminServiceCollectionExtensions.cs#LatticeApiTenantAdminServiceCollectionExtensions.AddLatticeTenantAdminApi"
+      },
+      {
+        "name": "AddLattice",
+        "kind": "registration",
+        "reason": "Tenancy requires the core registration before AddLatticeTenancy.",
+        "source": "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs"
+      },
+      {
+        "name": "AddLatticeMembership",
+        "kind": "registration",
+        "reason": "Tenancy requires authenticated subject and group resolution before AddLatticeTenancy.",
+        "source": "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs"
+      },
+      {
+        "name": "AddLatticeAuth",
+        "kind": "registration",
+        "reason": "Tenancy requires the real authorization gate before AddLatticeTenancy.",
+        "source": "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs"
       }
     ],
     "grpc_server": [
@@ -1351,6 +1369,89 @@
         }
       ],
       "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantSubjectResolution.cs"
+    },
+    "TenantRegionBackfillProgress": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Phase",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "StallReason",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Trees",
+          "type": "IReadOnlyList<TenantRegionBackfillTreeProgress>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionBackfillProgress.cs"
+    },
+    "TenantRegionBackfillTreeProgress": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Phase",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "EntriesApplied",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "SourceClusterId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "ReadFenced",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "PendingDeadLetters",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionBackfillTreeProgress.cs"
+    },
+    "TenantRegionStatusDescriptor": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "RegionId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Status",
+          "type": "TenantRegionLifecycleStatus",
+          "required": false
+        },
+        {
+          "name": "IsAllowed",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "BackfillProgress",
+          "type": "TenantRegionBackfillProgress?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionStatusDescriptor.cs"
     }
   },
   "operations": [
@@ -2057,7 +2158,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "concurrency": {
-        "rule": "Reports one row per region that is either allowed or carries a non-None status.",
+        "rule": "Reports one row per allowed or non-None region. Backfilling rows carry BackfillProgress when the backfill service is registered. A nonlocal row reports NotLocal; local progress includes phase, stall reason and per-tree bootstrap state, source, entries applied, read fence and pending dead letters.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "sources": [
@@ -2970,7 +3071,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "concurrency": {
-        "rule": "The last-resident-region guard runs before the write and again after the CRDT join; added regions start Provisioning until operator promotion, and dropped regions drain automatically through Offline to Removed.",
+        "rule": "The last-resident-region guard runs before the write and after the committed CRDT join. Added regions automatically advance Provisioning to Backfilling to Online only after every discovered tenant tree finishes bootstrap from an Online source, is unfenced and has no tenant_offline dead letters. Dropped regions automatically drain through Offline to Removed; an operator advance is an explicit data-in-place override.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
       },
       "sources": [

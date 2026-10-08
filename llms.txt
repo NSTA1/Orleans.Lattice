@@ -16,6 +16,14 @@ Every page on the site also has a markdown alternate at the same address ending 
 
 - [docs/agents/index.json](docs/agents/index.json): The machine-readable specifications for agents operating an Orleans.Lattice deployment - operational invariants, capability envelopes with guarantees and non-guarantees, procedures with preconditions, postconditions, failure modes and rollback, per-operation API contracts with error taxonomy, retry, idempotency and concurrency, governance decision trees, and the JSON Schemas that define every file's format. They describe every surface Lattice ships; a given host exposes only the packages it registers, so read each surface's `availability` before relying on it. The published copies are listed under Agent specifications in the site's llms.txt.
 
+- [MCP tool contracts](docs/agents/api/mcp.json): Registered tool names, parameters, availability and capability gates. Confirm the actual host's tools/list before calling.
+- [Region backfill](docs/agents/procedures/region-backfill.yaml): New-region bootstrap with or without tenancy; automatic verified tenant promotion and progress.
+- [Tenant region drain](docs/agents/procedures/tenant-region-drain.yaml): Withdraw tenant residency and revoke an allowed region after automatic drain.
+- [Replication re-seed](docs/agents/procedures/replication-reseed.yaml): Shadow-copy bootstrap, legacy fenced recovery, source lineage and incremental handoff.
+- [Peer management](docs/agents/procedures/replication-peer-management.yaml): Reversible detach versus permanent decommission.
+
+User-facing pages declare `agent_spec` in YAML front matter. Their published Markdown alternates retain its absolute URL and HTML announces it through `rel="describedby"`. Generated or unannotated pages fall back to the agent manifest.
+
 ## Start here
 
 - [README](README.md): What the platform is, why it exists, the Local/Team/Global deployment journey, the seam-oriented architecture, and quick start.

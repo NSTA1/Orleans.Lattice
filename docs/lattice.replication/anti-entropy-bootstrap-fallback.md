@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/replication-reseed.yaml"
+---
+
 # Anti-entropy bootstrap-snapshot fallback (GC'd divergence)
 
 [Targeted leaf re-replay](anti-entropy-leaf-rereplay.md) repairs a localised divergence by re-shipping the relevant write-ahead-log entries. But re-replay cannot always reach the divergence the Merkle walk localised; these cases defeat it:

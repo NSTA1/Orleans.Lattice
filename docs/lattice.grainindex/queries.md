@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Queries
 
 A grain index answers typed predicate questions over grain state - *"which

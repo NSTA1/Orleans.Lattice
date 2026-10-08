@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Api.Backup.Grpc architecture
 
 This page describes the code-first gRPC binding and its two-layer, fail-closed authorization model. The gRPC service, method definitions, marshallers, interceptor, and the default header credential bridge / options auth-scheme source are internal and are described here by behaviour; the public client, options, and seams are named.

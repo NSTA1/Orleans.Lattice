@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Schema enforcement and versioning (`Orleans.Lattice.Schema`)
 
 Orleans.Lattice stores every value as an opaque `byte[]`: the silo attaches no

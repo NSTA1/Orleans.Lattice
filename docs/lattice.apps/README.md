@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/app-lifecycle.yaml"
+---
+
 # Orleans.Lattice.Apps
 
 Opt-in **installable apps** for Orleans.Lattice: an app declares its trees, roles,

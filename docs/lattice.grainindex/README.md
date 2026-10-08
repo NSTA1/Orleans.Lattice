@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Orleans.Lattice.GrainIndex
 
 Typed grain indexing for [Orleans.Lattice](../../README.md). Declare that a grain's typed state should be tracked in a lattice tree, and ask questions like *"which `User` grains are 18 or over?"* without hand-maintaining a secondary index.

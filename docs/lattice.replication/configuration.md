@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Configuration
 
 This document covers the public configuration surface for `Orleans.Lattice.Replication`. The gRPC transport and the Azure Table WAL backend are separate packages and are configured in their own docs, cross-linked at the end of this page. Compression knobs that are shared with the core package are cross-referenced to [core compression](../lattice/compression.md).

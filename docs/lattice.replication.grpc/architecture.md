@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Architecture
 
 `Orleans.Lattice.Replication.Grpc` binds the replication package's public transport seams to ASP.NET Core gRPC. It does not change how mutations are captured, encoded, applied, deduplicated, or merged; those behaviours belong to [Orleans.Lattice.Replication](../lattice.replication/README.md). This document describes the transport topology in behavioural terms.

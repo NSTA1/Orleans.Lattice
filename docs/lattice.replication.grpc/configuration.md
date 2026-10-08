@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Configuration
 
 This document covers the public configuration surface for `Orleans.Lattice.Replication.Grpc`. For replication-wide options such as `LatticeReplicationOptions.ClusterId`, `ReplicationPeers`, shipping cadence, wire version, and flow control, see the [replication configuration reference](../lattice.replication/configuration.md).

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/telemetry.json"
+---
+
 # Orleans.Lattice.Dashboards
 
 `Orleans.Lattice.Dashboards` is a sibling package that ships pre-built Grafana dashboards and provisioning templates for the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters, and its `Overview` dashboard also charts the exact-KNN gather instruments of the repository-context `Orleans.Lattice.Api.Mcp.RepoContext` meter. Install it when you want operator dashboards bundled with the library version - the core library has no dependency on it.

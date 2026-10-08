@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Troubleshooting
 
 A symptom-driven guide to the problems Lattice trees actually hit in

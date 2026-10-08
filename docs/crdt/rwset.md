@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # RW-Set (Remove-Wins Observed-Remove Set)
 
 `tree.RwSet(key)` -> `RwSetAccessor`, merge mode `LatticeMergeMode.RwSet`.

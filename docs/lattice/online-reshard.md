@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/reshard.yaml"
+---
+
 # Online Reshard
 
 `ILattice.ReshardAsync(int newShardCount, CancellationToken)` grows or shrinks a tree's physical shard count **online** - the tree continues to serve reads and writes throughout the migration, with no global cutover lock. A larger count splits shards; a smaller count folds shards together and releases the retired shards' storage.

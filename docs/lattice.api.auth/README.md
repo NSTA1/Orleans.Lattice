@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/auth.json"
+---
+
 # Orleans.Lattice.Api.Auth
 
 A configuration and control facade for the [Orleans.Lattice](../../README.md) authorization system - administer the membership directory and the authorization policy store, and introspect policy (why a subject is or is not authorized, and what rules are in effect for them), over a single transport-agnostic surface.

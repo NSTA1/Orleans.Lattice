@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Retrieval and token economics
 
 The repository-context surface is only useful to an agent if the context it

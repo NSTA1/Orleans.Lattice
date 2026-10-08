@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # State Model
 
 This document describes how Orleans.Lattice represents tree state on

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/concepts.yaml"
+---
+
 # Min-Register (Monotone Low-Water Mark)
 
 `tree.MinRegister<T>(key, orderKeySelector)` -> `MinRegisterAccessor<T>`, merge

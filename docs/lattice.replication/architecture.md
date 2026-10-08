@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Architecture
 
 `Orleans.Lattice.Replication` layers cross-cluster replication on top of an

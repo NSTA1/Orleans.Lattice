@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/lattice.json"
+---
+
 # Read Caching
 
 Existence checks and batched reads (`ExistsAsync`, `GetManyAsync`), and any point read (`GetAsync`) the shard root serves serially, reach a leaf through a read-through cache: an internal stateless-worker grain placed in front of each primary leaf (the leaf cache grain in the diagram below). Each silo that reads through it runs its own activation - a stateless worker can run several per silo - and every activation keeps its own local mirror of the leaf's entries. Versioned reads (`GetWithVersionAsync`) bypass the cache and go to the leaf directly, and so does a point read on the shard root's optimistic, interleaved path ([`OptimisticShardRootPointReads`](configuration.md#optimisticshardrootpointreads), on by default): it reads the primary leaf rather than a cache replica, because a replica refreshed during a split or fold can briefly disagree with the shard root's routing, and it falls back to the serial read through the cache only when it cannot be validated. A validated optimistic read therefore neither consults the cache nor moves its hit and miss counters. While that option is on, a serial read of a leaf for which the shard root holds no ownership proof also asks the primary leaf for one before reading through the cache (backing off for 30 seconds per leaf after a reply that carries none), so later optimistic reads of that leaf can validate:

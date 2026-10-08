@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Orleans.Lattice.Api.Apps.Grpc
 
 The code-first gRPC **binding** and public **client** for the

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/mcp.json"
+---
+
 # Security
 
 The telemetry add-on sits on a **dual-credential trust boundary**: who may ask a telemetry question (MCP-side authorization) and how the proxy authenticates to the metrics backend (the backend credential) are two independent halves. Neither leaks into the other.

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/deployment.yaml"
+---
+
 # Performance: single-silo guide
 
 This document is an **approximate guide** to the performance you can expect

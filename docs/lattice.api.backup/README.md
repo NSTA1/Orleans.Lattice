@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Orleans.Lattice.Api.Backup
 
 A transport-agnostic backup / restore control facade for [Orleans.Lattice.Backup](../lattice.backup/README.md).

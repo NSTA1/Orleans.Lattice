@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/replication.json"
+---
+
 # Replication Public API Reference
 
 This document is the **contract** for the public `Orleans.Lattice.Replication` surface. It describes behaviour in caller-visible terms: what each public type is for, which members matter to callers, and where to find the operational detail. It does not name internal grains or implementation classes that are not public. For the how, follow the topic cross-references in each section.
