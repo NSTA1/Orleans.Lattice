@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Orleans.Lattice.Explorer.AppKit</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.AppKit</PackageId>
-    <Version>9.8.0</Version>
+    <Version>10.0.0</Version>
     <Description>The Orleans.Lattice Explorer AppKit: the static assets that run inside a Lattice App's sandboxed frame - the app-agnostic bootstrap document, its loader, the in-frame lattice API, the kit stylesheet and fonts, and the frame protocol schema - plus AppKitProtocol, the protocol's .NET constants for a host that speaks it. It has no project dependencies; the Explorer serves its assets under appkit/v1/ from _content/Orleans.Lattice.Explorer.AppKit.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

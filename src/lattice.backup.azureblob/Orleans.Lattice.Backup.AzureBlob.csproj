@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Backup.AzureBlob</PackageId>
-    <Version>9.9.0</Version>
+    <Version>10.0.0</Version>
     <Description>Azure Blob Storage ILatticeBackupSink for Orleans.Lattice.Backup. Persists backup manifests as block blobs and backup artifacts as append blobs of length-framed chunks (one blob per capture's artifact) in an Azure Storage container, so backups are durable off-cluster. Registered through DI in place of the in-cluster default sink; the capture and restore engines stay unaware of Azure specifics.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

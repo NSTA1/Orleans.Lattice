@@ -68,7 +68,7 @@ FORM: Order diagram, candidate 7 of 7, seed a5e4ebc3. Staging: one proportional 
 6. [Dashboards](docs/lattice.dashboards/README.md) Bundled Grafana dashboards for the Lattice meters.
 7. [Troubleshooting](docs/lattice/troubleshooting.md) Symptom-driven diagnosis, starting from a `DiagnoseAsync` report.
 8. [Disaster recovery](docs/lattice.backup/disaster-recovery.md) Recovering backups after losing the cluster that took them.
-9. [Explorer console](docs/lattice.explorer/running-the-explorer.md) An auth-aware web console over the cluster's gRPC APIs, with capability-gated admin areas. <span class="lt-status">in progress</span>
+9. [Explorer console](docs/lattice.explorer/running-the-explorer.md) An auth-aware web console over the cluster's gRPC APIs, with capability-gated admin areas.
 
 </div>
 </div>
@@ -82,7 +82,7 @@ FORM: Order diagram, candidate 7 of 7, seed a5e4ebc3. Staging: one proportional 
 <p>One machine, no cloud account, no external services.</p>
 <ul>
 <li><a href="docs/lattice.storage.file/README.md">File write-ahead log</a></li>
-<li><a href="docs/lattice.explorer/running-the-explorer.md">Explorer console</a> <span class="lt-status">in progress</span></li>
+<li><a href="docs/lattice.explorer/running-the-explorer.md">Explorer console</a></li>
 <li><a href="docs/lattice.api.mcp/README.md">MCP server</a></li>
 </ul>
 </li>

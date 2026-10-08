@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Schema</PackageId>
-    <Version>9.9.0</Version>
+    <Version>10.0.0</Version>
     <Description>Schema add-on for Orleans.Lattice. Ships schema enforcement, envelope versioning, remediation dry-run and shadow-build support, accept-then-poll remediation, migration and compliance-scan operations, the LatticeSchemaPolicyValidator for previewing a policy against sample values, dead-letter models, and the LatticeValueTransform value-to-value transform IR with client-side translation, server-side JSON evaluation, and an ILatticeValueTransform DI escape hatch.</Description>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
   </PropertyGroup>

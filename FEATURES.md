@@ -19,7 +19,7 @@ reference it, and a host that does not register it is unaffected. See
 - [Identity and Security](#identity-and-security)
 - [Administration and Operations](#administration-and-operations)
   - [Operations](#operations)
-  - [Explorer console (in progress)](#explorer-console-in-progress)
+  - [Explorer console](#explorer-console)
 - [AI and MCP](#ai-and-mcp)
 - [Indexing, Search and Views](#indexing-search-and-views)
 - [Reliability and Formal Verification](#reliability-and-formal-verification)
@@ -108,9 +108,7 @@ Running a cluster: backup, autoscaling, the external and administration APIs, th
 | **Tenant metrics** | Time-series panels in the console over a backend-neutral telemetry facade. Every answer's tenant scope is derived on the server, never accepted from the caller, and a request that was narrowed is reported as narrowed rather than silently showing less. | [Telemetry API](docs/lattice.api.telemetry/README.md) | [sample](samples/Explorer/README.md) |
 | **Performance** | Approximate single-silo throughput and per-call latency for point reads, point writes, multi-key batches, and atomic sagas, measured against real Azure Tables, and how that throughput responds as a cluster grows from one to eight silos on Azure Container Apps. | [Performance: single-silo guide](docs/lattice/performance-single-silo.md) - [Performance: multi-silo scaling guide](docs/lattice/performance-multi-silo.md) | n/a |
 
-### Explorer console (in progress)
-
-**Status: in progress.** The Explorer is under active development. Its packages build, ship documentation and are usable, but its surface area and navigation are still moving; treat the rows below as a description of work in flight rather than a stable contract.
+### Explorer console
 
 | Feature | What it gives you | Docs | Sample |
 |---|---|---|---|
