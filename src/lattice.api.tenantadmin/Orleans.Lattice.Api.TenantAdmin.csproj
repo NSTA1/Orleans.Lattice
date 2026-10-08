@@ -23,7 +23,9 @@
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
     <ProjectReference Include="..\lattice.schema\Orleans.Lattice.Schema.csproj" />
+    <ProjectReference Include="..\lattice.replication\Orleans.Lattice.Replication.csproj" />
     <ProjectReference Include="..\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.2.2" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
   </ItemGroup>
 

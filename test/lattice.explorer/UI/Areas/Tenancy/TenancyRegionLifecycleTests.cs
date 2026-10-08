@@ -13,8 +13,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 public sealed class TenancyRegionLifecycleTests
 {
     [Test]
-    [TestCase(TenantRegionLifecycleStatus.Provisioning, "Not served here until it is Online. Nothing in Lattice advances an added region: a platform operator of the hosting deployment promotes it once the tenant's data is in place.")]
-    [TestCase(TenantRegionLifecycleStatus.Backfilling, "Not served here until it is Online. Lattice copies no data into an added region; the hosting deployment fills it in, and a platform operator promotes it.")]
+    [TestCase(TenantRegionLifecycleStatus.Provisioning, "Not served here until it is Online. The region automatically enters Backfilling, where configured replicated tenant trees are copied from an Online peer.")]
+    [TestCase(TenantRegionLifecycleStatus.Backfilling, "Not served here until it is Online. Lattice is copying the tenant's configured replicated trees; the region becomes Online only after every tree bootstrap and parked offline entry is verified.")]
     [TestCase(TenantRegionLifecycleStatus.Online, "Serves this tenant.")]
     [TestCase(TenantRegionLifecycleStatus.Draining, "Awaiting confirmation from this region: its silos complete the drain after observing the change in sys-tenant-registry. If it stays Draining, check that the region is running and registry replication works in both directions. This view cannot confirm whether the remote region has observed the change; it may still serve the tenant until it does.")]
     [TestCase(TenantRegionLifecycleStatus.Offline, "Drained; no longer serves this tenant.")]
@@ -44,8 +44,8 @@ public sealed class TenancyRegionLifecycleTests
     }
 
     [Test]
-    [TestCase(TenantRegionLifecycleStatus.Provisioning, 1, "Adding: Provisioning", "Next: Backfilling, when a platform operator of the hosting deployment promotes it.")]
-    [TestCase(TenantRegionLifecycleStatus.Backfilling, 2, "Adding: Backfilling", "Next: Online, when a platform operator of the hosting deployment promotes it.")]
+    [TestCase(TenantRegionLifecycleStatus.Provisioning, 1, "Adding: Provisioning", "Next: Backfilling, when local replication starts backfill automatically.")]
+    [TestCase(TenantRegionLifecycleStatus.Backfilling, 2, "Adding: Backfilling", "Next: Online, after each tenant tree is verified.")]
     [TestCase(TenantRegionLifecycleStatus.Draining, 1, "Removing: Draining", "Next: Offline, taken automatically by the region's own silos.")]
     [TestCase(TenantRegionLifecycleStatus.Offline, 2, "Removing: Offline", "Next: Removed, taken automatically by the region's own silos.")]
     public void A_transitional_stage_is_a_step_of_three_on_its_path_with_what_comes_next(TenantRegionLifecycleStatus status, int step, string phase, string next)
@@ -94,10 +94,10 @@ public sealed class TenancyRegionLifecycleTests
     }
 
     [Test]
-    public void A_tenant_waiting_on_a_promotion_is_served_nowhere_until_an_operator_promotes_one() =>
+    public void A_tenant_waiting_on_backfill_is_served_nowhere_until_replica_is_verified() =>
         Assert.That(
             TenancyFormat.ServedNowhereReason([Region("eu-west", TenantRegionLifecycleStatus.Provisioning)]),
-            Is.EqualTo("it has residency set and none of its regions is Online yet. It is served again once a platform operator of the hosting deployment promotes one to Online."));
+            Is.EqualTo("it has residency set and none of its regions is Online yet. It is served again after an added region's backfill is verified, or an operator explicitly acknowledges that its data is already in place."));
 
     [Test]
     public void A_plan_for_a_tenant_already_served_nowhere_does_not_stop_serving_it()
@@ -298,7 +298,7 @@ public sealed class TenancyRegionLifecycleTests
             Assert.That(plan.Preview, Is.EqualTo(new[]
             {
                 "eu-west starts draining, and stops being served there.",
-                "us-east joins the residency as Provisioning; it is served there once a platform operator promotes it to Online.",
+                "us-east joins the residency as Provisioning; it starts serving the tenant after automatic backfill is verified.",
             }));
             Assert.That(plan.NotOnlineAfter, Is.EqualTo(new[] { "us-east (added: starts Provisioning)" }));
             Assert.That(plan.LeavesNoOnlineRegion, Is.True);

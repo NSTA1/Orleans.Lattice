@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// Unit tests for <see cref="TenantAdminToolGroup"/> and its
 /// <c>AddTenantAdminTools</c> registration: proves the group belongs to the
 /// tenant-admin facade group, that it is empty until control is opted in and then
-/// exposes exactly the five lifecycle tools plus the three region-residency tools,
+/// exposes exactly the five lifecycle tools plus the four region-residency tools,
 /// that every mutating tool carries the destructive / non-read-only annotation
 /// while the region-status report is read-only, and that the registration wires
 /// the group and the option flags. This is the enable-gating surface of a
@@ -28,6 +28,7 @@ public sealed class TenantAdminToolGroupTests
         "lattice_tenant_authorize_regions",
         "lattice_tenant_set_residency",
         "lattice_tenant_region_status",
+        "lattice_tenant_advance_region",
     };
 
     /// <summary>
@@ -43,6 +44,7 @@ public sealed class TenantAdminToolGroupTests
         "lattice_tenant_set_quotas",
         "lattice_tenant_authorize_regions",
         "lattice_tenant_set_residency",
+        "lattice_tenant_advance_region",
     };
 
     private static TenantAdminToolGroup CreateGroup(bool enableControl)

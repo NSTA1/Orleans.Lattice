@@ -43,4 +43,9 @@ internal sealed class GrpcLatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
     public Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(
         string tenantId, CancellationToken cancellationToken = default)
         => _client.GetTenantRegionStatusAsync(tenantId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TenantRegionStatusReport> AdvanceRegionAsync(
+        string tenantId, string regionId, bool acknowledgeDataInPlace, CancellationToken cancellationToken = default)
+        => _client.AdvanceTenantRegionAsync(tenantId, regionId, acknowledgeDataInPlace, cancellationToken);
 }

@@ -1543,6 +1543,55 @@
       ]
     },
     {
+      "id": "advance-tenant-region",
+      "in_process": "ILatticeTenantRegionAdmin.AdvanceRegionAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/AdvanceTenantRegion",
+      "transport_scope": "both",
+      "request": "TenantAdminRegionSetRequest",
+      "response": "TenantRegionStatusReport",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Tenant or region id is invalid, or acknowledgeDataInPlace is false."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "Tenant does not exist."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The region cannot make a legal one-step lifecycle transition."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not a platform operator."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Region-residency facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Read the current region status before retrying; a repeated call may advance another legal lifecycle step.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "Each call advances one lifecycle step, so repeating a successful call may advance the region again.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Platform-operator-only and requires acknowledgement that data is already in place; it bypasses verified backfill. Normal region enablement backfills automatically.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
       "id": "authorize-allowed-regions",
       "in_process": "ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/AuthorizeAllowedRegions",

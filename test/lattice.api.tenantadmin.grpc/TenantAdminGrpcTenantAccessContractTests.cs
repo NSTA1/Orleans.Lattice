@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc.Tests;
 /// <summary>
 /// Pins the tenant-administration gRPC contract across the delegated tenant access
 /// epic (#4154): every pre-epic RPC keeps its name, full method path, request and
-/// response message; every pre-epic wire message keeps its alias and field layout;
+/// response message; every pre-epic wire message keeps its alias and field layout
+/// except the region-set request, whose new operator-override fields are append-only;
 /// the new RPCs are appended, never interleaved; and a <c>SetTenantQuotas</c>
 /// payload written by a pre-epic peer still reads, while the four delegated access
 /// caps now travel inside it.
@@ -67,7 +68,7 @@ public sealed class TenantAdminGrpcTenantAccessContractTests
         ("GetTenantAccessPosture", typeof(TenantAdminTenantRequest), typeof(TenantAccessPosture)),
     ];
 
-    // Every pre-epic wire message of the binding: alias and "[Id] Name" field layout.
+    // Every unchanged pre-epic wire message: alias and "[Id] Name" field layout.
     private static readonly (Type Type, string Alias, string[] Fields)[] PreEpicMessages =
     [
         (typeof(TenantAdminTenantRequest), "oitng.tenreq", ["0 TenantId"]),
@@ -79,7 +80,6 @@ public sealed class TenantAdminGrpcTenantAccessContractTests
         (typeof(TenantSelfCurrentRequest), "oitng.selfcur", []),
         (typeof(TenantSelfListRequest), "oitng.selflist", []),
         (typeof(TenantSelfDescriptorList), "oitng.selftdl", ["0 Tenants"]),
-        (typeof(TenantAdminRegionSetRequest), "oitng.rgnset", ["0 TenantId", "1 Regions"]),
         (typeof(TenantAdminSubjectRequest), "oitng.subjreq", ["0 TenantId", "1 SubjectId"]),
         (typeof(TenantAdminGrantRequest), "oitng.grntreq", ["0 GranterTenantId", "1 GranteeTenantId", "2 Scope"]),
         (typeof(TenantAdminGrantOfferRequest), "oitng.grntoff", ["0 GranterTenantId", "1 GranteeTenantId", "2 Scope", "3 Operations"]),
@@ -143,12 +143,27 @@ public sealed class TenantAdminGrpcTenantAccessContractTests
     }
 
     [Test]
-    public void The_service_exposes_exactly_the_pre_epic_rpcs_plus_the_tenant_access_rpcs()
+    public void The_service_exposes_exactly_the_pre_epic_and_added_rpcs()
     {
         var methods = Methods();
-        var expected = PreEpicRpcs.Select(r => r.Name).Concat(TenantAccessRpcs.Select(r => r.Name));
+        var expected = PreEpicRpcs.Select(r => r.Name)
+            .Concat(TenantAccessRpcs.Select(r => r.Name))
+            .Append("AdvanceTenantRegion");
 
         Assert.That(methods.Values.Select(m => m.Name), Is.EquivalentTo(expected));
+    }
+
+    [Test]
+    public void AdvanceTenantRegion_is_unary_and_uses_the_region_set_request_and_status_report()
+    {
+        var method = Methods()["AdvanceTenantRegion"];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(method.FullName, Is.EqualTo($"/{Svc}/AdvanceTenantRegion"));
+            Assert.That(method.Type, Is.EqualTo(MethodType.Unary));
+            Assert.That(MessageTypes(method), Is.EqualTo((typeof(TenantAdminRegionSetRequest), typeof(TenantRegionStatusReport))));
+        });
     }
 
     [Test]
@@ -188,6 +203,29 @@ public sealed class TenantAdminGrpcTenantAccessContractTests
     }
 
     [Test]
+    public void Region_advance_fields_are_appended_to_the_existing_region_set_request()
+    {
+        var type = typeof(TenantAdminRegionSetRequest);
+        var layout = type.GetProperties()
+            .Select(p => (Property: p, Id: p.GetCustomAttribute<IdAttribute>()))
+            .Where(x => x.Id is not null)
+            .OrderBy(x => x.Id!.Id)
+            .Select(x => $"{x.Id!.Id} {x.Property.Name}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(type.GetCustomAttribute<AliasAttribute>()!.Alias, Is.EqualTo("oitng.rgnset"));
+            Assert.That(layout, Is.EqualTo(new[]
+            {
+                "0 TenantId",
+                "1 Regions",
+                "2 RegionId",
+                "3 AcknowledgeDataInPlace",
+            }));
+        });
+    }
+
+    [Test]
     public void The_tenant_access_operations_are_appended_after_every_pre_epic_value()
     {
         Assert.Multiple(() =>
@@ -210,7 +248,8 @@ public sealed class TenantAdminGrpcTenantAccessContractTests
             Assert.That((int)LatticeTenantAdminApiOperation.ExplainTenantAccess, Is.EqualTo(33));
             Assert.That((int)LatticeTenantAdminApiOperation.GetTenantEffectivePermissions, Is.EqualTo(34));
             Assert.That((int)LatticeTenantAdminApiOperation.GetTenantAccessPosture, Is.EqualTo(35));
-            Assert.That(Enum.GetValues<LatticeTenantAdminApiOperation>(), Has.Length.EqualTo(36));
+            Assert.That((int)LatticeTenantAdminApiOperation.AdvanceTenantRegion, Is.EqualTo(36));
+            Assert.That(Enum.GetValues<LatticeTenantAdminApiOperation>(), Has.Length.EqualTo(37));
         });
     }
 

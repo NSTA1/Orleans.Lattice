@@ -181,6 +181,9 @@ public enum LatticeTenantAdminApiOperation
     /// disabled.
     /// </summary>
     GetTenantAccessPosture = 35,
+
+    /// <summary>The mutating operator-only <c>AdvanceTenantRegion</c> RPC.</summary>
+    AdvanceTenantRegion = 36,
 }
 
 /// <summary>

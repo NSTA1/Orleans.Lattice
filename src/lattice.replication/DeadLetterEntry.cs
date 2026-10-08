@@ -67,4 +67,11 @@ public readonly record struct DeadLetterEntry
     /// </summary>
     [Id(6)]
     public Guid? SourceLineage { get; init; }
+
+    /// <summary>
+    /// Stable machine-readable reason tag supplied by the apply pipeline. Older
+    /// serialized entries decode to <see langword="null"/>.
+    /// </summary>
+    [Id(7)]
+    public string? ReasonTag { get; init; }
 }

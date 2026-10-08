@@ -488,9 +488,7 @@ never suddenly throttles an existing workload.
   deliberately *not* refused here, because cross-tenant grants are real and only
   the gate can adjudicate them - the resolution layer cannot see grants, so it must
   not decide crossings.
-- **Apply-path admission bypass, never isolation bypass.** As in core, the
-  replication-apply and saga-apply paths bypass quota *admission* (they re-enter
-  under a foreign/prepared scope) but never bypass the tenant *isolation* boundary.
+- **Backfill admission bypass, not accounting or isolation bypass.** Replication-applied data does not consume tenant request-rate tokens or pass through client footprint-quota admission, because the originating write was already admitted and applying it under a target quota could prevent convergence. The receiver still enforces local enrollment and tenant residency (including Backfilling), so the bypass is not an isolation bypass. Usage metering samples every locally registered tenant tree regardless of lifecycle status; successful backfill therefore counts against the target region's local bytes, keys, memory, and tree-count usage and, under `GlobalConverged`, the summed global footprint. A landed sample can make subsequent client writes over quota, but cannot refuse or throttle the backfill itself. Backfill consumes shared storage, WAL, CPU, and network capacity and can contend with client work; bootstrap progress and failure/stall state remain visible rather than promoting a partial replica.
 
 ### Enforcement scope (multi-cluster)
 
@@ -695,44 +693,11 @@ that the remote region has stopped serving: a disconnected region may still hold
 than claiming a remote acknowledgment. A decommissioned region that never runs
 again cannot acknowledge the drain and remains `Draining`.
 
-**The add path needs an operator step.** No shipped component backfills a region a
-tenant is added to. While the tenant is not `Online` in a region, that region refuses
-and dead-letters every replicated write for it - including anything a backfill would
-apply, because dead-letter replay and snapshot re-seed go through the same gate - so
-an added region lacks whatever was written while it was not admitting the tenant, and
-cannot be filled in until it is `Online`. Promoting it automatically would declare an
-incomplete replica online without anyone deciding to, so nothing does: an added region
-stays at `Provisioning`, and a tenant whose residency has been set is served in no
-region until an operator advances one. Where the region was admitting the tenant's
-writes up to the add - residency being configured for the first time, so every region
-was admit-all until then - it misses at most the writes shipped since, and advancing
-it is enough. Otherwise advance it and then recover the gap: replay the region's
-dead-lettered writes for the tenant's trees (see the
-[dead-letter queue](../lattice.replication/dead-letter-queue.md)), or let the
-[anti-entropy digest probe](../lattice.replication/anti-entropy-digest-probe.md)
-repair it where that is enabled. Advance the region one step at a time,
-`Provisioning` -> `Backfilling` -> `Online`, from host code on a silo:
+**The add path advances automatically.** An operator first authorizes the region in the tenant's allowed set; then adding it to residency starts `Provisioning`. With the tenant-admin and replication packages registered, the local lifecycle driver moves it to `Backfilling`, seeds each configured tenant tree from an `Online` peer, replays parked tenant-offline entries, and moves it to `Online` only after each receiver bootstrap is live, unfenced, and has no remaining parked entries. A tenant with no data trees advances directly to `Online`, so its first residency does not take it offline. Until `Online`, client requests remain refused even though replication is admitted to fill the target.
 
-```csharp verify
-using Orleans.Lattice.Tenancy;
+The receiver's backfill applies bypass tenant footprint and request-rate **admission**: an existing write was already authorized at its source, and charging it against the target's client token bucket could deadlock convergence. This bypass does not exempt the data from accounting. Each region's metering cycle samples all locally registered `t/{tenant}/` trees regardless of residency status, so imported bytes, keys, memory, and tree count appear in that region's usage slot; `GlobalConverged` sums the per-region slots and therefore accounts for each physical replica. Once a metering sample lands, the resulting usage can refuse later client writes over quota. Backfill still consumes shared storage, WAL, CPU, and network capacity, so ordinary resource pressure can slow client traffic; bootstrap phase, applied-entry counts, read fencing, pending parked entries, and stall reasons are visible in the Replication and Tenancy residency views. A failed or incomplete bootstrap stays Backfilling and is never promoted based on elapsed time.
 
-// Advances a region one legal lifecycle step and returns its committed status.
-// Call it twice to take an added region from Provisioning to Online.
-static async Task<TenantRegionStatus> PromoteRegionAsync(
-    ITenantRegistry registry, TenantId tenant, string regionId, string clusterId, CancellationToken cancellationToken)
-{
-    var record = await registry.GetAsync(tenant, cancellationToken)
-        ?? throw new InvalidOperationException($"Tenant '{tenant}' is not registered.");
-
-    if (!record.TryPromoteRegionStatus(regionId, clusterId, out _))
-    {
-        return record.GetRegionStatus(regionId);
-    }
-
-    var committed = await registry.PutAsync(record, cancellationToken);
-    return committed.GetRegionStatus(regionId);
-}
-```
+`GetTenantRegionStatusAsync` reports lifecycle and per-tree progress. Explorer's Replication area shows the trees being reseeded and their applied-entry and parked-entry counts. The explicit `AdvanceRegionAsync` platform-operator verb is only an override for data placed in the region out of band: it advances one legal step at a time, requires an explicit data-in-place acknowledgement, and is not needed for automatic replication backfill. Adding a region to the allowed set alone does not imply that its data is present; adding it to residency starts the automatic work. If an operator uses the override, verify the target data independently before acknowledging it.
 
 `TenantRecord.TryPromoteRegionStatus` applies only the next legal step
 (`TenantRegionLifecycle.TryNextPromotion`) and is a no-op at `Online`, `Removed`, and

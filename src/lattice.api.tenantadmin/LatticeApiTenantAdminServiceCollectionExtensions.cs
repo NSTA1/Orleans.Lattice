@@ -1,9 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Replication;
 using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Api.TenantAdmin;
@@ -106,19 +108,20 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
 
         // T20 per-tenant region residency. The two-tier fail-closed authorizer
         // (operator authorizes the allowed set; tenant-admin sets residency within
-        // it), the region-residency control facade every transport binding adapts
-        // over, the single-step lifecycle driver, and the listener that uses it to
-        // complete the drain of this silo's own serving region automatically
-        // (issue #3897). The add path is deliberately not driven: nothing copies a
-        // tenant's existing data into an added region, so promoting it to Online is
-        // the operator step the tenancy documentation names. All are append-only
-        // siblings of the tenant-lifecycle facade above.
+        // it), the region-residency facade, the lifecycle driver, and hosted
+        // reconciliation for local add-path backfill and remove-path drain.
         builder.Services.TryAddSingleton(sp => new TenantRegionResidencyAuthorizer(
             sp.GetRequiredService<ILatticeAccessGate>(),
             sp.GetRequiredService<ITenantRegistry>(),
             sp.GetService<ILatticeMembershipContext>()));
-        builder.Services.TryAddSingleton<ILatticeTenantRegionAdmin, LatticeTenantRegionAdmin>();
         builder.Services.TryAddSingleton<TenantRegionLifecycleDriver>();
+        builder.Services.TryAddSingleton<TenantRegionBackfillService>();
+        builder.Services.TryAddSingleton<TenantRegionBackfillCoordinatorDispatcher>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, TenantRegionBackfillDiscoveryService>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ITenantRegionStatusChangeListener, TenantRegionBackfillStatusChangeListener>());
+        builder.Services.TryAddSingleton<ILatticeTenantRegionAdmin, LatticeTenantRegionAdmin>();
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ITenantRegionStatusChangeListener, TenantRegionDrainCompletionListener>());
 

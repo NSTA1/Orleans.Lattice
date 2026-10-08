@@ -16,10 +16,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// form - the visible control of the palette's create command - that can also
 /// set the new tenant's allowed regions and initial residency, and a "Set
 /// regions" picker, the visible control of the palette's set-regions command.
-/// Creating a tenant with a residency is confirmed, because its regions start
-/// Provisioning and the tenant is served nowhere until one is promoted to
-/// Online; each region step after the creation reports its own outcome. The
-/// active tenant is marked as current. A caller without operator standing is
+/// Initial residency is applied as part of creation without a second approval;
+/// the lifecycle advances automatically and the regions page reports each step.
+/// The active tenant is marked as current. A caller without operator standing is
 /// sent, replacing the history entry, to its own tenant's workspace.
 /// </summary>
 public partial class TenancyDirectoryPage
@@ -45,7 +44,6 @@ public partial class TenancyDirectoryPage
     private string? _allowedError;
     private string? _residencyError;
     private string? _formError;
-    private bool _confirmCreate;
     private string _pendingId = string.Empty;
     private IReadOnlyList<string> _pendingAdmins = [];
     private IReadOnlyList<string> _pendingAllowed = [];
@@ -304,24 +302,8 @@ public partial class TenancyDirectoryPage
         _pendingAdmins = [.. _newAdmins.Distinct(StringComparer.Ordinal)];
         _pendingAllowed = allowed;
         _pendingResidency = residency;
-        if (residency.Length > 0)
-        {
-            // A new tenant's residency starts Provisioning, so the tenant is served nowhere until one is promoted.
-            _createOpen = false;
-            _confirmCreate = true;
-            return;
-        }
-
         await CreateCoreAsync().ConfigureAwait(true);
     }
-
-    private void BackToCreate()
-    {
-        _confirmCreate = false;
-        _createOpen = true;
-    }
-
-    private Task CreateConfirmedAsync() => _saving ? Task.CompletedTask : CreateCoreAsync();
 
     private async Task CreateCoreAsync()
     {
@@ -345,7 +327,7 @@ public partial class TenancyDirectoryPage
             }
 
             _saving = false;
-            BackToCreate();
+            _createOpen = true;
             return;
         }
         catch
@@ -353,9 +335,8 @@ public partial class TenancyDirectoryPage
             _saving = false;
             throw;
         }
-
         _createOpen = false;
-        _confirmCreate = false;
+        _createOpen = false;
         Catalog.Invalidate();
         Suggestions.InvalidateTenants();
         var seeded = created.AdminSubjects.Count == 0 ? "with no admin subject" : "administered by " + string.Join(", ", created.AdminSubjects);
@@ -414,4 +395,3 @@ public partial class TenancyDirectoryPage
         }
     }
 }
-

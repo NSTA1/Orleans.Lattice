@@ -17,8 +17,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 public sealed partial class TenancyRegionsTests
 {
     [Test]
-    [TestCase(TenantRegionLifecycleStatus.Provisioning, "Adding: Provisioning", "Step 1 of 3", "Next: Backfilling, when a platform operator of the hosting deployment promotes it.")]
-    [TestCase(TenantRegionLifecycleStatus.Backfilling, "Adding: Backfilling", "Step 2 of 3", "Next: Online, when a platform operator of the hosting deployment promotes it.")]
+    [TestCase(TenantRegionLifecycleStatus.Provisioning, "Adding: Provisioning", "Step 1 of 3", "Next: Backfilling, when local replication starts backfill automatically.")]
+    [TestCase(TenantRegionLifecycleStatus.Backfilling, "Adding: Backfilling", "Step 2 of 3", "Next: Online, after each tenant tree is verified.")]
     [TestCase(TenantRegionLifecycleStatus.Draining, "Removing: Draining", "Step 1 of 3", "Next: Offline, taken automatically by the region's own silos.")]
     [TestCase(TenantRegionLifecycleStatus.Offline, "Removing: Offline", "Step 2 of 3", "Next: Removed, taken automatically by the region's own silos.")]
     public void A_transitional_region_shows_the_step_it_has_reached_on_its_path(TenantRegionLifecycleStatus status, string phase, string figure, string next)

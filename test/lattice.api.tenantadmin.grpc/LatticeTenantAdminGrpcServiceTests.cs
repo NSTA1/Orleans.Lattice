@@ -302,6 +302,24 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             Assert.That(report.Regions[0].RegionId, Is.EqualTo("eu-west"));
             Assert.That(report.Regions[0].Status, Is.EqualTo(TenantRegionLifecycleStatus.Online));
             Assert.That(report.Regions[0].IsAllowed, Is.True);
+            Assert.That(report.Regions[0].BackfillProgress!.Phase, Is.EqualTo("Running"));
+            Assert.That(report.Regions[0].BackfillProgress!.StallReason, Is.EqualTo("Waiting for receiver bootstrap."));
+            Assert.That(report.Regions[0].BackfillProgress!.Trees[0].TreeId, Is.EqualTo("t/acme/orders"));
+            Assert.That(report.Regions[0].BackfillProgress!.Trees[0].EntriesApplied, Is.EqualTo(42));
+        });
+    }
+
+    [Test]
+    public async Task AdvanceTenantRegion_round_trips_region_and_data_in_place_acknowledgement()
+    {
+        var report = await _client.AdvanceTenantRegionAsync("acme", "eu-west", acknowledgeDataInPlace: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_regionAdmin.LastTenantId, Is.EqualTo("acme"));
+            Assert.That(_regionAdmin.LastAdvancedRegionId, Is.EqualTo("eu-west"));
+            Assert.That(_regionAdmin.LastAcknowledgedDataInPlace, Is.True);
+            Assert.That(report.Regions[0].Status, Is.EqualTo(TenantRegionLifecycleStatus.Online));
         });
     }
 
@@ -355,6 +373,14 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             Assert.That(async () => await _client.GetTenantRegionStatusAsync(null!),
                 Throws.InstanceOf<ArgumentException>());
             Assert.That(async () => await _client.GetTenantRegionStatusAsync(string.Empty),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.AdvanceTenantRegionAsync(null!, "eu-west", true),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.AdvanceTenantRegionAsync(string.Empty, "eu-west", true),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.AdvanceTenantRegionAsync("acme", null!, true),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.AdvanceTenantRegionAsync("acme", string.Empty, true),
                 Throws.InstanceOf<ArgumentException>());
         });
     }

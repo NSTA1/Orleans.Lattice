@@ -1,9 +1,13 @@
 using Bunit;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Replication;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Transport;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using static Orleans.Lattice.Explorer.Tests.UI.Areas.Replication.ReplicationTestData;
+using NSubstitute;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Replication;
 
@@ -374,6 +378,111 @@ public sealed class ReplicationEstatePageTests : ReplicationTestContext
             Assert.That(cut.FindAll(".lt-replication-sections__link")[1].GetAttribute("href"), Is.EqualTo("t/acme/replication/trees"));
             Assert.That(cut.Find(".lt-replication-map__peer-link").GetAttribute("href"), Is.EqualTo("t/acme/replication?region=ap-south"));
         });
+    }
+
+    [Test]
+    public void It_shows_per_tree_tenant_backfill_progress_when_tenancy_is_registered()
+    {
+        UseTenantBackfillProgress();
+
+        var cut = RenderAt<ReplicationEstatePage>("t/acme/replication", tenancy: true);
+
+        cut.WaitUntil(() =>
+        {
+            var section = cut.Find("#tenant-backfill-heading");
+            Assert.That(section.TextContent, Is.EqualTo("Tenant backfill"));
+            var progress = cut.Find("section[aria-labelledby='tenant-backfill-heading'] table.lt-table");
+            Assert.That(progress.TextContent, Does.Contain("t/acme/orders")
+                .And.Contain("east")
+                .And.Contain("ApplyingSnapshot")
+                .And.Contain("12")
+                .And.Contain("2")
+                .And.Contain("Yes"));
+            Assert.That(cut.Find(".lt-replication-note").TextContent, Does.Contain("Waiting for source region east."));
+        });
+    }
+
+    [Test]
+    public void Compact_tenant_backfill_rows_open_the_full_progress_details()
+    {
+        UseTenantBackfillProgress();
+
+        var cut = RenderAt<ReplicationEstatePage>("t/acme/replication", LtBreakpoint.Compact, tenancy: true);
+
+        cut.WaitUntil(() =>
+        {
+            var section = cut.Find("section[aria-labelledby='tenant-backfill-heading']");
+            Assert.That(section.QuerySelectorAll(".lt-table-list__open"), Has.Count.EqualTo(1));
+            Assert.That(section.QuerySelectorAll("table.lt-table"), Is.Empty);
+            Assert.That(section.QuerySelector(".lt-table-list__open")!.TextContent, Does.Contain("t/acme/orders")
+                .And.Contain("ApplyingSnapshot")
+                .And.Contain("12 entries applied")
+                .And.Contain("2 parked")
+                .And.Contain("source east"));
+        });
+
+        cut.Find("section[aria-labelledby='tenant-backfill-heading'] .lt-table-list__open").Click();
+
+        cut.WaitUntil(() =>
+        {
+            var detail = cut.Find(".lt-dialog");
+            Assert.That(detail.TextContent, Does.Contain("Source region").And.Contain("east")
+                .And.Contain("Read fenced").And.Contain("Yes"));
+        });
+    }
+
+    [Test]
+    public void It_hides_tenant_backfill_progress_when_tenancy_is_not_registered()
+    {
+        UseEstate();
+
+        var cut = RenderAt<ReplicationEstatePage>("replication");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("#tenant-backfill-heading"), Is.Empty);
+        });
+    }
+
+    private void UseTenantBackfillProgress()
+    {
+        UseTenancy("acme");
+        Services.AddSingleton<Orleans.Lattice.Explorer.Core.Connection.ILatticeActiveTenantProvider>(
+            new Orleans.Lattice.Explorer.Tests.Connection.FakeActiveTenantProvider("acme"));
+        UseEstate();
+        var regionAdmin = Substitute.For<ILatticeTenantRegionAdmin>();
+        regionAdmin.GetTenantRegionStatusAsync("acme", Arg.Any<CancellationToken>())
+            .Returns(new TenantRegionStatusReport
+            {
+                TenantId = "acme",
+                Regions =
+                [
+                    new TenantRegionStatusDescriptor
+                    {
+                        RegionId = "eu-west",
+                        Status = TenantRegionLifecycleStatus.Backfilling,
+                        IsAllowed = true,
+                        BackfillProgress = new TenantRegionBackfillProgress
+                        {
+                            Phase = "Blocked",
+                            StallReason = "Waiting for source region east.",
+                            Trees =
+                            [
+                                new TenantRegionBackfillTreeProgress
+                                {
+                                    TreeId = "t/acme/orders",
+                                    SourceClusterId = "east",
+                                    Phase = "ApplyingSnapshot",
+                                    EntriesApplied = 12,
+                                    PendingDeadLetters = 2,
+                                    ReadFenced = true,
+                                },
+                            ],
+                        },
+                    },
+                ],
+            });
+        Services.AddKeyedSingleton(ShellFacades.Key, regionAdmin);
     }
 
     [Test]

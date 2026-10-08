@@ -54,6 +54,7 @@ internal static class TenantSelfAwarenessToolMappings
                 RegionId = row.RegionId,
                 Status = row.Status.ToString(),
                 IsAllowed = row.IsAllowed,
+                BackfillProgress = row.BackfillProgress,
             };
         }
 

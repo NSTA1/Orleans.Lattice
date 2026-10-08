@@ -153,6 +153,7 @@ internal sealed class ReplicationDeadLetterGrain(
                 EnqueuedAtTicks = enqueuedAtTicks,
                 SourceLineageClusterId = sourceLineage?.SourceClusterId,
                 SourceLineage = sourceLineage?.Lineage,
+                ReasonTag = reasonTag,
             }),
             capacity: null,
             cancellationToken).ConfigureAwait(true);
