@@ -114,21 +114,6 @@ else
     }
 </LtDialog>
 
-<LtDialog Open="_confirmCreate" OpenChanged="@(open => { if (!open) BackToCreate(); })" Title="@($"Create tenant {_pendingId} with no Online region?")" Alert="true" Placement="DialogPlacement">
-    <p>
-        Tenant <code class="lt-tenancy-mono">@_pendingId</code> will be resident in <code class="lt-tenancy-mono">@TenancyFormat.RegionList(_pendingResidency)</code>.
-        Each region starts Provisioning and stays there until a platform operator of the hosting deployment promotes it.
-    </p>
-    <p class="lt-tenancy-consequence">
-        A tenant with residency is served only in Online regions, so <code class="lt-tenancy-mono">@_pendingId</code> is not served anywhere until then.
-        Leave the residency empty to serve it in every region.
-    </p>
-    <div class="lt-dialog__actions">
-        <LtButton Variant="LtButtonVariant.Quiet" OnClick="BackToCreate" Disabled="_saving">Back</LtButton>
-        <LtButton OnClick="CreateConfirmedAsync" Disabled="_saving">Create tenant</LtButton>
-    </div>
-</LtDialog>
-
 <LtDialog Open="_setRegionsOpen" OpenChanged="@(open => _setRegionsOpen = open)" Title="Set a tenant's regions" Placement="DialogPlacement"
           Description="Choose the tenant whose allowed regions and residency to set.">
     @if (_setRegionsOpen)

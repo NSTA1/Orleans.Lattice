@@ -20,10 +20,22 @@ internal static class ReplicationLinkHealthClassifier
     /// <param name="options">The thresholds. Must not be <see langword="null"/>.</param>
     /// <returns>The derived health.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
-    public static ReplicationLinkHealth Classify(in ReplicationPeerStatusRow row, LatticeReplicationStatusOptions options)
+    public static ReplicationLinkHealth Classify(in ReplicationPeerStatusRow row, LatticeReplicationStatusOptions options) =>
+        Classify(in row, options, out _);
+
+    /// <summary>Classifies the link and returns the specific blocking cause, when stalled.</summary>
+    /// <param name="row">The link's telemetry row.</param>
+    /// <param name="options">The thresholds. Must not be <see langword="null"/>.</param>
+    /// <param name="stallReason">The re-seed or dead-letter cause, or <see langword="null"/>.</param>
+    /// <returns>The derived health.</returns>
+    public static ReplicationLinkHealth Classify(
+        in ReplicationPeerStatusRow row,
+        LatticeReplicationStatusOptions options,
+        out ReplicationLinkStallReason? stallReason)
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        stallReason = null;
         var contacted = !double.IsNaN(row.LastContactSeconds);
         var worst = ReplicationLinkHealth.Healthy;
 
@@ -50,6 +62,7 @@ internal static class ReplicationLinkHealthClassifier
         // shipped receives no saga records until it is re-seeded (#4534).
         if (row.ReseedRequiredSeconds is not null)
         {
+            stallReason = ReplicationLinkStallReason.ReseedRequired;
             return ReplicationLinkHealth.Stalled;
         }
 
@@ -58,6 +71,7 @@ internal static class ReplicationLinkHealthClassifier
         // the queue (#4603).
         if (row.DeadLetterFullSeconds is not null)
         {
+            stallReason = ReplicationLinkStallReason.DeadLetterQueueFull;
             return ReplicationLinkHealth.Stalled;
         }
 

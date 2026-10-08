@@ -69,14 +69,18 @@ internal sealed class LatticeBackupReplicatedSinkStartupValidator(
         {
             foreach (var treeId in membership.ReplicatedTrees)
             {
+                var remediation = string.Equals(treeId, "sys-tenant-registry", StringComparison.Ordinal)
+                    ? ". The tenant registry is enrolled automatically by tenancy when replication is registered, "
+                        + "so its shared sink is required even when no user trees are replicated."
+                    : ", or remove this tree from the replicated set.";
                 throw new InvalidOperationException(
                     $"Tree '{treeId}' participates in the cross-cluster replication set but the "
                     + $"backup sink resolved to the default in-cluster {nameof(InClusterLatticeBackupSink)}. "
                     + "A replicated tree must be backed by a shared external sink reachable by every "
                     + "cluster so a backup captured on one cluster is resolvable and extendable from the "
                     + $"others. Register a shared external {nameof(ILatticeBackupSink)} implementation "
-                    + "(for example a durable off-cluster provider) before AddLatticeBackup, or remove "
-                    + "this tree from the replicated set.");
+                    + "(for example a durable off-cluster provider) before AddLatticeBackup"
+                    + remediation);
             }
         }
 

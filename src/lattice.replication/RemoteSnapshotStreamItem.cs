@@ -47,11 +47,22 @@ public readonly record struct RemoteSnapshotStreamItem
 
     /// <summary>
     /// On the trailer, the sibling boundaries the export captured at its end
-    /// (issue #4684): per tree the source replicates, other than the exported
-    /// one. Present only on an export served under the cross-tree hold.
+    /// (issue #4684). A provider with complete participant metadata includes
+    /// only other trees named by cross-tree operations represented in the
+    /// snapshot; a provider without that guarantee conservatively includes every
+    /// enrolled tree. Present only on an export served under the cross-tree hold.
     /// </summary>
     [Id(3)] internal System.Collections.Immutable.ImmutableDictionary<string, CrossTreeSiblingBoundary>? SiblingBoundaries { get; init; }
 
+    /// <summary>
+    /// On the trailer, the exported tree's own boundary captured at the export's
+    /// end (issue #4524): its physical write-ahead log and every partition's
+    /// next sequence. A receiver retires the saga decision rows the export
+    /// carried once its shipper has vouched acknowledged positions at or past
+    /// every tail; absent (a source that predates it), the rows are retained.
+    /// </summary>
+    [Id(4)] internal CrossTreeSiblingBoundary? ExportBoundary { get; init; }
+
     /// <summary>Whether this item is the trailer rather than an entry.</summary>
-    internal bool IsTrailer => CloseGeneration is not null || SiblingBoundaries is not null;
+    internal bool IsTrailer => CloseGeneration is not null || SiblingBoundaries is not null || ExportBoundary is not null;
 }

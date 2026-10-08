@@ -122,6 +122,35 @@ public sealed class LtTableCompactTests : ShellDesignTestContext
     }
 
     [Test]
+    public void An_open_detail_tracks_a_replaced_row_with_the_same_key()
+    {
+        var cut = RenderOrders(LtBreakpoint.Compact, table => table
+            .Add(x => x.DetailActions, order => builder => builder.AddContent(0, "Act on " + order.Status)));
+        cut.FindAll(".lt-table-list__open")[1].Click();
+        IReadOnlyList<Order> updated = [Orders[1] with { Status = "shipped" }, Orders[0], Orders[2]];
+
+        cut.Render(p => p.Add(x => x.Items, updated));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find("[role=dialog] h2").TextContent, Is.EqualTo(Orders[1].Key));
+            Assert.That(cut.FindAll("[role=dialog] .lt-dl__value")[1].TextContent, Is.EqualTo("shipped"));
+            Assert.That(cut.Find("[role=dialog] .lt-dialog__actions").TextContent, Is.EqualTo("Act on shipped"));
+        });
+    }
+
+    [Test]
+    public void Removing_the_open_row_closes_its_detail_instead_of_showing_stale_data()
+    {
+        var cut = RenderOrders(LtBreakpoint.Compact);
+        cut.FindAll(".lt-table-list__open")[1].Click();
+
+        cut.Render(p => p.Add(x => x.Items, new[] { Orders[0], Orders[2] }));
+
+        Assert.That(cut.FindAll("[role=dialog]"), Is.Empty);
+    }
+
+    [Test]
     public void Closing_the_sheet_returns_focus_to_its_row()
     {
         var cut = RenderOrders(LtBreakpoint.Compact);

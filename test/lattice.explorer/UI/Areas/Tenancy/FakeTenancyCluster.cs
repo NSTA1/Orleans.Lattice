@@ -372,6 +372,30 @@ internal sealed class FakeTenancyCluster :
         return new TenantRegionStatusReport { TenantId = tenantId, Regions = [.. Find(tenantId).Regions] };
     }
 
+    /// <inheritdoc />
+    public async Task<TenantRegionStatusReport> AdvanceRegionAsync(
+        string tenantId,
+        string regionId,
+        bool acknowledgeDataInPlace,
+        CancellationToken cancellationToken = default)
+    {
+        await EnterAsync(nameof(AdvanceRegionAsync));
+        if (!acknowledgeDataInPlace)
+        {
+            throw new InvalidOperationException("Data-in-place acknowledgement is required.");
+        }
+
+        var tenant = Find(tenantId);
+        var index = tenant.Regions.FindIndex(region => string.Equals(region.RegionId, regionId, StringComparison.Ordinal));
+        if (index < 0 || tenant.Regions[index].Status != TenantRegionLifecycleStatus.Backfilling)
+        {
+            throw new InvalidOperationException("Only a Backfilling region can be advanced.");
+        }
+
+        tenant.Regions[index] = tenant.Regions[index] with { Status = TenantRegionLifecycleStatus.Online };
+        return new TenantRegionStatusReport { TenantId = tenantId, Regions = [.. tenant.Regions] };
+    }
+
     // ILatticeTenantQuotaUsage
 
     /// <inheritdoc />

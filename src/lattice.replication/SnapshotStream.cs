@@ -82,6 +82,22 @@ public sealed class SnapshotStream
     internal System.Collections.Immutable.ImmutableDictionary<string, CrossTreeSiblingBoundary>? SiblingBoundaries { get; set; }
 
     /// <summary>
+    /// Whether this provider includes complete cross-tree participant
+    /// metadata on every snapshot row that represents a cross-tree operation.
+    /// Providers that cannot make this guarantee retain the conservative
+    /// enrollment-wide sibling-boundary behavior.
+    /// </summary>
+    internal bool CrossTreeParticipantsComplete { get; init; }
+
+    /// <summary>
+    /// The exported tree's own boundary the source captured at the export's end
+    /// (issue #4524), set once the stream is drained; <see langword="null"/> from
+    /// a source that predates it, in which case the imported saga decision rows
+    /// are never retired.
+    /// </summary>
+    internal CrossTreeSiblingBoundary? ExportBoundary { get; set; }
+
+    /// <summary>
     /// The same frontier as read when the export opened, before any entry is
     /// enumerated (issue #4586 part 2b), so a receiver can put its bootstrap drop
     /// floor in force before the drain applies anything. Its own-origin entry is

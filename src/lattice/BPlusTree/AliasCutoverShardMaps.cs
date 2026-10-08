@@ -355,7 +355,7 @@ internal static class AliasCutoverShardMaps
     /// Nothing is written for the logical id's own shards (the logical row now
     /// describes the new copy) or when the entry already matches.
     /// </summary>
-    private static async Task StampReplacedCopyAsync(
+    internal static async Task StampReplacedCopyAsync(
         ILatticeRegistry registry,
         string logicalTreeId,
         string replacedPhysicalTreeId,
@@ -430,7 +430,7 @@ internal static class AliasCutoverShardMaps
     /// <paramref name="map"/>, any redirect of traffic routed through
     /// <paramref name="logicalTreeId"/>: the logical id now resolves to that tree.
     /// </summary>
-    private static async Task ReleaseRedirectsAsync(
+    internal static async Task ReleaseRedirectsAsync(
         IGrainFactory grainFactory,
         string physicalTreeId,
         ShardMap map,

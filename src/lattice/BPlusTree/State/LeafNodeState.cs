@@ -68,7 +68,10 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     // reserved - never reuse it, because doing so would silently shadow
     // pre-step-6 persisted state during a rolling upgrade.
 
-    /// <summary>Grain identity of the right sibling leaf (for range scans), or <c>null</c>.</summary>
+    /// <summary>
+    /// Grain identity of the right sibling leaf (for range scans), or <c>null</c>.
+    /// A split publishes this link only after the sibling's birth row is durable.
+    /// </summary>
     [Id(1)] public GrainId? NextSibling { get; set; }
 
     /// <summary>Monotonic split lifecycle state.</summary>
@@ -104,8 +107,8 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     [Id(10)] public VersionVector LastCompactionVersion { get; set; } = new();
 
     /// <summary>
-    /// During a split, the previous value of <see cref="NextSibling"/> before it was
-    /// overwritten with the new sibling. Persisted in Phase 1 so that
+    /// During a split, the previous value of <see cref="NextSibling"/> before the
+    /// new sibling is born and spliced into the chain. Persisted in Phase 1 so that
     /// <see cref="BPlusTree.Grains.BPlusLeafGrain.CompleteSplitAsync"/> can link the
     /// new sibling into the doubly-linked list even after a crash-recovery.
     /// </summary>

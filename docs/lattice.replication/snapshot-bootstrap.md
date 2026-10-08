@@ -562,7 +562,7 @@ See [Auto-Bootstrap](auto-bootstrap.md).
 | Type | Shape | Purpose |
 |------|-------|---------|
 | `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
-| `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` plus `ReadFenced`, `EntriesApplied` and `RedriveAttempts` | Observable status snapshot returned by `GetStatusAsync`; carries the phase, the in-flight source cluster id (or `null` when no bootstrap is in flight), whether the tree's reads are fenced, how many snapshot entries the current drain attempt has applied, and how many times a failed bootstrap has been re-driven (see [Read fence during the drain](#read-fence-during-the-drain)). Answered while a drain runs. |
+| `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` plus `ReadFenced`, `EntriesApplied` and `RedriveAttempts` | Observable status snapshot returned by `GetStatusAsync`; carries the phase, the in-flight source cluster id (or `null` when no bootstrap is in flight), whether a legacy import's reads are fenced (fresh shadow imports remain readable), how many snapshot entries the current drain attempt has applied, and how many times a failed bootstrap has been re-driven (see [Read fence during the drain](#read-fence-during-the-drain)). Answered while a drain runs. |
 | `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public facade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
 | `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, `LatticeTreeBootstrappingException` (the source tree is itself mid-bootstrap), Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
 
@@ -578,7 +578,9 @@ Idle
 Any state -> Failed         (any thrown exception; restart is a fresh BootstrapAsync call)
 
 Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
-                              through an import; the tree stays read-fenced)
+                              through a legacy in-place import; its read fence stays armed)
+Failed -> IncrementalHandoff (automatic retry after a shadow copy was published
+                              but the completion write failed)
 ```
 
 ### Semantics
@@ -631,7 +633,7 @@ Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
   that failed before applying any snapshot entry tears the pump down,
   and a subsequent `BootstrapAsync` call restarts the cycle from
   `RequestingSnapshot`. A drain that failed part-way through an import
-  keeps the tree read-fenced and is re-driven automatically instead
+  keeps the read fence only for persisted legacy in-place imports; fresh shadow imports discard the copy and remain readable until explicitly restarted
   (see [Read fence during the drain](#read-fence-during-the-drain)).
 - **Bounded retry on transient transport faults.** When the
   snapshot drain throws an exception classified as transient by
@@ -663,8 +665,8 @@ Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
   its clock into the handoff seal, and fails the attempt. The deferral
   consumes a slot of the same `BootstrapTransientRetry` budget whatever the
   classifier says, and each retry re-opens the full export; once the budget
-  is spent the bootstrap fails with the import started, so the tree stays
-  read-fenced and is re-driven until a drain applies every entry. The
+  is spent the bootstrap fails with the import started, so fresh shadow attempts discard the copy and keep the original readable; persisted legacy in-place imports stay
+  read-fenced and are re-driven until a drain applies every entry. The
   handoff is never pinned past a deferred entry
   ([#4604](https://github.com/NSTA1/Orleans.Lattice/issues/4604)).
 - **Source HLC + origin preservation.** Every snapshot entry is
@@ -773,97 +775,91 @@ Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
 
 ### Read fence during the drain
 
-The drain applies the export one row at a time. A committed atomic batch
-arrives as independent committed rows: once its terminal has drained at
-the source, nothing in the export identifies the rows as one saga. A reader
-part-way through the drain could therefore see some of a batch's keys
-post-batch and the rest pre-batch, or absent (issue #4526). To prevent that,
-the coordinator **fences the tree's reads for the whole drain**:
+A fresh bootstrap imports into a held shadow copy instead of applying snapshot
+rows to the tree readers currently use. The receiver's original tree remains
+readable throughout the drain, and concurrent receiver writes continue to be
+mirrored to the shadow. Once the snapshot, reconciliation and incremental
+handoff are complete, the coordinator releases the hold and uses the existing
+resize alias-cutover path to publish the imported copy. Readers therefore see
+the complete original tree before cutover or the complete imported tree
+after it, never a row-by-row mixture.
 
-1. Before it applies the first entry, it arms a durable read fence on every
-   shard of the copy the tree routes to.
-2. While the fence is up, every read of the tree is refused with
-   `LatticeTreeBootstrappingException`. Readers are therefore either refused
-   or see the whole import, never part of it.
-3. After the last entry is applied, it lifts the fence on every shard, and
-   the import becomes visible at once.
+If a fresh shadow import fails before cutover, the coordinator aborts the held
+copy. The original remains readable and unchanged; a later `BootstrapAsync`
+call starts a fresh attempt. `ReadFenced` remains false during this path, and
+readers do not receive `LatticeTreeBootstrappingException` just because a fresh
+snapshot is being imported.
 
-**What is refused.**
+**Persisted legacy in-place imports.** A coordinator state written by an older
+version may already have `ReadFenceArmed` set. Recovery keeps that durable
+fence until the import completes, so those legacy readers still receive
+`LatticeTreeBootstrappingException` rather than seeing a partial import. This
+is also the state in which the operator override below applies. It does not
+apply to a fresh shadow-copy failure.
 
-- Point and multi-key reads, existence checks, counts, and key and entry
-  scans.
-- The read-modify-write verbs whose outcome depends on the current value:
-  `GetOrSetAsync`, version-conditional writes, and predicate writes.
-- The snapshot baseline capture that backups and snapshot cursors are built
-  from.
+For a legacy fenced import, the fence covers every shard of the routed copy:
 
-**What still applies.** Plain writes, deletes, range deletes, replication
-applies (the drain itself, and live incremental replication from any
-peer), saga prepares and terminals, and maintenance. Live replication
-interleaved with the drain becomes visible at the lift, with the import.
+- Point and multi-key reads, existence checks, counts, and key and entry scans
+  are refused.
+- Read-modify-write verbs whose outcome depends on the current value, such as
+  `GetOrSetAsync`, version-conditional writes and predicate writes, are refused.
+- Snapshot baseline capture for backups and snapshot cursors is refused.
+- Plain writes, deletes, range deletes, replication applies, saga prepares and
+  terminals, and maintenance still apply. Live replication interleaved with
+  the import becomes visible when the fence lifts.
 
-`LatticeTreeBootstrappingException` derives directly from `Exception`
-and carries the refused `TreeId`. It is **transient**: back off and retry.
-The gRPC data and state APIs map it to `StatusCode.Unavailable`.
+`LatticeTreeBootstrappingException` derives directly from `Exception` and
+carries the refused `TreeId`. It is transient: back off and retry. The gRPC
+data and state APIs map it to `StatusCode.Unavailable`.
 
-**How long it lasts.** The fence lasts for the duration of the drain,
-which is roughly proportional to the size of the tree. On a fresh receiver
-the tree holds nothing worth reading yet. On an **in-place re-bootstrap**,
-where a receiver that fell off the log re-bootstraps over its existing
-copy, a tree that was readable becomes **unreadable for the whole drain**.
-That trade-off is deliberate: a correct, retryable refusal is better than
-a torn read. A bootstrap into a shadow copy that keeps the receiver
-readable is tracked as #4567.
+**Watching a drain.** `ILatticeBootstrapCoordinator.GetStatusAsync` answers
+while a drain runs. Its `ReadFenced` field is false for a fresh shadow import
+and reports a fence recovered from legacy state; `EntriesApplied` reports the
+current attempt's progress, and `RedriveAttempts` counts automatic re-drives
+of legacy in-place imports and post-cutover shadow handoffs.
 
-**Watching a drain.** `ILatticeBootstrapCoordinator.GetStatusAsync`
-answers while a drain runs. Its `ReadFenced` field reports the fence,
-`EntriesApplied` reports the current attempt's progress, and
-`RedriveAttempts` counts automatic re-drives.
+**Migrations, resizes and undos are held.** The shadow copy uses the resize
+coordinator, so another migration, resize or undo cannot race its ownership
+transition. A legacy fence also covers the shards that existed when it was
+armed, so nothing may move the tree off them while it is up:
 
-**Migrations, resizes and undos are held.** The fence covers the shards
-that existed when it was armed, so nothing may move the tree off them
-while it is up:
-
-- A fenced shard refuses to open a split or consolidation, so a reshard
-  made of them is refused too.
+- A fenced shard refuses to open a split or consolidation, so a reshard made
+  of them is refused too.
 - A resize of a fenced tree is refused, and so is an undo of a completed
   resize.
-- If the coordinator finds a migration, resize or undo already in
-  progress, it waits for it before draining, re-checking every tick. While
-  it waits, it lifts a fence that hides no partial import.
+- If the coordinator finds a migration, resize or undo already in progress,
+  it waits for it before draining, re-checking every tick.
 
-Each side publishes its own state before reading the other's: the fence
-first, or the migration record or resize intent first. Whichever of two
-racing starts reads second therefore sees the first. A probe that cannot
-answer counts as a hold.
+Each side publishes its own state before reading the other's: the shadow hold,
+or the migration record or resize intent, is visible before the competing
+operation proceeds. A probe that cannot answer counts as a hold.
 
-**A failed drain keeps the fence.** A drain that fails after applying part
-of an import leaves the tree holding that partial import, so the fence stays
-up. The bootstrap stays in progress, reports `Failed`, and is **re-driven
-automatically**: it re-exports and re-drains the whole snapshot, with a
-backoff that starts at 5 seconds and doubles to a 5-minute cap. The fence
-lifts when a drain completes. A bootstrap from a different source cluster
-may take over a failed, fenced one. A drain that fails before applying any
-entry lifts the fence and fails as before. If that lift itself fails, the
-fence is kept and the bootstrap re-driven instead, so a fence is never left
-up with no coordinator to lift it.
+**A failed legacy drain keeps the fence.** If recovery of a persisted
+in-place import fails after applying part of the import, the fence stays up and
+the coordinator re-drives the snapshot with a backoff that starts at 5 seconds
+and doubles to a 5-minute cap. The fence lifts when a drain completes. A
+bootstrap from a different source cluster may take over a failed, fenced one.
+A legacy drain that fails before applying any entry lifts the fence and fails
+as before. If that lift itself fails, the fence is kept and the bootstrap is
+re-driven instead, so a fence is never left up with no coordinator to lift it.
+A failed fresh shadow import follows the discard-and-restart behavior above,
+not this legacy re-drive path.
 
-**Operator override.**
+**Operator override for legacy state.**
 `ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync(treeName, reason)`
-lifts the fence a failed bootstrap left up and stops its automatic re-drive.
-It is an **alarmed** override, never a recovery path, and works as follows:
+lifts the fence a failed legacy bootstrap left up and stops its automatic
+re-drive. It is an alarmed override, never a recovery path:
 
-- **Consequence.** Reads may then observe the partial import - a committed
-  batch with some keys present and others missing or stale - until a later
-  bootstrap completes.
+- **Consequence.** Reads may then observe the partial legacy import until a
+  later bootstrap completes.
 - **When it is refused.** While a drain is running.
 - **Failure.** It fails closed: a shard that cannot be lifted leaves the
   fence up and the call throws.
 - **Audit.** It requires a reason. Every call is audit-logged at `Warning`
   before it is dispatched, and every lift increments
   `orleans.lattice.replication.bootstrap.read_fence_force_lifted`.
-- **Exposure.** Like the re-seed verbs on the same seam, it is available
-  to host code only and is not exposed by any network API.
+- **Exposure.** Like the re-seed verbs on the same seam, it is available to
+  host code only and is not exposed by any network API.
 
 ```csharp verify
 ILatticeReplicationAdmin admin = client.ServiceProvider
@@ -875,13 +871,12 @@ BootstrapCoordinatorStatus status = await client.ServiceProvider
 
 if (status.Phase == LatticeBootstrapState.Failed && status.ReadFenced)
 {
-    // Exposes the partial import to readers until a later bootstrap completes.
+    // Exposes the partial legacy import to readers until a later bootstrap completes.
     bool lifted = await admin.ForceLiftBootstrapReadFenceAsync(
         "orders", reason: "source cluster decommissioned; re-seeding from site-b", cancellationToken);
     _ = lifted;
 }
 ```
-
 ### Source lineage gate
 
 When a whole-tree drain opens, the coordinator records the source lineage the export opened under for that source, together with the receiver tree frontier's epoch at the time ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). The record is durable before the first entry applies. It is written again wherever the aligned lineage is written, and it is kept when the reconcile skips.
@@ -1136,14 +1131,40 @@ source still stores a decision for. A decision row has no key or
 value; it carries the transaction id and `SettledDecision` (`true` for
 a commit). An aged-out row is resolved to its recorded verdict first,
 whether or not it has a resident bucket. The drain records each
-outcome in the receiver's transaction registry and does not forget
-it. Re-shipping a long retained tail can outlast the receiver's
+outcome in the receiver's transaction registry and does not let it age
+out. Re-shipping a long retained tail can outlast the receiver's
 decision retention, and a prepare arriving after the row was purged
-would strand again. The receiver cannot yet observe the stream passing
-the export's cut, which is what would make retiring the row safe, so
-it retains one registry row per saga the source stored at the export
-([#4524](https://github.com/NSTA1/Orleans.Lattice/issues/4524) tracks
-retiring them).
+would strand again.
+
+**Retiring the imported decision rows.** The rows are kept only until
+the stream from the source has passed the export's cut
+([#4524](https://github.com/NSTA1/Orleans.Lattice/issues/4524)):
+
+- **The export carries its cut.** After its last entry the export
+  captures the tree's per-partition WAL tails and sends them on its
+  trailer. Every prepare the export could have left behind is below
+  them.
+- **The drain registers its rows.** Once the drain completes, the
+  receiver records the txids it imported, keyed by the source cluster,
+  with that boundary. A later import from the same source replaces them.
+- **The rows retire once the stream passes the cut.** A per-tree grain
+  checks every minute. It forgets the rows only once the shipper from
+  that source vouches acknowledged positions on the captured log at or
+  past every tail: the positions behind the watermark the cross-tree
+  fence reads (see
+  [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)).
+  An import resets them, so only the post-import stream counts, and a
+  position passes a tail only once every earlier record from that
+  partition is acknowledged. No pre-cut prepare is then left to arrive.
+- **An older source is retained.** A sender that predates the boundary
+  sends none, and its rows are kept, as they were before. A source whose
+  log held nothing at the cut has nothing to re-ship, so its rows retire
+  at once.
+
+A forgotten row ages out as the registry's other decisions do. The
+check covers only the rows the import recorded, so a receiver-local
+decision for the same saga, which cannot exist for a saga authored at
+the source, is not tracked separately.
 
 The receiver then settles a replicated prepare against any decision
 its registry already holds, instead of staging it (the read uses the
@@ -1175,13 +1196,13 @@ again: it is often trimmed, which is why the peer fell off the log. So
   for it, with the row's verdict, as the tree's terminal would. The wait
   set is the participants replicated here, plus the tree. If that completes
   the barrier, every participant is finalized.
-- **The tree stays fenced until the barrier decides.** The imported tree
+- **The shadow stays unpublished until the barrier decides.** The imported tree
   serves the sub-saga post-saga, while a sibling whose terminal has not
-  arrived serves it pre-saga. So the drain does not lift the read fence
+  arrived serves it pre-saga. So the bootstrap does not publish the shadow
   while any barrier it arrived at is undecided. The bootstrap stays in its
-  incremental-handoff phase, re-checks on each tick, and lifts the fence
+  incremental-handoff phase, re-checks on each tick, and publishes the shadow
   and completes once every one has decided.
-  - The cost is availability: the imported tree is unreadable until the
+  - The original remains readable while the imported view waits until the
     sibling's own terminal reaches this receiver.
   - A re-driven drain records the same arrival again, and a terminal of the
     tree shipped later overwrites it. Both are no-ops.
@@ -1208,8 +1229,8 @@ again: it is often trimmed, which is why the peer fell off the log. So
   operation decided by a silo that predates stamping carries no stamps; the
   source serves no export while such a silo is up, so every export it served
   opened after that decision.
-- **The tree stays fenced while any barrier waits for it.** The drain does
-  not lift the read fence, and the bootstrap does not complete, while any
+- **The shadow stays unpublished while any barrier waits for it.** The drain does
+  not publish the shadow, and the bootstrap does not complete, while any
   barrier indexed under the tree is undecided, including one that opened
   after the drain while the fence was still up.
 - **Nor while a sibling tree may still owe a terminal.** An import can
@@ -1217,7 +1238,7 @@ again: it is often trimmed, which is why the peer fell off the log. So
   same operation has reached this cluster, and then no barrier exists yet to
   hold the fence. So the export captures, after its last row, every other
   tree the source replicates: its physical write-ahead log, each partition's
-  next sequence, and its export epoch. The tree stays read-fenced until
+  next sequence, and its export epoch. The shadow stays unpublished until
   every such sibling that this cluster replicates and whose log held
   anything has passed its boundary
   ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)), by either
@@ -1234,7 +1255,7 @@ again: it is often trimmed, which is why the peer fell off the log. So
 
   A sibling that has not passed within five minutes is re-seeded
   automatically when `AutoBootstrapOnFallOffLog` is on. With it off, the
-  tree stays fenced until an operator re-seeds the sibling, the same
+  shadow stays unpublished until an operator re-seeds the sibling, the same
   availability caveat a fall-off off the log carries. An export from a source
   that did not serve it under the cross-tree hold carries no boundaries.
 
@@ -1322,7 +1343,7 @@ so an operator's bootstrap serves it. While the request is recorded
 the sender withholds every saga record, so a drain whose export
 postdates the request knows every pending bucket it holds from that
 sender was staged before the re-seed or re-staged by the export.
-After the drain has applied the export, still behind the read fence,
+After the drain has applied the export, while the shadow is still held and unpublished,
 it walks the tree's pending buckets from that sender and settles each
 one durably, through a terminal mark on the shards that hold it:
 
@@ -1355,20 +1376,20 @@ Two rules keep the window closed:
   drain finished) does not record its export epoch for the echo, so
   the sender keeps withholding until a drain has cleared.
 
-**Visibility while the drain runs.** The drain installs committed rows
-one at a time, so the import is made atomic for readers by the
-[read fence](#read-fence-during-the-drain): every read of the tree is
-refused until the drain has applied its last entry, and the whole
-import becomes visible at once when the fence lifts. The decision rows
+**Visibility while the drain runs.** The drain applies committed rows
+one at a time on the held shadow, so readers continue to use the original
+until the resize alias cutover publishes the shadow only after the import
+completes. The complete imported copy is not routable before that point, and
+the whole import becomes visible at once when the alias cutover completes.The decision rows
 and the settle above keep each saga's outcome atomic across the import
 itself. In particular, a prepared row the drain imports after the
 saga's terminal has already reached the receiver through the live
 stream is settled as a committed write, rather than refused as a late
 prepare and left pre-saga beside its siblings (issue #4526).
-Modelled in `AtomicCommitCrossCluster`: the real drain, with
-incremental replication interleaved and the fence, is clean on every
+Modelled for legacy recovery in `AtomicCommitCrossCluster`: the real drain, with
+incremental replication interleaved and the legacy fence, is clean on every
 property, and lifting the fence early or on failure fires
-`RAllOrNothing`. For a cross-tree sub-saga the fence is held past the
+`RAllOrNothing`. For a cross-tree sub-saga the shadow remains unpublished past the
 drain until the receiver's barrier decides (see
 [Cross-tree sub-sagas](#snapshot-and-in-flight-atomic-visibility) above),
 which the cross-tree slice of the model checks clean.

@@ -59,4 +59,30 @@ internal sealed class SourceFrontierShipperState
     /// <summary>The tree's export epoch when <see cref="SkipClamp"/> was last lowered.</summary>
     [Id(7)]
     public long SkipClampEpoch { get; set; }
+
+    /// <summary>
+    /// Whether a modern peer acknowledged data before it first reported a
+    /// lineage, with no earlier acknowledged cursor to protect. Its first
+    /// reported lineage identifies those already-accepted contents rather than
+    /// replacing a known lineage.
+    /// </summary>
+    [Id(8)]
+    public bool ModernAcceptedBeforeFirstLineage { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="DataAcknowledged"/> is authoritative: set on a shipper
+    /// that started from empty state. A shipper persisted before it existed falls
+    /// back to treating any advanced partition cursor as acknowledged data.
+    /// </summary>
+    [Id(9)]
+    public bool DataAcknowledgementTracked { get; set; }
+
+    /// <summary>
+    /// Whether the peer ever accepted a data batch from this shipper. Partition
+    /// cursors also advance past entries filtered out of shipping (records the
+    /// peer originated, for one), so an advanced cursor alone does not mean the
+    /// peer received anything.
+    /// </summary>
+    [Id(10)]
+    public bool DataAcknowledged { get; set; }
 }

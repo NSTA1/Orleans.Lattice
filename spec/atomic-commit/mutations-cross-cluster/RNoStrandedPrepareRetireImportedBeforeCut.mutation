@@ -1,0 +1,24 @@
+# Pairs with RNoStrandedPrepare. Regression check for issue #4524. The
+# receiver retires a decision row an import recorded only once the
+# incremental stream from the source has passed the export's cut on every
+# partition. Lift that gate - forget the row while a pre-cut prepare the
+# origin's WAL still retains is in flight to the receiver - and the re-shipped
+# prepare finds no decision row to settle against, so it is staged for a saga
+# the snapshot already settled and no terminal ever consumes it.
+MODULE: RNoStrandedPrepareRetireImportedBeforeCut
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: an imported decision row is retired before the stream passes the export's cut, stranding a re-shipped pre-cut prepare
+PERTURBS: ReceiverRetireImported
+BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
+
+--- FIND
+    /\ ~filt
+    /\ rs = "none"
+    /\ ~\E r \in outbox : r.type = "prep" /\ TreeOf(r.key) = tr
+    /\ ~\E k \in rtodo : TreeOf(k) = tr
+--- REPLACE
+\* MUTATION: the row is retired before the stream passes the export's cut.
+    /\ rs = "none"
+    /\ ~\E k \in rtodo : TreeOf(k) = tr
+--- END

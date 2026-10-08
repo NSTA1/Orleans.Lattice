@@ -57,6 +57,11 @@ internal static class DataErrors
     {
         ArgumentNullException.ThrowIfNull(exception);
         ArgumentException.ThrowIfNullOrEmpty(action);
+        if (BootstrapReadFenceErrors.IsBootstrapReadFence(exception))
+        {
+            return "This tree is finishing a legacy in-place bootstrap; reads resume when it completes.";
+        }
+
         if (IsDenied(exception))
         {
             return $"You do not have permission to {action}.";

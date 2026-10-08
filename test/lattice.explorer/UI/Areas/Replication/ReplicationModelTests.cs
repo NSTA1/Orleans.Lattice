@@ -291,14 +291,19 @@ public sealed class ReplicationModelTests
         var denied = ReplicationFault.From(new LatticeAuthorizationDeniedException("secret detail"), "replication status");
         var unserved = ReplicationFault.From(new NotSupportedException("secret detail"), "replication status");
         var failed = ReplicationFault.From(new InvalidOperationException("secret detail"), "replication status");
+        var bootstrapping = ReplicationFault.From(
+            new Orleans.Lattice.LatticeTreeBootstrappingException("secret detail", "t/acme/orders"),
+            "replication enrolment");
 
         Assert.Multiple(() =>
         {
             Assert.That(denied.Kind, Is.EqualTo(ReplicationFaultKind.Denied));
             Assert.That(unserved.Kind, Is.EqualTo(ReplicationFaultKind.NotServed));
             Assert.That(failed.Kind, Is.EqualTo(ReplicationFaultKind.Failed));
-            Assert.That(new[] { denied.Message, unserved.Message, failed.Message }, Has.None.Contains("secret"));
+            Assert.That(bootstrapping.Kind, Is.EqualTo(ReplicationFaultKind.Bootstrapping));
+            Assert.That(new[] { denied.Message, unserved.Message, failed.Message, bootstrapping.Message }, Has.None.Contains("secret"));
             Assert.That(denied.Message, Is.EqualTo("You are not allowed to see replication status on this cluster."));
+            Assert.That(bootstrapping.Message, Is.EqualTo("This tree is finishing a legacy in-place bootstrap; reads resume when it completes."));
             Assert.That(() => ReplicationFault.From(null!, "x"), Throws.ArgumentNullException);
             Assert.That(() => ReplicationFault.From(new Exception(), " "), Throws.ArgumentException);
         });

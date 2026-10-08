@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Runtime;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -86,7 +87,8 @@ public partial class CrossClusterAtomicVisibilityTests
         Action<IGrainFactory>? configureFactory = null,
         FakePersistentState<ReplicationShipperState>? state = null,
         Action<LatticeReplicationOptions>? configureOptions = null,
-        ILatticeMergeModeResolver? modeResolver = null)
+        ILatticeMergeModeResolver? modeResolver = null,
+        IServiceProvider? activationServices = null)
     {
         var options = new LatticeReplicationOptions
         {
@@ -111,6 +113,7 @@ public partial class CrossClusterAtomicVisibilityTests
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shipper", $"{tree}/{TwoSiteClusterFixture.SiteBClusterId}"));
+        context.ActivationServices.Returns(activationServices);
         var shipper = new ReplicationShipperGrain(
             context, Substitute.For<IReminderRegistry>(), NullLogger<ReplicationShipperGrain>.Instance,
             monitor, transport, Substitute.For<IReplicationBatchEncoder>(), walEncoder,

@@ -9,11 +9,9 @@ namespace Orleans.Lattice.Replication.Tests;
 /// <summary>
 /// Issue #4604 on a real in-process cluster: a coordinated restore's durable
 /// receive fence (#1173) makes the replication applier defer every entry for
-/// the tree, the snapshot drain included. The drain used to discard the
-/// applier's result, so a bootstrap started while the fence held completed with
-/// nothing imported and pinned the handoff past every row, which the incremental
-/// stream never re-sends. The drain must instead not complete while its entries
-/// are deferred, and must import them once the fence lifts.
+/// the tree, the snapshot drain included. A deferred row cannot be published
+/// from the shadow copy: once its bounded attempt fails, the original remains
+/// readable, and the bootstrap can be started again after the fence lifts.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -52,7 +50,7 @@ public sealed class BootstrapDeferredEntryIntegrationTests
     private static byte[] Bytes(string value) => System.Text.Encoding.UTF8.GetBytes(value);
 
     [Test]
-    public async Task A_bootstrap_drained_while_a_restore_holds_the_receive_fence_imports_every_row_once_it_lifts()
+    public async Task A_deferred_shadow_import_is_discarded_and_can_restart_after_the_receive_fence_lifts()
     {
         var treeName = $"deferred-fence-{Guid.NewGuid():N}";
         await Tree(treeName).SetAsync("k1", Bytes("pre"));
@@ -63,7 +61,7 @@ public sealed class BootstrapDeferredEntryIntegrationTests
         await Coordinator.BootstrapAsync(treeName, SourceCluster);
 
         // While the fence holds, every row the drain applies is deferred, so the
-        // bootstrap must not reach the handoff.
+        // shadow copy must not reach the handoff.
         var held = DateTime.UtcNow + TimeSpan.FromSeconds(3);
         var phasesWhileFenced = new HashSet<LatticeBootstrapState>();
         while (DateTime.UtcNow < held)
@@ -72,7 +70,10 @@ public sealed class BootstrapDeferredEntryIntegrationTests
             await Task.Delay(100);
         }
 
+        var failed = await Coordinator.GetStatusAsync(treeName);
+        var beforeRetry = await Tree(treeName).GetManyAsync(["k1", "k2"]);
         await fence.ResumeAsync("restore-saga");
+        await Coordinator.BootstrapAsync(treeName, SourceCluster);
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
         BootstrapCoordinatorStatus status;
         while (true)
@@ -87,8 +88,13 @@ public sealed class BootstrapDeferredEntryIntegrationTests
         {
             Assert.That(phasesWhileFenced, Does.Not.Contain(LatticeBootstrapState.LiveIncremental),
                 "the bootstrap completed while the receive fence deferred every row it applied");
+            Assert.That(failed.Phase, Is.EqualTo(LatticeBootstrapState.Failed),
+                "a bounded deferred apply failure discards the held shadow copy");
+            Assert.That(failed.ReadFenced, Is.False);
+            Assert.That(Str(beforeRetry.GetValueOrDefault("k1")), Is.EqualTo("pre"));
+            Assert.That(Str(beforeRetry.GetValueOrDefault("k2")), Is.EqualTo("pre"));
             Assert.That(status.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
-                "the bootstrap completes once the fence lifts");
+                "a fresh bootstrap imports the rows once the fence lifts");
             Assert.That(Str(after.GetValueOrDefault("k1")), Is.EqualTo("snapshot"), "k1's snapshot row was dropped");
             Assert.That(Str(after.GetValueOrDefault("k2")), Is.EqualTo("snapshot"), "k2's snapshot row was dropped");
         });

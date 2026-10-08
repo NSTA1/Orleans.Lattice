@@ -161,6 +161,35 @@ public class LatticeReplicationGrpcServiceReseedTests
     }
 
     [Test]
+    public async Task Push_with_a_reseed_request_answers_under_the_frontier_epoch_observed_first()
+    {
+        // The echo is bound to the lineage the ack reports (#4768): the frontier
+        // epoch is learnt before the answer, and only a completion installed
+        // under it is echoed.
+        var (factory, coordinator) = Coordinator(completed: 4);
+        var lineage = Guid.NewGuid();
+        coordinator.GetCompletedExportEpochAsync("remote", lineage).Returns(Task.FromResult<long?>(6));
+        var frontier = Substitute.For<IReplicationTreeFrontierGrain>();
+        frontier.ObserveAsync("remote", Arg.Any<ReplicationSourceFrontier?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(lineage));
+        factory.GetGrain<IReplicationTreeFrontierGrain>("tree").Returns(frontier);
+
+        var ack = await CreateService(factory).Push(EmptyBox(), new TestServerCallContext(reseedAfter: 2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Value.BootstrapEpoch, Is.EqualTo(6));
+            Assert.That(ack.Value.ReceiverLineage, Is.EqualTo(lineage));
+        });
+        await coordinator.DidNotReceive().GetCompletedExportEpochAsync("remote");
+        Received.InOrder(() =>
+        {
+            frontier.ObserveAsync("remote", Arg.Any<ReplicationSourceFrontier?>(), Arg.Any<CancellationToken>());
+            coordinator.GetCompletedExportEpochAsync("remote", lineage);
+        });
+    }
+
+    [Test]
     public async Task Push_without_the_header_never_consults_the_bootstrap_coordinator()
     {
         var (factory, coordinator) = Coordinator(completed: 4);

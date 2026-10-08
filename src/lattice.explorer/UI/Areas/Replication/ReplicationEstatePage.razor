@@ -2,6 +2,7 @@
 @page "/t/{tenant}/replication"
 @inherits ExplorerPage
 @implements IDisposable
+@using Orleans.Lattice.Api.TenantAdmin
 
 @*
     /replication: the estate's replication as an order diagram (this region as
@@ -51,6 +52,58 @@ else
     }
 
     <ReplicationMap LocalRegionId="@_estate.LocalRegionId" Links="@_filtered" Filtered="@_filter.IsActive" />
+
+    @if (Data.HasTenantBackfill)
+    {
+        <section aria-labelledby="tenant-backfill-heading">
+            <h2 id="tenant-backfill-heading" class="lt-replication-heading">Tenant backfill</h2>
+            @if (_tenantBackfill is { } backfill)
+            {
+                <p class="lt-replication-note">
+                    Region backfill: <strong>@backfill.Phase</strong>.
+                    @if (!string.IsNullOrWhiteSpace(backfill.StallReason))
+                    {
+                        <span>@backfill.StallReason</span>
+                    }
+                </p>
+                <LtTable TItem="TenantRegionBackfillTreeProgress"
+                         Items="@backfill.Trees"
+                         Caption="Tenant tree backfill progress"
+                         CaptionHidden="true"
+                         RowKey="@(tree => tree.TreeId)">
+                    <ChildContent>
+                        <LtColumn TItem="TenantRegionBackfillTreeProgress" Title="Tree" RowHeader="true" Mono="true" Value="@(tree => tree.TreeId)" />
+                        <LtColumn TItem="TenantRegionBackfillTreeProgress" Title="Source" Mono="true" Value="@(tree => tree.SourceClusterId ?? "Pending")" />
+                        <LtColumn TItem="TenantRegionBackfillTreeProgress" Title="Phase" Value="@(tree => tree.Phase)" />
+                        <LtColumn TItem="TenantRegionBackfillTreeProgress" Title="Entries applied" Align="LtColumnAlign.End" Mono="true" Value="@(tree => ReplicationFormat.Count(tree.EntriesApplied))" />
+                        <LtColumn TItem="TenantRegionBackfillTreeProgress" Title="Parked entries" Align="LtColumnAlign.End" Mono="true" Value="@(tree => ReplicationFormat.Count(tree.PendingDeadLetters))" />
+                        <LtColumn TItem="TenantRegionBackfillTreeProgress" Title="Read fenced" Value="@(tree => tree.ReadFenced ? "Yes" : "No")" />
+                    </ChildContent>
+                    <EmptyContent><span>No tenant-tree bootstrap progress is available yet.</span></EmptyContent>
+                    <CompactRow>
+                        <LtCompactRow Mono="true">
+                            <Primary>@context.TreeId</Primary>
+                            <State>@context.Phase</State>
+                            <Secondary>@($"{ReplicationFormat.Count(context.EntriesApplied)} entries applied; {ReplicationFormat.Count(context.PendingDeadLetters)} parked; source {context.SourceClusterId ?? "pending"}")</Secondary>
+                        </LtCompactRow>
+                    </CompactRow>
+                    <Detail>
+                        <LtDefinitionList>
+                            <LtDefinition Term="Source region" Mono="true">@(context.SourceClusterId ?? "Pending")</LtDefinition>
+                            <LtDefinition Term="Phase">@context.Phase</LtDefinition>
+                            <LtDefinition Term="Entries applied" Mono="true">@ReplicationFormat.Count(context.EntriesApplied)</LtDefinition>
+                            <LtDefinition Term="Parked entries" Mono="true">@ReplicationFormat.Count(context.PendingDeadLetters)</LtDefinition>
+                            <LtDefinition Term="Read fenced">@(context.ReadFenced ? "Yes" : "No")</LtDefinition>
+                        </LtDefinitionList>
+                    </Detail>
+                </LtTable>
+            }
+        else if (_tenantBackfillFault is not null)
+        {
+            <p class="lt-replication-note" role="status">@_tenantBackfillFault.Message</p>
+        }
+        </section>
+    }
 
     <h2 class="lt-replication-heading">Links</h2>
     <ReplicationLinkTable Links="@_filtered"

@@ -134,8 +134,8 @@ internal sealed class ExplorerSample : IAsyncDisposable
 
         await Task.WhenAll(Regions.Select(region => region.StartAsync(cancellationToken))).ConfigureAwait(false);
 
-        // Every region is seeded, and the demo tree enrolled and known to the
-        // peer, before the primary writes the data replication then carries.
+        // Baseline access is local; tenant definitions and data are seeded only
+        // in east, once the peer can admit every enrolled sample tree.
         var staticDirectory = Options.Entra is null;
         await Task.WhenAll(Regions.Select(region => SampleSeeder.SeedRegionAsync(region, staticDirectory, Log, cancellationToken)))
             .ConfigureAwait(false);

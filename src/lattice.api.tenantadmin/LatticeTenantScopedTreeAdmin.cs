@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// and <see cref="ILatticeSchemaAdmin"/> surfaces. It is the single narrowest seam
 /// at which a tenant-local tree name is bound to the active tenant's namespace and
 /// quota. Lifecycle operations delegate to the tree-admin facade, which applies
-/// fail-closed authorization on the composed tree id; schema operations delegate to
-/// the in-process schema admin, which does not authorize by itself.
+/// fail-closed authorization on the composed tree id; schema operations authorize
+/// here before delegating to the ungated in-process schema admin.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// from the ambient <see cref="LatticeActiveTenantContext"/> - never from a method
 /// parameter - refusing fail-closed with <see cref="TenantScopeRequiredException"/>
 /// when none is in scope, and
-/// (3) composes the target id through <see cref="LatticeTenantTrees.Compose"/> under
+/// (3) composes the target id through <see cref="LatticeTenantTrees.Compose(TenantId, string)"/> under
 /// that tenant's prefix. Because the composed id's structural owner is always the
 /// active tenant (<see cref="LatticeTenantTrees.GetOwner"/>), no supplied local name
 /// - however adversarial - can name another tenant's tree, so tenant-namespace
@@ -171,6 +171,9 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
     {
         ArgumentNullException.ThrowIfNull(policy);
         var (_, treeId) = ResolveScope(name);
+        await LatticeAccessGateEnforcement
+            .EnforceWholeTreeAsync(_gate, _membership, treeId, LatticeOperation.SchemaAdmin, cancellationToken)
+            .ConfigureAwait(false);
         await _schemaAdmin.SetPolicyAsync(treeId, policy, cancellationToken).ConfigureAwait(false);
     }
 
@@ -179,6 +182,9 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
         string name, CancellationToken cancellationToken = default)
     {
         var (_, treeId) = ResolveScope(name);
+        await LatticeAccessGateEnforcement
+            .EnforceWholeTreeAsync(_gate, _membership, treeId, LatticeOperation.SchemaAdmin, cancellationToken)
+            .ConfigureAwait(false);
         return await _schemaAdmin.ClearPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
     }
 
@@ -187,6 +193,9 @@ internal sealed class LatticeTenantScopedTreeAdmin : ILatticeTenantScopedTreeAdm
         string name, CancellationToken cancellationToken = default)
     {
         var (_, treeId) = ResolveScope(name);
+        await LatticeAccessGateEnforcement
+            .EnforceWholeTreeAsync(_gate, _membership, treeId, LatticeOperation.Read, cancellationToken)
+            .ConfigureAwait(false);
         return await _schemaAdmin.GetPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
     }
 

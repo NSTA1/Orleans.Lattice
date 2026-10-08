@@ -160,7 +160,27 @@ internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
     public Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)
     {
         Record("GetRemediationStatus", treeId);
-        return Task.FromResult(Status.TryGetValue(treeId, out var report) ? report : LatticeSchemaRemediationReport.Idle);
+        var report = Status.TryGetValue(treeId, out var current) ? current : LatticeSchemaRemediationReport.Idle;
+        if (StatusGate is { } gate)
+        {
+            StatusGate = null;
+            return HoldAsync(gate, report, cancellationToken);
+        }
+
+        return Task.FromResult(report);
+    }
+
+    /// <summary>
+    /// When set, the next status read captures the report current at call time and
+    /// answers it only once this completes, as a slow read overtaken by a new operation.
+    /// </summary>
+    public TaskCompletionSource? StatusGate { get; set; }
+
+    private static async Task<LatticeSchemaRemediationReport> HoldAsync(
+        TaskCompletionSource gate, LatticeSchemaRemediationReport report, CancellationToken cancellationToken)
+    {
+        await gate.Task.WaitAsync(cancellationToken);
+        return report;
     }
 
     /// <inheritdoc />

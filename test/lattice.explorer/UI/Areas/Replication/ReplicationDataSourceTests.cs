@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Replication;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.Tests.UI.Session;
@@ -187,11 +188,64 @@ public sealed class ReplicationDataSourceTests
         {
             Assert.That(data.HasStatus, Is.False);
             Assert.That(data.HasControl, Is.False);
+            Assert.That(data.HasTenantBackfill, Is.False);
             Assert.That(status.Fault!.Kind, Is.EqualTo(ReplicationFaultKind.NotServed));
             Assert.That(tree.Fault!.Kind, Is.EqualTo(ReplicationFaultKind.NotServed));
             Assert.That(config.Fault!.Kind, Is.EqualTo(ReplicationFaultKind.NotServed));
             Assert.That(async () => await data.EnableAsync("orders", LatticeMergeMode.LwwRegister, null, CancellationToken.None), Throws.InstanceOf<NotSupportedException>());
             Assert.That(async () => await data.DisableAsync("orders", CancellationToken.None), Throws.InstanceOf<NotSupportedException>());
+        });
+    }
+
+    [Test]
+    public async Task Tenant_backfill_progress_is_read_for_the_asserted_tenant_when_tenancy_is_registered()
+    {
+        var progress = new TenantRegionBackfillProgress
+        {
+            Phase = "Running",
+            Trees = [new TenantRegionBackfillTreeProgress
+            {
+                TreeId = "t/acme/orders",
+                Phase = "Snapshot",
+                EntriesApplied = 4,
+                SourceClusterId = "eu-east",
+                ReadFenced = true,
+            }],
+        };
+        var regionAdmin = new FakeTenantRegionAdmin(new TenantRegionStatusReport
+        {
+            TenantId = "acme",
+            Regions = [new TenantRegionStatusDescriptor
+            {
+                RegionId = "eu-west",
+                Status = TenantRegionLifecycleStatus.Backfilling,
+                IsAllowed = true,
+                BackfillProgress = progress,
+            }],
+        });
+        using var data = Create(tenancy: true, tenant: "acme", regionAdmin: regionAdmin);
+
+        var report = await data.GetTenantRegionStatusAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(data.HasTenantBackfill, Is.True);
+            Assert.That(regionAdmin.ReadTenantIds, Is.EqualTo(new[] { "acme" }));
+            Assert.That(report.Regions.Single().BackfillProgress, Is.SameAs(progress));
+            Assert.That(report.Regions.Single().BackfillProgress!.Trees.Single().ReadFenced, Is.True);
+        });
+    }
+
+    [Test]
+    public void Replication_screen_does_not_resolve_or_call_tenant_admin_when_tenancy_is_disabled()
+    {
+        var regionAdmin = new FakeTenantRegionAdmin(new TenantRegionStatusReport { TenantId = "acme", Regions = [] });
+        using var data = Create(regionAdmin: regionAdmin);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(data.HasTenantBackfill, Is.False);
+            Assert.That(regionAdmin.ReadTenantIds, Is.Empty);
         });
     }
 
@@ -324,13 +378,21 @@ public sealed class ReplicationDataSourceTests
         });
     }
 
-    private ReplicationDataSource Create(ReplicationOptions? options = null, bool tenancy = false, string? tenant = null)
+    private ReplicationDataSource Create(
+        ReplicationOptions? options = null,
+        bool tenancy = false,
+        string? tenant = null,
+        FakeTenantRegionAdmin? regionAdmin = null)
     {
         var services = new ServiceCollection()
             .AddKeyedSingleton<ILatticeReplicationStatus>(ShellFacades.Key, _status)
             .AddKeyedSingleton<ILatticeReplicationControl>(ShellFacades.Key, _control)
             .AddSingleton<Orleans.Lattice.Explorer.Core.Authentication.IExplorerAuthSession>(_auth)
             .AddSingleton<Orleans.Lattice.Explorer.Core.Configuration.IExplorerSession>(_session);
+        if (regionAdmin is not null)
+        {
+            services.AddKeyedSingleton<ILatticeTenantRegionAdmin>(ShellFacades.Key, regionAdmin);
+        }
         if (tenancy)
         {
             // With tenancy on, the reserved default tenant is the one a call that asserts nothing is for.
@@ -338,5 +400,28 @@ public sealed class ReplicationDataSourceTests
         }
 
         return new ReplicationDataSource(services.BuildServiceProvider(), _time, options ?? new ReplicationOptions());
+    }
+
+    private sealed class FakeTenantRegionAdmin(TenantRegionStatusReport report) : ILatticeTenantRegionAdmin
+    {
+        public List<string> ReadTenantIds { get; } = [];
+
+        public Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(string tenantId, CancellationToken cancellationToken = default)
+        {
+            ReadTenantIds.Add(tenantId);
+            return Task.FromResult(report);
+        }
+
+        public Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(
+            string tenantId, IReadOnlyCollection<string> allowedRegions, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<TenantResidencyChangeResult> SetResidencyAsync(
+            string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<TenantRegionStatusReport> AdvanceRegionAsync(
+            string tenantId, string regionId, bool acknowledgeDataInPlace, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }

@@ -75,6 +75,13 @@ public sealed class ReplicationTenantIsolationGateTests
     private static TenantRecord Record(TenantStatus status) => TenantRecord.Create(
         Acme, status, TenantQuotas.Unbounded, TenantPlacement.Shared, HybridLogicalClock.Zero, "test");
 
+    private static TenantRecord RecordWithRegion(TenantRegionStatus status)
+    {
+        var record = Record(TenantStatus.Active);
+        record.SetRegionStatus("west", status, HybridLogicalClock.Zero, "test");
+        return record;
+    }
+
     /// <summary>Stubs the registry so <see cref="Acme"/> exists and is active.</summary>
     private static void KnowsActive(ITenantRegistry registry) =>
         registry.GetAsync(Acme, Arg.Any<CancellationToken>())
@@ -264,6 +271,52 @@ public sealed class ReplicationTenantIsolationGateTests
         var decision = await gate.EvaluateAsync(AcmeTree);
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+    }
+
+    [TestCase(TenantRegionStatus.Provisioning, false)]
+    [TestCase(TenantRegionStatus.Backfilling, true)]
+    [TestCase(TenantRegionStatus.Online, true)]
+    [TestCase(TenantRegionStatus.Draining, false)]
+    [TestCase(TenantRegionStatus.Offline, false)]
+    [TestCase(TenantRegionStatus.Removed, false)]
+    public async Task EvaluateAsync_replication_admits_only_backfilling_or_online_region(
+        TenantRegionStatus status,
+        bool expectedAdmitted)
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.GetAsync(Acme, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantRecord?>(RecordWithRegion(status)));
+        var residency = Substitute.For<ITenantResidencyResolver, ITenantResidencyConfirmation>();
+        residency.IsActive.Returns(true);
+        var confirmation = (ITenantResidencyConfirmation)residency;
+        confirmation.IsReplicationAdmissible(Arg.Any<TenantRecord>())
+            .Returns(call =>
+            {
+                var record = call.Arg<TenantRecord>();
+                return record.GetRegionStatus("west")
+                    is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
+            });
+
+        var decision = await CreateGate(registry, residency).EvaluateAsync(AcmeTree);
+
+        Assert.That(
+            decision,
+            Is.EqualTo(expectedAdmitted
+                ? ReplicationTenantIsolationDecision.Admit
+                : ReplicationTenantIsolationDecision.RejectOutOfRegion));
+    }
+
+    [Test]
+    public void Backfilling_region_is_not_online_for_client_serving()
+    {
+        var snapshot = TenantResidencySnapshot.Build(
+            [new KeyValuePair<TenantId, TenantRegionStatus>(Acme, TenantRegionStatus.Backfilling)]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(snapshot.IsReplicationAdmissibleLocally(Acme), Is.True);
+            Assert.That(snapshot.IsOnlineLocally(Acme), Is.False);
+        });
     }
 
     [Test]

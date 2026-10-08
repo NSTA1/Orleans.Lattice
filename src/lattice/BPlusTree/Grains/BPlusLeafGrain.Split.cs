@@ -927,7 +927,6 @@ internal sealed partial class BPlusLeafGrain
         state.State.SplitKey = splitKey;
         state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
         state.State.OldNextSibling = state.State.NextSibling;
-        state.State.NextSibling = state.State.SplitSiblingId;
 
         // Issue #3265. The unambiguous record that a division is outstanding.
         // It is set here and cleared only in CompleteSplitAsync, in the SAME
@@ -1018,17 +1017,6 @@ internal sealed partial class BPlusLeafGrain
 
         var oldNextId = state.State.OldNextSibling;
 
-        // The old-next leaf's back-pointer fixup targets a different grain
-        // than the sibling-seeding chain below, so it has no ordering
-        // dependency on it - kick it off now and await it alongside the
-        // sibling work to overlap the two cross-grain round-trips.
-        Task oldNextFixup = Task.CompletedTask;
-        if (oldNextId is not null)
-        {
-            var oldNext = grainFactory.GetGrain<IBPlusLeafGrain>(oldNextId.Value);
-            oldNextFixup = oldNext.SetPrevSiblingAsync(siblingId);
-        }
-
         // Seed every birth-time metadata slot on the sibling in one
         // round-trip: tree id, shard index, ownership key range, and the
         // next/prev sibling pointers. This replaces five separate gated
@@ -1096,14 +1084,32 @@ internal sealed partial class BPlusLeafGrain
             await newLeaf.InitializeSiblingAsync(siblingInit);
         }
 
-        // Join the back-pointer fixup before mutating the donor's own
-        // state so a thrown fixup surfaces here (and not on a later
-        // unobserved-task path). Awaited ahead of the transfer rather than
-        // after it, as it was while the transfer was a single pass: the
-        // transfer now removes rows batch by batch, so donor mutation begins
-        // at the first batch rather than after the last. It still overlaps
-        // the InitializeSiblingAsync round-trip above.
-        await oldNextFixup;
+        // Issue #4775: durable intent names the sibling for recovery, but a
+        // chain pointer must not name it until its birth row exists. Otherwise
+        // an interleaved scan reaches an unadmitted rowless leaf and the #4654
+        // gate correctly fails it closed. Persist the link before removing
+        // any donor rows, so a crash cannot strand a transferred batch.
+        if (state.State.NextSibling != siblingId)
+        {
+            var previousNext = state.State.NextSibling;
+            state.State.NextSibling = siblingId;
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                state.State.NextSibling = previousNext;
+                throw;
+            }
+        }
+
+        // Reverse traversal must not expose an unborn sibling either. The
+        // fixup is idempotent on recovery and still precedes every transfer.
+        if (oldNextId is { } oldNext)
+        {
+            await grainFactory.GetGrain<IBPlusLeafGrain>(oldNext).SetPrevSiblingAsync(siblingId);
+        }
 
         // Migrate the >= splitKey rows in bounded batches rather than in one
         // pass. The single pass read them through Cache.EnumerateRows(), which
@@ -1127,8 +1133,8 @@ internal sealed partial class BPlusLeafGrain
         // only an indivisible oversized row may exceed that budget alone.
         //
         // Crash-safety is unchanged by batching. The split intent - SplitKey,
-        // SplitSiblingId and NextSibling - is already durable before any row
-        // moves (persisted by SplitAsync, or carried by the recovery path), so
+        // SplitSiblingId - and the chain link are durable before any row moves
+        // (intent persisted by SplitAsync, link after birth above), so
         // a process that dies mid-transfer reactivates with SplitInProgress and
         // re-runs this method against the same durable SplitKey. The donor's
         // own remaining rows are the resume cursor: rows already migrated and

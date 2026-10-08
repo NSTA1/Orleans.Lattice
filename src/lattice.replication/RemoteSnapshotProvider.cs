@@ -128,6 +128,7 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             {
                 stream!.CloseGeneration = trailer.CloseGeneration;
                 stream.SiblingBoundaries = trailer.SiblingBoundaries;
+                stream.ExportBoundary = trailer.ExportBoundary;
                 stream.SourceFrontier = trailer.SourceFrontier;
             },
             cancellationToken);

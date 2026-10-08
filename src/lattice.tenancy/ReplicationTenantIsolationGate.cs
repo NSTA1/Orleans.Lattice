@@ -9,15 +9,18 @@ namespace Orleans.Lattice.Tenancy;
 /// alone through <see cref="LatticeTenantTrees.GetOwner"/> - never from a
 /// wire-supplied field, so a peer cannot redirect a write into a foreign tenant -
 /// and refuses a write whose tenant does not exist in the <see cref="ITenantRegistry"/>
-/// or is not resident in this serving region per the
-/// <see cref="ITenantResidencyResolver"/>.
+/// or is not eligible for replicated apply in this region per the
+/// <see cref="ITenantResidencyResolver"/>. A configured region admits replication
+/// while Backfilling or Online; this does not change client serving, which remains
+/// Online-only.
 /// </summary>
 /// <remarks>
 /// <para>
 /// This is the isolation boundary only. It enforces namespace correctness, tenant
-/// existence, and residency; it never gates on quota, because a replicated apply is
-/// receiver-side convergence of a write that already happened on the origin and must
-/// not be rejected on quota grounds. Quota admission stays on the authoring path.
+/// existence, and replication residency; it never gates on quota, because a
+/// replicated apply is receiver-side convergence of a write that already happened
+/// on the origin and must not be rejected on quota grounds. Quota admission stays
+/// on the authoring path.
 /// </para>
 /// <para>
 /// Fail-closed and allocation-conscious: platform-owned system / definition trees
@@ -156,10 +159,10 @@ internal sealed class ReplicationTenantIsolationGate(
             return true;
         }
 
-        bool online;
+        bool admissible;
         if (_residencyConfirmation is { } confirmation)
         {
-            if (!confirmation.TryResolveOnline(tenant, out online))
+            if (!confirmation.TryResolveReplicationAdmissible(tenant, out admissible))
             {
                 decision = default;
                 return false;
@@ -167,10 +170,13 @@ internal sealed class ReplicationTenantIsolationGate(
         }
         else
         {
-            online = _residency.IsOnlineInServingRegion(tenant);
+            // Unknown/custom resolvers retain the old Online-only behavior. The
+            // Backfilling allowance is granted only by the tenancy resolver that
+            // can verify the actual local-region lifecycle status.
+            admissible = _residency.IsOnlineInServingRegion(tenant);
         }
 
-        decision = online ? ReplicationTenantIsolationDecision.Admit : ReplicationTenantIsolationDecision.RejectOutOfRegion;
+        decision = admissible ? ReplicationTenantIsolationDecision.Admit : ReplicationTenantIsolationDecision.RejectOutOfRegion;
         return true;
     }
 
@@ -201,7 +207,7 @@ internal sealed class ReplicationTenantIsolationGate(
         // otherwise through the resolver's own seam.
         if (_residencyConfirmation is { } confirmation)
         {
-            return confirmation.IsOnline(record)
+            return confirmation.IsReplicationAdmissible(record)
                 ? ReplicationTenantIsolationDecision.Admit
                 : ReplicationTenantIsolationDecision.RejectOutOfRegion;
         }

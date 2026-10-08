@@ -589,9 +589,10 @@ SettleView(k) ==
 \* an undecided saga's prepare is staged in a pending bucket. A prepare
 \* arriving at a leaf that has already applied the saga's terminal is refused
 \* (BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync), so a duplicate
-\* trailing its terminal cannot install an orphan. The receiver registry never
-\* forgets here, so that refusal sits behind the settle: a leaf has a
-\* terminal only once its registry has decided.
+\* trailing its terminal cannot install an orphan. The receiver registry
+\* forgets an imported row only once no pre-cut prepare can still reach it
+\* (ReceiverRetireImported), so that refusal sits behind the settle: a leaf
+\* has a terminal only once its registry has decided.
 DeliverPrepare(m) ==
     /\ m \in outbox
     /\ m.type = "prep"
@@ -768,7 +769,8 @@ ForeignOriginClaim(tr) ==
 (*     key post-saga on a commit and pre-saga on an abort, a bucket still   *)
 (*     resident included, and a decision row the drain records in the      *)
 (*     receiver registry (LatticeBootstrapCoordinatorGrain.                *)
-(*     ApplySettledDecisionAsync, which never forgets it);                 *)
+(*     ApplySettledDecisionAsync, and retires only once the stream has     *)
+(*     passed the export's cut: ReceiverRetireImported);                   *)
 (*   - for a saga snap0 has as InFlight or absent: each origin bucket as a *)
 (*     prepared row, and each drained key's projection.                    *)
 (* A forgotten saga whose row is still stored is exported by its recorded  *)
@@ -1260,6 +1262,32 @@ FilterClear ==
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
                    gone, purged, ptrim, rs, detached, rpoison, losses, preguard, afence, ubnd, decom, afresh, bVars>>
 
+\* The receiver retires a decision row an import recorded (issue #4524,
+\* ImportedDecisionRetirementGrain): it forgets the row once the incremental
+\* stream from the source has passed the export's cut on every partition,
+\* read from the per-partition acked positions the shipper vouches beside its
+\* watermark (#4684) against the tails the export carried on its trailer.
+\* Those positions are shipped only while the peer is on the log, the replay
+\* filter is clear and no re-seed is pending (the retained floor caps them),
+\* and they pass a tail only once every earlier record is acked. Every
+\* prepare of the saga is appended before its decision, so under a decided
+\* import every one still in the outbox is pre-cut: none is left there to be
+\* settled against the row it would no longer find. A pre-cut terminal still
+\* in the outbox is not waited on here, an over-approximation of the gate.
+\* Lifting the gate is RNoStrandedPrepareRetireImportedBeforeCut.
+ReceiverRetireImported(tr) ==
+    /\ Decided(rdec[tr])
+    /\ rconn
+    /\ ~detached
+    /\ ~filt
+    /\ rs = "none"
+    /\ ~\E r \in outbox : r.type = "prep" /\ TreeOf(r.key) = tr
+    /\ ~\E k \in rtodo : TreeOf(k) = tr
+    /\ rstage[tr] \in {"idle", "done"}
+    /\ rdec' = [rdec EXCEPT ![tr] = "inflight"]
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rout, rstage, rdeleg, rdial, barrierVars,
+                   lossVars, bVars>>
+
 \* The origin's cross-tree purge frontier has passed the operation (#4733):
 \* its decision is purged on every participant. Then no arrival for it can
 \* come again: no export carries its decision row, and the origin purges a
@@ -1495,6 +1523,7 @@ Next ==
     \/ ReseedRewind
     \/ \E m \in MsgSet : ReplayWithhold(m)
     \/ FilterClear
+    \/ \E tr \in Trees : ReceiverRetireImported(tr)
     \/ BarrierTtlExpire
     \/ TombstoneDrop
     \/ ExportOpen
@@ -1567,11 +1596,13 @@ RStrictIsolation ==
     \A k \in RKeys : RObserved(k) = "post" => decision[T] = "committed"
 
 \* A receiver leaf applies a terminal only after its registry recorded the
-\* saga's outcome, and only that outcome, which is the origin's.
+\* saga's outcome, and only that outcome, which is the origin's. A row the
+\* receiver has since retired (ReceiverRetireImported) reads as absent, not
+\* as another outcome.
 RLinearizedTerminals ==
     \A k \in RKeys :
         rterm[k] # "none" =>
-            /\ rdec[TreeOf(k)] = decision[T]
+            /\ rdec[TreeOf(k)] \in {decision[T], "inflight"}
             /\ rterm[k] = Kind(decision[T])
 
 \* No registry holds both delegation rows for the saga (issue #2353's

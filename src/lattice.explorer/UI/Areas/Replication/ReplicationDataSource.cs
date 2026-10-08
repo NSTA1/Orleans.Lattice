@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.UI.Transport;
@@ -78,9 +79,23 @@ internal sealed class ReplicationDataSource : IDisposable
     /// <summary>Whether an enrolment facade is registered at all.</summary>
     public bool HasControl => Control is not null;
 
+    /// <summary>Whether this circuit can read backfill progress for its asserted tenant.</summary>
+    public bool HasTenantBackfill => RegionAdmin is not null && !string.IsNullOrEmpty(_tenant.ListingTenant);
+
     private ILatticeReplicationStatus? Status => _services.GetShellFacade<ILatticeReplicationStatus>();
 
     private ILatticeReplicationControl? Control => _services.GetShellFacade<ILatticeReplicationControl>();
+
+    private ILatticeTenantRegionAdmin? RegionAdmin => _services.GetShellFacade<ILatticeTenantRegionAdmin>();
+
+    /// <summary>Reads tenant residency and its local-region backfill progress.</summary>
+    public Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(CancellationToken cancellationToken)
+    {
+        var regionAdmin = RegionAdmin ?? throw new NotSupportedException("Tenant residency is not registered.");
+        var tenantId = _tenant.ListingTenant;
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        return regionAdmin.GetTenantRegionStatusAsync(tenantId, cancellationToken);
+    }
 
     /// <summary>
     /// Every link this region reports. A cached read younger than

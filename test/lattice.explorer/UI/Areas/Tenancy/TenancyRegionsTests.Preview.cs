@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 /// What each region means for the tenant and what a residency change would do
 /// to it (issue #4078): with no residency every region serves the tenant, a
 /// change is previewed region by region, and one that would leave the tenant
-/// served nowhere turns Apply off, says why and where promotion is explained,
+/// served nowhere turns Apply off and says why,
 /// and keeps the stop-serving confirmation off the primary button.
 /// </summary>
 public sealed partial class TenancyRegionsTests
@@ -62,7 +62,7 @@ public sealed partial class TenancyRegionsTests
     }
 
     [Test]
-    public void A_first_residency_turns_apply_off_and_explains_which_regions_are_not_online_and_where_promotion_is_explained()
+    public void A_first_residency_turns_apply_off_and_explains_backfill()
     {
         var cut = RenderRegions(resident: []);
         cut.WaitUntil(() => Checkbox(cut, "us-east"));
@@ -75,7 +75,7 @@ public sealed partial class TenancyRegionsTests
             {
                 "ap-south stops being served, because it is not in the residency.",
                 "eu-west stops being served, because it is not in the residency.",
-                "us-east joins the residency as Provisioning, and stops being served there until a platform operator promotes it to Online.",
+                "us-east joins the residency as Provisioning, then is automatically backfilled before it can serve the tenant.",
             }));
             Assert.That(TenancyForms.Button(cut, "Apply residency").HasAttribute("disabled"), Is.True);
 
@@ -84,13 +84,9 @@ public sealed partial class TenancyRegionsTests
             Assert.That(warning.TextContent, Does.Contain("Applying this leaves tenant acme served nowhere, so Apply is off.")
                 .And.Contain("Not Online for it: us-east (added: starts Provisioning).")
                 .And.Contain("A tenant with residency is served only in its Online regions")
-                .And.Contain("No region is Online for acme yet, and a region can be promoted only once it is in the residency")
-                .And.Contain("Leave the residency unset to keep it served in every region."));
-            var link = warning.QuerySelector("a")!;
-            Assert.That(link.GetAttribute("href"), Is.EqualTo(TenancyFormat.PromotionHelpUrl));
-            Assert.That(link.GetAttribute("target"), Is.EqualTo("_blank"));
-            Assert.That(link.GetAttribute("rel"), Is.EqualTo("noopener noreferrer"));
-            Assert.That(link.TextContent, Does.Contain("How a platform operator promotes a region").And.Contain("new tab"));
+                .And.Contain("No region is Online for acme yet. The tenant remains unserved until an added region's backfill is verified.")
+                .And.Contain("Leave residency unset to keep it served in every region."));
+            Assert.That(warning.QuerySelector("a"), Is.Null);
         });
 
         TenancyForms.Button(cut, "Apply residency").Click();
@@ -118,7 +114,7 @@ public sealed partial class TenancyRegionsTests
         cut.WaitUntil(() =>
         {
             // Nothing serves the tenant now, so the change stops nothing: Apply stays the primary action (issue #4114).
-            Assert.That(cut.Find(".lt-tenancy-still-unserved").TextContent, Does.Contain("stays unserved").And.Contain("promotes one of eu-west, us-east to Online"));
+            Assert.That(cut.Find(".lt-tenancy-still-unserved").TextContent, Does.Contain("stays unserved").And.Contain("until backfill is verified in one of eu-west, us-east"));
             Assert.That(cut.FindAll(".lt-tenancy-served-nowhere"), Is.Empty);
             Assert.That(TenancyForms.Button(cut, "Apply residency").HasAttribute("disabled"), Is.False);
             Assert.That(Preview(cut), Does.Contain("us-east stays in the residency, and is not served there until it is Online."));
@@ -136,7 +132,7 @@ public sealed partial class TenancyRegionsTests
         cut.WaitUntil(() =>
         {
             var warning = cut.Find(".lt-tenancy-served-nowhere").TextContent;
-            Assert.That(warning, Does.Contain("Keep a region that is already Online, or ask an operator to promote one first."));
+            Assert.That(warning, Does.Contain("Keep a region that is already Online, or wait for the new region's backfill to complete."));
             Assert.That(warning, Does.Not.Contain("No region is Online"));
         });
     }

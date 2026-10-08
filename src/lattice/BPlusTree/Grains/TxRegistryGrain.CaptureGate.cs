@@ -40,6 +40,9 @@ internal sealed partial class TxRegistryGrain
     internal static readonly TimeSpan LapsedHoldRetention = TimeSpan.FromMinutes(10);
 
     private Dictionary<Guid, CaptureHold>? _captureHolds;
+    internal static readonly TimeSpan ReadGateWriterWindow = TxRegistryWriteRetry.GatedMaxDelay * 2;
+    private DateTimeOffset _nextReadGateAt;
+    private TaskCompletionSource? _readAdmissionChanged;
 
     /// <summary>One capture's hold on this registry.</summary>
     private sealed class CaptureHold
@@ -47,9 +50,47 @@ internal sealed partial class TxRegistryGrain
         public TxRegistryCaptureGateMode Mode;
         public DateTimeOffset ExpiresAt;
         public Dictionary<Guid, TxStatus>? Decisions;
+        public bool IsReadGate;
 
         /// <summary>The txids this hold's status lookups answered undecided (issue #4589).</summary>
         public HashSet<Guid>? Undecided;
+    }
+
+    /// <inheritdoc />
+    public async Task AcquireReadCaptureGateAsync(Guid token, TimeSpan lease, CancellationToken cancellationToken = default)
+    {
+        if (token == Guid.Empty) throw new ArgumentException("A read gate token must not be empty.", nameof(token));
+        if (lease <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(lease));
+        var deadline = TimeProvider.GetUtcNow() + lease;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = TimeProvider.GetUtcNow();
+            if (_captureHolds is not null && _captureHolds.TryGetValue(token, out var existing))
+            {
+                if (!existing.IsReadGate || now > existing.ExpiresAt) throw GateLapsed();
+                return; // Widening registry coverage must not renew a read hold.
+            }
+            if (now >= deadline) throw GateLapsed();
+            var wait = _nextReadGateAt > now ? _nextReadGateAt - now : TimeSpan.Zero;
+            if (IsDecisionGated(out var gatedFor) && gatedFor > wait) wait = gatedFor;
+            if (wait <= TimeSpan.Zero)
+            {
+                // Reserve the admission window before the durability await.
+                // Even a crashed acquisition leaves a writer-open interval
+                // after its lease, rather than admitting overlapping readers.
+                _nextReadGateAt = now + lease + ReadGateWriterWindow;
+                await AcquireCaptureGateAsync(token, TxRegistryCaptureGateMode.Gate, lease);
+                _captureHolds![token].IsReadGate = true;
+                return;
+            }
+
+            var changed = _readAdmissionChanged ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var delayStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var delay = Task.Delay(wait < deadline - now ? wait : deadline - now, TimeProvider, delayStop.Token);
+            await Task.WhenAny(delay, changed.Task).ConfigureAwait(true);
+            delayStop.Cancel();
+        }
     }
 
     /// <inheritdoc />
@@ -109,6 +150,7 @@ internal sealed partial class TxRegistryGrain
         var now = TimeProvider.GetUtcNow();
         if (_captureHolds is null || !_captureHolds.TryGetValue(token, out var hold) || now > hold.ExpiresAt)
             return Task.FromResult(false);
+        if (hold.IsReadGate) return Task.FromResult(false);
 
         if (now + lease > hold.ExpiresAt) hold.ExpiresAt = now + lease;
         return Task.FromResult(true);
@@ -121,6 +163,12 @@ internal sealed partial class TxRegistryGrain
         if (_captureHolds is null || !_captureHolds.Remove(token, out var hold))
             return Task.FromResult(false);
 
+        if (hold.IsReadGate)
+        {
+            _nextReadGateAt = now + ReadGateWriterWindow;
+            _readAdmissionChanged?.TrySetResult();
+            _readAdmissionChanged = null;
+        }
         return Task.FromResult(now <= hold.ExpiresAt);
     }
 
@@ -152,6 +200,20 @@ internal sealed partial class TxRegistryGrain
         }
 
         return Task.FromResult(result);
+    }
+
+    /// <inheritdoc />
+    public Task<Dictionary<Guid, TxStatus>> GetCaptureGateSnapshotAsync(Guid token)
+    {
+        if (_captureHolds is null
+            || !_captureHolds.TryGetValue(token, out var hold)
+            || TimeProvider.GetUtcNow() > hold.ExpiresAt
+            || hold.Decisions is not { } decisions)
+        {
+            throw GateLapsed();
+        }
+
+        return Task.FromResult(new Dictionary<Guid, TxStatus>(decisions));
     }
 
     /// <inheritdoc />

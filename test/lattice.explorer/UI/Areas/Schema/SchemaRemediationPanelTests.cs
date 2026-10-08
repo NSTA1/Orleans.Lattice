@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class SchemaRemediationPanelTests : SchemaTestContext
+public sealed partial class SchemaRemediationPanelTests : SchemaTestContext
 {
     private IRenderedComponent<SchemaTreePage> Open(string tree = "orders")
     {
@@ -42,6 +42,28 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
 
         Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.Box(cut, "Member").Input("order.total");
         cut.WaitUntil(() => Assert.That(Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.ErrorOf(cut, "Member"), Is.Null, "a member the policy does not name is still accepted"));
+    }
+
+    [Test]
+    public void Adding_a_step_resets_the_member_input_with_the_draft()
+    {
+        UseEstate();
+        Schema.Policies["orders"] = new LatticeSchemaPolicy([LatticeSchemaRule.Regex("^[0-9]+$", "lines")]);
+        var cut = Open();
+
+        Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.Box(cut, "Member").Input("schema_probe");
+        cut.WaitUntil(() => Assert.That(Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.Box(cut, "Member").GetAttribute("value"), Is.EqualTo("schema_probe")));
+
+        Button(cut, "Add step").Click();
+
+        cut.WaitUntil(() => Assert.That(Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.Box(cut, "Member").GetAttribute("value"), Is.Empty));
+        Button(cut, "Add step").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-schema-builder .lt-schema-error").TextContent, Is.EqualTo("Enter the member the step acts on."));
+            Assert.That(Orleans.Lattice.Explorer.Tests.UI.Suggestions.SuggestionFields.Box(cut, "Member").GetAttribute("value"), Is.Empty);
+        });
     }
     [Test]
     public async Task The_member_source_names_each_member_once_is_forgotten_on_request_and_fails_closed()
@@ -222,8 +244,11 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
     public void Starting_a_remediation_needs_steps_and_the_tree_named_then_follows_it_to_the_end()
     {
         UseEstate();
+        Schema.Status["orders"] = LatticeSchemaRemediationReport.Aborted(
+            17, "order/previous", "a prior step still failed", System.Text.Encoding.UTF8.GetBytes("old failure"), "op-old");
         Schema.OperationGate = new TaskCompletionSource<LatticeSchemaRemediationReport>();
         var cut = Open();
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-schema-abort"), Has.Count.EqualTo(1)));
 
         Button(cut, "Review and start...").Click();
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-schema-editor .lt-schema-error").TextContent, Is.EqualTo("Add at least one step.")));
@@ -250,19 +275,23 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
             Assert.That(Schema.LastRemediation!.Value.Policy, Is.SameAs(Schema.Policies["orders"]));
             Assert.That(Schema.LastRemediation!.Value.Transform.Children, Has.Length.EqualTo(2));
             Assert.That(cut.Find(".lt-schema-operation .lt-schema-status").TextContent, Is.EqualTo("Running in the cluster."));
+            Assert.That(cut.FindAll(".lt-schema-abort"), Is.Empty, "diagnostics from the prior operation are not shown for this run");
             Assert.That(Stages(cut), Is.EqualTo(new[] { "*Checking every value", "Building the remediated copy", "Cutting over" }));
             Assert.That(cut.Find(".lt-schema-operation dl.lt-dl").TextContent, Does.Contain("Remediating every value through 2 steps"));
             Assert.That(Button(cut, "Review and start...").HasAttribute("disabled"), Is.True, "one operation per tree");
             Assert.That(cut.FindAll(".lt-schema-rules__item"), Is.Empty, "the editor clears once it has started");
         });
 
-        Schema.OperationGate.SetResult(LatticeSchemaRemediationReport.Completed(1234, "physical-orders-shadow", "op-9"));
+        Schema.OperationGate.SetResult(LatticeSchemaRemediationReport.Completed(1234, "physical-orders-shadow", "op-1"));
+        cut.WaitUntil(() => Assert.That(Schema.OperationStatuses["op-1"].IsTerminal, Is.True));
         Button(cut, "Refresh status").Click();
 
         cut.WaitUntil(() =>
         {
             Assert.That(Stages(cut), Is.EqualTo(new[] { "Checking every value", "Building the remediated copy", "Cutting over" }));
             Assert.That(cut.Find(".lt-schema-operation dl.lt-dl").TextContent, Does.Contain("1,234"));
+            Assert.That(cut.FindAll(".lt-schema-abort"), Is.Empty);
+            Assert.That(cut.Markup, Does.Not.Contain("a prior step still failed"));
             Assert.That(cut.Markup, Does.Not.Contain("physical-orders-shadow"));
         });
     }
@@ -304,12 +333,16 @@ public sealed class SchemaRemediationPanelTests : SchemaTestContext
         cut.WaitUntil(() => Assert.That(Schema.CountOf("StartRemediation"), Is.EqualTo(1)));
 
         Schema.OperationGate.SetResult(LatticeSchemaRemediationReport.Aborted(
-            17, "order/42", "currency does not match", System.Text.Encoding.UTF8.GetBytes("<script>alert(1)</script>"), "op-3"));
+            17, "order/42", "currency does not match", System.Text.Encoding.UTF8.GetBytes("<script>alert(1)</script>"), "op-1"));
+        cut.WaitUntil(() => Assert.That(Schema.OperationStatuses["op-1"].IsTerminal, Is.True));
+        Schema.OperationStatuses["op-1"] = Schema.OperationStatuses["op-1"] with { CompletedUnits = 9 };
         Button(cut, "Refresh status").Click();
 
         cut.WaitUntil(() =>
         {
             Assert.That(Stages(cut), Is.EqualTo(new[] { "Checking every value", "Building the remediated copy", "Cutting over" }));
+            Assert.That(cut.Find(".lt-operation-progress__stopped").TextContent, Does.Contain("after 17 of 17 values"),
+                "the operation stop count agrees with the remediation report when the cluster summary lags");
             var abort = cut.Find(".lt-schema-abort");
             Assert.That(abort.TextContent, Does.Contain("Nothing was cut over"));
             Assert.That(abort.QuerySelectorAll("dd").Select(value => value.TextContent.Trim()), Is.EqualTo(new[] { "order/42", "currency does not match" }));

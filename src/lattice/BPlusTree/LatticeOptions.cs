@@ -1047,9 +1047,14 @@ public class LatticeOptions
     /// number of rounds. <c>CountAsync</c>, <c>CountPerShardAsync</c> and
     /// <c>GetManyAsync</c> instead re-run their fan-out when the shard-map
     /// version moved, or a saga committed, while it was in flight, and this
-    /// caps the number of attempts. Values below <c>1</c> are treated as
+    /// caps the number of optimistic attempts. <c>GetManyAsync</c> then makes
+    /// one bounded decision-gated attempt, preserving atomic visibility without
+    /// starving solely because sagas keep committing. Gate loss, expiry or
+    /// topology change in that fallback fails with
+    /// <see cref="LatticeTransactionOutcomeUnavailableException"/>.
+    /// Values below <c>1</c> are treated as
     /// <c>1</c>: a scan still reconciles once, and a count or multi-get makes a
-    /// single attempt that throws if the topology moves under it.
+    /// single optimistic attempt.
     /// </summary>
     public int MaxScanRetries { get; set; } = DefaultMaxScanRetries;
 

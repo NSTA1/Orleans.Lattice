@@ -65,7 +65,8 @@ lifecycle, quota, and region-residency verbs and the
   `LatticeAuthorizationDeniedException` (unified into `TenantNotFoundException` on
   the quota-usage read) and no change is made. The read-only self-service surface
   scopes its answers to the caller instead of refusing, and the tenant-scoped tree
-  facade relies on the facades it wraps (see
+  facade authorizes schema-policy calls itself and delegates lifecycle authorization
+  to the tree facade it wraps (see
   [`ILatticeTenantScopedTreeAdmin`](#ilatticetenantscopedtreeadmin)). The bindings
   additionally gate every lifecycle, region-residency, access, grant, and quota-usage
   call they serve behind an explicit opt-in (the gRPC binding's default-deny
@@ -170,11 +171,10 @@ Register the facade on the silo (it requires the `Orleans.Lattice.Tenancy` packa
   `ILatticeTenantPolicyAdmin`, together with the
   fail-closed authorizers they consult, and a residency listener that completes the
   drain of the silo's own region: a region dropped by `SetResidencyAsync` moves
-  `Draining` -> `Offline` -> `Removed` on its own. A region it adds stays at
-  `Provisioning` until an operator advances it with
-  `TenantRecord.TryPromoteRegionStatus`, because nothing backfills the tenant's
-  existing data into it (see
-  [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)).
+  `Draining` -> `Offline` -> `Removed` on its own. An added region automatically backfills its configured tenant trees from an `Online` peer when replication is
+registered, and becomes `Online` only after each receiver bootstrap and parked offline entry is verified complete.
+Client requests remain refused while it is `Backfilling`; an operator override is available only for data
+already placed out of band (see [Lifecycle states](../lattice.tenancy/README.md#lifecycle-states)).
 - `AddLatticeTenantScopedTreeAdminApi(this ISiloBuilder builder)` - registers
   `ILatticeTenantScopedTreeAdmin`.
 
@@ -226,6 +226,7 @@ the last resident region can never be removed.
 | `AuthorizeAllowedRegionsAsync` | `Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(string tenantId, IReadOnlyCollection<string> allowedRegions, CancellationToken cancellationToken = default)` |
 | `SetResidencyAsync` | `Task<TenantResidencyChangeResult> SetResidencyAsync(string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)` |
 | `GetTenantRegionStatusAsync` | `Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `AdvanceRegionAsync` | `Task<TenantRegionStatusReport> AdvanceRegionAsync(string tenantId, string regionId, bool acknowledgeDataInPlace, CancellationToken cancellationToken = default)` |
 
 Each authored set is a **replacement, not a delta**: the supplied collection
 becomes the whole set, so a currently-allowed or currently-resident region absent from
@@ -258,6 +259,7 @@ returned region set instead of silently absent.
 | `AuthorizeAllowedRegionsAsync` | **Operator only** | Cluster-wide `Admin` on the reserved auth policy tree. A tenant admin is denied - the allowed set is the operator's containment boundary and a tenant must not be able to widen it. |
 | `SetResidencyAsync` | **Operator or tenant admin** | That operator, or a live admin subject on the tenant record. |
 | `GetTenantRegionStatusAsync` | **Operator or tenant admin** | Same as above. Read-only. |
+| `AdvanceRegionAsync` | **Operator only** | Requires acknowledgement that the tenant data is already present; one legal add-path step at a time. Normally not needed because replication backfills automatically. |
 
 Both tiers are independent of the data-plane `DefaultEffect`, so an unmatched request
 resolves to deny even under `DefaultEffect = Allow`. Every transport binding inherits
@@ -338,10 +340,16 @@ supplied and does not use the two-tier gate above. Its tree verbs delegate to
 access gate as it would for any caller - whole-tree `Admin` to create (also checked
 here before any quota accounting), `TreeLifecycle` to delete, recover, or purge, and
 `Read` to check existence or deletion status - so the caller's membership
-validation and tenancy's isolation apply there. Its schema-policy verbs delegate to
-the in-process `ILatticeSchemaAdmin`, which performs no authorization of its own (see
-[Capability gate](../lattice.schema/README.md#capability-gate)), and the facade adds
-no check for them.
+validation and tenancy's isolation apply there. Its schema-policy verbs authorize
+the caller over the whole composed tree before delegating: `SchemaAdmin` for
+`SetSchemaPolicyAsync` and `ClearSchemaPolicyAsync`, and `Read` for
+`GetSchemaPolicyAsync`. A denied or key-filtered allow throws
+`LatticeAuthorizationDeniedException` without calling the schema admin, so an
+asserted active tenant cannot grant access to another tenant's policy. This check
+is required because the in-process `ILatticeSchemaAdmin` performs no authorization
+of its own and its store uses system origin (see
+[Capability gate](../lattice.schema/README.md#capability-gate)). The shared gate's
+system-origin and no-op-host bypasses are unchanged.
 
 ### `ILatticeTenantAccessAdmin`
 
@@ -687,8 +695,10 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantLifecycleStatus` | enum | `Active` / `Suspended`. |
 | `TenantRegionAuthorizationResult` | result | The resulting allowed region set. |
 | `TenantResidencyChangeResult` | result | The regions this call began adding (now `Provisioning`) and removing (now `Draining`), and the resulting per-region status rows. |
-| `TenantRegionStatusReport` | result | Per-region rows (`TenantRegionStatusDescriptor`), ordered by region id. |
-| `TenantRegionStatusDescriptor` | model | One region's allowed flag and lifecycle status. |
+| `TenantRegionStatusReport` | result | Per-region rows (`TenantRegionStatusDescriptor`), ordered by region id; local backfill progress is included when available. |
+| `TenantRegionStatusDescriptor` | model | One region's allowed flag, lifecycle status, and optional local backfill report. |
+| `TenantRegionBackfillProgress` | model | Overall phase, a visible stall or unavailable reason, and ordered per-tree progress. |
+| `TenantRegionBackfillTreeProgress` | model | Tree id, source cluster, bootstrap phase, entries applied, parked offline entries, and read-fence state. |
 | `TenantRegionLifecycleStatus` | enum | `None` / `Provisioning` / `Backfilling` / `Online` / `Draining` / `Offline` / `Removed`. |
 | `TenantNotFoundException` | exception | No tenant with that id is registered. |
 | `TenantAlreadyExistsException` | exception | A tenant with the same id is already registered. |

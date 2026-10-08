@@ -7,6 +7,7 @@ using Orleans.Lattice.Operations;
 using Orleans.Lattice.Testing;
 using Orleans.TestingHost;
 using Orleans.Lattice.Tests.Fakes;
+using System.Diagnostics;
 
 namespace Orleans.Lattice.Tests.Operations;
 
@@ -36,6 +37,7 @@ public sealed class WalMoveSiloLossChaosTests
     public async Task OneTimeSetUp()
     {
         GatedWal.Reset();
+        IndexGate.Reset();
         var builder = new TestClusterBuilder(2);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
@@ -47,6 +49,7 @@ public sealed class WalMoveSiloLossChaosTests
     public async Task OneTimeTearDown()
     {
         GatedWal.Release();
+        IndexGate.Release();
         await _cluster.StopAllSilosAsync();
         await _cluster.DisposeAsync();
     }
@@ -89,14 +92,27 @@ public sealed class WalMoveSiloLossChaosTests
             async () => (await survivor.GetAsync("default", operationId))?.State == LatticeOperationState.Running,
             "the survivor to observe the move running");
 
+        // Model the dead-index routing window deterministically, independent of
+        // where Orleans happened to place the index in this run.
+        IndexGate.BlockTerminalUpdates = true;
         await _cluster.KillSiloAsync(secondary);
 
+        var longestPoll = TimeSpan.Zero;
         await TestPoll.UntilAsync(
-            async () => (await survivor.GetAsync("default", operationId))?.State == LatticeOperationState.Failed,
+            async () =>
+            {
+                var watch = Stopwatch.StartNew();
+                var status = await survivor.GetAsync("default", operationId).WaitAsync(TimeSpan.FromSeconds(2));
+                longestPoll = watch.Elapsed > longestPoll ? watch.Elapsed : longestPoll;
+                return status?.State == LatticeOperationState.Failed;
+            },
             "the move of the killed silo to be failed rather than left running",
             timeout: TimeSpan.FromMinutes(2),
             cadence: TimeSpan.FromMilliseconds(250));
         var record = await survivor.GetAsync("default", operationId);
+        Assert.That(IndexGate.Entered.Task.IsCompleted, Is.True, "The failing status path must actually encounter the blocked index.");
+        Assert.That(longestPoll, Is.LessThan(TimeSpan.FromSeconds(2)), "No poll may wait out the 30-second Orleans response timeout.");
+        IndexGate.Release();
 
         // Let a surviving saga (if the admin grain lived on the primary) run on; the
         // partition must serve either way.
@@ -130,6 +146,40 @@ public sealed class WalMoveSiloLossChaosTests
                 Assert.That(await tree.GetAsync($"before-{i}"), Is.EqualTo(new[] { (byte)i }), $"before-{i}");
             }
         });
+    }
+
+    private static class IndexGate
+    {
+        public static volatile bool BlockTerminalUpdates;
+        public static TaskCompletionSource Entered { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private static TaskCompletionSource Gate { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public static void Reset()
+        {
+            BlockTerminalUpdates = false;
+            Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public static void Release() => Gate.TrySetResult();
+        public static Task WaitAsync() => Gate.Task;
+    }
+
+    private sealed class IndexStallFilter : IOutgoingGrainCallFilter
+    {
+        public async Task Invoke(IOutgoingGrainCallContext context)
+        {
+            if (IndexGate.BlockTerminalUpdates
+                && context.InterfaceMethod.DeclaringType == typeof(ILatticeOperationIndexGrain)
+                && (context.InterfaceMethod.Name == nameof(ILatticeOperationIndexGrain.MarkFinishedAsync)
+                    || (context.InterfaceMethod.Name == nameof(ILatticeOperationIndexGrain.ReconcileAsync)
+                        && context.Request.GetArgument(0) is LatticeOperationRecord { IsTerminal: true })))
+            {
+                IndexGate.Entered.TrySetResult();
+                await IndexGate.WaitAsync();
+            }
+            await context.Invoke();
+        }
     }
 
     /// <summary>Process-wide WAL stores shared by both silos, plus the copy gate.</summary>
@@ -220,6 +270,7 @@ public sealed class WalMoveSiloLossChaosTests
             siloBuilder.AddWalStorage(_ => GatedWal.Baseline);
             siloBuilder.AddLatticeWalStorageProvider("gated", _ => new GatedTargetWalProvider());
             siloBuilder.UseInMemoryReminderService();
+            siloBuilder.Services.AddSingleton<IOutgoingGrainCallFilter, IndexStallFilter>();
             siloBuilder.Services.Configure<LatticeOperationOptions>(o =>
             {
                 o.HeartbeatInterval = TimeSpan.FromSeconds(1);

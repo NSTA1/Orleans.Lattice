@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class ClusterWalPageTests : ClusterTestContext
+public sealed partial class ClusterWalPageTests : ClusterTestContext
 {
     private const string TreeId = "orders";
     private const string PreviousTree = "ledger";

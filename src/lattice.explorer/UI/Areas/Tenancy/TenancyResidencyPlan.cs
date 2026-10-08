@@ -52,9 +52,9 @@ internal sealed class TenancyResidencyPlan
 
     /// <summary>
     /// Whether applying the plan would leave the tenant with residency and no
-    /// Online region. A region the plan adds starts Provisioning and stays there
-    /// until an operator of the hosting deployment promotes it, and a tenant with
-    /// any residency is served only in Online regions, so such a plan stops (or
+    /// Online region. A region the plan adds starts Provisioning and is served
+    /// only after its backfill is verified, and a tenant with any residency is
+    /// served only in Online regions, so such a plan stops (or
     /// keeps stopped) serving the tenant.
     /// </summary>
     public bool LeavesNoOnlineRegion =>
@@ -180,7 +180,7 @@ internal sealed class TenancyResidencyPlan
             changed |= resident != planned;
             rows.Add(new TenancyRegionRow(
                 region.RegionId, region.Status, region.IsAllowed, resident, planned, RefusalFor(region),
-                TenancyFormat.IsServedIn(region.Status, hasResidency)));
+                TenancyFormat.IsServedIn(region.Status, hasResidency), region.BackfillProgress));
         }
 
         Rows = rows;
@@ -206,8 +206,8 @@ internal sealed class TenancyResidencyPlan
         if (row.IsPlanned && !row.IsResident)
         {
             return row.IsServed
-                ? $"{region} joins the residency as Provisioning, and stops being served there until a platform operator promotes it to Online."
-                : $"{region} joins the residency as Provisioning; it is served there once a platform operator promotes it to Online.";
+                ? $"{region} joins the residency as Provisioning, then is automatically backfilled before it can serve the tenant."
+                : $"{region} joins the residency as Provisioning; it starts serving the tenant after automatic backfill is verified.";
         }
 
         if (!row.IsPlanned && row.IsResident)

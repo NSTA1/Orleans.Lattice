@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// previewed region by region before it is applied. A plan that removes a
 /// region (it drains the tenant's data there) is confirmed; one that would
 /// leave the tenant with residency and no Online region (an added region stays
-/// Provisioning until an operator of the hosting deployment promotes it) turns
+/// Provisioning until verified backfill completes) turns
 /// Apply off, says which regions are not Online and why, and can be applied
 /// only through an explicit secondary path whose confirmation keeps serving by
 /// default.
@@ -45,8 +45,11 @@ public partial class TenancyRegions : IDisposable
     private TenancyFailure? _failure;
     private string? _loadedFor;
     private bool _busy;
+    private string? _savePhase;
     private bool _confirmResidency;
     private bool _confirmAllowed;
+    private string? _operatorAdvanceRegion;
+    private bool _acknowledgeDataInPlace;
     private IReadOnlyList<string> _allowed = [];
     private LtMultiComboBox? _allowedBox;
     private TenancyRegionSuggestionSource? _regionSource;
@@ -313,6 +316,8 @@ public partial class TenancyRegions : IDisposable
         {
             Toasts.Show(refusal, LtToastTone.Warning);
         }
+
+        StateHasChanged();
     }
 
     private async Task ApplyResidency()
@@ -342,6 +347,9 @@ public partial class TenancyRegions : IDisposable
         }
 
         _busy = true;
+        _savePhase = $"Applying residency for {TenantId}";
+        StopFollowing();
+        StateHasChanged();
         try
         {
             var result = await Catalog.Regions!.SetResidencyAsync(TenantId, _plan.Planned).ConfigureAwait(true);
@@ -360,6 +368,65 @@ public partial class TenancyRegions : IDisposable
         finally
         {
             _busy = false;
+            _savePhase = null;
+            FollowIfTransitional();
+        }
+    }
+
+    private void OpenOperatorAdvance(string regionId)
+    {
+        if (!CanAuthorize || _busy)
+        {
+            return;
+        }
+
+        _operatorAdvanceRegion = regionId;
+        _acknowledgeDataInPlace = false;
+    }
+
+    private void CloseOperatorAdvance()
+    {
+        _operatorAdvanceRegion = null;
+        _acknowledgeDataInPlace = false;
+    }
+
+    private void AcknowledgementChanged(ChangeEventArgs args) =>
+        _acknowledgeDataInPlace = args.Value is bool acknowledged
+            ? acknowledged
+            : string.Equals(Convert.ToString(args.Value, System.Globalization.CultureInfo.InvariantCulture), "true", StringComparison.OrdinalIgnoreCase);
+
+    private async Task AdvanceForOperatorAsync()
+    {
+        if (!CanAuthorize || _busy || !_acknowledgeDataInPlace || _operatorAdvanceRegion is not { } regionId)
+        {
+            return;
+        }
+
+        _busy = true;
+        _savePhase = $"Acknowledging data in {regionId}";
+        StateHasChanged();
+        try
+        {
+            var result = await Catalog.Regions!.AdvanceRegionAsync(
+                TenantId, regionId, acknowledgeDataInPlace: true).ConfigureAwait(true);
+            if (_lifetime.IsLeft)
+            {
+                return;
+            }
+
+            CloseOperatorAdvance();
+            Adopt(result.Regions);
+            Toasts.Show($"Tenant {TenantId} region {regionId} was advanced by operator acknowledgement.", LtToastTone.Success);
+        }
+        catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
+        {
+            Toasts.Show(failure.Message, LtToastTone.Danger);
+        }
+        finally
+        {
+            _busy = false;
+            _savePhase = null;
+            FollowIfTransitional();
         }
     }
 
@@ -419,6 +486,7 @@ public partial class TenancyRegions : IDisposable
         }
 
         _busy = true;
+        _savePhase = $"Saving allowed regions for {TenantId}";
         StateHasChanged();
         try
         {
@@ -429,11 +497,13 @@ public partial class TenancyRegions : IDisposable
         {
             _allowedError = failure.Message;
             _busy = false;
+            _savePhase = null;
             return;
         }
         catch
         {
             _busy = false;
+            _savePhase = null;
             throw;
         }
 
@@ -446,6 +516,7 @@ public partial class TenancyRegions : IDisposable
         finally
         {
             _busy = false;
+            _savePhase = null;
         }
     }
 }

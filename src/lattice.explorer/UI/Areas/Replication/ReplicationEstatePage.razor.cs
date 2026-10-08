@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.Replication;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
@@ -15,6 +16,8 @@ public partial class ReplicationEstatePage
     private ReplicationFilter _filter = ReplicationFilter.None;
     private IReadOnlyList<ReplicationPeerStatusEntry> _filtered = [];
     private IReadOnlyList<string> _apps = [];
+    private TenantRegionBackfillProgress? _tenantBackfill;
+    private ReplicationFault? _tenantBackfillFault;
     private bool _refreshing;
     private bool _subscribed;
     private readonly ComponentLifetime _cancellation = new();
@@ -92,6 +95,27 @@ public partial class ReplicationEstatePage
             var read = await Data.GetEstateAsync(refresh, _cancellation.Token);
             _estate = read.Value;
             _fault = read.Fault;
+            _tenantBackfill = null;
+            _tenantBackfillFault = null;
+            if (_estate is not null && Data.HasTenantBackfill)
+            {
+                try
+                {
+                    var report = await Data.GetTenantRegionStatusAsync(_cancellation.Token);
+                    _tenantBackfill = report.Regions
+                        .FirstOrDefault(region => string.Equals(
+                            region.RegionId, _estate.LocalRegionId, StringComparison.Ordinal))
+                        ?.BackfillProgress;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _tenantBackfillFault = ReplicationFault.From(ex, "tenant backfill progress");
+                }
+            }
             Apply();
         }
         catch (OperationCanceledException)

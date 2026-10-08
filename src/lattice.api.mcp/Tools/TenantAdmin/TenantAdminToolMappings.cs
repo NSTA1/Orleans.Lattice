@@ -128,6 +128,7 @@ internal static class TenantAdminToolMappings
                 RegionId = region.RegionId,
                 Status = region.Status.ToString(),
                 IsAllowed = region.IsAllowed,
+                BackfillProgress = region.BackfillProgress,
             };
         }
 

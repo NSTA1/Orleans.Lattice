@@ -160,4 +160,19 @@ internal static class TenantAdminToolInvocations
             .ConfigureAwait(false);
         return TenantAdminToolMappings.ToMcp(result);
     }
+
+    /// <summary>Advances one tenant-region lifecycle step after operator acknowledgement.</summary>
+    public static async Task<McpTenantRegionStatusResult> AdvanceRegionAsync(
+        ILatticeTenantRegionAdmin regionAdmin,
+        string tenantId,
+        string regionId,
+        bool acknowledgeDataInPlace,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(regionAdmin);
+        var result = await regionAdmin
+            .AdvanceRegionAsync(tenantId, regionId, acknowledgeDataInPlace, cancellationToken)
+            .ConfigureAwait(false);
+        return TenantAdminToolMappings.ToMcp(result);
+    }
 }

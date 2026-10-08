@@ -9,6 +9,7 @@ namespace Orleans.Lattice;
 /// </summary>
 internal static class TypeAliases
 {
+    internal const string AliasRoutingMoveState = "ol.arm";
     // Primitives
     internal const string HybridLogicalClock = "ol.hlc";
     internal const string LwwValue = "ol.lwv";

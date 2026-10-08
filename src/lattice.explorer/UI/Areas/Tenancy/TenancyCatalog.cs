@@ -107,9 +107,12 @@ internal sealed class TenancyCatalog
             return memo.Standing;
         }
 
-        var current = await selfService.GetCurrentTenantAsync(cancellationToken).ConfigureAwait(true)
+        var currentRead = selfService.GetCurrentTenantAsync(cancellationToken);
+        var operatorRead = IsOperatorAsync(cancellationToken);
+        await Task.WhenAll(currentRead, operatorRead).ConfigureAwait(true);
+        var current = await currentRead.ConfigureAwait(true)
             ?? throw new InvalidOperationException("The cluster did not report the caller's tenant.");
-        var isOperator = await IsOperatorAsync(cancellationToken).ConfigureAwait(true);
+        var isOperator = await operatorRead.ConfigureAwait(true);
         var workspace = active ?? current.TenantId;
         var isAdmin = !isOperator && await AdministersAsync(workspace, cancellationToken).ConfigureAwait(true);
 

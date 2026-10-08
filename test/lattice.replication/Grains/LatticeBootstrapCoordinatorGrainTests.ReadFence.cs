@@ -178,6 +178,29 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     }
 
     [Test]
+    public async Task A_failed_post_cutover_shadow_handoff_counts_a_due_redrive()
+    {
+        var (grain, state, _, _, _, _, _, _) = Create();
+        Seed(state, LatticeBootstrapState.Failed);
+        state.State.UseShadowCopy = true;
+        state.State.ShadowCopyCutoverComplete = true;
+        state.State.NextRedriveAtUtcTicks = DateTime.UtcNow.AddHours(1).Ticks;
+
+        await grain.ProcessNextPhaseAsync();
+        var phaseWhilePending = state.State.Phase;
+
+        state.State.NextRedriveAtUtcTicks = DateTime.UtcNow.AddSeconds(-1).Ticks;
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(phaseWhilePending, Is.EqualTo(LatticeBootstrapState.Failed));
+            Assert.That(state.State.Phase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff));
+            Assert.That(state.State.RedriveAttempts, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public async Task A_failed_fenced_bootstrap_may_be_taken_over_by_another_source()
     {
         var (grain, state, _, _, _, _, _, _) = Create();

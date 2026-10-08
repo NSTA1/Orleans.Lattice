@@ -1,9 +1,13 @@
+using System.Collections.Immutable;
+using System.Net;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.Lattice.Replication.Tests.Fakes;
 using Orleans.Lattice.Replication.Tests.Grains;
+using Orleans.Metadata;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Replication.Tests;
 
@@ -280,6 +284,97 @@ public partial class CrossClusterAtomicVisibilityTests
             Assert.That(shipped, Is.SupersetOf(new[] { "hole-2", "hole-3" }), "every retained plain record ships");
         });
     }
+
+    [Test]
+    public async Task Shipper_waits_for_the_startup_manifest_before_classifying_an_unknown_watermark_gap()
+    {
+        const string tree = "ccv-shipper-startup-gap";
+        var ticks = DateTime.UtcNow.Ticks;
+        var walEncoder = new ReplicationShipperGrainTests.StubWalRecordEncoder();
+        var feed = new ReplicationShipperGrainTests.StubReplogShardGrain(walEncoder)
+        {
+            ReportsTrimWatermark = false,
+        };
+        feed.Append(LocalSet(tree, "unwritten-offset", Hlc(ticks, 1)));
+        feed.Append(LocalSet(tree, "retained", Hlc(ticks, 2)));
+        feed.Holes.Add(0);
+
+        var manifests = Substitute.For<IClusterManifestProvider>();
+        var siloA = SiloAddress.New(new IPEndPoint(IPAddress.Loopback, 11111), 1);
+        var siloB = SiloAddress.New(new IPEndPoint(IPAddress.Loopback, 11112), 1);
+        var currentManifest = new ClusterManifest(
+            new MajorMinorVersion(1, 1),
+            ImmutableDictionary<SiloAddress, GrainManifest>.Empty);
+        manifests.Current.Returns(_ => currentManifest);
+        var membership = Substitute.For<IClusterMembershipService>();
+        membership.CurrentSnapshot.Returns(_ => new ClusterMembershipSnapshot(
+            ImmutableDictionary<SiloAddress, ClusterMember>.Empty
+                .Add(siloA, new ClusterMember(siloA, SiloStatus.Active, "silo-a"))
+                .Add(siloB, new ClusterMember(siloB, SiloStatus.Active, "silo-b")),
+            new MembershipVersion(1)));
+        var activationServices = Substitute.For<IServiceProvider>();
+        activationServices.GetService(typeof(IClusterManifestProvider)).Returns(manifests);
+        activationServices.GetService(typeof(IClusterMembershipService)).Returns(membership);
+        var transport = Substitute.For<IReplicationTransport>();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+
+        var shipper = CreateShipper(
+            tree,
+            [feed],
+            walEncoder,
+            transport,
+            activationServices: activationServices);
+        await shipper.PumpForTestingAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "an empty startup manifest is not evidence of a trim");
+            Assert.That(feed.ReadFromSequences, Is.EqualTo(new long[] { 0 }),
+                "the shipper leaves the cursor at the unresolved gap");
+        });
+
+        currentManifest = new ClusterManifest(
+            new MajorMinorVersion(1, 1),
+            ImmutableDictionary<SiloAddress, GrainManifest>.Empty.Add(
+                siloA,
+                new GrainManifest(
+                    ImmutableDictionary<GrainType, GrainProperties>.Empty,
+                    ImmutableDictionary<GrainInterfaceType, GrainInterfaceProperties>.Empty)));
+        await shipper.PumpForTestingAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "a missing active silo manifest is still startup, not evidence of a trim");
+            Assert.That(feed.ReadFromSequences, Is.EqualTo(new long[] { 0, 0 }),
+                "the shipper holds the same cursor until every active silo manifest is present");
+        });
+
+        var startupReadCount = feed.ReadFromSequences.Count;
+        currentManifest = new ClusterManifest(
+            new MajorMinorVersion(1, 1),
+            ImmutableDictionary<SiloAddress, GrainManifest>.Empty.Add(
+                siloA,
+                new GrainManifest(
+                    ImmutableDictionary<GrainType, GrainProperties>.Empty,
+                    ImmutableDictionary<GrainInterfaceType, GrainInterfaceProperties>.Empty))
+                .Add(
+                    siloB,
+                    new GrainManifest(
+                        ImmutableDictionary<GrainType, GrainProperties>.Empty,
+                        ImmutableDictionary<GrainInterfaceType, GrainInterfaceProperties>.Empty)));
+        feed.ReportsTrimWatermark = true;
+        await shipper.PumpForTestingAsync(CancellationToken.None);
+        await transport.Received().SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "the reported watermark proves the first offset was never written");
+            Assert.That(feed.ReadFromSequences.Skip(startupReadCount).First(), Is.EqualTo(0),
+                "the same cursor is retried once the manifest can report its trim watermark");
+        });
+    }
+
     private static double? ReseedSeconds(ReplicationPeerStats stats, string tree) =>
         stats.ReadStatusPage(new ReplicationPeerStatusReadRequest { TreeId = tree, Limit = 10 })
             .Single(r => r.Direction == ReplicationContactDirection.Outbound)

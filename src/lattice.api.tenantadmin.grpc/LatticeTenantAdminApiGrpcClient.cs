@@ -253,6 +253,32 @@ public sealed partial class LatticeTenantAdminApiGrpcClient
     }
 
     /// <summary>
+    /// Advances one lifecycle step for a tenant region. This operator-only
+    /// override requires explicit acknowledgement that the tenant's data is
+    /// already present in the target region.
+    /// </summary>
+    /// <param name="tenantId">The tenant id. Must not be null or empty.</param>
+    /// <param name="regionId">The region id. Must not be null or empty.</param>
+    /// <param name="acknowledgeDataInPlace">Must be true to acknowledge that data is already present.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The updated region status report.</returns>
+    public Task<TenantRegionStatusReport> AdvanceTenantRegionAsync(
+        string tenantId, string regionId, bool acknowledgeDataInPlace, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        return UnaryAsync(
+            _methods.AdvanceTenantRegion,
+            new TenantAdminRegionSetRequest
+            {
+                TenantId = tenantId,
+                RegionId = regionId,
+                AcknowledgeDataInPlace = acknowledgeDataInPlace,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Reads a tenant's current usage against its quota ceilings: per dimension the
     /// consumption, the steady-state ceiling, the burst-adjusted admission ceiling,
     /// and the live and accrued overage, qualified by the enforcement scope the

@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.Operations;
 /// pruning and the size cap.
 /// </summary>
 [TestFixture]
-public sealed class LatticeOperationIndexGrainTests
+public sealed partial class LatticeOperationIndexGrainTests
 {
     private const string Tenant = "acme";
 

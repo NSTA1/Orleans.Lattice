@@ -44,6 +44,7 @@ public partial class LatticeRegistryGrainTests
         var existing = new TreeRegistryEntry { PhysicalTreeId = "physical-old" };
         tree.GetAsync("my-tree").Returns(Task.FromResult<byte[]?>(JsonSerializer.SerializeToUtf8Bytes(existing)));
         tree.GetAsync("physical-new").Returns(Task.FromResult<byte[]?>(null));
+        tree.GetAsync("physical-old").Returns(Task.FromResult<byte[]?>(null));
 
         await grain.SetAliasAsync("my-tree", "physical-new");
 

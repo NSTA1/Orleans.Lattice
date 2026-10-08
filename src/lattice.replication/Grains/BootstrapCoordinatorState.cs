@@ -289,4 +289,28 @@ internal sealed class BootstrapCoordinatorState
     /// which clears this flag and lets the fresh drain decide the fence.
     /// </summary>
     [Id(32)] public bool FenceHeldForDecommissionedSource { get; set; }
+
+    /// <summary>
+    /// Whether this bootstrap stages imported rows into an online shadow copy.
+    /// False for legacy fenced imports that must resume in place.
+    /// </summary>
+    [Id(33)] public bool UseShadowCopy { get; set; }
+
+    /// <summary>The resize snapshot destination used by this bootstrap, if started.</summary>
+    [Id(34)] public string? ShadowCopyTreeId { get; set; }
+
+    /// <summary>Whether the shadow copy has become the logical tree's authoritative alias target.</summary>
+    [Id(35)] public bool ShadowCopyCutoverComplete { get; set; }
+
+    /// <summary>The active sibling imports this coordinator has already asked to refresh.</summary>
+    [Id(36)] public HashSet<string> SiblingRefreshesRequested { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per source cluster, the tree frontier epoch the bootstrap recorded in
+    /// <see cref="CompletedExportEpochs"/> installed its import under (issue
+    /// #4768). Absent when the install was refused because the contents were
+    /// replaced during the drain. State written before this slot decodes to an
+    /// empty map, under which a lineage-bound echo is withheld.
+    /// </summary>
+    [Id(37)] public Dictionary<string, Guid> CompletedExportLineages { get; set; } = new(StringComparer.Ordinal);
 }

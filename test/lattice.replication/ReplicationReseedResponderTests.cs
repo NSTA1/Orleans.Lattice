@@ -85,4 +85,29 @@ public class ReplicationReseedResponderTests
 
         Assert.That(echoed, Is.Null);
     }
+
+    [Test]
+    public async Task With_a_reported_lineage_echoes_only_a_completion_installed_under_it()
+    {
+        var (factory, coordinator) = Create(completed: 5);
+        var lineage = Guid.NewGuid();
+        coordinator.GetCompletedExportEpochAsync(Source, lineage).Returns(Task.FromResult<long?>(null));
+
+        var echoed = await ReplicationReseedResponder.RespondAsync(factory, Tree, Source, 3, true, NullLogger.Instance, lineage);
+
+        Assert.That(echoed, Is.Null, "a completion under another lineage does not vouch for the peer's current contents");
+        await coordinator.DidNotReceive().GetCompletedExportEpochAsync(Source);
+        await coordinator.Received(1).BootstrapForReseedAsync(Source, 3, true, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task A_degraded_receiver_reporting_the_empty_lineage_echoes_its_unbound_completion()
+    {
+        var (factory, coordinator) = Create(completed: 5);
+
+        var echoed = await ReplicationReseedResponder.RespondAsync(factory, Tree, Source, 3, true, NullLogger.Instance, Guid.Empty);
+
+        Assert.That(echoed, Is.EqualTo(5), "the sender settles on an empty-lineage echo, so a degraded receiver must still answer");
+        await coordinator.DidNotReceiveWithAnyArgs().GetCompletedExportEpochAsync(default!, default(Guid));
+    }
 }

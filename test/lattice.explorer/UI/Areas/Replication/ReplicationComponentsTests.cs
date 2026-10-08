@@ -91,6 +91,24 @@ public sealed class ReplicationComponentsTests : ReplicationTestContext
     }
 
     [Test]
+    public void A_stalled_link_shows_its_actionable_cause()
+    {
+        var link = Link("orders", "east", ReplicationLinkHealth.Stalled) with
+        {
+            StallReason = ReplicationLinkStallReason.DeadLetterQueueFull,
+        };
+        var cut = Render<ReplicationLinkTable>(parameters => parameters
+            .Add(table => table.Links, [link])
+            .Add(table => table.Caption, "Links"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Markup, Does.Contain("Stall reason"));
+            Assert.That(cut.Markup, Does.Contain("Dead-letter queue full"));
+        });
+    }
+
+    [Test]
     public void The_toolbar_offers_the_given_regions_and_apps_and_labels_every_select()
     {
         var cut = Render<ReplicationToolbar>(parameters => parameters

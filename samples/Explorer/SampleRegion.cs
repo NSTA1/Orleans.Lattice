@@ -318,6 +318,7 @@ internal sealed class SampleRegion : IAsyncDisposable
                 replication.LivenessProbeInterval = TimeSpan.FromSeconds(5);
             },
             enableRuntimeConfig: true);
+        silo.ReplicateLatticeSystemTrees();
         silo.AddLatticeReplicationApi();
 
         // Health thresholds low enough that pausing the peer link turns a link

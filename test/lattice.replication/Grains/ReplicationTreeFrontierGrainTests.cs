@@ -112,8 +112,19 @@ public sealed class ReplicationTreeFrontierGrainTests
             Assert.That(snapshot.LowWatermarks, Is.Empty, "even a watermark tagged with the new epoch waits for the re-seed");
             Assert.That(await h.Origin(OriginA).GetLowWatermarkAsync(CancellationToken.None), Is.EqualTo(HybridLogicalClock.Zero),
                 "the origin's aggregate may still count the lost coverage, so the tree caps it");
-            await h.Hwm.Received(1).ResetAppliedIdentitiesAsync(Arg.Any<CancellationToken>());
+            await h.Hwm.Received(1).ResetAppliedIdentitiesAsync(Arg.Any<CancellationToken>(), false);
         });
+    }
+
+    [Test]
+    public async Task A_bootstrap_shadow_cutover_preserves_the_import_floor_while_resetting_tree_coverage()
+    {
+        var h = new Harness(RegistryLineage);
+        var grain = h.Activate();
+
+        await grain.OnContentsReplacingAsync(CancellationToken.None, preserveBootstrapFloor: true);
+
+        await h.Hwm.Received(1).ResetAppliedIdentitiesAsync(Arg.Any<CancellationToken>(), true);
     }
 
     [Test]

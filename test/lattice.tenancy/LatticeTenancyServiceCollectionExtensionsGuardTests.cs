@@ -5,6 +5,7 @@ using NSubstitute;
 using Orleans.Hosting;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Tenancy.Tests;
 
@@ -121,6 +122,30 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
                 builder.Services.Count(d => d.ServiceType == typeof(ITenantEpochSubscriber)),
                 Is.EqualTo(3),
                 "the compiled policy, residency and placement snapshots are each kept current by the epoch");
+        });
+    }
+
+    [Test]
+    public void AddLatticeTenancy_wires_registry_alias_changes_to_the_existing_policy_snapshot_once()
+    {
+        var builder = NewBuilderWithDependencies();
+        builder.AddLatticeTenancy();
+        var observers = builder.Services.Where(d => d.ServiceType == typeof(ITreeAliasObserver)).ToArray();
+        builder.AddLatticeTenancy();
+        using var policy = new CompiledTenantPolicySnapshotMaintainer(
+            Substitute.For<ITenantRegistry>(), Substitute.For<ITenantPolicyEpochPublisher>(),
+            TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var provider = Substitute.For<IServiceProvider>();
+        provider.GetService(typeof(CompiledTenantPolicySnapshotMaintainer)).Returns(policy);
+
+        var descriptor = observers.Single(d => d.ImplementationFactory is not null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.Services.Where(d => d.ServiceType == typeof(ITreeAliasObserver)),
+                Is.EqualTo(observers), "repeat registration must not duplicate alias observers");
+            Assert.That(descriptor.Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+            Assert.That(descriptor.ImplementationFactory!(provider), Is.SameAs(policy));
         });
     }
 
@@ -260,6 +285,73 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
         builder.Services.AddSingleton(Substitute.For<ILatticeMembershipDirectory>());
         builder.Services.AddSingleton(Substitute.For<ILatticeDecisionEngine>());
         return builder;
+    }
+
+    [TestCase(true, true)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(false, false)]
+    public void AddLatticeTenancy_with_replication_enrols_registry_in_every_options_instance(bool replicationFirst, bool conflictingMap)
+    {
+        var builder = NewBuilderWithDependencies();
+        if (replicationFirst)
+        {
+            builder.AddLatticeReplication(options => options.ClusterId = "registration-test");
+        }
+
+        builder.AddLatticeTenancy();
+        builder.AddLatticeTenancy();
+        if (!replicationFirst)
+        {
+            builder.AddLatticeReplication(options => options.ClusterId = "registration-test");
+        }
+
+        if (conflictingMap)
+        {
+            builder.Services.ConfigureAll<LatticeReplicationOptions>(options =>
+                options.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
+                {
+                    ["application"] = LatticeMergeMode.OrSet,
+                    [TenantTreeNames.RegistryTree] = LatticeMergeMode.OrSet,
+                });
+        }
+
+        using var services = builder.Services.BuildServiceProvider();
+        var options = services.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
+        foreach (var name in new[] { Options.DefaultName, TenantTreeNames.RegistryTree, "application" })
+        {
+            var trees = options.Get(name).ReplicatedTrees
+                ?? throw new AssertionException("Tenancy must declare its definition registry for replication.");
+            Assert.Multiple(() =>
+            {
+                Assert.That(trees[TenantTreeNames.RegistryTree], Is.EqualTo(LatticeMergeMode.LwwRegister));
+                if (conflictingMap)
+                {
+                    Assert.That(trees["application"], Is.EqualTo(LatticeMergeMode.OrSet));
+                }
+
+                Assert.That(trees.ContainsKey(TenantTreeNames.UsageTree), Is.False);
+                Assert.That(trees.ContainsKey(TenantTreeNames.OverageTree), Is.False);
+            });
+        }
+    }
+
+    [Test]
+    public void AddLatticeTenancy_without_replication_does_not_enrol_registry()
+    {
+        var builder = NewBuilderWithDependencies();
+        builder.AddLatticeTenancy();
+        builder.Services.ConfigureAll<LatticeReplicationOptions>(options =>
+            options.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>
+            {
+                ["application"] = LatticeMergeMode.OrSet,
+            });
+        using var services = builder.Services.BuildServiceProvider();
+        var options = services.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
+        foreach (var name in new[] { Options.DefaultName, TenantTreeNames.RegistryTree, "application" })
+        {
+            Assert.That(options.Get(name).ReplicatedTrees!.Keys, Is.EquivalentTo(new[] { "application" }));
+        }
     }
 
     /// <summary>A minimal <see cref="ISiloBuilder"/> backed by a plain service collection.</summary>

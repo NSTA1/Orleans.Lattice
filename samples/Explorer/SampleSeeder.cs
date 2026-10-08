@@ -5,6 +5,7 @@ using Orleans.Lattice.Apps;
 using Orleans.Lattice.Apps.Sources;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Replication;
 using Orleans.Lattice.Samples.Explorer.TaskBoard;
 using Orleans.Lattice.Tenancy;
 
@@ -58,7 +59,7 @@ internal static class SampleSeeder
         ("t-003", "Review night-shift report", "done"),
     ];
 
-    /// <summary>Seeds what every region holds: identities, policy and tenants.</summary>
+    /// <summary>Seeds each region's sample identities and baseline policy.</summary>
     /// <param name="region">The region.</param>
     /// <param name="staticDirectory">Whether the static roster backs the directory, so the demo groups can be seeded.</param>
     /// <param name="log">Receives one line per seeded item.</param>
@@ -73,20 +74,12 @@ internal static class SampleSeeder
             await SeedAccessAsync(region.Services, cancellationToken).ConfigureAwait(false);
             log($"[{region.Id}] Access: deny-by-default, 'operators' (member 'alice') may Read '{SampleIdentities.FactoryFloorTree}'.");
         }
-
-        if (!region.Plan.IsEstate)
-        {
-            return;
-        }
-
-        await SeedTenancyAsync(region, cancellationToken).ConfigureAwait(false);
-        log($"[{region.Id}] Tenancy: tenants '{SampleIdentities.AcmeTenant}' (admin '{SampleIdentities.AcmeAdmin}') and '{SampleIdentities.GlobexTenant}' (admin '{SampleIdentities.GlobexAdmin}'), both also administered by the operator and allowed in east and west, each with an '{SampleIdentities.TenantOrdersTree}' tree and quotas; '{SampleIdentities.AcmeTenant}' is resident and Online in east and west, '{SampleIdentities.GlobexTenant}' has no residency and is served in every region; '{SampleIdentities.AcmeTenant}' offers '{SampleIdentities.GlobexTenant}' Read on its orders.");
-        log($"[{region.Id}] Delegated access: '{SampleIdentities.GlobexTenant}' keeps its own group 't/{SampleIdentities.GlobexTenant}/{SampleIdentities.GlobexOperatorsGroup}' (member '{SampleIdentities.Alice}') in its member set, with globex rules granting it Read on '{SampleIdentities.TenantOrdersTree}' and '{SampleIdentities.GlobexInvoicesTree}'; a Platform rule denies '{SampleIdentities.Alice}' the invoices, shadowing globex's rule.");
     }
 
     /// <summary>
     /// Enrols the demo tree in replication from the primary region, then waits
-    /// until the peer has learned the enrolment.
+    /// until the peer has learned the enrolment. Tenant trees are enrolled only
+    /// after the tenant's first resident region is Online.
     /// </summary>
     /// <remarks>
     /// The enrolment is written once, in one region, and reaches the peer
@@ -107,17 +100,46 @@ internal static class SampleSeeder
         ArgumentNullException.ThrowIfNull(peer);
         ArgumentNullException.ThrowIfNull(log);
 
-        using (LatticeSystemOrigin.Enter())
+        foreach (var treeId in new[] { SampleIdentities.FactoryFloorTree })
         {
-            var control = primary.Services.GetRequiredService<ILatticeReplicationControl>();
-            await control.EnableReplicationAsync(SampleIdentities.FactoryFloorTree, LatticeMergeMode.LwwRegister, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+            using (LatticeSystemOrigin.Enter())
+            {
+                var control = primary.Services.GetRequiredService<ILatticeReplicationControl>();
+                await control.EnableReplicationAsync(treeId, LatticeMergeMode.LwwRegister, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (!await WaitForEnrolmentAsync(peer, treeId, EnrolmentBudget, cancellationToken).ConfigureAwait(false))
+            {
+                throw new TimeoutException($"Region '{peer.Id}' has not learned replication enrolment for '{treeId}'.");
+            }
         }
 
-        var learned = await WaitForEnrolmentAsync(peer, SampleIdentities.FactoryFloorTree, EnrolmentBudget, cancellationToken).ConfigureAwait(false);
-        log(learned
-            ? $"[{primary.Id}] Replication: '{SampleIdentities.FactoryFloorTree}' enrolled (last-writer-wins) with '{peer.Id}'."
-            : $"[{primary.Id}] Replication: '{SampleIdentities.FactoryFloorTree}' enrolled, but '{peer.Id}' had not learned it within {EnrolmentBudget.TotalSeconds:0}s.");
+        log($"[{primary.Id}] Replication: '{SampleIdentities.FactoryFloorTree}' enrolled (last-writer-wins) with '{peer.Id}'.");
+    }
+
+    private static async Task EnrolTenantTreesAsync(
+        SampleRegion primary, SampleRegion peer, CancellationToken cancellationToken)
+    {
+        foreach (var treeId in new[]
+        {
+            OrdersTree(SampleIdentities.AcmeTenant),
+            OrdersTree(SampleIdentities.GlobexTenant),
+            InvoicesTree,
+        })
+        {
+            using (LatticeSystemOrigin.Enter())
+            {
+                var control = primary.Services.GetRequiredService<ILatticeReplicationControl>();
+                await control.EnableReplicationAsync(
+                    treeId, LatticeMergeMode.LwwRegister, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!await WaitForEnrolmentAsync(peer, treeId, EnrolmentBudget, cancellationToken).ConfigureAwait(false))
+            {
+                throw new TimeoutException($"Region '{peer.Id}' has not learned replication enrolment for '{treeId}'.");
+            }
+        }
     }
 
     /// <summary>How long seeding waits for the peer to learn an enrolment before carrying on.</summary>
@@ -166,8 +188,8 @@ internal static class SampleSeeder
 
     /// <summary>
     /// Seeds what only the primary region holds: the demo tree's data and, on the
-    /// estate, the task board installed in the acme tenant with a few cards.
-    /// Replication carries both to the peer.
+    /// estate, tenant definitions, tenant data and the task board installed in
+    /// acme with a few cards. Replication carries them to the peer.
     /// </summary>
     /// <param name="region">The primary region.</param>
     /// <param name="peer">The peer region, or <see langword="null"/> for a single-region run.</param>
@@ -177,6 +199,12 @@ internal static class SampleSeeder
     {
         ArgumentNullException.ThrowIfNull(region);
         ArgumentNullException.ThrowIfNull(log);
+
+        if (peer is not null)
+        {
+            await SeedTenancyAsync(region, peer, cancellationToken).ConfigureAwait(false);
+            log($"[{region.Id}] Tenancy: acme and globex seeded once; tenant definitions replicate to '{peer.Id}'. acme is Online in east and west; globex has no residency. Tenant orders, grants and delegated access are seeded in this region and replicate to the peer.");
+        }
 
         var grains = region.Services.GetRequiredService<IGrainFactory>();
         using (LatticeSystemOrigin.Enter())
@@ -269,7 +297,7 @@ internal static class SampleSeeder
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task SeedTenancyAsync(SampleRegion region, CancellationToken cancellationToken)
+    private static async Task SeedTenancyAsync(SampleRegion region, SampleRegion peer, CancellationToken cancellationToken)
     {
         var services = region.Services;
 
@@ -305,7 +333,11 @@ internal static class SampleSeeder
                 await regions.AuthorizeAllowedRegionsAsync(tenant, allowed, cancellationToken).ConfigureAwait(false);
             }
 
-            await regions.SetResidencyAsync(SampleIdentities.AcmeTenant, allowed, cancellationToken).ConfigureAwait(false);
+            // The first resident region has no tenant trees to recover. Establish
+            // it as Online before enrolling tenant trees and adding the peer, so
+            // every non-empty peer bootstrap has a verified Online source.
+            await regions.SetResidencyAsync(
+                SampleIdentities.AcmeTenant, [SampleIdentities.EastRegion], cancellationToken).ConfigureAwait(false);
 
             var grants = services.GetRequiredService<ILatticeTenantGrantAdmin>();
 
@@ -319,19 +351,20 @@ internal static class SampleSeeder
                 cancellationToken).ConfigureAwait(false);
         }
 
-        // SetResidencyAsync leaves each added region Provisioning, because nothing
-        // backfills it: an operator of the hosting deployment promotes it. acme's
-        // residency is set for the first time before any of its data is written,
-        // so there is no gap to recover and promoting both regions is enough.
-        using (LatticeSystemOrigin.Enter())
+        await WaitForTenantRegionAsync(
+            region, SampleIdentities.AcmeTenant, SampleIdentities.EastRegion, TenantRegionStatus.Online, cancellationToken)
+            .ConfigureAwait(false);
+
+        await EnrolTenantTreesAsync(region, peer, cancellationToken).ConfigureAwait(false);
+        using (LatticeCredentialContext.Use(BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme))
         {
-            var registry = services.GetRequiredService<ITenantRegistry>();
-            var acme = TenantId.Parse(SampleIdentities.AcmeTenant);
-            foreach (var regionId in allowed)
-            {
-                await PromoteToOnlineAsync(registry, acme, regionId, region.Id, cancellationToken).ConfigureAwait(false);
-            }
+            await services.GetRequiredService<ILatticeTenantRegionAdmin>()
+                .SetResidencyAsync(SampleIdentities.AcmeTenant, allowed, cancellationToken).ConfigureAwait(false);
         }
+
+        // The added peer reaches Online through automatic backfill; seed writes
+        // only after its verified bootstrap is complete.
+        await WaitForTenantSeedAsync(peer, cancellationToken).ConfigureAwait(false);
 
         // Each tenant's orders, and the rule that lets its admin work with them:
         // tenancy scopes what an admin may reach, and the deny-by-default gate
@@ -398,6 +431,90 @@ internal static class SampleSeeder
         await SeedGlobexAccessAsync(services, cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task WaitForTenantSeedAsync(SampleRegion peer, CancellationToken cancellationToken)
+    {
+        var registry = peer.Services.GetRequiredService<ITenantRegistry>();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(EnrolmentBudget);
+        using var poll = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
+        try
+        {
+            do
+            {
+                var acme = await registry.GetAsync(TenantId.Parse(SampleIdentities.AcmeTenant), deadline.Token).ConfigureAwait(false);
+                var globex = await registry.GetAsync(TenantId.Parse(SampleIdentities.GlobexTenant), deadline.Token).ConfigureAwait(false);
+                if (acme?.GetRegionStatus(SampleIdentities.EastRegion) == TenantRegionStatus.Online
+                    && acme.GetRegionStatus(SampleIdentities.WestRegion) == TenantRegionStatus.Online
+                    && globex is not null)
+                {
+                    return;
+                }
+            }
+            while (await poll.WaitForNextTickAsync(deadline.Token).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            var acme = await registry.GetAsync(TenantId.Parse(SampleIdentities.AcmeTenant), CancellationToken.None).ConfigureAwait(false);
+            var globex = await registry.GetAsync(TenantId.Parse(SampleIdentities.GlobexTenant), CancellationToken.None).ConfigureAwait(false);
+            var acmeStatuses = acme is null
+                ? "missing"
+                : string.Join(", ", acme.RegionStatusEntries.Select(entry => $"{entry.Key}={entry.Value}"));
+            var globexStatuses = globex is null
+                ? "missing"
+                : string.Join(", ", globex.RegionStatusEntries.Select(entry => $"{entry.Key}={entry.Value}"));
+            ReplicationConfigReport config;
+            using (LatticeSystemOrigin.Enter())
+            {
+                config = await peer.Services.GetRequiredService<ILatticeReplicationControl>()
+                    .GetReplicationConfigAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            var registryTree = config.Trees.FirstOrDefault(tree =>
+                string.Equals(tree.TreeId, "sys-tenant-registry", StringComparison.Ordinal));
+            var bootstrap = await peer.Services.GetRequiredService<ILatticeBootstrapCoordinator>()
+                .GetStatusAsync("sys-tenant-registry").ConfigureAwait(false);
+            throw new TimeoutException(
+                $"Region '{peer.Id}' has not observed the seeded tenant registry within {EnrolmentBudget.TotalSeconds:0}s. "
+                + $"{peer.Id} records: acme=[{acmeStatuses}], globex=[{globexStatuses}]; "
+                + $"registry replication enabled={registryTree?.Enabled}, ambiguous={registryTree?.Ambiguous}; "
+                + $"bootstrap phase={bootstrap.Phase}, source={bootstrap.SourceClusterId}, "
+                + $"read-fenced={bootstrap.ReadFenced}, entries-applied={bootstrap.EntriesApplied}. "
+                + "Check sys-tenant-registry replication.");
+        }
+    }
+
+    private static async Task WaitForTenantRegionAsync(
+        SampleRegion region,
+        string tenantId,
+        string regionId,
+        TenantRegionStatus expectedStatus,
+        CancellationToken cancellationToken)
+    {
+        var registry = region.Services.GetRequiredService<ITenantRegistry>();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(EnrolmentBudget);
+        using var poll = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
+        try
+        {
+            do
+            {
+                var tenant = await registry.GetAsync(TenantId.Parse(tenantId), deadline.Token).ConfigureAwait(false);
+                if (tenant?.GetRegionStatus(regionId) == expectedStatus)
+                {
+                    return;
+                }
+            }
+            while (await poll.WaitForNextTickAsync(deadline.Token).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            var tenant = await registry.GetAsync(TenantId.Parse(tenantId), CancellationToken.None).ConfigureAwait(false);
+            throw new TimeoutException(
+                $"Tenant '{tenantId}' did not reach {expectedStatus} in region '{regionId}' within "
+                + $"{EnrolmentBudget.TotalSeconds:0}s; current status is {tenant?.GetRegionStatus(regionId)}.");
+        }
+    }
+
     /// <summary>
     /// Seeds globex's delegated tenant access through the same tenant directory and
     /// tenant policy facades Access calls: its own group <c>t/globex/operators</c>
@@ -453,27 +570,6 @@ internal static class SampleSeeder
     /// <param name="writerId">The writer id stamped on each promotion: the promoting region's id.</param>
     /// <param name="cancellationToken">Cancels the promotion.</param>
     /// <returns>The region's committed status once no further step applies.</returns>
-    public static async Task<TenantRegionStatus> PromoteToOnlineAsync(
-        ITenantRegistry registry, TenantId tenant, string regionId, string writerId, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(registry);
-        ArgumentException.ThrowIfNullOrEmpty(regionId);
-
-        while (true)
-        {
-            var record = await registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidOperationException($"Tenant '{tenant}' is not registered.");
-            var status = record.GetRegionStatus(regionId);
-            if (status is not (TenantRegionStatus.Provisioning or TenantRegionStatus.Backfilling)
-                || !record.TryPromoteRegionStatus(regionId, writerId, out _))
-            {
-                return status;
-            }
-
-            await registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
     /// <summary>
     /// Installs and enables the task board in <paramref name="tenant"/> through
     /// the app registry and activation pipeline - the engine the Apps area's

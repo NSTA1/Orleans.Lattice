@@ -38,7 +38,16 @@ public sealed class ReplicationPeerStatusModelsTests
             Assert.That(entry.TimeSinceLastContact, Is.EqualTo(TimeSpan.FromSeconds(4)));
             Assert.That(entry.InFlight, Is.EqualTo(5));
             Assert.That(entry.Health, Is.EqualTo(ReplicationLinkHealth.Lagging));
+            Assert.That(entry.StallReason, Is.Null);
         });
+    }
+
+    [Test]
+    public void ReplicationPeerStatusEntry_carries_the_stall_reason()
+    {
+        var entry = Entry() with { StallReason = ReplicationLinkStallReason.ReseedRequired };
+
+        Assert.That(entry.StallReason, Is.EqualTo(ReplicationLinkStallReason.ReseedRequired));
     }
 
     [Test]
@@ -168,6 +177,16 @@ public sealed class ReplicationPeerStatusModelsTests
         {
             Assert.That((int)ReplicationLinkDirection.Outbound, Is.Zero);
             Assert.That((int)ReplicationLinkDirection.Inbound, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void ReplicationLinkStallReason_values_are_pinned()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That((int)ReplicationLinkStallReason.ReseedRequired, Is.Zero);
+            Assert.That((int)ReplicationLinkStallReason.DeadLetterQueueFull, Is.EqualTo(1));
         });
     }
 }

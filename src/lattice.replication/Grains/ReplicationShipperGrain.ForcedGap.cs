@@ -186,12 +186,23 @@ internal sealed partial class ReplicationShipperGrain
     // (serial or pipelined) or a liveness probe.
     private long? _reseedEchoThisTick;
 
+    // The receiver lineage the ack carrying _reseedEchoThisTick reported: the
+    // receiver binds the echo to it, so it is the lineage the bootstrap that
+    // settles the re-seed installed (#4768).
+    private Guid? _reseedEchoLineageThisTick;
+
+    // The lineage a re-seed settled this tick, for ApplyReceiverLineageAsync:
+    // the settling bootstrap's own replacement of the peer's contents is not a
+    // gap to re-seed again (#4768).
+    private Guid? _settledLineageThisTick;
+
     /// <summary>Records the bootstrap epoch an ack echoes, for <see cref="MaybeClearReseedAsync"/>.</summary>
     private void NoteReseedEcho(ReplicationAck ack)
     {
         if (ack.BootstrapEpoch is { } echoed && (_reseedEchoThisTick is not { } seen || echoed > seen))
         {
             _reseedEchoThisTick = echoed;
+            _reseedEchoLineageThisTick = ack.ReceiverLineage;
         }
     }
 
@@ -205,7 +216,9 @@ internal sealed partial class ReplicationShipperGrain
     private async Task MaybeClearReseedAsync()
     {
         var echo = _reseedEchoThisTick;
+        var echoLineage = _reseedEchoLineageThisTick;
         _reseedEchoThisTick = null;
+        _reseedEchoLineageThisTick = null;
 
         // Before any echo is considered: an export drained while a silo
         // predated the purge hold never settles the re-seed (#4664).
@@ -215,6 +228,17 @@ internal sealed partial class ReplicationShipperGrain
         }
 
         if (echo is not { } echoedThisTick)
+        {
+            return;
+        }
+
+        // Once the peer reports lineages, only an echo bound to the lineage its
+        // ack reported vouches for the peer's current contents (#4768). An ack
+        // that reported none (its frontier was unreachable) waits for the next.
+        if (state.State.Frontier.LineageObserved
+            && state.State.Frontier.Lineage is { } knownLineage
+            && knownLineage != Guid.Empty
+            && (echoLineage is not { } boundLineage || boundLineage == Guid.Empty))
         {
             return;
         }
@@ -281,6 +305,7 @@ internal sealed partial class ReplicationShipperGrain
         // snapshot carries any saga it withholds (#4533).
         await BeginReplayFilterAsync(_partitionCount, carried: true);
         state.State.ReseedRequiredSinceUtcTicks = 0;
+        _settledLineageThisTick = echoLineage is { } settled && settled != Guid.Empty ? settled : null;
         // The re-seed settled what the applied low watermark was clamped on (#4586).
         await OnReseedRewoundForFrontierAsync(echoed);
         await state.WriteStateAsync();

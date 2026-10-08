@@ -54,15 +54,18 @@ public sealed class TenantRegionLifecycleDriverTests
     // ---- add path --------------------------------------------------------
 
     [Test]
-    public async Task AdvanceAsync_drives_the_full_add_path_to_online()
+    public async Task Add_path_requires_a_backfill_completion_proof_before_online()
     {
         var registry = new FakeTenantRegistry();
         registry.Seed(RecordWith(TenantRegionStatus.Provisioning));
         var driver = Driver(registry);
 
-        var afterFirst = await driver.AdvanceAsync(Acme, "region-a");
-        var afterSecond = await driver.AdvanceAsync(Acme, "region-a");
-        var afterThird = await driver.AdvanceAsync(Acme, "region-a");
+        var afterFirst = await driver.BeginBackfillAsync(Acme, "region-a");
+        Assert.That(
+            async () => await driver.CompleteBackfillAsync(Acme, "region-a", backfillVerified: false),
+            Throws.ArgumentException);
+        var afterSecond = await driver.CompleteBackfillAsync(Acme, "region-a", backfillVerified: true);
+        var afterThird = await driver.CompleteBackfillAsync(Acme, "region-a", backfillVerified: true);
 
         Assert.Multiple(() =>
         {
@@ -82,9 +85,9 @@ public sealed class TenantRegionLifecycleDriverTests
         registry.Seed(RecordWith(TenantRegionStatus.Draining));
         var driver = Driver(registry);
 
-        var afterFirst = await driver.AdvanceAsync(Acme, "region-a");
-        var afterSecond = await driver.AdvanceAsync(Acme, "region-a");
-        var afterThird = await driver.AdvanceAsync(Acme, "region-a");
+        var afterFirst = await driver.CompleteDrainStepAsync(Acme, "region-a");
+        var afterSecond = await driver.CompleteDrainStepAsync(Acme, "region-a");
+        var afterThird = await driver.CompleteDrainStepAsync(Acme, "region-a");
 
         Assert.Multiple(() =>
         {
@@ -102,7 +105,7 @@ public sealed class TenantRegionLifecycleDriverTests
         registry.Seed(RecordWith(TenantRegionStatus.Provisioning));
         var driver = Driver(registry);
 
-        await driver.AdvanceAsync(Acme, "region-a");
+        await driver.BeginBackfillAsync(Acme, "region-a");
 
         Assert.Multiple(() =>
         {
@@ -114,13 +117,13 @@ public sealed class TenantRegionLifecycleDriverTests
     // ---- no-op paths -----------------------------------------------------
 
     [Test]
-    public async Task AdvanceAsync_is_a_no_op_for_a_region_with_no_status()
+    public async Task BeginBackfillAsync_is_a_no_op_for_a_region_with_no_status()
     {
         var registry = new FakeTenantRegistry();
         registry.Seed(RecordWith(status: null));
         var driver = Driver(registry);
 
-        var result = await driver.AdvanceAsync(Acme, "region-a");
+        var result = await driver.BeginBackfillAsync(Acme, "region-a");
 
         Assert.Multiple(() =>
         {
@@ -130,13 +133,13 @@ public sealed class TenantRegionLifecycleDriverTests
     }
 
     [Test]
-    public async Task AdvanceAsync_is_a_no_op_at_a_terminal_status()
+    public async Task BeginBackfillAsync_is_a_no_op_at_a_terminal_status()
     {
         var registry = new FakeTenantRegistry();
         registry.Seed(RecordWith(TenantRegionStatus.Online));
         var driver = Driver(registry);
 
-        var result = await driver.AdvanceAsync(Acme, "region-a");
+        var result = await driver.BeginBackfillAsync(Acme, "region-a");
 
         Assert.Multiple(() =>
         {
@@ -231,7 +234,7 @@ public sealed class TenantRegionLifecycleDriverTests
                 "region-a", TenantRegionStatus.Draining, HybridLogicalClock.Tick(HybridLogicalClock.Zero), "admin"));
         var driver = Driver(registry);
 
-        var result = await driver.AdvanceAsync(Acme, "region-a");
+        var result = await driver.BeginBackfillAsync(Acme, "region-a");
 
         Assert.Multiple(() =>
         {
@@ -246,25 +249,25 @@ public sealed class TenantRegionLifecycleDriverTests
     // ---- guards ----------------------------------------------------------
 
     [Test]
-    public void AdvanceAsync_on_a_missing_tenant_throws_not_found()
+    public void BeginBackfillAsync_on_a_missing_tenant_throws_not_found()
     {
         var driver = Driver(new FakeTenantRegistry());
 
         Assert.That(
-            async () => await driver.AdvanceAsync(Acme, "region-a"),
+            async () => await driver.BeginBackfillAsync(Acme, "region-a"),
             Throws.TypeOf<TenantNotFoundException>());
     }
 
     [TestCase(null)]
     [TestCase("")]
-    public void AdvanceAsync_null_or_empty_region_throws(string? regionId)
+    public void BeginBackfillAsync_null_or_empty_region_throws(string? regionId)
     {
         var registry = new FakeTenantRegistry();
         registry.Seed(RecordWith(TenantRegionStatus.Provisioning));
         var driver = Driver(registry);
 
         Assert.That(
-            async () => await driver.AdvanceAsync(Acme, regionId!),
+            async () => await driver.BeginBackfillAsync(Acme, regionId!),
             Throws.InstanceOf<ArgumentException>());
     }
 

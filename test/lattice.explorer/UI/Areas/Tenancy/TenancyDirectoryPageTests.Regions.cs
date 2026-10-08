@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 /// <summary>
 /// The directory's regions: residency linking to each tenant's regions, the
 /// set-regions picker behind the palette command, and a new tenant created with
-/// its allowed regions and an initial residency, confirmed because it starts with
-/// no Online region, each step reporting its own outcome.
+/// its allowed regions and an initial residency without a second confirmation,
+/// each step reporting its own outcome.
 /// </summary>
 public sealed partial class TenancyDirectoryPageTests
 {
@@ -91,7 +91,7 @@ public sealed partial class TenancyDirectoryPageTests
     }
 
     [Test]
-    public void A_tenant_created_with_regions_and_a_residency_is_confirmed_then_each_step_reports_its_outcome()
+    public void A_tenant_created_with_regions_and_a_residency_needs_no_extra_confirmation()
     {
         Cluster.CreatesTenantsWithoutRegions = true;
         var cut = OpenCreate();
@@ -101,16 +101,8 @@ public sealed partial class TenancyDirectoryPageTests
 
         cut.WaitUntil(() =>
         {
-            Assert.That(cut.Find("[role=alertdialog] .lt-dialog__title").TextContent, Is.EqualTo("Create tenant globex with no Online region?"));
-            Assert.That(cut.Find("[role=alertdialog] .lt-tenancy-consequence").TextContent, Does.Contain("is not served anywhere until then"));
-            Assert.That(cut.FindAll("form.lt-tenancy-form"), Is.Empty, "the form gives way to the confirmation");
-            Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.CreateTenantAsync)));
-        });
-
-        TenancyForms.Button(cut, "Create tenant").Click();
-
-        cut.WaitUntil(() =>
-        {
+            Assert.That(cut.FindAll("[role=alertdialog]"), Is.Empty,
+                "setting initial residency is part of tenant creation, not a separate approval");
             Assert.That(Cluster.Calls.Where(call => call is nameof(FakeTenancyCluster.CreateTenantAsync) or nameof(FakeTenancyCluster.AuthorizeAllowedRegionsAsync) or nameof(FakeTenancyCluster.SetResidencyAsync)),
                 Is.EqualTo(new[] { nameof(FakeTenancyCluster.CreateTenantAsync), nameof(FakeTenancyCluster.AuthorizeAllowedRegionsAsync), nameof(FakeTenancyCluster.SetResidencyAsync) }));
             var regions = Cluster.Tenants["globex"].Regions;
@@ -146,26 +138,6 @@ public sealed partial class TenancyDirectoryPageTests
     }
 
     [Test]
-    public void Back_from_the_confirmation_returns_to_the_filled_form_and_writes_nothing()
-    {
-        var cut = OpenCreate();
-        FillCreate(cut, "globex", allowed: ["us-east"], residency: ["us-east"]);
-        cut.Find("form.lt-tenancy-form").Submit();
-        cut.WaitUntil(() => cut.Find("[role=alertdialog]"));
-
-        TenancyForms.Button(cut, "Back").Click();
-
-        cut.WaitUntil(() =>
-        {
-            Assert.That(cut.FindAll("[role=alertdialog]"), Is.Empty);
-            Assert.That(TenancyForms.Field(cut, "Tenant id").GetAttribute("value"), Is.EqualTo("globex"));
-            Assert.That(ChipsOf(cut, AllowedLabel), Is.EqualTo(new[] { "us-east" }));
-            Assert.That(ChipsOf(cut, ResidencyLabel), Is.EqualTo(new[] { "us-east" }));
-            Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.CreateTenantAsync)));
-        });
-    }
-
-    [Test]
     public void The_residency_waits_for_allowed_regions_and_follows_them()
     {
         var cut = OpenCreate();
@@ -187,9 +159,6 @@ public sealed partial class TenancyDirectoryPageTests
         var cut = OpenCreate();
         FillCreate(cut, "globex", allowed: ["us-east"], residency: ["us-east"]);
         cut.Find("form.lt-tenancy-form").Submit();
-        cut.WaitUntil(() => cut.Find("[role=alertdialog]"));
-
-        TenancyForms.Button(cut, "Create tenant").Click();
 
         cut.WaitUntil(() =>
         {
@@ -211,9 +180,6 @@ public sealed partial class TenancyDirectoryPageTests
         var cut = OpenCreate();
         FillCreate(cut, "globex", allowed: ["us-east"], residency: ["us-east"]);
         cut.Find("form.lt-tenancy-form").Submit();
-        cut.WaitUntil(() => cut.Find("[role=alertdialog]"));
-
-        TenancyForms.Button(cut, "Create tenant").Click();
 
         cut.WaitUntil(() =>
         {
@@ -223,15 +189,12 @@ public sealed partial class TenancyDirectoryPageTests
     }
 
     [Test]
-    public void A_refused_creation_from_the_confirmation_returns_to_the_form_with_the_reason()
+    public void A_refused_creation_with_initial_residency_returns_to_the_form_with_the_reason()
     {
         Cluster.Fail(nameof(FakeTenancyCluster.CreateTenantAsync), new TenantAlreadyExistsException("globex"));
         var cut = OpenCreate();
         FillCreate(cut, "globex", allowed: ["us-east"], residency: ["us-east"]);
         cut.Find("form.lt-tenancy-form").Submit();
-        cut.WaitUntil(() => cut.Find("[role=alertdialog]"));
-
-        TenancyForms.Button(cut, "Create tenant").Click();
 
         cut.WaitUntil(() =>
         {

@@ -655,10 +655,24 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task AcquireCaptureGateAsync(Guid token, TxRegistryCaptureGateMode mode, TimeSpan lease);
 
     /// <summary>
+    /// Acquires a nonrenewable decision gate for a multi-key read. Read gates
+    /// never overlap on this registry, and release or expiry is followed by a
+    /// writer-open admission window before the next read gate. Acquisition is
+    /// bounded by <paramref name="lease"/> and observes cancellation.
+    /// Existing snapshot-capture admission is unchanged.
+    /// </summary>
+    /// <param name="token">The read's gate token.</param>
+    /// <param name="lease">The acquisition budget and hold lifetime.</param>
+    /// <param name="cancellationToken">Cancels acquisition.</param>
+    /// <returns>A task that completes with D0 captured under the hold.</returns>
+    [AlwaysInterleave]
+    Task AcquireReadCaptureGateAsync(Guid token, TimeSpan lease, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Extends the hold under <paramref name="token"/> to <c>now + lease</c>.
     /// Returns <see langword="false"/> when the hold is not live (never
-    /// acquired, released, lapsed, or lost to a reactivation); a lapsed hold is
-    /// never revived.
+    /// acquired, released, lapsed, or lost to a reactivation), or is a
+    /// nonrenewable read hold; a lapsed hold is never revived.
     /// </summary>
     /// <param name="token">The capture's gate token.</param>
     /// <param name="lease">The new lease, measured from now.</param>
@@ -690,6 +704,18 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <returns>The per-txid status as of D0.</returns>
     [AlwaysInterleave]
     Task<Dictionary<Guid, TxStatus>> GetCaptureGateStatusManyAsync(Guid token, IReadOnlyList<Guid> txids);
+
+    /// <summary>
+    /// Returns a defensive copy of the local decision snapshot (D0) captured by
+    /// the live gate under <paramref name="token"/>. Unlike a reader snapshot,
+    /// this preserves recorded expired decisions and never resolves delegated
+    /// coordinators. An absent transaction resolves as InFlight.
+    /// Throws <see cref="TxDecisionGateRefusedException"/> when the gate is lost.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <returns>The local decisions captured at gate acquisition.</returns>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, TxStatus>> GetCaptureGateSnapshotAsync(Guid token);
 
     /// <summary>
     /// The transactions the capture under <paramref name="token"/> resolved through

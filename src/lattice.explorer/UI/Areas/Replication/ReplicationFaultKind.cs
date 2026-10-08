@@ -11,4 +11,7 @@ internal enum ReplicationFaultKind
 
     /// <summary>The cluster could not answer: not connected, unavailable, or an unexpected fault.</summary>
     Failed = 2,
+
+    /// <summary>A legacy in-place snapshot bootstrap has fenced this tree's reads.</summary>
+    Bootstrapping = 3,
 }

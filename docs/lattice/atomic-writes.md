@@ -837,9 +837,58 @@ view, so it **fails closed only when its result depends on the registry**:
 - if no key the read reached carried a prepared mutation, no value
   depended on a saga decision and the result is returned;
 - otherwise the attempt is retried under a fresh snapshot, within
-  `LatticeOptions.MaxScanRetries`, and on exhaustion the read throws
+  `LatticeOptions.MaxScanRetries`, then uses the bounded fallback below.
+  A fallback that cannot certify its cut throws
   `LatticeTransactionOutcomeUnavailableException` rather than return a
   result that could be torn (some keys post-saga, some pre-saga).
+
+When saga commits repeatedly invalidate the optimistic `GetManyAsync` attempts,
+the read acquires a read-specific hold on the local decision gate across
+the legacy registry and every registry shard in the durable high-water mark. It
+reads under the gate's immutable D0 decisions, then validates the shard map and
+releases every hold before accepting the result. A copied registry snapshot
+alone is insufficient: committed prepares drain irreversibly into ordinary leaf
+entries. The gate prevents new local decisions and delegated-verdict caching;
+terminals and late-prepare settlement follow durable local decisions, so existing
+committed sagas may drain without crossing D0.
+
+The fallback has a 30-second deadline including acquisition and certification,
+and never renews its 30-second per-registry leases. Prepares and ordinary writes
+remain admitted; saga decisions are temporarily refused and retried by their
+existing writer retry policy. Cleanup releases holds on success, failure and
+cancellation; partial acquisition releases every attempted registry. If a caller
+abandons a stalled grain call, cleanup follows its completion and the leases
+lapse independently. A lost, expired or reactivated hold, an uncovered registry
+shard, or a topology change fails closed rather than certifying a torn read.
+Read holds do not overlap on a registry. Acquisition is sequential, legacy
+first and then ascending shard number, including high-water widening; this
+prevents readers from each holding a different half of the registries. After
+release or expiry each registry leaves a one-second writer-open interval before
+admitting another read hold. That interval references twice the writer retry
+ceiling constant; a focused guard checks that it exceeds the actual maximum
+backoff (currently 640 ms). Existing backup capture admission is unchanged.
+
+The obstruction is tree-wide, not limited to the requested keys or transaction
+ids: new local commit/abort decisions, delegation registration and delegated
+verdict caching wait or defer. Ordinary writes, prepares, and draining a decision
+already in D0 continue. With healthy RPC scheduling and storage, the normal added
+writer delay is the remaining read acquisition/fan-out/certification time plus
+one writer retry (at most 640 ms); a crashed reader's obstruction ends after its
+nonrenewed 30-second lease, plus that retry. The open interval lets a writer that
+arrived during a hold land before back-to-back readers can reacquire. It is not
+a bound on unavailable storage, unrelated backup holds or replication deferral
+scheduling.
+
+Sustained saga commits alone no longer invalidate every attempt once the read
+obtains its gate. Acquisition can still lose under reader contention; a read
+that cannot acquire and certify within 30 seconds fails closed. Repeated lease
+expiry, unavailable storage/transport, unbounded RPC latency, reactivation, and
+continued topology/registry-coverage churn are not unconditional progress cases.
+The counts retain their existing retry policy. An Information-level structured
+log names the tree and optimistic attempt count whenever the fallback is entered.
+A fallback read occupies a `LatticeGrain` stateless-worker activation for up to
+the 30-second gate lease, so `MaxLocalWorkers` headroom matters under sustained
+fallback traffic.
 
 The streaming `KeysAsync` / `EntriesAsync` scans instead pin the one
 snapshot they capture at scan start for every page, and are not re-run

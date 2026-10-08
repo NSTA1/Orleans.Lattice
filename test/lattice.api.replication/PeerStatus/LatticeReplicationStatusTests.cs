@@ -118,6 +118,27 @@ public sealed class LatticeReplicationStatusTests
     }
 
     [Test]
+    public async Task GetPeerStatusAsync_maps_the_specific_cause_of_a_stalled_link()
+    {
+        var reader = new StatsBackedPeerStatusReader();
+        var now = reader.Stats.Now;
+        reader.Stats.RecordReseedRequired("trimmed", "east", now);
+        reader.Stats.RecordDeadLetterFull("full-queue", "east", ReplicationContactDirection.Outbound, now);
+        reader.Stats.RecordReseedRequired("both", "east", now);
+        reader.Stats.RecordDeadLetterFull("both", "east", ReplicationContactDirection.Outbound, now);
+
+        var links = await ReadAllAsync(CreateStatus(reader), ReplicationPeerStatusQuery.All);
+        var reasons = links.ToDictionary(link => link.TreeId, link => link.StallReason);
+
+        Assert.That(reasons, Is.EqualTo(new Dictionary<string, ReplicationLinkStallReason?>
+        {
+            ["both"] = ReplicationLinkStallReason.ReseedRequired,
+            ["full-queue"] = ReplicationLinkStallReason.DeadLetterQueueFull,
+            ["trimmed"] = ReplicationLinkStallReason.ReseedRequired,
+        }));
+    }
+
+    [Test]
     public async Task GetPeerStatusAsync_omits_trees_the_caller_may_not_manage()
     {
         var reader = new StatsBackedPeerStatusReader();

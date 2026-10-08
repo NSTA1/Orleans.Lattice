@@ -20,6 +20,17 @@ internal interface ITenantResidencyConfirmation
     bool TryResolveOnline(TenantId tenant, out bool online);
 
     /// <summary>
+    /// Answers whether inbound replication is admissible in the local region.
+    /// Unlike client serving, replication may enter a region while it is
+    /// <see cref="TenantRegionStatus.Backfilling"/> so the replica can converge
+    /// before it becomes online.
+    /// </summary>
+    /// <param name="tenant">The tenant to test.</param>
+    /// <param name="admissible">The answer when this returns <c>true</c>; otherwise <c>false</c>.</param>
+    /// <returns><c>true</c> when the answer is authoritative; otherwise the caller must confirm.</returns>
+    bool TryResolveReplicationAdmissible(TenantId tenant, out bool admissible);
+
+    /// <summary>
     /// Confirms against the tenant's authoritative registry record whether it is
     /// online in this serving region. An unregistered tenant is not online.
     /// </summary>
@@ -37,4 +48,12 @@ internal interface ITenantResidencyConfirmation
     /// <param name="record">The tenant's authoritative registry record.</param>
     /// <returns><c>true</c> when the tenant is online in this serving region.</returns>
     bool IsOnline(TenantRecord record);
+
+    /// <summary>
+    /// Whether inbound replication may be applied to the tenant in the local
+    /// region, by the same rule the residency snapshot applies.
+    /// </summary>
+    /// <param name="record">The tenant's authoritative registry record.</param>
+    /// <returns><c>true</c> when unconfigured, backfilling, or online locally.</returns>
+    bool IsReplicationAdmissible(TenantRecord record);
 }

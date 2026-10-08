@@ -26,7 +26,11 @@ internal interface IReplicationTreeFrontierGrain : IGrainWithStringKey
     /// tree's applied identities. Durable before it returns; a failure must
     /// propagate to the caller, which must not replace the contents.
     /// </summary>
-    Task OnContentsReplacingAsync(CancellationToken cancellationToken = default);
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="preserveBootstrapFloor">Whether this is a bootstrap shadow cutover whose destination retains the floored contents.</param>
+    Task OnContentsReplacingAsync(
+        CancellationToken cancellationToken = default,
+        bool preserveBootstrapFloor = false);
 
     /// <summary>
     /// The tree registry is about to persist <paramref name="nextLineage"/> as

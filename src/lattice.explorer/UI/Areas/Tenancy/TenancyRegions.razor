@@ -16,6 +16,12 @@
     </div>
     <span class="lt-visually-hidden" aria-live="polite">@_stageAnnouncement</span>
 
+    @if (_busy)
+    {
+        <LtProgress Label="Saving tenant regions" Phase="@_savePhase"
+                    Detail="Waiting for the cluster to confirm the change. The residency lifecycle continues after the save." />
+    }
+
     @if (_failure is { } failure)
     {
         <LtEmptyState Title="@(failure.Kind == TenancyFailureKind.Denied ? "Not permitted" : "Regions could not be read")" HeadingLevel="3">
@@ -88,6 +94,26 @@
                         <LtStatusPill State="@TenancyFormat.RegionStatusRole(context.Status)" Text="@TenancyFormat.RegionStatusLabel(context.Status, _plan.HasResidency)" />
                         @StepProgress(context)
                         <span class="lt-tenancy-meaning">@TenancyFormat.RegionStatusMeaning(context.Status, _plan.HasResidency)</span>
+                        @if (context.BackfillProgress is { } progress)
+                        {
+                            <div class="lt-tenancy-backfill-progress" aria-label="@($"Backfill progress in {context.RegionId}")">
+                                <strong>Backfill: @progress.Phase</strong>
+                                @if (progress.StallReason is { Length: > 0 } reason)
+                                {
+                                    <span class="lt-tenancy-warning" role="status">@reason</span>
+                                }
+                                @foreach (var tree in progress.Trees)
+                                {
+                                    <span class="lt-tenancy-quiet">@tree.TreeId: @tree.Phase (@tree.EntriesApplied entries applied)</span>
+                                }
+                            </div>
+                        }
+                        @if (CanAuthorize && context.Status == TenantRegionLifecycleStatus.Backfilling)
+                        {
+                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="@(() => OpenOperatorAdvance(context.RegionId))" Disabled="_busy">
+                                Override backfill for @context.RegionId...
+                            </LtButton>
+                        }
                     </LtColumn>
                     <LtColumn TItem="TenancyRegionRow" Title="Served here" Value="@(row => ServedText(row))" />
                     <LtColumn TItem="TenancyRegionRow" Title="Allowed" Value="@(row => row.IsAllowed ? "Allowed" : "Not allowed")" />
@@ -103,16 +129,15 @@
                         <State><LtStatusPill State="@TenancyFormat.RegionStatusRole(context.Status)" Text="@TenancyFormat.RegionStatusLabel(context.Status, _plan.HasResidency)" /></State>
                     </LtCompactRow>
                 </CompactRow>
-                <DetailActions>
-                    @StepProgress(context)
-                    <p class="lt-tenancy-meaning">@TenancyFormat.RegionStatusMeaning(context.Status, _plan.HasResidency)</p>
-                    @ResidencyControl(context)
-                </DetailActions>
             </LtTable>
 
             @if (_following)
             {
                 <p class="lt-tenancy-quiet lt-tenancy-following">Updating on its own while a region is part-way through a change.</p>
+                <p class="lt-tenancy-note">
+                    The cluster reports lifecycle stages, but not their age or a stall reason.
+                    If a removal stays at the same step, ask a platform operator to check the draining region's silos and replication.
+                </p>
             }
 
             @if (_plan.IsChanged)
@@ -131,14 +156,11 @@
                             <p class="lt-tenancy-consequence">Applying this leaves tenant <span class="lt-tenancy-mono">@TenantId</span> served nowhere, so Apply is off.</p>
                             <p>
                                 Not Online for it: <span class="lt-tenancy-mono">@string.Join(", ", _plan.NotOnlineAfter)</span>.
-                                A tenant with residency is served only in its Online regions, and a region added to the residency
-                                starts Provisioning until a platform operator of the hosting deployment promotes it to Online.
+                                A tenant with residency is served only in its Online regions. Added regions are automatically backfilled
+                                and become Online after the replica is verified.
                                 @(_plan.HasOnlineRegion
-                                    ? "Keep a region that is already Online, or ask an operator to promote one first."
-                                    : $"No region is Online for {TenantId} yet, and a region can be promoted only once it is in the residency, so a first residency stops serving it until an operator promotes one. Leave the residency unset to keep it served in every region.")
-                            </p>
-                            <p>
-                                <a href="@TenancyFormat.PromotionHelpUrl" target="_blank" rel="noopener noreferrer">How a platform operator promotes a region (opens the documentation in a new tab)</a>
+                                    ? "Keep a region that is already Online, or wait for the new region's backfill to complete."
+                                    : $"No region is Online for {TenantId} yet. The tenant remains unserved until an added region's backfill is verified. Leave residency unset to keep it served in every region.")
                             </p>
                         </div>
                     }
@@ -146,8 +168,7 @@
                     {
                         <p class="lt-tenancy-note lt-tenancy-still-unserved">
                             Tenant <span class="lt-tenancy-mono">@TenantId</span> is served nowhere now, so this change stops nothing. It stays unserved
-                            until a platform operator of the hosting deployment promotes one of <span class="lt-tenancy-mono">@TenancyFormat.RegionList(_plan.Planned)</span> to Online.
-                            <a href="@TenancyFormat.PromotionHelpUrl" target="_blank" rel="noopener noreferrer">How a platform operator promotes a region (opens the documentation in a new tab)</a>
+                            until backfill is verified in one of <span class="lt-tenancy-mono">@TenancyFormat.RegionList(_plan.Planned)</span>.
                         </p>
                     }
                 </section>
@@ -181,8 +202,8 @@
     {
         <p class="lt-tenancy-consequence">
             After this change none of tenant <code class="lt-tenancy-mono">@TenantId</code>'s resident regions is Online. A tenant with residency is
-            served only in Online regions, so <code class="lt-tenancy-mono">@TenantId</code> is not served anywhere until a platform operator of the
-            hosting deployment promotes one of <code class="lt-tenancy-mono">@TenancyFormat.RegionList(_plan.Planned)</code> to Online.
+            served only in Online regions, so <code class="lt-tenancy-mono">@TenantId</code> is not served anywhere until backfill is verified in one of
+            <code class="lt-tenancy-mono">@TenancyFormat.RegionList(_plan.Planned)</code>.
         </p>
         <div class="lt-dialog__actions">
             <LtButton OnClick="@(() => _confirmResidency = false)">Keep serving @TenantId</LtButton>
@@ -196,6 +217,24 @@
             <LtButton Variant="LtButtonVariant.Destructive" OnClick="SetResidencyAsync" Disabled="_busy">Drain and apply</LtButton>
         </div>
     }
+</LtDialog>
+
+<LtDialog Open="@(_operatorAdvanceRegion is not null)" OpenChanged="@(open => { if (!open) CloseOperatorAdvance(); })"
+          Title="@($"Acknowledge data in place for {_operatorAdvanceRegion}")" Alert="true" Placement="DialogPlacement">
+    <p>
+        This bypasses verified backfill and can expose missing data. Continue only if the tenant's complete data is already present in
+        <code class="lt-tenancy-mono">@_operatorAdvanceRegion</code>.
+    </p>
+    <label class="lt-tenancy-acknowledgement">
+        <input type="checkbox" checked="@_acknowledgeDataInPlace" @onchange="AcknowledgementChanged" />
+        I confirm the tenant's complete data is already in this region.
+    </label>
+    <div class="lt-dialog__actions">
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseOperatorAdvance" Disabled="_busy">Cancel</LtButton>
+        <LtButton Variant="LtButtonVariant.Destructive" OnClick="AdvanceForOperatorAsync" Disabled="@(_busy || !_acknowledgeDataInPlace)">
+            Acknowledge and advance
+        </LtButton>
+    </div>
 </LtDialog>
 
 <LtDialog Open="_confirmAllowed" OpenChanged="@(open => _confirmAllowed = open)" Title="Revoke allowed regions?" Alert="true" Placement="DialogPlacement">

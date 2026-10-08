@@ -188,6 +188,22 @@
   font-size: var(--lt-text-sm);
 }
 
+.lt-tenancy-backfill-progress {
+  display: grid;
+  gap: var(--lt-space-1);
+  max-width: 32rem;
+  margin: var(--lt-space-2) 0 0;
+}
+
+.lt-tenancy-acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lt-space-2);
+  max-width: 48rem;
+  margin: var(--lt-space-3) 0;
+  font-size: var(--lt-text-sm);
+}
+
 /* A region part-way along its add or remove path: the step it has reached, on a short bar. */
 .lt-tenancy-step {
   max-width: 20rem;

@@ -6,6 +6,7 @@ using Orleans.Lattice.Operations;
 using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
+using Orleans.Timers;
 
 namespace Orleans.Lattice.Tests.Operations;
 
@@ -17,7 +18,7 @@ namespace Orleans.Lattice.Tests.Operations;
 /// with a manual clock, so nothing depends on wall time.
 /// </summary>
 [TestFixture]
-public sealed class LatticeOperationGrainTests
+public sealed partial class LatticeOperationGrainTests
 {
     private const string Tenant = "default";
     private const string OperationId = "op-1";
@@ -44,7 +45,7 @@ public sealed class LatticeOperationGrainTests
         };
     }
 
-    private LatticeOperationGrain CreateGrain(string operationId = OperationId)
+    private LatticeOperationGrain CreateGrain(string operationId = OperationId, IReminderRegistry? reminders = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("latticeoperation", LatticeOperationKey.For(Tenant, operationId)));
@@ -57,9 +58,11 @@ public sealed class LatticeOperationGrainTests
             factory,
             _liveness,
             Options.Create(_options),
-            NullLogger<LatticeOperationGrain>.Instance)
+            NullLogger<LatticeOperationGrain>.Instance,
+            reminders ?? Substitute.For<IReminderRegistry>())
         {
             Clock = _clock,
+            TimerFactory = _ => Substitute.For<IGrainTimer>(),
         };
     }
 
@@ -117,9 +120,10 @@ public sealed class LatticeOperationGrainTests
             Assert.That(result.Record.PhaseCount, Is.EqualTo(2));
             Assert.That(result.Record.TreeIds, Is.EqualTo(new[] { "tree-a" }));
             Assert.That(result.Record.StartedAtUtc, Is.EqualTo(_clock.GetUtcNow()));
-            Assert.That(_state.WriteCount, Is.EqualTo(1));
+            Assert.That(_state.WriteCount, Is.EqualTo(2), "The record/outbox and index acknowledgement are persisted separately.");
         });
-        await _index.Received(1).AddAsync(OperationId, "test.kind", _clock.GetUtcNow());
+        await _index.Received(1).ReconcileAsync(
+            Arg.Is<LatticeOperationRecord>(r => r.OperationId == OperationId && r.State == LatticeOperationState.Queued), false);
     }
 
     [Test]
@@ -274,7 +278,8 @@ public sealed class LatticeOperationGrainTests
             Assert.That(done.Result["backupId"], Is.EqualTo("bk-1"));
             Assert.That(again!.State, Is.EqualTo(LatticeOperationState.Succeeded), "A terminal outcome is final.");
         });
-        await _index.Received(1).MarkFinishedAsync(OperationId, finishedAt);
+        await _index.Received(1).ReconcileAsync(
+            Arg.Is<LatticeOperationRecord>(r => r.FinishedAtUtc == finishedAt), false);
     }
 
     [Test]
@@ -377,7 +382,7 @@ public sealed class LatticeOperationGrainTests
         _clock.Advance(TimeSpan.FromTicks(1));
 
         Assert.That(await grain.GetAsync(), Is.Null);
-        await _index.Received(1).RemoveAsync(OperationId);
+        await _index.Received(1).ReconcileAsync(Arg.Any<LatticeOperationRecord>(), true);
     }
 
     [Test]

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.Lattice.Replication.Tests.Fakes;
@@ -54,6 +55,19 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
         factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
         factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
+        var resize = Substitute.For<ITreeResizeGrain>();
+        var authoritativeTreeId = treeName;
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.ResolveAsync(treeName).Returns(_ => Task.FromResult(authoritativeTreeId));
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        resize.BeginBootstrapCopyAsync(Arg.Any<string>()).Returns(call => $"{treeName}/shadow");
+        resize.IsBootstrapCopyReadyAsync(Arg.Any<string>()).Returns(true);
+        resize.CompleteBootstrapCopyAsync(Arg.Any<string>()).Returns(_ =>
+        {
+            authoritativeTreeId = $"{treeName}/shadow";
+            return Task.CompletedTask;
+        });
+        factory.GetGrain<ITreeResizeGrain>(Arg.Any<string>()).Returns(resize);
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var apply = Substitute.For<IReplicationApplier>();

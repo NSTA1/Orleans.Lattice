@@ -6,10 +6,9 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 
 /// <summary>
 /// Internal helper for trusted infrastructure to advance a tenant's region
-/// through the residency lifecycle one legal step at a time: it applies the
-/// backfill-complete promotion (<see cref="TenantRegionStatus.Provisioning"/> -&gt;
-/// <see cref="TenantRegionStatus.Backfilling"/> -&gt;
-/// <see cref="TenantRegionStatus.Online"/>) on the add path, and the drain
+/// through the residency lifecycle one legal step at a time: it applies
+/// <see cref="TenantRegionStatus.Provisioning"/> -&gt;
+/// <see cref="TenantRegionStatus.Backfilling"/> on the add path, and the drain
 /// completion (<see cref="TenantRegionStatus.Draining"/> -&gt;
 /// <see cref="TenantRegionStatus.Offline"/> -&gt;
 /// <see cref="TenantRegionStatus.Removed"/>) on the remove path.
@@ -18,13 +17,10 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <para>
 /// This is not a caller-facing operation, so it carries no caller authorization.
 /// The silo drives the remove path of its own serving region automatically
-/// through <see cref="TenantRegionDrainCompletionListener"/>, which calls
-/// <see cref="CompleteDrainStepAsync"/>. The add path is deliberately <b>not</b>
-/// driven automatically: no shipped component copies a tenant's existing data into
-/// a newly added region, so promoting it to <see cref="TenantRegionStatus.Online"/>
-/// unprompted would serve an incomplete replica. Advancing an added region is the
-/// operator step the tenancy documentation names, taken once the region has been
-/// backfilled.
+/// through <see cref="TenantRegionDrainCompletionListener"/> and drives the add
+/// path through <see cref="TenantRegionBackfillService"/>. This driver never moves
+/// a region to <see cref="TenantRegionStatus.Online"/> without a verified bootstrap
+/// completion or an explicit operator acknowledgement.
 /// </para>
 /// <para>
 /// Every advance consults the single lifecycle authority
@@ -58,11 +54,12 @@ internal sealed class TenantRegionLifecycleDriver
     }
 
     /// <summary>
-    /// Advances <paramref name="regionId"/> of <paramref name="tenant"/> by a single
-    /// legal lifecycle step on either path and returns the region's committed
-    /// status. A no-op that returns the current status when the region is at a
-    /// terminal or non-transitional status (or has no status at all), so it is safe
-    /// to redrive.
+    /// Advances <paramref name="regionId"/> of <paramref name="tenant"/> by one
+    /// legal add-path step after an explicit data-in-place acknowledgement and
+    /// returns the region's committed status. Automatic backfill uses the internal
+    /// verified-completion path instead. A no-op that returns the current status
+    /// when the region is at a terminal or non-transitional status (or has no
+    /// status at all), so it is safe to redrive.
     /// </summary>
     /// <param name="tenant">The tenant whose region is advanced.</param>
     /// <param name="regionId">The region id to advance. Must not be <c>null</c> or empty.</param>
@@ -74,9 +71,48 @@ internal sealed class TenantRegionLifecycleDriver
     /// </returns>
     /// <exception cref="ArgumentException"><paramref name="regionId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="TenantNotFoundException">No tenant with that id is registered.</exception>
-    public Task<TenantRegionStatus> AdvanceAsync(
+    /// <param name="acknowledgeDataInPlace">Must be <see langword="true"/> to explicitly acknowledge that the operator has verified the tenant's data is present in this region.</param>
+    public Task<TenantRegionStatus> AdvanceForOperatorAsync(
+        TenantId tenant, string regionId, bool acknowledgeDataInPlace, CancellationToken cancellationToken = default)
+    {
+        if (!acknowledgeDataInPlace)
+        {
+            throw new ArgumentException("The operator must acknowledge that tenant data is already in place.", nameof(acknowledgeDataInPlace));
+        }
+
+        return AdvanceAddStepAsync(tenant, regionId, cancellationToken);
+    }
+
+    /// <summary>Moves a newly added region from Provisioning to Backfilling.</summary>
+    /// <param name="tenant">The tenant whose region is advanced.</param>
+    /// <param name="regionId">The region id to advance.</param>
+    /// <param name="cancellationToken">Cancels the advance.</param>
+    internal Task<TenantRegionStatus> BeginBackfillAsync(
         TenantId tenant, string regionId, CancellationToken cancellationToken = default) =>
-        AdvanceCoreAsync(tenant, regionId, drainOnly: false, cancellationToken);
+        AdvanceExpectedAsync(tenant, regionId, TenantRegionStatus.Provisioning, cancellationToken);
+
+    /// <summary>
+    /// Moves a region from Backfilling to Online only after every configured tenant
+    /// tree has completed its receiver-side bootstrap.
+    /// </summary>
+    /// <param name="tenant">The tenant whose region is advanced.</param>
+    /// <param name="regionId">The region id to advance.</param>
+    /// <param name="backfillVerified">Whether all tenant trees have a live incremental bootstrap.</param>
+    /// <param name="cancellationToken">Cancels the advance.</param>
+    internal Task<TenantRegionStatus> CompleteBackfillAsync(
+        TenantId tenant, string regionId, bool backfillVerified, CancellationToken cancellationToken = default)
+    {
+        if (!backfillVerified)
+        {
+            throw new ArgumentException("A region cannot become Online until its backfill is verified complete.", nameof(backfillVerified));
+        }
+
+        return AdvanceExpectedAsync(tenant, regionId, TenantRegionStatus.Backfilling, cancellationToken);
+    }
+
+    private Task<TenantRegionStatus> AdvanceAddStepAsync(
+        TenantId tenant, string regionId, CancellationToken cancellationToken = default) =>
+        AdvanceExpectedAsync(tenant, regionId, expectedStatus: null, cancellationToken);
 
     /// <summary>
     /// Advances <paramref name="regionId"/> of <paramref name="tenant"/> by a single
@@ -114,6 +150,35 @@ internal sealed class TenantRegionLifecycleDriver
 
         var current = record.GetRegionStatus(regionId);
         if (drainOnly && !IsDrainStep(current))
+        {
+            return current;
+        }
+
+        if (!record.TryPromoteRegionStatus(regionId, _writerId, out _))
+        {
+            return current;
+        }
+
+        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        return merged.GetRegionStatus(regionId);
+    }
+
+    private async Task<TenantRegionStatus> AdvanceExpectedAsync(
+        TenantId tenant,
+        string regionId,
+        TenantRegionStatus? expectedStatus,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false)
+            ?? throw new TenantNotFoundException(tenant.Value);
+        var current = record.GetRegionStatus(regionId);
+        if (expectedStatus is { } expected && current != expected)
+        {
+            return current;
+        }
+
+        if (expectedStatus is null && current is not (TenantRegionStatus.Provisioning or TenantRegionStatus.Backfilling))
         {
             return current;
         }

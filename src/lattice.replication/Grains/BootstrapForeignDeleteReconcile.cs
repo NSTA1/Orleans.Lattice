@@ -83,6 +83,39 @@ internal static class BootstrapForeignDeleteReconcile
     public static ForeignOrphanVerdict Classify(SnapshotSourceFrontier frontier, string origin, HybridLogicalClock timestamp)
     {
         ArgumentNullException.ThrowIfNull(frontier);
+        return ClassifyCore(frontier, origin, timestamp);
+    }
+
+    /// <summary>
+    /// Classifies a live receiver row whose key the export lacks, as seen by
+    /// the receiver <paramref name="receiverClusterId"/> (issue #4768). A row
+    /// of the receiver's own origin - stored with no origin, or stamped with
+    /// the receiver's id - is always kept. The source cannot have reaped a
+    /// delete of it the receiver has not applied, since the reap gate waits for
+    /// the receiver to acknowledge the tombstone. So such a row is either still
+    /// on its way to the source, or newer than any delete there. Its watermark
+    /// at the source is derived from the receiver's own shipper. A rebind of
+    /// that shipper's log can let it run ahead of what the source applied, so
+    /// it proves nothing about the receiver's writes.
+    /// </summary>
+    public static ForeignOrphanVerdict ClassifyForReceiver(
+        SnapshotSourceFrontier frontier,
+        string receiverClusterId,
+        string? rowOrigin,
+        HybridLogicalClock timestamp)
+    {
+        ArgumentNullException.ThrowIfNull(frontier);
+        if (string.IsNullOrEmpty(rowOrigin)
+            || string.Equals(rowOrigin, receiverClusterId, StringComparison.Ordinal))
+        {
+            return ForeignOrphanVerdict.Keep;
+        }
+
+        return ClassifyCore(frontier, rowOrigin, timestamp);
+    }
+
+    private static ForeignOrphanVerdict ClassifyCore(SnapshotSourceFrontier frontier, string origin, HybridLogicalClock timestamp)
+    {
         if (string.IsNullOrEmpty(origin))
         {
             return ForeignOrphanVerdict.Keep;

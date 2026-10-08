@@ -1,8 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Replication;
 using Orleans.Lattice.Tenancy;
 using Orleans.TestingHost;
 
@@ -41,8 +45,10 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests;
 public sealed class LatticeTenantRegionAdminIntegrationTests
 {
     private const string Operator = "root";
+    private const string TenantAdmin = "alice";
     private const string RegionA = "us-east";
     private const string RegionB = "us-west";
+    private const string BackfillTree = "t/backfill-data/orders";
 
     private readonly FacadeClusterFixture _fixture = new();
 
@@ -59,7 +65,7 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
     public Task TearDown() => _fixture.DisposeAsync();
 
     [Test]
-    public async Task Add_path_provisions_then_backfills_to_online_through_the_facade_and_driver()
+    public async Task Add_path_auto_promotes_an_empty_tenant_without_an_operator_step()
     {
         var tenant = TenantId.Parse("add-path");
         await SeedTenantAsync(tenant);
@@ -71,16 +77,82 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             var change = await Facade.SetResidencyAsync(tenant.Value, new[] { RegionA });
             Assert.That(change.AddedRegions, Does.Contain(RegionA), "the newly-resident region begins adding");
 
-            // Backfill-complete promotion: Provisioning -> Backfilling -> Online.
-            Assert.That(await Driver.AdvanceAsync(tenant, RegionA), Is.EqualTo(TenantRegionStatus.Backfilling));
-            Assert.That(await Driver.AdvanceAsync(tenant, RegionA), Is.EqualTo(TenantRegionStatus.Online));
+        }
 
+        var online = await WaitForStatusAsync(tenant, RegionA, TenantRegionLifecycleStatus.Online);
+        Assert.That(online, Is.EqualTo(TenantRegionLifecycleStatus.Online),
+            "the empty-tenant fast path must complete automatically, without an operator promotion call");
+    }
+
+    [Test]
+    public async Task Existing_tenant_data_is_backfilled_before_the_new_region_becomes_online()
+    {
+        var tenant = TenantId.Parse("backfill-data");
+        await SeedTenantAsync(tenant, RegionB);
+        using (LatticeSystemOrigin.Enter())
+        using (LatticeActiveTenantContext.With(tenant))
+        {
+            var targetTree = _fixture.SiloServices.GetRequiredService<IGrainFactory>().GetGrain<ILattice>(BackfillTree);
+            await targetTree.SetAsync("existing-1", Bytes("stale-one"));
+            await targetTree.SetAsync("existing-2", Bytes("stale-two"));
+        }
+
+        FacadeClusterFixture.FixtureBootstrapSnapshotSource.Arm(BackfillTree);
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Facade.AuthorizeAllowedRegionsAsync(tenant.Value, new[] { RegionA, RegionB });
+            var change = await Facade.SetResidencyAsync(tenant.Value, new[] { RegionA, RegionB });
+            Assert.That(change.AddedRegions, Does.Contain(RegionA));
+        }
+
+        try
+        {
+            await FacadeClusterFixture.FixtureBootstrapSnapshotSource.FirstRowAppliedAsync(TimeSpan.FromSeconds(30));
+
+            using (LatticeSystemOrigin.Enter())
+            {
+                var report = await Facade.GetTenantRegionStatusAsync(tenant.Value);
+                var backfilling = report.Regions.Single(r => r.RegionId == RegionA);
+                Assert.That(backfilling.Status, Is.EqualTo(TenantRegionLifecycleStatus.Backfilling),
+                    "the region must not become Online while the snapshot is only partly applied");
+            }
+
+            var gate = _fixture.SiloServices.GetRequiredService<ILatticeAccessGate>();
+            using (LatticeActiveTenantContext.With(tenant))
+            {
+                var decision = await gate.AuthorizeAsync(new LatticeAccessRequest(
+                    BackfillTree,
+                    LatticeOperation.Read,
+                    new LatticeSubject(TenantAdmin),
+                    "existing-1"));
+                Assert.That(decision.Allowed, Is.False,
+                    "tenant client reads remain refused while the region is Backfilling");
+            }
+        }
+        finally
+        {
+            FacadeClusterFixture.FixtureBootstrapSnapshotSource.Release();
+        }
+
+        var online = await WaitForStatusAsync(tenant, RegionA, TenantRegionLifecycleStatus.Online);
+        using (LatticeSystemOrigin.Enter())
+        {
             var report = await Facade.GetTenantRegionStatusAsync(tenant.Value);
-            var row = report.Regions.Single(r => r.RegionId == RegionA);
+            var progress = report.Regions.Single(r => r.RegionId == RegionA).BackfillProgress;
+            Assert.That(online, Is.EqualTo(TenantRegionLifecycleStatus.Online),
+                $"Backfill progress: phase={progress?.Phase}; stall={progress?.StallReason}; "
+                + $"trees={string.Join(", ", progress?.Trees.Select(t => $"{t.TreeId}:{t.Phase}:{t.SourceClusterId}:{t.ReadFenced}") ?? [])}");
+        }
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            var tree = _fixture.SiloServices.GetRequiredService<IGrainFactory>().GetGrain<ILattice>(BackfillTree);
+            var values = await tree.GetManyAsync(["existing-1", "existing-2"]);
             Assert.Multiple(() =>
             {
-                Assert.That(row.Status, Is.EqualTo(TenantRegionLifecycleStatus.Online), "the region is online after backfill");
-                Assert.That(row.IsAllowed, Is.True, "an online region is in the allowed set");
+                Assert.That(values["existing-1"], Is.EqualTo(Bytes("replicated-one")));
+                Assert.That(values["existing-2"], Is.EqualTo(Bytes("replicated-two")));
             });
         }
     }
@@ -101,8 +173,8 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             Assert.That(change.RemovedRegions, Does.Contain(RegionB), "the dropped region begins draining");
 
             // Drain completion: Draining -> Offline -> Removed.
-            Assert.That(await Driver.AdvanceAsync(tenant, RegionB), Is.EqualTo(TenantRegionStatus.Offline));
-            Assert.That(await Driver.AdvanceAsync(tenant, RegionB), Is.EqualTo(TenantRegionStatus.Removed));
+            Assert.That(await Driver.CompleteDrainStepAsync(tenant, RegionB), Is.EqualTo(TenantRegionStatus.Offline));
+            Assert.That(await Driver.CompleteDrainStepAsync(tenant, RegionB), Is.EqualTo(TenantRegionStatus.Removed));
 
             var report = await Facade.GetTenantRegionStatusAsync(tenant.Value);
             var row = report.Regions.Single(r => r.RegionId == RegionB);
@@ -138,7 +210,7 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
                 Assert.That(
                     remote.Status,
                     Is.EqualTo(TenantRegionLifecycleStatus.Provisioning),
-                    "an added region is never promoted automatically: going Online without a backfill would serve an incomplete replica");
+                    "this single-silo fixture has no lifecycle driver running in the remote region");
             });
         }
     }
@@ -265,6 +337,7 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
         var status = TenantRegionLifecycleStatus.None;
         while (Environment.TickCount64 < deadline)
         {
+            using var systemOrigin = LatticeSystemOrigin.Enter();
             var report = await Facade.GetTenantRegionStatusAsync(tenant.Value);
             status = report.Regions.Single(r => r.RegionId == regionId).Status;
             if (status == expected)
@@ -278,7 +351,7 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
         return status;
     }
 
-    private async Task SeedTenantAsync(TenantId tenant)
+    private async Task SeedTenantAsync(TenantId tenant, string? onlineRegion = null)
     {
         var record = TenantRecord.Create(
             tenant,
@@ -287,8 +360,17 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             TenantPlacement.Shared,
             new HybridLogicalClock { WallClockTicks = 1 },
             "seed");
+        if (onlineRegion is not null)
+        {
+            record.AuthorizeRegion(onlineRegion, new HybridLogicalClock { WallClockTicks = 2 }, "seed");
+            record.SetRegionStatus(onlineRegion, TenantRegionStatus.Online, new HybridLogicalClock { WallClockTicks = 3 }, "seed");
+            record.AddAdminSubject(TenantAdmin, new HybridLogicalClock { WallClockTicks = 4 }, "seed");
+        }
+
         await _fixture.Registry.PutAsync(record);
     }
+
+    private static byte[] Bytes(string value) => System.Text.Encoding.UTF8.GetBytes(value);
 
     /// <summary>
     /// A single-silo cluster composing the tenancy engine, the auth add-on
@@ -309,7 +391,8 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
 
         public async Task InitializeAsync()
         {
-            var builder = new TestClusterBuilder(1);
+            var builder = new TestClusterBuilder(initialSilosCount: 1);
+            builder.Options.ClusterId = RegionA;
             builder.AddSiloBuilderConfigurator<SiloConfigurator>();
             Cluster = builder.Build();
             await Cluster.DeployAsync();
@@ -330,6 +413,15 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             {
                 siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
                 siloBuilder.UseInMemoryReminderService();
+                siloBuilder.Services.AddSingleton<IBootstrapSnapshotSource, FixtureBootstrapSnapshotSource>();
+                siloBuilder.AddLatticeReplication(options =>
+                {
+                    options.ClusterId = RegionA;
+                    options.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+                    {
+                        [BackfillTree] = LatticeMergeMode.LwwRegister,
+                    };
+                });
                 siloBuilder.AddLatticeMembership();
                 siloBuilder.AddLatticeAuth(options =>
                 {
@@ -338,6 +430,92 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
                 });
                 siloBuilder.AddLatticeTenancy();
                 siloBuilder.AddLatticeTenantAdminApi();
+            }
+        }
+
+        internal sealed class FixtureBootstrapSnapshotSource : IBootstrapSnapshotSource
+        {
+            private static readonly object Sync = new();
+            private static string? _tree;
+            private static TaskCompletionSource _firstRowApplied = NewSignal();
+            private static TaskCompletionSource _released = NewSignal();
+
+            private static TaskCompletionSource NewSignal() =>
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public static void Arm(string tree)
+            {
+                lock (Sync)
+                {
+                    _tree = tree;
+                    _firstRowApplied = NewSignal();
+                    _released = NewSignal();
+                }
+            }
+
+            public static void Release()
+            {
+                lock (Sync)
+                {
+                    _released.TrySetResult();
+                    _tree = null;
+                }
+            }
+
+            public static async Task FirstRowAppliedAsync(TimeSpan timeout)
+            {
+                Task firstRow;
+                lock (Sync)
+                {
+                    firstRow = _firstRowApplied.Task;
+                }
+
+                var reached = await Task.WhenAny(firstRow, Task.Delay(timeout));
+                Assert.That(reached, Is.SameAs(firstRow),
+                    "PRECONDITION: the receiver must apply a snapshot row and pause before promotion");
+            }
+
+            public Task<SnapshotStream> ExportAsync(
+                string treeName,
+                HybridLogicalClock asOfHlc,
+                CancellationToken cancellationToken = default) =>
+                Task.FromResult(new SnapshotStream(
+                    treeName,
+                    HybridLogicalClock.Zero,
+                    new VersionVector(),
+                    RowsAsync(treeName)));
+
+            private static async IAsyncEnumerable<SnapshotEntry> RowsAsync(string treeName)
+            {
+                string? gatedTree;
+                TaskCompletionSource firstRow;
+                TaskCompletionSource released;
+                lock (Sync)
+                {
+                    gatedTree = _tree;
+                    firstRow = _firstRowApplied;
+                    released = _released;
+                }
+
+                yield return new SnapshotEntry
+                {
+                    Key = "existing-1",
+                    Value = Bytes("replicated-one"),
+                    Timestamp = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.AddHours(1).Ticks },
+                };
+
+                if (string.Equals(treeName, gatedTree, StringComparison.Ordinal))
+                {
+                    firstRow.TrySetResult();
+                    await released.Task;
+                }
+
+                yield return new SnapshotEntry
+                {
+                    Key = "existing-2",
+                    Value = Bytes("replicated-two"),
+                    Timestamp = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.AddHours(1).Ticks },
+                };
             }
         }
     }

@@ -736,6 +736,13 @@ public class LatticeMicroBenchmarks
         // so every copy is open with no minimum admission epoch.
         _grainFactory.RouteByString<ICopyReceiveFenceGrain>(static _ => BenchCopyReceiveFenceGrain.Instance);
 
+        // Issue #4567: replication applies probe for an active bootstrap shadow
+        // copy. The benchmark fixture has none, so keep that probe on the original
+        // tree without reaching an unregistered grain route.
+        var resize = Substitute.For<ITreeResizeGrain>();
+        resize.GetBootstrapCopyTreeIdAsync().Returns(Task.FromResult<string?>(null));
+        _grainFactory.RouteByString<ITreeResizeGrain>(_ => resize);
+
         // Issue #4545: a leaf terminal that settles a key without a marked
         // prepare stamp records an applied-terminal witness in the leaf's
         // sidecar before its next state write. An in-memory sidecar per leaf

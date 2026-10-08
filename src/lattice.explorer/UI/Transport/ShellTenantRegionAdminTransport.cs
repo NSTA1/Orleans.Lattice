@@ -52,6 +52,20 @@ internal sealed class ShellTenantRegionAdminTransport(ShellTransportChannel chan
     }
 
     /// <inheritdoc />
+    public Task<TenantRegionStatusReport> AdvanceRegionAsync(
+        string tenantId, string regionId, bool acknowledgeDataInPlace, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        return CallAsync(
+            (TenantId: tenantId, RegionId: regionId, AcknowledgeDataInPlace: acknowledgeDataInPlace),
+            static (client, state, ct) => client.AdvanceTenantRegionAsync(
+                state.TenantId, state.RegionId, state.AcknowledgeDataInPlace, ct),
+            tenantId,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     protected override Exception MapFault(RpcException exception, string? subject, CancellationToken cancellationToken) =>
         ShellTenantFaults.Map(exception, subject, cancellationToken);
 }

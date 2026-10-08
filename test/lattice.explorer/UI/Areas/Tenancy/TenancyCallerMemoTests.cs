@@ -1,3 +1,4 @@
+using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
@@ -13,6 +14,27 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Tenancy;
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
 public sealed class TenancyCallerMemoTests : TenancyTestContext
 {
+    [Test]
+    public async Task Standing_reads_operator_and_current_tenant_concurrently_but_waits_for_both()
+    {
+        UseTenancyAs(isOperator: true);
+        var current = Cluster.Hold(nameof(FakeTenancyCluster.GetCurrentTenantAsync));
+        var catalog = Catalog;
+
+        var reading = catalog.GetStandingAsync(CancellationToken.None);
+
+        await Switcher!.Received().IsOperatorAsync(Arg.Any<CancellationToken>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(reading.IsCompleted, Is.False);
+            Assert.That(catalog.LastStanding, Is.Null, "neither admission nor a memo is published before both reads finish");
+        });
+        current.SetResult();
+        var standing = await reading;
+        Assert.That(standing.IsOperator, Is.True);
+        Assert.That(standing.CurrentTenant, Is.EqualTo("acme"));
+    }
+
     [Test]
     public async Task The_last_standing_is_not_the_next_callers()
     {

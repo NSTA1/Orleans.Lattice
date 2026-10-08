@@ -359,6 +359,12 @@ public static class ReplicationTypeAliases
     // causal-apply buffer and the dead-letter queue (#4707).
     internal const string ReplicationSourceLineageStamp = "olr.ls";
 
+    // Imported saga decision rows a bootstrap recorded, retired once the
+    // incremental stream passes the export's cut (#4524).
+    internal const string IImportedDecisionRetirementGrain = "olr.ir";
+    internal const string ImportedDecisionRetirementState = "olr.is";
+    internal const string ImportedDecisionSet = "olr.ie";
+
     // Per-peer decommission registry: a durable record that a peer was
     // decommissioned (never re-enrolled implicitly), distinct from the
     // reversible detach tracked by ICrossTreePeerEnrolmentGrain.

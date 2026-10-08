@@ -63,8 +63,8 @@ public class LatticeSnapshotProviderAliasMoveTests
         await movedCopy.SetAsync("only-in-new-copy", V("new"));
         await registry.SetAliasAsync(tree, moved);
 
-        Assert.That(S(await logical.GetAsync("shared")), Is.EqualTo("old"),
-            "precondition: the logical tree's grain still routes to the old copy after the move, so the test is not vacuous");
+        Assert.That(S(await logical.GetAsync("shared")), Is.EqualTo("new"),
+            "the warmed logical router follows the alias move without retiring the old copy");
 
         var provider = new LatticeSnapshotProvider(
             _cluster.Client,

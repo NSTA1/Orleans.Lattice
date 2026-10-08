@@ -298,6 +298,9 @@ A picker works in one of two ways:
 - **Suggest.** Any text is accepted, and existing values are offered as
   suggestions. A typed value that already exists is flagged, for example "This
   tree exists: restoring replaces what it holds." (the Restore into tree field).
+  The WAL move target works this way too: this silo's provider keys are suggestions,
+  not an allow-list. A key absent from its catalogue is accepted with advice to
+  confirm resolution on every silo; the plan reports whether it resolves here.
 
 A field that names a **new** thing is not a picker, because there is nothing to
 pick: a new group id, a new rule id, a new tenant id, a snapshot's destination
@@ -319,7 +322,9 @@ The list is a bounded answer (8 values by default), never a full listing. Typing
 does not start a query per key: at most one query is outstanding, a new keystroke
 cancels it, and the keys typed meanwhile collapse into one query for the latest
 text. Small lists such as regions and tenants are read once and reused for up to
-30 seconds; a WAL move's provider keys are read once for each tree you name.
+30 seconds; a nonempty WAL provider-key catalogue is read once per tree and caller.
+An empty catalogue or a failed audit is unavailable, with a reason, and a later
+query retries it.
 
 A picker never blocks a form. When its source cannot list values (no identity
 directory is configured, the cluster does not serve the facade, or the read is
