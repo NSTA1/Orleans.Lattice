@@ -22,30 +22,24 @@
 
   <!--
     Published Orleans.Lattice NuGet packages (nuget.org), NOT project references
-    into src/. Orleans.Lattice.Explorer.Web brings the shared UI, Core, Access,
-    Backup, and Schema explorer libraries transitively; the Entra.Web package adds
-    the hosted-web (OpenID Connect, auth-code + PKCE) Entra sign-in provider that
-    replaces the desktop/device-code flow - the console is a multi-replica Blazor
-    Server web head, so the browser signs in via a server-side confidential client
-    rather than an interactive desktop broker.
-
-    The four shared libraries carrying the transport-header origin-lock fix
-    (Core / Access / Backup / Schema) are referenced explicitly so the
-    fixed versions win over the versions Explorer.Web pulls transitively.
+    into src/. Orleans.Lattice.Explorer.Web brings the Explorer UI (every native
+    area compiled in) and Core transitively; Core and UI are also pinned
+    explicitly so the whole Explorer family resolves to one released version. The
+    Entra.Web package adds the hosted-web (OpenID Connect, auth-code + PKCE) Entra
+    sign-in provider that replaces the desktop/device-code flow - the console is a
+    multi-replica Blazor Server web head, so the browser signs in via a
+    server-side confidential client rather than an interactive desktop broker.
 
     Orleans.Lattice.Caching.AzureBlob backs the Microsoft.Identity.Web distributed
     token cache with the per-region storage account, so a signed-in operator's
     token survives replica scale/restart and is shared across warm replicas.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="9.4.1" />
-    <PackageReference Include="Orleans.Lattice.Explorer.Core" Version="9.4.2" />
-    <PackageReference Include="Orleans.Lattice.Explorer.Access" Version="9.4.0" />
-    <PackageReference Include="Orleans.Lattice.Explorer.UI" Version="9.4.2" />
-    <PackageReference Include="Orleans.Lattice.Explorer.Backup" Version="9.4.0" />
-    <PackageReference Include="Orleans.Lattice.Explorer.Schema" Version="9.4.0" />
-    <PackageReference Include="Orleans.Lattice.Explorer.Entra.Web" Version="9.4.0" />
-    <PackageReference Include="Orleans.Lattice.Caching.AzureBlob" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Core" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.UI" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Entra.Web" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Caching.AzureBlob" Version="10.0.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
   </ItemGroup>
 
