@@ -17,6 +17,32 @@ public sealed class TenantRegionBackfillServiceTests
     private static readonly TenantId Acme = TenantId.Parse("acme");
 
     [Test]
+    public async Task AdvanceTenantAsync_promotes_an_empty_tenant_without_operator_intervention()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(TenantRecordForBackfill());
+        var treeRegistry = Substitute.For<ILatticeRegistry>();
+        treeRegistry.GetAllTreeIdsAsync(Arg.Any<string?>())
+            .Returns(Task.FromResult<IReadOnlyList<string>>([]));
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(treeRegistry);
+        var driver = new TenantRegionLifecycleDriver(
+            registry,
+            Options.Create(new ClusterOptions { ClusterId = "west" }));
+        var service = new TenantRegionBackfillService(
+            registry,
+            driver,
+            grainFactory,
+            Options.Create(new ClusterOptions { ClusterId = "west" }),
+            Substitute.For<ILogger<TenantRegionBackfillService>>());
+
+        var status = await service.AdvanceTenantAsync(Acme, sourceClusterId: null, CancellationToken.None);
+
+        Assert.That(status, Is.EqualTo(TenantRegionStatus.Online));
+        Assert.That(registry.Peek(Acme.Value)!.GetRegionStatus("west"), Is.EqualTo(TenantRegionStatus.Online));
+    }
+
+    [Test]
     public async Task AdvanceTenantAsync_discovers_runtime_tree_enrolments_and_waits_for_verified_bootstrap()
     {
         const string treeId = "t/acme/orders";
