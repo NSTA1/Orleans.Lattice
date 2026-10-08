@@ -71,3 +71,7 @@ and an `ILattice.ReshardAsync` keeps it and cannot target more shards than it.
 `Rebuildable` marks a tree whose contents can be re-derived; no backup or restore
 path in this version acts on it.
 MCP tool names are app-local and become `{slug}_{name}` at dispatch.
+
+Part of [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). See the
+[Lattice Apps documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.apps/README.md)
+for the manifest reference, activation and the authoring guide.

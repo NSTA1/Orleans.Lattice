@@ -33,3 +33,7 @@ does not own the invoker or channel.
 `AdvertisedAuthSchemes` with public sign-in parameters only, never secrets or
 user-specific data. Missing descriptions and consent remain null across the
 wire. Wire aliases and field ids are stable and additive-only.
+
+Part of [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). See the
+[Apps gRPC binding documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.apps.grpc/README.md)
+for registration, clients and the wire contract.

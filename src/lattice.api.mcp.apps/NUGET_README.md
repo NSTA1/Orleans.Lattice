@@ -50,3 +50,7 @@ container; without the projection, the source or the gate, or without any
 registered `IAppMcpToolProvider`, it offers no app tools, and a caller without a
 resolved membership holds no role. The
 host's `ILatticeApiMcpAuthorizer` must admit the namespaced tool names.
+
+Part of [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). See the
+[app MCP tools documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.mcp.apps/README.md)
+for registration, naming and authorization.
