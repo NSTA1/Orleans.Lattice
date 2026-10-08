@@ -38,32 +38,32 @@
     would be.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Storage.AzureTable" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Replication" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Replication" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Backup" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Backup.AzureBlob" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Backup" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.State" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Data" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Auth" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Schema" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Schema" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Auth" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Membership" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Membership.Entra" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Membership.Entra.Graph" Version="9.9.0" />
-    <PackageReference Include="Orleans.Lattice.Scaling" Version="9.9.0" />
+    <PackageReference Include="Orleans.Lattice" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Storage.AzureTable" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Replication" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Replication" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Backup" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Backup.AzureBlob" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Backup" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.State" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Data" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Schema" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Schema" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Auth" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Membership" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Membership.Entra" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Membership.Entra.Graph" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Scaling" Version="10.0.0" />
   </ItemGroup>
 
   <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
