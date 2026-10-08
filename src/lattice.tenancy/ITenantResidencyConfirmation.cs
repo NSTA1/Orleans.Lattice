@@ -31,6 +31,16 @@ internal interface ITenantResidencyConfirmation
     bool TryResolveReplicationAdmissible(TenantId tenant, out bool admissible);
 
     /// <summary>
+    /// Answers whether a region is resident for a tenant from the authoritative
+    /// in-memory view.
+    /// </summary>
+    /// <param name="tenant">The tenant to test.</param>
+    /// <param name="regionId">The direct sender's region id.</param>
+    /// <param name="resident">The answer when this returns <c>true</c>.</param>
+    /// <returns><c>true</c> when the answer is authoritative; otherwise the caller must confirm.</returns>
+    bool TryResolveSourceResident(TenantId tenant, string regionId, out bool resident);
+
+    /// <summary>
     /// Confirms against the tenant's authoritative registry record whether it is
     /// online in this serving region. An unregistered tenant is not online.
     /// </summary>
@@ -56,4 +66,13 @@ internal interface ITenantResidencyConfirmation
     /// <param name="record">The tenant's authoritative registry record.</param>
     /// <returns><c>true</c> when unconfigured, backfilling, or online locally.</returns>
     bool IsReplicationAdmissible(TenantRecord record);
+
+    /// <summary>
+    /// Whether the given region is resident according to the tenant's authoritative
+    /// registry record.
+    /// </summary>
+    /// <param name="record">The tenant's authoritative registry record.</param>
+    /// <param name="regionId">The direct sender's region id.</param>
+    /// <returns><c>true</c> when the tenant is unconfigured or the region is resident.</returns>
+    bool IsResident(TenantRecord record, string regionId);
 }

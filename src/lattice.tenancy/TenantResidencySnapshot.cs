@@ -4,13 +4,12 @@ namespace Orleans.Lattice.Tenancy;
 
 /// <summary>
 /// An immutable, point-in-time snapshot mapping each <b>residency-configured</b>
-/// tenant to its <see cref="TenantRegionStatus"/> <b>in the local serving
-/// region</b>. The <see cref="TenantResidencySnapshotMaintainer"/> rebuilds it
-/// from the tenant registry off the core change-feed and swaps it atomically, so
-/// the hot-path reader (<see cref="TenantResidencyResolver"/>) can answer "is this
-/// tenant online here?" with a single in-memory
-/// <see cref="FrozenDictionary{TKey,TValue}"/> lookup - no grain hop, no
-/// allocation, O(1).
+/// tenant to its status in the local serving region and every configured region.
+/// The <see cref="TenantResidencySnapshotMaintainer"/> rebuilds it from the tenant
+/// registry off the core change-feed and swaps it atomically, so the hot-path
+/// readers can resolve destination and authenticated-source residency from
+/// in-memory <see cref="FrozenDictionary{TKey,TValue}"/> lookups - no grain hop,
+/// no allocation, O(1).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,9 +26,15 @@ namespace Orleans.Lattice.Tenancy;
 internal sealed class TenantResidencySnapshot
 {
     private readonly FrozenDictionary<TenantId, TenantRegionStatus> _byTenant;
+    private readonly FrozenDictionary<TenantId, FrozenDictionary<string, TenantRegionStatus>> _byRegion;
 
-    private TenantResidencySnapshot(FrozenDictionary<TenantId, TenantRegionStatus> byTenant) =>
+    private TenantResidencySnapshot(
+        FrozenDictionary<TenantId, TenantRegionStatus> byTenant,
+        FrozenDictionary<TenantId, FrozenDictionary<string, TenantRegionStatus>> byRegion)
+    {
         _byTenant = byTenant;
+        _byRegion = byRegion;
+    }
 
     /// <summary>
     /// The empty snapshot: every lookup misses, so every tenant resolves to online
@@ -38,7 +43,9 @@ internal sealed class TenantResidencySnapshot
     /// before its record has been observed.
     /// </summary>
     public static TenantResidencySnapshot Empty { get; } =
-        new(FrozenDictionary<TenantId, TenantRegionStatus>.Empty);
+        new(
+            FrozenDictionary<TenantId, TenantRegionStatus>.Empty,
+            FrozenDictionary<TenantId, FrozenDictionary<string, TenantRegionStatus>>.Empty);
 
     /// <summary>The number of residency-configured tenants the snapshot carries a local status for.</summary>
     public int Count => _byTenant.Count;
@@ -46,7 +53,7 @@ internal sealed class TenantResidencySnapshot
     /// <summary>
     /// Builds a snapshot from the given per-tenant local-region statuses. Later
     /// entries win on a duplicate key, so the caller may pass an already-deduplicated
-    /// map.
+    /// map. This overload is for callers that do not need source-region lookup.
     /// </summary>
     /// <remarks>
     /// A dictionary source already guarantees unique keys, so the defensive dedup
@@ -65,7 +72,9 @@ internal sealed class TenantResidencySnapshot
 
         if (statuses is IReadOnlyDictionary<TenantId, TenantRegionStatus>)
         {
-            return new TenantResidencySnapshot(statuses.ToFrozenDictionary());
+            return new TenantResidencySnapshot(
+                statuses.ToFrozenDictionary(),
+                FrozenDictionary<TenantId, FrozenDictionary<string, TenantRegionStatus>>.Empty);
         }
 
         var deduped = statuses.TryGetNonEnumeratedCount(out var count) && count > 0
@@ -76,7 +85,40 @@ internal sealed class TenantResidencySnapshot
             deduped[pair.Key] = pair.Value;
         }
 
-        return new TenantResidencySnapshot(deduped.ToFrozenDictionary());
+        return new TenantResidencySnapshot(
+            deduped.ToFrozenDictionary(),
+            FrozenDictionary<TenantId, FrozenDictionary<string, TenantRegionStatus>>.Empty);
+    }
+
+    /// <summary>
+    /// Builds a residency snapshot from authoritative tenant records, retaining
+    /// the lifecycle status of every region for source-authorization checks.
+    /// </summary>
+    /// <param name="records">The scanned tenant registry records.</param>
+    /// <param name="localRegionId">The region served by this silo.</param>
+    /// <returns>An immutable snapshot of local and per-region residency.</returns>
+    public static TenantResidencySnapshot Build(
+        IEnumerable<TenantRecord> records,
+        string localRegionId)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentException.ThrowIfNullOrEmpty(localRegionId);
+
+        var local = new Dictionary<TenantId, TenantRegionStatus>();
+        var regions = new Dictionary<TenantId, FrozenDictionary<string, TenantRegionStatus>>();
+        foreach (var record in records)
+        {
+            if (!record.HasResidencyConfiguration)
+            {
+                continue;
+            }
+
+            local[record.Id] = record.GetRegionStatus(localRegionId);
+            regions[record.Id] = record.RegionStatusEntries
+                .ToFrozenDictionary(static entry => entry.Key, static entry => entry.Value, StringComparer.Ordinal);
+        }
+
+        return new TenantResidencySnapshot(local.ToFrozenDictionary(), regions.ToFrozenDictionary());
     }
 
     /// <summary>
@@ -117,4 +159,21 @@ internal sealed class TenantResidencySnapshot
     public bool IsReplicationAdmissibleLocally(TenantId tenant) =>
         !_byTenant.TryGetValue(tenant, out var status)
         || status is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
+
+    /// <summary>
+    /// Whether <paramref name="regionId"/> is a resident region for the tenant.
+    /// An unconfigured tenant is resident everywhere for backwards compatibility.
+    /// </summary>
+    public bool IsResidentInRegion(TenantId tenant, string regionId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        if (!_byTenant.ContainsKey(tenant))
+        {
+            return true;
+        }
+
+        return _byRegion.TryGetValue(tenant, out var regions)
+            && regions.TryGetValue(regionId, out var status)
+            && TenantRegionLifecycle.IsResident(status);
+    }
 }

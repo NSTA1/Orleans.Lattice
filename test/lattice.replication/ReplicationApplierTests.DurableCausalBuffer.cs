@@ -74,6 +74,56 @@ public partial class ReplicationApplierTests
         Assert.That(h.BufferState.State.Entries, Is.Empty);
     }
 
+    [Test]
+    public async Task Reloaded_buffer_rechecks_the_persisted_authenticated_sender_before_applying()
+    {
+        var relayIsResident = true;
+        var gate = new FuncTenantIsolationGate(
+            isActive: true,
+            (_, sender) => sender == "relay" && relayIsResident
+                ? ReplicationTenantIsolationDecision.Admit
+                : ReplicationTenantIsolationDecision.RejectSourceNotResident);
+        var h = CreateCausalHarness(tenantIsolationGate: gate);
+
+        ApplyResult parked;
+        using (ReplicationSourceLineageScope.EnterAuthenticatedDelivery("relay"))
+        {
+            parked = await h.Applier.ApplyAsync(BlockedOnSiteC("k", 100));
+        }
+
+        Assert.That(parked.Applied, Is.False);
+        Assert.That(h.BufferState.State.Entries.Single().AuthenticatedSenderClusterId, Is.EqualTo("relay"));
+
+        // The dependency is now satisfied, but the direct sender has since
+        // become nonresident. Re-authorize the persisted sender on restart.
+        relayIsResident = false;
+        h.Vc.Entries[OriginC] = Hlc(50);
+        var restarted = new ReplicationApplier(
+            h.Factory,
+            h.Monitor,
+            replicationContext: new AnyTreeLwwContext(),
+            tenantIsolationGate: gate);
+        var (grain, _) = CausalBufferTestWiring.Wire(h.Factory, restarted, h.Monitor, Tree, h.BufferState);
+
+        Assert.That(await grain.DrainAsync(), Is.Zero);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Senders, Is.EqualTo(new string?[] { "relay", "relay" }));
+            Assert.That(h.BufferState.State.Entries, Is.Empty);
+        });
+        await h.Apply.DidNotReceiveWithAnyArgs()
+            .ApplySetAsync(default!, default!, default, default!, default, default);
+        await h.Dlq.Received(1).EnqueueAuthenticatedAsync(
+            Arg.Is<WalRecord>(entry => entry.Key == "k"),
+            Arg.Any<string>(),
+            0,
+            LatticeReplicationMetrics.ReasonForeignTenant,
+            Arg.Any<CancellationToken>(),
+            "relay",
+            Arg.Any<ReplicationSourceLineageStamp?>());
+    }
+
     // Mechanism 2, quiescent form: the dependency was already met before the
     // restart (the drain never ran), and nothing more arrives for the tree.
     // The re-arm on reactivation - the maintenance tick, modelled here by a

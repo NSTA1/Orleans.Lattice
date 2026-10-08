@@ -68,9 +68,12 @@ internal sealed class LatticeReplicationDeadLetters(
         // so the applier checks it against the lineage the tree has drained
         // since, exactly as it checks a pushed entry.
         ApplyResult result;
-        using (ReplicationSourceLineageScope.Enter(
-                   parked.Value.SourceLineageClusterId ?? string.Empty,
-                   parked.Value.SourceLineageClusterId is null ? null : parked.Value.SourceLineage))
+        using (ReplicationSourceLineageScope.EnterAuthenticatedDelivery(
+                   parked.Value.AuthenticatedSenderClusterId,
+                   parked.Value.SourceLineageClusterId is { } sourceClusterId
+                       && parked.Value.SourceLineage is { } lineage
+                       ? new ReplicationSourceLineageStamp(sourceClusterId, lineage)
+                       : null))
         {
             result = await inner.ApplyAsync(parked.Value.Entry, cancellationToken).ConfigureAwait(false);
         }
@@ -83,7 +86,7 @@ internal sealed class LatticeReplicationDeadLetters(
         // refusal is not terminal either (issue #4707): the entry was read under
         // a lineage this tree no longer holds, and it stays parked for the
         // operator to discard.
-        if (result.Deferred || result.SourceLineageRefused)
+        if (result.Deferred || result.SourceLineageRefused || result.TenantIsolationRefused)
         {
             return result;
         }

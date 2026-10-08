@@ -23,9 +23,13 @@ internal sealed class ReplicationSourceLineageScope : IDisposable
     private Decision? _decided;
     private bool _disposed;
 
-    private ReplicationSourceLineageScope(ReplicationSourceLineageStamp? stamp, Guid? observedFrontierEpoch)
+    private ReplicationSourceLineageScope(
+        ReplicationSourceLineageStamp? stamp,
+        string? authenticatedSenderClusterId,
+        Guid? observedFrontierEpoch)
     {
         Stamp = stamp;
+        AuthenticatedSenderClusterId = authenticatedSenderClusterId;
         ObservedFrontierEpoch = observedFrontierEpoch;
         _previous = s_current.Value;
     }
@@ -35,6 +39,12 @@ internal sealed class ReplicationSourceLineageScope : IDisposable
     /// an unstamped delivery, which applies as before.
     /// </summary>
     public ReplicationSourceLineageStamp? Stamp { get; }
+
+    /// <summary>
+    /// The authenticated direct sender of the delivery, kept separate from the
+    /// record's original lineage; <see langword="null"/> when identity is absent.
+    /// </summary>
+    public string? AuthenticatedSenderClusterId { get; }
 
     /// <summary>
     /// The receiver tree frontier epoch the transport already observed for this
@@ -48,6 +58,8 @@ internal sealed class ReplicationSourceLineageScope : IDisposable
     /// <summary>The stamp of the innermost active scope, or <see langword="null"/>.</summary>
     public static ReplicationSourceLineageStamp? Current => s_current.Value?.Stamp;
 
+    /// <summary>The authenticated direct sender of the innermost scope, or <see langword="null"/>.</summary>
+    public static string? CurrentAuthenticatedSenderClusterId => s_current.Value?.AuthenticatedSenderClusterId;
     /// <summary>
     /// Enters a scope whose applies carry <paramref name="stamp"/>. Always
     /// replaces any outer scope, so an unstamped entry applied inside a stamped
@@ -57,7 +69,7 @@ internal sealed class ReplicationSourceLineageScope : IDisposable
         ReplicationSourceLineageStamp? stamp,
         Guid? observedFrontierEpoch = null)
     {
-        var scope = new ReplicationSourceLineageScope(stamp, observedFrontierEpoch);
+        var scope = new ReplicationSourceLineageScope(stamp, null, observedFrontierEpoch);
         s_current.Value = scope;
         return scope;
     }
@@ -74,6 +86,20 @@ internal sealed class ReplicationSourceLineageScope : IDisposable
         Enter(
             lineage is { } l ? new ReplicationSourceLineageStamp(sourceClusterId, l) : null,
             observedFrontierEpoch);
+
+    /// <summary>
+    /// Enters a delivery scope with an authenticated direct sender and optional
+    /// record-lineage stamp. The two identities are intentionally independent.
+    /// </summary>
+    public static ReplicationSourceLineageScope EnterAuthenticatedDelivery(
+        string? authenticatedSenderClusterId,
+        ReplicationSourceLineageStamp? stamp = null,
+        Guid? observedFrontierEpoch = null)
+    {
+        var scope = new ReplicationSourceLineageScope(stamp, authenticatedSenderClusterId, observedFrontierEpoch);
+        s_current.Value = scope;
+        return scope;
+    }
 
     /// <summary>
     /// The verdict already reached for <paramref name="treeId"/> in this scope,

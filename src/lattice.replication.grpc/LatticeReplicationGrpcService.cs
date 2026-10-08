@@ -563,9 +563,12 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         var applyStart = Stopwatch.GetTimestamp();
         try
         {
-            using var lineageScope = stampedLineage is null
-                ? null
-                : ReplicationSourceLineageScope.Enter(request.OriginClusterId, stampedLineage, receiverLineage);
+            using var lineageScope = ReplicationSourceLineageScope.EnterAuthenticatedDelivery(
+                request.OriginClusterId,
+                stampedLineage is { } lineage
+                    ? new ReplicationSourceLineageStamp(request.OriginClusterId, lineage)
+                    : null,
+                receiverLineage);
             result = await _applier.ApplyBatchAsync(entries, context.CancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
@@ -1124,4 +1127,3 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         return held;
     }
 }
-

@@ -79,7 +79,56 @@ public sealed class ReplicationTenantIsolationGateTests
     {
         var record = Record(TenantStatus.Active);
         record.SetRegionStatus("west", status, HybridLogicalClock.Zero, "test");
+        record.SetRegionStatus("origin", TenantRegionStatus.Online, HybridLogicalClock.Zero, "test");
         return record;
+    }
+
+    private static TenantRecord RecordWithRegions(
+        TenantRegionStatus destinationStatus,
+        TenantRegionStatus senderStatus)
+    {
+        var record = Record(TenantStatus.Active);
+        record.SetRegionStatus("west", destinationStatus, TestClocks.Clock(1), "test");
+        record.SetRegionStatus("origin", TenantRegionStatus.Online, TestClocks.Clock(2), "test");
+        if (senderStatus != TenantRegionStatus.None)
+        {
+            record.SetRegionStatus("relay", senderStatus, TestClocks.Clock(3), "test");
+        }
+
+        return record;
+    }
+
+    private static ITenantResidencyResolver ActiveResidency()
+    {
+        var residency = Substitute.For<ITenantResidencyResolver, ITenantResidencyConfirmation>();
+        residency.IsActive.Returns(true);
+        var confirmation = (ITenantResidencyConfirmation)residency;
+        confirmation.IsReplicationAdmissible(Arg.Any<TenantRecord>())
+            .Returns(call =>
+            {
+                var record = call.Arg<TenantRecord>();
+                return !record.HasResidencyConfiguration
+                    || record.GetRegionStatus("west") is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
+            });
+        confirmation.IsResident(Arg.Any<TenantRecord>(), Arg.Any<string>())
+            .Returns(call =>
+            {
+                var record = call.Arg<TenantRecord>();
+                var regionId = call.ArgAt<string>(1);
+                return !record.HasResidencyConfiguration
+                    || record.GetRegionStatus(regionId) is TenantRegionStatus.Provisioning
+                        or TenantRegionStatus.Backfilling
+                        or TenantRegionStatus.Online;
+            });
+        return residency;
+    }
+
+    private static ReplicationTenantIsolationGate GateFor(TenantRecord record)
+    {
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.GetAsync(Acme, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantRecord?>(record));
+        return CreateGate(registry, ActiveResidency());
     }
 
     /// <summary>Stubs the registry so <see cref="Acme"/> exists and is active.</summary>
@@ -206,7 +255,7 @@ public sealed class ReplicationTenantIsolationGateTests
         residency.IsActive.Returns(true);
         residency.IsOnlineInServingRegion(Acme).Returns(resident);
 
-        var decision = await CreateGate(registry, residency).EvaluateAsync("t/acme/a/notes/records");
+        var decision = await CreateGate(registry, residency).EvaluateAsync("t/acme/a/notes/records", "west");
 
         Assert.That(decision, Is.EqualTo(expected));
     }
@@ -219,7 +268,7 @@ public sealed class ReplicationTenantIsolationGateTests
         // Null residency default (IsActive false) => all regions allowed.
         var gate = CreateGate(registry);
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
     }
@@ -234,7 +283,7 @@ public sealed class ReplicationTenantIsolationGateTests
         residency.IsOnlineInServingRegion(Acme).Returns(true);
         var gate = CreateGate(registry, residency);
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant));
         // Fail closed on existence before residency; never create a tenant, never
@@ -253,7 +302,7 @@ public sealed class ReplicationTenantIsolationGateTests
         residency.IsOnlineInServingRegion(Acme).Returns(false);
         var gate = CreateGate(registry, residency);
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectOutOfRegion));
     }
@@ -268,7 +317,7 @@ public sealed class ReplicationTenantIsolationGateTests
         residency.IsOnlineInServingRegion(Acme).Returns(true);
         var gate = CreateGate(registry, residency);
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
     }
@@ -296,14 +345,49 @@ public sealed class ReplicationTenantIsolationGateTests
                 return record.GetRegionStatus("west")
                     is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
             });
+        confirmation.IsResident(Arg.Any<TenantRecord>(), "origin").Returns(true);
 
-        var decision = await CreateGate(registry, residency).EvaluateAsync(AcmeTree);
+        var decision = await CreateGate(registry, residency).EvaluateAsync(AcmeTree, "origin");
 
         Assert.That(
             decision,
             Is.EqualTo(expectedAdmitted
                 ? ReplicationTenantIsolationDecision.Admit
                 : ReplicationTenantIsolationDecision.RejectOutOfRegion));
+    }
+
+    [TestCase(TenantRegionStatus.Backfilling)]
+    [TestCase(TenantRegionStatus.Online)]
+    public async Task EvaluateAsync_rejects_nonresident_sender_for_backfilling_or_online_destination(
+        TenantRegionStatus destinationStatus)
+    {
+        var gate = GateFor(RecordWithRegions(destinationStatus, TenantRegionStatus.None));
+
+        var decision = await gate.EvaluateAsync(AcmeTree, "relay");
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectSourceNotResident));
+    }
+
+    [Test]
+    public async Task EvaluateAsync_authorizes_relay_by_direct_sender_not_original_lineage()
+    {
+        var gate = GateFor(RecordWithRegions(TenantRegionStatus.Online, TenantRegionStatus.Backfilling));
+
+        // The record's original lineage is "origin"; authorization is against the
+        // authenticated direct sender "relay", which is itself resident.
+        var decision = await gate.EvaluateAsync(AcmeTree, "relay");
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
+    }
+
+    [Test]
+    public async Task EvaluateAsync_rejects_missing_authenticated_sender_for_tenant()
+    {
+        var gate = GateFor(RecordWithRegions(TenantRegionStatus.Online, TenantRegionStatus.Online));
+
+        var decision = await gate.EvaluateAsync(AcmeTree, authenticatedSenderClusterId: null);
+
+        Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectMissingSourceIdentity));
     }
 
     [Test]
@@ -330,7 +414,7 @@ public sealed class ReplicationTenantIsolationGateTests
         residency.IsActive.Returns(false);
         var gate = CreateGate(registry, residency);
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
         // Residency is skipped entirely on the single IsActive bool read.
@@ -350,7 +434,7 @@ public sealed class ReplicationTenantIsolationGateTests
         var registry = Substitute.For<ITenantRegistry>();
         var gate = CreateGate(registry, policy: await CompiledPolicyAsync(Acme));
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
         Assert.That(registry.ReceivedCalls(), Is.Empty,
@@ -368,7 +452,7 @@ public sealed class ReplicationTenantIsolationGateTests
         residency.IsOnlineInServingRegion(Acme).Returns(false);
         var gate = CreateGate(registry, residency, await CompiledPolicyAsync(Acme));
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectOutOfRegion));
         Assert.That(registry.ReceivedCalls(), Is.Empty);
@@ -384,7 +468,7 @@ public sealed class ReplicationTenantIsolationGateTests
         KnowsActive(registry);
         var gate = CreateGate(registry, policy: await CompiledPolicyAsync(TenantId.Parse("other")));
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
         await registry.Received(1).GetAsync(Acme, Arg.Any<CancellationToken>());
@@ -397,7 +481,7 @@ public sealed class ReplicationTenantIsolationGateTests
         KnowsNothing(registry);
         var gate = CreateGate(registry, policy: await CompiledPolicyAsync(TenantId.Parse("other")));
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant));
     }
@@ -433,7 +517,7 @@ public sealed class ReplicationTenantIsolationGateTests
         KnowsNothing(registry);
         var gate = CreateGate(registry, policy: policy);
 
-        var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west", CancellationToken.None);
 
         Assert.That(
             decision,
@@ -455,7 +539,7 @@ public sealed class ReplicationTenantIsolationGateTests
         var registry = Substitute.For<ITenantRegistry>();
         var gate = CreateGate(registry, policy: policy);
 
-        var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west", CancellationToken.None);
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
         await registry.DidNotReceive().GetAsync(Arg.Any<TenantId>(), Arg.Any<CancellationToken>());
@@ -473,7 +557,7 @@ public sealed class ReplicationTenantIsolationGateTests
         KnowsActive(registry);
         var gate = CreateGate(registry, policy: policy);
 
-        var decision = await gate.EvaluateAsync(AcmeTree, CancellationToken.None);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west", CancellationToken.None);
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
     }
@@ -499,7 +583,7 @@ public sealed class ReplicationTenantIsolationGateTests
         KnowsSuspended(registry);
         var gate = CreateGate(registry, policy: await CompiledPolicyAsync(TenantId.Parse("other")));
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(
             decision,
@@ -520,7 +604,7 @@ public sealed class ReplicationTenantIsolationGateTests
         Assert.That(policy.IsSnapshotAuthoritative, Is.True, "guard: the fast path must be the one under test");
         var gate = CreateGate(registry, policy: policy);
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.That(decision, Is.EqualTo(ReplicationTenantIsolationDecision.RejectSuspendedTenant));
         Assert.That(registry.ReceivedCalls(), Is.Empty, "the fast path must stay allocation- and round-trip-free");
@@ -541,7 +625,7 @@ public sealed class ReplicationTenantIsolationGateTests
         residency.IsOnlineInServingRegion(Acme).Returns(true);
         var gate = CreateGate(registry, residency);
 
-        var decision = await gate.EvaluateAsync(AcmeTree);
+        var decision = await gate.EvaluateAsync(AcmeTree, "west");
 
         Assert.Multiple(() =>
         {
@@ -570,10 +654,10 @@ public sealed class ReplicationTenantIsolationGateTests
         await Assert.MultipleAsync(async () =>
         {
             Assert.That(
-                await fallbackGate.EvaluateAsync(AcmeTree),
+                await fallbackGate.EvaluateAsync(AcmeTree, "west"),
                 Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
             Assert.That(
-                await fastGate.EvaluateAsync(AcmeTree),
+                await fastGate.EvaluateAsync(AcmeTree, "west"),
                 Is.EqualTo(ReplicationTenantIsolationDecision.Admit));
         });
     }

@@ -73,7 +73,23 @@ A run the gate rejects - either way, or for want of an enrollment source - is al
 
 Two further receiver-side gates run after an entry clears enrollment, before any high-water-mark read:
 
-- **Tenant isolation (dead-lettered).** When tenancy is on, the owning tenant is derived from the tree id alone - never from a wire field - and an entry whose tenant does not exist here, is not resident in the region serving this receiver, or has been suspended or disabled is refused. It is dead-lettered with the `foreign_tenant`, `tenant_offline`, or `tenant_suspended` reason, records the matching `rejected-foreign-tenant` / `rejected-tenant-offline` / `rejected-tenant-suspended` apply-duration outcome, and leaves the high-water-mark unchanged. The rejection is not a deferral, so the receive path still acknowledges the batch and the sender advances past the entry rather than re-shipping it - unless the dead-letter queue is full, in which case the entry (or its run) is deferred instead so it is never acknowledged without being parked; once the tenant exists, becomes resident, or is reinstated, the parked entry can be replayed from the [dead-letter queue](dead-letter-queue.md). With tenancy off the gate is inactive and costs nothing.
+- **Tenant isolation (dead-lettered).** When tenancy is on, the owning tenant is
+  derived from the tree id alone - never from a wire field. An entry is refused
+  when the tenant does not exist, is inactive, or is not resident at the
+  destination; the destination may receive tenant data while `Backfilling` or
+  `Online`. The authenticated direct sender must also be resident for that tenant
+  (`Provisioning`, `Backfilling`, or `Online`). Authorization uses the direct
+  sender authenticated by the transport, not `WalRecord.OriginClusterId` or its
+  source-lineage stamp, so a relay must itself be resident even when the original
+  writer was resident. A tenant-scoped delivery without an authenticated sender
+  is refused. Refused entries are dead-lettered with `foreign_tenant`,
+  `tenant_offline`, or `tenant_suspended` as appropriate and leave the
+  high-water mark unchanged. Legacy causal-buffer and dead-letter entries without
+  a stored sender fail closed on drain or replay and stay parked; they cannot
+  recover authorization from optional lineage. The receive path acknowledges a
+  refusal only after the entry is durably parked; a full dead-letter queue defers
+  and re-ships it instead. With tenancy off the gate is inactive and costs
+  nothing.
 - **Restore receive fence (deferred).** While a cross-cluster restore saga has paused inbound apply for the tree, the entry is not applied: the call returns `Applied = false` with `Deferred = true`, and the sender keeps its cursor and re-ships once the fence lifts. The tree's apply seam refuses an entry that routes to a restored copy the saga still holds closed, or that was admitted before the saga paused receiving, and the applier defers it the same way ([#4593](coordinated-restore.md#restored-copies-are-born-receive-closed)). A single-entry apply records the deferral under the `dedup` apply-duration outcome; the batch path defers a multi-entry run whole and records no apply-duration sample for it.
 
 The batch path applies the same classification once per run, except that it checks the restore receive fence first: a run for a fenced tree is deferred whole before it is classified. The wire mode is part of the run key - a run is a contiguous `(TreeId, OriginClusterId, Mode)` segment, so a mode change starts a new run that is classified on its own - and the representative first entry therefore classifies the whole run. A rejected run neither merges nor advances the per-origin high-water-mark; every entry still records its matching apply-duration outcome so per-entry receiver observability is preserved, while a single warning is logged per run rather than per entry to avoid a log-flood amplification from a hostile peer.

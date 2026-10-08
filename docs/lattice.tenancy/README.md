@@ -611,12 +611,16 @@ shown today.
   has never configured residency - every newly created tenant - is treated as online
   in every region, the pre-residency admit-all behaviour, until it does.
 - **Metadata everywhere, data to the residency set.** Tenant definitions
-  converge to every region the registry tree replicates to, so any such region can
-  fail-closed answer "is this tenant resident here?". A tenant's data is shipped to peers like any other replicated
-  tree; the receiving region refuses (and dead-letters) a replicated write for a
-  tenant that is not `Online` there, so the data lands only where the tenant is
-  online. The same gate refuses and dead-letters a replicated write for a tenant the
-  receiving region does not know or holds suspended.
+  converge to every region the registry tree replicates to, so any such region
+  can fail-closed answer "is this tenant resident here?". A tenant data write is
+  admitted only when the destination is `Backfilling` or `Online` and the
+  authenticated direct sender is resident (`Provisioning`, `Backfilling`, or
+  `Online`). The receiver authorizes the authenticated direct sender, not the
+  write's original `WalRecord.OriginClusterId`; therefore every relay must itself
+  be resident for the tenant. A tenant-scoped write without an authenticated
+  sender is refused, including a durable entry replayed without its previously
+  stored sender. The same gate refuses and dead-letters writes for an unknown or
+  suspended tenant.
 - **Symmetric multi-master.** An `Online` region is a full read-write replica; there
   is no primary or leader. Enforcement ties in at the gate (a tenant not `Online` in
   the serving region is refused) and the replication apply path (a tenant's

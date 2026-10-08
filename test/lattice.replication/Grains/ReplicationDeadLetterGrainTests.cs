@@ -74,6 +74,31 @@ public class ReplicationDeadLetterGrainTests
     }
 
     [Test]
+    public async Task EnqueueAuthenticatedAsync_persists_direct_sender_separately_from_lineage()
+    {
+        var (grain, _, _) = await CreateGrainAsync();
+        var lineage = new ReplicationSourceLineageStamp("origin", Guid.NewGuid());
+
+        await grain.EnqueueAuthenticatedAsync(
+            MakeEntry(),
+            "tenant source refused",
+            0,
+            LatticeReplicationMetrics.ReasonForeignTenant,
+            CancellationToken.None,
+            "relay",
+            lineage);
+
+        var parked = (await grain.ListAsync(CancellationToken.None)).Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(parked.Entry.OriginClusterId, Is.EqualTo("site-b"));
+            Assert.That(parked.AuthenticatedSenderClusterId, Is.EqualTo("relay"));
+            Assert.That(parked.SourceLineageClusterId, Is.EqualTo("origin"));
+            Assert.That(parked.SourceLineage, Is.EqualTo(lineage.Lineage));
+        });
+    }
+
+    [Test]
     public async Task No_head_cursor_row_is_ever_written_preserving_on_disk_format()
     {
         var (grain, data, _) = await CreateGrainAsync();
@@ -427,4 +452,3 @@ public class ReplicationDeadLetterGrainTests
         Assert.That(id, Is.EqualTo("_lattice_replog_dlq_my-tree"));
     }
 }
-

@@ -70,4 +70,11 @@ public readonly record struct ApplyResult
     /// way leaves the entry parked. Defaults to <c>false</c>.
     /// </summary>
     [Id(3)] public bool SourceLineageRefused { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the tenant-isolation gate refused the entry. A dead-letter
+    /// replay remains parked on this outcome so a sender that is not currently
+    /// authorized cannot consume the durable entry.
+    /// </summary>
+    [Id(4)] public bool TenantIsolationRefused { get; init; }
 }

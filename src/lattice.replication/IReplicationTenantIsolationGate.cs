@@ -57,4 +57,27 @@ public interface IReplicationTenantIsolationGate
     ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
         string treeId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Classifies whether a replicated write may be applied when received directly
+    /// from <paramref name="authenticatedSenderClusterId"/>. The sender is the
+    /// identity authenticated by the transport, not
+    /// <see cref="WalRecord.OriginClusterId"/>, which preserves original lineage
+    /// through relays. An implementation that cannot validate sender residency
+    /// must fail closed.
+    /// </summary>
+    /// <param name="treeId">The inbound entry's tree id.</param>
+    /// <param name="authenticatedSenderClusterId">
+    /// The authenticated direct sender, or <see langword="null"/> when no
+    /// authenticated identity is available.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the evaluation.</param>
+    /// <returns>The sender-aware isolation decision.</returns>
+    ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
+        string treeId,
+        string? authenticatedSenderClusterId,
+        CancellationToken cancellationToken = default) =>
+        new(string.IsNullOrWhiteSpace(authenticatedSenderClusterId)
+            ? ReplicationTenantIsolationDecision.RejectMissingSourceIdentity
+            : ReplicationTenantIsolationDecision.RejectSourceNotResident);
 }

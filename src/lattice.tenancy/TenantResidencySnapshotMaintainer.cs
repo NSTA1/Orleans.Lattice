@@ -7,12 +7,13 @@ namespace Orleans.Lattice.Tenancy;
 
 /// <summary>
 /// The per-silo maintainer of the in-memory tenant-residency snapshot. It builds a
-/// <see cref="TenantResidencySnapshot"/> - each residency-configured tenant's
-/// status <b>in this silo's serving region</b> - from the tenant registry on first
-/// use, observes the core change-feed (<see cref="IMutationObserver"/>) and
-/// rebuilds when the tenant-registry tree mutates, and swaps the immutable snapshot
-/// atomically on every rebuild. It also diffs each rebuild against the previous
-/// local-region view and publishes every observed transition to the registered
+/// <see cref="TenantResidencySnapshot"/> with each configured tenant's status in
+/// the local serving region and every configured source region from the tenant
+/// registry on first use, observes the core change-feed
+/// (<see cref="IMutationObserver"/>) and rebuilds when the tenant-registry tree
+/// mutates, and swaps the immutable snapshot atomically on every rebuild. It also
+/// diffs each rebuild against the previous local-region view and publishes every
+/// observed transition to the registered
 /// <see cref="ITenantRegionStatusChangeListener"/>s.
 /// </summary>
 /// <remarks>
@@ -202,13 +203,13 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
         try
         {
             var generation = _currency.Generation;
-            Dictionary<TenantId, TenantRegionStatus> byTenant;
+            Dictionary<TenantId, TenantRecord> records;
             var attempt = 1;
             while (true)
             {
                 try
                 {
-                    byTenant = await ScanStatusesAsync(cancellationToken).ConfigureAwait(false);
+                    records = await ScanRecordsAsync(cancellationToken).ConfigureAwait(false);
                     break;
                 }
                 catch (EnumerationAbortedException) when (attempt < maxScanAttempts)
@@ -217,7 +218,7 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
                 }
             }
 
-            var changes = SwapSnapshot(byTenant, generation);
+            var changes = SwapSnapshot(records, generation);
             await NotifyListenersAsync(changes, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -287,8 +288,8 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
             // generation past it, so the result is not authoritative and the rebuild
             // that observation queued captures the change.
             var generation = _currency.Generation;
-            var byTenant = await ScanStatusesAsync(cancellationToken).ConfigureAwait(false);
-            var changes = SwapSnapshot(byTenant, generation);
+            var records = await ScanRecordsAsync(cancellationToken).ConfigureAwait(false);
+            var changes = SwapSnapshot(records, generation);
             await NotifyListenersAsync(changes, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -298,45 +299,51 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
     }
 
     /// <summary>
-    /// Enumerates the tenant registry into a local-region status map. Only
-    /// residency-configured tenants are included; an unconfigured tenant is left out
-    /// so it resolves to admit-all. This is the only step that touches the
+    /// Enumerates the tenant registry into a residency-configured record map. The
+    /// records retain all region statuses for both local-destination and
+    /// authenticated-sender checks. This is the only step that touches the
     /// (grain-backed) registry, so it is the only step that can raise a transient
     /// <see cref="EnumerationAbortedException"/>.
     /// </summary>
-    private async Task<Dictionary<TenantId, TenantRegionStatus>> ScanStatusesAsync(CancellationToken cancellationToken)
+    private async Task<Dictionary<TenantId, TenantRecord>> ScanRecordsAsync(CancellationToken cancellationToken)
     {
-        var byTenant = new Dictionary<TenantId, TenantRegionStatus>();
+        var records = new Dictionary<TenantId, TenantRecord>();
         await foreach (var record in _registry.ListAsync(cancellationToken).ConfigureAwait(false))
         {
             if (record.HasResidencyConfiguration)
             {
-                byTenant[record.Id] = record.GetRegionStatus(_regionId);
+                records[record.Id] = record;
             }
         }
 
-        return byTenant;
+        return records;
     }
 
     /// <summary>
-    /// Publishes a freshly scanned status map as the current snapshot: computes the
+    /// Publishes a freshly scanned record map as the current snapshot: computes the
     /// local-region transition diff against the previous map (only when a listener is
     /// registered), swaps the immutable snapshot in atomically, records the cluster
     /// generation it was built for, advances the epoch exactly once, and records the
-    /// new map as the diff baseline. Pure and non-faulting - it never touches the
-    /// registry.
+    /// new local map as the diff baseline. Pure and non-faulting - it never touches
+    /// the registry.
     /// </summary>
     private IReadOnlyList<TenantRegionStatusChange> SwapSnapshot(
-        Dictionary<TenantId, TenantRegionStatus> byTenant,
+        Dictionary<TenantId, TenantRecord> records,
         long generation)
     {
+        var localStatuses = new Dictionary<TenantId, TenantRegionStatus>(records.Count);
+        foreach (var (tenant, record) in records)
+        {
+            localStatuses[tenant] = record.GetRegionStatus(_regionId);
+        }
+
         var changes = _listeners.Length == 0
             ? (IReadOnlyList<TenantRegionStatusChange>)Array.Empty<TenantRegionStatusChange>()
-            : DiffChanges(byTenant);
+            : DiffChanges(localStatuses);
 
-        Volatile.Write(ref _current, TenantResidencySnapshot.Build(byTenant));
+        Volatile.Write(ref _current, TenantResidencySnapshot.Build(records.Values, _regionId));
         Volatile.Write(ref _builtForGeneration, generation);
-        _lastByTenant = byTenant;
+        _lastByTenant = localStatuses;
         Interlocked.Increment(ref _epoch);
         return changes;
     }

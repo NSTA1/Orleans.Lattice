@@ -1877,7 +1877,15 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 state.State.ShadowCopyTreeId
                     ?? throw new InvalidOperationException($"Bootstrap shadow copy for tree '{TreeName}' has not been recorded."))
             : default;
-        return await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+        using var senderScope = ReplicationSourceLineageScope.EnterAuthenticatedDelivery(state.State.SourceClusterId);
+        var result = await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+        if (result.TenantIsolationRefused)
+        {
+            throw new InvalidOperationException(
+                $"Bootstrap from source region '{state.State.SourceClusterId}' was refused by tenant residency isolation.");
+        }
+
+        return result;
     }
 
     private async Task<string> ResolveBootstrapPhysicalTreeIdAsync(string treeName)

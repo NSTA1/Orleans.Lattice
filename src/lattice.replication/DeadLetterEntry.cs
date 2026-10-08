@@ -74,4 +74,13 @@ public readonly record struct DeadLetterEntry
     /// </summary>
     [Id(7)]
     public string? ReasonTag { get; init; }
+
+    /// <summary>
+    /// Authenticated direct sender that delivered the entry, separate from its
+    /// original <see cref="WalRecord.OriginClusterId"/> lineage. Older entries
+    /// decode to <see langword="null"/> and therefore cannot pass source checks
+    /// during replay.
+    /// </summary>
+    [Id(8)]
+    public string? AuthenticatedSenderClusterId { get; init; }
 }
