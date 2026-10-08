@@ -28,6 +28,8 @@ public partial class LatticeReplicationGrpcServiceTests
 
         public ReplicationSourceLineageStamp? SeenStamp { get; private set; }
 
+        public string? SeenAuthenticatedSender { get; private set; }
+
         public Guid? SeenFrontierEpoch { get; private set; }
 
         public Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default) =>
@@ -37,6 +39,7 @@ public partial class LatticeReplicationGrpcServiceTests
         {
             Called = true;
             SeenStamp = ReplicationSourceLineageScope.Current;
+            SeenAuthenticatedSender = ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId;
             SeenFrontierEpoch = ReplicationSourceLineageScope.Active?.ObservedFrontierEpoch;
             return Task.FromResult(Result);
         }
@@ -96,6 +99,7 @@ public partial class LatticeReplicationGrpcServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(applier.Called, Is.True, "precondition: the batch reached the applier");
+            Assert.That(applier.SeenAuthenticatedSender, Is.EqualTo(LineageSender));
             Assert.That(applier.SeenStamp, Is.EqualTo(new ReplicationSourceLineageStamp(LineageSender, lineage)),
                 "the applier checks the batch against the lineage the authenticated sender stamped, so the service must pass it");
             Assert.That(applier.SeenFrontierEpoch, Is.EqualTo(ack.Value.ReceiverLineage),
@@ -128,6 +132,8 @@ public partial class LatticeReplicationGrpcServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(applier.Called, Is.True);
+            Assert.That(applier.SeenAuthenticatedSender, Is.EqualTo(LineageSender),
+                "source authorization uses the authenticated sender even without a lineage header");
             Assert.That(applier.SeenStamp, Is.Null, "a sender that predates the stamp is not checked");
         });
     }

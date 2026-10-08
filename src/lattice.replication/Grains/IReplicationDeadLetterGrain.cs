@@ -60,6 +60,20 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
         CancellationToken cancellationToken,
         ReplicationSourceLineageStamp? sourceLineage = null);
 
+    /// <summary>
+    /// Parks an entry together with its authenticated direct sender and optional
+    /// record-lineage stamp. The sender is never inferred from
+    /// <see cref="WalRecord.OriginClusterId"/> or the lineage stamp.
+    /// </summary>
+    Task<long> EnqueueAuthenticatedAsync(
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        string reasonTag,
+        CancellationToken cancellationToken,
+        string? authenticatedSenderClusterId,
+        ReplicationSourceLineageStamp? sourceLineage);
+
     /// <summary>Returns every parked entry in ascending entry-id order. Empty list when the queue is empty.</summary>
     Task<IReadOnlyList<DeadLetterEntry>> ListAsync(CancellationToken cancellationToken);
 
@@ -97,4 +111,3 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     [AlwaysInterleave]
     Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken);
 }
-

@@ -210,14 +210,14 @@ public sealed class TenantRegistrySnapshotCrossSiloTests
     {
         var world = await ResidencyWorld.CreateAsync();
         var gateB = world.ReplicationGateB();
-        Assert.That(await gateB.EvaluateAsync(OwnedTree), Is.EqualTo(ReplicationTenantIsolationDecision.Admit), "precondition");
+        Assert.That(await gateB.EvaluateAsync(OwnedTree, Region), Is.EqualTo(ReplicationTenantIsolationDecision.Admit), "precondition");
         world.SiloBRegistry.HoldScans();
 
         world.Acme.SetRegionStatus(Region, TenantRegionStatus.Offline, Clock(20), "test");
         await world.CommitOnSiloAAsync();
 
         Assert.That(
-            await gateB.EvaluateAsync(OwnedTree),
+            await gateB.EvaluateAsync(OwnedTree, Region),
             Is.EqualTo(ReplicationTenantIsolationDecision.RejectOutOfRegion),
             "silo B must not keep admitting inbound replication for a tenant taken offline through silo A");
     }
@@ -229,7 +229,7 @@ public sealed class TenantRegistrySnapshotCrossSiloTests
         var gateB = world.ReplicationGateB();
         var reads = world.SiloBRegistry.PointReads;
 
-        var pending = gateB.EvaluateAsync(OwnedTree);
+        var pending = gateB.EvaluateAsync(OwnedTree, Region);
 
         Assert.That(pending.IsCompletedSuccessfully, Is.True);
         Assert.That(pending.Result, Is.EqualTo(ReplicationTenantIsolationDecision.Admit));

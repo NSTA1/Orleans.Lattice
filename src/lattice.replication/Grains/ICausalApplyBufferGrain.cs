@@ -54,6 +54,16 @@ internal interface ICausalApplyBufferGrain : IGrainWithStringKey
     Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0, ReplicationSourceLineageStamp? sourceLineage = null);
 
     /// <summary>
+    /// Durably parks an entry together with the transport-authenticated direct
+    /// sender, independently of the entry's original WAL lineage.
+    /// </summary>
+    Task<int> ParkAuthenticatedAsync(
+        WalRecord entry,
+        long admissionEpoch,
+        ReplicationSourceLineageStamp? sourceLineage,
+        string? authenticatedSenderClusterId);
+
+    /// <summary>
     /// Applies, in FIFO order and to a fixed point, every parked entry whose
     /// dependencies the local vector clock now satisfies, removing each one
     /// durably after its apply returned. Returns the number of entries still

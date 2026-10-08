@@ -86,6 +86,22 @@ internal sealed class TenantResidencyResolver : ITenantResidencyResolver, ITenan
     }
 
     /// <inheritdoc />
+    public bool TryResolveSourceResidency(TenantId tenant, string? regionId, out bool configured, out bool allowed)
+    {
+        if (!_maintainer.IsSnapshotAuthoritative)
+        {
+            configured = false;
+            allowed = false;
+            return false;
+        }
+
+        var snapshot = _maintainer.Current;
+        configured = snapshot.TryGetStatus(tenant, out _);
+        allowed = snapshot.IsReplicationSourceInRegion(tenant, regionId);
+        return true;
+    }
+
+    /// <inheritdoc />
     public async ValueTask<bool> ConfirmOnlineAsync(TenantId tenant, CancellationToken cancellationToken = default)
     {
         var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
@@ -111,5 +127,14 @@ internal sealed class TenantResidencyResolver : ITenantResidencyResolver, ITenan
 
         return record.GetRegionStatus(_maintainer.LocalRegionId)
             is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
+    }
+
+    /// <inheritdoc />
+    public bool IsReplicationSource(TenantRecord record, string regionId)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        return !record.HasResidencyConfiguration
+            || TenantRegionLifecycle.IsReplicationSource(record.GetRegionStatus(regionId));
     }
 }

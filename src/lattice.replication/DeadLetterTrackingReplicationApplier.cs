@@ -280,6 +280,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
         var anyLineageRefused = false;
+        var anyTenantIsolationRefused = false;
         HashSet<Guid>? deferredSagas = null;
         for (var i = 0; i < unpoisonedEntries.Count; i++)
         {
@@ -312,12 +313,23 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             {
                 anyLineageRefused = true;
             }
+            if (result.TenantIsolationRefused)
+            {
+                anyTenantIsolationRefused = true;
+            }
             if (result.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = result.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
+        return new ApplyResult
+        {
+            Applied = applied,
+            HighWaterMark = highest,
+            Deferred = anyDeferred,
+            SourceLineageRefused = anyLineageRefused,
+            TenantIsolationRefused = anyTenantIsolationRefused,
+        };
     }
 
     /// <summary>
@@ -488,7 +500,15 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var reasonTag = ClassifyFailure(failure);
         try
         {
-            await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, reasonTag, cancellationToken, ReplicationSourceLineageScope.Current).ConfigureAwait(false);
+            await EnqueueDeadLetterAsync(
+                dlq,
+                entry,
+                failure.Message ?? "<no message>",
+                attempts,
+                reasonTag,
+                cancellationToken,
+                ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId,
+                ReplicationSourceLineageScope.Current).ConfigureAwait(false);
             peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, since: null);
         }
         catch (ReplicationDeadLetterQueueFullException)
@@ -865,12 +885,14 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
         try
         {
-            await dlq.EnqueueAsync(
+            await EnqueueDeadLetterAsync(
+                dlq,
                 entry,
                 failureReason,
                 retryCount,
                 LatticeReplicationMetrics.ReasonPoisonedSaga,
                 cancellationToken,
+                ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId,
                 ReplicationSourceLineageScope.Current).ConfigureAwait(false);
             peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, since: null);
         }
@@ -917,6 +939,28 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             entry.TreeId,
             entry.CrossTreeOperationId,
             action);
+    }
+
+    private static Task<long> EnqueueDeadLetterAsync(
+        IReplicationDeadLetterGrain deadLetters,
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        string reasonTag,
+        CancellationToken cancellationToken,
+        string? authenticatedSenderClusterId,
+        ReplicationSourceLineageStamp? sourceLineage)
+    {
+        return string.IsNullOrWhiteSpace(authenticatedSenderClusterId)
+            ? deadLetters.EnqueueAsync(entry, failureReason, retryCount, reasonTag, cancellationToken, sourceLineage)
+            : deadLetters.EnqueueAuthenticatedAsync(
+                entry,
+                failureReason,
+                retryCount,
+                reasonTag,
+                cancellationToken,
+                authenticatedSenderClusterId,
+                sourceLineage);
     }
 
     private static RetryKey KeyFor(WalRecord entry) =>

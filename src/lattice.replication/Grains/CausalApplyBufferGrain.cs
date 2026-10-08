@@ -42,6 +42,7 @@ internal sealed class CausalApplyBufferGrain(
     // #4707). Mirrors the persisted ParkedCausalEntry.SourceLineage and is
     // rebuilt with the buffer; an unstamped entry has no row.
     private readonly Dictionary<CausalApplyBuffer.EntryKey, ReplicationSourceLineageStamp> _lineages = new();
+    private readonly Dictionary<CausalApplyBuffer.EntryKey, string> _senders = new();
     private string? _treeId;
 
     /// <inheritdoc />
@@ -50,7 +51,25 @@ internal sealed class CausalApplyBufferGrain(
     private string TreeId => _treeId ??= context.GrainId.Key.ToString() ?? string.Empty;
 
     /// <inheritdoc />
-    public async Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0, ReplicationSourceLineageStamp? sourceLineage = null)
+    public Task<int> ParkAsync(
+        WalRecord entry,
+        long admissionEpoch = 0,
+        ReplicationSourceLineageStamp? sourceLineage = null) =>
+        ParkCoreAsync(entry, admissionEpoch, sourceLineage, authenticatedSenderClusterId: null);
+
+    /// <inheritdoc />
+    public Task<int> ParkAuthenticatedAsync(
+        WalRecord entry,
+        long admissionEpoch,
+        ReplicationSourceLineageStamp? sourceLineage,
+        string? authenticatedSenderClusterId) =>
+        ParkCoreAsync(entry, admissionEpoch, sourceLineage, authenticatedSenderClusterId);
+
+    private async Task<int> ParkCoreAsync(
+        WalRecord entry,
+        long admissionEpoch,
+        ReplicationSourceLineageStamp? sourceLineage,
+        string? authenticatedSenderClusterId)
     {
         var buffer = EnsureLoaded();
         var resolved = options.Get(TreeId);
@@ -72,6 +91,14 @@ internal sealed class CausalApplyBufferGrain(
             {
                 _lineages.Remove(parkedKey);
             }
+            if (!string.IsNullOrWhiteSpace(authenticatedSenderClusterId))
+            {
+                _senders[parkedKey] = authenticatedSenderClusterId;
+            }
+            else
+            {
+                _senders.Remove(parkedKey);
+            }
 
             foreach (var displaced in evicted)
             {
@@ -88,18 +115,21 @@ internal sealed class CausalApplyBufferGrain(
                     var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId);
                     foreach (var displaced in evicted)
                     {
-                        await dlq.EnqueueAsync(
+                        await EnqueueDeadLetterAsync(
+                            dlq,
                             displaced,
                             failureReason: "Causal-apply buffer full; evicted blocked entry to make room.",
                             retryCount: 0,
                             reasonTag: LatticeReplicationMetrics.ReasonHlcSkew,
                             CancellationToken.None,
+                            AuthenticatedSenderOf(displaced),
                             LineageOf(displaced)).ConfigureAwait(true);
                     }
 
                     foreach (var displaced in evicted)
                     {
                         _lineages.Remove(CausalApplyBuffer.EntryKey.From(displaced));
+                        _senders.Remove(CausalApplyBuffer.EntryKey.From(displaced));
                     }
                 }
 
@@ -238,6 +268,7 @@ internal sealed class CausalApplyBufferGrain(
                             "A causal dependency of this entry names a write this cluster acknowledged and then lost "
                             + "(it was discarded from the dead-letter queue), so the entry can never be applied in causal order.",
                             LatticeReplicationMetrics.ReasonDependencyLost,
+                            AuthenticatedSenderOf(ent),
                             LineageOf(ent)).ConfigureAwait(true))
                     {
                         (keepParked ??= new List<WalRecord>()).Add(ent);
@@ -250,7 +281,12 @@ internal sealed class CausalApplyBufferGrain(
                     try
                     {
                         var lineageVerdict = await applier
-                            .ApplyDrainedEntryAsync(ent, EpochOf(ent), LineageOf(ent), CancellationToken.None)
+                            .ApplyDrainedEntryAsync(
+                                ent,
+                                EpochOf(ent),
+                                LineageOf(ent),
+                                AuthenticatedSenderOf(ent),
+                                CancellationToken.None)
                             .ConfigureAwait(true);
                         if (lineageVerdict == ReplicationSourceLineageGate.Verdict.RefuseLineage)
                         {
@@ -262,6 +298,38 @@ internal sealed class CausalApplyBufferGrain(
                             logger.LogInformation(
                                 "Causal-apply buffer for tree {Tree} discarded an entry its sender read under a replaced source lineage (key {Key}).",
                                 TreeId, ent.Key);
+                        }
+                        else if (lineageVerdict == ReplicationSourceLineageGate.Verdict.RefuseTenantSource)
+                        {
+                            if (!await TryDeadLetterAsync(
+                                    ent,
+                                    "The tenant is unknown or inactive, or the destination is outside its residency; "
+                                    + "the parked entry was not applied.",
+                                    LatticeReplicationMetrics.ReasonForeignTenant,
+                                    AuthenticatedSenderOf(ent),
+                                    LineageOf(ent)).ConfigureAwait(true))
+                            {
+                                (keepParked ??= new List<WalRecord>()).Add(ent);
+                            }
+                        }
+                        else if (lineageVerdict is ReplicationSourceLineageGate.Verdict.RefuseTenantSourceNotResident
+                            or ReplicationSourceLineageGate.Verdict.RefuseMissingTenantSourceIdentity)
+                        {
+                            var sourceRefused = lineageVerdict
+                                == ReplicationSourceLineageGate.Verdict.RefuseTenantSourceNotResident;
+                            if (!await TryDeadLetterAsync(
+                                    ent,
+                                    sourceRefused
+                                        ? "The authenticated sender is not resident for this tenant; the parked entry was not applied."
+                                        : "The configured tenant residency requires an authenticated sender; the parked entry was not applied.",
+                                    sourceRefused
+                                        ? LatticeReplicationMetrics.ReasonTenantSourceNotResident
+                                        : LatticeReplicationMetrics.ReasonMissingSourceIdentity,
+                                    AuthenticatedSenderOf(ent),
+                                    LineageOf(ent)).ConfigureAwait(true))
+                            {
+                                (keepParked ??= new List<WalRecord>()).Add(ent);
+                            }
                         }
                         else if (lineageVerdict == ReplicationSourceLineageGate.Verdict.RefuseTransient)
                         {
@@ -311,7 +379,12 @@ internal sealed class CausalApplyBufferGrain(
                         var reasonTag = ex is ArgumentException or InvalidOperationException
                             ? LatticeReplicationMetrics.ReasonSchema
                             : LatticeReplicationMetrics.ReasonUnknown;
-                        if (!await TryDeadLetterAsync(ent, ex.Message ?? "<no message>", reasonTag, LineageOf(ent)).ConfigureAwait(true))
+                        if (!await TryDeadLetterAsync(
+                                ent,
+                                ex.Message ?? "<no message>",
+                                reasonTag,
+                                AuthenticatedSenderOf(ent),
+                                LineageOf(ent)).ConfigureAwait(true))
                         {
                             (keepParked ??= new List<WalRecord>()).Add(ent);
                         }
@@ -330,6 +403,7 @@ internal sealed class CausalApplyBufferGrain(
                     {
                         _epochs.Remove(CausalApplyBuffer.EntryKey.From(ent));
                         _lineages.Remove(CausalApplyBuffer.EntryKey.From(ent));
+                        _senders.Remove(CausalApplyBuffer.EntryKey.From(ent));
                     }
                 }
 
@@ -339,6 +413,7 @@ internal sealed class CausalApplyBufferGrain(
                     {
                         _epochs.Remove(CausalApplyBuffer.EntryKey.From(ent));
                         _lineages.Remove(CausalApplyBuffer.EntryKey.From(ent));
+                        _senders.Remove(CausalApplyBuffer.EntryKey.From(ent));
                     }
                 }
 
@@ -380,6 +455,31 @@ internal sealed class CausalApplyBufferGrain(
     private ReplicationSourceLineageStamp? LineageOf(WalRecord entry) =>
         _lineages.TryGetValue(CausalApplyBuffer.EntryKey.From(entry), out var stamp) ? stamp : null;
 
+    private string? AuthenticatedSenderOf(WalRecord entry) =>
+        _senders.TryGetValue(CausalApplyBuffer.EntryKey.From(entry), out var sender) ? sender : null;
+
+    private static Task<long> EnqueueDeadLetterAsync(
+        IReplicationDeadLetterGrain deadLetters,
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        string reasonTag,
+        CancellationToken cancellationToken,
+        string? authenticatedSenderClusterId,
+        ReplicationSourceLineageStamp? sourceLineage)
+    {
+        return string.IsNullOrWhiteSpace(authenticatedSenderClusterId)
+            ? deadLetters.EnqueueAsync(entry, failureReason, retryCount, reasonTag, cancellationToken, sourceLineage)
+            : deadLetters.EnqueueAuthenticatedAsync(
+                entry,
+                failureReason,
+                retryCount,
+                reasonTag,
+                cancellationToken,
+                authenticatedSenderClusterId,
+                sourceLineage);
+    }
+
     /// <summary>
     /// Dead-letters <paramref name="entry"/>, or returns <see langword="false"/>
     /// when the dead-letter queue is full (#4603) so the caller keeps it parked.
@@ -388,16 +488,19 @@ internal sealed class CausalApplyBufferGrain(
         WalRecord entry,
         string failureReason,
         string reasonTag,
+        string? authenticatedSenderClusterId,
         ReplicationSourceLineageStamp? sourceLineage)
     {
         try
         {
-            await grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).EnqueueAsync(
+            await EnqueueDeadLetterAsync(
+                grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId),
                 entry,
                 failureReason,
                 retryCount: 0,
                 reasonTag,
                 CancellationToken.None,
+                authenticatedSenderClusterId,
                 sourceLineage).ConfigureAwait(true);
             return true;
         }
@@ -471,6 +574,7 @@ internal sealed class CausalApplyBufferGrain(
         var buffer = new CausalApplyBuffer(TreeId);
         _epochs.Clear();
         _lineages.Clear();
+        _senders.Clear();
         foreach (var parked in state.State.Entries)
         {
             buffer.Restore(parked.Entry, parked.ParkedAtTicks);
@@ -479,6 +583,10 @@ internal sealed class CausalApplyBufferGrain(
             if (parked.SourceLineage is { } stamp)
             {
                 _lineages.TryAdd(key, stamp);
+            }
+            if (!string.IsNullOrWhiteSpace(parked.AuthenticatedSenderClusterId))
+            {
+                _senders.TryAdd(key, parked.AuthenticatedSenderClusterId);
             }
         }
 
@@ -505,6 +613,7 @@ internal sealed class CausalApplyBufferGrain(
                 ParkedAtTicks = parkedAtTicks,
                 AdmissionEpoch = EpochOf(entry),
                 SourceLineage = LineageOf(entry),
+                AuthenticatedSenderClusterId = AuthenticatedSenderOf(entry),
             });
         }
 

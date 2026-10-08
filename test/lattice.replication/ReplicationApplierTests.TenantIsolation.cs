@@ -30,20 +30,52 @@ public partial class ReplicationApplierTests
     /// recording every tree it was consulted for so a test can assert the gate was
     /// (or was not) called.
     /// </summary>
-    private sealed class FuncTenantIsolationGate(
-        bool isActive,
-        Func<string, ReplicationTenantIsolationDecision> decide) : IReplicationTenantIsolationGate
+    private sealed class FuncTenantIsolationGate : IReplicationTenantIsolationGate
     {
+        private readonly bool _isActive;
+        private readonly Func<string, string?, ReplicationTenantIsolationDecision> _decide;
+
+        public FuncTenantIsolationGate(
+            bool isActive,
+            Func<string, ReplicationTenantIsolationDecision> decide)
+            : this(isActive, (treeId, _) => decide(treeId))
+        {
+        }
+
+        public FuncTenantIsolationGate(
+            bool isActive,
+            Func<string, string?, ReplicationTenantIsolationDecision> decide)
+        {
+            _isActive = isActive;
+            _decide = decide;
+        }
+
         public List<string> Consulted { get; } = [];
 
-        public bool IsActive => isActive;
+        public List<string?> Senders { get; } = [];
+
+        public bool IsActive => _isActive;
 
         public ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
             string treeId,
             CancellationToken cancellationToken = default)
         {
+            return Evaluate(treeId, null);
+        }
+
+        public ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
+            string treeId,
+            string? authenticatedSenderClusterId,
+            CancellationToken cancellationToken = default)
+        {
+            return Evaluate(treeId, authenticatedSenderClusterId);
+        }
+
+        private ValueTask<ReplicationTenantIsolationDecision> Evaluate(string treeId, string? sender)
+        {
             Consulted.Add(treeId);
-            return new ValueTask<ReplicationTenantIsolationDecision>(decide(treeId));
+            Senders.Add(sender);
+            return new ValueTask<ReplicationTenantIsolationDecision>(_decide(treeId, sender));
         }
     }
 
@@ -152,6 +184,87 @@ public partial class ReplicationApplierTests
             0,
             LatticeReplicationMetrics.ReasonTenantOffline,
             Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_authorizes_relay_by_authenticated_sender_not_record_origin()
+    {
+        var gate = new FuncTenantIsolationGate(
+            isActive: true,
+            (_, sender) => sender == "relay"
+                ? ReplicationTenantIsolationDecision.Admit
+                : ReplicationTenantIsolationDecision.RejectSourceNotResident);
+        var (applier, apply, _, _, _) = CreateTenantApplier(EnrolledTenantTrees(), gate);
+        var entry = EnrollmentEntry(AcmeOrdersTree, "k", Hlc(26)) with { OriginClusterId = "origin" };
+
+        ApplyResult result;
+        using (ReplicationSourceLineageScope.EnterAuthenticatedDelivery("relay"))
+        {
+            result = await applier.ApplyAsync(entry);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.OriginClusterId, Is.EqualTo("origin"));
+            Assert.That(gate.Senders, Is.EqualTo(new[] { "relay" }));
+            Assert.That(result.Applied, Is.True);
+        });
+        await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), entry.Timestamp, "origin", null, 0);
+    }
+
+    [Test]
+    public async Task ApplyAsync_refuses_tenant_write_without_authenticated_sender()
+    {
+        var gate = new FuncTenantIsolationGate(
+            isActive: true,
+            (_, sender) => sender is null
+                ? ReplicationTenantIsolationDecision.RejectMissingSourceIdentity
+                : ReplicationTenantIsolationDecision.Admit);
+        var (applier, apply, hwm, dlq, _) = CreateTenantApplier(EnrolledTenantTrees(), gate);
+
+        var result = await applier.ApplyAsync(EnrollmentEntry(AcmeOrdersTree, "k", Hlc(27)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.False);
+            Assert.That(result.TenantIsolationRefused, Is.True);
+            Assert.That(gate.Senders, Is.EqualTo(new string?[] { null }));
+        });
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        await dlq.Received(1).EnqueueAsync(
+            Arg.Any<WalRecord>(),
+            Arg.Any<string>(),
+            0,
+            LatticeReplicationMetrics.ReasonMissingSourceIdentity,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyAsync_dead_letters_nonresident_sender_with_source_specific_reason()
+    {
+        var gate = new FuncTenantIsolationGate(
+            isActive: true,
+            (_, _) => ReplicationTenantIsolationDecision.RejectSourceNotResident);
+        var (applier, apply, hwm, dlq, _) = CreateTenantApplier(EnrolledTenantTrees(), gate);
+
+        ApplyResult result;
+        using (ReplicationSourceLineageScope.EnterAuthenticatedDelivery("relay"))
+        {
+            result = await applier.ApplyAsync(EnrollmentEntry(AcmeOrdersTree, "k", Hlc(28)));
+        }
+
+        Assert.That(result.TenantIsolationRefused, Is.True);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        await dlq.Received(1).EnqueueAuthenticatedAsync(
+            Arg.Any<WalRecord>(),
+            Arg.Any<string>(),
+            0,
+            LatticeReplicationMetrics.ReasonTenantSourceNotResident,
+            Arg.Any<CancellationToken>(),
+            "relay",
+            Arg.Any<ReplicationSourceLineageStamp?>());
     }
 
     [Test]

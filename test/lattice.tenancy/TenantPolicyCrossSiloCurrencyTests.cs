@@ -234,7 +234,7 @@ public sealed class TenantPolicyCrossSiloCurrencyTests
         var world = await World.CreateAsync();
         var gateB = new ReplicationTenantIsolationGate(world.SiloBRegistry, new NullTenantResidencyResolver(), world.SiloB);
         Assert.That(
-            await gateB.EvaluateAsync(SharedTree),
+            await gateB.EvaluateAsync(SharedTree, "peer"),
             Is.EqualTo(ReplicationTenantIsolationDecision.Admit),
             "precondition: an active tenant is admitted on silo B");
 
@@ -245,7 +245,7 @@ public sealed class TenantPolicyCrossSiloCurrencyTests
             "precondition: silo B's snapshot still holds the tenant as active");
 
         Assert.That(
-            await gateB.EvaluateAsync(SharedTree),
+            await gateB.EvaluateAsync(SharedTree, "peer"),
             Is.EqualTo(ReplicationTenantIsolationDecision.RejectSuspendedTenant),
             "silo B must not keep admitting inbound replication for a tenant suspended on silo A");
     }
@@ -263,7 +263,7 @@ public sealed class TenantPolicyCrossSiloCurrencyTests
             "precondition: silo B's snapshot still holds the deleted tenant");
 
         Assert.That(
-            await gateB.EvaluateAsync(SharedTree),
+            await gateB.EvaluateAsync(SharedTree, "peer"),
             Is.EqualTo(ReplicationTenantIsolationDecision.RejectUnknownTenant),
             "silo B must not keep admitting inbound replication for a tenant deleted on silo A");
     }

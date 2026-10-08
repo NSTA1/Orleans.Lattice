@@ -39,7 +39,9 @@ public partial class ReplicationApplierTests
         public required Fakes.FakePersistentState<CausalApplyBufferState> BufferState { get; init; }
     }
 
-    private static CausalHarness CreateCausalHarness(LatticeReplicationOptions? options = null)
+    private static CausalHarness CreateCausalHarness(
+        LatticeReplicationOptions? options = null,
+        IReplicationTenantIsolationGate? tenantIsolationGate = null)
     {
         var rows = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
         var vc = new VersionVector();
@@ -96,7 +98,11 @@ public partial class ReplicationApplierTests
         monitor.CurrentValue.Returns(resolved);
         monitor.Get(Arg.Any<string>()).Returns(resolved);
 
-        var applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext());
+        var applier = new ReplicationApplier(
+            factory,
+            monitor,
+            replicationContext: new AnyTreeLwwContext(),
+            tenantIsolationGate: tenantIsolationGate);
         var (_, bufferState) = CausalBufferTestWiring.Wire(factory, applier, monitor, Tree);
 
         return new CausalHarness

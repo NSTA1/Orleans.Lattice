@@ -49,4 +49,16 @@ public enum ReplicationTenantIsolationDecision
     /// applied, so it can be replayed if the tenant is reinstated.
     /// </summary>
     RejectSuspendedTenant = 3,
+
+    /// <summary>
+    /// The write is refused because the authenticated direct sender is not
+    /// resident for the tenant. Original record lineage is not sender identity.
+    /// </summary>
+    RejectSourceNotResident = 4,
+
+    /// <summary>
+    /// The write is refused because the transport did not provide an authenticated
+    /// direct-sender identity.
+    /// </summary>
+    RejectMissingSourceIdentity = 5,
 }

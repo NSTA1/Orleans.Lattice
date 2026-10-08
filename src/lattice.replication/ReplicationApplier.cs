@@ -297,7 +297,10 @@ internal sealed partial class ReplicationApplier(
             if (_tenantIsolationGate is not null && _tenantIsolationGate.IsActive)
             {
                 var decision = await _tenantIsolationGate
-                    .EvaluateAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+                    .EvaluateAsync(
+                        entry.TreeId,
+                        ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId,
+                        cancellationToken).ConfigureAwait(false);
                 if (decision != ReplicationTenantIsolationDecision.Admit)
                 {
                     if (!await TryDeadLetterAsync(entry, DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)).ConfigureAwait(false))
@@ -312,9 +315,17 @@ internal sealed partial class ReplicationApplier(
                     {
                         ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
                         ReplicationTenantIsolationDecision.RejectSuspendedTenant => LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant,
+                        ReplicationTenantIsolationDecision.RejectSourceNotResident => LatticeReplicationMetrics.OutcomeRejectedTenantSourceNotResident,
+                        ReplicationTenantIsolationDecision.RejectMissingSourceIdentity => LatticeReplicationMetrics.OutcomeRejectedMissingSourceIdentity,
                         _ => LatticeReplicationMetrics.OutcomeRejectedForeignTenant,
                     };
-                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+                    return new ApplyResult
+                    {
+                        Applied = false,
+                        HighWaterMark = HybridLogicalClock.Zero,
+                        TenantIsolationRefused = decision is ReplicationTenantIsolationDecision.RejectSourceNotResident
+                            or ReplicationTenantIsolationDecision.RejectMissingSourceIdentity,
+                    };
                 }
             }
 
@@ -797,13 +808,15 @@ internal sealed partial class ReplicationApplier(
     {
         try
         {
-            await grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId).EnqueueAsync(
+            await EnqueueDeadLetterAsync(
+                grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId),
                 entry,
                 failureReason: "A causal dependency of this entry names a write this cluster acknowledged and then lost "
                     + "(it was discarded from the dead-letter queue), so the entry can never be applied in causal order.",
                 retryCount: 0,
                 reasonTag: LatticeReplicationMetrics.ReasonDependencyLost,
                 cancellationToken,
+                ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId,
                 ReplicationSourceLineageScope.Current).ConfigureAwait(false);
             RecordDeadLetterFull(entry, full: false);
             return true;
@@ -921,7 +934,11 @@ internal sealed partial class ReplicationApplier(
         // Issue #4707: the entry keeps the source lineage its sender stamped, so
         // its drain is checked against the lineage drained by then.
         var remaining = await GetBufferGrain(entry.TreeId)
-            .ParkAsync(entry, admissionEpoch, ReplicationSourceLineageScope.Current)
+            .ParkAuthenticatedAsync(
+                entry,
+                admissionEpoch,
+                ReplicationSourceLineageScope.Current,
+                ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId)
             .ConfigureAwait(false);
         _bufferMayHoldEntries[entry.TreeId] = remaining > 0;
     }
@@ -969,10 +986,31 @@ internal sealed partial class ReplicationApplier(
         WalRecord entry,
         long admissionEpoch,
         ReplicationSourceLineageStamp? sourceLineage,
+        string? authenticatedSenderClusterId,
         CancellationToken cancellationToken)
     {
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
-        using var lineageScope = ReplicationSourceLineageScope.Enter(sourceLineage);
+        using var lineageScope = ReplicationSourceLineageScope.EnterAuthenticatedDelivery(
+            authenticatedSenderClusterId,
+            sourceLineage);
+
+        if (_tenantIsolationGate is not null && _tenantIsolationGate.IsActive)
+        {
+            var tenantDecision = await _tenantIsolationGate
+                .EvaluateAsync(entry.TreeId, authenticatedSenderClusterId, cancellationToken)
+                .ConfigureAwait(false);
+            if (tenantDecision != ReplicationTenantIsolationDecision.Admit)
+            {
+                return tenantDecision switch
+                {
+                    ReplicationTenantIsolationDecision.RejectSourceNotResident =>
+                        ReplicationSourceLineageGate.Verdict.RefuseTenantSourceNotResident,
+                    ReplicationTenantIsolationDecision.RejectMissingSourceIdentity =>
+                        ReplicationSourceLineageGate.Verdict.RefuseMissingTenantSourceIdentity,
+                    _ => ReplicationSourceLineageGate.Verdict.RefuseTenantSource,
+                };
+            }
+        }
 
         var lineageVerdict = await AdmitSourceLineageAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
         if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
@@ -1458,7 +1496,8 @@ internal sealed partial class ReplicationApplier(
         CancellationToken cancellationToken)
     {
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
-        return dlq.EnqueueAsync(
+        return EnqueueDeadLetterAsync(
+            dlq,
             entry,
             failureReason: $"Inbound replication entry for tree '{entry.TreeId}' declared merge mode "
                 + $"'{entry.Mode}' but the receiver resolves this tree to '{expected}'; the entry was "
@@ -1466,6 +1505,7 @@ internal sealed partial class ReplicationApplier(
             retryCount: 0,
             reasonTag: LatticeReplicationMetrics.ReasonModeMismatch,
             cancellationToken,
+            ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId,
             ReplicationSourceLineageScope.Current);
     }
 
@@ -1485,6 +1525,14 @@ internal sealed partial class ReplicationApplier(
     {
         var (reasonTag, failureReason) = decision switch
         {
+            ReplicationTenantIsolationDecision.RejectSourceNotResident =>
+                (LatticeReplicationMetrics.ReasonTenantSourceNotResident,
+                    $"Inbound replicated write for tree '{entry.TreeId}' was delivered by a region that is "
+                    + "not resident for the tenant; the write was refused regardless of its original record lineage."),
+            ReplicationTenantIsolationDecision.RejectMissingSourceIdentity =>
+                (LatticeReplicationMetrics.ReasonMissingSourceIdentity,
+                    $"Inbound replicated write for tree '{entry.TreeId}' had no authenticated direct-sender "
+                    + "identity; the write was refused because tenant source residency could not be verified."),
             ReplicationTenantIsolationDecision.RejectOutOfRegion =>
                 (LatticeReplicationMetrics.ReasonTenantOffline,
                     $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that is not "
@@ -1503,13 +1551,37 @@ internal sealed partial class ReplicationApplier(
         };
 
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
-        return dlq.EnqueueAsync(
+        return EnqueueDeadLetterAsync(
+            dlq,
             entry,
             failureReason: failureReason,
             retryCount: 0,
             reasonTag: reasonTag,
             cancellationToken,
+            ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId,
             ReplicationSourceLineageScope.Current);
+    }
+
+    private static Task EnqueueDeadLetterAsync(
+        IReplicationDeadLetterGrain deadLetters,
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        string reasonTag,
+        CancellationToken cancellationToken,
+        string? authenticatedSenderClusterId,
+        ReplicationSourceLineageStamp? sourceLineage)
+    {
+        return string.IsNullOrWhiteSpace(authenticatedSenderClusterId)
+            ? deadLetters.EnqueueAsync(entry, failureReason, retryCount, reasonTag, cancellationToken, sourceLineage)
+            : deadLetters.EnqueueAuthenticatedAsync(
+                entry,
+                failureReason,
+                retryCount,
+                reasonTag,
+                cancellationToken,
+                authenticatedSenderClusterId,
+                sourceLineage);
     }
 
 

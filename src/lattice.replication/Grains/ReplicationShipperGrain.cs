@@ -609,7 +609,7 @@ internal sealed partial class ReplicationShipperGrain(
     /// identity at least once for this activation. Until it has, the next pump
     /// tick performs the authoritative registry resolve regardless of the
     /// backstop clock, so a freshly activated shipper always binds before it
-    /// ships. Set by <see cref="ApplyResolvedIdentityAsync(string, int)"/>.
+    /// ships. Set by <see cref="ApplyResolvedIdentityAsync(string, int, SourceLineageObservation)"/>.
     /// </summary>
     private bool _sourceIdentityResolved;
 

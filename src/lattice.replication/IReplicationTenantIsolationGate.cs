@@ -54,7 +54,34 @@ public interface IReplicationTenantIsolationGate
     /// <see cref="ReplicationTenantIsolationDecision.Admit"/> to apply it, or a
     /// reject decision to refuse it.
     /// </returns>
+    /// <remarks>
+    /// This legacy overload has no authenticated sender identity. The tenancy
+    /// implementation preserves existing behavior when residency is inactive or
+    /// unconfigured, and requires a sender only when source residency is checked.
+    /// </remarks>
     ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
         string treeId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Classifies whether a replicated write may be applied when received directly
+    /// from <paramref name="authenticatedSenderClusterId"/>. The sender is the
+    /// identity authenticated by the transport, not
+    /// <see cref="WalRecord.OriginClusterId"/>, which preserves original lineage
+    /// through relays. The default implementation delegates to the legacy overload
+    /// for source compatibility. Custom gates must override this overload to
+    /// enforce authenticated source residency themselves.
+    /// </summary>
+    /// <param name="treeId">The inbound entry's tree id.</param>
+    /// <param name="authenticatedSenderClusterId">
+    /// The authenticated direct sender, or <see langword="null"/> when no
+    /// authenticated identity is available.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the evaluation.</param>
+    /// <returns>The sender-aware isolation decision.</returns>
+    ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
+        string treeId,
+        string? authenticatedSenderClusterId,
+        CancellationToken cancellationToken = default) =>
+        EvaluateAsync(treeId, cancellationToken);
 }

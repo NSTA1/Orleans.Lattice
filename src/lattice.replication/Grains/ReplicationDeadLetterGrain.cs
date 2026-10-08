@@ -113,7 +113,42 @@ internal sealed class ReplicationDeadLetterGrain(
         int retryCount,
         string reasonTag,
         CancellationToken cancellationToken,
-        ReplicationSourceLineageStamp? sourceLineage = null)
+        ReplicationSourceLineageStamp? sourceLineage = null) =>
+        await EnqueueCoreAsync(
+            entry,
+            failureReason,
+            retryCount,
+            reasonTag,
+            cancellationToken,
+            authenticatedSenderClusterId: null,
+            sourceLineage).ConfigureAwait(true);
+
+    /// <inheritdoc />
+    public Task<long> EnqueueAuthenticatedAsync(
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        string reasonTag,
+        CancellationToken cancellationToken,
+        string? authenticatedSenderClusterId,
+        ReplicationSourceLineageStamp? sourceLineage) =>
+        EnqueueCoreAsync(
+            entry,
+            failureReason,
+            retryCount,
+            reasonTag,
+            cancellationToken,
+            authenticatedSenderClusterId,
+            sourceLineage);
+
+    private async Task<long> EnqueueCoreAsync(
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        string reasonTag,
+        CancellationToken cancellationToken,
+        string? authenticatedSenderClusterId,
+        ReplicationSourceLineageStamp? sourceLineage)
     {
         ArgumentNullException.ThrowIfNull(failureReason);
         ArgumentException.ThrowIfNullOrEmpty(reasonTag);
@@ -154,6 +189,7 @@ internal sealed class ReplicationDeadLetterGrain(
                 SourceLineageClusterId = sourceLineage?.SourceClusterId,
                 SourceLineage = sourceLineage?.Lineage,
                 ReasonTag = reasonTag,
+                AuthenticatedSenderClusterId = authenticatedSenderClusterId,
             }),
             capacity: null,
             cancellationToken).ConfigureAwait(true);

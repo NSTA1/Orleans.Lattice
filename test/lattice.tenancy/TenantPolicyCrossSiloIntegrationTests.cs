@@ -126,7 +126,7 @@ public sealed class TenantPolicyCrossSiloIntegrationTests
             Assert.That(residency.IsSnapshotAuthoritative, Is.True, "precondition: a leased, rebuilt residency view is authoritative");
             Assert.That((await OwnedReadAsync(services, gamma, gammaTree)).Allowed, Is.True, "precondition: online on every silo");
             Assert.That(
-                await services.GetRequiredService<IReplicationTenantIsolationGate>().EvaluateAsync(gammaTree),
+                await services.GetRequiredService<IReplicationTenantIsolationGate>().EvaluateAsync(gammaTree, region),
                 Is.EqualTo(ReplicationTenantIsolationDecision.Admit),
                 "precondition: inbound replication admitted on every silo");
         }
@@ -140,7 +140,7 @@ public sealed class TenantPolicyCrossSiloIntegrationTests
             var decision = await OwnedReadAsync(silos[i], gamma, gammaTree);
             Assert.That(decision.Allowed, Is.False, $"silo {i}'s tenant gate must not admit a tenant taken offline through silo 0");
             Assert.That(
-                await silos[i].GetRequiredService<IReplicationTenantIsolationGate>().EvaluateAsync(gammaTree),
+                await silos[i].GetRequiredService<IReplicationTenantIsolationGate>().EvaluateAsync(gammaTree, region),
                 Is.EqualTo(ReplicationTenantIsolationDecision.RejectOutOfRegion),
                 $"silo {i} must not admit inbound replication for a tenant taken offline through silo 0");
         }

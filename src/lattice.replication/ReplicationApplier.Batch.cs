@@ -126,6 +126,7 @@ internal sealed partial class ReplicationApplier
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
         var anyLineageRefused = false;
+        var anyTenantIsolationRefused = false;
         var i = 0;
         while (i < entries.Count)
         {
@@ -145,6 +146,10 @@ internal sealed partial class ReplicationApplier
             {
                 anyLineageRefused = true;
             }
+            if (runResult.TenantIsolationRefused)
+            {
+                anyTenantIsolationRefused = true;
+            }
             if (runResult.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = runResult.HighWaterMark;
@@ -152,7 +157,14 @@ internal sealed partial class ReplicationApplier
             i = j;
         }
 
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
+        return new ApplyResult
+        {
+            Applied = anyApplied,
+            HighWaterMark = highest,
+            Deferred = anyDeferred,
+            SourceLineageRefused = anyLineageRefused,
+            TenantIsolationRefused = anyTenantIsolationRefused,
+        };
     }
 
     /// <summary>
@@ -239,6 +251,7 @@ internal sealed partial class ReplicationApplier
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
         var anyLineageRefused = false;
+        var anyTenantIsolationRefused = false;
         foreach (var runResult in results)
         {
             if (runResult.Applied)
@@ -253,13 +266,24 @@ internal sealed partial class ReplicationApplier
             {
                 anyLineageRefused = true;
             }
+            if (runResult.TenantIsolationRefused)
+            {
+                anyTenantIsolationRefused = true;
+            }
             if (runResult.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = runResult.HighWaterMark;
             }
         }
 
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
+        return new ApplyResult
+        {
+            Applied = anyApplied,
+            HighWaterMark = highest,
+            Deferred = anyDeferred,
+            SourceLineageRefused = anyLineageRefused,
+            TenantIsolationRefused = anyTenantIsolationRefused,
+        };
     }
 
     /// <summary>
@@ -283,6 +307,7 @@ internal sealed partial class ReplicationApplier
             var highest = HybridLogicalClock.Zero;
             var anyDeferred = false;
             var anyLineageRefused = false;
+            var anyTenantIsolationRefused = false;
             foreach (var (start, end) in segments)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -300,12 +325,23 @@ internal sealed partial class ReplicationApplier
                 {
                     anyLineageRefused = true;
                 }
+                if (runResult.TenantIsolationRefused)
+                {
+                    anyTenantIsolationRefused = true;
+                }
                 if (runResult.HighWaterMark.CompareTo(highest) > 0)
                 {
                     highest = runResult.HighWaterMark;
                 }
             }
-            return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
+            return new ApplyResult
+            {
+                Applied = anyApplied,
+                HighWaterMark = highest,
+                Deferred = anyDeferred,
+                SourceLineageRefused = anyLineageRefused,
+                TenantIsolationRefused = anyTenantIsolationRefused,
+            };
         }
         finally
         {
@@ -704,7 +740,10 @@ internal sealed partial class ReplicationApplier
         if (_tenantIsolationGate is not null && _tenantIsolationGate.IsActive)
         {
             var decision = await _tenantIsolationGate
-                .EvaluateAsync(treeId, cancellationToken).ConfigureAwait(false);
+                .EvaluateAsync(
+                    treeId,
+                    ReplicationSourceLineageScope.CurrentAuthenticatedSenderClusterId,
+                    cancellationToken).ConfigureAwait(false);
             if (decision != ReplicationTenantIsolationDecision.Admit)
             {
                 return await RejectTenantIsolationRunAsync(
@@ -1466,6 +1505,7 @@ internal sealed partial class ReplicationApplier
         var anyApplied = false;
         var anyDeferred = false;
         var anyLineageRefused = false;
+        var anyTenantIsolationRefused = false;
         var highest = HybridLogicalClock.Zero;
         for (var k = startInclusive; k < endExclusive; k++)
         {
@@ -1483,12 +1523,23 @@ internal sealed partial class ReplicationApplier
             {
                 anyLineageRefused = true;
             }
+            if (r.TenantIsolationRefused)
+            {
+                anyTenantIsolationRefused = true;
+            }
             if (r.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = r.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
+        return new ApplyResult
+        {
+            Applied = anyApplied,
+            HighWaterMark = highest,
+            Deferred = anyDeferred,
+            SourceLineageRefused = anyLineageRefused,
+            TenantIsolationRefused = anyTenantIsolationRefused,
+        };
     }
 
     /// <summary>
@@ -1542,7 +1593,12 @@ internal sealed partial class ReplicationApplier
                 RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeDedup);
             }
 
-            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = full };
+            return new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = full,
+            };
         }
 
         if (admission == InboundTreeAdmission.RejectNoEnrollmentSource)
@@ -1630,6 +1686,8 @@ internal sealed partial class ReplicationApplier
         {
             ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
             ReplicationTenantIsolationDecision.RejectSuspendedTenant => LatticeReplicationMetrics.OutcomeRejectedSuspendedTenant,
+            ReplicationTenantIsolationDecision.RejectSourceNotResident => LatticeReplicationMetrics.OutcomeRejectedTenantSourceNotResident,
+            ReplicationTenantIsolationDecision.RejectMissingSourceIdentity => LatticeReplicationMetrics.OutcomeRejectedMissingSourceIdentity,
             _ => LatticeReplicationMetrics.OutcomeRejectedForeignTenant,
         };
 
@@ -1655,6 +1713,13 @@ internal sealed partial class ReplicationApplier
             RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeDedup);
         }
 
-        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = full };
+        return new ApplyResult
+        {
+            Applied = false,
+            HighWaterMark = HybridLogicalClock.Zero,
+            Deferred = full,
+            TenantIsolationRefused = decision is ReplicationTenantIsolationDecision.RejectSourceNotResident
+                or ReplicationTenantIsolationDecision.RejectMissingSourceIdentity,
+        };
     }
 }

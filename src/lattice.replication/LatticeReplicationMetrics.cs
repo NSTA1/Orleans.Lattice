@@ -218,6 +218,18 @@ public static class LatticeReplicationMetrics
     public const string OutcomeRejectedTenantOffline = "rejected-tenant-offline";
 
     /// <summary>
+    /// Apply-duration outcome for an entry refused because its authenticated
+    /// direct sender is not resident for the tenant.
+    /// </summary>
+    public const string OutcomeRejectedTenantSourceNotResident = "rejected-tenant-source-not-resident";
+
+    /// <summary>
+    /// Apply-duration outcome for a tenant entry whose configured source residency
+    /// could not be checked because no authenticated sender identity was available.
+    /// </summary>
+    public const string OutcomeRejectedMissingSourceIdentity = "rejected-missing-source-identity";
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value: the inbound entry was rejected by the
     /// receiver-side tenant-isolation gate because its tenant, while it exists, has
     /// been suspended or disabled by an operator. The entry is not applied; because
@@ -235,6 +247,7 @@ public static class LatticeReplicationMetrics
     /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
     /// <see cref="ReasonModeMismatch"/>, <see cref="ReasonForeignTenant"/>,
     /// <see cref="ReasonTenantOffline"/>, <see cref="ReasonSuspendedTenant"/>,
+    /// <see cref="ReasonTenantSourceNotResident"/>, <see cref="ReasonMissingSourceIdentity"/>,
     /// <see cref="ReasonPoisonedSaga"/>, <see cref="ReasonDependencyLost"/>,
     /// and <see cref="ReasonUnknown"/>.
     /// </summary>
@@ -332,6 +345,12 @@ public static class LatticeReplicationMetrics
     /// residency set.
     /// </summary>
     public const string ReasonTenantOffline = "tenant_offline";
+
+    /// <summary>Reason tag value: the authenticated sender is not resident for the tenant.</summary>
+    public const string ReasonTenantSourceNotResident = "tenant_source_not_resident";
+
+    /// <summary>Reason tag value: required authenticated sender identity is unavailable.</summary>
+    public const string ReasonMissingSourceIdentity = "missing_source_identity";
 
     /// <summary>
     /// Reason tag value: enqueue cause was an inbound replicated write for a tenant

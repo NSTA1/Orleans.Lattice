@@ -35,4 +35,7 @@ internal sealed class ParkedCausalEntry
     /// entry parked before the stamp was recorded, which apply as before.
     /// </summary>
     [Id(3)] public ReplicationSourceLineageStamp? SourceLineage { get; init; }
+
+    /// <summary>The authenticated direct sender that delivered the parked entry.</summary>
+    [Id(4)] public string? AuthenticatedSenderClusterId { get; init; }
 }

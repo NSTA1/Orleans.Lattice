@@ -10,9 +10,10 @@ namespace Orleans.Lattice.Tenancy;
 /// wire-supplied field, so a peer cannot redirect a write into a foreign tenant -
 /// and refuses a write whose tenant does not exist in the <see cref="ITenantRegistry"/>
 /// or is not eligible for replicated apply in this region per the
-/// <see cref="ITenantResidencyResolver"/>. A configured region admits replication
-/// while Backfilling or Online; this does not change client serving, which remains
-/// Online-only.
+/// <see cref="ITenantResidencyResolver"/>. It also requires the authenticated
+/// direct sender to be resident for that tenant; original record lineage is not
+/// sender identity. A configured destination admits replication while Backfilling
+/// or Online; this does not change client serving, which remains Online-only.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -64,6 +65,13 @@ internal sealed class ReplicationTenantIsolationGate(
     /// <inheritdoc />
     public ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
         string treeId,
+        CancellationToken cancellationToken = default)
+        => EvaluateAsync(treeId, authenticatedSenderClusterId: null, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
+        string treeId,
+        string? authenticatedSenderClusterId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -138,11 +146,25 @@ internal sealed class ReplicationTenantIsolationGate(
             // through to the registry, which answers residency from the record.
             if (TryEvaluateResidency(tenant, out var decision))
             {
-                return new ValueTask<ReplicationTenantIsolationDecision>(decision);
+                if (decision != ReplicationTenantIsolationDecision.Admit)
+                {
+                    return new ValueTask<ReplicationTenantIsolationDecision>(decision);
+                }
+            }
+
+            if (!_residency.IsActive)
+            {
+                return new ValueTask<ReplicationTenantIsolationDecision>(
+                    ReplicationTenantIsolationDecision.Admit);
+            }
+
+            if (TryEvaluateSourceResidency(tenant, authenticatedSenderClusterId, out var sourceDecision))
+            {
+                return new ValueTask<ReplicationTenantIsolationDecision>(sourceDecision);
             }
         }
 
-        return EvaluateAgainstRegistryAsync(tenant, cancellationToken);
+        return EvaluateAgainstRegistryAsync(tenant, authenticatedSenderClusterId, cancellationToken);
     }
 
     /// <summary>
@@ -180,6 +202,27 @@ internal sealed class ReplicationTenantIsolationGate(
         return true;
     }
 
+    private bool TryEvaluateSourceResidency(
+        TenantId tenant,
+        string? authenticatedSenderClusterId,
+        out ReplicationTenantIsolationDecision decision)
+    {
+        if (_residencyConfirmation is not { } confirmation
+            || !confirmation.TryResolveSourceResidency(
+                tenant, authenticatedSenderClusterId, out var configured, out var allowed))
+        {
+            decision = default;
+            return false;
+        }
+
+        decision = !configured || allowed
+            ? ReplicationTenantIsolationDecision.Admit
+            : string.IsNullOrWhiteSpace(authenticatedSenderClusterId)
+                ? ReplicationTenantIsolationDecision.RejectMissingSourceIdentity
+                : ReplicationTenantIsolationDecision.RejectSourceNotResident;
+        return true;
+    }
+
     /// <summary>
     /// Slow path for a tenant absent from the compiled snapshot: consults the
     /// authoritative registry before admitting, so a not-yet-compiled tenant is
@@ -190,6 +233,7 @@ internal sealed class ReplicationTenantIsolationGate(
     /// </summary>
     private async ValueTask<ReplicationTenantIsolationDecision> EvaluateAgainstRegistryAsync(
         TenantId tenant,
+        string? authenticatedSenderClusterId,
         CancellationToken cancellationToken)
     {
         var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
@@ -203,17 +247,39 @@ internal sealed class ReplicationTenantIsolationGate(
             return ReplicationTenantIsolationDecision.RejectSuspendedTenant;
         }
 
-        // Residency from the authoritative record when the resolver can read one;
-        // otherwise through the resolver's own seam.
+        // Preserve the destination-side refusal reason when the destination has
+        // already left the replication-admissible residency states.
         if (_residencyConfirmation is { } confirmation)
         {
-            return confirmation.IsReplicationAdmissible(record)
-                ? ReplicationTenantIsolationDecision.Admit
-                : ReplicationTenantIsolationDecision.RejectOutOfRegion;
+            if (!confirmation.IsReplicationAdmissible(record))
+            {
+                return ReplicationTenantIsolationDecision.RejectOutOfRegion;
+            }
+        }
+        else if (!TryEvaluateResidency(tenant, out var destinationDecision)
+            || destinationDecision != ReplicationTenantIsolationDecision.Admit)
+        {
+            return ReplicationTenantIsolationDecision.RejectOutOfRegion;
         }
 
-        return TryEvaluateResidency(tenant, out var decision)
-            ? decision
-            : ReplicationTenantIsolationDecision.RejectOutOfRegion;
+        if (!_residency.IsActive || !record.HasResidencyConfiguration)
+        {
+            return ReplicationTenantIsolationDecision.Admit;
+        }
+
+        if (string.IsNullOrWhiteSpace(authenticatedSenderClusterId))
+        {
+            return ReplicationTenantIsolationDecision.RejectMissingSourceIdentity;
+        }
+
+        var sourceAllowed = _residencyConfirmation is { } sourceConfirmation
+            ? sourceConfirmation.IsReplicationSource(record, authenticatedSenderClusterId)
+            : TenantRegionLifecycle.IsReplicationSource(record.GetRegionStatus(authenticatedSenderClusterId));
+        if (!sourceAllowed)
+        {
+            return ReplicationTenantIsolationDecision.RejectSourceNotResident;
+        }
+
+        return ReplicationTenantIsolationDecision.Admit;
     }
 }

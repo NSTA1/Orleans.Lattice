@@ -29,6 +29,15 @@ internal static class ReplicationSourceLineageGate
 
         /// <summary>Refuse the batch for now; the sender retries it.</summary>
         RefuseTransient,
+
+        /// <summary>The tenant gate refused this sender; the entry was dead-lettered.</summary>
+        RefuseTenantSource,
+
+        /// <summary>A tenant source was nonresident when the entry was replayed.</summary>
+        RefuseTenantSourceNotResident,
+
+        /// <summary>A configured tenant source could not be authenticated on replay.</summary>
+        RefuseMissingTenantSourceIdentity,
     }
 
     /// <summary>
