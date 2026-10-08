@@ -10,9 +10,11 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// silo knows, as the WAL placement audit of the named tree reports them.
 /// </summary>
 /// <remarks>
-/// Read once per tree and caller (sign-in, endpoint and asserted tenant); the keys are a silo-wide catalogue, so
-/// any tree the caller may read reports them. Without a tree to audit, or when the
-/// audit fails, the field accepts a typed key and says why.
+/// A nonempty catalogue is read once per tree and caller (sign-in, endpoint and asserted tenant);
+/// the keys are silo-wide, so any tree the caller may read reports them. Without a
+/// tree, when the catalogue is empty, or when the audit fails, suggestions are
+/// unavailable with a reason and a later query retries. These keys are suggestions,
+/// not an allow-list: a target may be known only to another silo.
 /// </remarks>
 /// <param name="facades">The Cluster area's facades.</param>
 /// <param name="tree">The tree whose placement is audited, read at query time.</param>
@@ -24,7 +26,12 @@ internal sealed class ClusterProviderKeySuggestionSource(ClusterFacades facades,
     /// <summary>The note shown when the audit fails.</summary>
     public const string UnavailableReason = "The provider keys could not be listed, so the key is used as typed.";
 
-    private (string Tree, ShellCallerKey Caller, IReadOnlyList<LtSuggestion>? Keys)? _remembered;
+    /// <summary>The note shown when the audit reports no catalogue entries.</summary>
+    public const string EmptyCatalogueReason = "This silo reports no provider keys, so the key is used as typed. Confirm the target resolves on every silo before moving.";
+
+    private RememberedKeys? _remembered;
+
+    private sealed record RememberedKeys(string Tree, ShellCallerKey Caller, ImmutableArray<LtSuggestion> Keys);
 
     /// <inheritdoc />
     public async ValueTask<LtSuggestionSet> SuggestAsync(string text, int limit, CancellationToken cancellationToken)
@@ -37,14 +44,20 @@ internal sealed class ClusterProviderKeySuggestionSource(ClusterFacades facades,
         }
 
         var caller = facades.Caller;
-        if (_remembered is not { } remembered
+        var remembered = Volatile.Read(ref _remembered);
+        if (remembered is null
             || !string.Equals(remembered.Tree, treeId, StringComparison.Ordinal)
             || remembered.Caller != caller)
         {
-            IReadOnlyList<LtSuggestion>? keys;
+            ImmutableArray<LtSuggestion> keys;
             try
             {
                 var audit = await facades.RequireTreeAdmin().AuditWalPlacementAsync(treeId, cancellationToken).ConfigureAwait(false);
+                if (audit.KnownProviderKeys.IsDefaultOrEmpty)
+                {
+                    return LtSuggestionSet.Unavailable(EmptyCatalogueReason);
+                }
+
                 keys = Keys(audit.KnownProviderKeys);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -53,34 +66,27 @@ internal sealed class ClusterProviderKeySuggestionSource(ClusterFacades facades,
             }
             catch (Exception)
             {
-                keys = null;
+                return LtSuggestionSet.Unavailable(UnavailableReason);
             }
 
-            remembered = (treeId, caller, keys);
+            remembered = new RememberedKeys(treeId, caller, keys);
             if (facades.Caller == caller)
             {
-                _remembered = remembered;
+                Volatile.Write(ref _remembered, remembered);
             }
         }
 
-        return remembered.Keys is { } list
-            ? SuggestionMatcher.Match(list, text, limit)
-            : LtSuggestionSet.Unavailable(UnavailableReason);
+        return SuggestionMatcher.Match(remembered.Keys, text, limit);
     }
 
-    private static IReadOnlyList<LtSuggestion> Keys(ImmutableArray<string> known)
+    private static ImmutableArray<LtSuggestion> Keys(ImmutableArray<string> known)
     {
-        if (known.IsDefaultOrEmpty)
-        {
-            return [];
-        }
-
-        var keys = new List<LtSuggestion>(known.Length);
+        var keys = ImmutableArray.CreateBuilder<LtSuggestion>(known.Length);
         foreach (var key in known)
         {
             keys.Add(new LtSuggestion(key));
         }
 
-        return keys;
+        return keys.MoveToImmutable();
     }
 }

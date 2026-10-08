@@ -489,8 +489,12 @@ units. The page reads the undo before the resize's own in-progress flag, so an
 undo of a resize that had already finished is still followed until it has unwound.
 
 The WAL page first audits placement for a named tree. The move planner's target
-provider key is a picker over the provider keys the resolving silo reports for that
-tree; without a tree to audit it accepts a typed key. A move plan is addressed
+provider key suggests the keys the resolving silo reports for that tree, but accepts
+any typed key, including one known only to another silo. An unlisted key carries
+an advisory, not a refusal: confirm it resolves on every silo before moving. An
+empty catalogue or a failed audit says why suggestions are unavailable and is
+retried on a later query instead of being remembered permanently. The plan reports
+whether its target resolves on this silo. A move plan is addressed
 entirely by `?tree=`, `?partition=` and `?target=`, so refreshing or returning
 to the link resumes the same preview. Planning changes nothing. Executing a
 move quiesces the partition briefly, copies the tail, flips placement and
