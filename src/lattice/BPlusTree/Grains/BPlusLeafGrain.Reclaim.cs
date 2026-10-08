@@ -532,11 +532,11 @@ internal sealed partial class BPlusLeafGrain
             // The check above catches a split that landed AFTER the reclaim
             // built its plan: the plan names the pre-split successor, our
             // pointer names the new sibling, they differ, we decline. But
-            // SplitAsync persists SplitState, SplitKey, SplitSiblingId and
-            // NextSibling in ONE atomic block, so the new sibling S becomes
-            // chain-reachable the instant the split intent lands. The reclaim
-            // walk follows NextSibling, so a pass starting after that instant
-            // builds its plan naming S itself - and then expectedNext == S ==
+            // SplitAsync persists the intent first; CompleteSplitAsync publishes
+            // NextSibling once the sibling S has a durable birth row (#4775),
+            // before any rows move. The reclaim walk follows NextSibling, so a
+            // pass starting after that publication builds its plan naming S
+            // itself - and then expectedNext == S ==
             // our NextSibling, the comparison agrees, and the fold proceeds.
             //
             // S passes the reclaim probe for a reason that is not a bug in the
