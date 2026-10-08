@@ -25,9 +25,14 @@ public sealed class TenancyRegionsSmokeTests
     private static readonly TimeSpan ReplicationBudget = TimeSpan.FromMinutes(7);
 
     private ExplorerSample _sample = null!;
+    private readonly HashSet<string> _observedTenants = new(StringComparer.Ordinal);
 
     [OneTimeSetUp]
-    public async Task StartAsync() => _sample = await SampleTestHost.StartAsync(minimal: false);
+    public async Task StartAsync()
+    {
+        _sample = await SampleTestHost.StartAsync(minimal: false);
+        Assert.That(await RegistryRowsMatchAsync(), Is.True, "seeded registry rows must match before either drain");
+    }
 
     [OneTimeTearDown]
     public async Task StopAsync()
@@ -282,7 +287,37 @@ public sealed class TenancyRegionsSmokeTests
             }
         }
 
-        return true;
+        return await RegistryRowsMatchAsync();
+    }
+
+    private async Task<bool> RegistryRowsMatchAsync()
+    {
+        using var system = LatticeSystemOrigin.Enter();
+        var sets = new Dictionary<string, SortedSet<string>>();
+        foreach (var region in _sample.Regions)
+        {
+            var rows = new SortedSet<string>(StringComparer.Ordinal);
+            await foreach (var record in region.Services.GetRequiredService<ITenantRegistry>().ListAsync())
+            {
+                rows.Add(record.Id.ToString());
+            }
+
+            sets[region.Id] = rows;
+        }
+
+        var lost = _observedTenants.Where(tenant => sets.Values.Any(rows => !rows.Contains(tenant))).ToArray();
+        _observedTenants.UnionWith(sets.Values.SelectMany(rows => rows));
+        Assert.That(lost, Is.Empty, "a registry row previously observed in a region was lost; rows: "
+            + string.Join("; ", sets.Select(entry => $"{entry.Key}=[{string.Join(",", entry.Value)}]")));
+        var first = sets.Values.First();
+        var match = sets.Values.All(rows => rows.SetEquals(first));
+        if (!match)
+        {
+            NUnit.Framework.TestContext.Out.WriteLine("registry rows differ: "
+                + string.Join("; ", sets.Select(entry => $"{entry.Key}=[{string.Join(",", entry.Value)}]")));
+        }
+
+        return match;
     }
 
     private async Task PrintConvergenceAsync(string tenant, string stage, TimeSpan elapsed)
