@@ -97,9 +97,22 @@ public partial class ClusterWalPage : IDisposable
 
     private LtDialogPlacement SheetPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
-    private string TargetHint => _audit.Value is { KnownProviderKeys.IsDefaultOrEmpty: false } audit
-        ? "Known keys: " + string.Join(", ", audit.KnownProviderKeys) + "."
-        : "A storage provider key every silo resolves.";
+    private string TargetHint
+    {
+        get
+        {
+            const string guidance = "You may type another key. Confirm the target resolves on every silo before moving.";
+            if (_audit.Value is not { KnownProviderKeys.IsDefaultOrEmpty: false } audit
+                || !string.Equals(audit.TreeId, _planTree?.Trim(), StringComparison.Ordinal))
+            {
+                return "Suggestions list only this silo's known keys. " + guidance;
+            }
+
+            return _planTarget?.Trim() is { Length: > 0 } target && !audit.KnownProviderKeys.Contains(target, StringComparer.Ordinal)
+                ? "This silo does not list this key; it may be known to another silo. " + guidance
+                : "Known keys: " + string.Join(", ", audit.KnownProviderKeys) + ". " + guidance;
+        }
+    }
 
     private string? ReclaimSource => _receipt is { SourceRetained: true } receipt
         ? receipt.FromProviderKey
