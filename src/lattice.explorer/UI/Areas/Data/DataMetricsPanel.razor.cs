@@ -33,6 +33,9 @@ public partial class DataMetricsPanel : IDisposable
         if (Workspace is { } workspace && _loadedFor != workspace.Tree.StateId)
         {
             _loadedFor = workspace.Tree.StateId;
+            _metrics = null;
+            _measures = [];
+            _sampledAt = null;
             await LoadAsync();
         }
     }
@@ -83,6 +86,7 @@ public partial class DataMetricsPanel : IDisposable
             return;
         }
 
+        var token = _lifetime.Renew();
         if (DataServices.Find<IMetricsReader>(Services) is not { } reader)
         {
             _error = "This Explorer has no state API to read metrics through.";
@@ -93,11 +97,17 @@ public partial class DataMetricsPanel : IDisposable
         _error = null;
         try
         {
-            _metrics = await reader.GetAsync(workspace.Tree.StateId, _lifetime.Token);
+            var metrics = await reader.GetAsync(workspace.Tree.StateId, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _metrics = metrics;
             _measures = _metrics is null ? [] : Measures(_metrics);
             _sampledAt = Time.GetUtcNow();
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (Exception) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
@@ -107,7 +117,10 @@ public partial class DataMetricsPanel : IDisposable
         }
         finally
         {
-            _loading = false;
+            if (!token.IsCancellationRequested)
+            {
+                _loading = false;
+            }
         }
     }
 }

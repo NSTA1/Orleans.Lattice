@@ -1,8 +1,12 @@
 using System.Text;
 using Bunit;
+using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 
@@ -11,6 +15,38 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
 public sealed class DataMetricsAndDeadLettersTests : DataTestContext
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Metrics_from_a_previous_tree_cannot_replace_the_current_answer(bool fault)
+    {
+        Client.WithTree("orders").WithTree("current");
+        var pending = new TaskCompletionSource<TreeMetrics?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reader = Substitute.For<IMetricsReader>();
+        reader.GetAsync("orders", Arg.Any<CancellationToken>()).Returns(pending.Task);
+        reader.GetAsync("current", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TreeMetrics?>(new TreeMetrics { TreeId = "current", LiveKeys = 222 }));
+        Services.AddSingleton(reader);
+        var cut = RenderAt("data/orders?tab=metrics");
+        cut.WaitUntil(() => Assert.That(reader.ReceivedCalls().Count(), Is.GreaterThanOrEqualTo(2)));
+
+        Navigation.NavigateTo("data/current?tab=metrics");
+        cut.WaitUntil(() => Assert.That(cut.Find("figure").TextContent, Does.Contain("222")));
+
+        if (fault)
+        {
+            pending.SetException(new InvalidOperationException("old read failed"));
+        }
+        else
+        {
+            pending.SetResult(new TreeMetrics { TreeId = "orders", LiveKeys = 111 });
+        }
+
+        var replaced = await TestPoll.TryUntilAsync(
+            () => cut.FindAll("figure").Count == 0 || !cut.Find("figure").TextContent.Contains("222", StringComparison.Ordinal),
+            TimeSpan.FromMilliseconds(300));
+        Assert.That(replaced, Is.False, "the previous tree's late answer or fault must not change the current metrics");
+    }
+
     [Test]
     public void Metrics_are_drawn_as_booktabs_figures_with_per_shard_hotness()
     {

@@ -158,7 +158,7 @@ internal sealed class TelemetryChartGeometry
         var drawn = ordered.Take(MaxDrawn).ToArray();
         var finite = drawn.SelectMany(view => view.Values).Where(double.IsFinite).ToArray();
         var (minimum, maximum) = Extent(finite);
-        var ticks = new[] { minimum, (minimum + maximum) / 2, maximum }
+        var ticks = new[] { minimum, minimum / 2 + maximum / 2, maximum }
             .Select(value => new TelemetryAxisTick(Y(value, minimum, maximum), TelemetryFormat.Value(value, unit, semantic)))
             .ToArray();
 
@@ -214,8 +214,15 @@ internal sealed class TelemetryChartGeometry
         return Left + ((PlotRight - Left) * (times[index] - times[0]).Ticks / span);
     }
 
-    private static double Y(double value, double minimum, double maximum) =>
-        PlotBottom - ((PlotBottom - Top) * (value - minimum) / (maximum - minimum));
+    private static double Y(double value, double minimum, double maximum)
+    {
+        var span = maximum - minimum;
+        var scale = Math.Max(Math.Abs(minimum), Math.Abs(maximum));
+        var fraction = double.IsFinite(span)
+            ? (value - minimum) / span
+            : (value / scale - minimum / scale) / (maximum / scale - minimum / scale);
+        return PlotBottom - (PlotBottom - Top) * fraction;
+    }
 
     private static (double Minimum, double Maximum) Extent(double[] values)
     {
@@ -225,7 +232,7 @@ internal sealed class TelemetryChartGeometry
         }
 
         var low = Math.Min(0, values.Min());
-        var high = values.Max();
+        var high = Math.Max(0, values.Max());
         if (high <= low)
         {
             high = low + 1;
@@ -242,11 +249,16 @@ internal sealed class TelemetryChartGeometry
         }
 
         var magnitude = Math.Pow(10, Math.Floor(Math.Log10(value)));
+        if (magnitude == 0)
+        {
+            return value;
+        }
+
         foreach (var factor in new[] { 1d, 2d, 2.5, 5d, 10d })
         {
             if (factor * magnitude >= value)
             {
-                return factor * magnitude;
+                return double.IsFinite(factor * magnitude) ? factor * magnitude : value;
             }
         }
 
