@@ -87,6 +87,58 @@ public class ChangeFeedSagaTerminalOrderingTests
     }
 
     [Test]
+    public async Task Subscribe_yields_prepare_appended_after_its_tail_was_captured_before_terminal()
+    {
+        var tree = $"feed-tail-race-{Guid.NewGuid():N}";
+        var txid = Guid.NewGuid();
+        var appendCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var appended = 0;
+        var factory = InterceptingFactory.Create(_cluster.Client, (key, grain) =>
+        {
+            if (key == $"{tree}/0")
+            {
+                return InterceptingWalShard.Create(
+                    grain,
+                    static () => Task.CompletedTask,
+                    async (inner, cancellationToken) =>
+                    {
+                        await appendCompleted.Task.WaitAsync(cancellationToken);
+                        return await inner.GetNextSequenceAsync(cancellationToken);
+                    });
+            }
+
+            if (key == $"{tree}/1")
+            {
+                return InterceptingWalShard.Create(
+                    grain,
+                    static () => Task.CompletedTask,
+                    async (inner, cancellationToken) =>
+                    {
+                        var capturedTail = await inner.GetNextSequenceAsync(cancellationToken);
+                        if (Interlocked.Exchange(ref appended, 1) == 0)
+                        {
+                            await Shard(tree, 1).AppendAsync(
+                                Prepare(tree, txid, "a", 100) with { AtomicBatchSize = 1 },
+                                cancellationToken);
+                            await Shard(tree, 0).AppendAsync(Terminal(tree, txid, 200), cancellationToken);
+                            appendCompleted.TrySetResult();
+                        }
+
+                        return capturedTail;
+                    });
+            }
+
+            return grain;
+        });
+        var feed = new ChangeFeed(factory, _options, _resolver);
+
+        var entries = await CollectAsync(feed.Subscribe(tree, ChangeFeedCursor.Initial));
+
+        Assert.That(appended, Is.EqualTo(1), "the tail-capture interleaving hook never ran");
+        AssertTerminalFollowsPrepares(entries, txid, expectedPrepares: 1);
+    }
+
+    [Test]
     public async Task Subscribe_yields_terminal_after_a_prepare_with_a_later_hlc()
     {
         // Leaf clocks are independent, so a prepare on one partition can
@@ -198,13 +250,18 @@ public class ChangeFeedSagaTerminalOrderingTests
     {
         private IWalShardGrain _inner = null!;
         private Func<Task> _beforeRead = null!;
+        private Func<IWalShardGrain, CancellationToken, ValueTask<long>>? _getNextSequence;
 
-        internal static IWalShardGrain Create(IWalShardGrain inner, Func<Task> beforeRead)
+        internal static IWalShardGrain Create(
+            IWalShardGrain inner,
+            Func<Task> beforeRead,
+            Func<IWalShardGrain, CancellationToken, ValueTask<long>>? getNextSequence = null)
         {
             var proxy = DispatchProxy.Create<IWalShardGrain, InterceptingWalShard>();
             var self = (InterceptingWalShard)(object)proxy;
             self._inner = inner;
             self._beforeRead = beforeRead;
+            self._getNextSequence = getNextSequence;
             return proxy;
         }
 
@@ -214,6 +271,12 @@ public class ChangeFeedSagaTerminalOrderingTests
             if (targetMethod!.Name == nameof(IWalShardGrain.ReadAsync))
             {
                 return new ValueTask<WalShardPage>(ReadAfterHookAsync(args!));
+            }
+
+            if (targetMethod!.Name == nameof(IWalShardGrain.GetNextSequenceAsync)
+                && _getNextSequence is not null)
+            {
+                return _getNextSequence(_inner, (CancellationToken)args![0]!);
             }
 
             return targetMethod.Invoke(_inner, args);

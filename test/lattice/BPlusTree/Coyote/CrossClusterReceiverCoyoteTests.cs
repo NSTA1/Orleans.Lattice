@@ -19,7 +19,7 @@ public sealed class CrossClusterReceiverCoyoteTests
 {
     private static void AssertGuardFinds(ICoyoteModel model, string propertyTag)
     {
-        var result = CoyoteModelHarness.Explore(model);
+        var result = CoyoteModelHarness.Explore(model, seed: CoyoteModelHarness.GuardSeed);
         Assert.That(
             result.BugsFound,
             Is.GreaterThan(0),
