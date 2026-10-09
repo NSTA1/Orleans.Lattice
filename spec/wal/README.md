@@ -23,19 +23,19 @@ properties exhaustively within the CI fixture's per-run ceiling.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 11 | 4 | 25 | 42 | 38 | 111,154 |
+| `WalDurability` | 11 | 4 | 26 | 43 | 39 | 226,592 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
 excluding non-behavioural actions, plus its property rows. `Distinct states` is
-TLC's count for the module's own cfg. `WalDurability` searches to depth 27 and
+TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 `WalMove` to depth 16, with tla2tools v1.7.4.
 
-`WalDurability` also has one variant configuration, `WalDurability.TwoFaults.cfg`
+`WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
 invariant and both action properties with a budget of two faults instead of one:
-680,122 distinct states to depth 32. The liveness properties stay at one fault,
+1,310,600 distinct states to depth 42. The liveness properties stay at one fault,
 because at two the full configuration takes about ten minutes, past the TLC budget.
 
 Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
@@ -44,10 +44,21 @@ leaf's durable snapshot (`SnapshotVanish`, issue #4634) or its state row
 faults so a snapshot and a row can both vanish. Destroyed data is outside the durability
 properties by construction, so it checks the properties that say the loss is never
 silent - `ReadPositionHonest` above all, carved out only for the writes a purge
-deleted (issue #4700) - with the other safety invariants that still apply: 3,277,793
-distinct states. A purge marks a leaf before clearing it, and recovery re-creates only
+deleted (issue #4700) - with the other safety invariants that still apply: 6,402,166
+distinct states to depth 42. A purge marks a leaf before clearing it, and recovery re-creates only
 a marked leaf (`MarkPurge`, `PurgeClear`, `Recover`); the lifecycle resumes once
 recovery has reset every marker.
+
+The `WalDurability.WarmLeaf.cfg` variant checks every property without faults:
+17,041 distinct states to depth 28. Replay requires a scheduled request, consumed
+by each bounded read slice; foreground writes cannot arm it. Weak fairness belongs
+to the timer/GC scheduling trigger and then the requested read, assuming eventual
+admission and responsive storage. The #3314 mutation
+`ReclamationEventuallyAdvancesWarmLeafNeedsCheckpoint` reproduces the circular
+birth-time registration gate: a warm foreground-only leaf needs a checkpoint
+before its timer can schedule the read that earns that checkpoint. The production
+regression uses the actual timer, loads accepted snapshot coverage and performs
+real GC without deactivation or checkpoint hints.
 
 `WalMove` has one too, `WalMove.TwoMoves.cfg`: two moves of the same stream, each
 with its own coordinator, so one can take over the other's lapsed fence while the
@@ -59,6 +70,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | File | What it is |
 |------|-----------|
 | `WalDurability.tla` / `.cfg` / `.manifest.json` | The leaf-lifecycle module, its TLC model and its manifest. |
+| `WalDurability.WarmLeaf.cfg` | Permanently active leaves, with no faults and all safety and liveness properties. |
 | `WalDurability.TwoFaults.cfg` | The same module checked against its safety properties at two faults. |
 | [`mutations/`](mutations/) | One or more deliberate defects per property and per action of `WalDurability`. |
 | [`Refinement.md`](Refinement.md) | `WalDurability` mapped to production: variables, actions, properties, detectors, classification and gaps. |
@@ -178,7 +190,7 @@ java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalMove.cfg WalMove.tla
 
 Pass `-metadir` with a directory outside the repository, or delete the `states/`
 directory TLC leaves beside the module. On two workers `WalDurability` takes about
-two minutes, because it checks two liveness properties over the full state graph;
+four minutes, because it checks two liveness properties over the full state graph;
 its `TwoFaults` variant takes about forty seconds; `WalMove` takes seconds, and its
 `TwoMoves` variant about fifteen.
 

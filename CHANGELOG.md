@@ -44,6 +44,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Leaf - Warm leaves make checkpoint progress.** Root and sibling leaves now arm the coverage-lag timer after durable identity is seeded, so foreground-only writes can reach snapshot-backed checkpoints without deactivation. ([#3314](https://github.com/NSTA1/Orleans.Lattice/issues/3314)) (`Orleans.Lattice`)
+- **Replication - Change-feed terminals follow their prepares.** A post-terminal tail pass recovers prepares that raced the initial partition heads, preventing an observed saga terminal from reaching consumers before its prepares. ([#4511](https://github.com/NSTA1/Orleans.Lattice/issues/4511)) (`Orleans.Lattice.Replication`)
+
 - **Config - ANN slice budgets above the timer ceiling.** An open or ingest slice budget longer than a timer can wait (about 49.7 days) faulted every open attempt and every build slice that waited, so the approximate index never opened or built. Both deadlines now clamp to the ceiling. ([#4014](https://github.com/NSTA1/Orleans.Lattice/issues/4014)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
 
 - **Config - Embedding request timeout ceiling.** An `OnyxEmbeddingOptions.RequestTimeout` that `HttpClient` refuses (non-positive, or above `int.MaxValue` milliseconds) made every embedding health probe and embed call throw instead of failing closed. Validation now rejects it. ([#3966](https://github.com/NSTA1/Orleans.Lattice/issues/3966)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

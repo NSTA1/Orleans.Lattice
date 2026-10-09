@@ -163,15 +163,13 @@ internal sealed class ChangeFeed(
         // one partition while a prepare it resolves is appended to a partition
         // this call has already read. Emitted in HLC order alone, the terminal
         // could reach a consumer ahead of that prepare, and a bridge applying
-        // the feed to a peer would commit the saga split. Two rules close it:
-        // after the first pass the call captures every partition's tail and
-        // reads each partition up to it, waiting out a transient hole below
-        // an in-flight flush (see CatchUpPartitionAsync), so the call yields
-        // exactly the offsets below those tails - and a saga's prepares are appended
-        // before it decides, which precedes every terminal append, so a
-        // terminal below the tails has every prepare it resolves below them
-        // too. Terminals are then emitted after every other record of the
-        // call, so HLC skew cannot place one ahead of its prepares.
+        // the feed to a peer would commit the saga split. The first tail vector
+        // bounds the initial read and waits out transient holes below an
+        // in-flight flush (see CatchUpPartitionAsync). Since independently
+        // captured partition heads are not an atomic snapshot, a post-terminal
+        // barrier pass recovers prepares for terminals in that initial cut.
+        // Terminals are then emitted after every other record of the call, so
+        // HLC skew cannot place one ahead of its prepares.
         var collected = new List<WalRecord>();
         var terminals = new List<WalRecord>();
         var resume = new long[partitions];
@@ -204,6 +202,64 @@ internal sealed class ChangeFeed(
             await CatchUpPartitionAsync(
                 shards[partition], resume[partition], tails[partition],
                 includeLocalOrigin, localClusterId, resolvedMode, collected, terminals, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (terminals.Count > 0)
+        {
+            // The captured heads are not an atomic cross-partition snapshot:
+            // a prepare can be appended after its partition's head was read
+            // while a later terminal is included from another partition. Once
+            // a terminal is observed, all of its prepares are already durable,
+            // so a fresh head pass can safely recover any that fell beyond the
+            // first vector. Ignore terminals found only in this pass; they were
+            // appended after the original cut and will be read next time.
+            var terminalTransactions = terminals.Select(static entry => entry.TransactionId).ToHashSet();
+            var barrierTasks = new Task<long>[partitions];
+            for (var partition = 0; partition < partitions; partition++)
+            {
+                barrierTasks[partition] = shards[partition].GetNextSequenceAsync(cancellationToken).AsTask();
+            }
+
+            var barrierTails = await Task.WhenAll(barrierTasks).ConfigureAwait(false);
+            var barrierCollected = new List<WalRecord>();
+            var barrierTerminals = new List<WalRecord>();
+            for (var partition = 0; partition < partitions; partition++)
+            {
+                await CatchUpPartitionAsync(
+                    shards[partition], resume[partition], barrierTails[partition],
+                    includeLocalOrigin, localClusterId, resolvedMode,
+                    barrierCollected, barrierTerminals, cancellationToken).ConfigureAwait(false);
+            }
+
+            var preparedIdentities = collected
+                .Where(static entry => entry.IsPrepared)
+                .Select(static entry => (
+                    entry.TransactionId,
+                    entry.Key,
+                    entry.Op,
+                    entry.Timestamp,
+                    entry.AtomicBatchIndex,
+                    entry.EndExclusiveKey))
+                .ToHashSet();
+            foreach (var entry in barrierCollected)
+            {
+                if (!entry.IsPrepared || !terminalTransactions.Contains(entry.TransactionId))
+                {
+                    continue;
+                }
+
+                var identity = (
+                    entry.TransactionId,
+                    entry.Key,
+                    entry.Op,
+                    entry.Timestamp,
+                    entry.AtomicBatchIndex,
+                    entry.EndExclusiveKey);
+                if (preparedIdentities.Add(identity))
+                {
+                    collected.Add(entry);
+                }
+            }
         }
 
         collected.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));

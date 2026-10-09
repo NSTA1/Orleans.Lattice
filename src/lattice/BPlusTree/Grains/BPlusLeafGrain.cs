@@ -2755,6 +2755,9 @@ internal sealed partial class BPlusLeafGrain(
         if (treeIdJustSet)
         {
             await SeedDurableMaterialiserBlockPinAsync();
+            // Activation ran before birth supplied the tree id. Arm progress
+            // now, without waiting for the checkpoint the timer must earn.
+            await EnsureCoverageLagTimerAsync();
         }
     }
 
@@ -3089,6 +3092,7 @@ internal sealed partial class BPlusLeafGrain(
         if (state.State.TreeId is not null)
         {
             await SeedDurableMaterialiserBlockPinAsync(init.WalHeadsAtBirth);
+            await EnsureCoverageLagTimerAsync();
         }
     }
 

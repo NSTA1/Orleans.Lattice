@@ -24,11 +24,12 @@ One WAL partition of three offsets is shared by two leaves. Every write belongs 
 position. A budget of one fault - a shard crash, a leaf stop, a failed persist or a
 failed capture - bounds the environment; the two fault-free intended-design stutters
 (`ActivateLoadFail`, `ActivateRowless`, `ReplayFaultRearm`) cost nothing. The base model
-checks 111,154 distinct states to depth 27 with every safety and liveness property.
+checks 226,592 distinct states to depth 35 with every safety and liveness property.
 The `TwoFaults` variant (`WalDurability.TwoFaults.cfg`) checks every safety invariant
-with a budget of two faults: 680,122 distinct states to depth 32. The `SnapshotLoss`
+with a budget of two faults: 1,310,600 distinct states to depth 42. The `SnapshotLoss`
 variant lets the environment destroy a leaf's snapshot or its row, and the operator
-purge a tree, at two faults: 3,277,793 distinct states to depth 32.
+purge a tree, at two faults: 6,402,166 distinct states to depth 42. The `WarmLeaf` variant has no
+faults: 17,041 distinct states to depth 28, with every property checked.
 
 ## Variable mapping
 
@@ -42,6 +43,7 @@ purge a tree, at two faults: 3,277,793 distinct states to depth 32.
 | `orphans` | Abandoned appends that may still land | Provider calls `WalAbandonedFlushRegistry` holds: flushes `WalShardGrain` stopped waiting for at their deadline or under an expired drain budget, never acknowledged (issue #4621). |
 | `up[l]` | A leaf activation exists | A live `BPlusLeafGrain` activation whose activation replay has been armed (`BPlusLeafGrain.ExecuteActivationReplayAsync`). |
 | `cache[l]` | The in-memory projection | `BPlusLeafGrain` entry cache (`LeafEntryCache`), rebuilt on every activation from a snapshot and the WAL. Modelled as the set of owned offsets it holds; values are abstracted away. |
+| `replayRequested[l]` | A scheduled bounded replay slice | Activation arms replay; a populated resident leaf's timer or an empty floor-holder's GC drive schedules another slice. Foreground appends do not schedule replay. This abstracts successful timer registration after durable identity seeding, finite stall thresholds and eventual admission. |
 | `rp[l]` | The leaf's read position (pending or persisted) | The pending checkpoint map in `BPlusLeafGrain.Projection` (`_pendingCheckpointOffsetsByPartition`) over the persisted slot; `max(rp, stCp)` is `BPlusLeafGrain.GetCurrentCheckpointForPartition`. It is a READ position: `BPlusLeafGrain.ReplayPartitionAsync` advances it over entries it skips as another leaf's work (#2270). |
 | `stCp[l]` | The activation's belief about its persisted checkpoint | `LeafNodeState.ProjectionCheckpointOffset` / `LeafNodeState.ProjectionCheckpointOffsetsByPartition` in `state.State`, read through `BPlusLeafGrain.GetPersistedCheckpointForPartition`. |
 | `durCp[l]` | What grain storage holds | The checkpoint carried by the last successful `WriteStateAsync` of the leaf's state. |
@@ -66,6 +68,7 @@ purge a tree, at two faults: 3,277,793 distinct states to depth 32.
 | `Append` | Offset allocation | `WalShardGrain.AppendAsync` assigns the next offset through `WalOffsetAllocationCore.Assign` under the shard's state gate. **Over-approximation:** the model appends whenever an offset remains; production appends only on a client write, a subset. | Yes: `WalShardGrainTests.AppendAsync_assigns_monotonically_increasing_sequence_numbers` and `WalOffsetContiguityCoyoteTests.Atomic_assign_keeps_every_offset_unique_and_dense`. |
 | `FlushAck(o)` | Flush lands, write acknowledged, owner folds it in | `WalShardGrain.FlushAsync` completes the append's acknowledgement only after the provider flush; flushes of different appends complete in any order. The owning leaf applies its own write to its cache on the foreground path without advancing its checkpoint. **Over-approximation:** the model also acknowledges a write whose owner is not active, without the apply; production routes a write through an active leaf, so the model's set of acknowledged-but-unapplied writes is a superset. | Yes: `WalShardGrainTests.AppendAsync_hung_provider_flush_faults_with_timeout_when_deadline_elapses` - an append whose flush never lands does not complete. |
 | `ShardCrash` | WAL shard activation lost | Unflushed appends are lost with the activation; the next activation recovers the allocator from the provider's highest stored offset through `WalOffsetAllocationCore.RecoveredNextOffset`. An abandoned provider call does not survive to land below a reader: the in-memory and file providers' writes die with the process, and the Azure Table provider commits phase 2 in offset order and rolls a late phase-1 row forward in order or back (`ReconcileAsync`), so it lands only at or above the committed tail. **Over-approximation:** the crash may happen between any two actions. | Yes: `WalOffsetAllocationCoreTests.A_recovered_allocator_resumes_one_past_the_highest_stored_offset` and `WalShardGrainTests.AppendAsync_recovers_offset_counter_from_provider_on_initialization`, which drives the same core through the grain's test seam. |
+| `ScheduleReplay(l)` | Schedule bounded replay independently of a prior checkpoint | `BPlusLeafGrain.EnsureCoverageLagTimerAsync` registers the existing timer after durable identity seeding in `BPlusLeafGrain.SetTreeIdAsync` and `BPlusLeafGrain.InitializeSiblingAsync`, as well as on seeded activation and checkpoint persist. The callback `BPlusLeafGrain.OnCoverageLagTimerTickAsync` routes never-checkpointed and stalled populated leaves through `BPlusLeafGrain.DriveStarvedCheckpointFromTimerAsync`; empty floor holders use the GC starvation drive. No foreground append offset is treated as a processed prefix. | Yes: `WarmLeafCheckpointProgressIntegrationTests.Foreground_only_warm_leaf_banks_loadable_coverage_and_reclaims_its_wal` and `WarmLeafCheckpointProgressIntegrationTests.Sibling_birth_arms_progress_before_any_checkpoint` (actual runtime timer and accepted snapshot load, with real GC on the root-leaf arm; both red without their birth-time registration). |
 | `ReadStep(l)` | Read the next entry of the shared stream | Activation replay and the starvation drive, both through `BPlusLeafGrain.ReplayPartitionAsync`: shown only offsets below the durable-contiguous watermark (`WalShippingWatermark.IsOffsetExposable`), which is also bounded by every unsettled abandoned call and by one past the highest stored offset (`WalShardGrain.GetReadableHeadAsync`, issue #4621), folding owned entries and advancing the read position over every entry read (#2270). A read below the tail returns the surviving suffix. | Yes: `BPlusLeafGrainTests.ProjectionCheckpointOffset_advances_over_entries_the_leaf_skips`, `WalShippingWatermarkCoyoteTests.Watermark_never_ships_an_offset_above_a_prefix_hole` and `WalShippingWatermarkTests.The_first_in_flight_offset_is_never_exposable_and_the_one_below_it_is`; the head bound by `WalShardGrainTests.A_trailing_hole_is_not_exposed_when_the_post_failure_resync_fails` (red only when the `_highestStored` clamp is removed: the failure handler's resync rewinds the allocator before the call settles, so the clamp carries the bound only when that resync fails, and this test fails it), and the reader's use of that head by `WalShardGrainTests.A_head_a_reader_resumes_from_never_passes_an_offset_a_recovered_allocator_can_reissue`. |
 | `Abandon(o)` | A flush misses its deadline, or the drain budget expires under it | `WalShardGrain` faults the append's acknowledgement (an unknown outcome to its caller) and registers the still-running provider call in `WalAbandonedFlushRegistry`, process-wide and keyed by provider, tree and shard, so a reactivation in the same process sees it too. Until the call settles, `WalShardGrain.DurableContiguousTailOffset` exposes nothing at or above it (issue #4621). Costs a fault. | Yes: `WalShardGrainTests.ReadAsync_never_exposes_an_offset_above_an_abandoned_flush_that_can_still_land` and `WalShardGrainTests.A_reactivated_shard_is_held_below_its_predecessors_abandoned_flush_until_it_settles`, red when the watermark ignores an abandoned window or the registry is per activation. |
 | `LateLand(o)` | An abandoned call lands | The provider writes the entry. Every provider refuses a write at an occupied offset and at or below its trim watermark (`InMemoryWalStorageProvider`, `FileWalShard`, the Azure Table provider's transactional `Add`), so it lands only in a gap no reader has passed. | Yes: `WalShardGrainTests.ReadAsync_never_exposes_an_offset_above_an_abandoned_flush_that_can_still_land` (the entry is shown in order once it lands) and `InMemoryWalStorageProviderTrimWatermarkTests.An_append_at_or_below_the_watermark_is_refused_and_allocation_stays_above_it`. |
@@ -150,8 +153,8 @@ Two properties are classified differently:
   also violates `ReadPositionHonest` (at depth 9), and no liveness-only protocol
   defect was found for it; `EveryAckedWriteMaterialisedLeafStopsUnbounded` perturbs
   the environment's fault assumption instead. The module's protocol-defect
-  liveness evidence is `ReclamationEventuallyAdvances`, whose two pairings violate
-  no safety invariant.
+  liveness evidence is `ReclamationEventuallyAdvances`; its scheduling, own-entry
+  and residual-persist pairings violate no safety invariant.
 
 What the finite instance can hide is **bounded-out** cells, and they are named
 rather than assumed absent:
@@ -182,7 +185,11 @@ perturbs the ENVIRONMENT assumption that faults do not recur for ever. It shows 
 property needs that assumption. The protocol-defect liveness pairings, which keep
 the spec's fairness intact, are `EveryAckedWriteMaterialisedColdStartResumesFromCheckpoint`
 (subsumed, above), `ReclamationEventuallyAdvancesReadPositionTracksOwnEntries` (#2270)
-and `ReclamationEventuallyAdvancesResidualAdvanceNeverPersisted` (#3608).
+`ReclamationEventuallyAdvancesResidualAdvanceNeverPersisted` (#3608), and
+`ReclamationEventuallyAdvancesWarmLeafNeedsCheckpoint` (#3314). The last keeps the
+leaf active with no faults: a populated cache cannot schedule replay before a
+checkpoint exists. This reproduces birth-time timer registration being deferred
+until the first checkpoint, not a read-watermark or capture-safety relaxation.
 
 ## Detectors
 
@@ -199,6 +206,7 @@ to the old behaviour, and green on the fix:
 
 | Mutation | Behaviour it reproduced | Issue | Detectors |
 |----------|-------------------------|-------|-----------|
+| `ReclamationEventuallyAdvancesWarmLeafNeedsCheckpoint` | A leaf born before identity seeding has no timer until a first checkpoint; foreground-only traffic earns neither checkpoint nor coverage. | #3314 | the `ScheduleReplay` row's |
 | `ReadPositionHonestLoadFailureColdReplays` | A failed snapshot load cold-replays a WAL trimmed under that snapshot. | #4450 | the `ActivateLoadFail` row's |
 | `TrimCoveredBySnapshotColdCaptureOverclaims` | A capture mid cold rebuild claims the persisted checkpoint over a partial projection. | #4451 | the `Capture` row's |
 | `ReadPositionHonestFaultedColdReplayResumesWarm` | A faulted cold rebuild re-arms warm from the persisted checkpoint. | #4467 | the `ReplayFaultRearm` row's |
@@ -232,6 +240,13 @@ trim and recovers.
 These are modelled abstractly or not at all. **No conclusion about them may be drawn
 from this specification.**
 
+- **Scheduling and admission.** Weak fairness applies to `ScheduleReplay`, then
+  to a requested `ReadStep`, not to an unsolicited WAL read. Each read consumes
+  its request. The timer must be enabled and registered after durable identity
+  seeding; finite stall thresholds, admission refusals and backoff are delay,
+  not states. Eventual successful admission and responsive storage are assumptions:
+  the model proves neither a wall-clock bound nor progress under permanent refusal.
+  Its one-entry slices abstract the production drive's bounded replay budget.
 - **Values, keys, HLCs and CRDT merge.** A write is an offset and a projection is a
   set of offsets, so replay idempotence (applying an entry twice leaves the
   projection unchanged) is true by construction here and asserts nothing. It is the

@@ -328,6 +328,10 @@ public partial class BootstrapAtomicVisibilityTests
         // delivers. The change feed yields every terminal after its saga's
         // prepares (issue #4511), so a terminal's saga is always known here.
         var sagaByTransaction = new Dictionary<Guid, int>();
+        var prepareBatchSizes = new Dictionary<Guid, int>();
+        var preparedBatchIndexes = new Dictionary<Guid, HashSet<int>>();
+        var prepareApplyResults = new Dictionary<Guid, Dictionary<int, (bool Applied, bool Deferred)>>();
+        var terminalShardIndexes = new Dictionary<Guid, HashSet<int>>();
         // Phase D1c: cursor shape is per-partition WAL offset.
         // Capture the producer's current cursor before the Subscribe
         // call so entries authored during our consume land in the
@@ -357,7 +361,30 @@ public partial class BootstrapAtomicVisibilityTests
                         sagaByTransaction[entry.TransactionId] = preparedSaga;
                     }
 
+                    if (entry.IsPrepared && entry.AtomicBatchSize > 0)
+                    {
+                        prepareBatchSizes[entry.TransactionId] = entry.AtomicBatchSize;
+                        if (!preparedBatchIndexes.TryGetValue(entry.TransactionId, out var indexes))
+                        {
+                            indexes = [];
+                            preparedBatchIndexes.Add(entry.TransactionId, indexes);
+                        }
+
+                        indexes.Add(entry.AtomicBatchIndex);
+                    }
+
                     var result = await receiverApplier.ApplyAsync(entry, cancellationToken).ConfigureAwait(false);
+                    if (entry.IsPrepared && entry.AtomicBatchSize > 0)
+                    {
+                        if (!prepareApplyResults.TryGetValue(entry.TransactionId, out var outcomesByIndex))
+                        {
+                            outcomesByIndex = [];
+                            prepareApplyResults.Add(entry.TransactionId, outcomesByIndex);
+                        }
+
+                        outcomesByIndex[entry.AtomicBatchIndex] = (result.Applied, result.Deferred);
+                    }
+
                     if (result.Deferred)
                     {
                         // The receiver deferred the entry (a fence, a gate, a
@@ -371,7 +398,46 @@ public partial class BootstrapAtomicVisibilityTests
                     if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort
                         && sagaByTransaction.TryGetValue(entry.TransactionId, out var terminalSaga))
                     {
-                        await flipProbe.SampleAfterTerminalAsync(terminalSaga, entry.ShardIndex, cancellationToken).ConfigureAwait(false);
+                        if (!terminalShardIndexes.TryGetValue(entry.TransactionId, out var shardIndexes))
+                        {
+                            shardIndexes = [];
+                            terminalShardIndexes.Add(entry.TransactionId, shardIndexes);
+                        }
+
+                        shardIndexes.Add(entry.ShardIndex);
+                        var observedPrepares = preparedBatchIndexes.TryGetValue(entry.TransactionId, out var prepareIndexes)
+                            ? prepareIndexes.Count
+                            : 0;
+                        var expectedPrepares = prepareBatchSizes.TryGetValue(entry.TransactionId, out var batchSize)
+                            ? batchSize
+                            : 0;
+                        var appliedPrepares = 0;
+                        var deferredPrepares = 0;
+                        var nonAppliedPrepares = 0;
+                        if (prepareApplyResults.TryGetValue(entry.TransactionId, out var recordedOutcomes))
+                        {
+                            foreach (var outcome in recordedOutcomes.Values)
+                            {
+                                if (outcome.Applied)
+                                {
+                                    appliedPrepares++;
+                                }
+                                else if (outcome.Deferred)
+                                {
+                                    deferredPrepares++;
+                                }
+                                else
+                                {
+                                    nonAppliedPrepares++;
+                                }
+                            }
+                        }
+                        await flipProbe.SampleAfterTerminalAsync(
+                            terminalSaga,
+                            entry.ShardIndex,
+                            $"prepares={observedPrepares}/{expectedPrepares} applied={appliedPrepares} deferred={deferredPrepares} nonApplied={nonAppliedPrepares}, "
+                            + $"terminalApplied={result.Applied}, terminals={shardIndexes.Count}/{entry.AtomicShardCount}",
+                            cancellationToken).ConfigureAwait(false);
                     }
                 }
 
@@ -451,7 +517,11 @@ public partial class BootstrapAtomicVisibilityTests
 
         public int SamplesFor(int saga) => _samples.TryGetValue(saga, out var count) ? count : 0;
 
-        public async Task SampleAfterTerminalAsync(int saga, int sourceShard, CancellationToken cancellationToken)
+        public async Task SampleAfterTerminalAsync(
+            int saga,
+            int sourceShard,
+            string progress,
+            CancellationToken cancellationToken)
         {
             var keys = sagaKeys[saga];
             var stateBefore = await bootstrapState();
@@ -461,7 +531,7 @@ public partial class BootstrapAtomicVisibilityTests
             {
                 var stateAfter = await bootstrapState();
                 var absent = string.Join(",", keys.Where(k => !values.ContainsKey(k)));
-                Violations.Enqueue($"saga={saga} {values.Count}/{keys.Length} after the terminal of source shard {sourceShard} (absent: {absent}; bootstrap {stateBefore} -> {stateAfter})");
+                Violations.Enqueue($"saga={saga} {values.Count}/{keys.Length} after the terminal of source shard {sourceShard} ({progress}; absent: {absent}; bootstrap {stateBefore} -> {stateAfter})");
             }
         }
 

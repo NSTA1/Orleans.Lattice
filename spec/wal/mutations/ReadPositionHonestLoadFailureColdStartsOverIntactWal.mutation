@@ -18,6 +18,7 @@ PERTURBS: ActivateLoadFail
 \* MUTATION: cold start when the prefix probes intact.
     /\ tail = 0
     /\ up' = [up EXCEPT ![l] = TRUE]
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = TRUE]
     /\ cache' = [cache EXCEPT ![l] = {}]
     /\ rp' = [rp EXCEPT ![l] = -1]
     /\ stCp' = [stCp EXCEPT ![l] = durCp[l]]

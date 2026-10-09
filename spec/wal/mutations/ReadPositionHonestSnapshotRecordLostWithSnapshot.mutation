@@ -12,13 +12,13 @@ PERTURBS: SnapshotVanish
 --- FIND
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale>>
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale, replayRequested>>
     /\ UNCHANGED pinVars
 --- REPLACE
 \* MUTATION: the record is lost together with the snapshot.
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale>>
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale, replayRequested>>
     /\ hadSnap' = [hadSnap EXCEPT ![l] = FALSE]
     /\ UNCHANGED <<pinOff, pinHlc, row, purgeRec, cleared, deleted, purged>>
 --- END
