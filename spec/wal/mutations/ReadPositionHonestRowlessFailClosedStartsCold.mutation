@@ -18,6 +18,7 @@ PERTURBS: ActivateRowless
     /\ ~CreateIntent(l)
 \* MUTATION: the rowless leaf comes up cold and empty instead of failing closed.
     /\ up' = [up EXCEPT ![l] = TRUE]
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = TRUE]
     /\ row' = [row EXCEPT ![l] = TRUE]
     /\ cache' = [cache EXCEPT ![l] = {}]
     /\ rp' = [rp EXCEPT ![l] = -1]

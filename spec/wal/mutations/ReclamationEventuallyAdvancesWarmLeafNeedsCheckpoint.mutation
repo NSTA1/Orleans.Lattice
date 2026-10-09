@@ -1,0 +1,17 @@
+# Issue #3314: reproduce the timer registration's circular eligibility.
+# Foreground writes populate a warm cache but never advance its checkpoint.
+# The timer asks for a checkpoint before scheduling the read that earns one.
+# Activation and scheduling fairness stay intact. With no stop required,
+# an active leaf retains its acknowledged WAL forever.
+MODULE: ReclamationEventuallyAdvancesWarmLeafNeedsCheckpoint
+TARGET: ReclamationEventuallyAdvances
+CLASS: Temporal
+SUMMARY: a warm leaf needs a persisted checkpoint before its timer is registered to schedule replay
+PERTURBS: ScheduleReplay
+BOUNDS: MaxFaults = 0
+
+--- FIND
+    /\ cache[l] # {} \/ (cache[l] = {} /\ pinOff[l] < MaxOff - 1)
+--- REPLACE
+    /\ (cache[l] # {} /\ stCp[l] >= 0) \/ (cache[l] = {} /\ pinOff[l] < MaxOff - 1)
+--- END

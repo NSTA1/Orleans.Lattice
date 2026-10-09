@@ -119,17 +119,19 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*            "zero" while only Zero-frontier pins were published (a       *)
 (*            block pin), "clock" once a real frontier was.                *)
 (*                                                                         *)
+(*  replayRequested[l] a bounded read slice has an activation/timer/GC     *)
+(*            trigger; a foreground acknowledgement does not supply one.  *)
 (*  faults    environment faults spent so far.                             *)
 (***************************************************************************)
 VARIABLES next, inflight, durable, tail, acked, orphans,
-          up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
+          up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested,
           pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults
 
 walVars  == <<next, inflight, durable, tail, acked, orphans>>
-leafVars == <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
+leafVars == <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested>>
 pinVars  == <<pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged>>
 vars == <<next, inflight, durable, tail, acked, orphans,
-          up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
+          up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested,
           pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults>>
 
 Pos == -1..(MaxOff - 1)
@@ -152,6 +154,7 @@ TypeOK ==
    /\ snapCov \in [Leaves -> Pos \cup {NoSnap}]
    /\ snapRows \in [Leaves -> SUBSET Offs]
    /\ stale \in [Leaves -> BOOLEAN]
+   /\ replayRequested \in [Leaves -> BOOLEAN]
    /\ pinOff \in [Leaves -> Pos]
    /\ pinHlc \in [Leaves -> {"zero", "clock", "gone"}]
    /\ hadSnap \in [Leaves -> BOOLEAN]
@@ -229,6 +232,8 @@ Init ==
     /\ snapCov = [l \in Leaves |-> NoSnap]
     /\ snapRows = [l \in Leaves |-> {}]
     /\ stale = [l \in Leaves |-> FALSE]
+    \* Born, active leaves have completed replay of the initially empty WAL.
+    /\ replayRequested = [l \in Leaves |-> FALSE]
     \* Every leaf is born holding a durably seeded Zero block pin
     \* (SeedDurableMaterialiserBlockPinAsync), before any write reaches it.
     /\ pinOff = [l \in Leaves |-> -1]
@@ -276,7 +281,7 @@ FlushAck(o) ==
                 THEN [cache EXCEPT ![Owner[o]] = @ \cup {o}]
                 ELSE cache
     /\ UNCHANGED <<next, tail>>
-    /\ UNCHANGED <<up, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<up, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
     /\ UNCHANGED orphans
@@ -349,15 +354,37 @@ SettleHole(o) ==
 (***************************************************************************)
 ReadFrom(l) == IF rp[l] + 1 < tail THEN tail ELSE rp[l] + 1
 
+\* Scheduling is separate from reading. Foreground FlushAck does not arm it.
+\* A resident leaf holding rows is driven by its coverage-lag timer, including
+\* the never-checkpointed case; an empty floor holder is driven by the GC.
+\* Finite stall thresholds and admission backoff are abstracted as delay.
+\* Fairness assumes eventual admission and successful bounded slices, NOT a
+\* timer that holds a permit forever or storage that never answers.
+ScheduleReplay(l) ==
+    /\ up[l]
+    /\ ~stale[l]
+    /\ ~replayRequested[l]
+    /\ ReadFrom(l) < next
+    /\ cache[l] # {} \/ (cache[l] = {} /\ pinOff[l] < MaxOff - 1)
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = TRUE]
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
+
 ReadStep(l) ==
     /\ up[l]
     /\ ~stale[l]
+    /\ replayRequested[l]
     /\ ReadFrom(l) < Watermark
     /\ LET o == ReadFrom(l)
        IN /\ rp' = [rp EXCEPT ![l] = o]
           /\ cache' = IF o \in durable /\ Owner[o] = l
                       THEN [cache EXCEPT ![l] = @ \cup {o}]
                       ELSE cache
+    \* One bounded slice per request. More work needs another trigger; a warm
+    \* activation does not inherit a perpetual right to read future appends.
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = FALSE]
     /\ UNCHANGED walVars
     /\ UNCHANGED <<up, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
@@ -378,7 +405,7 @@ PersistCheckpoint(l) ==
     /\ stCp' = [stCp EXCEPT ![l] = rp[l]]
     /\ clk' = [clk EXCEPT ![l] = @ \/ cache[l] # {}]
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, anchor, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<up, cache, rp, anchor, cov, snapCov, snapRows, stale, replayRequested>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
 
@@ -390,7 +417,7 @@ PersistFail(l) ==
     /\ stCp' = stCp
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<up, cache, rp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested>>
     /\ UNCHANGED pinVars
 
 (***************************************************************************)
@@ -415,7 +442,7 @@ Capture(l) ==
     /\ snapRows' = [snapRows EXCEPT ![l] = cache[l]]
     /\ cov' = [cov EXCEPT ![l] = rp[l]]
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, stale>>
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, stale, replayRequested>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
 
@@ -427,7 +454,7 @@ CaptureFail(l) ==
     /\ cov' = cov
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, snapCov, snapRows, stale, replayRequested>>
     /\ UNCHANGED pinVars
 
 (***************************************************************************)
@@ -517,6 +544,7 @@ LeafStop(l) ==
     /\ up[l]
     /\ faults < MaxFaults
     /\ up' = [up EXCEPT ![l] = FALSE]
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = FALSE]
     /\ cache' = [cache EXCEPT ![l] = {}]
     /\ rp' = [rp EXCEPT ![l] = -1]
     /\ stCp' = [stCp EXCEPT ![l] = durCp[l]]
@@ -564,6 +592,7 @@ Activate(l) ==
     /\ ~stale[l]
     /\ ~SnapshotVanished(l)
     /\ row[l] \/ CreateIntent(l)
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = TRUE]
     /\ IF snapCov[l] # NoSnap
        THEN /\ cache' = [cache EXCEPT ![l] = snapRows[l]]
             /\ rp' = [rp EXCEPT ![l] = snapCov[l]]
@@ -636,7 +665,7 @@ SnapshotVanish(l) ==
     /\ snapRows' = [snapRows EXCEPT ![l] = {}]
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale>>
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale, replayRequested>>
     /\ UNCHANGED pinVars
 
 (***************************************************************************)
@@ -656,6 +685,7 @@ LeafRowVanish(l) ==
     /\ faults < MaxFaults
     /\ row' = [row EXCEPT ![l] = FALSE]
     /\ up' = [up EXCEPT ![l] = FALSE]
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = FALSE]
     /\ cache' = [cache EXCEPT ![l] = {}]
     /\ rp' = [rp EXCEPT ![l] = -1]
     /\ stCp' = [stCp EXCEPT ![l] = -1]
@@ -730,6 +760,7 @@ PurgeClear(l) ==
     /\ cleared' = [cleared EXCEPT ![l] = TRUE]
     /\ row' = [row EXCEPT ![l] = FALSE]
     /\ up' = [up EXCEPT ![l] = FALSE]
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = FALSE]
     /\ cache' = [cache EXCEPT ![l] = {}]
     /\ rp' = [rp EXCEPT ![l] = -1]
     /\ stCp' = [stCp EXCEPT ![l] = -1]
@@ -768,7 +799,7 @@ Recover(l) ==
             /\ hadSnap' = [hadSnap EXCEPT ![l] = FALSE]
             /\ pinOff' = [pinOff EXCEPT ![l] = -1]
             /\ pinHlc' = [pinHlc EXCEPT ![l] = "zero"]
-            /\ UNCHANGED up
+            /\ UNCHANGED <<up, replayRequested>>
     /\ UNCHANGED walVars
     /\ UNCHANGED <<deleted, purged>>
     /\ UNCHANGED faults
@@ -818,6 +849,7 @@ Next ==
     \/ \E o \in Offs : LateLand(o)
     \/ \E o \in Offs : SettleHole(o)
     \/ ShardCrash
+    \/ \E l \in Leaves : ScheduleReplay(l)
     \/ \E l \in Leaves : ReadStep(l)
     \/ \E l \in Leaves : PersistCheckpoint(l)
     \/ \E l \in Leaves : PersistFail(l)
@@ -840,7 +872,8 @@ Next ==
 
 (***************************************************************************)
 (* Fairness: the protocol's own steps are weakly fair - appends complete,  *)
-(* flushes land, leaves activate, read, persist, capture and publish, and  *)
+(* flushes land, leaves activate, schedule requested reads, persist,       *)
+(* capture and publish, and                                                *)
 (* the GC runs. The fault actions are environment events and deliberately *)
 (* NOT fair; faults are bounded by MaxFaults, which is the assumption that *)
 (* faults do not happen for ever.                                          *)
@@ -852,6 +885,7 @@ Spec ==
     /\ \A o \in Offs : WF_vars(FlushAck(o))
     /\ \A o \in Offs : WF_vars(LateLand(o) \/ SettleHole(o))
     /\ WF_vars(GcTrim)
+    /\ \A l \in Leaves : WF_vars(ScheduleReplay(l))
     /\ \A l \in Leaves : WF_vars(ReadStep(l))
     /\ \A l \in Leaves : WF_vars(PersistCheckpoint(l))
     /\ \A l \in Leaves : WF_vars(Capture(l))

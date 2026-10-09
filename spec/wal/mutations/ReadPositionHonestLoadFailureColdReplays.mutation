@@ -21,6 +21,7 @@ PERTURBS: ActivateLoadFail
 \* MUTATION: production's fall-through to the cold path.
     /\ ~FallsOff(durCp[l])
     /\ up' = [up EXCEPT ![l] = TRUE]
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = TRUE]
     /\ cache' = [cache EXCEPT ![l] = {}]
     /\ rp' = [rp EXCEPT ![l] = -1]
     /\ stCp' = [stCp EXCEPT ![l] = durCp[l]]

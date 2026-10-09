@@ -6,13 +6,14 @@
 MODULE: RecoveryNeverFallsOffLogPinRetiredWhileRowLive
 TARGET: RecoveryNeverFallsOffLog
 CLASS: Invariant
-SUMMARY: the GC retires a live leaf's pin and trims past its checkpoint
+SUMMARY: the GC retires a stopped leaf's pin despite its live row and trims past its checkpoint
 PERTURBS: PinRetire
 
 --- FIND
     /\ ~row[l]
     /\ pinHlc[l] # "gone"
 --- REPLACE
-\* MUTATION: the pin of a leaf with a row is retired too.
+\* MUTATION: a stopped leaf's surviving row no longer protects its pin.
+    /\ ~up[l]
     /\ pinHlc[l] # "gone"
 --- END

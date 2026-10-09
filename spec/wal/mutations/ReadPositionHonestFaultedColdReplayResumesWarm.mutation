@@ -17,6 +17,7 @@ PERTURBS: ReplayFaultRearm
     /\ rp[l] < anchor[l]
 \* MUTATION: the re-armed replay resumes warm from the persisted checkpoint.
     /\ rp' = [rp EXCEPT ![l] = stCp[l]]
+    /\ replayRequested' = [replayRequested EXCEPT ![l] = TRUE]
     /\ UNCHANGED walVars
     /\ UNCHANGED <<up, cache, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars

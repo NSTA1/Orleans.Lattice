@@ -5,13 +5,14 @@
   "counts": {
     "invariants": 11,
     "properties": 4,
-    "actions": 25,
-    "mutations": 42,
-    "behaviourRows": 38,
-    "distinctStates": 111154
+    "actions": 26,
+    "mutations": 43,
+    "behaviourRows": 39,
+    "distinctStates": 226592
   },
   "variants": {
-    "TwoFaults": { "distinctStates": 680122 },
-    "SnapshotLoss": { "distinctStates": 3277793 }
+    "TwoFaults": { "distinctStates": 1310600 },
+    "SnapshotLoss": { "distinctStates": 6402166 },
+    "WarmLeaf": { "distinctStates": 17041 }
   }
 }
