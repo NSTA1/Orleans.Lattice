@@ -348,6 +348,15 @@ internal sealed partial class BPlusLeafGrain
         RecordSplitFault(LatticeMetrics.LeafSplitFaultTimeout, 0);
         RecordSplitFault(LatticeMetrics.LeafSplitFaultOther, 0);
 
+        // Capture is also the recovery driver for a split whose parent link
+        // could not be recorded on an earlier attempt. Drain it even when the
+        // donor is now under the byte bound; otherwise no later write may ever
+        // re-surface the durable marker.
+        if (HasUnlinkedSplit)
+        {
+            await LinkCaptureSplitAsync(UnlinkedSplitResult());
+        }
+
         if (maxLeafBytes <= 0 || Cache.StateBytes <= maxLeafBytes)
         {
             return false;
@@ -360,11 +369,15 @@ internal sealed partial class BPlusLeafGrain
             // A contended gate returns null, as does a re-check that finds the
             // leaf already back under bound. Either way there is no progress to
             // make on this turn, so stop rather than spin.
-            if (await SplitIfNeededUnderGateAsync(maxLeafKeys, maxLeafBytes) is null)
+            var split = await SplitIfNeededUnderGateAsync(maxLeafKeys, maxLeafBytes);
+            if (split is null)
             {
                 break;
             }
 
+            // Complete the root's durable link before another division can
+            // overwrite this leaf's single unlinked-split marker.
+            await LinkCaptureSplitAsync(split);
             splits++;
         }
 
@@ -417,6 +430,20 @@ internal sealed partial class BPlusLeafGrain
         }
 
         return splits > 0;
+    }
+
+    private async Task LinkCaptureSplitAsync(SplitResult splitResult)
+    {
+        var treeId = state.State.TreeId
+            ?? throw new InvalidOperationException("A capture split cannot be linked before the leaf has a tree id.");
+        var shardIndex = state.State.ShardIndex ?? 0;
+        var shardRoot = grainFactory.GetGrain<IShardRootGrain>($"{treeId}/{shardIndex}");
+        await shardRoot.LinkLeafSplitFromCaptureAsync(splitResult);
+
+        if (splitResult.Donor == context.GrainId)
+        {
+            await AcknowledgeSplitLinkRecordedAsync(splitResult.NewSiblingId);
+        }
     }
 
     /// <summary>

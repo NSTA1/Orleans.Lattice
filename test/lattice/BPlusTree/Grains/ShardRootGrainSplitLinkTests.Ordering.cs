@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Reflection;
 using NSubstitute;
+using Orleans.Concurrency;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Runtime;
 
@@ -65,6 +67,17 @@ public sealed partial class ShardRootGrainSplitLinkTests
     // --- Issue #4795: the donor's unlinked-split marker is retired only after the link intent is durable ---
 
     [Test]
+    public void Capture_split_link_is_marked_always_interleave()
+    {
+        var method = typeof(IShardRootGrain).GetMethod(nameof(IShardRootGrain.LinkLeafSplitFromCaptureAsync));
+
+        Assert.That(method, Is.Not.Null);
+        Assert.That(method!.GetCustomAttribute<AlwaysInterleaveAttribute>(inherit: false), Is.Not.Null,
+            "Capture can hold a leaf's split gate while an interleaved root write waits on that leaf. " +
+            "The root must admit the capture link so the write and capture cannot deadlock.");
+    }
+
+    [Test]
     public async Task A_recorded_leaf_split_acknowledges_the_link_to_its_donor()
     {
         var h = CreateTwoLevelHarness();
@@ -74,6 +87,18 @@ public sealed partial class ShardRootGrainSplitLinkTests
         await h.Grain.SetAsync("c", [1]);
 
         await h.Leaf(LeftLeafId).Received(1).AcknowledgeSplitLinkRecordedAsync(SiblingId);
+    }
+
+    [Test]
+    public async Task A_capture_split_does_not_call_back_to_acknowledge_its_waiting_donor()
+    {
+        var h = CreateTwoLevelHarness();
+
+        await h.Grain.LinkLeafSplitFromCaptureAsync(
+            LeafSplit("d") with { Donor = LeftLeafId });
+
+        await h.Leaf(LeftLeafId).DidNotReceive().AcknowledgeSplitLinkRecordedAsync(Arg.Any<GrainId>());
+        Assert.That(h.State.State.PendingChildLinks, Is.Empty);
     }
 
     [Test]

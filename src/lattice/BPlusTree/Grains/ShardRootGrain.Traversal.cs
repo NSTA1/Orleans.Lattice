@@ -816,19 +816,37 @@ internal sealed partial class ShardRootGrain
     private Task<SplitResult?> LinkSplitAsync(SplitResult splitResult)
         => LinkSplitAsync(splitResult, 0);
 
+    /// <inheritdoc />
+    public async Task LinkLeafSplitFromCaptureAsync(SplitResult splitResult)
+    {
+        ArgumentNullException.ThrowIfNull(splitResult);
+        if (splitResult.Donor is null)
+        {
+            throw new ArgumentException("A capture split must identify its donor leaf.", nameof(splitResult));
+        }
+
+        // The capture caller clears the donor marker after this durable link
+        // completes. Calling back into that leaf here would deadlock its
+        // capture turn while it awaits the root.
+        await LinkSplitAsync(splitResult, 0, acknowledgeDonors: false);
+    }
+
     /// <summary>
     /// <see cref="LinkSplitAsync(SplitResult)"/> for a caller that knows the
     /// height of the new sibling: 0 for a leaf, the number of internal levels
     /// at and below it for an internal node, or <c>-1</c> for a division of the
     /// current root.
     /// </summary>
-    private async Task<SplitResult?> LinkSplitAsync(SplitResult splitResult, int height)
+    private async Task<SplitResult?> LinkSplitAsync(
+        SplitResult splitResult,
+        int height,
+        bool acknowledgeDonors = true)
     {
         using var routingMutation = EnterRoutingMutation();
         await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            await LinkSplitLockedAsync(splitResult, height);
+            await LinkSplitLockedAsync(splitResult, height, acknowledgeDonors);
         }
         finally
         {
@@ -847,7 +865,10 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private readonly record struct LinkWork(SplitResult Split, int Height, PendingChildLink? Intent);
 
-    private async Task LinkSplitLockedAsync(SplitResult splitResult, int height)
+    private async Task LinkSplitLockedAsync(
+        SplitResult splitResult,
+        int height,
+        bool acknowledgeDonors)
     {
         var work = new List<LinkWork>(1 + (splitResult.Additional?.Length ?? 0));
         foreach (var single in FlattenSplit(splitResult))
@@ -861,7 +882,10 @@ internal sealed partial class ShardRootGrain
         if (height >= 0)
         {
             await RecordPendingChildLinksAsync(work);
-            await AcknowledgeRecordedSplitsAsync(work);
+            if (acknowledgeDonors)
+            {
+                await AcknowledgeRecordedSplitsAsync(work);
+            }
         }
 
         await DrainLinkWorkLockedAsync(work);
