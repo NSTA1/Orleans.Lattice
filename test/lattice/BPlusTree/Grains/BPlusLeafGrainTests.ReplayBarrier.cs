@@ -93,6 +93,11 @@ public partial class BPlusLeafGrainTests
                 + "so requiring a completed replay before a capture would disable the mechanism in "
                 + "the only circumstance it exists for. A capture claims coverage only for offsets "
                 + "actually applied, so it is correct at any point in a replay.",
+            ["AcknowledgeSplitLinkRecordedAsync"] =
+                "Issue #4795. Retires the donor's durable unlinked-split marker once the shard root has "
+                + "recorded the link intent. The marker is persisted topology state, not part of the "
+                + "projection a replay rebuilds, and gating it would leave a marker re-surfacing the "
+                + "division behind a replay; it is best-effort and idempotent, like SetNextSiblingAsync.",
             ["BankDurablePinAsync"] =
                 "Issue #3599. The WAL GC's permit-free first tier for a floor-holding leaf, graded "
                 + "by re-reading the pin. Waiting for the replay would park the sweep behind the "

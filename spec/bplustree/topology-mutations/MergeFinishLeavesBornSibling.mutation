@@ -1,0 +1,13 @@
+# Pairs with OrphanRecoverable. The leaf is removed from routing but remains a live orphan.
+MODULE: MergeFinishLeavesBornSibling
+TARGET: OrphanRecoverable
+CLASS: Invariant
+SUMMARY: a removed sibling remains born with no route or recovery evidence
+PERTURBS: MergeFinish
+
+--- FIND
+    /\ born' = FALSE
+--- REPLACE
+\* MUTATION: retain a born leaf after unlink.
+    /\ born' = TRUE
+--- END

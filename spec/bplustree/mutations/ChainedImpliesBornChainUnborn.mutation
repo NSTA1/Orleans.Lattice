@@ -1,0 +1,14 @@
+# Pairs with ChainedImpliesBorn. The donor chains to a sibling that was never
+# persisted, a dangling sibling link.
+MODULE: ChainedImpliesBornChainUnborn
+TARGET: ChainedImpliesBorn
+CLASS: Invariant
+SUMMARY: the donor is chained to a sibling that does not exist yet
+PERTURBS: Chain
+
+--- FIND
+    /\ phase = "intent" /\ born /\ ~chained
+--- REPLACE
+\* MUTATION: chain without a born sibling.
+    /\ phase = "intent" /\ ~chained
+--- END

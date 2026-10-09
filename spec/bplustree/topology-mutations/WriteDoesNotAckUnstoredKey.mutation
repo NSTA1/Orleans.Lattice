@@ -1,0 +1,13 @@
+# Pairs with NoKeyLost. A write is acknowledged but does not enter either leaf.
+MODULE: WriteDoesNotAckUnstoredKey
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: an acknowledged key is absent from every leaf
+PERTURBS: Write
+
+--- FIND
+    /\ acked' = acked \cup {k}
+--- REPLACE
+\* MUTATION: acknowledge without storing.
+    /\ acked' = acked
+--- END

@@ -1,0 +1,25 @@
+# Pairs with NoKeyLost. Transfer removes a donor row without storing the sibling copy.
+MODULE: MoveDropsKey
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a split transfer drops an acknowledged key
+PERTURBS: Move
+
+--- FIND
+Move(k) ==
+    /\ phase = "splitting"
+    /\ born
+    /\ k \in donorRows
+    /\ k \in Moving
+    /\ donorRows' = donorRows \ {k}
+    /\ siblingRows' = siblingRows \cup {k}
+--- REPLACE
+\* MUTATION: omit the sibling copy.
+Move(k) ==
+    /\ phase = "splitting"
+    /\ born
+    /\ k \in donorRows
+    /\ k \in Moving
+    /\ donorRows' = donorRows \ {k}
+    /\ siblingRows' = siblingRows
+--- END

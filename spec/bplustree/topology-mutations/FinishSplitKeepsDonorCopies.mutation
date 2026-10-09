@@ -1,0 +1,29 @@
+# Pairs with StableNoDuplicate. The split reaches a stable phase with duplicate rows.
+MODULE: FinishSplitKeepsDonorCopies
+TARGET: StableNoDuplicate
+CLASS: Invariant
+SUMMARY: a completed split leaves keys on both leaves
+PERTURBS: FinishSplit
+
+--- FIND
+FinishSplit ==
+    /\ phase = "splitting"
+    /\ born
+    /\ donorNext
+    /\ siblingPrev
+    /\ successorPrev
+    /\ donorRows \cap Moving = {}
+    /\ phase' = "ready"
+    /\ donorRows' = donorRows
+--- REPLACE
+\* MUTATION: retain all moved rows on the donor.
+FinishSplit ==
+    /\ phase = "splitting"
+    /\ born
+    /\ donorNext
+    /\ siblingPrev
+    /\ successorPrev
+    /\ donorRows \cap Moving = {}
+    /\ phase' = "ready"
+    /\ donorRows' = donorRows \cup siblingRows
+--- END

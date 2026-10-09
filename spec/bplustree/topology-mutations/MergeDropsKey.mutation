@@ -1,0 +1,19 @@
+# Pairs with NoKeyLost. The source row is deleted without joining it into the survivor.
+MODULE: MergeDropsKey
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a merge drops a key acknowledged before the fold
+PERTURBS: Merge
+
+--- FIND
+Merge(k) ==
+    /\ phase = "merging"
+    /\ k \in siblingRows
+    /\ donorRows' = donorRows \cup {k}
+--- REPLACE
+\* MUTATION: discard the source key.
+Merge(k) ==
+    /\ phase = "merging"
+    /\ k \in siblingRows
+    /\ donorRows' = donorRows
+--- END

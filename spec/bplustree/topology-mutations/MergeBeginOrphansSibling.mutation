@@ -1,0 +1,21 @@
+# Pairs with OrphanRecoverable. Merge drops the only published route before work starts.
+MODULE: MergeBeginOrphansSibling
+TARGET: OrphanRecoverable
+CLASS: Invariant
+SUMMARY: a merge start leaves a born sibling without a route or recovery record
+PERTURBS: MergeBegin
+
+--- FIND
+MergeBegin ==
+    /\ phase = "ready"
+    /\ linked
+    /\ phase' = "merging"
+    /\ linked' = TRUE
+--- REPLACE
+\* MUTATION: withdraw the parent route before moving rows.
+MergeBegin ==
+    /\ phase = "ready"
+    /\ linked
+    /\ phase' = "merging"
+    /\ linked' = FALSE
+--- END

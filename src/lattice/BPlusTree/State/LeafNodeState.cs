@@ -480,6 +480,21 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     [Id(27)] public bool RowRecorded { get; set; }
 
     /// <summary>
+    /// The sibling this leaf divided to whose separator the shard root has not
+    /// yet acknowledged recording (issue #4795), or <see langword="null"/>.
+    /// Persisted in the same write that clears <see cref="SplitInFlight"/>, so
+    /// the obligation to link the sibling survives a shard-root fault between
+    /// the division returning and the root persisting its link intent. While
+    /// set, the next write re-surfaces the division to the root, which links
+    /// it idempotently. Written only by the split completion and its
+    /// acknowledgement.
+    /// </summary>
+    [Id(28)] public GrainId? UnlinkedSplitSiblingId { get; set; }
+
+    /// <summary>The separator key of <see cref="UnlinkedSplitSiblingId"/>.</summary>
+    [Id(29)] public string? UnlinkedSplitKey { get; set; }
+
+    /// <summary>
     /// Bytes this leaf's persisted snapshot last occupied on the wire, recorded
     /// so the next activation can reserve hydration budget accurately from its
     /// very first moment instead of re-learning the size by overshooting

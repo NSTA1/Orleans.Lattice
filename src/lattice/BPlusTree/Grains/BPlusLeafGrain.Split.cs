@@ -498,7 +498,10 @@ internal sealed partial class BPlusLeafGrain
             // returned null here without resuming anything - silently undoing
             // the fix at the seam it exists to protect.
             if (!HasInterruptedSplit)
-                return null;
+            {
+                return HasUnlinkedSplit ? UnlinkedSplitResult() : null;
+            }
+
             var recovered = await CompleteSplitAsync();
             await PersistAsync();
 
@@ -769,10 +772,57 @@ internal sealed partial class BPlusLeafGrain
         => state.State.SplitInFlight
             || state.State.SplitState == Primitives.SplitState.SplitInProgress;
 
+    /// <summary>
+    /// Whether a completed division is still unacknowledged by the shard root
+    /// (issue #4795). Unlike <see cref="HasInterruptedSplit"/> there is nothing
+    /// left to migrate; only the separator still has to reach a parent.
+    /// </summary>
+    private bool HasUnlinkedSplit => state.State.UnlinkedSplitSiblingId is not null;
+
+    private bool NeedsSplitRecovery => HasInterruptedSplit || HasUnlinkedSplit;
+
+    private SplitResult UnlinkedSplitResult() => new()
+    {
+        PromotedKey = state.State.UnlinkedSplitKey!,
+        NewSiblingId = state.State.UnlinkedSplitSiblingId!.Value,
+        ChildIsLeaf = true,
+        Donor = context.GrainId,
+    };
+
+    /// <inheritdoc />
+    public async Task AcknowledgeSplitLinkRecordedAsync(GrainId siblingId)
+    {
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            if (state.State.UnlinkedSplitSiblingId != siblingId)
+            {
+                return;
+            }
+
+            state.State.UnlinkedSplitSiblingId = null;
+            state.State.UnlinkedSplitKey = null;
+            await PersistAsync();
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
     private async Task<SplitResult?> SplitAsync()
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
+
+        // Issue #4795. A completed division whose separator the shard root has
+        // not acknowledged is handed back before another begins: a second
+        // division would overwrite the single record and strand the first.
+        if (!HasInterruptedSplit && HasUnlinkedSplit)
+        {
+            return UnlinkedSplitResult();
+        }
+
         // Issue #3265. A split whose intent is already durable must be RESUMED,
         // never re-minted.
         //
@@ -1275,6 +1325,14 @@ internal sealed partial class BPlusLeafGrain
         state.State.HighKeyExclusive = splitKey;
         state.State.OldNextSibling = null;
         state.State.SplitInFlight = false;
+
+        // Issue #4795. The division is complete, but its separator reaches a
+        // parent only through the SplitResult returned below, and the shard
+        // root records its link intent only after receiving it. The obligation
+        // is therefore recorded here, in the persist that retires the in-flight
+        // marker, and retired by the root's acknowledgement.
+        state.State.UnlinkedSplitSiblingId = siblingId;
+        state.State.UnlinkedSplitKey = splitKey;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
         // A terminal can interleave with the transfer above (the leaf mutation
@@ -1330,11 +1388,14 @@ internal sealed partial class BPlusLeafGrain
         // thrown deadline used to take the SplitResult below with it. The
         // caller publishes through PublishSplitDigestAsync once it has let
         // the gate go.
+        await PersistAsync();
+
         return new SplitResult
         {
             PromotedKey = splitKey,
             NewSiblingId = siblingId,
             ChildIsLeaf = true,
+            Donor = context.GrainId,
         };
     }
 

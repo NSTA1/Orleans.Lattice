@@ -1,0 +1,23 @@
+# Pairs with ParentSiblingConsistency. The parent route appears before reverse links are repaired.
+MODULE: ChainDonorPublishesEarly
+TARGET: ParentSiblingConsistency
+CLASS: Invariant
+SUMMARY: parent routing exposes a sibling before the chain is consistent
+PERTURBS: ChainDonor
+
+--- FIND
+ChainDonor ==
+    /\ phase = "splitting"
+    /\ born
+    /\ ~donorNext
+    /\ donorNext' = TRUE
+    /\ linked' = FALSE
+--- REPLACE
+\* MUTATION: publish the route before the successor back-link.
+ChainDonor ==
+    /\ phase = "splitting"
+    /\ born
+    /\ ~donorNext
+    /\ donorNext' = TRUE
+    /\ linked' = TRUE
+--- END

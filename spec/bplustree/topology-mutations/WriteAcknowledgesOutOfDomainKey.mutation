@@ -1,0 +1,13 @@
+# Pairs with TypeOK. A write puts a key outside the declared keyspace in the acknowledged set.
+MODULE: WriteAcknowledgesOutOfDomainKey
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the acknowledged-key state escapes the declared domain
+PERTURBS: Write
+
+--- FIND
+    /\ acked' = acked \cup {k}
+--- REPLACE
+\* MUTATION: acknowledge an out-of-domain key.
+    /\ acked' = acked \cup {0}
+--- END

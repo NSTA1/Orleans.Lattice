@@ -1,0 +1,23 @@
+# Pairs with BornImpliesSplit. Sibling birth resets the donor's split phase.
+MODULE: BirthBeforeSplit
+TARGET: BornImpliesSplit
+CLASS: Invariant
+SUMMARY: a persisted sibling has no split protocol owning it
+PERTURBS: Birth
+
+--- FIND
+Birth ==
+    /\ phase = "splitting"
+    /\ ~born
+    /\ born' = TRUE
+    /\ siblingPrev' = TRUE
+    /\ phase' = "splitting"
+--- REPLACE
+\* MUTATION: birth outside a split.
+Birth ==
+    /\ phase = "splitting"
+    /\ ~born
+    /\ born' = TRUE
+    /\ siblingPrev' = TRUE
+    /\ phase' = "idle"
+--- END

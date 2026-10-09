@@ -1,0 +1,14 @@
+# Pairs with NoKeyLostOrDuplicated. The row transfer copies a key to the sibling
+# but leaves it on the donor, so the key is held by both halves.
+MODULE: NoKeyLostOrDuplicatedMoveKeepsDonorRow
+TARGET: NoKeyLostOrDuplicated
+CLASS: Invariant
+SUMMARY: a moved row is not removed from the donor and is duplicated
+PERTURBS: MoveRow
+
+--- FIND
+    /\ rowsS' = rowsS \cup {k} /\ rowsD' = rowsD \ {k}
+--- REPLACE
+\* MUTATION: the donor keeps its copy.
+    /\ rowsS' = rowsS \cup {k} /\ rowsD' = rowsD
+--- END

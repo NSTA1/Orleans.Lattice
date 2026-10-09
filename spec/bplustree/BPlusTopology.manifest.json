@@ -1,0 +1,13 @@
+{
+  "mutations": "topology-mutations",
+  "refinement": "BPlusTopologyRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 8,
+    "properties": 0,
+    "actions": 14,
+    "mutations": 14,
+    "behaviourRows": 21,
+    "distinctStates": 232
+  }
+}

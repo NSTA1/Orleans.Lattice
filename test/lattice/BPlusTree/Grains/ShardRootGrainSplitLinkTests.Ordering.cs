@@ -61,4 +61,32 @@ public sealed partial class ShardRootGrainSplitLinkTests
         await h.Node(LeftParentId).DidNotReceive().AcceptSplitAsync("k", Arg.Any<GrainId>());
         Assert.That(h.State.State.PendingChildLinks, Is.Empty);
     }
+
+    // --- Issue #4795: the donor's unlinked-split marker is retired only after the link intent is durable ---
+
+    [Test]
+    public async Task A_recorded_leaf_split_acknowledges_the_link_to_its_donor()
+    {
+        var h = CreateTwoLevelHarness();
+        h.Leaf(LeftLeafId).SetAsync("c", Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(
+            LeafSplit("d") with { Donor = LeftLeafId }));
+
+        await h.Grain.SetAsync("c", [1]);
+
+        await h.Leaf(LeftLeafId).Received(1).AcknowledgeSplitLinkRecordedAsync(SiblingId);
+    }
+
+    [Test]
+    public async Task A_failed_acknowledgement_does_not_fail_the_write()
+    {
+        var h = CreateTwoLevelHarness();
+        h.Leaf(LeftLeafId).SetAsync("c", Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(
+            LeafSplit("d") with { Donor = LeftLeafId }));
+        h.Leaf(LeftLeafId).AcknowledgeSplitLinkRecordedAsync(Arg.Any<GrainId>())
+            .Returns(Task.FromException(new InvalidOperationException("donor unavailable")));
+
+        await h.Grain.SetAsync("c", [1]);
+
+        Assert.That(h.State.State.PendingChildLinks, Is.Empty);
+    }
 }

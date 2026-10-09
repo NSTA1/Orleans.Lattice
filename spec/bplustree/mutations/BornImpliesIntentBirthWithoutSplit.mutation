@@ -1,0 +1,14 @@
+# Pairs with BornImpliesIntent. A sibling is persisted with no split in flight,
+# an orphan leaf from the start.
+MODULE: BornImpliesIntentBirthWithoutSplit
+TARGET: BornImpliesIntent
+CLASS: Invariant
+SUMMARY: a sibling is born although no split is in flight
+PERTURBS: Birth
+
+--- FIND
+    /\ phase = "intent" /\ ~born
+--- REPLACE
+\* MUTATION: no split intent required.
+    /\ ~born
+--- END

@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations",
+  "refinement": "SplitLinkRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 8,
+    "properties": 1,
+    "actions": 12,
+    "mutations": 11,
+    "behaviourRows": 18,
+    "distinctStates": 260
+  }
+}

@@ -861,9 +861,32 @@ internal sealed partial class ShardRootGrain
         if (height >= 0)
         {
             await RecordPendingChildLinksAsync(work);
+            await AcknowledgeRecordedSplitsAsync(work);
         }
 
         await DrainLinkWorkLockedAsync(work);
+    }
+
+    // Issue #4795. Best-effort: an unacknowledged record merely re-surfaces
+    // the division on the donor's next write, and linking is idempotent.
+    private async Task AcknowledgeRecordedSplitsAsync(List<LinkWork> work)
+    {
+        foreach (var item in work)
+        {
+            if (item.Split.Donor is not { } donor)
+            {
+                continue;
+            }
+
+            try
+            {
+                await ResolveLeafGrain(donor).AcknowledgeSplitLinkRecordedAsync(item.Split.NewSiblingId);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Could not acknowledge recorded split link for sibling {Sibling}; it will re-surface.", item.Split.NewSiblingId);
+            }
+        }
     }
 
     private async Task DrainLinkWorkLockedAsync(List<LinkWork> work)

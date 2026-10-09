@@ -1,0 +1,16 @@
+# Pairs with LinkedClearsIntent. Linking does not retire the pending link intent,
+# which would be replayed against an already linked sibling.
+MODULE: LinkedClearsIntentLinkKeepsIntent
+TARGET: LinkedClearsIntent
+CLASS: Invariant
+SUMMARY: the pending intent survives a successful link
+PERTURBS: Link
+
+--- FIND
+    /\ linked' = TRUE /\ pending' = FALSE /\ held' = FALSE
+    /\ UNCHANGED <<rowsD, rowsS, acked, phase, born, chained, marker, crashes>>
+--- REPLACE
+\* MUTATION: the intent is never retired.
+    /\ linked' = TRUE /\ held' = FALSE
+    /\ UNCHANGED <<rowsD, rowsS, acked, phase, born, chained, pending, marker, crashes>>
+--- END

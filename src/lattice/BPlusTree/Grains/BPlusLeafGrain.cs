@@ -1160,7 +1160,7 @@ internal sealed partial class BPlusLeafGrain(
         // recovered split is kept alongside whatever the write produces, so
         // the shard root links both (issue #3523).
         SplitResult? recovered = null;
-        if (HasInterruptedSplit)
+        if (NeedsSplitRecovery)
         {
             recovered = await CompleteRecoverySplitUnderGateAsync();
         }
@@ -1519,7 +1519,7 @@ internal sealed partial class BPlusLeafGrain(
         // (issue #3583). The recovered split rides on the result for the shard
         // root to link.
         SplitResult? recovered = null;
-        if (HasInterruptedSplit)
+        if (NeedsSplitRecovery)
         {
             recovered = await CompleteRecoverySplitUnderGateAsync();
         }
@@ -2105,7 +2105,7 @@ internal sealed partial class BPlusLeafGrain(
         // forward and leaves the split for a tracked write to complete and
         // report; it is reached only from a rolling-upgrade caller.
         SplitResult? recovered = null;
-        if (tracked && HasInterruptedSplit)
+        if (tracked && NeedsSplitRecovery)
         {
             recovered = await CompleteRecoverySplitUnderGateAsync();
         }
@@ -4218,7 +4218,7 @@ internal sealed partial class BPlusLeafGrain(
         // The recovered split is kept alongside whatever the batch produces
         // (issue #3523).
         SplitResult? recovered = null;
-        if (HasInterruptedSplit)
+        if (NeedsSplitRecovery)
         {
             recovered = await CompleteRecoverySplitUnderGateAsync();
         }
