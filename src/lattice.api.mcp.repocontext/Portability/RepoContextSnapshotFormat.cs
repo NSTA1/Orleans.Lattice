@@ -154,10 +154,35 @@ internal static class RepoContextSnapshotFormat
                 $"Negative repository-context snapshot frame length ({length}).");
         }
 
-        var payload = new byte[length];
-        await ReadExactlyAsync(source, payload, cancellationToken).ConfigureAwait(false);
-        return payload;
+        if (length <= DirectAllocationLimit)
+        {
+            var payload = new byte[length];
+            await ReadExactlyAsync(source, payload, cancellationToken).ConfigureAwait(false);
+            return payload;
+        }
+
+        // The length prefix is untrusted: grow with the bytes actually received so a
+        // forged multi-gigabyte prefix on a short stream cannot force the allocation.
+        using var grown = new MemoryStream();
+        var chunk = new byte[DirectAllocationLimit];
+        var remaining = length;
+        while (remaining > 0)
+        {
+            var want = Math.Min(remaining, chunk.Length);
+            var got = await source.ReadAsync(chunk.AsMemory(0, want), cancellationToken).ConfigureAwait(false);
+            if (got == 0)
+            {
+                throw new InvalidDataException("Unexpected end of repository-context snapshot stream.");
+            }
+
+            grown.Write(chunk, 0, got);
+            remaining -= got;
+        }
+
+        return grown.ToArray();
     }
+
+    private const int DirectAllocationLimit = 1024 * 1024;
 
     private static async ValueTask ReadExactlyAsync(
         Stream source,

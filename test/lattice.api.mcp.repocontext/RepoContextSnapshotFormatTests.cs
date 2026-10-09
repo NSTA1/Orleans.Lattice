@@ -67,6 +67,37 @@ public sealed class RepoContextSnapshotFormatTests
     }
 
     [Test]
+    public void ReadFrameAsync_forged_huge_length_on_short_stream_throws_invalid_data()
+    {
+        var bytes = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, int.MaxValue - 64);
+        using var stream = new MemoryStream(bytes);
+
+        Assert.That(
+            () => RepoContextSnapshotFormat.ReadFrameAsync(
+                stream, TestContext.CurrentContext.CancellationToken).AsTask(),
+            Throws.InstanceOf<InvalidDataException>());
+    }
+
+    [Test]
+    public async Task ReadFrameAsync_frame_larger_than_direct_limit_round_trips()
+    {
+        var payload = new byte[(2 * 1024 * 1024) + 5];
+        new Random(7).NextBytes(payload);
+        using var stream = new MemoryStream();
+        var prefix = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(prefix, payload.Length);
+        stream.Write(prefix);
+        stream.Write(payload);
+        stream.Position = 0;
+
+        var frame = await RepoContextSnapshotFormat.ReadFrameAsync(
+            stream, TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(frame, Is.EqualTo(payload));
+    }
+
+    [Test]
     public async Task ReadFrameAsync_returns_null_at_clean_end_of_stream()
     {
         using var stream = new MemoryStream();

@@ -132,6 +132,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - Explorer sign-in return URL accepted control characters.** A path such as `/<TAB>/evil.com` passed the local-URL check and browsers read it as `//evil.com`, an open redirect. Control characters are now rejected. ([#4790](https://github.com/NSTA1/Orleans.Lattice/pull/4790)) (`Orleans.Lattice.Explorer.Entra.Web`)
+
+- **Security - Graph continuation token accepted a foreign port or userinfo.** Only scheme and host were compared, so a replayed next link could target another port or carry credentials. Both now must match the configured Graph base. ([#4790](https://github.com/NSTA1/Orleans.Lattice/pull/4790)) (`Orleans.Lattice.Membership.Entra.Graph`)
+
+- **Security - Snapshot import trusted a frame length prefix.** A forged multi-gigabyte prefix on a short stream forced the whole allocation up front. Large frames now grow with the bytes actually received. ([#4790](https://github.com/NSTA1/Orleans.Lattice/pull/4790)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Indexing - A newline in a path defeated exclude globs and .gitignore rules.** Both pattern translations emitted `.` constructs that do not cross a line feed, so a file under a directory whose name held one was indexed despite matching a deny rule. Both now match across lines and anchor at `\z`. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Security - A password containing `?` or `#` was logged in full.** The secret redactor stopped its userinfo scan at those two characters, found no `@` in the truncated prefix, and read the URL as carrying no credential, so the whole authority reached the log verbatim. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

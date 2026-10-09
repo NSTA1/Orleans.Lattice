@@ -48,7 +48,10 @@ internal static class GraphContinuationToken
             return false;
         }
 
-        return string.Equals(tokenUri.Host, graphBaseUrl.Host, StringComparison.OrdinalIgnoreCase);
+        // The port must match too, and embedded credentials are never legitimate.
+        return string.Equals(tokenUri.Host, graphBaseUrl.Host, StringComparison.OrdinalIgnoreCase)
+            && tokenUri.Port == graphBaseUrl.Port
+            && string.IsNullOrEmpty(tokenUri.UserInfo);
     }
 
     /// <summary>

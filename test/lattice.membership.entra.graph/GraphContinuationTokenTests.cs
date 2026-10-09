@@ -27,6 +27,22 @@ public class GraphContinuationTokenTests
     }
 
     [Test]
+    public void IsValid_different_port_rejected()
+    {
+        Assert.That(
+            GraphContinuationToken.IsValid("https://graph.microsoft.com:8443/v1.0/users", PublicCloudBase),
+            Is.False);
+    }
+
+    [Test]
+    public void IsValid_userinfo_rejected()
+    {
+        Assert.That(
+            GraphContinuationToken.IsValid("https://user:pw@graph.microsoft.com/v1.0/users", PublicCloudBase),
+            Is.False);
+    }
+
+    [Test]
     public void IsValid_national_cloud_same_host_accepted()
     {
         const string token = "https://graph.microsoft.us/v1.0/users?$skiptoken=abc";

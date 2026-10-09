@@ -195,13 +195,30 @@ public static class ExplorerEntraWebEndpointRouteBuilderExtensions
         // Allows "/" or "/foo" but not "//" or "/\".
         if (url[0] == '/')
         {
-            return url.Length == 1 || (url[1] != '/' && url[1] != '\\');
+            return (url.Length == 1 || (url[1] != '/' && url[1] != '\\'))
+                && !HasControlCharacter(url.AsSpan(1));
         }
 
         // Allows "~/" or "~/foo" but not "~//" or "~/\".
         if (url.Length > 1 && url[0] == '~' && url[1] == '/')
         {
-            return url.Length == 2 || (url[2] != '/' && url[2] != '\\');
+            return (url.Length == 2 || (url[2] != '/' && url[2] != '\\'))
+                && !HasControlCharacter(url.AsSpan(2));
+        }
+
+        return false;
+    }
+
+    // Browsers strip tab, CR and LF from a URL, so "/<TAB>/evil.com" is
+    // read as "//evil.com" and escapes the site.
+    private static bool HasControlCharacter(ReadOnlySpan<char> value)
+    {
+        foreach (var c in value)
+        {
+            if (char.IsControl(c))
+            {
+                return true;
+            }
         }
 
         return false;
