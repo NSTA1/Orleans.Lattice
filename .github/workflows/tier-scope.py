@@ -15,12 +15,12 @@ behaviour under test:
   spin up multi-silo clusters, kill and restart them, and are the slowest and
   most flake-prone tier per test.
 
-Every other run is FULLY GATED and skips nothing:
+Every other run keeps all test tiers. Exhaustive TLC is separately scoped:
 
-- a pull request into `main` (including an integration branch's own pull
-  request into `main`) or into a `release/**` line;
-- the integration-branch push lane, which evaluates the bucket's combined
-  state after each member merge;
+- a pull request into `main` skips exhaustive TLC only when its diff contains
+  no TLC input; its base-model smoke shard still runs;
+- a pull request into a `release/**` line, the integration-branch push lane,
+  and nightly coverage keep exhaustive TLC;
 - any event or base this script does not recognise. The failure direction is
   deliberately "run more", never "run less".
 
@@ -34,21 +34,25 @@ introduced by a member therefore still blocks the merge to `main`; what it loses
 is per-member attribution, because it surfaces on the bucket with every other
 member's changes beside it. That is the accepted cost of this rule.
 
-TLC RUNS WHEN ITS INPUTS CHANGE
+EXHAUSTIVE TLC RUNS WHEN ITS INPUTS CHANGE
 -------------------------------
 The `Tlc` category is also exploration-dominated - TLC model-checks every
 specification module and a mutant of each definition, about 40 runner-minutes
 per run - and it is deterministic: the same specification, harness and toolchain
-yield the same verdict every run. So a member pull request runs the TLC shards
-(test-shards.json `"tlc": true`) exactly when its diff touches a TLC input
+yield the same verdict every run. A pull request into `main` or an integration
+branch runs the exhaustive TLC shards (test-shards.json `"tlc": true`) exactly
+when its diff touches a TLC input
 (`TLC_INPUTS`: the `.tla`, `.cfg`, manifest and mutation files under spec/, the
 Formal harness, the CI workflows and the build files the harness compiles
 against; not the refinement notes and READMEs, which TLC never reads), and
-skips them otherwise. Such a
-member cannot change any TLC verdict, so the skip loses nothing - not even
+skips them otherwise. A change that touches none of those inputs cannot alter
+any TLC verdict, so the skip loses nothing - not even
 attribution, because a specification change is precisely a TLC input and still
-runs TLC on the pull request that wrote it. A missing or empty changed-file list
-runs TLC (fail towards "run more"). Fully gated runs never skip it.
+runs TLC on the pull request that wrote it. The separate `"tlcSmoke": true`
+base-model shard still runs on every routine CI pull request. Release-line
+pull requests, pushes, nightly coverage, and any unknown event keep the
+exhaustive shards. A missing or empty changed-file list runs TLC (fail towards
+"run more").
 
 LEG CAP
 -------
@@ -113,10 +117,6 @@ def is_integration_branch(ref: str) -> bool:
     return len(parts) >= 3 and parts[0] != "" and parts[1] == "epic" and all(parts[2:])
 
 
-def is_fully_gated_base(ref: str) -> bool:
-    return ref == "main" or fnmatch.fnmatchcase(ref, "release/*")
-
-
 def touches_tlc_input(changed: list[str] | None) -> bool:
     """True unless a non-empty changed-file list touches no TLC input."""
     if not changed:
@@ -138,9 +138,20 @@ def decide(event: str, base_ref: str, changed: list[str] | None = None) -> dict[
         )
         return full
 
-    if is_fully_gated_base(base_ref):
+    if base_ref == "main":
         full["reason"] = (
-            f"a pull request into '{base_ref}' is fully gated, so every tier runs"
+            "a pull request into 'main' keeps every tier; exhaustive TLC runs only when a TLC input changes"
+        )
+        if not touches_tlc_input(changed):
+            full["skip_tlc_reason"] = (
+                "pull request into 'main' touches no TLC input (specifications, Formal harness, workflows, build files), "
+                "so no exhaustive TLC verdict can change; the base-model smoke shard still runs"
+            )
+        return full
+
+    if fnmatch.fnmatchcase(base_ref, "release/*"):
+        full["reason"] = (
+            f"a pull request into '{base_ref}' is fully gated, including exhaustive TLC"
         )
         return full
 
@@ -153,9 +164,9 @@ def decide(event: str, base_ref: str, changed: list[str] | None = None) -> dict[
 
     skip_tlc_reason = "" if touches_tlc_input(changed) else (
         f"member pull request into integration branch '{base_ref}' that touches no TLC "
-        "input (specifications, Formal harness, workflows, build files), so no TLC "
+        "input (specifications, Formal harness, workflows, build files), so no exhaustive TLC "
         "verdict can change; TLC runs on that branch's own push lane and on its pull "
-        "request into main"
+        "request into main; the base-model smoke shard still runs"
     )
     return {
         "scope": "member",
@@ -218,8 +229,9 @@ def main() -> int:
             else:
                 handle.write(f"### Test tiers: all ({decision['reason']})\n\n")
             if decision["skip_tlc_reason"]:
-                handle.write("### TLC shards skipped\n\n")
+                handle.write("### Exhaustive TLC shards skipped\n\n")
                 handle.write(f"Reason: {decision['skip_tlc_reason']}.\n\n")
+                handle.write("The base-model smoke shard still runs.\n\n")
 
     return 0
 

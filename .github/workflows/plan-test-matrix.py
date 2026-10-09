@@ -43,7 +43,7 @@ run-test-leg.py additionally emits a GitHub error annotation per failing item an
 records per-item results, so the aggregate report names the exact package, shard
 and tier without anyone opening a log.
 
-SKIPPING TIERS BY POLICY
+SKIPPING WORK BY POLICY
 -----------------------
 `--skip-tiers coyote,chaos` plans a run that executes the deterministic tier
 only. ci.yml passes it for a MEMBER pull request into an integration branch and
@@ -60,6 +60,10 @@ drop anything silently, and that is the whole design:
   excluded tiers on the item. The exclusion for `coyote,chaos` together is the
   deterministic tier's own filter, so a member pull request runs precisely the
   surface the deterministic tier runs on a fully gated one.
+- A shard marked `"tlc": true` is an exhaustive TLC shard; a shard marked
+  `"tlcSmoke": true` is the retained base-model smoke check. Each has its own
+  skip reason so routine PRs can skip exhaustive TLC without losing smoke
+  coverage, while Publish can skip both after exact-SHA CI verification.
 
 The deterministic tier cannot be skipped: a run with nothing left to execute is
 a green that verified nothing.
@@ -192,6 +196,13 @@ def parse_args() -> argparse.Namespace:
         help="When non-empty, the shards test-shards.json marks \"tlc\": true are "
              "recorded as skipped with this reason instead of run. tier-scope.py "
              "sets it only for a member pull request whose diff touches no TLC input.",
+    )
+    parser.add_argument(
+        "--skip-tlc-smoke-reason",
+        default="",
+        help="When non-empty, the shards test-shards.json marks \"tlcSmoke\": true "
+             "are recorded as skipped instead of run. Publish uses this only after "
+             "requiring successful CI for the exact tag commit.",
     )
     parser.add_argument("--output-matrix")
     parser.add_argument("--report-file")
@@ -326,7 +337,13 @@ def build_shard_filters(config: dict) -> list[dict]:
             claimed.extend(includes)
             claimed_categories.extend(categories)
 
-        result.append({"shard": name, "filter": expression, "tlc": bool(entry.get("tlc"))})
+        result.append({
+            "shard": name,
+            "filter": expression,
+            "tlc": bool(entry.get("tlc")),
+            "tlcSmoke": bool(entry.get("tlcSmoke")),
+            "tiers": entry.get("tiers"),
+        })
     return result
 
 
@@ -338,6 +355,7 @@ def make_items(
     skip_tiers: list[str] | None = None,
     skip_reason: str = "skipped by policy",
     skip_tlc_reason: str = "",
+    skip_tlc_smoke_reason: str = "",
 ) -> tuple[list[dict], list[dict]]:
     """Return (items to run, items skipped by policy).
 
@@ -345,8 +363,8 @@ def make_items(
     the full plan. With skipped tiers, nothing disappears: a crossed item of a
     skipped tier moves to the second list, and an untiered item stays in the
     first with the skipped tiers' categories excluded and recorded. A non-empty
-    skip_tlc_reason moves every item of a shard marked "tlc" to the second list
-    the same way.
+    skip_tlc_reason moves every item of a shard marked "tlc" to the second list;
+    skip_tlc_smoke_reason does the same for a shard marked "tlcSmoke".
     """
     skip_tiers = list(skip_tiers or [])
     exclusion = exclusion_filter(skip_tiers)
@@ -410,7 +428,11 @@ def make_items(
                 )
                 continue
 
+            allowed_tiers = shard["tiers"] or [tier for tier, _ in TIERS]
             for tier, tier_filter in TIERS:
+                if tier not in allowed_tiers:
+                    continue
+
                 combined = f"({shard['filter']})&({tier_filter})"
                 estimate = durations.get(
                     (package, shard["shard"], tier), DEFAULT_ESTIMATE[tier]
@@ -424,11 +446,17 @@ def make_items(
                     "label": f"{package} / {shard['shard']} ({tier})",
                     "seeded": package in seeded,
                 }
-                if tier in skip_tiers or (shard["tlc"] and skip_tlc_reason):
+                if tier in skip_tiers or (shard["tlc"] and skip_tlc_reason) or (
+                    shard["tlcSmoke"] and skip_tlc_smoke_reason
+                ):
                     # Recorded, not run. It costs nothing (no process start),
                     # so it is priced at zero and never reaches the packer.
                     item["estimate"] = 0.0
-                    item["skip"] = skip_reason if tier in skip_tiers else skip_tlc_reason
+                    item["skip"] = (
+                        skip_reason if tier in skip_tiers
+                        else skip_tlc_reason if shard["tlc"]
+                        else skip_tlc_smoke_reason
+                    )
                     skipped.append(item)
                 else:
                     items.append(item)
@@ -568,7 +596,7 @@ def main() -> int:
     durations = load_durations(args.durations)
     items, skipped = make_items(
         packages, shard_config, durations, seeded, args.skip_tiers, args.skip_reason,
-        args.skip_tlc_reason.strip(),
+        args.skip_tlc_reason.strip(), args.skip_tlc_smoke_reason.strip(),
     )
     legs = pack(items, args.max_legs)
 

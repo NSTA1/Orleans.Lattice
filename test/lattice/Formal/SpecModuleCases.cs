@@ -17,6 +17,9 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </summary>
 public static class SpecModuleCases
 {
+    /// <summary>The dedicated AtomicCommit base-model smoke test method name.</summary>
+    public const string SmokeTestName = "The_atomic_commit_base_specification_holds";
+
     /// <summary>One case per discovered module.</summary>
     public static IEnumerable<TestCaseData> Modules() => Expand(ModulesFor);
 

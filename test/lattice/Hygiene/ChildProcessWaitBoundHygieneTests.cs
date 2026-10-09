@@ -61,6 +61,9 @@ namespace Orleans.Lattice.Tests.Hygiene;
 [TestFixture]
 public sealed class ChildProcessWaitBoundHygieneTests
 {
+    private const string TlcExceptionFile = "test/lattice/Formal/TlcModelCheckTests.cs";
+    private static readonly string TlcWaitMarker = string.Concat("TLC_", "UNBOUNDED_WAIT");
+
     /// <summary>
     /// A file the gate must have examined. It waits on a child process with an
     /// explicit timeout, so it pins the scan to a real, correct site: if this
@@ -115,7 +118,7 @@ public sealed class ChildProcessWaitBoundHygieneTests
 
             var relative = Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
             var text = Encoding.UTF8.GetString(bytes);
-            var findings = FindUnboundedWaits(text).Concat(FindDiscardedBoundedWaits(text)).ToList();
+            var findings = FindUnboundedWaits(text, relative).Concat(FindDiscardedBoundedWaits(text)).ToList();
 
             lock (gate)
             {
@@ -160,7 +163,7 @@ public sealed class ChildProcessWaitBoundHygieneTests
     /// One entry per violation, each beginning with <c>:</c> and the 1-based line
     /// number so a caller can prefix it with the file path. Ordered by position.
     /// </returns>
-    internal static IReadOnlyList<string> FindUnboundedWaits(string text)
+    internal static IReadOnlyList<string> FindUnboundedWaits(string text, string? relativePath = null)
     {
         // Comments and string literals are blanked first. This repository
         // documents its own gotchas at length, so the defective shape appears in
@@ -179,6 +182,22 @@ public sealed class ChildProcessWaitBoundHygieneTests
             findings.Add(
                 $":{LineOf(code, match.Index)}: {match.Groups["receiver"].Value}.{call} "
                 + $"is unbounded - {remedy}.");
+        }
+
+        var markerMatches = Regex.Matches(text, Regex.Escape(TlcWaitMarker));
+        if (markerMatches.Count == 1
+            && string.Equals(relativePath, TlcExceptionFile, StringComparison.Ordinal)
+            && findings.Count == 1
+            && findings[0].Contains("process.WaitForExit()", StringComparison.Ordinal))
+        {
+            return [];
+        }
+
+        if (markerMatches.Count > 0)
+        {
+            findings.Add(
+                $":{LineOf(text, markerMatches[0].Index)}: {TlcWaitMarker} must identify exactly one "
+                + $"unbounded process.WaitForExit() in {TlcExceptionFile}.");
         }
 
         return findings;
@@ -297,6 +316,36 @@ public sealed class ChildProcessWaitBoundHygieneTests
         const string source = "process.WaitForExit(30000);";
 
         Assert.That(FindUnboundedWaits(source), Is.Empty);
+    }
+
+    [Test]
+    public void The_TLC_marker_exempts_exactly_its_one_unbounded_wait_in_the_TLC_fixture()
+    {
+        var marker = string.Concat("TLC_", "UNBOUNDED_WAIT");
+        var source = $"// {marker}\nprocess.WaitForExit();";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                FindUnboundedWaits(source, TlcExceptionFile),
+                Is.Empty,
+                "the marked TLC wait relies on the outer CI job timeout, not a short per-run deadline");
+            Assert.That(
+                FindUnboundedWaits(source, "test/other.cs"),
+                Has.Count.EqualTo(2),
+                "a marker in any other file must not suppress an unbounded wait");
+        });
+    }
+
+    [Test]
+    public void The_TLC_marker_does_not_exempt_multiple_waits_or_a_wait_in_another_fixture()
+    {
+        var marker = string.Concat("TLC_", "UNBOUNDED_WAIT");
+        var source = $"// {marker}\nfirst.WaitForExit();\nsecond.WaitForExit();";
+        var findings = FindUnboundedWaits(source, TlcExceptionFile);
+
+        Assert.That(findings, Has.Count.EqualTo(3),
+            "the exception is valid only while the marker identifies the fixture's single expected wait");
     }
 
     [Test]

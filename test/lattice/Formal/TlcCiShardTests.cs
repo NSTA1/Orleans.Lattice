@@ -56,6 +56,51 @@ public sealed class TlcCiShardTests
             "a category no case carries is a CI leg that runs nothing and reads as green");
     }
 
+    [Test]
+    public void Atomic_variant_groups_are_nonempty_and_balanced_by_manifest_state_count()
+    {
+        var variants = SpecModuleCatalogue.Repository()
+            .Where(module => module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal))
+            .SelectMany(module => module.Manifest.Variants.Select(variant =>
+                (Category: TlcCiShard.OfVariant(module, variant.Key)!, States: variant.Value)))
+            .ToList();
+        var loads = variants.GroupBy(variant => variant.Category)
+            .ToDictionary(group => group.Key, group => group.Sum(variant => variant.States), StringComparer.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(loads.Keys, Is.EquivalentTo(TlcCiShard.AtomicVariantShards));
+            Assert.That(
+                loads.Values.Max() - loads.Values.Min(),
+                Is.LessThanOrEqualTo(variants.Max(variant => variant.States)),
+                "state-weighted longest-processing-time assignment must keep each shard within one largest variant");
+        });
+    }
+
+    [Test]
+    public void The_base_model_smoke_shard_precedes_the_full_TLC_catch_all()
+    {
+        var shards = LatticeShards();
+        var smokeIndex = shards.FindIndex(shard => shard.Name == "formal-tlc-smoke");
+        var fullIndex = shards.FindIndex(shard => shard.Name == CatchAllShard);
+        Assert.That(smokeIndex, Is.GreaterThanOrEqualTo(0));
+        Assert.That(fullIndex, Is.GreaterThanOrEqualTo(0));
+        var smoke = shards[smokeIndex];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(smokeIndex, Is.LessThan(fullIndex));
+            Assert.That(smoke.TlcSmoke, Is.True);
+            Assert.That(smoke.Tiers, Is.EqualTo(new[] { "deterministic" }));
+            Assert.That(smoke.Includes, Is.EqualTo(new[]
+                { $"Formal.TlcModelCheckTests.{SpecModuleCases.SmokeTestName}" }));
+            var smokeTest = typeof(TlcModelCheckTests).GetMethod(SpecModuleCases.SmokeTestName)
+                ?? throw new InvalidOperationException("The smoke shard does not name a test method.");
+            Assert.That(smokeTest.GetParameters(), Is.Empty);
+            Assert.That(smokeTest.IsDefined(typeof(TestAttribute), inherit: false), Is.True);
+        });
+    }
+
     [TestCase("Replication", "EventualConvergence", TlcCiShard.Convergence)]
     [TestCase("Replication", "BootstrapHandoffLosesNothing", TlcCiShard.ReplicationWal)]
     [TestCase("ReplicationReBootstrap", "", TlcCiShard.ReBootstrap)]
@@ -100,10 +145,21 @@ public sealed class TlcCiShardTests
         {
             foreach (var (module, variant) in variants)
             {
-                var expected = module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal)
-                    ? TlcCiShard.AtomicVariants
-                    : module.Name.StartsWith("Replication", StringComparison.Ordinal) ? TlcCiShard.ReBootstrap : null;
-                Assert.That(TlcCiShard.OfVariant(module, variant), Is.EqualTo(expected), $"{module.Name}.{variant}");
+                var category = TlcCiShard.OfVariant(module, variant);
+                if (module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal))
+                {
+                    Assert.That(
+                        TlcCiShard.AtomicVariantShards.Contains(category!),
+                        Is.True,
+                        $"{module.Name}.{variant} should route to one of the atomic variant shards");
+                }
+                else
+                {
+                    var expected = module.Name.StartsWith("Replication", StringComparison.Ordinal)
+                        ? TlcCiShard.ReBootstrap
+                        : null;
+                    Assert.That(category, Is.EqualTo(expected), $"{module.Name}.{variant}");
+                }
             }
         });
     }
@@ -120,7 +176,7 @@ public sealed class TlcCiShardTests
         Assert.Multiple(() =>
         {
             Assert.That(Categories(mutation), Is.EqualTo(new[] { TlcCiShard.ReBootstrap }));
-            Assert.That(Categories(variant), Is.EqualTo(new[] { TlcCiShard.AtomicVariants }));
+            Assert.That(TlcCiShard.AtomicVariantShards.Contains(Categories(variant).Single()), Is.True);
             Assert.That(Categories(baseCase), Is.Empty);
         });
     }
@@ -147,7 +203,7 @@ public sealed class TlcCiShardTests
             ? data.Properties[PropertyNames.Category].Cast<string>()
             : [];
 
-    private static List<(string Name, bool Tlc, List<string> Categories)> LatticeShards()
+    private static List<(string Name, bool Tlc, bool TlcSmoke, List<string> Categories, List<string> Includes, List<string> Tiers)> LatticeShards()
     {
         var path = Path.Combine(HygieneRepository.FindRepoRoot(), ".github", "workflows", "test-shards.json");
         using var document = JsonDocument.Parse(File.ReadAllText(path));
@@ -155,8 +211,15 @@ public sealed class TlcCiShardTests
             .Select(shard => (
                 shard.GetProperty("shard").GetString()!,
                 shard.TryGetProperty("tlc", out var tlc) && tlc.GetBoolean(),
+                shard.TryGetProperty("tlcSmoke", out var smoke) && smoke.GetBoolean(),
                 shard.TryGetProperty("includeCategories", out var categories)
                     ? categories.EnumerateArray().Select(c => c.GetString()!).ToList()
+                    : [],
+                shard.TryGetProperty("include", out var includes)
+                    ? includes.EnumerateArray().Select(c => c.GetString()!).ToList()
+                    : [],
+                shard.TryGetProperty("tiers", out var tiers)
+                    ? tiers.EnumerateArray().Select(c => c.GetString()!).ToList()
                     : []))
             .ToList();
     }
