@@ -137,6 +137,44 @@ public sealed class TenancyQuotaTests : TenancyTestContext
         });
     }
 
+    [TestCase(",")]
+    [TestCase("_")]
+    [TestCase(" ,_, ")]
+    public void Separator_only_quota_fields_are_invalid_and_do_not_remove_existing_limits(string text)
+    {
+        Cluster.Tenants["acme"].Quotas = new TenantQuotasDescriptor { MaxKeys = 100, MaxGroups = 20 };
+        var cut = OpenEditor();
+        TenancyForms.Type(cut, "Keys", text);
+        TenancyForms.Type(cut, "Tenant groups", text);
+        TenancyForms.Type(cut, "Burst allowance (percent)", text);
+
+        cut.Find("form.lt-tenancy-form").Submit();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyForms.ErrorOf(cut, "Keys"), Is.EqualTo(TenancyQuotaDraft.InvalidCeilingMessage));
+            Assert.That(TenancyForms.ErrorOf(cut, "Tenant groups"), Is.EqualTo(TenancyQuotaDraft.InvalidCapMessage));
+            Assert.That(TenancyForms.ErrorOf(cut, "Burst allowance (percent)"), Is.EqualTo(TenancyQuotaDraft.InvalidBurstMessage));
+            Assert.That(Cluster.Calls, Does.Not.Contain(nameof(FakeTenancyCluster.SetTenantQuotasAsync)));
+            Assert.That(Cluster.Tenants["acme"].Quotas.MaxKeys, Is.EqualTo(100));
+            Assert.That(Cluster.Tenants["acme"].Quotas.MaxGroups, Is.EqualTo(20));
+        });
+    }
+
+    [TestCase("", false, true, null)]
+    [TestCase("   ", true, true, null)]
+    [TestCase(",", false, false, null)]
+    [TestCase("_", true, false, null)]
+    [TestCase(",_,", false, false, null)]
+    [TestCase("1,024", true, true, 1024L)]
+    [TestCase("1_024", false, true, 1024L)]
+    [TestCase("2 KiB", true, true, 2048L)]
+    public void Parsing_a_ceiling_only_treats_whitespace_as_unset(string text, bool bytes, bool valid, long? expected)
+    {
+        Assert.That(TenancyQuotaDraft.TryParseCeiling(text, bytes, out var value), Is.EqualTo(valid));
+        Assert.That(value, Is.EqualTo(expected));
+    }
+
     [Test]
     public void The_clusters_refusal_is_shown_in_the_form_and_cancel_closes_it()
     {

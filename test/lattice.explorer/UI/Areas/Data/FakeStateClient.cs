@@ -60,6 +60,15 @@ internal sealed class FakeStateClient : ILatticeStateClient
     /// </summary>
     public TaskCompletionSource? TreeTagIndexGate { get; set; }
 
+    /// <summary>A scripted history reply, including replies that arrive after cancellation.</summary>
+    public Func<EntryHistoryRequest, CancellationToken, Task<EntryHistoryResponse>>? HistoryRead { get; set; }
+
+    /// <summary>A scripted tag-member reply, including replies that arrive after cancellation.</summary>
+    public Func<TagMemberScanRequest, CancellationToken, Task<TagMemberScanPage>>? TagMemberRead { get; set; }
+
+    /// <summary>A scripted index-metadata reply, including replies that arrive after cancellation.</summary>
+    public Func<CatalogRequest, CancellationToken, Task<CoveredTreeCatalogPage>>? CoveredTreeRead { get; set; }
+
     /// <summary>When set, a continuation scan throws this.</summary>
     public Exception? ContinuationFault { get; set; }
 
@@ -152,6 +161,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<CoveredTreeCatalogPage> ListCoveredTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(ListCoveredTreesAsync));
+        if (CoveredTreeRead is { } read)
+        {
+            return read(request, cancellationToken);
+        }
+
         return Task.FromResult(new CoveredTreeCatalogPage
         {
             Entries = request.IndexName is { } index && Covered.TryGetValue(index, out var trees) ? trees : [],
@@ -169,6 +183,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<TagMemberScanPage> ScanTagMembersAsync(TagMemberScanRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(ScanTagMembersAsync));
+        if (TagMemberRead is { } read)
+        {
+            return read(request, cancellationToken);
+        }
+
         ThrowIfFaulted(nameof(ScanTagMembersAsync));
         var members = Members.TryGetValue((request.IndexName, request.Tag), out var found) ? found : [];
         var (items, next) = Page(members, request.PageToken, request.PageSize);
@@ -227,6 +246,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<EntryHistoryResponse> GetEntryHistoryAsync(EntryHistoryRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(GetEntryHistoryAsync) + ":" + (request.ContinuationToken ?? "first"));
+        if (HistoryRead is { } read)
+        {
+            return read(request, cancellationToken);
+        }
+
         ThrowIfFaulted(nameof(GetEntryHistoryAsync));
         var revisions = History.TryGetValue((request.TreeId, request.Key), out var found) ? found : [];
         IEnumerable<EntryRevisionRecord> ordered = revisions.Where(revision => request.ToHlc is not { } to || revision.Hlc <= to);

@@ -117,6 +117,7 @@ public partial class DataHistoryPanel : IDisposable
         }
 
         _query = query;
+        var cancellationToken = _lifetime.Renew();
         if (_keySource?.StateId != workspace.Tree.StateId)
         {
             _keySource = DataServices.Find<IDataReader>(Services) is { } reader ? new DataKeySuggestionSource(reader, workspace.Tree.StateId) : null;
@@ -142,10 +143,13 @@ public partial class DataHistoryPanel : IDisposable
         _prefixChanges.Clear();
         if (workspace.Key is not null)
         {
-            await ReloadAsync();
+            await ReloadAsync(cancellationToken);
         }
 
-        RestartFollow();
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            RestartFollow();
+        }
     }
 
     /// <inheritdoc />
@@ -208,18 +212,21 @@ public partial class DataHistoryPanel : IDisposable
         return ReferenceEquals(row, newest);
     }
 
-    private async Task ReloadAsync()
+    private Task ReloadAsync() => ReloadAsync(_lifetime.Renew());
+
+    private async Task ReloadAsync(CancellationToken cancellationToken)
     {
         _durable.Clear();
         _liveRows.Clear();
         _continuation = null;
         _timeline = null;
-        await LoadPageAsync();
+        _tail = null;
+        await LoadPageAsync(cancellationToken);
     }
 
-    private Task LoadOlderAsync() => LoadPageAsync();
+    private Task LoadOlderAsync() => LoadPageAsync(_lifetime.Token);
 
-    private async Task LoadPageAsync()
+    private async Task LoadPageAsync(CancellationToken cancellationToken)
     {
         if (Workspace is not { Key: { } key } workspace)
         {
@@ -247,7 +254,12 @@ public partial class DataHistoryPanel : IDisposable
                     ValuePreviewBudget = HistoryReader.HistoryPreviewBudget,
                     Reverse = true,
                 },
-                _lifetime.Token);
+                cancellationToken);
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
 
             foreach (var record in response.Revisions)
             {
@@ -261,16 +273,22 @@ public partial class DataHistoryPanel : IDisposable
             _tail = new HistoryLiveTail(key, _durable);
             Build();
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            _error = DataErrors.Describe(exception, "read this key's history");
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _error = DataErrors.Describe(exception, "read this key's history");
+            }
         }
         finally
         {
-            _loading = false;
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _loading = false;
+            }
         }
     }
 
@@ -400,6 +418,11 @@ public partial class DataHistoryPanel : IDisposable
             {
                 await InvokeAsync(() =>
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
                     if (key is null)
                     {
                         _prefixChanges.Insert(0, change);
@@ -430,6 +453,11 @@ public partial class DataHistoryPanel : IDisposable
 
             await InvokeAsync(() =>
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 _following = false;
                 if (DataErrors.IsNotOffered(exception))
                 {

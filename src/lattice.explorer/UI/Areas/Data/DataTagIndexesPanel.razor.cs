@@ -22,6 +22,7 @@ public partial class DataTagIndexesPanel : IDisposable
     internal const int MemberPageSize = 50;
 
     private readonly ComponentLifetime _lifetime = new();
+    private readonly ComponentLifetime _memberReads = new();
     private readonly string _headingId = LtIds.Next("lt-data-tag-index");
     private readonly Dictionary<string, TreeTagIndexStatus?> _statuses = new(StringComparer.Ordinal);
     private IReadOnlyList<DataTagMember> _members = [];
@@ -79,25 +80,61 @@ public partial class DataTagIndexesPanel : IDisposable
             return;
         }
 
-        if (_loadedFor != workspace.Tree.StateId)
+        var treeChanged = _loadedFor != workspace.Tree.StateId;
+        if (treeChanged || _indexes is null)
         {
-            _loadedFor = workspace.Tree.StateId;
-            _selection = null;
-            _watch.Clear();
-            await ReloadAsync();
-            await ResumeAsync();
+            var cancellationToken = _memberReads.Renew();
+            if (treeChanged)
+            {
+                _loadedFor = workspace.Tree.StateId;
+                _selection = null;
+                _members = [];
+                _membersContinuation = null;
+                _membersError = null;
+                _loadingMembers = false;
+                _watch.Clear();
+            }
+
+            await ReloadAsync(cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (treeChanged)
+            {
+                await ResumeAsync();
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
         }
 
         var selection = (workspace.Address.GetQuery(DataTabs.IndexQuery), workspace.Address.GetQuery(DataTabs.TagQuery));
         if (_selection != selection)
         {
+            var cancellationToken = _memberReads.Renew();
             var indexChanged = _selection?.Index != selection.Item1;
             _selection = selection;
             _selected = selection.Item1;
             _tag = selection.Item2;
-            if (indexChanged)
+            if (indexChanged || _covered is null || _tags is null)
             {
-                await LoadSelectedIndexAsync();
+                try
+                {
+                    await LoadSelectedIndexAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
             }
 
             await ResetMembersAsync();
@@ -108,6 +145,7 @@ public partial class DataTagIndexesPanel : IDisposable
     public void Dispose()
     {
         _lifetime.Leave();
+        _memberReads.Leave();
         _watch?.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -134,7 +172,9 @@ public partial class DataTagIndexesPanel : IDisposable
     private string CoveredCount(TagIndexRef index) =>
         _statuses.GetValueOrDefault(index.IndexName) is { } status ? DataFormat.Count(status.CoveredTrees.Length) : "-";
 
-    private async Task ReloadAsync()
+    private Task ReloadAsync() => ReloadAsync(_lifetime.Token);
+
+    private async Task ReloadAsync(CancellationToken cancellationToken)
     {
         _indexes = null;
         _error = null;
@@ -147,15 +187,25 @@ public partial class DataTagIndexesPanel : IDisposable
 
         try
         {
-            _indexes = await reader.ListTagIndexesForTreeAsync(workspace.Tree.StateId, _lifetime.Token);
+            var indexes = await reader.ListTagIndexesForTreeAsync(workspace.Tree.StateId, cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _indexes = indexes;
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return;
         }
         catch (Exception exception)
         {
-            _error = DataErrors.Describe(exception, "read the tag indexes over this tree");
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _error = DataErrors.Describe(exception, "read the tag indexes over this tree");
+            }
+
             return;
         }
 
@@ -163,7 +213,13 @@ public partial class DataTagIndexesPanel : IDisposable
         {
             foreach (var index in _indexes)
             {
-                _statuses[index.IndexName] = await StatusAsync(admin, index.IndexName);
+                var status = await StatusAsync(admin, index.IndexName);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                _statuses[index.IndexName] = status;
             }
         }
     }
@@ -181,7 +237,7 @@ public partial class DataTagIndexesPanel : IDisposable
         }
     }
 
-    private async Task LoadSelectedIndexAsync()
+    private async Task LoadSelectedIndexAsync(CancellationToken cancellationToken)
     {
         _covered = null;
         _tags = null;
@@ -192,10 +248,21 @@ public partial class DataTagIndexesPanel : IDisposable
             return;
         }
 
-        _canReconcile = workspace.OffersAdministration && TreeAdminOperationsAccess.Of(Gate.Admin) is not null && await Gate.CanAdministerAsync(index.TreeId, _lifetime.Token);
+        var canReconcile = workspace.OffersAdministration && TreeAdminOperationsAccess.Of(Gate.Admin) is not null && await Gate.CanAdministerAsync(index.TreeId, cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _canReconcile = canReconcile;
         try
         {
-            var covered = await reader.ListCoveredTreesForIndexAsync(index.IndexName, _lifetime.Token);
+            var covered = await reader.ListCoveredTreesForIndexAsync(index.IndexName, cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             var visible = new List<DataTreeEntry>(covered.Count);
             foreach (var stateId in covered)
             {
@@ -210,24 +277,38 @@ public partial class DataTagIndexesPanel : IDisposable
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             _covered = [];
         }
 
         try
         {
-            _tags = await reader.ListTagsForIndexAsync(index.IndexName, _lifetime.Token);
+            var tags = await reader.ListTagsForIndexAsync(index.IndexName, cancellationToken);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _tags = tags;
+            }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            _tags = [];
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _tags = [];
+            }
         }
     }
 
     private async Task ResetMembersAsync()
     {
+        _memberReads.Renew();
         _members = [];
         _membersContinuation = null;
         _membersError = null;
+        _loadingMembers = false;
         if (_tag is not null)
         {
             await LoadMembersAsync();
@@ -242,23 +323,36 @@ public partial class DataTagIndexesPanel : IDisposable
         }
 
         _loadingMembers = true;
+        _membersError = null;
+        var cancellationToken = _memberReads.Token;
         try
         {
-            var page = await reader.ScanTagMembersAsync(index.IndexName, _tag, MemberPageSize, _membersContinuation, _lifetime.Token);
+            var page = await reader.ScanTagMembersAsync(index.IndexName, _tag, MemberPageSize, _membersContinuation, cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             _members = [.. _members, .. page.Members.Select(member => new DataTagMember(workspace.Directory.FindByStateId(member.TreeId), member.Key, member.TreeId + "\n" + member.Key))];
 
             _membersContinuation = page.HasMore ? page.ContinuationToken : null;
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            _membersError = DataErrors.Describe(exception, "read the keys carrying this tag");
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _membersError = DataErrors.Describe(exception, "read the keys carrying this tag");
+            }
         }
         finally
         {
-            _loadingMembers = false;
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _loadingMembers = false;
+            }
         }
     }
 

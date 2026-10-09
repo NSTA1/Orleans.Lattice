@@ -44,6 +44,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Data navigation keeps the current results.** Late history and tag-index replies no longer mix old revisions or members into the current selection, replace its error or paging state, or restart its live feed. (PR link pending assignment.) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Separator-only quotas are invalid.** A quota containing only commas or underscores is rejected instead of silently clearing its ceiling or resetting access and burst limits. Whitespace still leaves a limit unset. (PR link pending assignment.) (`Orleans.Lattice.Explorer.UI`)
+
 - **Leaf - Warm leaves make checkpoint progress.** Root and sibling leaves now arm the coverage-lag timer after durable identity is seeded, so foreground-only writes can reach snapshot-backed checkpoints without deactivation. ([#3314](https://github.com/NSTA1/Orleans.Lattice/issues/3314)) (`Orleans.Lattice`)
 - **Replication - Change-feed terminals follow their prepares.** A post-terminal tail pass recovers prepares that raced the initial partition heads, preventing an observed saga terminal from reaching consumers before its prepares. ([#4511](https://github.com/NSTA1/Orleans.Lattice/issues/4511)) (`Orleans.Lattice.Replication`)
 - **Replication - Atomic sagas during bootstrap.** A replicated saga applied while a peer is bootstrapping is now visible all-or-nothing on that peer; previously a read could briefly see only some of its keys. ([#4791](https://github.com/NSTA1/Orleans.Lattice/issues/4791)) (`Orleans.Lattice`)

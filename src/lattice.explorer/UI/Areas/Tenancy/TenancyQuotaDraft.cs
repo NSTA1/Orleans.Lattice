@@ -157,12 +157,13 @@ internal sealed class TenancyQuotaDraft
     public static bool TryParseCeiling(string? text, bool bytes, out long? value)
     {
         value = null;
-        var trimmed = (text ?? string.Empty).Trim().Replace(",", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal);
+        var trimmed = (text ?? string.Empty).Trim();
         if (trimmed.Length == 0)
         {
             return true;
         }
 
+        trimmed = trimmed.Replace(",", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal);
         var factor = 1L;
         if (bytes)
         {
