@@ -4,6 +4,11 @@ Guidance for AI coding agents working in the Orleans.Lattice repository. Human
 contributors should read this too. It complements, and does not replace, the
 detailed rules under `.github/` - when they disagree, `.github/` wins.
 
+This is the root routing document: it holds repository-wide guidance and
+invariants only. Before changing anything, read the matching
+`.github/instructions/` file (several auto-attach by path) or
+`.github/skills/` skill from the routing table below.
+
 This file is for agents **changing this repository**. An agent **operating** an
 Orleans.Lattice deployment - calling its APIs or MCP tools, running procedures
 such as backup, restore or reshard - should start from the machine-readable
@@ -43,6 +48,38 @@ Global deployment journey, [FEATURES.md](FEATURES.md) for the capability
 catalogue, [PACKAGES.md](PACKAGES.md) for the package inventory, and
 [llms.txt](llms.txt) for a documentation index (it points at the complete one the
 documentation site generates, where every page is also published as markdown).
+
+## Invariants - do not violate
+
+- **Orleans serialization is wire/persisted format.** Every serializable type
+  needs `[GenerateSerializer]`, a stable `[Alias(TypeAliases.X)]`, sequential
+  `[Id(n)]` on serialized members, and `[Immutable]` when never mutated. Never
+  rename or remove an alias, and never renumber, reuse, or remove an `[Id]`.
+- **A `[GenerateSerializer]` exception** must either derive directly from
+  `System.Exception` or register a no-op `[RegisterCopier] IDeepCopier<T>` beside
+  it (return the input unchanged). Orleans has no same-silo copier for BCL
+  exception subclasses, so a co-located grain-result copy otherwise fails with an
+  opaque `KeyNotFoundException`. `SerializableExceptionDeepCopyContractTests` and
+  `SerializableExceptionDeepCopyGateEnrolmentTests` enforce this per package.
+- **Security surfaces** (auth, membership, replication, telemetry, MCP,
+  installable apps, delegated tenant access, Explorer) fail closed, never trust
+  peer/wire-supplied classification, and enforce at the single narrowest seam.
+  Read `.github/instructions/security.instructions.md` before touching them.
+- **Grain, primitive and metric rules** (grain state and options access, CRDT
+  semantics, `Meter`/instrument declaration order) are in the instructions files
+  routed below; they are enforced by tests, so do not work around them.
+- **Never push to `main`**, and never add commit trailers (see Pull requests).
+
+## Where to look next
+
+| Task | Read |
+| --- | --- |
+| Change implementation | `.github/instructions/grains.instructions.md` (`src/lattice/BPlusTree/Grains/`), `primitives.instructions.md` (`Primitives/`), `security.instructions.md` (security surfaces); naming: **naming-conventions** skill |
+| Add or change tests | `.github/instructions/testing.instructions.md`, **testing** skill |
+| Change docs | **documentation** skill, **markdown-editing** skill (long files), `.github/instructions/crdt-docs.instructions.md` (`docs/crdt/`) |
+| Understand a package | [PACKAGES.md](PACKAGES.md), then `docs/<package>/` |
+| Understand the public API or capabilities | [FEATURES.md](FEATURES.md), [README.md](README.md), [llms.txt](llms.txt) |
+| Search the repo or recall past decisions | `repocontext_*` tools (next section) |
 
 ## Finding things in the repo
 
@@ -157,23 +194,10 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   skipped, so the run still prints `Passed!` with `Skipped: 0` and only the
   `Total` drops. The master file has the `docker run` command.
 
-## Conventions that matter
+## Coding conventions
 
 - Nullable reference types and implicit usings are on. File-scoped namespaces;
   one top-level type per file.
-- Every serializable type needs `[GenerateSerializer]`, a stable
-  `[Alias(TypeAliases.X)]`, sequential `[Id(n)]` on serialized members, and
-  `[Immutable]` when never mutated. Never rename or remove an alias - it is wire
-  format.
-- A `[GenerateSerializer]` exception must either derive directly from
-  `System.Exception` or register a no-op `[RegisterCopier] IDeepCopier<T>` beside
-  it (return the input unchanged). Orleans registers a same-silo deep copier for
-  `System.Exception` but not for its BCL subclasses, so an exception deriving from
-  `InvalidOperationException`/`TimeoutException`/etc. otherwise fails a co-located
-  grain-result copy with an opaque `KeyNotFoundException`. The
-  `SerializableExceptionDeepCopyContractTests` guard audits this per package, and
-  `SerializableExceptionDeepCopyGateEnrolmentTests` fails CI when a package that
-  declares such an exception has no enrolled guard.
 - Public API parameters validate with `ArgumentNullException.ThrowIfNull`.
 - Keep XML `<summary>` docs on all public types and members; they ship in the
   NuGet packages.
@@ -182,15 +206,6 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   path under `docs/agents/`. The site retains the pointer in Markdown alternates
   and emits a page-specific `rel="describedby"` link; pages without a pointer
   fall back to `docs/agents/index.json`.
-- Detailed naming, testing, documentation, and long-Markdown-editing rules live
-  as skills under `.github/skills/` and instructions under
-  `.github/instructions/`. Read the relevant one before large changes.
-- Security invariants for the auth, membership, replication, telemetry, MCP,
-  installable-apps, delegated tenant access, and Explorer surfaces (fail closed; never trust peer/wire-supplied classification;
-  enforce at the single narrowest seam; isolate credential state per circuit; no
-  dead security config; keep the allocation bar on security hot paths) live in
-  `.github/instructions/security.instructions.md`,
-  which auto-attaches when you edit those packages.
 
 ## Hygiene gates (these fail the build at PR time)
 
