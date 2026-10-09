@@ -16,11 +16,9 @@ namespace Orleans.Lattice.Tests.Formal;
 /// BALANCE, NOT CORRECTNESS. These groups only spread CPU-bound JVM runs over
 /// runners; a case with no group runs in the <c>formal-tlc</c> shard, which
 /// claims the rest of <see cref="TlcModelCheckTests"/>. A new module therefore
-/// runs whether or not anybody adds it here. Each group was sized from the
-/// per-case durations of a measured run to about 30-60 test-minutes, which the
-/// harness runs about four cases at a time, so 8-16 minutes of wall-clock on a
-/// 4-core runner. Re-measure from a run's <c>formal-tlc*</c> TRX files when a
-/// shard drifts past 20.
+/// runs whether or not anybody adds it here. AtomicCommit* variants are split
+/// into six groups using their manifest state counts as weights, so a newly
+/// declared variant is routed automatically and the work remains balanced.
 /// </para>
 /// <para>
 /// SHARE A CONTROL WHERE YOU CAN. <see cref="TlcModelCheckTests"/> runs each
@@ -51,19 +49,42 @@ internal static class TlcCiShard
 
     /// <summary>
     /// The mutants of every AtomicCommit* module. Its variant configurations
-    /// are <see cref="AtomicVariants"/>: a variant has no control arm, so
+    /// are split into <see cref="AtomicVariantShards"/>: a variant has no control arm, so
     /// splitting them off leaves every shared control with its mutants.
     /// </summary>
     public const string Atomic = "TlcShardAtomic";
 
-    /// <summary>The variant configurations of every AtomicCommit* module.</summary>
-    public const string AtomicVariants = "TlcShardAtomicVariants";
+    /// <summary>The first state-balanced group of AtomicCommit* variant configurations.</summary>
+    public const string AtomicVariants1 = "TlcShardAtomicVariants1";
+
+    /// <summary>The second state-balanced group of AtomicCommit* variant configurations.</summary>
+    public const string AtomicVariants2 = "TlcShardAtomicVariants2";
+
+    /// <summary>The third state-balanced group of AtomicCommit* variant configurations.</summary>
+    public const string AtomicVariants3 = "TlcShardAtomicVariants3";
+
+    /// <summary>The fourth state-balanced group of AtomicCommit* variant configurations.</summary>
+    public const string AtomicVariants4 = "TlcShardAtomicVariants4";
+
+    /// <summary>The fifth state-balanced group of AtomicCommit* variant configurations.</summary>
+    public const string AtomicVariants5 = "TlcShardAtomicVariants5";
+
+    /// <summary>The sixth state-balanced group of AtomicCommit* variant configurations.</summary>
+    public const string AtomicVariants6 = "TlcShardAtomicVariants6";
+
+    /// <summary>The six categories used to partition AtomicCommit* variants.</summary>
+    public static IReadOnlyList<string> AtomicVariantShards { get; } =
+        [AtomicVariants1, AtomicVariants2, AtomicVariants3, AtomicVariants4, AtomicVariants5, AtomicVariants6];
 
     /// <summary>The mutants of every Backup* module.</summary>
     public const string Backup = "TlcShardBackup";
 
     /// <summary>Every category <see cref="Of"/> and <see cref="OfVariant"/> can return.</summary>
-    public static IReadOnlyList<string> All { get; } = [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, AtomicVariants, Backup];
+    public static IReadOnlyList<string> All { get; } =
+        [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup];
+
+    private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
+        new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// <summary>
     /// The shard category of <paramref name="mutation"/> of
@@ -121,7 +142,36 @@ internal static class TlcCiShard
             return ReBootstrap;
         }
 
-        return module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal) ? AtomicVariants : null;
+        if (!module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return AtomicVariantCategories.Value.TryGetValue((module.Name, variant), out var category)
+            ? category
+            : AtomicVariants1;
+    }
+
+    private static IReadOnlyDictionary<(string Module, string Variant), string> CreateAtomicVariantCategories()
+    {
+        var assignments = new Dictionary<(string Module, string Variant), string>();
+        var loads = new long[AtomicVariantShards.Count];
+        var variants = SpecModuleCatalogue.Repository()
+            .Where(module => module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal))
+            .SelectMany(module => module.Manifest.Variants.Select(variant =>
+                (Module: module.Name, Variant: variant.Key, States: variant.Value)))
+            .OrderByDescending(variant => variant.States)
+            .ThenBy(variant => variant.Module, StringComparer.Ordinal)
+            .ThenBy(variant => variant.Variant, StringComparer.Ordinal);
+
+        foreach (var variant in variants)
+        {
+            var shard = Array.IndexOf(loads, loads.Min());
+            assignments.Add((variant.Module, variant.Variant), AtomicVariantShards[shard]);
+            loads[shard] += variant.States;
+        }
+
+        return assignments;
     }
 
     private static bool IsReplicationCompanion(string name) =>

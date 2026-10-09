@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Tests.Hygiene;
 
 /// <summary>
 /// Tiered gating for member pull requests (#4430): a pull request whose base is
-/// an integration branch skips the Coyote and chaos tiers, and every other run
-/// skips nothing.
+/// an integration branch skips the Coyote and chaos tiers. Exhaustive TLC is
+/// scoped separately by changed inputs, while the base-model smoke shard
+/// remains on routine pull requests.
 /// <para>
 /// The rule lives in <c>.github/workflows/tier-scope.py</c> and its effect in
 /// <c>plan-test-matrix.py --skip-tiers</c>. Both are driven here UNMODIFIED,
@@ -22,7 +23,8 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// that ran too much costs runner minutes; a pull request into <c>main</c> that
 /// ran too little merges a Coyote or chaos regression nobody executed. So the
 /// <c>main</c> and <c>release/**</c> cases, and every base the rule does not
-/// recognise, are asserted to keep every tier.
+/// recognise, are asserted to keep all test tiers. The TLC-specific fixture
+/// pins exhaustive-input scoping separately.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -316,9 +318,13 @@ public sealed partial class CiMemberPullRequestTieringTests
         string? Skip,
         IReadOnlyList<string> ExcludedTiers);
 
-    private static IReadOnlyList<PlannedItem> Plan(string[] packages, string? skipTiers, string? skipTlcReason = null)
+    private static IReadOnlyList<PlannedItem> Plan(
+        string[] packages,
+        string? skipTiers,
+        string? skipTlcReason = null,
+        string? skipTlcSmokeReason = null)
     {
-        var (exitCode, _, stderr) = RunPlanner(packages, skipTiers, out var matrix, skipTlcReason);
+        var (exitCode, _, stderr) = RunPlanner(packages, skipTiers, out var matrix, skipTlcReason, skipTlcSmokeReason);
 
         Assert.That(exitCode, Is.Zero, "plan-test-matrix.py failed: " + stderr);
 
@@ -352,7 +358,8 @@ public sealed partial class CiMemberPullRequestTieringTests
         string[] packages,
         string? skipTiers,
         out string matrix,
-        string? skipTlcReason = null)
+        string? skipTlcReason = null,
+        string? skipTlcSmokeReason = null)
     {
         var work = Directory.CreateTempSubdirectory("tiering-");
 
@@ -380,6 +387,11 @@ public sealed partial class CiMemberPullRequestTieringTests
             if (skipTlcReason is not null)
             {
                 arguments.AddRange(["--skip-tlc-reason", skipTlcReason]);
+            }
+
+            if (skipTlcSmokeReason is not null)
+            {
+                arguments.AddRange(["--skip-tlc-smoke-reason", skipTlcSmokeReason]);
             }
 
             var result = RunPython(arguments);

@@ -177,6 +177,18 @@ public sealed partial class CiIntegrationBranchTriggerTests
     }
 
     [Test]
+    public void Ci_runs_full_validation_on_release_line_pushes_before_tags_are_cut()
+    {
+        var ciPath = Path.Combine(HygieneRepository.FindRepoRoot(), ".github", "workflows", "ci.yml");
+        var branches = BranchesOf(OnBlock(File.ReadAllText(ciPath)), "push");
+
+        Assert.That(
+            branches,
+            Does.Contain("release/**"),
+            "Publish requires a successful build-and-test run for the exact tag SHA, so every release-line commit must run CI");
+    }
+
+    [Test]
     public void No_push_reachable_step_reads_pull_request_context_without_an_event_guard()
     {
         var guarded = new List<string>();

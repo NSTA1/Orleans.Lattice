@@ -73,13 +73,14 @@ on:
   # coverage unconditional, and it falls to zero for any bucket whose pull
   # request is raised at the end, which is the case this lane exists for.
   #
-  # `release/**` is deliberately NOT included. The same mechanism applies to a
-  # patch wave, but the consequence does not: `publish.yml` builds the package,
-  # runs its deterministic and chaos tiers and the durable active-active gate
-  # before anything reaches NuGet, so a release line's combined state IS
-  # evaluated before it ships. A bucket had no such backstop at all.
+  # Release-line pushes are also included: the release workflow requires a
+  # successful `build-and-test` run on the exact tag SHA, and tags are cut only
+  # after those branch commits have been gated here.
   push:
-    branches: ['*/epic/**']
+    # Release-line pushes receive the full suite and exhaustive TLC before tags
+    # are cut from them. The final Publish gate also verifies this run at the
+    # exact tag commit.
+    branches: ['*/epic/**', 'release/**']
 
 # Least-privilege: this workflow only reads source code.
 permissions:
@@ -1494,10 +1495,11 @@ jobs:
       # complement, so every test is claimed exactly once and none is dropped.
       # TIERED GATING FOR MEMBER PULL REQUESTS. A pull request whose base is an
       # integration branch (`*/epic/**`) skips the two exploration-dominated
-      # tiers, Coyote and chaos; every other run - a pull request into `main` or
-      # `release/**`, and the integration branch's own push lane - skips
-      # nothing. tier-scope.py owns the rule and its rationale, including why
-      # the TLC fixtures are kept; this step only feeds it the event.
+      # tiers, Coyote and chaos. Exhaustive TLC is skipped on `main` or member
+      # PRs only when the diff touches no TLC input; the base-model smoke check
+      # remains. Release-line PRs and pushes, integration pushes, and relevant
+      # PRs run exhaustive TLC. tier-scope.py owns the rule; this step feeds it
+      # the event and changed paths.
       #
       # Nothing a member skips is lost. Its commits reach `main` only through
       # the integration branch, whose push lane runs every tier after each
@@ -2583,22 +2585,21 @@ jobs:
             *) echo "::error::Upstream job 'plan' reported '${PLAN}'. It carries every guard step and must succeed on every run that reports."; ok=false ;;
           esac
 
-          # Tiered gating (tier-scope.py) may skip tiers ONLY on a member pull
-          # request into an integration branch. A pull request into `main` or
-          # a release line, and the integration-branch push lane, must run
-          # every tier; a non-empty skip list there is a broken rule, not a
-          # policy, and fails the required check rather than passing quietly.
+          # Tiered gating (tier-scope.py) may skip Coyote/chaos only on a member
+          # pull request. Exhaustive TLC may be skipped on a member or `main`
+          # pull request only when no TLC input changed; the base-model smoke
+          # shard is never skipped. Release lines and pushes remain exhaustive.
           case "$EVENT:$BASE_REF" in
-            pull_request:main|pull_request:release/*) tiers_may_skip=false ;;
-            pull_request:*/epic/*) tiers_may_skip=true ;;
-            *) tiers_may_skip=false ;;
+            pull_request:main|pull_request:release/*) tiers_may_skip=false; tlc_may_skip=true ;;
+            pull_request:*/epic/*) tiers_may_skip=true; tlc_may_skip=true ;;
+            *) tiers_may_skip=false; tlc_may_skip=false ;;
           esac
           if [ -n "$SKIPPED_TIERS" ] && [ "$tiers_may_skip" != "true" ]; then
             echo "::error::Tiers '${SKIPPED_TIERS}' were skipped on a ${EVENT} run with base '${BASE_REF:-none}'. Only a member pull request into an integration branch may skip tiers; this run must be fully gated."
             ok=false
           fi
-          if [ -n "$SKIP_TLC_REASON" ] && [ "$tiers_may_skip" != "true" ]; then
-            echo "::error::The TLC shards were skipped on a ${EVENT} run with base '${BASE_REF:-none}'. Only a member pull request into an integration branch may skip them; this run must be fully gated."
+          if [ -n "$SKIP_TLC_REASON" ] && [ "$tlc_may_skip" != "true" ]; then
+            echo "::error::The exhaustive TLC shards were skipped on a ${EVENT} run with base '${BASE_REF:-none}'. Only a member or main pull request with no changed TLC input may skip them; release-line pull requests and pushes must be fully gated."
             ok=false
           fi
 
@@ -2664,9 +2665,11 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ -n "$SKIP_TLC_REASON" ]; then
-            echo "::notice title=TLC shards skipped::${SKIP_TLC_REASON}."
+            echo "::notice title=Exhaustive TLC shards skipped::${SKIP_TLC_REASON}."
             {
-              echo "### TLC shards NOT run"
+              echo "### Exhaustive TLC shards NOT run"
+              echo ""
+              echo "The base-model smoke shard still runs."
               echo ""
               echo "Reason: ${SKIP_TLC_REASON}."
             } >> "$GITHUB_STEP_SUMMARY"

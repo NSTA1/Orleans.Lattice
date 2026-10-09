@@ -247,14 +247,18 @@ before the tests run.
 
 ## CI decision
 
-TLC **is** run per PR, as an ordinary NUnit fixture
-(`test/lattice/Formal/TlcModelCheckTests.cs`) tagged `[Category("Tlc")]`. It
-therefore rides the existing test fan-out with no change to the matrix planner:
-the `deterministic` tier is the complement of `Chaos` and `Coyote`, so a new
-category lands in it automatically, and `test/lattice`'s last shard is a
-complement shard, so a new namespace is picked up without editing the shard
-config. The workflow provisions a Temurin 17 JDK and a digest-pinned
-`tla2tools.jar` before the leg runs.
+TLC runs through the ordinary NUnit fixture
+(`test/lattice/Formal/TlcModelCheckTests.cs`, `[Category("Tlc")]`). Routine CI
+pull requests keep a base-model smoke check: the `formal-tlc-smoke` shard runs
+one base specification in the deterministic tier. Exhaustive shards check every
+module, variant and mutation, but routine pull requests into `main` or an
+integration branch run them only when the diff touches a TLC input (`.tla`,
+`.cfg`, manifest or mutation files under `spec/`, the Formal harness, workflows,
+or build inputs). A missing or empty changed-file list fails toward running the
+exhaustive checks. Release-line pull requests and pushes, integration-branch
+pushes, and nightly coverage run the exhaustive shards. `Publish` verifies that
+the exact tag SHA has a successful release-line `build-and-test` run before it
+can publish, so its per-package test matrix can skip repeating TLC.
 
 Every lane that runs .NET tests has to do the same, because the `Tlc` category
 is selected by any ordinary filter rather than opted into by name, and the
@@ -267,8 +271,10 @@ release and digest as the others, and digest-verified - or to carry a
 `# tla-toolchain: not-required - <reason>` marker saying why it cannot select
 the category.
 
-This reverses an earlier decision recorded here, which is worth stating plainly
-rather than quietly overwriting. That decision rested on two premises: that the
+This reverses the earlier decision to keep exhaustive TLC out of routine per-PR
+CI, which is worth stating plainly rather than quietly overwriting. Routine PRs
+now retain a base smoke check, with exhaustive runs gated by relevant inputs.
+That earlier decision rested on two premises: that the
 .NET build image carries no Java runtime, and that the specification tracks the
 protocol *design* rather than any single code change, so gating a PR on it would
 buy little marginal signal. The first premise was simply wrong - the GitHub
@@ -317,9 +323,8 @@ and most of each run is JVM start-up. A module costs one run for its base model,
 two per mutation (the control arm and the mutant), one more per
 `DEADLOCK: off` mutation and one per variant configuration, so the atomic-commit
 module costs 43 runs. A variant's run is usually the most expensive one of its
-module - it exists to check a larger bound - so measure it on two workers and keep
-it well under the per-run ceiling: `WalDurability.TwoFaults` takes about forty
-seconds there.
+module - it exists to check a larger bound - so measure it on two workers to
+estimate shard cost: `WalDurability.TwoFaults` takes about forty seconds there.
 
 Measured on a 16-core Windows workstation that other builds were loading at the
 time (so treat the figures as an upper bound), for the atomic-commit module's
@@ -342,7 +347,7 @@ runs: roughly `(1 + 2 x mutations)` runs per module, divided by the
 concurrency. Five more modules of the atomic-commit module's size would add
 about five times its cost - on the order of ten minutes of TLC on a four-core
 runner, which the `test/lattice` leg can absorb but a sixth or seventh area
-would make worth splitting into its own shard. The five-minute timeout is per
-TLC run, as a hang guard, and the wait for a concurrency slot is outside it, so
-it does not tighten as modules are added; a single run approaching it means the
-model is wrong, not that the budget is.
+would make worth splitting into its own shard. The per-process five-minute
+timeout has been removed: a slow or large TLC run is allowed to finish rather
+than aborting the test job. The enclosing CI job timeout remains the outer bound
+for a process that never exits.

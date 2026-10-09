@@ -114,19 +114,56 @@
         "shard": "formal-tlc-atomic",
         "tlc": true,
         "includeCategories": ["TlcShardAtomic"],
-        "note": "The mutants of every AtomicCommit* module, kept whole because mutants of one module share their control arms. Its variant configurations were split into formal-tlc-atomic-variants once the cross-cluster module grew to 29 of them (#4722)."
+        "note": "The mutants of every AtomicCommit* module, kept whole because mutants of one module share their control arms. Variant configurations are balanced across six formal-tlc-atomic-variants-* shards because they have no shared control arms."
       },
       {
-        "shard": "formal-tlc-atomic-variants",
+        "shard": "formal-tlc-atomic-variants-1",
         "tlc": true,
-        "includeCategories": ["TlcShardAtomicVariants"],
-        "note": "The variant configurations of every AtomicCommit* module: AtomicCommitCrossCluster's 35 slices, about 33 test-minutes measured locally at two TLC workers. A variant has no control arm, so nothing here shares work with formal-tlc-atomic."
+        "includeCategories": ["TlcShardAtomicVariants1"],
+        "note": "State-weighted AtomicCommit* variant group 1 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
+      },
+      {
+        "shard": "formal-tlc-atomic-variants-2",
+        "tlc": true,
+        "includeCategories": ["TlcShardAtomicVariants2"],
+        "note": "State-weighted AtomicCommit* variant group 2 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
+      },
+      {
+        "shard": "formal-tlc-atomic-variants-3",
+        "tlc": true,
+        "includeCategories": ["TlcShardAtomicVariants3"],
+        "note": "State-weighted AtomicCommit* variant group 3 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
+      },
+      {
+        "shard": "formal-tlc-atomic-variants-4",
+        "tlc": true,
+        "includeCategories": ["TlcShardAtomicVariants4"],
+        "note": "State-weighted AtomicCommit* variant group 4 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
+      },
+      {
+        "shard": "formal-tlc-atomic-variants-5",
+        "tlc": true,
+        "includeCategories": ["TlcShardAtomicVariants5"],
+        "note": "State-weighted AtomicCommit* variant group 5 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
+      },
+      {
+        "shard": "formal-tlc-atomic-variants-6",
+        "tlc": true,
+        "includeCategories": ["TlcShardAtomicVariants6"],
+        "note": "State-weighted AtomicCommit* variant group 6 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
       },
       {
         "shard": "formal-tlc-backup",
         "tlc": true,
         "includeCategories": ["TlcShardBackup"],
         "note": "The mutants of every Backup* module, about 30 test-minutes."
+      },
+      {
+        "shard": "formal-tlc-smoke",
+        "tlcSmoke": true,
+        "tiers": ["deterministic"],
+        "include": ["Formal.TlcModelCheckTests.The_atomic_commit_base_specification_holds"],
+        "note": "One retained base-model TLC smoke check on every routine CI run. Exhaustive base models and mutation gates remain in the full formal-tlc shard."
       },
       {
         "shard": "formal-tlc",

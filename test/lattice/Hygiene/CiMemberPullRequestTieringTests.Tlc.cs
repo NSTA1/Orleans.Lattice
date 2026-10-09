@@ -1,11 +1,12 @@
 using System.Text.RegularExpressions;
+using Orleans.Lattice.Tests.Formal;
 
 namespace Orleans.Lattice.Tests.Hygiene;
 
 /// <summary>
-/// The TLC-input scoping of a member pull request: the <c>"tlc"</c> shards run
-/// only when the diff touches something TLC reads, and never skip on a fully
-/// gated run.
+/// Exhaustive TLC-input scoping: routine main and member pull requests retain
+/// the smoke shard and skip exhaustive shards only when no TLC input changed;
+/// release-line and other fully gated runs keep exhaustive TLC.
 /// </summary>
 public sealed partial class CiMemberPullRequestTieringTests
 {
@@ -25,6 +26,47 @@ public sealed partial class CiMemberPullRequestTieringTests
             Does.Contain(MemberBase),
             "a member pull request whose diff no TLC verdict depends on should skip the TLC shards. "
                 + Describe(changed, decision));
+    }
+
+    [Test]
+    public void A_main_pull_request_that_touches_no_TLC_input_keeps_the_smoke_shard_and_skips_only_exhaustive_TLC()
+    {
+        var decision = DecideTierScope("pull_request", "main", ["src/lattice/BPlusTree/Grains/LatticeGrain.cs"]);
+        var run = Plan(["lattice"], skipTiers: null);
+        var scoped = Plan(["lattice"], skipTiers: null, skipTlcReason: decision["skip_tlc_reason"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision["skip_tlc_reason"], Does.Contain("smoke shard still runs"));
+            Assert.That(
+                scoped.Single(item => item.Shard == "formal-tlc-smoke").Skip,
+                Is.Null,
+                "every routine pull request keeps its base-model smoke check");
+            var smokeFilter = $"FullyQualifiedName~Orleans.Lattice.Tests.Formal.TlcModelCheckTests.{SpecModuleCases.SmokeTestName}";
+            Assert.That(scoped.Single(item => item.Shard == "formal-tlc-smoke").Filter, Does.Contain(smokeFilter));
+            Assert.That(
+                scoped.Single(item => item.Shard == "formal-tlc" && item.Tier == "deterministic").Filter,
+                Does.Contain($"FullyQualifiedName!~Orleans.Lattice.Tests.Formal.TlcModelCheckTests.{SpecModuleCases.SmokeTestName}"),
+                "the exhaustive catch-all must not re-run the base-model smoke case");
+            Assert.That(
+                scoped.Where(item => item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal)
+                    && item.Shard != "formal-tlc-smoke" && item.Skip is null),
+                Is.Empty,
+                "only the exhaustive TLC shards are skipped");
+            Assert.That(
+                scoped.Where(item => item.Skip == decision["skip_tlc_reason"]).Select(item => item.Shard).Distinct(),
+                Is.EquivalentTo(run.Where(item => item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal)
+                    && item.Shard != "formal-tlc-smoke").Select(item => item.Shard).Distinct()));
+        });
+    }
+
+    [TestCase("spec/atomic-commit/AtomicCommit.tla")]
+    [TestCase("test/lattice/Formal/TlcModelCheckTests.cs")]
+    public void A_main_pull_request_that_touches_a_TLC_input_runs_exhaustive_TLC(string changed)
+    {
+        var decision = DecideTierScope("pull_request", "main", [changed]);
+
+        Assert.That(decision["skip_tlc_reason"], Is.Empty, Describe(changed, decision));
     }
 
     [TestCase("spec/wal/WalMove.tla")]
@@ -54,8 +96,15 @@ public sealed partial class CiMemberPullRequestTieringTests
         Assert.That(DecideTierScope("pull_request", MemberBase, [])["skip_tlc_reason"], Is.Empty, "an empty list means run more");
     }
 
-    [TestCase("pull_request", "main")]
+    [Test]
+    public void A_main_pull_request_with_no_changed_file_list_runs_exhaustive_TLC()
+    {
+        Assert.That(DecideTierScope("pull_request", "main")["skip_tlc_reason"], Is.Empty);
+        Assert.That(DecideTierScope("pull_request", "main", [])["skip_tlc_reason"], Is.Empty);
+    }
+
     [TestCase("pull_request", "release/1.4")]
+    [TestCase("push", "release/1.4")]
     [TestCase("push", MemberBase)]
     [TestCase("workflow_dispatch", "")]
     public void A_fully_gated_run_never_skips_the_TLC_shards(string eventName, string baseRef)
@@ -74,7 +123,8 @@ public sealed partial class CiMemberPullRequestTieringTests
         var scoped = Plan(packages, MemberSkippedTiers, skipTlcReason: "no TLC input (test)");
 
         var tlcShards = run
-            .Where(item => item.Skip is null && item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal))
+            .Where(item => item.Skip is null && item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal)
+                && item.Shard != "formal-tlc-smoke")
             .Select(item => item.Shard)
             .Distinct()
             .ToList();
@@ -82,15 +132,22 @@ public sealed partial class CiMemberPullRequestTieringTests
         Assert.That(tlcShards, Is.Not.Empty, "the plan carries no formal-tlc shard; this comparison would prove nothing");
         Assert.That(
             scoped.Where(item => item.Skip is null && item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal)),
+            Is.Not.Empty,
+            "a routine plan must retain its smoke shard");
+        Assert.That(
+            scoped.Where(item => item.Skip is null && item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal)
+                && item.Shard != "formal-tlc-smoke"),
             Is.Empty,
-            "a TLC-scoped member plan must not run a formal-tlc shard");
+            "a TLC-scoped plan must not run an exhaustive formal-tlc shard");
         Assert.That(
             scoped.Where(item => item.Skip == "no TLC input (test)").Select(item => item.Shard).Distinct(),
             Is.EquivalentTo(tlcShards),
-            "every formal-tlc shard must be recorded as skipped, with the stated reason, rather than dropped");
+            "every exhaustive formal-tlc shard must be recorded as skipped, with the stated reason, rather than dropped");
         Assert.That(
             scoped.Where(item => item.Skip is null).Select(item => item.Label),
-            Is.EquivalentTo(run.Where(item => item.Skip is null && !item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal)).Select(item => item.Label)),
+            Is.EquivalentTo(run.Where(item => item.Skip is null
+                && (!item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal)
+                    || item.Shard == "formal-tlc-smoke")).Select(item => item.Label)),
             "skipping TLC must not change any other item");
     }
 
@@ -111,11 +168,34 @@ public sealed partial class CiMemberPullRequestTieringTests
         Assert.That(
             Regex.IsMatch(
                 verdict,
-                @"if \[ -n ""\$SKIP_TLC_REASON"" \] && \[ ""\$tiers_may_skip"" != ""true"" \]; then[\s\S]*?ok=false"),
+                @"if \[ -n ""\$SKIP_TLC_REASON"" \] && \[ ""\$tlc_may_skip"" != ""true"" \]; then[\s\S]*?ok=false"),
             Is.True,
             "a TLC skip outside a member pull request must fail the verdict");
-        Assert.That(verdict, Does.Contain("TLC shards NOT run"), "a TLC skip must be announced on the run summary");
+        Assert.That(
+            verdict,
+            Does.Contain("Exhaustive TLC shards NOT run").And.Contain("base-model smoke shard still runs"),
+            "a TLC skip must be announced without implying that the smoke shard was skipped");
 
-        Assert.That(Read(PublishWorkflow), Does.Not.Contain("--skip-tlc-reason"), "publish.yml must never skip TLC");
+        var publish = Read(PublishWorkflow);
+        Assert.That(publish, Does.Contain("--skip-tlc-reason").And.Contain("--skip-tlc-smoke-reason"),
+            "Publish can skip the per-package TLC work only because it verifies successful CI for the exact tag SHA");
+        Assert.That(publish, Does.Contain("verify-release-ci").And.Contain("TAG_SHA: ${{ github.sha }}"));
+    }
+
+    [Test]
+    public void Publish_can_skip_both_TLC_shard_kinds_only_when_exact_SHA_CI_is_required()
+    {
+        var skipped = Plan(
+            ["lattice"],
+            skipTiers: null,
+            skipTlcReason: "exact SHA verified by CI",
+            skipTlcSmokeReason: "exact SHA verified by CI");
+
+        Assert.That(
+            skipped.Where(item => item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal)
+                && item.Skip is not null).Select(item => item.Shard).Distinct(),
+            Is.EquivalentTo(Plan(["lattice"], skipTiers: null)
+                .Where(item => item.Shard.StartsWith("formal-tlc", StringComparison.Ordinal))
+                .Select(item => item.Shard).Distinct()));
     }
 }

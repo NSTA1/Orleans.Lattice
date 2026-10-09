@@ -78,7 +78,7 @@
 
 # -- lattice, sharded --------------------------------------------------------
 #
-# The eight formal-tlc* rows are the one exception to the provenance above.
+# The formal-tlc* rows are the one exception to the provenance above.
 # They are not a median of leg records: the TLC gates outgrew their shards
 # faster than a median window could follow. They come from one run, ci.yml run
 # 37322771720 (2026-10-05, the #4676 head), in which formal-tlc took 41.9 min of
@@ -93,18 +93,25 @@
 # The rebootstrap row also carries the replication companions moved into it
 # afterwards, ReplicationLowWatermark and ReplicationCausalDelivery, about 5.5
 # test-minutes measured locally.
-# The atomic-variants row was split out of atomic by #4722: the summed local
-# TLC time of AtomicCommitCrossCluster's 35 variants at two workers, 33
-# test-minutes, / 3.9. The atomic row is re-priced for its mutants alone,
-# whose controls now run over a larger base, as an estimate.
+# The atomic-variants rows were split into six state-balanced shards from one
+# successful CI run (37822276637, attempt 2), whose 44 variant cases took
+# 27.09 minutes of wall clock. Each provisional estimate is one sixth of that
+# observed wall time; replace them with measured shard medians at the next
+# duration refresh. The smoke model runs separately in seconds.
 lattice	formal-tlc	deterministic	9.1
 lattice	formal-tlc-shard-ownership	deterministic	15.3
 lattice	formal-tlc-convergence	deterministic	14.1
 lattice	formal-tlc-replication-wal	deterministic	18.4
 lattice	formal-tlc-rebootstrap	deterministic	18.7
 lattice	formal-tlc-atomic	deterministic	23.3
-lattice	formal-tlc-atomic-variants	deterministic	23.6
+lattice	formal-tlc-atomic-variants-1	deterministic	4.5
+lattice	formal-tlc-atomic-variants-2	deterministic	4.5
+lattice	formal-tlc-atomic-variants-3	deterministic	4.5
+lattice	formal-tlc-atomic-variants-4	deterministic	4.5
+lattice	formal-tlc-atomic-variants-5	deterministic	4.5
+lattice	formal-tlc-atomic-variants-6	deterministic	4.5
 lattice	formal-tlc-backup	deterministic	8.1
+lattice	formal-tlc-smoke	deterministic	0.1
 lattice	bplustree	deterministic	7.9
 lattice	rest	deterministic	4.8
 lattice	bplustree	chaos	5.5
@@ -144,8 +151,6 @@ lattice	formal-tlc-rebootstrap	chaos	0.0
 lattice	formal-tlc-rebootstrap	coyote	0.0
 lattice	formal-tlc-atomic	chaos	0.0
 lattice	formal-tlc-atomic	coyote	0.0
-lattice	formal-tlc-atomic-variants	chaos	0.0
-lattice	formal-tlc-atomic-variants	coyote	0.0
 lattice	formal-tlc-backup	chaos	0.0
 lattice	formal-tlc-backup	coyote	0.0
 
@@ -157,7 +162,7 @@ lattice.api.mcp.repocontext	host	all	1.9
 
 # -- other packages, unsharded -----------------------------------------------
 lattice.dashboards	-	all	3.3
-lattice.replication	-	all	8.4
+lattice.replication	-	all	14.5
 lattice.backup	-	all	4.0
 lattice.storage.azuretable	-	all	0.7
 lattice.api.state	-	all	1.2

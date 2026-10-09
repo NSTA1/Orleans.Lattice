@@ -471,10 +471,13 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     only, `publish.yml` is push-triggered, and
     `ci-serial-old.yml` and `promote-videos.yml` are manual-dispatch only, so
     none of them is affected.)
-    The same three workflows also run on `push` to `*/epic/**` (never
-    `release/**`): an advisory integration-branch lane that evaluates the bucket
-    itself after each member merge - `ci.yml` unconditionally, the other two
-    only when that merge touched their `paths:` - and blocks nothing.
+    The same three workflows also run on `push` to `*/epic/**`: an advisory
+    integration-branch lane that evaluates the bucket itself after each member
+    merge - `ci.yml` unconditionally, the other two only when that merge touched
+    their `paths:` - and blocks nothing. `ci.yml` additionally runs on `push` to
+    `release/**`; those runs execute the full suite and exhaustive TLC. `Publish`
+    requires a successful `build-and-test` run on the exact tag SHA before it can
+    push to NuGet.
     `CiIntegrationBranchTriggerTests` fails the build if a workflow that gates
     epic pull requests lacks that push trigger. Because `*/epic/**` also
     matches every member branch, and no branch filter can tell a bucket from
@@ -486,24 +489,22 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     `build-and-test` all skip on its member flag; the same fixture fails the
     build if a push-triggered lane runs any other job on a member push, or its
     copy of the rule drifts from `ci.yml`'s.
-  - **A member pull request into an integration branch skips the Coyote and
-    chaos tiers, and the TLC shards when its diff touches no TLC input;
-    nothing else does.** When a pull request's base is a `*/epic/**` branch,
-    `ci.yml` runs the deterministic tier only, plans it onto at most six legs
-    instead of ten, and keeps every guard step and the `content-gates` job.
-    The TLC shards (`"tlc": true` in `test-shards.json`) still run on such a
-    member whenever its diff touches a `.tla`, `.cfg`, manifest or mutation
-    file under `spec/`, the Formal harness, a workflow, or a build file; only a
-    member that touches none of those, so cannot change any TLC verdict, skips
-    them. A pull request into `main` or `release/**` - including the
-    integration branch's own pull request into `main` - and the
-    integration-branch push lane run every tier and every TLC shard.
-    The rule lives in `.github/workflows/tier-scope.py`; the skipped items are
-    listed as NOT RUN on the run summary, and the `build-and-test` verdict fails
-    any run that skipped a tier or the TLC shards outside a member pull request.
-    `CiMemberPullRequestTieringTests` pins both directions. The cost is
-    attribution: a Coyote or chaos regression surfaces on the bucket's push
-    lane or its pull request into `main`, not on the member that caused it.
+  - **Routine `main` and integration-member pull requests keep TLC smoke; exhaustive TLC is
+    input-gated.** The `formal-tlc-smoke` shard checks one base specification in the
+    deterministic tier on every routine CI pull request. A pull request into `main` or a
+    `*/epic/**` integration branch skips exhaustive TLC only when its non-empty changed-file
+    list touches no TLC input: `.tla`, `.cfg`, manifest or mutation files under `spec/`, the
+    Formal harness, workflows, or build inputs. An absent or empty changed-file list fails
+    toward running exhaustive TLC. A `main` pull request keeps all other tiers; a member pull
+    request into an integration branch also skips Coyote and chaos and plans the deterministic
+    tier onto at most six legs instead of ten, while retaining every guard step and
+    `content-gates`. Release-line pull requests and pushes, integration-branch pushes, nightly
+    coverage, and any relevant or unknown diff run exhaustive TLC. `Publish` verifies successful
+    release-line `build-and-test` for the exact tag SHA before publishing. The rule lives in
+    `.github/workflows/tier-scope.py`; the skipped items are listed as NOT RUN, and
+    `CiMemberPullRequestTieringTests` pins the policy. The cost is attribution: an exhaustive
+    TLC regression from a member can surface on the bucket push lane or its pull request into
+    `main`, not on the member that caused it.
   - **An epic branch must never carry branch protection, and in particular
     never a required status check with `strict` (require branches to be up to
     date before merging).** That setting on `main` is precisely what serialises

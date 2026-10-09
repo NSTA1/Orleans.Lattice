@@ -119,6 +119,70 @@ on:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # VERIFY RELEASE SHA. A package test leg is not a substitute for the
+  # repository-wide required check: a tag must point at a release-line commit
+  # whose push run passed build-and-test at that exact SHA.
+  # ---------------------------------------------------------------------------
+  verify-release-ci:
+    name: Verify CI on tagged commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Wait for successful release-line CI on this exact SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 720); do
+            runs="$(gh api --paginate \
+              "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${TAG_SHA}&per_page=100" \
+              --jq '.workflow_runs[]
+                | select(.event == "push" and (.head_branch | startswith("release/")))
+                | [.id, .status, (.conclusion // ""), .head_sha]
+                | @tsv')"
+
+            found=false
+            active=false
+            while IFS=$'\t' read -r run_id status conclusion head_sha; do
+              [ -n "${run_id}" ] || continue
+              [ "${head_sha}" = "${TAG_SHA}" ] || continue
+              found=true
+
+              if [ "${status}" != "completed" ]; then
+                active=true
+                continue
+              fi
+              [ "${conclusion}" = "success" ] || continue
+
+              check="$(gh api \
+                "repos/${REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" \
+                --jq '[.jobs[] | select(.name == "build-and-test") | .conclusion] | first // ""')"
+              if [ "${check}" = "success" ]; then
+                echo "Found successful build-and-test for ${TAG_SHA} on ${run_id}."
+                exit 0
+              fi
+            done <<< "${runs}"
+
+            if [ "${found}" = "true" ] && [ "${active}" != "true" ]; then
+              echo "::error::Release-line CI runs for ${TAG_SHA} completed without a successful build-and-test job."
+              exit 1
+            fi
+
+            echo "Waiting for release-line build-and-test on ${TAG_SHA} (poll ${attempt}/720)."
+            sleep 30
+          done
+
+          echo "::error::Timed out waiting for release-line build-and-test on ${TAG_SHA}."
+          exit 1
+
+  # ---------------------------------------------------------------------------
   # PREPARE. Everything that can refuse the release before any runner is spent
   # on tests: the release-line guard, the tag parse, and the csproj version
   # check. Then plans the released package's test legs with the same planner,
@@ -319,6 +383,8 @@ jobs:
             --shards .github/workflows/test-shards.json \
             --durations .github/workflows/test-durations.tsv \
             --max-legs 10 \
+            --skip-tlc-reason "the exact tag SHA is verified by the required release-line CI run" \
+            --skip-tlc-smoke-reason "the exact tag SHA is verified by the required release-line CI run" \
             --output-matrix /tmp/matrix.json \
             --report-file "$GITHUB_STEP_SUMMARY"
 
@@ -542,9 +608,10 @@ jobs:
   # ---------------------------------------------------------------------------
   publish:
     name: Pack and publish
-    needs: [prepare, test, release-gate]
+    needs: [verify-release-ci, prepare, test, release-gate]
     if: >-
       always()
+      && needs.verify-release-ci.result == 'success'
       && needs.prepare.result == 'success'
       && needs.release-gate.result == 'success'
       && (needs.test.result == 'success'
