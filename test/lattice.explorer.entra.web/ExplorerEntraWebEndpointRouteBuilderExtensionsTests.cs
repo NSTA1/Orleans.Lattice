@@ -314,6 +314,10 @@ public sealed class ExplorerEntraWebEndpointRouteBuilderExtensionsTests
     [TestCase("~//evil.com", false)]
     [TestCase("~/\\evil.com", false)]
     [TestCase("https://evil.com", false)]
+    [TestCase("/\t/evil.com", false)]
+    [TestCase("/\n/evil.com", false)]
+    [TestCase("/\r/evil.com", false)]
+    [TestCase("~/\t/evil.com", false)]
     public void IsLocalUrl_matches_aspnet_local_url_rules(string? url, bool expected)
     {
         Assert.That(ExplorerEntraWebEndpointRouteBuilderExtensions.IsLocalUrl(url), Is.EqualTo(expected));
