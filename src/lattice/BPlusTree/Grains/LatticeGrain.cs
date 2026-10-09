@@ -5030,8 +5030,9 @@ internal sealed partial class LatticeGrain(
     private async ValueTask<RoutingInfo> GetReplicationApplyRoutingAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var shadowTreeId = await grainFactory.GetGrain<ITreeResizeGrain>(TreeId)
-            .GetBootstrapCopyTreeIdAsync();
+        var shadowTreeId = ReplicationApplyScope.IsBootstrapShadowBypassed
+            ? null
+            : await grainFactory.GetGrain<ITreeResizeGrain>(TreeId).GetBootstrapCopyTreeIdAsync();
         if (shadowTreeId is not null)
         {
             return await GetBootstrapShadowRoutingAsync(shadowTreeId, cancellationToken);

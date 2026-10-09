@@ -653,6 +653,11 @@ internal sealed partial class LatticeGrain
             ? LatticeDeltaContext.With(delta)
             : null)
         {
+            await StagePreparedWithBootstrapMirrorAsync(StageAsync);
+        }
+
+        async Task StageAsync()
+        {
             if (expiresAtTicks > 0)
             {
                 var remainingTicks = expiresAtTicks - DateTimeOffset.UtcNow.UtcTicks;
@@ -673,6 +678,48 @@ internal sealed partial class LatticeGrain
                 await SetAsync(key, value);
             }
         }
+    }
+
+    /// <summary>
+    /// Stages a replicated prepare and, while a bootstrap hold routes applies
+    /// to a held shadow copy, stages it on the original physical tree as well
+    /// (issue #4791).
+    /// <para>
+    /// During the hold, readers and an abort both use the original tree, while
+    /// applies land on the shadow. A saga whose prepares straddle the hold's
+    /// start would otherwise hold some keys only on the original tree and the
+    /// rest only on the shadow: a reader resolving the committed decision sees
+    /// a partial batch, and an abort that discards the shadow leaves the
+    /// original tree torn. Mirroring every hold-time prepare keeps each tree
+    /// holding the saga's whole batch, so both cutover and abort keep it
+    /// all-or-nothing. The mirror carries the same transaction, clock and
+    /// batch stamps, so the copy the original tree's shadow forward delivers
+    /// to the shadow is the same idempotent prepare.
+    /// </para>
+    /// <para>
+    /// The hold is checked after the primary write, so a hold that begins
+    /// while that write is in flight is still mirrored. A failed mirror
+    /// fails the apply, and the sender re-ships it; re-staging is idempotent.
+    /// </para>
+    /// </summary>
+    private async Task StagePreparedWithBootstrapMirrorAsync(Func<Task> stage)
+    {
+        await stage();
+
+        var shadowTreeId = await grainFactory.GetGrain<ITreeResizeGrain>(TreeId)
+            .GetBootstrapCopyTreeIdAsync();
+        if (shadowTreeId is null)
+        {
+            return;
+        }
+
+#if LATTICE_DIAG
+        Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
+            $"[DIAG xc-apply-prepared-mirror] tree={TreeId} shadow={shadowTreeId} tx={LatticeTransactionContext.Current}");
+#endif
+
+        ReplicationApplyScope.EnterBootstrapShadowBypass();
+        await stage();
     }
 
     /// <inheritdoc />
@@ -716,7 +763,7 @@ internal sealed partial class LatticeGrain
         using (LatticeVectorClockContext.With(sourceVectorClock))
         using (LatticeHlcOverrideContext.With(sourceHlc))
         {
-            await DeleteAsync(key);
+            await StagePreparedWithBootstrapMirrorAsync(() => DeleteAsync(key));
         }
     }
 
@@ -772,7 +819,11 @@ internal sealed partial class LatticeGrain
         switch (status)
         {
             case TxStatus.Committed:
-                await applyCommitted();
+                // A sibling prepare of this saga staged during a bootstrap
+                // hold was mirrored onto the original tree, so the committed
+                // write is mirrored too, or an original-tree reader would
+                // resolve that sibling as committed without this key (#4791).
+                await StagePreparedWithBootstrapMirrorAsync(applyCommitted);
                 return true;
             case TxStatus.Aborted:
                 return true;
