@@ -12,7 +12,8 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// a comma after it. In <see cref="LtComboBoxMode.PickExisting"/> a value the
 /// source does not list is refused with an inline error and left in the input to
 /// correct; when the source cannot list its values the field says why and adds
-/// what is typed. Duplicates are ignored. Each chip's remove control names the
+/// what is typed. A mixed-validity paste keeps both refused values and unfinished text.
+/// Duplicates are ignored. Each chip's remove control names the
 /// value it removes.
 /// </remarks>
 public partial class LtMultiComboBox
@@ -118,6 +119,10 @@ public partial class LtMultiComboBox
             if (_error is null)
             {
                 _text = rest;
+            }
+            else if (!string.IsNullOrWhiteSpace(rest))
+            {
+                _text += ", " + rest.TrimStart();
             }
         }
     }

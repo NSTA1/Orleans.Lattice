@@ -128,6 +128,24 @@ public sealed partial class LtComboBoxTests
     }
 
     [Test]
+    public async Task ConfirmAsync_refuses_an_answer_from_a_source_replaced_while_validation_runs()
+    {
+        var acme = new FakeSuggestionSource("orders") { Gated = true };
+        var globex = new FakeSuggestionSource("invoices");
+        var cut = RenderBox(acme, p => p.Add(x => x.Value, "orders"));
+
+        var confirmation = cut.InvokeAsync(cut.Instance.ConfirmAsync);
+        Assert.That(acme.Queries, Has.Count.EqualTo(1));
+        cut.Render(p => p.Add(x => x.Source, globex));
+        await cut.InvokeAsync(() => acme.Queries[0].Gate.SetResult(acme.Answer("orders", 8)));
+
+        Assert.That(await confirmation, Is.False, "the old source cannot approve the new source's value");
+        Assert.That(cut.Find("input").GetAttribute("value"), Is.EqualTo("orders"));
+        Assert.That(await cut.InvokeAsync(cut.Instance.ConfirmAsync), Is.False);
+        Assert.That(globex.Queries, Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public async Task Disposing_the_field_cancels_its_query()
     {
         var source = new FakeSuggestionSource(Trees) { Gated = true };

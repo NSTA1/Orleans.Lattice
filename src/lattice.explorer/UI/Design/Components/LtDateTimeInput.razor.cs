@@ -26,6 +26,7 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// the flow of the page. Everything in the picker works from the keyboard: the arrow keys
 /// move by day and week, Page Up and Page Down by month (with Shift, by year), Home and End
 /// to the ends of the week, and Escape closes the picker and returns focus to its button.
+/// Navigation stops at the first and last representable dates.
 /// </para>
 /// <para>
 /// A value is raised through <see cref="ValueChanged"/> as soon as what is typed reads as
@@ -403,14 +404,14 @@ public partial class LtDateTimeInput : IAsyncDisposable
     {
         DateOnly? next = args.Key switch
         {
-            "ArrowLeft" => _active.AddDays(-1),
-            "ArrowRight" => _active.AddDays(1),
-            "ArrowUp" => _active.AddDays(-7),
-            "ArrowDown" => _active.AddDays(7),
-            "PageUp" => args.ShiftKey ? _active.AddYears(-1) : _active.AddMonths(-1),
-            "PageDown" => args.ShiftKey ? _active.AddYears(1) : _active.AddMonths(1),
-            "Home" => _active.AddDays(-MondayIndex(_active)),
-            "End" => _active.AddDays(6 - MondayIndex(_active)),
+            "ArrowLeft" => ShiftDay(_active, -1),
+            "ArrowRight" => ShiftDay(_active, 1),
+            "ArrowUp" => ShiftDay(_active, -7),
+            "ArrowDown" => ShiftDay(_active, 7),
+            "PageUp" => ShiftMonth(_active, args.ShiftKey ? -12 : -1),
+            "PageDown" => ShiftMonth(_active, args.ShiftKey ? 12 : 1),
+            "Home" => ShiftDay(_active, -MondayIndex(_active)),
+            "End" => ShiftDay(_active, 6 - MondayIndex(_active)),
             _ => null,
         };
 
@@ -429,9 +430,23 @@ public partial class LtDateTimeInput : IAsyncDisposable
 
     private void ShowMonth(int months)
     {
-        _month = _month.AddMonths(months);
+        _month = ShiftMonth(_month, months);
         var day = Math.Min(_active.Day, DateTime.DaysInMonth(_month.Year, _month.Month));
         _active = new DateOnly(_month.Year, _month.Month, day);
+    }
+
+    private static DateOnly ShiftDay(DateOnly day, int days) =>
+        DateOnly.FromDayNumber(Math.Clamp(day.DayNumber + days, DateOnly.MinValue.DayNumber, DateOnly.MaxValue.DayNumber));
+
+    private static DateOnly ShiftMonth(DateOnly day, int months)
+    {
+        var current = (day.Year - 1) * 12 + day.Month - 1;
+        if (current + months is < 0 or >= 9999 * 12)
+        {
+            return day;
+        }
+
+        return day.AddMonths(months);
     }
 
     private Task PickDayAsync(DateOnly day)
@@ -500,21 +515,25 @@ public partial class LtDateTimeInput : IAsyncDisposable
     private bool DayInRange(DateOnly day)
     {
         var start = new DateTimeOffset(day.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
-        var end = start.AddDays(1).AddSeconds(-1);
+        var end = day == DateOnly.MaxValue ? LtTimeText.ToSecond(DateTimeOffset.MaxValue) : start.AddDays(1).AddSeconds(-1);
         return (Min is not { } min || end >= min) && (EffectiveMax is not { } max || start <= max);
     }
 
-    private IReadOnlyList<DateOnly[]> Weeks()
+    private IReadOnlyList<DateOnly?[]> Weeks()
     {
-        var first = _month.AddDays(-MondayIndex(_month));
-        var last = _month.AddMonths(1).AddDays(-1);
-        var weeks = new List<DateOnly[]>(6);
-        for (var start = first; start <= last; start = start.AddDays(7))
+        var first = _month.DayNumber - MondayIndex(_month);
+        var last = _month.DayNumber + DateTime.DaysInMonth(_month.Year, _month.Month) - 1;
+        var weeks = new List<DateOnly?[]>(6);
+        for (var start = first; start <= last; start += 7)
         {
-            var week = new DateOnly[7];
+            var week = new DateOnly?[7];
             for (var i = 0; i < 7; i++)
             {
-                week[i] = start.AddDays(i);
+                var number = start + i;
+                if (number >= DateOnly.MinValue.DayNumber && number <= DateOnly.MaxValue.DayNumber)
+                {
+                    week[i] = DateOnly.FromDayNumber(number);
+                }
             }
 
             weeks.Add(week);
