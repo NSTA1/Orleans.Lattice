@@ -59,7 +59,7 @@
       {
         "shard": "bplustree-grains",
         "include": ["BPlusTree.Grains."],
-        "note": "Per-grain unit tests. Largest by file count, cheap per test."
+        "note": "Per-grain unit tests. Largest by file count, cheap per test; the split-link leaf/root regression slice ran 17 tests in 0.791s locally, so it remains in this shard."
       },
       {
         "shard": "bplustree-state",
@@ -169,7 +169,7 @@
         "shard": "formal-tlc",
         "tlc": true,
         "include": ["Formal.TlcModelCheckTests"],
-        "note": "Every other TLC case: the base run of every module, the variant runs of every module but AtomicCommit*, the mutants of modules TlcCiShard does not group (a new spec module lands here), and the synthetic-module gates, about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
+        "note": "Every other TLC case: the base run of every module, variant runs of every module but AtomicCommit*, mutations of ungrouped modules (including BPlusTopology), and synthetic-module gates. BPlusTopology's 15 base/mutation cases took 13s locally, too small to justify a dedicated runner; the catch-all historically measured about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
       },
       {
         "shard": "rest",

@@ -564,6 +564,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task BankDurablePinAsync();
 
     /// <summary>
+    /// Retires the durable record that a division to <paramref name="siblingId"/>
+    /// is not yet known to the shard root (issue #4795). Called by the shard
+    /// root once the link intent for that sibling is durable. A call naming any
+    /// other sibling, or arriving when no record is held, is a no-op.
+    /// </summary>
+    /// <param name="siblingId">The sibling whose link intent is now durable.</param>
+    Task AcknowledgeSplitLinkRecordedAsync(GrainId siblingId);
+
+    /// <summary>
     /// Stores a grain reference to the parent internal node so this leaf
     /// can propagate its <see cref="ChildDigestSnapshot"/> upward when
     /// its projection digest changes. Called once by the shard root

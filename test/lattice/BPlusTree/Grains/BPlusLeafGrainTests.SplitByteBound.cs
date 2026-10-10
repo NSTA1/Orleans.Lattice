@@ -137,6 +137,7 @@ public sealed class BPlusLeafGrainSplitByteBoundTests
     public async Task Capture_path_repair_divides_a_leaf_that_is_already_oversized()
     {
         var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "byte-bound-tree";
         // Seeded with the bound disabled, so the leaf is allowed to grow
         // oversized exactly as a deployment running a pre-fix build did. The
         // write path therefore cannot have split it.

@@ -1,0 +1,13 @@
+# Pairs with SplitRequiresData. The split intent accepts an empty donor.
+MODULE: SplitCanStartEmpty
+TARGET: SplitRequiresData
+CLASS: Invariant
+SUMMARY: a split enters progress without any acknowledged key
+PERTURBS: SplitIntent
+
+--- FIND
+    /\ \E k \in Keys : k \in donorRows /\ k \in Moving
+--- REPLACE
+\* MUTATION: start an empty split.
+    /\ TRUE
+--- END

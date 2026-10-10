@@ -1,0 +1,15 @@
+# Pairs with LinkObligationDurable. This is the ordering reported in #4795: the
+# donor completes the split and holds the result only in memory, with no durable
+# marker. A root crash before the link intent is persisted strands the sibling.
+MODULE: LinkObligationDurableNoMarker
+TARGET: LinkObligationDurable
+CLASS: Invariant
+SUMMARY: completing a split leaves no durable record of the link obligation
+PERTURBS: FinishSplit
+
+--- FIND
+    /\ phase' = "done" /\ held' = TRUE /\ marker' = TRUE
+--- REPLACE
+\* MUTATION: the pre-fix ordering, no donor marker.
+    /\ phase' = "done" /\ held' = TRUE /\ marker' = FALSE
+--- END

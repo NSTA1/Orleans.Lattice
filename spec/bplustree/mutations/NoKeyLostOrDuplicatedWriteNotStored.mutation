@@ -1,0 +1,14 @@
+# Pairs with NoKeyLostOrDuplicated. A write below the split key is acknowledged
+# but never stored on the donor, so an acknowledged key is lost.
+MODULE: NoKeyLostOrDuplicatedWriteNotStored
+TARGET: NoKeyLostOrDuplicated
+CLASS: Invariant
+SUMMARY: an acknowledged write is not stored in either half
+PERTURBS: Write
+
+--- FIND
+          ELSE /\ rowsD' = rowsD \cup {k} /\ UNCHANGED rowsS
+--- REPLACE
+\* MUTATION: acknowledged but dropped.
+          ELSE /\ rowsD' = rowsD /\ UNCHANGED rowsS
+--- END

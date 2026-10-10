@@ -61,7 +61,9 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
         BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
         List<LeafSnapshotBlob> Saved,
-        List<Dictionary<string, LwwValue<byte[]>>> SiblingBatches);
+        List<Dictionary<string, LwwValue<byte[]>>> SiblingBatches,
+        List<SplitResult> CaptureSplits,
+        IShardRootGrain ShardRoot);
 
     /// <summary>
     /// Builds a leaf that is over the byte bound already, on a tree with NO
@@ -95,6 +97,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
         materialiserCheckpointInterval ??= TimeSpan.Zero;
         var saved = new List<LeafSnapshotBlob>();
         var siblingBatches = new List<Dictionary<string, LwwValue<byte[]>>>();
+        var captureSplits = new List<SplitResult>();
 
         // Seed through the snapshot the leaf rehydrates at activation, NOT by
         // writing into the cache's underlying dictionary.
@@ -151,6 +154,14 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
         sibling.InitializeSiblingAsync(Arg.Any<SiblingInitialization>()).Returns(Task.CompletedTask);
         sibling.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>()).Returns(Task.CompletedTask);
 
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        shardRoot.LinkLeafSplitFromCaptureAsync(Arg.Any<SplitResult>())
+            .Returns(ci =>
+            {
+                captureSplits.Add(ci.Arg<SplitResult>());
+                return Task.CompletedTask;
+            });
+
         var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
         coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(persistedCheckpoint < 0 ? 0L : persistedCheckpoint));
@@ -171,6 +182,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
             .Returns(Task.FromResult(decision));
 
         var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shardRoot);
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coord);
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(sibling);
@@ -188,6 +200,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
 
         var state = new FakePersistentState<LeafNodeState>();
         state.State.TreeId = CaptureSeamTreeId;
+        state.State.ShardIndex = 0;
         state.State.ProjectionCheckpointOffset = persistedCheckpoint;
 
         var optionsResolver = TestOptionsResolver.Create(
@@ -213,7 +226,7 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
             TestMutationObservers.NoObservers(),
             TestOriginClusterIdResolver.Default());
 
-        return new CaptureSeamHarness(grain, state, saved, siblingBatches);
+        return new CaptureSeamHarness(grain, state, saved, siblingBatches, captureSplits, shardRoot);
     }
 
     private static byte[] Payload(int size) => Encoding.UTF8.GetBytes(new string('x', size));
@@ -590,6 +603,47 @@ public sealed partial class BPlusLeafGrainCaptureSeamByteOverflowTests
             + "The division loop is bounded at MaxByteOverflowSplitsPerPass, so a leaf more than "
             + "2^8 times over bound would legitimately need a second pass - but 16x must converge "
             + "in one.");
+        Assert.That(h.CaptureSplits.Count, Is.GreaterThan(1),
+            "each capture-time division must be linked before the donor can divide again.");
+        Assert.That(h.State.State.UnlinkedSplitSiblingId, Is.Null,
+            "the capture left a completed division without a durable parent-link acknowledgement.");
+    }
+
+    [Test]
+    public async Task Capture_retries_a_pending_split_link_before_resuming_byte_overflow_repair()
+    {
+        var h = CreateOversizedLeaf(maxLeafBytes: 3500, entries: 6, bytesEach: 1024);
+        var failFirstLink = true;
+        h.ShardRoot.LinkLeafSplitFromCaptureAsync(Arg.Any<SplitResult>())
+            .Returns(ci =>
+            {
+                var split = ci.Arg<SplitResult>();
+                h.CaptureSplits.Add(split);
+                if (failFirstLink)
+                {
+                    failFirstLink = false;
+                    return Task.FromException(new InvalidOperationException("root unavailable"));
+                }
+
+                return Task.CompletedTask;
+            });
+        await LeafActivationHarness.ActivateAsync(h.Grain, CancellationToken.None);
+
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await h.Grain.CaptureSnapshotAsync());
+        var pendingSibling = h.State.State.UnlinkedSplitSiblingId;
+        Assert.That(pendingSibling, Is.Not.Null, "the failed root call lost its durable split marker.");
+
+        await h.Grain.CaptureSnapshotAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.CaptureSplits.Count, Is.GreaterThanOrEqualTo(2));
+            Assert.That(h.CaptureSplits[0].NewSiblingId, Is.EqualTo(pendingSibling));
+            Assert.That(h.CaptureSplits[1].NewSiblingId, Is.EqualTo(pendingSibling),
+                "the retry must re-submit the outstanding split before attempting another division.");
+            Assert.That(h.State.State.UnlinkedSplitSiblingId, Is.Null,
+                "the successful durable link did not retire the donor marker.");
+        });
     }
 
     /// <summary>

@@ -1,0 +1,23 @@
+# Pairs with PendingOnlyForCompleteSplit. The durable pending record rolls its phase back.
+MODULE: RecordPendingBeforeSplitComplete
+TARGET: PendingOnlyForCompleteSplit
+CLASS: Invariant
+SUMMARY: a pending parent link describes an incomplete split
+PERTURBS: RecordPending
+
+--- FIND
+RecordPending ==
+    /\ phase = "ready"
+    /\ held \/ marker
+    /\ ~pending
+    /\ pending' = TRUE
+    /\ phase' = "ready"
+--- REPLACE
+\* MUTATION: retain a pending record while the split is idle.
+RecordPending ==
+    /\ phase = "ready"
+    /\ held \/ marker
+    /\ ~pending
+    /\ pending' = TRUE
+    /\ phase' = "idle"
+--- END

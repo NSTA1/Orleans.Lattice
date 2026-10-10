@@ -1,0 +1,14 @@
+# Pairs with IntentOnlyForCompleteSplit. The root records a link intent without
+# holding a completed split result.
+MODULE: IntentOnlyForCompleteSplitEagerRecord
+TARGET: IntentOnlyForCompleteSplit
+CLASS: Invariant
+SUMMARY: a link intent is recorded for a split that is not complete
+PERTURBS: RecordPending
+
+--- FIND
+    /\ phase = "done" /\ held /\ ~pending /\ ~linked
+--- REPLACE
+\* MUTATION: no completed result required.
+    /\ ~pending /\ ~linked
+--- END

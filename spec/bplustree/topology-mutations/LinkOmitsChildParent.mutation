@@ -1,0 +1,13 @@
+# Pairs with ParentSiblingConsistency. Parent routing is published without the child-side reference.
+MODULE: LinkOmitsChildParent
+TARGET: ParentSiblingConsistency
+CLASS: Invariant
+SUMMARY: the parent routes to a leaf that does not point back to its parent
+PERTURBS: Link
+
+--- FIND
+    /\ childParent' = TRUE
+--- REPLACE
+\* MUTATION: omit the child-side link.
+    /\ childParent' = FALSE
+--- END

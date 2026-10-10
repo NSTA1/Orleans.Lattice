@@ -37,6 +37,8 @@ be quiet about one.
 | [`backup/`](backup/README.md) | `BackupCutover` | A local shadow-cutover restore and its revert: alias and map moved together, stale-routing redirects, the alias reservation. |
 | [`wal/`](wal/README.md) | `WalDurability` | The leaf WAL durability lifecycle under crash-anywhere recovery: append, out-of-order flush, per-leaf read checkpoints whose persist can fail, snapshots, durable pins and the GC trim they bound. |
 | [`wal/`](wal/README.md) | `WalMove` | A WAL partition moving between storage providers: fence, quiesced copy, placement switch and shard crash. |
+| [`bplustree/`](bplustree/README.md) | `SplitLink` | A leaf split completing on the donor, the shard root recording and applying the child link, and a root crash between them. |
+| [`bplustree/`](bplustree/README.md) | `BPlusTopology` | Interleaved split/fold writes, sibling-chain publication, parent routing and unlinked-sibling recovery. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

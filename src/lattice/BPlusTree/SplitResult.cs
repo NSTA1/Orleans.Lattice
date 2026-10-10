@@ -97,6 +97,15 @@ internal sealed record SplitResult
     [Id(4)] public bool Forwarded { get; init; }
 
     /// <summary>
+    /// The leaf that divided and still holds the durable record of this
+    /// division as unacknowledged, or <see langword="null"/> when the division
+    /// has no such record (internal nodes, bulk grafts). The shard root calls
+    /// it back once the link intent is durable, so the record can be retired
+    /// (issue #4795).
+    /// </summary>
+    [Id(5)] public GrainId? Donor { get; init; }
+
+    /// <summary>
     /// Marks a split result a sibling returned to a forwarding leaf as
     /// forwarded, so the forwarding leaf's caller links it by re-descent
     /// rather than against the path it captured for the forwarding leaf

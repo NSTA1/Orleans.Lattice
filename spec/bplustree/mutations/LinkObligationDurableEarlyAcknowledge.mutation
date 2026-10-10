@@ -1,0 +1,15 @@
+# Pairs with LinkObligationDurable. The root acknowledges the donor before its
+# link intent is durable, so the marker is retired while nothing else records
+# the obligation.
+MODULE: LinkObligationDurableEarlyAcknowledge
+TARGET: LinkObligationDurable
+CLASS: Invariant
+SUMMARY: the marker is retired before the link intent is durable
+PERTURBS: Acknowledge
+
+--- FIND
+    /\ marker /\ (pending \/ linked)
+--- REPLACE
+\* MUTATION: acknowledged without a durable intent.
+    /\ marker
+--- END

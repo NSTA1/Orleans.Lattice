@@ -112,7 +112,7 @@ public class AtomicWriteSiloRestartChaosTests
     /// for resumption on the next activation. Inner exceptions are searched, because a
     /// saga or fan-out wraps the fault of the call that failed.
     /// </summary>
-    private static bool IsSiloChurnFault(Exception ex)
+    internal static bool IsSiloChurnFault(Exception ex)
     {
         for (var e = ex; e is not null; e = e.InnerException)
         {
@@ -120,6 +120,10 @@ public class AtomicWriteSiloRestartChaosTests
                 or ShardActivationTimeoutException or LatticeShuttingDownException)
                 return true;
             if (e is InvalidOperationException && e.Message.Contains("rolled back", StringComparison.Ordinal))
+                return true;
+            // Orleans' InMemoryReminderTable disables access at ApplicationServices stop.
+            if (e is InvalidOperationException
+                && string.Equals(e.Message, "The reminder service is not currently available.", StringComparison.Ordinal))
                 return true;
         }
 

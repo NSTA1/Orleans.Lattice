@@ -182,6 +182,16 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task SetAsync(string key, byte[] value);
 
     /// <summary>
+    /// Links a split produced by byte-overflow repair during leaf snapshot
+    /// capture. The root persists and drains the link intent but leaves donor
+    /// acknowledgement to the capturing leaf, which is awaiting this call
+    /// from its own activation. It must interleave with root writes: a write
+    /// can be waiting on this leaf while capture holds its split gate.
+    /// </summary>
+    [AlwaysInterleave]
+    Task LinkLeafSplitFromCaptureAsync(SplitResult splitResult);
+
+    /// <summary>
     /// Inserts or updates the value for <paramref name="key"/> with an absolute
     /// expiry. The entry is treated as tombstoned on reads once the
     /// current UTC wall clock passes <paramref name="expiresAtTicks"/>.

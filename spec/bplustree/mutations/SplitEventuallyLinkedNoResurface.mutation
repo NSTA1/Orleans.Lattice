@@ -1,0 +1,19 @@
+# Pairs with SplitEventuallyLinked. Recovery never re-surfaces a marked split, so
+# a root that loses its in-memory result before recording the intent never
+# links the sibling.
+# DEADLOCK: off is required: the stranded state has no successor, which TLC
+# reports as a deadlock before it checks the liveness property.
+MODULE: SplitEventuallyLinkedNoResurface
+TARGET: SplitEventuallyLinked
+CLASS: Temporal
+SUMMARY: a marked split is never handed back to the root after a crash
+PERTURBS: Resurface
+DEADLOCK: off
+
+--- FIND
+    /\ marker /\ ~held /\ ~pending /\ ~linked
+--- REPLACE
+\* MUTATION: recovery never re-surfaces.
+    /\ FALSE
+    /\ marker /\ ~held /\ ~pending /\ ~linked
+--- END

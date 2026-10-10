@@ -1,0 +1,14 @@
+# Pairs with TypeOK. A crash is budgeted by MaxCrashes; without the budget the
+# crash counter leaves its declared range.
+MODULE: TypeOKCrashUnbounded
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: crashes are no longer bounded by MaxCrashes
+PERTURBS: Crash
+
+--- FIND
+    /\ crashes < MaxCrashes
+--- REPLACE
+\* MUTATION: no crash budget.
+    /\ TRUE
+--- END

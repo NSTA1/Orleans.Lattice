@@ -348,6 +348,15 @@ internal sealed partial class BPlusLeafGrain
         RecordSplitFault(LatticeMetrics.LeafSplitFaultTimeout, 0);
         RecordSplitFault(LatticeMetrics.LeafSplitFaultOther, 0);
 
+        // Capture is also the recovery driver for a split whose parent link
+        // could not be recorded on an earlier attempt. Drain it even when the
+        // donor is now under the byte bound; otherwise no later write may ever
+        // re-surface the durable marker.
+        if (HasUnlinkedSplit)
+        {
+            await LinkCaptureSplitAsync(UnlinkedSplitResult());
+        }
+
         if (maxLeafBytes <= 0 || Cache.StateBytes <= maxLeafBytes)
         {
             return false;
@@ -360,11 +369,15 @@ internal sealed partial class BPlusLeafGrain
             // A contended gate returns null, as does a re-check that finds the
             // leaf already back under bound. Either way there is no progress to
             // make on this turn, so stop rather than spin.
-            if (await SplitIfNeededUnderGateAsync(maxLeafKeys, maxLeafBytes) is null)
+            var split = await SplitIfNeededUnderGateAsync(maxLeafKeys, maxLeafBytes);
+            if (split is null)
             {
                 break;
             }
 
+            // Complete the root's durable link before another division can
+            // overwrite this leaf's single unlinked-split marker.
+            await LinkCaptureSplitAsync(split);
             splits++;
         }
 
@@ -417,6 +430,20 @@ internal sealed partial class BPlusLeafGrain
         }
 
         return splits > 0;
+    }
+
+    private async Task LinkCaptureSplitAsync(SplitResult splitResult)
+    {
+        var treeId = state.State.TreeId
+            ?? throw new InvalidOperationException("A capture split cannot be linked before the leaf has a tree id.");
+        var shardIndex = state.State.ShardIndex ?? 0;
+        var shardRoot = grainFactory.GetGrain<IShardRootGrain>($"{treeId}/{shardIndex}");
+        await shardRoot.LinkLeafSplitFromCaptureAsync(splitResult);
+
+        if (splitResult.Donor == context.GrainId)
+        {
+            await AcknowledgeSplitLinkRecordedAsync(splitResult.NewSiblingId);
+        }
     }
 
     /// <summary>
@@ -498,7 +525,10 @@ internal sealed partial class BPlusLeafGrain
             // returned null here without resuming anything - silently undoing
             // the fix at the seam it exists to protect.
             if (!HasInterruptedSplit)
-                return null;
+            {
+                return HasUnlinkedSplit ? UnlinkedSplitResult() : null;
+            }
+
             var recovered = await CompleteSplitAsync();
             await PersistAsync();
 
@@ -769,10 +799,66 @@ internal sealed partial class BPlusLeafGrain
         => state.State.SplitInFlight
             || state.State.SplitState == Primitives.SplitState.SplitInProgress;
 
+    /// <summary>
+    /// Whether a completed division is still unacknowledged by the shard root
+    /// (issue #4795). Unlike <see cref="HasInterruptedSplit"/> there is nothing
+    /// left to migrate; only the separator still has to reach a parent.
+    /// </summary>
+    private bool HasUnlinkedSplit => state.State.UnlinkedSplitSiblingId is not null;
+
+    private bool NeedsSplitRecovery => HasInterruptedSplit || HasUnlinkedSplit;
+
+    private SplitResult UnlinkedSplitResult() => new()
+    {
+        PromotedKey = state.State.UnlinkedSplitKey!,
+        NewSiblingId = state.State.UnlinkedSplitSiblingId!.Value,
+        ChildIsLeaf = true,
+        Donor = context.GrainId,
+    };
+
+    /// <inheritdoc />
+    public async Task AcknowledgeSplitLinkRecordedAsync(GrainId siblingId)
+    {
+        // A checkpoint flush can synchronously run a snapshot recheck while a
+        // foreground split still owns this gate. That capture may link this
+        // donor's split before returning to the split that owns the gate; waiting
+        // here would make the outer split wait on its own gate. The durable
+        // unlinked marker is safe to leave for the next operation to re-surface.
+        if (!_splitGate.Wait(0))
+        {
+            return;
+        }
+
+        try
+        {
+            if (state.State.UnlinkedSplitSiblingId != siblingId)
+            {
+                return;
+            }
+
+            state.State.UnlinkedSplitSiblingId = null;
+            state.State.UnlinkedSplitKey = null;
+            await PersistAsync();
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
     private async Task<SplitResult?> SplitAsync()
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
+
+        // Issue #4795. A completed division whose separator the shard root has
+        // not acknowledged is handed back before another begins: a second
+        // division would overwrite the single record and strand the first.
+        if (!HasInterruptedSplit && HasUnlinkedSplit)
+        {
+            return UnlinkedSplitResult();
+        }
+
         // Issue #3265. A split whose intent is already durable must be RESUMED,
         // never re-minted.
         //
@@ -1275,6 +1361,14 @@ internal sealed partial class BPlusLeafGrain
         state.State.HighKeyExclusive = splitKey;
         state.State.OldNextSibling = null;
         state.State.SplitInFlight = false;
+
+        // Issue #4795. The division is complete, but its separator reaches a
+        // parent only through the SplitResult returned below, and the shard
+        // root records its link intent only after receiving it. The obligation
+        // is therefore recorded here, in the persist that retires the in-flight
+        // marker, and retired by the root's acknowledgement.
+        state.State.UnlinkedSplitSiblingId = siblingId;
+        state.State.UnlinkedSplitKey = splitKey;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
         // A terminal can interleave with the transfer above (the leaf mutation
@@ -1330,11 +1424,14 @@ internal sealed partial class BPlusLeafGrain
         // thrown deadline used to take the SplitResult below with it. The
         // caller publishes through PublishSplitDigestAsync once it has let
         // the gate go.
+        await PersistAsync();
+
         return new SplitResult
         {
             PromotedKey = splitKey,
             NewSiblingId = siblingId,
             ChildIsLeaf = true,
+            Donor = context.GrainId,
         };
     }
 

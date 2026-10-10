@@ -502,7 +502,7 @@ internal sealed partial class BPlusLeafGrain
         Dictionary<string, LwwValue<byte[]>> stranded, bool isCrossShardMigration, bool completeInterruptedSplit = true)
     {
         SplitResult? recovered = null;
-        if (completeInterruptedSplit && HasInterruptedSplit)
+        if (completeInterruptedSplit && NeedsSplitRecovery)
         {
             recovered = await CompleteRecoverySplitUnderGateAsync();
         }
@@ -656,7 +656,7 @@ internal sealed partial class BPlusLeafGrain
     private async Task<SplitResult?> SetManyAdmittingSpanAsync(List<KeyValuePair<string, byte[]>> entries)
     {
         SplitResult? recovered = null;
-        if (HasInterruptedSplit)
+        if (NeedsSplitRecovery)
         {
             recovered = await CompleteRecoverySplitUnderGateAsync();
         }

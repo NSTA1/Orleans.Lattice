@@ -104,6 +104,8 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
         nameof(IShardRootGrain.IsSplittingAsync),
         nameof(IShardRootGrain.IsWriteFencedAsync),
         nameof(IShardRootGrain.LiftWriteFenceAsync),
+        // Capture split-link recovery publishes routing, not stored values.
+        nameof(IShardRootGrain.LinkLeafSplitFromCaptureAsync),
         nameof(IShardRootGrain.MarkDeletedAsync),
         nameof(IShardRootGrain.MarkDrainedAsync),
         nameof(IShardRootGrain.MarkLeavesMovedAwayAsync),

@@ -1,0 +1,23 @@
+# Pairs with ParentSiblingConsistency. The child route precedes its persistent child-side reference.
+MODULE: ChainSuccessorPublishesEarly
+TARGET: ParentSiblingConsistency
+CLASS: Invariant
+SUMMARY: parent routing is published without the child-side reference
+PERTURBS: ChainSuccessor
+
+--- FIND
+ChainSuccessor ==
+    /\ phase = "splitting"
+    /\ donorNext
+    /\ ~successorPrev
+    /\ successorPrev' = TRUE
+    /\ linked' = FALSE
+--- REPLACE
+\* MUTATION: publish the route before the child-side reference.
+ChainSuccessor ==
+    /\ phase = "splitting"
+    /\ donorNext
+    /\ ~successorPrev
+    /\ successorPrev' = TRUE
+    /\ linked' = TRUE
+--- END

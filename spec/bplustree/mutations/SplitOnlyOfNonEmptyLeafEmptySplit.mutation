@@ -1,0 +1,14 @@
+# Pairs with SplitOnlyOfNonEmptyLeaf. A split begins on a leaf that holds no
+# rows.
+MODULE: SplitOnlyOfNonEmptyLeafEmptySplit
+TARGET: SplitOnlyOfNonEmptyLeaf
+CLASS: Invariant
+SUMMARY: an empty leaf is split
+PERTURBS: SplitIntent
+
+--- FIND
+    /\ phase = "idle" /\ rowsD # {}
+--- REPLACE
+\* MUTATION: no rows required.
+    /\ phase = "idle"
+--- END

@@ -1,0 +1,13 @@
+# Pairs with OrphanRecoverable. A root crash also erases the donor's durable marker.
+MODULE: CrashDropsDurableMarker
+TARGET: OrphanRecoverable
+CLASS: Invariant
+SUMMARY: a completed split becomes an unrecoverable orphan after root crash
+PERTURBS: Crash
+
+--- FIND
+    /\ marker' = marker
+--- REPLACE
+\* MUTATION: erase durable evidence on crash.
+    /\ marker' = FALSE
+--- END
