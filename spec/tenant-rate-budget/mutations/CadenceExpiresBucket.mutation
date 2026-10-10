@@ -1,0 +1,18 @@
+MODULE: CadenceExpiresBucket
+TARGET: CadenceRetainsEnforcement
+CLASS: Action
+SUMMARY: lease cadence incorrectly removes enforcement
+PERTURBS: Tick
+
+--- FIND
+    /\ now' = now + 1
+    /\ age' = [s \in Silos |-> 1]
+    /\ UNCHANGED <<live, rate, changed, joined, left, restarted, phase, cycles,
+                   grant, configured, emission, tolerance, tat, demand, cancelled>>
+--- REPLACE
+    /\ now' = now + 1
+    /\ age' = [s \in Silos |-> 1]
+    /\ configured' = [s \in Silos |-> FALSE]
+    /\ UNCHANGED <<live, rate, changed, joined, left, restarted, phase, cycles,
+                   grant, emission, tolerance, tat, demand, cancelled>>
+--- END

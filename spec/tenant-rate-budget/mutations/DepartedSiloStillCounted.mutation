@@ -1,0 +1,11 @@
+MODULE: DepartedSiloStillCounted
+TARGET: DepartedSiloNotEnforcing
+CLASS: Action
+SUMMARY: a departed silo remains in the live membership input
+PERTURBS: Leave
+
+--- FIND
+    /\ live' = live \ {s}
+--- REPLACE
+    /\ live' = live
+--- END

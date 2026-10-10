@@ -1,0 +1,11 @@
+MODULE: CancelledGrantInstalled
+TARGET: CancelledGrantIgnored
+CLASS: Action
+SUMMARY: a delayed response installs a grant after cancellation
+PERTURBS: Deliver
+
+--- FIND
+           install == ~cancelled[s]
+--- REPLACE
+           install == TRUE
+--- END

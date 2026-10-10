@@ -1,0 +1,13 @@
+MODULE: LeaseNeverSettles
+TARGET: LeaseSettles
+CLASS: Temporal
+SUMMARY: a completed exchange never finishes its lease cycle
+PERTURBS: Deliver
+
+--- FIND
+    /\ phase' = [phase EXCEPT ![s] = "idle"]
+    /\ age' = [age EXCEPT ![s] = 0]
+--- REPLACE
+    /\ phase' = phase
+    /\ age' = [age EXCEPT ![s] = 0]
+--- END

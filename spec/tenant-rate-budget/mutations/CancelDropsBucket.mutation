@@ -1,0 +1,16 @@
+MODULE: CancelDropsBucket
+TARGET: CancelFencesGrant
+CLASS: Action
+SUMMARY: cancellation removes the enforcing bucket instead of retaining it
+PERTURBS: Cancel
+
+--- FIND
+    /\ cancelled' = [cancelled EXCEPT ![s] = TRUE]
+    /\ UNCHANGED <<live, rate, changed, joined, left, restarted, now, phase,
+                   cycles, age, grant, configured, emission, tolerance, tat, demand>>
+--- REPLACE
+    /\ cancelled' = [cancelled EXCEPT ![s] = TRUE]
+    /\ configured' = [configured EXCEPT ![s] = FALSE]
+    /\ UNCHANGED <<live, rate, changed, joined, left, restarted, now, phase,
+                   cycles, age, grant, emission, tolerance, tat, demand>>
+--- END

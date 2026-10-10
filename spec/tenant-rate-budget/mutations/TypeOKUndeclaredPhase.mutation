@@ -1,0 +1,11 @@
+MODULE: TypeOKUndeclaredPhase
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a lease cycle enters an undeclared phase
+PERTURBS: BeginLease
+
+--- FIND
+    /\ phase' = [phase EXCEPT ![s] = "pending"]
+--- REPLACE
+    /\ phase' = [phase EXCEPT ![s] = "unknown"]
+--- END

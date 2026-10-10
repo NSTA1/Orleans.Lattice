@@ -1,0 +1,20 @@
+MODULE: RestartMintsBurst
+TARGET: RestartRetainsEnforcement
+CLASS: Action
+SUMMARY: restarting the coordinator resets the singleton bucket
+PERTURBS: Restart
+
+--- FIND
+    /\ restarted' = TRUE
+    /\ phase' = [phase EXCEPT ![s] = "idle"]
+    /\ cancelled' = [cancelled EXCEPT ![s] = TRUE]
+    /\ UNCHANGED <<live, rate, changed, joined, left, now, cycles, age, grant,
+                   configured, emission, tolerance, tat, demand>>
+--- REPLACE
+    /\ restarted' = TRUE
+    /\ phase' = [phase EXCEPT ![s] = "idle"]
+    /\ cancelled' = [cancelled EXCEPT ![s] = TRUE]
+    /\ tat' = [tat EXCEPT ![s] = 0]
+    /\ UNCHANGED <<live, rate, changed, joined, left, now, cycles, age, grant,
+                   configured, emission, tolerance, demand>>
+--- END
