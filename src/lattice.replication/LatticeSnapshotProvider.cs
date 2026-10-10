@@ -268,8 +268,10 @@ internal sealed class LatticeSnapshotProvider(
             return new SnapshotSourceGeneration();
         }
 
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false);
+        // ResolveAsync and GetShardMapAsync are projections of this same entry,
+        // so derive them from it rather than paying two more registry calls.
+        var physicalTreeId = entry.PhysicalTreeId ?? treeName;
+        var shardMap = entry.ShardMap;
         var deletion = await _grainFactory.GetGrain<ITreeDeletionGrain>(treeName)
             .GetDeletionStatusAsync()
             .ConfigureAwait(false);
@@ -881,9 +883,9 @@ internal sealed class LatticeSnapshotProvider(
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false)
+        var entry = await _grainFactory.GetLatticeRegistry().GetEntryAsync(treeName).ConfigureAwait(false);
+        var physicalTreeId = entry?.PhysicalTreeId ?? treeName;
+        var shardMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
                 LatticeConstants.DefaultShardCount);
@@ -967,8 +969,9 @@ internal sealed class LatticeSnapshotProvider(
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
+        // One registry read serves both the routed copy and its shard map.
+        var entry = await _grainFactory.GetLatticeRegistry().GetEntryAsync(treeName).ConfigureAwait(false);
+        var physicalTreeId = entry?.PhysicalTreeId ?? treeName;
 
         // The registry's shard map is the producer-side authority on
         // virtual-slot / physical-shard layout. A tree that has been
@@ -978,7 +981,7 @@ internal sealed class LatticeSnapshotProvider(
         // covers a tree that exists in the registry but has not yet
         // had its map materialised (an empty pending-prepare scan in
         // that case is a no-op anyway).
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false)
+        var shardMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
                 LatticeConstants.DefaultShardCount);
