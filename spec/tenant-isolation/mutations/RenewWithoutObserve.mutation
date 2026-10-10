@@ -1,0 +1,17 @@
+# Pairs with NoStaleAuthority. The lease response carries the current epoch so
+# a silo that missed the push still learns it; the mutant ignores it, and the
+# silo renews past the captured deadline while trusting its old snapshot.
+MODULE: RenewWithoutObserve
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: a renewal carries the current epoch but the silo does not observe it
+PERTURBS: Renew
+
+--- FIND
+    /\ knows' = [knows EXCEPT ![s] = TRUE]
+    /\ stale' = [stale EXCEPT ![s] = stale[s] \/ Superseded(s)]
+--- REPLACE
+\* MUTATION: the renewed epoch is not observed.
+    /\ knows' = [knows EXCEPT ![s] = TRUE]
+    /\ stale' = stale
+--- END

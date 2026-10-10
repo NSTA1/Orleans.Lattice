@@ -1,0 +1,16 @@
+# Pairs with TypeOK. The crash budget guard is dropped, so the crash counter
+# leaves its declared range.
+MODULE: TypeOKSiloCrashOverBudget
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a silo crashes past the crash budget
+PERTURBS: SiloCrash
+
+--- FIND
+    /\ alive[s] /\ crashes < MaxCrashes
+    /\ crashes' = crashes + 1
+--- REPLACE
+\* MUTATION: the budget is unchecked.
+    /\ alive[s]
+    /\ crashes' = crashes + 1
+--- END

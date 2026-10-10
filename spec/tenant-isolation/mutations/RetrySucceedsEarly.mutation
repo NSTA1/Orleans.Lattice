@@ -1,0 +1,17 @@
+# Pairs with NoStaleAuthority. The re-publish clears the debt without waiting
+# for acknowledgements or lease expiry.
+MODULE: RetrySucceedsEarly
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: the re-publish reports success before the captured silos are covered
+PERTURBS: RetrySucceeds
+BOUNDS: MaxFailures = 1
+
+--- FIND
+    /\ wstate = "retrying" /\ alive[wsilo]
+    /\ \A t \in Silos : pend[t] \in {"no", "lapsed"}
+--- REPLACE
+\* MUTATION: the wait is skipped.
+    /\ wstate = "retrying" /\ alive[wsilo]
+    /\ TRUE
+--- END

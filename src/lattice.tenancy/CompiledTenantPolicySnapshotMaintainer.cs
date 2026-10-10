@@ -218,8 +218,10 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
     /// publishes the change to every silo, completing only once the publish has
     /// completed (or failed and been handed to a background re-publish). The core
     /// awaits the hook before the write returns, so a caller that sees the write
-    /// complete can rely on no silo still treating a pre-write snapshot as
-    /// authoritative.
+    /// complete after a successful publish can rely on no silo still treating a
+    /// pre-write snapshot as authoritative. When publication fails, the committing
+    /// silo remains non-authoritative but peers can retain their old authority
+    /// until the background re-publish succeeds.
     /// </remarks>
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {

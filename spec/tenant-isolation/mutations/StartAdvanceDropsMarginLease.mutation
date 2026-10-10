@@ -1,0 +1,22 @@
+# Pairs with NoStaleAuthority. Defect #4806: the ledger filtered leases on the
+# recorded deadline alone, so a lease past its deadline on the grain's clock but
+# still trusted by a slower silo was neither pushed to nor waited out. The base
+# captures every lease whose deadline plus the clock-rate margin has not passed.
+MODULE: StartAdvanceDropsMarginLease
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: the advance captures only leases inside their recorded deadline
+PERTURBS: StartAdvance
+
+--- FIND
+    /\ wstate' = "advancing"
+    /\ epoch' = <<epoch[1], epoch[2] + 1>>
+    /\ knows' = [t \in Silos |-> FALSE]
+    /\ pend' = [t \in Silos |-> Capture(t)]
+--- REPLACE
+\* MUTATION: the margin is dropped from the capture.
+    /\ wstate' = "advancing"
+    /\ epoch' = <<epoch[1], epoch[2] + 1>>
+    /\ knows' = [t \in Silos |-> FALSE]
+    /\ pend' = [t \in Silos |-> IF lease[t] = "live" THEN "tied" ELSE "no"]
+--- END

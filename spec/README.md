@@ -43,6 +43,7 @@ be quiet about one.
 | [`tenant-quotas/`](tenant-quotas/README.md) | `TenantTreeCount` | Concurrent authoritative tree-count checks and registrations, including the intentional in-flight overshoot window. |
 | [`tenant-quotas/`](tenant-quotas/README.md) | `TenantQuotaEvaluation` | Footprint dimension evaluation and burst ceilings over bounded usage and quota configurations. |
 | [`tenant-rate-budget/`](tenant-rate-budget/README.md) | `TenantRateBudget` | Demand-aware silo budget leases, membership changes, delayed deliveries, cancellation and coordinator restart. |
+| [`tenant-isolation/`](tenant-isolation/README.md) | `TenantIsolation` | Tenant policy epoch, lease and snapshot freshness, publication failures, membership recovery and epoch restart. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

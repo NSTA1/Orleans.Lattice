@@ -1,0 +1,19 @@
+{
+  "mutations": "mutations",
+  "refinement": "TenantIsolationRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 5,
+    "properties": 2,
+    "actions": 20,
+    "mutations": 25,
+    "behaviourRows": 25,
+    "distinctStates": 200358
+  },
+  "variants": {
+    "Crash": { "distinctStates": 919142 },
+    "Restart": { "distinctStates": 672536 },
+    "Failure": { "distinctStates": 627966 },
+    "Faults": { "distinctStates": 32602 }
+  }
+}

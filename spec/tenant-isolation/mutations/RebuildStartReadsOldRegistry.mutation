@@ -1,0 +1,15 @@
+# Pairs with NoStaleAuthority. The rebuild compiles a cached view rather than
+# scanning the registry, so it clears the out-of-date mark without picking up
+# the write.
+MODULE: RebuildStartReadsOldRegistry
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: a rebuild republishes the snapshot it already had
+PERTURBS: RebuildStart
+
+--- FIND
+    /\ snapVer' = [snapVer EXCEPT ![s] = regVer]
+--- REPLACE
+\* MUTATION: the registry is not rescanned.
+    /\ snapVer' = snapVer
+--- END

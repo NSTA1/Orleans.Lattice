@@ -1,0 +1,15 @@
+# Pairs with UnconfirmableDenies. With the snapshot not authoritative and the
+# registry unreachable the enforcer must deny; the mutant falls back to the
+# snapshot.
+MODULE: DecideTrustsUnconfirmable
+TARGET: UnconfirmableDenies
+CLASS: Invariant
+SUMMARY: a request that cannot be confirmed trusts the snapshot
+PERTURBS: Decide
+
+--- FIND
+              ELSE [kind |-> "deny", auth |-> FALSE, reach |-> FALSE]
+--- REPLACE
+\* MUTATION: fail open.
+              ELSE [kind |-> "trust", auth |-> FALSE, reach |-> FALSE]
+--- END

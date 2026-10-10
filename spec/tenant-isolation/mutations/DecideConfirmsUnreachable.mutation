@@ -1,0 +1,14 @@
+# Pairs with UnconfirmableDenies. A failed registry read is treated as a
+# confirmation rather than a denial.
+MODULE: DecideConfirmsUnreachable
+TARGET: UnconfirmableDenies
+CLASS: Invariant
+SUMMARY: a request is reported confirmed though the registry was unreachable
+PERTURBS: Decide
+
+--- FIND
+              ELSE IF r THEN [kind |-> "confirm", auth |-> FALSE, reach |-> TRUE]
+--- REPLACE
+\* MUTATION: a failed read confirms.
+              ELSE IF TRUE THEN [kind |-> "confirm", auth |-> FALSE, reach |-> r]
+--- END

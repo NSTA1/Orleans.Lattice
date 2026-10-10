@@ -227,7 +227,7 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   also kept current by a cluster-wide tenant-policy epoch. Before a registry write
   returns, the committing silo advances the epoch and pushes it to every silo, which
   marks its snapshot out of date and rebuilds; the write completes once every silo
-  has acknowledged, or has had its lease lapse. Each silo holds its snapshot
+  has acknowledged, or has had its recorded lease plus the clock-rate margin lapse. Each silo holds its snapshot
   authoritative only while it holds a live lease from the epoch (renewed every third
   of `PolicySnapshotLeaseDuration`) and has compiled the latest epoch it has seen.
   A silo that cannot know it is current - its lease has lapsed, it has been told of a
@@ -238,7 +238,7 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   timestamp read. A restarted epoch holds each write open for about 1.1 times the
   lease (one lease plus a tenth), or until
   every silo cluster membership does not report dead has leased from it, so no silo
-  leased by its previous incarnation stays authoritative. One window is bounded
+  leased by its previous incarnation stays authoritative. The guarantee assumes no silo clock runs slower than the epoch grain's by more than the margin over one lease. Two windows remain open: failed publication lets the write return while peers retain old authority until the background re-publish succeeds (the committing silo stays non-authoritative); the writer-crash window is bounded
   rather than closed: a silo that crashes after committing a registry write but
   before publishing it leaves the other silos unaware of that write until cluster
   membership declares it dead, at which point every surviving silo rebuilds. Each

@@ -1,0 +1,16 @@
+# Pairs with NoStaleAuthority. The grace is one lease plus the margin precisely
+# so every lease the previous activation granted has lapsed; the mutant ends it
+# with those leases still trusted.
+MODULE: GraceElapseKeepsOldLeases
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: the grace ends while leases from the previous activation stay trusted
+PERTURBS: GraceElapse
+BOUNDS: MaxRestarts = 1
+
+--- FIND
+    /\ lease' = [t \in Silos |-> IF lease[t] = "old" THEN "none" ELSE lease[t]]
+--- REPLACE
+\* MUTATION: old leases outlive the grace.
+    /\ lease' = lease
+--- END

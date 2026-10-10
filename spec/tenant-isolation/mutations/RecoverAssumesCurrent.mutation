@@ -1,0 +1,24 @@
+# Pairs with NoStaleAuthority. A restarted silo must observe the current epoch
+# and rebuild before it is authoritative; the mutant starts it as though it had
+# already observed the current epoch with a current snapshot.
+MODULE: RecoverAssumesCurrent
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: a fresh process assumes its empty snapshot is current
+PERTURBS: Recover
+BOUNDS: MaxCrashes = 1
+
+--- FIND
+    /\ alive' = [alive EXCEPT ![s] = TRUE]
+    /\ UNCHANGED <<regVer, coveredVer, returnedVer, wstate, wsilo, owes, epoch,
+                   graceOpen, graceWait, lease, pend, snapVer, stale, scanning,
+                   scanDirty, knows, awaiting, dec, crashes, restarts, failures>>
+--- REPLACE
+\* MUTATION: the fresh process trusts itself.
+    /\ alive' = [alive EXCEPT ![s] = TRUE]
+    /\ stale' = [stale EXCEPT ![s] = FALSE]
+    /\ knows' = [knows EXCEPT ![s] = TRUE]
+    /\ UNCHANGED <<regVer, coveredVer, returnedVer, wstate, wsilo, owes, epoch,
+                   graceOpen, graceWait, lease, pend, snapVer, scanning,
+                   scanDirty, awaiting, dec, crashes, restarts, failures>>
+--- END

@@ -1,0 +1,17 @@
+# Pairs with NoStaleAuthority. The subscription acknowledges the new epoch
+# before (here: without) marking the snapshot out of date, so the advance
+# completes while the peer still trusts its old snapshot.
+MODULE: DeliverWithoutObserve
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: a silo acknowledges a push without marking its snapshot out of date
+PERTURBS: Deliver
+
+--- FIND
+    /\ knows' = [knows EXCEPT ![t] = TRUE]
+    /\ stale' = [stale EXCEPT ![t] = stale[t] \/ Superseded(t)]
+--- REPLACE
+\* MUTATION: the push is not observed.
+    /\ knows' = [knows EXCEPT ![t] = TRUE]
+    /\ stale' = stale
+--- END

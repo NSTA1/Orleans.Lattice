@@ -1,0 +1,15 @@
+# Pairs with NoStaleAuthority. An epoch observed while a scan runs must leave
+# the result non-authoritative until the follow-up rebuild; the mutant marks it
+# current regardless.
+MODULE: RebuildFinishIgnoresDirty
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: a rebuild invalidated while it scanned still publishes as current
+PERTURBS: RebuildFinish
+
+--- FIND
+    /\ stale' = [stale EXCEPT ![s] = scanDirty[s]]
+--- REPLACE
+\* MUTATION: the follow-up rebuild is skipped.
+    /\ stale' = [stale EXCEPT ![s] = FALSE]
+--- END
