@@ -531,13 +531,14 @@ internal sealed class TreeResizeGrain(
         var operationId = operationIdOverride ?? Guid.NewGuid().ToString("N");
         ArgumentException.ThrowIfNullOrEmpty(operationId);
 
-        // Resolve the current physical tree ID (may already be aliased from a prior resize).
+        // Resolve the current physical tree ID (may already be aliased from a
+        // prior resize) and capture the old registry entry so UndoResizeAsync
+        // can restore it. ResolveAsync is a projection of the entry, so one
+        // registry read serves both.
         var registry = grainFactory.GetLatticeRegistry();
-        var currentPhysical = await registry.ResolveAsync(TreeId);
-        var snapshotTreeId = $"{TreeId}/resized/{operationId}";
-
-        // Capture the old registry entry so UndoResizeAsync can restore it.
         var oldEntry = await registry.GetEntryAsync(TreeId);
+        var currentPhysical = oldEntry?.PhysicalTreeId ?? TreeId;
+        var snapshotTreeId = $"{TreeId}/resized/{operationId}";
 
         // The old physical shards the snapshot will shadow-forward, and so the
         // set this resize rejects and, on undo, releases. Computed exactly as
@@ -810,8 +811,8 @@ internal sealed class TreeResizeGrain(
     private async Task<int?> FindBootstrapFencedShardAsync()
     {
         var registry = grainFactory.GetLatticeRegistry();
-        var physical = await registry.ResolveAsync(TreeId);
         var entry = await registry.GetEntryAsync(TreeId);
+        var physical = entry?.PhysicalTreeId ?? TreeId;
         var shardCount = (await optionsResolver.ResolveAsync(physical)).ShardCount;
         var shardIndices = RoutedShardIndices.Resolve(shardCount, entry?.ShardMap);
         return await TreeBootstrapReadFence.FindFencedShardAsync(grainFactory, physical, shardIndices);

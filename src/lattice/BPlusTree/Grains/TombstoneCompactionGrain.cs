@@ -1253,15 +1253,19 @@ internal sealed class TombstoneCompactionGrain(
     /// logical tree id and a default identity <see cref="ShardMap"/> when
     /// the registry has no record (e.g. an unregistered tree in a test
     /// harness).
+    /// <para>
+    /// <c>ResolveAsync</c> and <c>GetShardMapAsync</c> are projections of the
+    /// registry entry, so one <c>GetEntryAsync</c> serves both; see
+    /// <see cref="RegistryEntryShardMap"/>. A registered tree costs one
+    /// registry turn rather than three.
+    /// </para>
     /// </summary>
     private async Task<(string physicalTreeId, IReadOnlyList<int> physicalShards)> ResolveShardTopologyAsync()
     {
         var registry = grainFactory.GetLatticeRegistry();
-        var resolved = await registry.ResolveAsync(TreeId);
-        var physicalTreeId = string.IsNullOrEmpty(resolved) ? TreeId : resolved;
-        var resolvedOpts = await optionsResolver.ResolveAsync(TreeId);
-        var map = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolvedOpts.ShardCount);
+        var entry = await registry.GetEntryAsync(TreeId);
+        var physicalTreeId = entry?.PhysicalTreeId is { Length: > 0 } physical ? physical : TreeId;
+        var map = await RegistryEntryShardMap.ResolveAsync(registry, optionsResolver, TreeId, entry);
         return (physicalTreeId, map.GetPhysicalShardIndices());
     }
 

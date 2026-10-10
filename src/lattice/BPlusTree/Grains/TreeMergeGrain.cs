@@ -106,14 +106,14 @@ internal sealed class TreeMergeGrain(
         // from the registry so that mid-merge map mutations (e.g. adaptive
         // splits on either side) can't mis-route subsequent ticks (audit bug #5).
         var registry = grainFactory.GetLatticeRegistry();
-        var sourceResolved = await registry.ResolveAsync(sourceTreeId);
+        // ResolveAsync and GetShardMapAsync are projections of the registry
+        // entry, so one entry read per tree serves the alias and the map.
+        var sourceEntry = await registry.GetEntryAsync(sourceTreeId);
         var targetResolved = await registry.ResolveAsync(TargetTreeId);
-        var sourcePhysicalTreeId = string.IsNullOrEmpty(sourceResolved) ? sourceTreeId : sourceResolved;
+        var sourcePhysicalTreeId = sourceEntry?.PhysicalTreeId is { Length: > 0 } sourcePhysical ? sourcePhysical : sourceTreeId;
         var targetPhysicalTreeId = string.IsNullOrEmpty(targetResolved) ? TargetTreeId : targetResolved;
 
-        var sourceResolvedOpts = await optionsResolver.ResolveAsync(sourceTreeId);
-        var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
-            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts.ShardCount);
+        var sourceMap = await RegistryEntryShardMap.ResolveAsync(registry, optionsResolver, sourceTreeId, sourceEntry);
         var sourcePhysicalShards = sourceMap.GetPhysicalShardIndices();
 
         // Snapshot every field the mutation set touches so a failing
@@ -206,9 +206,8 @@ internal sealed class TreeMergeGrain(
     {
         var sourceTreeId = state.State.SourceTreeId!;
         var registry = grainFactory.GetLatticeRegistry();
-        var sourceOptions = await optionsResolver.ResolveAsync(sourceTreeId);
-        var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
-            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, sourceOptions.ShardCount);
+        var sourceMap = await RegistryEntryShardMap.ResolveAsync(
+            registry, optionsResolver, sourceTreeId, await registry.GetEntryAsync(sourceTreeId));
         var current = sourceMap.GetPhysicalShardIndices();
 
         var recorded = state.State.SourcePhysicalShards;
@@ -487,10 +486,10 @@ internal sealed class TreeMergeGrain(
         var registry = grainFactory.GetLatticeRegistry();
         var sourceTreeId = state.State.SourceTreeId
             ?? throw new InvalidOperationException("Cannot resolve topology without a source tree id.");
+        var sourceEntry = await registry.GetEntryAsync(sourceTreeId);
         if (string.IsNullOrEmpty(state.State.SourcePhysicalTreeId))
         {
-            var resolved = await registry.ResolveAsync(sourceTreeId);
-            state.State.SourcePhysicalTreeId = string.IsNullOrEmpty(resolved) ? sourceTreeId : resolved;
+            state.State.SourcePhysicalTreeId = sourceEntry?.PhysicalTreeId is { Length: > 0 } resolved ? resolved : sourceTreeId;
         }
         if (string.IsNullOrEmpty(state.State.TargetPhysicalTreeId))
         {
@@ -498,9 +497,7 @@ internal sealed class TreeMergeGrain(
             state.State.TargetPhysicalTreeId = string.IsNullOrEmpty(resolved) ? TargetTreeId : resolved;
         }
 
-        var sourceResolvedOpts2 = await optionsResolver.ResolveAsync(sourceTreeId);
-        var sourceMap = await registry.GetShardMapAsync(sourceTreeId)
-            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, sourceResolvedOpts2.ShardCount);
+        var sourceMap = await RegistryEntryShardMap.ResolveAsync(registry, optionsResolver, sourceTreeId, sourceEntry);
         state.State.SourcePhysicalShards = [.. sourceMap.GetPhysicalShardIndices()];
     }
 

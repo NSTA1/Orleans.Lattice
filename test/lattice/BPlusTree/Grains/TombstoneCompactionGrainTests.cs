@@ -66,6 +66,28 @@ public partial class TombstoneCompactionGrainTests
     }
 
     /// <summary>
+    /// Replaces the registry with one serving the tree's entry carrying the given
+    /// alias and map, as the registry does: <c>ResolveAsync</c> and
+    /// <c>GetShardMapAsync</c> are projections of this entry, and compaction
+    /// reads the entry once for both.
+    /// </summary>
+    private static ILatticeRegistry StubRegistryEntry(IGrainFactory grainFactory, string? physicalTreeId, ShardMap? map)
+    {
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+                PhysicalTreeId = physicalTreeId,
+                ShardMap = map,
+            }));
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        return registry;
+    }
+
+    /// <summary>
     /// The key the bounded chain walk resumes at when it parks before the leaf
     /// at <paramref name="leafIndex"/> in a shard set up by
     /// <see cref="SetupShardWithLeaves"/>. Mirrors the rig's key layout: leaf

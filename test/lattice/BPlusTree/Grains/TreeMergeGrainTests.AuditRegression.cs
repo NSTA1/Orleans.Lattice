@@ -109,11 +109,8 @@ public partial class TreeMergeGrainTests
         var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
         SetupKeepalive(reminderRegistry);
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        registry.ResolveAsync(SourceTreeId).Returns(sourcePhysical);
+        var registry = StubSourceEntry(grainFactory, sourcePhysical, ShardMap.CreateDefault(4, 2));
         registry.ResolveAsync(TargetTreeId).Returns(targetPhysical);
-        registry.GetShardMapAsync(SourceTreeId)
-            .Returns(Task.FromResult<ShardMap?>(ShardMap.CreateDefault(4, 2)));
         registry.GetShardMapAsync(TargetTreeId)
             .Returns(Task.FromResult<ShardMap?>(ShardMap.CreateDefault(4, 2)));
 
@@ -190,10 +187,8 @@ public partial class TreeMergeGrainTests
         var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
         SetupKeepalive(reminderRegistry);
 
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        registry.ResolveAsync(SourceTreeId).Returns(SourceTreeId);
+        var registry = StubSourceEntry(grainFactory, physicalTreeId: null, sourceMap);
         registry.ResolveAsync(TargetTreeId).Returns(TargetTreeId);
-        registry.GetShardMapAsync(SourceTreeId).Returns(Task.FromResult<ShardMap?>(sourceMap));
         registry.GetShardMapAsync(TargetTreeId)
             .Returns(Task.FromResult<ShardMap?>(ShardMap.CreateDefault(4, 2)));
 

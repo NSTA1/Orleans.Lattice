@@ -54,6 +54,26 @@ public partial class TreeMergeGrainTests
     }
 
     /// <summary>
+    /// Serves the source tree's registry entry with the given alias and map, as
+    /// the registry does: <c>ResolveAsync</c> and <c>GetShardMapAsync</c> are
+    /// projections of this entry, and the merge reads the entry once for both.
+    /// </summary>
+    private static ILatticeRegistry StubSourceEntry(IGrainFactory grainFactory, string? physicalTreeId, ShardMap? map)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.GetEntryAsync(SourceTreeId).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+                PhysicalTreeId = physicalTreeId,
+                ShardMap = map,
+            }));
+        return registry;
+    }
+
+    /// <summary>
     /// The key the bounded drain resumes at when it parks before the source leaf
     /// at <paramref name="leafIndex"/>. Mirrors the rig's key layout: leaf
     /// <c>i</c> owns <c>[k{i}, k{i+1})</c>.

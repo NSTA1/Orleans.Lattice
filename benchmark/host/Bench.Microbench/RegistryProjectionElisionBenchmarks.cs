@@ -5,7 +5,7 @@ using BenchmarkDotNet.Attributes;
 namespace Orleans.Lattice.Benchmark.Microbench;
 
 /// <summary>
-/// Isolates the registry round trips three routing reads paid for projections
+/// Isolates the registry round trips several routing reads paid for projections
 /// of a single registry entry. <c>ILatticeRegistry.ResolveAsync(id)</c> is
 /// <c>GetEntryAsync(id)?.PhysicalTreeId ?? id</c> and <c>GetShardMapAsync(id)</c>
 /// is <c>GetEntryAsync(id)?.ShardMap</c>, so a caller that awaited them beside,
@@ -21,6 +21,13 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// export: the open and close generation captures (GetEntry + Resolve +
 /// GetShardMap each -> GetEntry) and the tombstone and prepared passes
 /// (Resolve + GetShardMap each -> GetEntry), 10 serial reads -> 4.</item>
+/// <item><see cref="Site.ResizeInitiate"/> - <c>TreeResizeGrain</c> initiating a
+/// resize (and its bootstrap-fence probe): Resolve + GetEntry -> GetEntry.</item>
+/// <item><see cref="Site.CompactionTopology"/> - <c>TombstoneCompactionGrain</c>
+/// resolving a pass topology: Resolve + options GetEntry + GetShardMap -> GetEntry.</item>
+/// <item><see cref="Site.MergeInitiate"/> - <c>TreeMergeGrain</c> initiating a
+/// merge: source Resolve + options GetEntry + GetShardMap, plus the target
+/// Resolve -> source GetEntry plus the target Resolve, 4 serial reads -> 2.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -40,11 +47,12 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 public class RegistryProjectionElisionBenchmarks
 {
     private const string TreeId = "tree";
+    private const string TargetTreeId = "target";
 
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -70,10 +78,28 @@ public class RegistryProjectionElisionBenchmarks
         {
             case Site.StateObserverOpen:
             case Site.BootstrapFenceResolve:
+            case Site.ResizeInitiate:
             {
                 var physical = await _registry.ResolveAsync(TreeId);
                 var entry = await _registry.GetEntryAsync(TreeId);
                 return Fold(physical, entry?.ShardMapVersion ?? 0);
+            }
+
+            case Site.CompactionTopology:
+            {
+                var physical = await _registry.ResolveAsync(TreeId);
+                var options = await _registry.GetEntryAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                return Fold(physical, (map ?? options?.ShardMapVersion) ?? 0);
+            }
+
+            case Site.MergeInitiate:
+            {
+                var source = await _registry.ResolveAsync(TreeId);
+                var target = await _registry.ResolveAsync(TargetTreeId);
+                var options = await _registry.GetEntryAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                return Fold(source, (map ?? options?.ShardMapVersion) ?? 0) + target.Length;
             }
 
             default:
@@ -106,9 +132,18 @@ public class RegistryProjectionElisionBenchmarks
         {
             case Site.StateObserverOpen:
             case Site.BootstrapFenceResolve:
+            case Site.ResizeInitiate:
+            case Site.CompactionTopology:
             {
                 var entry = await _registry.GetEntryAsync(TreeId);
                 return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0);
+            }
+
+            case Site.MergeInitiate:
+            {
+                var entry = await _registry.GetEntryAsync(TreeId);
+                var target = await _registry.ResolveAsync(TargetTreeId);
+                return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0) + target.Length;
             }
 
             default:
@@ -138,6 +173,15 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>One snapshot export's registry routing reads.</summary>
         SnapshotExport,
+
+        /// <summary>A resize initiation capturing the old alias and entry.</summary>
+        ResizeInitiate,
+
+        /// <summary>A compaction pass resolving its shard topology.</summary>
+        CompactionTopology,
+
+        /// <summary>A merge initiation resolving source and target topology.</summary>
+        MergeInitiate,
     }
 
     /// <summary>How a simulated grain call completes.</summary>

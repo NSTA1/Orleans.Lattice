@@ -35,9 +35,7 @@ public partial class TreeMergeGrainTests
 
         // Shard 1 was folded onto shard 0 while the merge ran: the map no
         // longer references it.
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        registry.GetShardMapAsync(SourceTreeId)
-            .Returns(Task.FromResult<ShardMap?>(new ShardMap { Slots = new int[16], Version = 2 }));
+        StubSourceEntry(grainFactory, physicalTreeId: null, new ShardMap { Slots = new int[16], Version = 2 });
 
         state.State.InProgress = true;
         state.State.SourceTreeId = SourceTreeId;
@@ -71,9 +69,7 @@ public partial class TreeMergeGrainTests
 
         var grown = ShardMap.CreateDefault(16, 2).Slots;
         grown[15] = 2;
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        registry.GetShardMapAsync(SourceTreeId)
-            .Returns(Task.FromResult<ShardMap?>(new ShardMap { Slots = grown, Version = 3 }));
+        StubSourceEntry(grainFactory, physicalTreeId: null, new ShardMap { Slots = grown, Version = 3 });
 
         state.State.InProgress = true;
         state.State.SourceTreeId = SourceTreeId;
