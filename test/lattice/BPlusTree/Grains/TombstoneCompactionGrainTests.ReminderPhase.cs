@@ -129,11 +129,7 @@ public partial class TombstoneCompactionGrainTests
     /// </summary>
     private static void StubEmptyShardTopology(IGrainFactory grainFactory)
     {
-        var registry = Substitute.For<ILatticeRegistry>();
-        registry.ResolveAsync(TreeId).Returns(TreeId);
-        registry.GetShardMapAsync(TreeId).Returns(Task.FromResult<ShardMap?>(
-            ShardMap.CreateDefault(4, ShardCount)));
-        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        StubRegistryEntry(grainFactory, physicalTreeId: null, ShardMap.CreateDefault(4, ShardCount));
         for (var i = 0; i < ShardCount; i++)
         {
             var shard = Substitute.For<IShardRootGrain>();
