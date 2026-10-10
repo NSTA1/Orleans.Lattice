@@ -114,12 +114,12 @@ public sealed class TenantPolicyEpochLedgerTests
     {
         var (ledger, time) = PastGrace();
         ledger.Lease("silo-1");
-        time.Advance(Lease);
+        time.Advance(Lease + ledger.Margin);
         var log = new List<(string, TenantPolicyEpoch)>();
 
         var advance = ledger.AdvanceAsync(Recording(log));
 
-        Assert.That(advance.IsCompletedSuccessfully, Is.True, "an expired lease holds no authority to wait out");
+        Assert.That(advance.IsCompletedSuccessfully, Is.True, "a lease past its deadline plus the margin holds no authority to wait out");
         Assert.That(log, Is.Empty);
         Assert.That(ledger.SubscriberCount, Is.Zero);
         await advance;
