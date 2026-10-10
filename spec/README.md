@@ -39,6 +39,8 @@ be quiet about one.
 | [`wal/`](wal/README.md) | `WalMove` | A WAL partition moving between storage providers: fence, quiesced copy, placement switch and shard crash. |
 | [`bplustree/`](bplustree/README.md) | `SplitLink` | A leaf split completing on the donor, the shard root recording and applying the child link, and a root crash between them. |
 | [`bplustree/`](bplustree/README.md) | `BPlusTopology` | Interleaved split/fold writes, sibling-chain publication, parent routing and unlinked-sibling recovery. |
+| [`bplustree/`](bplustree/README.md) | `BPlusCascade` | Rightmost leaf splits cascading through level-indexed internal nodes and repeated root promotions, checked through six tree levels. |
+| [`bplustree/`](bplustree/README.md) | `BPlusReclaimRecovery` | Durable leaf retirement, unlink, route removal, successor back-link repair, clear and crash recovery. |
 | [`tenant-quotas/`](tenant-quotas/README.md) | `TenantFootprint` | Sampled local and converged quota admission, delayed usage publication and receiver-side accounting without a hard global reservation. |
 | [`tenant-quotas/`](tenant-quotas/README.md) | `TenantTreeCount` | Concurrent authoritative tree-count checks and registrations, including the intentional in-flight overshoot window. |
 | [`tenant-quotas/`](tenant-quotas/README.md) | `TenantQuotaEvaluation` | Footprint dimension evaluation and burst ceilings over bounded usage and quota configurations. |

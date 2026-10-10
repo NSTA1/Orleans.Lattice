@@ -518,4 +518,16 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     /// </para>
     /// </summary>
     [Id(23)] public long SnapshotLoadHintBytes { get; set; }
+
+    /// <summary>
+    /// Whether leaf reclaim has durably closed this leaf to mutations. Kept
+    /// until reclaim is safely completed or explicitly abandoned.
+    /// </summary>
+    [Id(30)] public bool ReclaimRetired { get; set; }
+
+    /// <summary>The successor whose reclaim completion is owed by this leaf.</summary>
+    [Id(31)] public GrainId? PendingReclaimSuccessorId { get; set; }
+
+    /// <summary>The successor after <see cref="PendingReclaimSuccessorId"/> in the chain.</summary>
+    [Id(32)] public GrainId? PendingReclaimNextId { get; set; }
 }

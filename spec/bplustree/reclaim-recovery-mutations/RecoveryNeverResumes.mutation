@@ -1,0 +1,12 @@
+# Pairs with PendingEventuallyCompletes. A lost activation must be able to resume the pending protocol.
+MODULE: RecoveryNeverResumes
+TARGET: PendingEventuallyCompletes
+CLASS: Temporal
+SUMMARY: a crashed reclaim never becomes runnable again
+PERTURBS: Recover
+
+--- FIND
+    /\ ready' = TRUE
+--- REPLACE
+    /\ ready' = FALSE
+--- END

@@ -1,0 +1,17 @@
+# Pairs with RootHasOneRoot. Root promotion creates a new root with only one
+# child, dropping the sibling side of the split.
+MODULE: PromoteRootCreatesUnaryRoot
+TARGET: RootHasOneRoot
+CLASS: Invariant
+SUMMARY: root promotion leaves the new root with one child
+PERTURBS: PromoteRoot
+
+--- FIND
+           newRootEntries ==
+               <<[node |-> oldRoot, separator |-> NoKey],
+                 [node |-> sibling, separator |-> pending.separator]>>
+--- REPLACE
+\* MUTATION: only one half of the split is attached to the new root.
+           newRootEntries ==
+               <<[node |-> oldRoot, separator |-> NoKey]>>
+--- END

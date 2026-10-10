@@ -1,0 +1,13 @@
+# Pairs with CompletedReclaimCleared. Clearing the marker before the victim leaves a lost obligation.
+MODULE: CompleteBeforeClear
+TARGET: CompletedReclaimCleared
+CLASS: Invariant
+SUMMARY: a reclaim marker is retired while the victim still exists
+PERTURBS: Complete
+
+--- FIND
+    /\ ~victimExists
+    /\ pending' = "none"
+--- REPLACE
+    /\ pending' = "none"
+--- END

@@ -2930,6 +2930,8 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        _reclaimRetired = state.State.ReclaimRetired ? 1 : 0;
+
         if (state.State.TreeId is { } metricPhysicalTreeId)
             _metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(metricPhysicalTreeId);
         // Publish this activation's same-silo revision cookie HERE, before the

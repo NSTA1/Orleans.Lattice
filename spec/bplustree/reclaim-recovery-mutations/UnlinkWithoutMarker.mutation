@@ -1,0 +1,12 @@
+# Pairs with UnlinkedVictimHasMarker. A crash after the predecessor update loses the only cleanup obligation.
+MODULE: UnlinkWithoutMarker
+TARGET: UnlinkedVictimHasMarker
+CLASS: Invariant
+SUMMARY: the predecessor unlinks the victim without durable recovery evidence
+PERTURBS: UnlinkAndRecord
+
+--- FIND
+    /\ pending' = "victim"
+--- REPLACE
+    /\ pending' = "none"
+--- END

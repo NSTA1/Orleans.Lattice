@@ -1,0 +1,48 @@
+# Pairs with ParentChildAccounting. The leaf is listed by its parent but keeps
+# no matching parent pointer.
+MODULE: LinkLeafOmitsParentChild
+TARGET: ParentChildAccounting
+CLASS: Invariant
+SUMMARY: a linked leaf has no back-pointer to its parent
+PERTURBS: LinkLeaf
+
+--- FIND
+LinkLeaf ==
+    /\ ready
+    /\ pending.kind = "leaf-link"
+    /\ LET donor == pending.donor
+           sibling == pending.sibling
+           parentNode == pending.parent
+           newEntries == Append(
+               children[parentNode],
+               [node |-> sibling, separator |-> pending.separator])
+       IN
+            /\ parent[donor] = parentNode
+            /\ children[parentNode][Len(children[parentNode])].node = donor
+            /\ children' =
+                [n \in NodePool |->
+                    IF n = parentNode THEN newEntries ELSE children[n]]
+            /\ parent' =
+                [n \in NodePool |->
+                    IF n = sibling THEN parentNode ELSE parent[n]]
+--- REPLACE
+LinkLeaf ==
+    /\ ready
+    /\ pending.kind = "leaf-link"
+    /\ LET donor == pending.donor
+           sibling == pending.sibling
+           parentNode == pending.parent
+           newEntries == Append(
+               children[parentNode],
+               [node |-> sibling, separator |-> pending.separator])
+       IN
+            /\ parent[donor] = parentNode
+            /\ children[parentNode][Len(children[parentNode])].node = donor
+            /\ children' =
+                [n \in NodePool |->
+                    IF n = parentNode THEN newEntries ELSE children[n]]
+\* MUTATION: the sibling remains parentless after being appended.
+            /\ parent' =
+                [n \in NodePool |->
+                    IF n = sibling THEN NoNode ELSE parent[n]]
+--- END

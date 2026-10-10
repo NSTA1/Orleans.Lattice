@@ -124,6 +124,36 @@ public class ConcurrentSplitLinkageIntegrationTests
         await AssertNoOrphansAndNoLostKeysAsync(treeId, tree);
     }
 
+    [Test]
+    public async Task Sequential_splits_reach_at_least_six_tree_levels()
+    {
+        const int keyCount = 1_000;
+        var treeId = $"split-link-depth-{Guid.NewGuid():N}";
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = FourShardClusterFixture.SmallMaxLeafKeys,
+            MaxInternalChildren = SmallMaxInternalChildren,
+            ShardCount = FourShardClusterFixture.TestShardCount,
+        });
+
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{treeId}/0");
+        for (var i = 0; i < keyCount; i++)
+        {
+            await shard.SetAsync($"depth-{i:D5}", Encoding.UTF8.GetBytes($"value-{i}"));
+        }
+
+        var topology = await shard.GetTopologySnapshotAsync(8, CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(topology.SubtreeDepth, Is.GreaterThanOrEqualTo(6),
+                "repeated leaf and internal splits must promote the root beyond the model's initial three levels");
+            Assert.That(topology.ChildrenTruncated, Is.False);
+            Assert.That(topology.LiveCount, Is.EqualTo(keyCount));
+        });
+        Assert.That(await shard.GetAsync($"depth-{keyCount - 1:D5}"), Is.Not.Null);
+    }
+
     [Repeat(3)]
     [TestCase(null)]
     [TestCase(SmallMaxInternalChildren)]

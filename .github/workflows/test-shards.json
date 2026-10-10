@@ -159,6 +159,24 @@
         "note": "The mutants of every Backup* module, about 30 test-minutes."
       },
       {
+        "shard": "formal-tlc-bplus-cascade-base",
+        "tlc": true,
+        "includeCategories": ["TlcShardBPlusCascadeBase"],
+        "note": "The BPlusCascade base model, isolated from the catch-all so its exhaustive state search has a measured per-job budget."
+      },
+      {
+        "shard": "formal-tlc-bplus-cascade-mutations-1",
+        "tlc": true,
+        "includeCategories": ["TlcShardBPlusCascadeMutations1"],
+        "note": "Seven BPlusCascade mutations. The remaining six are grouped by target property in the companion shard, keeping each shared control run in one job."
+      },
+      {
+        "shard": "formal-tlc-bplus-cascade-mutations-2",
+        "tlc": true,
+        "includeCategories": ["TlcShardBPlusCascadeMutations2"],
+        "note": "Six BPlusCascade parent-accounting, recovery, separator-range, and maximum-height mutations, grouped by target property to reuse each control run."
+      },
+      {
         "shard": "formal-tlc-smoke",
         "tlcSmoke": true,
         "tiers": ["deterministic"],

@@ -86,10 +86,9 @@ public partial class BPlusLeafGrainTests
             + "to merge rows into. The compare-and-swap above this check CANNOT catch this "
             + "ordering: the reclaim plan names the split sibling itself, so the expected "
             + "successor genuinely IS the current successor and the comparison agrees. "
-            + "Accepting here unlinks a leaf that CompleteSplitAsync then merges rows into, "
-            + "and because the retirement latch is a bare instance field with no persisted "
-            + "counterpart, a deactivation in between clears it and the merge succeeds "
-            + "silently onto an unreachable leaf. See issue #2160.");
+            + "Accepting here unlinks a leaf that CompleteSplitAsync then merges rows into. "
+            + "The durable retirement latch would refuse that merge and strand the split, "
+            + "so the unlink must still be declined. See issue #2160.");
     }
 
     [Test]
@@ -175,21 +174,19 @@ public partial class BPlusLeafGrainTests
             + "the hazard and make the epic's feature effectively unreachable on a busy tree.");
     }
 
-    // --- The silent arm, asserted at the seam that produces it ---
+    // --- The activation-loss arm, asserted at the seam that produces it ---
 
     [Test]
-    public async Task The_retirement_latch_does_not_survive_reactivation_so_declining_is_the_only_defence()
+    public async Task The_retirement_latch_survives_reactivation_and_refuses_the_merge()
     {
-        // This is the arm that makes #2160 silent rather than loud, and it is
-        // why the fix is a declination rather than making the latch durable.
+        // A durable latch closes the old silent arm: reactivation must not
+        // admit a split merge onto a leaf that reclaim has already unlinked.
         //
         // Had the unlink been accepted, the shard root would have latched the
         // split sibling via TryBeginRetirementAsync and CompleteSplitAsync
-        // would then call MergeEntriesAsync on it. The hope is that the latch
-        // makes that merge throw. It does not reliably: _reclaimRetired is a
-        // bare instance field, so a deactivation between the latch and the
-        // merge clears it, the merge is admitted, and the rows land on an
-        // unlinked leaf with nothing thrown anywhere.
+        // would then call MergeEntriesAsync on it. The durable latch must
+        // refuse that merge after reactivation; the split guard remains
+        // necessary because the refusal otherwise strands the split.
         //
         // Assert that property directly, so the reasoning above is pinned by a
         // test rather than left as a comment.
@@ -212,22 +209,15 @@ public partial class BPlusLeafGrainTests
             + "the LOUD arm, and it is the one the safety argument relies on");
 
         // Same durable state, new activation: exactly what a deactivation
-        // between the latch and CompleteSplitAsync's merge produces, because
-        // CompleteSplitAsync holds the sibling as a grain REFERENCE and the
-        // call itself reactivates it.
+        // between the latch and CompleteSplitAsync's merge produces.
         var reactivated = CreateGrain(state);
 
-        Assert.DoesNotThrowAsync(
+        Assert.ThrowsAsync<LeafRetiredException>(
             async () => await reactivated.MergeEntriesAsync(rows),
-            "The retirement latch does NOT survive reactivation, so it cannot be the defence "
-            + "against #2160: the merge is admitted and the rows land silently on a leaf that "
-            + "has already been unlinked from the chain. This is why the fix declines the "
-            + "unlink up front rather than making _reclaimRetired durable - a durable latch "
-            + "would only convert this silent arm into the loud arm, which is the other half "
-            + "of #2160 (the stale split boundary), not a fix.");
+            "The retirement latch is persisted, so a newly activated grain must refuse a merge "
+            + "rather than admitting rows onto a leaf that reclaim may have unlinked.");
 
-        Assert.That(reactivated.EntriesForTest.ContainsKey("k"), Is.True,
-            "and the row really is present on the reactivated leaf, so this is data landing "
-            + "somewhere unreachable rather than a merge that quietly did nothing");
+        Assert.That(reactivated.EntriesForTest.ContainsKey("k"), Is.False,
+            "the refused merge must not place data on an unreachable leaf");
     }
 }

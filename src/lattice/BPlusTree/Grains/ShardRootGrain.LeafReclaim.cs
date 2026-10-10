@@ -207,13 +207,13 @@ internal sealed partial class ShardRootGrain
             // Clears owed by earlier folds first. Those leaves are off the
             // chain, so the walk below cannot find them; this record is the
             // only path back to them. A no-op when nothing is owed.
-            await RetryPendingLeafClearsAsync();
+            var clearedPendingLeaves = await RetryPendingLeafClearsAsync();
 
             if (RootIsLeafTyped) return 0;
 
             try
             {
-                return await ReclaimEmptyLeavesCoreAsync(maxLeaves, startTimestamp);
+                return await ReclaimEmptyLeavesCoreAsync(maxLeaves, startTimestamp, clearedPendingLeaves);
             }
             finally
             {
@@ -226,7 +226,10 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<int> ReclaimEmptyLeavesCoreAsync(int maxLeaves, long startTimestamp)
+    private async Task<int> ReclaimEmptyLeavesCoreAsync(
+        int maxLeaves,
+        long startTimestamp,
+        HashSet<GrainId> clearedPendingLeaves)
     {
         // Hoisted out of the walk: the descent path is scratch space reused
         // for every candidate rather than a fresh allocation per leaf, which
@@ -288,12 +291,38 @@ internal sealed partial class ShardRootGrain
 
         var prevId = entry.PrevId;
         var prevProbe = entry.PrevProbe;
+        var pendingReclaimBlocked = false;
 
         // The head leaf is never a reclaim candidate: it owns the range below
         // the first separator in the tree and has no predecessor to inherit
         // it. The walk therefore always considers the leaf AFTER prevId.
-        while (prevProbe.NextSibling is { } currentId && !budget.ShouldYield())
+        while ((prevProbe.PendingReclaimSuccessorId is not null || prevProbe.NextSibling is not null)
+            && !budget.ShouldYield())
         {
+            // The predecessor's durable marker is the recovery path for a
+            // fold or orphan unsplice interrupted after its link committed.
+            // Complete it before considering another successor, because the
+            // marker is a single-slot obligation and must not be overwritten.
+            if (prevProbe.PendingReclaimSuccessorId is not null)
+            {
+                budget.RecordLeafVisited();
+                if (!await TryCompletePendingReclaimAsync(prevId, prevProbe, path, clearedPendingLeaves))
+                {
+                    pendingReclaimBlocked = true;
+                    break;
+                }
+
+                budget.RecordLeafVisited();
+                prevProbe = await ResolveLeafGrain(prevId).GetReclaimProbeAsync();
+                if (prevProbe.PendingReclaimSuccessorId is not null)
+                {
+                    pendingReclaimBlocked = true;
+                    break;
+                }
+            }
+
+            if (prevProbe.NextSibling is not { } currentId) break;
+
             budget.RecordLeafVisited();
 
             var currentProbe = await ResolveLeafGrain(currentId).GetReclaimProbeAsync();
@@ -334,6 +363,12 @@ internal sealed partial class ShardRootGrain
                 budget.RecordLeafVisited();
                 prevProbe = await ResolveLeafGrain(prevId).GetReclaimProbeAsync();
 
+                if (prevProbe.PendingReclaimSuccessorId is not null)
+                {
+                    pendingReclaimBlocked = true;
+                    break;
+                }
+
                 // Budget spent. Stop walking, not just folding: probing the
                 // rest of the chain would activate every remaining leaf and
                 // count its rows for a decision this pass can no longer act
@@ -359,9 +394,11 @@ internal sealed partial class ShardRootGrain
         // complicating it: both bounds leave the walk standing on a leaf it has
         // finished with, so the cursor is derived from the same probe either
         // way and a partial pass is already correct.
-        _leafReclaimResumeLowKey = prevProbe.NextSibling is null
-            ? null
-            : prevProbe.HighKeyExclusive;
+        _leafReclaimResumeLowKey = pendingReclaimBlocked
+            ? prevProbe.LowKeyInclusive
+            : prevProbe.NextSibling is null
+                ? null
+                : prevProbe.HighKeyExclusive;
 
         // Which of the four exits the walk took. The two bounds are reported
         // apart rather than as one "budget" because they answer different
@@ -370,7 +407,8 @@ internal sealed partial class ShardRootGrain
         // raising the batch size would achieve nothing. Collapsing them would
         // make the log unable to distinguish the case this bound exists for.
         var stopReason =
-            prevProbe.NextSibling is null ? "end-of-chain"
+            pendingReclaimBlocked ? "pending-reclaim"
+            : prevProbe.NextSibling is null ? "end-of-chain"
             : reclaimed >= maxLeaves ? "fold-budget"
             : budget.LeavesVisited >= visitBudget ? "probe-budget"
             : "deadline";
@@ -756,64 +794,75 @@ internal sealed partial class ShardRootGrain
             return false;
         }
 
-        try
-        {
-            // Unlink and widen in one compare-and-swap. A false return means a
-            // split moved the predecessor underneath us and inserted a leaf
-            // between it and this one; the fold is abandoned with nothing
-            // changed on the predecessor.
-            var outcome = await ResolveLeafGrain(prevId).TryUnlinkSuccessorAsync(
-                currentId,
-                currentProbe.NextSibling,
-                currentProbe.HighKeyExclusive);
+        // Unlink and widen in one compare-and-swap. A false return means a
+        // split moved the predecessor underneath us and inserted a leaf
+        // between it and this one; the fold is abandoned with nothing
+        // changed on the predecessor.
+        var outcome = await ResolveLeafGrain(prevId).TryUnlinkSuccessorAsync(
+            currentId,
+            currentProbe.NextSibling,
+            currentProbe.HighKeyExclusive);
 
-            if (outcome != LeafUnlinkOutcome.Unlinked)
+        if (outcome != LeafUnlinkOutcome.Unlinked)
+        {
+            // One line per cause, because these are unrelated races
+            // and reporting all of them as the first one is what let a
+            // production audit read the guard's silence as the guard never
+            // firing. See LeafUnlinkOutcome.
+            switch (outcome)
             {
-                // One line per cause, because these are three unrelated races
-                // and reporting all of them as the first one is what let a
-                // production audit read the guard's silence as the guard never
-                // firing. See LeafUnlinkOutcome.
-                switch (outcome)
-                {
-                    case LeafUnlinkOutcome.DeclinedSplitInFlight:
-                        // Information, not Debug: this is the #2160 ordering,
-                        // and a deployed container does not enable Debug - so
-                        // at Debug its absence from a log proves nothing, which
-                        // is precisely how this went undiagnosed. Rare by
-                        // construction, because the walk now declines this case
-                        // before it ever latches; reaching here means the
-                        // division landed after the probe.
-                        logger.LogInformation(
-                            "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
-                            + "{PrevLeaf} is mid-division into it, so a split landed underneath the reclaim and that "
-                            + "leaf is about to receive rows.",
-                            MyShardIndex, TreeId, currentId, prevId);
-                        break;
+                case LeafUnlinkOutcome.DeclinedSplitInFlight:
+                    // Information, not Debug: this is the #2160 ordering,
+                    // and a deployed container does not enable Debug - so
+                    // at Debug its absence from a log proves nothing, which
+                    // is precisely how this went undiagnosed. Rare by
+                    // construction, because the walk now declines this case
+                    // before it ever latches; reaching here means the
+                    // division landed after the probe.
+                    logger.LogInformation(
+                        "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
+                        + "{PrevLeaf} is mid-division into it, so a split landed underneath the reclaim and that "
+                        + "leaf is about to receive rows.",
+                        MyShardIndex, TreeId, currentId, prevId);
+                    break;
 
-                    case LeafUnlinkOutcome.DeclinedWidenSealed:
-                        logger.LogDebug(
-                            "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
-                            + "{PrevLeaf} carries a moved-away seal, so widening it onto the vacated range would make "
-                            + "it the owner of keys its own read gate refuses to serve. The seal lifts on consolidation.",
-                            MyShardIndex, TreeId, currentId, prevId);
-                        break;
+                case LeafUnlinkOutcome.DeclinedWidenSealed:
+                    logger.LogDebug(
+                        "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
+                        + "{PrevLeaf} carries a moved-away seal, so widening it onto the vacated range would make "
+                        + "it the owner of keys its own read gate refuses to serve. The seal lifts on consolidation.",
+                        MyShardIndex, TreeId, currentId, prevId);
+                    break;
 
-                    default:
-                        logger.LogDebug(
-                            "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
-                            + "{PrevLeaf} no longer points at it, so a split landed underneath the reclaim.",
-                            MyShardIndex, TreeId, currentId, prevId);
-                        break;
-                }
+                case LeafUnlinkOutcome.DeclinedReclaimPending:
+                    logger.LogWarning(
+                        "Shard {ShardIndex} of tree '{TreeId}' deferred folding leaf {LeafId}: predecessor "
+                        + "{PrevLeaf} still owes completion of an earlier reclaim.",
+                        MyShardIndex, TreeId, currentId, prevId);
+                    break;
 
-                await leaf.AbandonRetirementAsync();
-                return false;
+                default:
+                    logger.LogDebug(
+                        "Shard {ShardIndex} of tree '{TreeId}' declined to fold leaf {LeafId}: its predecessor "
+                        + "{PrevLeaf} no longer points at it, so a split landed underneath the reclaim.",
+                        MyShardIndex, TreeId, currentId, prevId);
+                    break;
             }
-        }
-        catch
-        {
-            await leaf.AbandonRetirementAsync();
-            throw;
+
+            var mayAbandonRetirement = outcome != LeafUnlinkOutcome.DeclinedReclaimPending;
+            if (!mayAbandonRetirement)
+            {
+                // The predecessor can only accept a pending marker for one
+                // successor. If it names this victim, its latch must stay
+                // closed; otherwise this candidate never committed and may
+                // be safely reopened.
+                var latestPredecessorProbe = await ResolveLeafGrain(prevId).GetReclaimProbeAsync();
+                mayAbandonRetirement = latestPredecessorProbe.PendingReclaimSuccessorId != currentId;
+            }
+
+            if (mayAbandonRetirement)
+                await leaf.AbandonRetirementAsync();
+            return false;
         }
 
         // Past the compare-and-swap the fold has committed: the predecessor
@@ -829,7 +878,12 @@ internal sealed partial class ShardRootGrain
         // worth a retry rather than a single attempt.
         if (retireRoutingFrom is { } parentToRetireFrom)
         {
-            await RetireRoutingAsync(parentToRetireFrom, currentId);
+            if (!await RetireRoutingAsync(parentToRetireFrom, currentId))
+            {
+                // The predecessor's persisted marker keeps this work
+                // discoverable. Do not clear a leaf that may still be routed.
+                return true;
+            }
         }
 
         if (currentProbe.NextSibling is { } nextId)
@@ -840,16 +894,15 @@ internal sealed partial class ShardRootGrain
             }
             catch (Exception ex)
             {
-                // The walk's own back-pointer repair re-points the successor on
-                // a later pass, because the successor is still on the chain.
                 logger.LogWarning(
                     ex,
-                    "Shard {ShardIndex} of tree '{TreeId}' folded leaf {LeafId} out of the chain but could not re-point its successor {NextLeaf} at predecessor {PrevLeaf}; a later pass repairs the back pointer.",
+                    "Shard {ShardIndex} of tree '{TreeId}' folded leaf {LeafId} out of the chain but could not re-point its successor {NextLeaf} at predecessor {PrevLeaf}; the pending reclaim marker retains the repair obligation.",
                     MyShardIndex,
                     TreeId,
                     currentId,
                     nextId,
                     prevId);
+                return true;
             }
         }
 
@@ -859,7 +912,16 @@ internal sealed partial class ShardRootGrain
         // pass" would finish it, and no pass ever could, orphaning the leaf's
         // storage row and its WAL materialiser pin. It is recorded durably as
         // owed first, and a failure is retried from that record.
-        await ClearRemovedLeafAsync(currentId, "folded");
+        if (await ClearRemovedLeafAsync(currentId, "folded"))
+        {
+            await ResolveLeafGrain(prevId).CompletePendingReclaimAsync(currentId);
+        }
+        else
+        {
+            // The predecessor marker remains the durable retry path when the
+            // pending-clear record could not be written before a failed clear.
+            return true;
+        }
 
         _leafGrains.TryRemove(currentId, out _);
 
@@ -871,6 +933,79 @@ internal sealed partial class ShardRootGrain
             prevId,
             currentProbe.HighKeyExclusive ?? "(unbounded)");
 
+        return true;
+    }
+
+    /// <summary>
+    /// Resumes the durable obligation left by an unlink that was interrupted
+    /// before routing, back-link or grain-state cleanup completed.
+    /// </summary>
+    private async Task<bool> TryCompletePendingReclaimAsync(
+        GrainId predecessorId,
+        LeafReclaimProbe predecessorProbe,
+        Stack<GrainId> path,
+        HashSet<GrainId> clearedPendingLeaves)
+    {
+        if (predecessorProbe.PendingReclaimSuccessorId is not { } retiredLeafId)
+            return true;
+
+        var retiredLeaf = ResolveLeafGrain(retiredLeafId);
+        var retiredProbe = await retiredLeaf.GetReclaimProbeAsync();
+
+        // A successfully cleared grain has no range left to descend on; its
+        // routing retirement necessarily completed before the clear. Otherwise
+        // re-evaluate the live route rather than trusting an activation-local
+        // parent path from the attempt that wrote the marker.
+        if (retiredProbe.LowKeyInclusive is { } lowKey)
+        {
+            path.Clear();
+            var routedLeafId = await ResolveWriteLeafAsync(lowKey, path);
+            if (routedLeafId == retiredLeafId)
+            {
+                if (path.Count == 0
+                    || !await RetireRoutingAsync(path.Peek(), retiredLeafId))
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (predecessorProbe.PendingReclaimNextId is { } nextId)
+        {
+            try
+            {
+                await ResolveLeafGrain(nextId).SetPrevSiblingAsync(predecessorId);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Shard {ShardIndex} of tree '{TreeId}' could not repair successor {NextLeaf}'s back link "
+                    + "while completing reclaim of leaf {LeafId}; the pending marker retains the repair obligation.",
+                    MyShardIndex,
+                    TreeId,
+                    nextId,
+                    retiredLeafId);
+                return false;
+            }
+        }
+
+        if (!clearedPendingLeaves.Contains(retiredLeafId))
+        {
+            // A failed clear was already attempted earlier in this pass, either
+            // by the pending-clear retry or by the original fold. Do not retry
+            // it twice while holding the shard-root turn.
+            if (state.State.PendingLeafClears.Contains(retiredLeafId))
+                return false;
+
+            if (!await ClearRemovedLeafAsync(retiredLeafId, "previously unlinked"))
+                return false;
+
+            clearedPendingLeaves.Add(retiredLeafId);
+        }
+
+        await ResolveLeafGrain(predecessorId).CompletePendingReclaimAsync(retiredLeafId);
+        _leafGrains.TryRemove(retiredLeafId, out _);
         return true;
     }
 
@@ -898,14 +1033,12 @@ internal sealed partial class ShardRootGrain
     /// neither accept a new record nor replay an old one.
     /// </para>
     /// <para>
-    /// A failure is retried and then logged and swallowed. The fold has
-    /// already committed on the chain, so reporting it as failed would have
-    /// the pass treat an unlinked leaf as still present; and the leaf is empty
-    /// and latched, so a stale routing entry costs refused writes on that
-    /// range until a later pass or the activation recycles, not lost ones.
+    /// A failure is retried and then reported to the caller. The predecessor
+    /// keeps the durable completion marker, and the caller must not clear the
+    /// victim while a routing entry may still point at it.
     /// </para>
     /// </summary>
-    private async Task RetireRoutingAsync(GrainId parentId, GrainId currentId)
+    private async Task<bool> RetireRoutingAsync(GrainId parentId, GrainId currentId)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -917,7 +1050,7 @@ internal sealed partial class ShardRootGrain
                 // parent still names the removed child. Not invalidating here
                 // would keep routing writes onto a leaf that has been cleared.
                 InvalidateRoutingTable(parentId);
-                return;
+                return true;
             }
             catch (Exception ex) when (attempt < MaxRetries)
             {
@@ -937,7 +1070,7 @@ internal sealed partial class ShardRootGrain
                     MyShardIndex,
                     TreeId,
                     currentId);
-                return;
+                return false;
             }
         }
     }

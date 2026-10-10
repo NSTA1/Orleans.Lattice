@@ -6,10 +6,11 @@ agent_spec: "docs/agents/api/lattice.json"
 
 Orleans.Lattice checks its most concurrency-sensitive protocols formally, not
 only with prose and chaos tests. Epic #4430 extended that coverage from the
-atomic-commit protocol to five more areas. Issue #4795 added B+ tree
-topology to that formal census. This page indexes them: what each
-area checks, how much, which production defects the checking found, and, just
-as prominently, what each area does **not** cover.
+atomic-commit protocol to five more areas. The B+ tree topology census now also
+checks cascading splits through a fan-out-three instance reaching its six-level
+bound, and durable leaf-reclaim recovery through successor back-link repair.
+This page indexes what each area checks, how much, which production defects the
+checking found, and, just as prominently, what each area does **not** cover.
 
 ## How every area is checked
 
@@ -39,7 +40,7 @@ every build. The acceptance census (#4442) adds two more gates:
 
 Figures are derived from module manifests and refinement notes. Each area's spec
 `README.md` holds the figures the build checks; the B+ tree topology row reflects
-the modules added for #4795.
+its four checked modules.
 
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
@@ -48,7 +49,7 @@ the modules added for #4795.
 | Cross-cluster atomic visibility | 1 | 59 | 39 | 116 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 82 | 64 | 190 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
-| B+ tree topology | 2 | 25 | 39 | 25 | [B+ tree topology](../../spec/bplustree/README.md) |
+| B+ tree topology | 4 | 47 | 73 | 45 | [B+ tree topology](../../spec/bplustree/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
@@ -76,14 +77,17 @@ gaps, states its full scope.
   - **Does not cover:** other alias moves, shard consolidation, and any
     cross-cluster replication of ownership moves.
 - **B+ tree topology** ([`spec/bplustree/`](../../spec/bplustree/README.md)).
-  - **Covers:** a donor-to-sibling split and parent-link crash window; interleaved
+  - **Covers:** a donor-to-sibling split and parent-link crash window; right-edge
+    parent splits from three to six levels in the checked instance; interleaved
     writes through a bounded leaf split and fold; sibling-chain and parent-route
-    publication; durable evidence that a born, unlinked sibling can be recovered.
-    Range ownership during adaptive shard split, online reshard and resize is
-    already covered by the `ShardOwnership` models above.
-  - **Does not cover:** the orphan audit/repair algorithm itself, cascading
-    parent splits, arbitrary tree depth, or the full reshard/resize protocol in
-    this module. Those boundaries are stated in the refinement notes.
+    publication; and durable retirement, route removal, successor back-link
+    repair, clearing, and recovery for a reclaimed leaf. Range ownership during
+    adaptive shard split, online reshard and resize is already covered by the
+    `ShardOwnership` models above.
+  - **Does not cover:** an unbounded-height proof (the level-indexed model is
+    checked only through six levels), simultaneous cascading split propagation,
+    the orphan audit/repair algorithm itself, or the full reshard/resize protocol
+    in this module. See the refinement notes.
 - **Cross-cluster atomic visibility** ([`spec/atomic-commit/`](../../spec/atomic-commit/README.md),
   module `AtomicCommitCrossCluster`).
   - **Covers:** the receiver side of an atomic write replicated to a peer: the
@@ -133,7 +137,7 @@ area's list is the authoritative one:
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
 | Backup and restore | #4485, #4490, #4589, #4593, #4686 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
-| B+ tree topology | #4795 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
+| B+ tree topology | #4795, #4815, #4818 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
 
 ## Related
 

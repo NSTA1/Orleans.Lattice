@@ -70,8 +70,9 @@ internal sealed partial class BPlusLeafGrain
     {
         _mutationsInFlight++;
 
-        if (_reclaimRetired != 0)
+        if (_reclaimRetired != 0 || state.State.ReclaimRetired)
         {
+            _reclaimRetired = 1;
             _mutationsInFlight--;
             throw new LeafRetiredException(context.GrainId.ToString());
         }
@@ -116,6 +117,8 @@ internal sealed partial class BPlusLeafGrain
             // make every leaf that has ever split refuse to fold its successor
             // forever. See LeafReclaimProbe.SplitTargetSiblingId.
             SplitTargetSiblingId = HasInterruptedSplit ? state.State.SplitSiblingId : null,
+            PendingReclaimSuccessorId = state.State.PendingReclaimSuccessorId,
+            PendingReclaimNextId = state.State.PendingReclaimNextId,
         };
     }
 
@@ -149,21 +152,20 @@ internal sealed partial class BPlusLeafGrain
         // narrow but it is exactly the acknowledged-then-erased loss this gate
         // exists to prevent, so the order has to close it by construction
         // rather than shorten it.
+        state.State.ReclaimRetired = true;
         _reclaimRetired = 1;
+        if (_mutationsInFlight != 0)
+        {
+            state.State.ReclaimRetired = false;
+            _reclaimRetired = 0;
+            return false;
+        }
+
+        await PersistAsync();
 
         var retire = false;
         try
         {
-            // A mutation admitted BEFORE the latch is not refused by it, and
-            // its rows may not have reached the projection yet, so the count
-            // below could still miss them. Refuse rather than reason about it.
-            // Reading the counter here, after the latch and before any await,
-            // is the other half of the handshake in EnterMutationScope: that
-            // publishes itself first and reads the latch second, this writes
-            // the latch first and reads the counter second, so neither can
-            // miss the other.
-            if (_mutationsInFlight != 0) return false;
-
             // From here no mutation is in flight and none can be admitted, so
             // the leaf's contents cannot change and the judgement below is
             // taken against state that is frozen for the rest of the fold.
@@ -181,16 +183,15 @@ internal sealed partial class BPlusLeafGrain
             // including an exceptional one. A latched leaf that is still
             // routed refuses writes that will re-route straight back to it, so
             // failing to unlatch trades a data-loss risk for a livelock.
-            if (!retire) _reclaimRetired = 0;
+            if (!retire) await SetRetirementLatchAsync(false);
         }
     }
 
     /// <inheritdoc />
-    public Task AbandonRetirementAsync()
+    public async Task AbandonRetirementAsync()
     {
         using var routingMutation = EnterLeafRoutingMutation();
-        _reclaimRetired = 0;
-        return Task.CompletedTask;
+        await SetRetirementLatchAsync(false);
     }
 
     /// <inheritdoc />
@@ -205,21 +206,20 @@ internal sealed partial class BPlusLeafGrain
         // first, and the reasoning there is the reasoning here - read it. The
         // only difference between the two methods is WHICH judgement the latch
         // freezes, so the freeze itself has to happen identically.
+        state.State.ReclaimRetired = true;
         _reclaimRetired = 1;
+        if (_mutationsInFlight != 0)
+        {
+            state.State.ReclaimRetired = false;
+            _reclaimRetired = 0;
+            return false;
+        }
+
+        await PersistAsync();
 
         var retire = false;
         try
         {
-            // A mutation admitted before the latch is not refused by it.
-            //
-            // Here that is not merely a race to close, it is EVIDENCE AGAINST
-            // THE PREMISE. Routing is a total function, so nothing should be
-            // able to route a write to a leaf no descent reaches; a mutation
-            // in flight on one means the caller's unreachability finding and
-            // this leaf's own experience disagree. Refuse and let the caller
-            // report it rather than reasoning past a contradiction.
-            if (_mutationsInFlight != 0) return false;
-
             // Split, seal and prepared-transaction state can all resurrect
             // rows this leaf does not currently hold, and the caller's
             // key-duplication proof is taken against the rows it holds NOW.
@@ -260,7 +260,7 @@ internal sealed partial class BPlusLeafGrain
         {
             // Unlatch on every path that did not commit, including an
             // exceptional one, for the same reason as the empty-leaf latch.
-            if (!retire) _reclaimRetired = 0;
+            if (!retire) await SetRetirementLatchAsync(false);
         }
     }
 
@@ -514,6 +514,9 @@ internal sealed partial class BPlusLeafGrain
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
+            if (state.State.PendingReclaimSuccessorId is not null)
+                return LeafUnlinkOutcome.DeclinedReclaimPending;
+
             // The compare half of the compare-and-swap, and the whole reason
             // this method exists rather than a bare sibling setter. Reclaim is
             // a multi-grain sequence and the split gate is per-grain, so a
@@ -549,10 +552,10 @@ internal sealed partial class BPlusLeafGrain
             //
             // Unlinking S then lets CompleteSplitAsync merge the split's rows
             // into a leaf that is retired and out of the chain. The retirement
-            // latch does not save it: _reclaimRetired is a bare instance field
-            // with no persisted counterpart, so if S deactivates in between,
-            // the merge call reactivates it with the latch cleared and the
-            // rows land silently on an unreachable leaf. Nothing throws.
+            // latch is durable, so if S deactivates in between, the merge
+            // still refuses rather than landing rows on an unreachable leaf.
+            // The guard remains necessary: that refusal would strand the
+            // split after its durable intent has published S.
             //
             // Declining costs nothing that matters: reclaim is background work
             // and the next pass sees a settled topology, exactly as for the
@@ -606,8 +609,12 @@ internal sealed partial class BPlusLeafGrain
             var prevHigh = state.State.HighKeyExclusive;
             var prevSplitKey = state.State.SplitKey;
             var prevSplitSiblingId = state.State.SplitSiblingId;
+            var prevPendingSuccessorId = state.State.PendingReclaimSuccessorId;
+            var prevPendingNextId = state.State.PendingReclaimNextId;
 
             state.State.NextSibling = newNext;
+            state.State.PendingReclaimSuccessorId = expectedNext;
+            state.State.PendingReclaimNextId = newNext;
 
             // Widen in the SAME persist as the unlink. Split into two writes,
             // there is a window in which this leaf has taken over routing for
@@ -641,6 +648,8 @@ internal sealed partial class BPlusLeafGrain
                 state.State.HighKeyExclusive = prevHigh;
                 state.State.SplitKey = prevSplitKey;
                 state.State.SplitSiblingId = prevSplitSiblingId;
+                state.State.PendingReclaimSuccessorId = prevPendingSuccessorId;
+                state.State.PendingReclaimNextId = prevPendingNextId;
                 throw;
             }
 
@@ -716,6 +725,67 @@ internal sealed partial class BPlusLeafGrain
         finally
         {
             _splitGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task CompletePendingReclaimAsync(GrainId retiredLeafId)
+    {
+        using var routingMutation = EnterLeafRoutingMutation();
+        await AwaitReplayBarrierAsync();
+
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            if (state.State.PendingReclaimSuccessorId != retiredLeafId)
+                return;
+
+            var previousNext = state.State.PendingReclaimSuccessorId;
+            var previousAfterNext = state.State.PendingReclaimNextId;
+            state.State.PendingReclaimSuccessorId = null;
+            state.State.PendingReclaimNextId = null;
+
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                state.State.PendingReclaimSuccessorId = previousNext;
+                state.State.PendingReclaimNextId = previousAfterNext;
+                throw;
+            }
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
+    private async Task SetRetirementLatchAsync(bool retired)
+    {
+        var previous = state.State.ReclaimRetired;
+        if (previous == retired)
+        {
+            _reclaimRetired = retired ? 1 : 0;
+            return;
+        }
+
+        state.State.ReclaimRetired = retired;
+        _reclaimRetired = retired ? 1 : 0;
+
+        try
+        {
+            await PersistAsync();
+        }
+        catch
+        {
+            // Persistence may have committed before the exception surfaced.
+            // Fail closed in this activation; a later activation uses the
+            // durable value that storage actually accepted.
+            state.State.ReclaimRetired = previous || retired;
+            _reclaimRetired = state.State.ReclaimRetired ? 1 : 0;
+            throw;
         }
     }
 }

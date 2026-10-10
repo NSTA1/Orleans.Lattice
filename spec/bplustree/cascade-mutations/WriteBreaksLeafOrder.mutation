@@ -1,0 +1,14 @@
+# Pairs with SortedLeafChain. A new high key is placed in the leftmost leaf,
+# violating its order relative to the next leaf.
+MODULE: WriteBreaksLeafOrder
+TARGET: SortedLeafChain
+CLASS: Invariant
+SUMMARY: a rightmost key is written into the leftmost leaf
+PERTURBS: Write
+
+--- FIND
+            /\ nodeKeys' = AddToAncestors(nodeKeys, rightmost, {key})
+--- REPLACE
+\* MUTATION: add the high key to the leftmost leaf and its ancestors.
+            /\ nodeKeys' = AddToAncestors(nodeKeys, firstLeaf, {key})
+--- END

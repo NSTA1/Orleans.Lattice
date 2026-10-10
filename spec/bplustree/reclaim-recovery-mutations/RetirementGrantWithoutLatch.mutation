@@ -1,0 +1,12 @@
+# Pairs with RetirementGrantIsLatched. The caller would proceed after a latch that cannot refuse writes.
+MODULE: RetirementGrantWithoutLatch
+TARGET: RetirementGrantIsLatched
+CLASS: Invariant
+SUMMARY: retirement is granted without persisting the write-refusing latch
+PERTURBS: BeginRetirement
+
+--- FIND
+    /\ retired' = TRUE
+--- REPLACE
+    /\ retired' = FALSE
+--- END

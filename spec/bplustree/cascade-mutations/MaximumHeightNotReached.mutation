@@ -1,0 +1,18 @@
+# Restricting promotion leaves the configured sixth level unreachable.
+MODULE: MaximumHeightNotReached
+TARGET: ReachMaxHeight
+CLASS: Temporal
+SUMMARY: root promotion stops before the configured maximum height
+PERTURBS: PromoteRoot
+
+--- FIND
+PromoteRoot ==
+    /\ ready
+    /\ pending.kind = "root-promotion"
+    /\ treeHeight < MaxHeight
+--- REPLACE
+PromoteRoot ==
+    /\ ready
+    /\ pending.kind = "root-promotion"
+    /\ treeHeight < MaxHeight - 1
+--- END

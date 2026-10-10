@@ -1,0 +1,12 @@
+# Pairs with PendingEventuallyCompletes. Repeatedly accepting a no-op route retirement stalls recovery.
+MODULE: RouteNeverRetires
+TARGET: PendingEventuallyCompletes
+CLASS: Temporal
+SUMMARY: a pending reclaim cannot finish while its route remains published
+PERTURBS: RetireRoute
+
+--- FIND
+    /\ routed' = FALSE
+--- REPLACE
+    /\ routed' = TRUE
+--- END

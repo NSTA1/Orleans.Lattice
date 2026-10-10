@@ -1,0 +1,24 @@
+# Pairs with ClearedVictimHasRepairedBackLink. Clearing while the successor
+# still points at the retired leaf leaves writes and reverse scans a stale link.
+MODULE: ClearBeforeBackLinkRepair
+TARGET: ClearedVictimHasRepairedBackLink
+CLASS: Invariant
+SUMMARY: the victim is cleared before its successor back link is repaired
+PERTURBS: ClearVictim
+
+--- FIND
+ClearVictim ==
+    /\ ready
+    /\ pending = "victim"
+    /\ ~linked
+    /\ ~routed
+    /\ backLinkCorrect
+    /\ victimExists
+--- REPLACE
+ClearVictim ==
+    /\ ready
+    /\ pending = "victim"
+    /\ ~linked
+    /\ ~routed
+    /\ victimExists
+--- END

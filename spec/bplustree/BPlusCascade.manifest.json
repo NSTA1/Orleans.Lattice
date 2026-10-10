@@ -1,0 +1,13 @@
+{
+  "mutations": "cascade-mutations",
+  "refinement": "BPlusCascadeRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 10,
+    "properties": 1,
+    "actions": 9,
+    "mutations": 13,
+    "behaviourRows": 19,
+    "distinctStates": 1271
+  }
+}
