@@ -79,4 +79,10 @@ internal readonly record struct LeafReclaimProbe
     /// </para>
     /// </summary>
     [Id(6)] public GrainId? SplitTargetSiblingId { get; init; }
+
+    /// <summary>The leaf whose committed reclaim this predecessor still owes, or <see langword="null"/>.</summary>
+    [Id(7)] public GrainId? PendingReclaimSuccessorId { get; init; }
+
+    /// <summary>The leaf following <see cref="PendingReclaimSuccessorId"/> after the committed unlink.</summary>
+    [Id(8)] public GrainId? PendingReclaimNextId { get; init; }
 }

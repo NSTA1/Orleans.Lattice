@@ -79,9 +79,19 @@ internal static class TlcCiShard
     /// <summary>The mutants of every Backup* module.</summary>
     public const string Backup = "TlcShardBackup";
 
+    /// <summary>The BPlusCascade base-model TLC run.</summary>
+    public const string BPlusCascadeBase = "TlcShardBPlusCascadeBase";
+
+    /// <summary>The BPlusCascade mutants outside the parent-accounting, recovery, separator-range, and height groups.</summary>
+    public const string BPlusCascadeMutations1 = "TlcShardBPlusCascadeMutations1";
+
+    /// <summary>The BPlusCascade parent-accounting, recovery, separator-range, and height mutants.</summary>
+    public const string BPlusCascadeMutations2 = "TlcShardBPlusCascadeMutations2";
+
     /// <summary>Every category <see cref="Of"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
-        [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup];
+        [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup,
+         BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -124,7 +134,23 @@ internal static class TlcCiShard
             return Backup;
         }
 
+        if (string.Equals(name, "BPlusCascade", StringComparison.Ordinal))
+        {
+            return mutation.Target is "ParentChildAccounting" or "RecoverablePending" or "SeparatorRanges" or "ReachMaxHeight"
+                ? BPlusCascadeMutations2
+                : BPlusCascadeMutations1;
+        }
+
         return name.StartsWith("AtomicCommit", StringComparison.Ordinal) ? Atomic : null;
+    }
+
+    /// <summary>The shard category of the base-model case, or <see langword="null"/> to leave it in the catch-all.</summary>
+    public static string? OfModule(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        return string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
+            ? BPlusCascadeBase
+            : null;
     }
 
     /// <summary>
@@ -189,6 +215,7 @@ internal static class TlcCiShard
 
         var category = data.Arguments switch
         {
+            [SpecModule module] => OfModule(module),
             [SpecModule module, SpecMutation mutation, ..] => Of(module, mutation),
             [SpecModule module, string variant] => OfVariant(module, variant),
             _ => null,

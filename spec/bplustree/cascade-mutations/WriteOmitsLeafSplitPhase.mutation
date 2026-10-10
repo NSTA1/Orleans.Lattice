@@ -1,0 +1,21 @@
+# Pairs with FanoutBound. An acknowledged overfull leaf has no persisted split
+# phase.
+MODULE: WriteOmitsLeafSplitPhase
+TARGET: FanoutBound
+CLASS: Invariant
+SUMMARY: an overfull leaf has no recorded split phase
+PERTURBS: Write
+
+--- FIND
+            /\ pending' =
+                IF Cardinality(updatedLeafKeys) > Fanout
+                THEN [kind |-> "leaf-birth",
+                      donor |-> rightmost,
+                      sibling |-> FreshNode,
+                      parent |-> parent[rightmost],
+                      separator |-> MinSet(RightHalf(updatedLeafKeys))]
+                ELSE pending
+--- REPLACE
+\* MUTATION: an overfull leaf has no recovery phase.
+            /\ pending' = pending
+--- END

@@ -5,7 +5,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// (<c>IBPlusLeafGrain.TryUnlinkSuccessorAsync</c>).
 /// <para>
 /// This replaced a <see langword="bool"/>, and the reason is issue #2160's
-/// reopen. Three genuinely different conditions decline that call, and the
+/// reopen. Four genuinely different conditions decline that call, and the
 /// caller could not tell them apart, so every one of them was reported by a
 /// single log line that named only the first: <em>"its predecessor no longer
 /// points at it, so a split landed underneath the reclaim"</em>. For two of
@@ -54,4 +54,10 @@ internal enum LeafUnlinkOutcome
     /// successor. See issue #2143 and <c>HasWidenBlockingState</c>.
     /// </summary>
     DeclinedWidenSealed = 3,
+
+    /// <summary>
+    /// This leaf still owes completion of an earlier successor reclaim, so a
+    /// second unlink must wait rather than overwrite its durable recovery marker.
+    /// </summary>
+    DeclinedReclaimPending = 4,
 }

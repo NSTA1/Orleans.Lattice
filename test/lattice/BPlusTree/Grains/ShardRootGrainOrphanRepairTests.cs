@@ -232,9 +232,25 @@ public sealed partial class ShardRootGrainOrphanRepairTests
                     {
                         NextSibling = ci.ArgAt<GrainId?>(1),
                         HighKeyExclusive = widened,
+                        PendingReclaimSuccessorId = ci.ArgAt<GrainId>(0),
+                        PendingReclaimNextId = ci.ArgAt<GrainId?>(1),
                     };
                     return Task.FromResult(LeafUnlinkOutcome.Unlinked);
                 });
+
+            leaf.CompletePendingReclaimAsync(Arg.Any<GrainId>()).Returns(ci =>
+            {
+                if (probes[self].PendingReclaimSuccessorId == ci.Arg<GrainId>())
+                {
+                    probes[self] = probes[self] with
+                    {
+                        PendingReclaimSuccessorId = null,
+                        PendingReclaimNextId = null,
+                    };
+                }
+
+                return Task.CompletedTask;
+            });
 
             harness.Leaves[id] = leaf;
         }
@@ -298,6 +314,24 @@ public sealed partial class ShardRootGrainOrphanRepairTests
 
         // The whole chain was examined, so there is nothing to resume.
         Assert.That(page.ResumeFromInclusive, Is.Null);
+    }
+
+    [Test]
+    public async Task A_failed_successor_back_pointer_repair_keeps_orphan_state_and_marker()
+    {
+        var h = CreateHarness();
+        h.C.SetPrevSiblingAsync(Arg.Any<GrainId?>())
+            .Returns(_ => Task.FromException(new InvalidOperationException("successor unavailable")));
+
+        Assert.That(async () => await RepairAsync(h),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        Assert.That(h.Probes[h.LeafA].NextSibling, Is.EqualTo(h.LeafC));
+        Assert.That(h.Probes[h.LeafA].PendingReclaimSuccessorId, Is.EqualTo(h.LeafB));
+        Assert.That(h.Probes[h.LeafA].PendingReclaimNextId, Is.EqualTo(h.LeafC));
+        await h.B.DidNotReceive().ClearGrainStateAsync();
+        await h.A.DidNotReceive().CompletePendingReclaimAsync(h.LeafB);
+        await h.B.DidNotReceive().AbandonRetirementAsync();
     }
 
     [Test]
@@ -488,17 +522,28 @@ public sealed partial class ShardRootGrainOrphanRepairTests
     }
 
     [Test]
-    public async Task A_throwing_swap_unlatches_the_orphan_before_it_propagates()
+    public async Task A_throwing_swap_keeps_the_orphan_latched_for_an_ambiguous_commit()
     {
-        // Same compensation on the exceptional path: a swap whose outcome is
-        // unknown must not leave the leaf latched.
+        // The predecessor can persist the unlink and then fail while reporting
+        // it. Model that ambiguous commit: the durable marker, not the
+        // exception, decides whether the victim can be reopened.
         var h = CreateHarness();
         h.A.TryUnlinkSuccessorAsync(Arg.Any<GrainId>(), Arg.Any<GrainId?>(), Arg.Any<string?>())
-            .Returns<Task<LeafUnlinkOutcome>>(_ => throw new TimeoutException("storage"));
+            .Returns<Task<LeafUnlinkOutcome>>(_ =>
+            {
+                h.Probes[h.LeafA] = h.Probes[h.LeafA] with
+                {
+                    NextSibling = h.LeafC,
+                    PendingReclaimSuccessorId = h.LeafB,
+                    PendingReclaimNextId = h.LeafC,
+                };
+                return Task.FromException<LeafUnlinkOutcome>(new TimeoutException("storage"));
+            });
 
         Assert.That(async () => await RepairAsync(h), Throws.TypeOf<TimeoutException>());
 
-        await h.B.Received(1).AbandonRetirementAsync();
+        Assert.That(h.Probes[h.LeafA].PendingReclaimSuccessorId, Is.EqualTo(h.LeafB));
+        await h.B.DidNotReceive().AbandonRetirementAsync();
         await h.B.DidNotReceive().ClearGrainStateAsync();
     }
 

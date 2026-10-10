@@ -304,7 +304,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Atomically points this leaf past <paramref name="expectedNext"/> and
     /// widens its owned range to cover what that successor gave up, and
-    /// returns whether it did - and when it did not, which of the three
+    /// returns whether it did - and when it did not, which of the four
     /// declinations fired.
     /// <para>
     /// The compare half is what makes empty-leaf reclaim safe against a
@@ -327,8 +327,8 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </para>
     /// <para>
     /// The result is a <see cref="LeafUnlinkOutcome"/> rather than a
-    /// <see langword="bool"/> because three unrelated conditions decline this
-    /// call and a caller that cannot tell them apart reports all three as the
+    /// <see langword="bool"/> because four unrelated conditions decline this
+    /// call and a caller that cannot tell them apart reports every one as the
     /// first one. That is not a cosmetic loss - see
     /// <see cref="LeafUnlinkOutcome"/> for the production misdiagnosis it
     /// produced. Every declination still leaves this leaf exactly as it was
@@ -340,6 +340,12 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
         GrainId expectedNext,
         GrainId? newNext,
         string? absorbHighKeyExclusive);
+
+    /// <summary>
+    /// Clears the durable completion marker for a successor reclaim after its
+    /// routing, back-link and grain-state cleanup have completed.
+    /// </summary>
+    Task CompletePendingReclaimAsync(GrainId retiredLeafId);
 
     /// <summary>
     /// Extends this leaf's exclusive high bound to cover the range vacated by
@@ -397,21 +403,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// is an ordinary outcome rather than a failure.
     /// </para>
     /// <para>
-    /// A latched leaf refuses every mutation, so a caller that latches and
-    /// then cannot complete the fold MUST call
-    /// <see cref="AbandonRetirementAsync"/> to reopen it. The pairing is what
-    /// keeps a leaf from being left permanently unwritable by an interrupted
-    /// fold, and it is why the latch is deliberately in memory only: an
-    /// activation that dies mid-fold reopens the leaf by reactivating it,
-    /// where a persisted flag would strand it forever.
+    /// The retirement latch is durable. The predecessor records the
+    /// completion obligation in the same persist as the unlink, so a process
+    /// crash cannot reopen a leaf that is still routed or strand an untracked
+    /// removed leaf.
     /// </para>
     /// </summary>
     Task<bool> TryBeginRetirementAsync();
 
     /// <summary>
-    /// Reopens a leaf that <see cref="TryBeginRetirementAsync"/> latched but
-    /// whose fold could not be completed, so it accepts writes again and the
-    /// next reclaim pass can retry it from a clean state.
+    /// Reopens a leaf that <see cref="TryBeginRetirementAsync"/> latched when
+    /// the compare-and-swap explicitly declined before committing the unlink.
     /// </summary>
     Task AbandonRetirementAsync();
 

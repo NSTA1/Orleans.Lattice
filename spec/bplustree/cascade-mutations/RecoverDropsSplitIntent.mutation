@@ -1,0 +1,28 @@
+# Pairs with RecoverablePending. Recovery clears the durable record instead of
+# resuming the interrupted structural operation.
+MODULE: RecoverDropsSplitIntent
+TARGET: RecoverablePending
+CLASS: Invariant
+SUMMARY: recovery retires an intent before linking its sibling
+PERTURBS: Recover
+
+--- FIND
+Recover ==
+    /\ ~ready
+    /\ pending.kind # "none"
+    /\ ready' = TRUE
+    /\ UNCHANGED
+        <<active, kind, parent, children, nodeKeys, nodeLevel,
+          previousLeaf, nextLeaf, root, firstLeaf, rightmost, treeHeight,
+          acked, pending, crashes>>
+--- REPLACE
+Recover ==
+    /\ ~ready
+    /\ pending.kind # "none"
+    /\ ready' = TRUE
+    /\ pending' = NoPending
+    /\ UNCHANGED
+        <<active, kind, parent, children, nodeKeys, nodeLevel,
+          previousLeaf, nextLeaf, root, firstLeaf, rightmost, treeHeight,
+          acked, crashes>>
+--- END

@@ -47,7 +47,7 @@ internal sealed partial class ShardRootGrain
     /// the entry in memory, where the end-of-pass flush attempts it again.
     /// </para>
     /// </summary>
-    private async Task ClearRemovedLeafAsync(GrainId leafId, string removal)
+    private async Task<bool> ClearRemovedLeafAsync(GrainId leafId, string removal)
     {
         if (!state.State.PendingLeafClears.Contains(leafId))
         {
@@ -71,7 +71,7 @@ internal sealed partial class ShardRootGrain
                 leafId);
         }
 
-        await TryClearPendingLeafAsync(leafId, removal);
+        return await TryClearPendingLeafAsync(leafId, removal);
     }
 
     /// <summary>
@@ -79,12 +79,13 @@ internal sealed partial class ShardRootGrain
     /// tree but could not clear, oldest first and at most
     /// <see cref="MaxPendingLeafClearRetriesPerPass"/> of them.
     /// </summary>
-    private async Task RetryPendingLeafClearsAsync()
+    private async Task<HashSet<GrainId>> RetryPendingLeafClearsAsync()
     {
+        var cleared = new HashSet<GrainId>();
         var owed = state.State.PendingLeafClears;
         if (owed.Count == 0)
         {
-            return;
+            return cleared;
         }
 
         // Snapshotted because a concurrent interleaved pass on this activation
@@ -94,10 +95,12 @@ internal sealed partial class ShardRootGrain
 
         foreach (var leafId in batch)
         {
-            await TryClearPendingLeafAsync(leafId, "a previously removed");
+            if (await TryClearPendingLeafAsync(leafId, "a previously removed"))
+                cleared.Add(leafId);
         }
 
         await FlushPendingLeafClearsAsync();
+        return cleared;
     }
 
     /// <summary>
@@ -154,7 +157,7 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task TryClearPendingLeafAsync(GrainId leafId, string removal)
+    private async Task<bool> TryClearPendingLeafAsync(GrainId leafId, string removal)
     {
         try
         {
@@ -170,7 +173,7 @@ internal sealed partial class ShardRootGrain
                 removal,
                 leafId);
 
-            return;
+            return false;
         }
 
         _leafGrains.TryRemove(leafId, out _);
@@ -179,5 +182,7 @@ internal sealed partial class ShardRootGrain
         {
             _pendingLeafClearsNeedPersist = true;
         }
+
+        return true;
     }
 }

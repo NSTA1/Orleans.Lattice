@@ -853,13 +853,23 @@ internal sealed partial class ShardRootGrain
                     prevId,
                     outcome);
 
-                await leaf.AbandonRetirementAsync();
+                var mayAbandonRetirement = outcome != LeafUnlinkOutcome.DeclinedReclaimPending;
+                if (!mayAbandonRetirement)
+                {
+                    var latestPredecessorProbe = await ResolveLeafGrain(prevId).GetReclaimProbeAsync();
+                    mayAbandonRetirement = latestPredecessorProbe.PendingReclaimSuccessorId != currentId;
+                }
+
+                if (mayAbandonRetirement)
+                    await leaf.AbandonRetirementAsync();
                 return Finding(OrphanedLeafDisposition.RefusedChainRace, keys.Count, verified);
             }
         }
         catch
         {
-            await leaf.AbandonRetirementAsync();
+            // The predecessor may have committed the unlink before a storage
+            // error surfaced. Its durable marker, not an in-memory rollback of
+            // the victim latch, determines whether a retry must finish cleanup.
             throw;
         }
 
@@ -874,17 +884,15 @@ internal sealed partial class ShardRootGrain
             }
             catch (Exception ex)
             {
-                // Nothing reads the back pointer to route, and the successor is
-                // still on the chain, so the reclaim walk's back-pointer repair
-                // re-points it on a later pass.
                 logger.LogWarning(
                     ex,
-                    "Shard {ShardIndex} of tree '{TreeId}' unspliced orphaned leaf {LeafId} but could not re-point its successor {NextLeaf} at predecessor {PrevLeaf}; a later pass repairs the back pointer.",
+                    "Shard {ShardIndex} of tree '{TreeId}' unspliced orphaned leaf {LeafId} but could not re-point its successor {NextLeaf} at predecessor {PrevLeaf}; its state and pending marker are retained for recovery.",
                     MyShardIndex,
                     TreeId,
                     currentId,
                     nextId,
                     prevId);
+                throw;
             }
         }
 
@@ -899,7 +907,10 @@ internal sealed partial class ShardRootGrain
         // cannot rediscover it: issue #2207. The clear is recorded durably as
         // owed before it is attempted, and a failure is retried from that
         // record rather than promised to a re-run that could never find it.
-        await ClearRemovedLeafAsync(currentId, "unspliced orphaned");
+        if (await ClearRemovedLeafAsync(currentId, "unspliced orphaned"))
+        {
+            await ResolveLeafGrain(prevId).CompletePendingReclaimAsync(currentId);
+        }
 
         _leafGrains.TryRemove(currentId, out _);
 

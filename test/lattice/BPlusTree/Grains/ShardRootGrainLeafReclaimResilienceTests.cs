@@ -53,6 +53,8 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
     private sealed class ReclaimHarness
     {
         public ShardRootGrain Grain { get; set; } = null!;
+        public required IGrainContext Context { get; init; }
+        public required IGrainFactory Factory { get; init; }
         public required IBPlusInternalGrain Root { get; init; }
         public required FakePersistentState<ShardRootState> State { get; init; }
         public required GrainId LeafA { get; init; }
@@ -85,6 +87,14 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
             Separators.RemoveAt(index);
             return true;
         }
+
+        public ShardRootGrain CreateGrain() => new(
+            Context,
+            State,
+            Factory,
+            TestOptionsResolver.Create(factory: Factory),
+            NullLogger<ShardRootGrain>.Instance,
+            TestMutationObservers.NoObservers());
     }
 
     private static ReclaimHarness CreateHarness()
@@ -135,6 +145,8 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
 
         var harness = new ReclaimHarness
         {
+            Context = context,
+            Factory = factory,
             Root = Substitute.For<IBPlusInternalGrain>(),
             State = state,
             LeafA = leafA,
@@ -181,9 +193,25 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
                     {
                         NextSibling = ci.ArgAt<GrainId?>(1),
                         HighKeyExclusive = ci.ArgAt<string?>(2),
+                        PendingReclaimSuccessorId = ci.Arg<GrainId>(),
+                        PendingReclaimNextId = ci.ArgAt<GrainId?>(1),
                     };
                     return Task.FromResult(LeafUnlinkOutcome.Unlinked);
                 });
+
+            leaf.CompletePendingReclaimAsync(Arg.Any<GrainId>()).Returns(ci =>
+            {
+                if (probes[self].PendingReclaimSuccessorId == ci.Arg<GrainId>())
+                {
+                    probes[self] = probes[self] with
+                    {
+                        PendingReclaimSuccessorId = null,
+                        PendingReclaimNextId = null,
+                    };
+                }
+
+                return Task.CompletedTask;
+            });
 
             harness.Leaves[id] = leaf;
         }
@@ -191,11 +219,7 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>())
             .Returns(ci => harness.Leaves[ci.Arg<GrainId>()]);
 
-        harness.Grain = new ShardRootGrain(
-            context, state, factory,
-            TestOptionsResolver.Create(factory: factory),
-            NullLogger<ShardRootGrain>.Instance,
-            TestMutationObservers.NoObservers());
+        harness.Grain = harness.CreateGrain();
 
         return harness;
     }
@@ -215,6 +239,7 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
         await h.Root.Received(1).RemoveChildAsync(h.LeafB);
         await h.C.Received(1).SetPrevSiblingAsync(h.LeafA);
         await h.B.Received(1).ClearGrainStateAsync();
+        await h.A.Received(1).CompletePendingReclaimAsync(h.LeafB);
         await h.B.DidNotReceive().AbandonRetirementAsync();
     }
 
@@ -260,12 +285,11 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
     }
 
     [Test]
-    public async Task A_throwing_compare_and_swap_unlatches_the_leaf_before_it_propagates()
+    public async Task A_throwing_compare_and_swap_keeps_the_leaf_latched_for_an_ambiguous_commit()
     {
-        // Same compensation as the declined swap, but on the exceptional path:
-        // the latch is released and the fault is then allowed out, because a
-        // swap whose outcome is unknown must not be reported as a clean
-        // decline.
+        // A persistence fault may be reported after the unlink committed. The
+        // caller cannot safely release the durable latch without first proving
+        // that the predecessor did not commit its marker.
         var h = CreateHarness();
         h.A.TryUnlinkSuccessorAsync(Arg.Any<GrainId>(), Arg.Any<GrainId?>(), Arg.Any<string?>())
             .Returns<LeafUnlinkOutcome>(_ => throw new InvalidOperationException("predecessor unavailable"));
@@ -273,17 +297,16 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
         Assert.That(async () => await h.Grain.ReclaimEmptyLeavesAsync(4),
             Throws.InstanceOf<InvalidOperationException>());
 
-        await h.B.Received(1).AbandonRetirementAsync();
+        await h.B.DidNotReceive().AbandonRetirementAsync();
         await h.B.DidNotReceive().ClearGrainStateAsync();
     }
 
     [Test]
-    public async Task A_routing_entry_that_will_not_retire_is_retried_and_then_given_up_on()
+    public async Task A_routing_entry_that_will_not_retire_keeps_the_victim_and_recovery_marker()
     {
-        // Past the compare-and-swap the fold has committed, so a routing entry
-        // that cannot be removed must not fail the fold: the range is already
-        // served by the predecessor. It is worth retrying because until it
-        // lands the latched leaf refuses writes on its range.
+        // Past the compare-and-swap the fold has committed, but clearing the
+        // victim while a route can still point at it would lose future writes.
+        // The durable predecessor marker must preserve the completion work.
         var h = CreateHarness();
         h.Root.RemoveChildAsync(Arg.Any<GrainId>())
             .Returns<bool>(_ => throw new InvalidOperationException("parent unavailable"));
@@ -296,9 +319,65 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
         // MaxRetries is 2, so the initial attempt plus two retries.
         await h.Root.Received(3).RemoveChildAsync(h.LeafB);
 
-        // The fold still finished its remaining tidy-up.
-        await h.C.Received(1).SetPrevSiblingAsync(h.LeafA);
+        await h.C.DidNotReceive().SetPrevSiblingAsync(h.LeafA);
+        await h.B.DidNotReceive().ClearGrainStateAsync();
+        Assert.That(h.Probes[h.LeafA].PendingReclaimSuccessorId, Is.EqualTo(h.LeafB));
+    }
+
+    [Test]
+    public async Task A_later_pass_finishes_route_retirement_before_clearing_the_victim()
+    {
+        var h = CreateHarness();
+        h.Root.RemoveChildAsync(Arg.Any<GrainId>())
+            .Returns<bool>(_ => throw new InvalidOperationException("parent unavailable"));
+
+        Assert.That(await h.Grain.ReclaimEmptyLeavesAsync(4), Is.EqualTo(1));
+        Assert.That(h.Probes[h.LeafA].PendingReclaimSuccessorId, Is.EqualTo(h.LeafB));
+        await h.B.DidNotReceive().ClearGrainStateAsync();
+
+        h.Root.RemoveChildAsync(Arg.Any<GrainId>())
+            .Returns(ci => Task.FromResult(h.RemoveChild(ci.Arg<GrainId>())));
+        h.Grain = h.CreateGrain();
+
+        var retry = await h.Grain.ReclaimEmptyLeavesAsync(4);
+
+        Assert.That(retry, Is.Zero, "recovery completes the earlier fold; it is not a new fold");
+        await h.Root.Received(4).RemoveChildAsync(h.LeafB);
         await h.B.Received(1).ClearGrainStateAsync();
+        await h.A.Received(1).CompletePendingReclaimAsync(h.LeafB);
+        Assert.That(h.Probes[h.LeafA].PendingReclaimSuccessorId, Is.Null);
+    }
+
+    [Test]
+    public async Task A_failed_successor_back_pointer_repair_keeps_the_reclaim_marker()
+    {
+        var h = CreateHarness();
+        h.C.SetPrevSiblingAsync(Arg.Any<GrainId?>())
+            .Returns(_ => Task.FromException(new InvalidOperationException("successor unavailable")));
+
+        Assert.That(await h.Grain.ReclaimEmptyLeavesAsync(1), Is.EqualTo(1),
+            "the predecessor unlink committed, so the fold remains counted");
+        Assert.That(h.Probes[h.LeafA].PendingReclaimSuccessorId, Is.EqualTo(h.LeafB));
+        Assert.That(h.Probes[h.LeafA].PendingReclaimNextId, Is.EqualTo(h.LeafC));
+        await h.B.DidNotReceive().ClearGrainStateAsync();
+        await h.A.DidNotReceive().CompletePendingReclaimAsync(h.LeafB);
+
+        Assert.That(await h.Grain.ReclaimEmptyLeavesAsync(1), Is.Zero,
+            "an incomplete pending reclaim is recovery work, not another fold");
+        Assert.That(h.Probes[h.LeafA].PendingReclaimSuccessorId, Is.EqualTo(h.LeafB));
+        await h.B.DidNotReceive().ClearGrainStateAsync();
+
+        h.C.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(ci =>
+        {
+            h.Probes[h.LeafC] = h.Probes[h.LeafC] with { PrevSibling = ci.Arg<GrainId?>() };
+            return Task.CompletedTask;
+        });
+
+        Assert.That(await h.Grain.ReclaimEmptyLeavesAsync(1), Is.Zero);
+        Assert.That(h.Probes[h.LeafC].PrevSibling, Is.EqualTo(h.LeafA));
+        Assert.That(h.Probes[h.LeafA].PendingReclaimSuccessorId, Is.Null);
+        await h.B.Received(1).ClearGrainStateAsync();
+        await h.A.Received(1).CompletePendingReclaimAsync(h.LeafB);
     }
 
     [Test]

@@ -1,0 +1,44 @@
+# Pairs with NoKeyLostOrDuplicated. A leaf split duplicates the donor's rows
+# and drops the right half of the acknowledged keys.
+MODULE: BirthLeafDuplicatesRows
+TARGET: NoKeyLostOrDuplicated
+CLASS: Invariant
+SUMMARY: a leaf split duplicates the donor rows and loses the right half
+PERTURBS: BirthLeaf
+
+--- FIND
+BirthLeaf ==
+    /\ ready
+    /\ pending.kind = "leaf-birth"
+    /\ LET donor == pending.donor
+           sibling == pending.sibling
+           leftKeys == LeftHalf(nodeKeys[donor])
+           rightKeys == RightHalf(nodeKeys[donor])
+       IN
+            /\ active' = active \cup {sibling}
+            /\ kind' =
+                [n \in NodePool |->
+                    IF n = sibling THEN "leaf" ELSE kind[n]]
+            /\ nodeKeys' =
+                [n \in NodePool |->
+                    IF n = donor THEN leftKeys
+                    ELSE IF n = sibling THEN rightKeys
+--- REPLACE
+BirthLeaf ==
+    /\ ready
+    /\ pending.kind = "leaf-birth"
+    /\ LET donor == pending.donor
+           sibling == pending.sibling
+           leftKeys == LeftHalf(nodeKeys[donor])
+           rightKeys == RightHalf(nodeKeys[donor])
+       IN
+            /\ active' = active \cup {sibling}
+            /\ kind' =
+                [n \in NodePool |->
+                    IF n = sibling THEN "leaf" ELSE kind[n]]
+            /\ nodeKeys' =
+                [n \in NodePool |->
+                    IF n = donor THEN leftKeys
+                    \* MUTATION: the sibling receives the donor's left half.
+                    ELSE IF n = sibling THEN leftKeys
+--- END

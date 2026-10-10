@@ -1,0 +1,30 @@
+# Pairs with RoutedKeysOwned. A separator above the right leaf's first key
+# sends that key down the preceding child path.
+MODULE: LinkLeafMisroutesKeys
+TARGET: RoutedKeysOwned
+CLASS: Invariant
+SUMMARY: a leaf split publishes a separator that misroutes a key
+PERTURBS: LinkLeaf
+
+--- FIND
+LinkLeaf ==
+    /\ ready
+    /\ pending.kind = "leaf-link"
+    /\ LET donor == pending.donor
+           sibling == pending.sibling
+           parentNode == pending.parent
+           newEntries == Append(
+               children[parentNode],
+               [node |-> sibling, separator |-> pending.separator])
+--- REPLACE
+LinkLeaf ==
+    /\ ready
+    /\ pending.kind = "leaf-link"
+    /\ LET donor == pending.donor
+           sibling == pending.sibling
+           parentNode == pending.parent
+\* MUTATION: raise the separator above the sibling's minimum key.
+           newEntries == Append(
+               children[parentNode],
+               [node |-> sibling, separator |-> pending.separator + 1])
+--- END

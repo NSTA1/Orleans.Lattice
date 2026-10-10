@@ -44,7 +44,8 @@ public sealed class TlcCiShardTests
     [Test]
     public void Every_category_routes_at_least_one_case_of_the_repository()
     {
-        var routed = SpecModuleCases.Mutations()
+        var routed = SpecModuleCases.Modules()
+            .Concat(SpecModuleCases.Mutations())
             .Concat(SpecModuleCases.Variants())
             .SelectMany(Categories)
             .Distinct()
@@ -116,6 +117,32 @@ public sealed class TlcCiShardTests
         var mutation = module.LoadMutations().First(m => m.Name.StartsWith(mutationPrefix, StringComparison.Ordinal));
 
         Assert.That(TlcCiShard.Of(module, mutation), Is.EqualTo(expected), $"{moduleName}/{mutation.Name}");
+    }
+
+    [Test]
+    public void Bplus_cascade_runs_are_partitioned_by_base_and_balanced_mutation_groups()
+    {
+        var module = Module("BPlusCascade");
+        var mutations = module.LoadMutations();
+        var loads = mutations
+            .GroupBy(mutation => TlcCiShard.Of(module, mutation)!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.BPlusCascadeBase));
+            Assert.That(loads.Keys, Is.EquivalentTo(new[]
+                { TlcCiShard.BPlusCascadeMutations1, TlcCiShard.BPlusCascadeMutations2 }));
+            Assert.That(
+                loads.Values.Max() - loads.Values.Min(),
+                Is.LessThanOrEqualTo(2),
+                "the BPlusCascade mutation cases must be spread across both TLC shards");
+            Assert.That(
+                mutations.Where(mutation => mutation.Target is "ParentChildAccounting" or "RecoverablePending" or "SeparatorRanges" or "ReachMaxHeight")
+                    .All(mutation => TlcCiShard.Of(module, mutation) == TlcCiShard.BPlusCascadeMutations2),
+                Is.True,
+                "mutations sharing one target property must stay together to reuse the same control run");
+        });
     }
 
     [Test]

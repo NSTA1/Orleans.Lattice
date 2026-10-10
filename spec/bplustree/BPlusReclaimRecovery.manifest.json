@@ -1,0 +1,13 @@
+{
+  "mutations": "reclaim-recovery-mutations",
+  "refinement": "BPlusReclaimRecoveryRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 6,
+    "properties": 1,
+    "actions": 9,
+    "mutations": 9,
+    "behaviourRows": 15,
+    "distinctStates": 24
+  }
+}

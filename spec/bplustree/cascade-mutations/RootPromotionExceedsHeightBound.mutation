@@ -1,0 +1,20 @@
+# Pairs with HeightBound. This mutation allows promotion beyond the documented
+# finite instance bound.
+MODULE: RootPromotionExceedsHeightBound
+TARGET: HeightBound
+CLASS: Invariant
+SUMMARY: root promotion grows beyond the configured model height
+PERTURBS: PromoteRoot
+
+--- FIND
+PromoteRoot ==
+    /\ ready
+    /\ pending.kind = "root-promotion"
+    /\ treeHeight < MaxHeight
+--- REPLACE
+PromoteRoot ==
+    /\ ready
+    /\ pending.kind = "root-promotion"
+\* MUTATION: permit promotion one level beyond the configured bound.
+    /\ treeHeight < MaxHeight + 1
+--- END

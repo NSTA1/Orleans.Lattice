@@ -1,0 +1,30 @@
+# Pairs with SeparatorRanges. The separator attached to a leaf sibling is
+# below the first key owned by that sibling.
+MODULE: LinkLeafBreaksSeparatorRange
+TARGET: SeparatorRanges
+CLASS: Invariant
+SUMMARY: a leaf split publishes a separator below the right leaf's first key
+PERTURBS: LinkLeaf
+
+--- FIND
+LinkLeaf ==
+    /\ ready
+    /\ pending.kind = "leaf-link"
+    /\ LET donor == pending.donor
+           sibling == pending.sibling
+           parentNode == pending.parent
+           newEntries == Append(
+               children[parentNode],
+               [node |-> sibling, separator |-> pending.separator])
+--- REPLACE
+LinkLeaf ==
+    /\ ready
+    /\ pending.kind = "leaf-link"
+    /\ LET donor == pending.donor
+           sibling == pending.sibling
+           parentNode == pending.parent
+\* MUTATION: lower the separator beneath the sibling's minimum key.
+           newEntries == Append(
+               children[parentNode],
+               [node |-> sibling, separator |-> pending.separator - 1])
+--- END

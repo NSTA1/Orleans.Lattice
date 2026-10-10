@@ -1,0 +1,23 @@
+# Pairs with NoRouteToClearedVictim. Clearing before route retirement can strand future writes.
+MODULE: ClearWhileRouted
+TARGET: NoRouteToClearedVictim
+CLASS: Invariant
+SUMMARY: the victim is cleared while a parent route may still select it
+PERTURBS: ClearVictim
+
+--- FIND
+ClearVictim ==
+    /\ ready
+    /\ pending = "victim"
+    /\ ~linked
+    /\ ~routed
+    /\ backLinkCorrect
+    /\ victimExists
+--- REPLACE
+ClearVictim ==
+    /\ ready
+    /\ pending = "victim"
+    /\ ~linked
+    /\ backLinkCorrect
+    /\ victimExists
+--- END

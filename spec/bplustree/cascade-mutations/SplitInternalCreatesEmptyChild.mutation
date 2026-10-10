@@ -1,0 +1,100 @@
+# Pairs with TypeOK. The internal split assigns its new sibling an invalid
+# level.
+MODULE: SplitInternalCreatesEmptyChild
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an internal split creates a sibling outside the level domain
+PERTURBS: SplitInternal
+
+--- FIND
+SplitInternal ==
+    /\ ready
+    /\ pending.kind = "internal-split"
+    /\ NodePool \ active # {}
+    /\ LET donor == pending.donor
+           sibling == FreshNode
+           oldParent == parent[donor]
+           middle == Len(children[donor]) \div 2
+           leftEntries == SubSeq(children[donor], 1, middle)
+           rightEntries == SubSeq(children[donor], middle + 1, Len(children[donor]))
+           promoted == rightEntries[1].separator
+           siblingEntries ==
+                [i \in 1..Len(rightEntries) |->
+                    IF i = 1
+                    THEN [rightEntries[i] EXCEPT !.separator = NoKey]
+                    ELSE rightEntries[i]]
+           moved == {rightEntries[i].node : i \in 1..Len(rightEntries)}
+           leftKeys ==
+                UNION {nodeKeys[leftEntries[i].node] : i \in 1..Len(leftEntries)}
+           rightKeys ==
+                UNION {nodeKeys[rightEntries[i].node] : i \in 1..Len(rightEntries)}
+       IN
+            /\ active' = active \cup {sibling}
+            /\ kind' =
+                [n \in NodePool |->
+                    IF n = sibling THEN "internal" ELSE kind[n]]
+            /\ parent' =
+                [n \in NodePool |->
+                    IF n \in moved THEN sibling ELSE parent[n]]
+            /\ children' =
+                [n \in NodePool |->
+                    IF n = donor THEN leftEntries
+                    ELSE IF n = sibling THEN siblingEntries
+                    ELSE children[n]]
+            /\ nodeKeys' =
+                [n \in NodePool |->
+                    IF n = donor THEN leftKeys
+                    ELSE IF n = sibling THEN rightKeys
+                    ELSE IF oldParent # NoNode /\ n \in Ancestors(oldParent)
+                         THEN nodeKeys[n] \ rightKeys
+                         ELSE nodeKeys[n]]
+            /\ nodeLevel' =
+                [n \in NodePool |->
+                    IF n = sibling THEN nodeLevel[donor] ELSE nodeLevel[n]]
+--- REPLACE
+SplitInternal ==
+    /\ ready
+    /\ pending.kind = "internal-split"
+    /\ NodePool \ active # {}
+    /\ LET donor == pending.donor
+           sibling == FreshNode
+           oldParent == parent[donor]
+           middle == Len(children[donor]) \div 2
+           leftEntries == SubSeq(children[donor], 1, middle)
+           rightEntries == SubSeq(children[donor], middle + 1, Len(children[donor]))
+           promoted == rightEntries[1].separator
+           siblingEntries ==
+                [i \in 1..Len(rightEntries) |->
+                    IF i = 1
+                    THEN [rightEntries[i] EXCEPT !.separator = NoKey]
+                    ELSE rightEntries[i]]
+           moved == {rightEntries[i].node : i \in 1..Len(rightEntries)}
+           leftKeys ==
+                UNION {nodeKeys[leftEntries[i].node] : i \in 1..Len(leftEntries)}
+           rightKeys ==
+                UNION {nodeKeys[rightEntries[i].node] : i \in 1..Len(rightEntries)}
+       IN
+            /\ active' = active \cup {sibling}
+            /\ kind' =
+                [n \in NodePool |->
+                    IF n = sibling THEN "internal" ELSE kind[n]]
+            /\ parent' =
+                [n \in NodePool |->
+                    IF n \in moved THEN sibling ELSE parent[n]]
+            /\ children' =
+                [n \in NodePool |->
+                    IF n = donor THEN leftEntries
+                    ELSE IF n = sibling THEN siblingEntries
+                    ELSE children[n]]
+            /\ nodeKeys' =
+                [n \in NodePool |->
+                    IF n = donor THEN leftKeys
+                    ELSE IF n = sibling THEN rightKeys
+                    ELSE IF oldParent # NoNode /\ n \in Ancestors(oldParent)
+                         THEN nodeKeys[n] \ rightKeys
+                         ELSE nodeKeys[n]]
+            /\ nodeLevel' =
+                [n \in NodePool |->
+                    \* MUTATION: an active internal node has level zero.
+                    IF n = sibling THEN 0 ELSE nodeLevel[n]]
+--- END

@@ -21,7 +21,7 @@ public static class SpecModuleCases
     public const string SmokeTestName = "The_atomic_commit_base_specification_holds";
 
     /// <summary>One case per discovered module.</summary>
-    public static IEnumerable<TestCaseData> Modules() => Expand(ModulesFor);
+    public static IEnumerable<TestCaseData> Modules() => Expand(ModulesFor).Select(TlcCiShard.Tag);
 
     /// <summary>The single case for <paramref name="module"/>.</summary>
     public static IEnumerable<object[]> ModulesFor(SpecModule module)

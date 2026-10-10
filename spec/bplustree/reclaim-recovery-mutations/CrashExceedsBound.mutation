@@ -1,0 +1,12 @@
+# Pairs with TypeOK and keeps the crash action tied to its declared finite bound.
+MODULE: CrashExceedsBound
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a crash exceeds the configured crash bound
+PERTURBS: Crash
+
+--- FIND
+    /\ crashes' = crashes + 1
+--- REPLACE
+    /\ crashes' = MaxCrashes + 1
+--- END

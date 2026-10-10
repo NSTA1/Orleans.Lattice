@@ -1,0 +1,33 @@
+# Pairs with RecoverablePending. A crash discards the durable evidence that an
+# allocated node still needs to be linked.
+MODULE: CrashDropsDurableSplitIntent
+TARGET: RecoverablePending
+CLASS: Invariant
+SUMMARY: crash clears the split intent while a sibling is detached
+PERTURBS: Crash
+
+--- FIND
+Crash ==
+    /\ ready
+    /\ pending.kind # "none"
+    /\ crashes < MaxCrashes
+    /\ ready' = FALSE
+    /\ crashes' = crashes + 1
+    /\ UNCHANGED
+        <<active, kind, parent, children, nodeKeys, nodeLevel,
+          previousLeaf, nextLeaf, root, firstLeaf, rightmost, treeHeight,
+          acked, pending>>
+--- REPLACE
+Crash ==
+    /\ ready
+    /\ pending.kind # "none"
+    /\ crashes < MaxCrashes
+\* MUTATION: discard the durable recovery evidence.
+    /\ ready' = FALSE
+    /\ pending' = NoPending
+    /\ crashes' = crashes + 1
+    /\ UNCHANGED
+        <<active, kind, parent, children, nodeKeys, nodeLevel,
+          previousLeaf, nextLeaf, root, firstLeaf, rightmost, treeHeight,
+          acked>>
+--- END

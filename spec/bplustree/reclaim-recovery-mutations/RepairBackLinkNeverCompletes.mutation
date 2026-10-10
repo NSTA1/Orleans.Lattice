@@ -1,0 +1,23 @@
+# Pairs with PendingEventuallyCompletes. A retry that never repairs the
+# successor back link cannot safely clear the victim or retire its marker.
+MODULE: RepairBackLinkNeverCompletes
+TARGET: PendingEventuallyCompletes
+CLASS: Temporal
+SUMMARY: the successor back link remains stale forever
+PERTURBS: RepairBackLink
+
+--- FIND
+RepairBackLink ==
+    /\ ready
+    /\ pending = "victim"
+    /\ ~linked
+    /\ ~backLinkCorrect
+    /\ backLinkCorrect' = TRUE
+--- REPLACE
+RepairBackLink ==
+    /\ ready
+    /\ pending = "victim"
+    /\ ~linked
+    /\ ~backLinkCorrect
+    /\ backLinkCorrect' = FALSE
+--- END
