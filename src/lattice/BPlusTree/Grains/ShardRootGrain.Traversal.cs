@@ -825,6 +825,18 @@ internal sealed partial class ShardRootGrain
             throw new ArgumentException("A capture split must identify its donor leaf.", nameof(splitResult));
         }
 
+        // Promoting a one-leaf root seeds the old root leaf's parent pointer.
+        // That leaf is this capture caller, so waiting for its SetParentAsync
+        // would queue behind the capture that is waiting for this root call.
+        // Persist the recoverable link and let the next root operation promote
+        // it after capture has returned.
+        if (RootIsLeafTyped)
+        {
+            var deferred = new List<LinkWork>(1) { new(splitResult, 0, null) };
+            await RecordPendingChildLinksAsync(deferred, trackInFlight: false);
+            return;
+        }
+
         // The capture caller clears the donor marker after this durable link
         // completes. Calling back into that leaf here would deadlock its
         // capture turn while it awaits the root.
@@ -843,15 +855,21 @@ internal sealed partial class ShardRootGrain
         bool acknowledgeDonors = true)
     {
         using var routingMutation = EnterRoutingMutation();
+        List<LinkWork> work;
         await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            await LinkSplitLockedAsync(splitResult, height, acknowledgeDonors);
+            work = await LinkSplitLockedAsync(splitResult, height);
         }
         finally
         {
             _inFlightChildLinks.Clear();
             _splitLinkGate.Release();
+        }
+
+        if (acknowledgeDonors)
+        {
+            await AcknowledgeRecordedSplitsAsync(work);
         }
 
         return null;
@@ -865,10 +883,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private readonly record struct LinkWork(SplitResult Split, int Height, PendingChildLink? Intent);
 
-    private async Task LinkSplitLockedAsync(
-        SplitResult splitResult,
-        int height,
-        bool acknowledgeDonors)
+    private async Task<List<LinkWork>> LinkSplitLockedAsync(SplitResult splitResult, int height)
     {
         var work = new List<LinkWork>(1 + (splitResult.Additional?.Length ?? 0));
         foreach (var single in FlattenSplit(splitResult))
@@ -882,13 +897,33 @@ internal sealed partial class ShardRootGrain
         if (height >= 0)
         {
             await RecordPendingChildLinksAsync(work);
-            if (acknowledgeDonors)
-            {
-                await AcknowledgeRecordedSplitsAsync(work);
-            }
         }
 
         await DrainLinkWorkLockedAsync(work);
+        await DrainDeferredChildLinksLockedAsync();
+        return work;
+    }
+
+    private async Task DrainDeferredChildLinksLockedAsync()
+    {
+        var deferred = state.State.PendingChildLinks
+            .Where(intent => !_inFlightChildLinks.Contains(intent))
+            .ToArray();
+
+        foreach (var intent in deferred)
+        {
+            _inFlightChildLinks.Add(intent);
+            var height = intent.ChildIsLeaf
+                ? 0
+                : await MeasureInternalHeightAsync(intent.ChildId);
+            var split = new SplitResult
+            {
+                PromotedKey = intent.PromotedKey,
+                NewSiblingId = intent.ChildId,
+                ChildIsLeaf = intent.ChildIsLeaf,
+            };
+            await DrainLinkWorkLockedAsync([new LinkWork(split, height, intent)]);
+        }
     }
 
     // Issue #4795. Best-effort: an unacknowledged record merely re-surfaces
@@ -1098,14 +1133,17 @@ internal sealed partial class ShardRootGrain
     /// the ordinary interrupted-split recovery rather than being stranded
     /// reachable-by-chain but unreachable-by-descent.
     /// </remarks>
-    private async Task RecordPendingChildLinksAsync(List<LinkWork> work)
+    private async Task RecordPendingChildLinksAsync(List<LinkWork> work, bool trackInFlight = true)
     {
         for (var i = 0; i < work.Count; i++)
         {
             var intent = NewPendingChildLink(work[i].Split);
             work[i] = work[i] with { Intent = intent };
             state.State.PendingChildLinks.Add(intent);
-            _inFlightChildLinks.Add(intent);
+            if (trackInFlight)
+            {
+                _inFlightChildLinks.Add(intent);
+            }
         }
 
         try

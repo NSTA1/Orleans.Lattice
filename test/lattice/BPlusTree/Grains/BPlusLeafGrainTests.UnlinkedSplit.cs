@@ -5,6 +5,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
+using System.Reflection;
 using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -89,6 +90,38 @@ public partial class BPlusLeafGrainTests
         await grain.AcknowledgeSplitLinkRecordedAsync(GrainId.Create("leaf", Guid.NewGuid().ToString()));
 
         Assert.That(state.State.UnlinkedSplitSiblingId, Is.EqualTo(split.NewSiblingId));
+    }
+
+    [Test]
+    public async Task Acknowledging_a_recorded_link_does_not_wait_for_an_in_flight_split()
+    {
+        var (grain, state, split) = await CompleteADivisionAsync();
+        var gateField = typeof(BPlusLeafGrain).GetField("_splitGate", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(gateField, Is.Not.Null, "_splitGate field not found - was it renamed?");
+        var gate = (SemaphoreSlim)gateField!.GetValue(grain)!;
+        Assert.That(gate.Wait(0), Is.True, "gate should start free");
+
+        Task acknowledgement;
+        bool completedWhileGateHeld;
+        try
+        {
+            acknowledgement = grain.AcknowledgeSplitLinkRecordedAsync(split.NewSiblingId);
+            completedWhileGateHeld = await Task.WhenAny(acknowledgement, Task.Delay(TimeSpan.FromSeconds(1)))
+                == acknowledgement;
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        await acknowledgement;
+        Assert.That(completedWhileGateHeld, Is.True,
+            "A capture recheck nested in a split must not wait for the split gate it is nested under.");
+        Assert.That(state.State.UnlinkedSplitSiblingId, Is.EqualTo(split.NewSiblingId),
+            "A contended acknowledgement must leave the durable marker for a later retry.");
+
+        await grain.AcknowledgeSplitLinkRecordedAsync(split.NewSiblingId);
+        Assert.That(state.State.UnlinkedSplitSiblingId, Is.Null);
     }
 
     [Test]

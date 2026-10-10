@@ -90,6 +90,33 @@ public sealed partial class ShardRootGrainSplitLinkTests
     }
 
     [Test]
+    public async Task A_capture_link_can_enter_while_another_split_acknowledges_its_donor()
+    {
+        var h = CreateTwoLevelHarness();
+        var captureSibling = GrainId.Create("leaf", "capture-sibling");
+        Task? captureLink = null;
+        var captureCompletedBeforeAcknowledgementReturned = false;
+
+        h.Leaf(LeftLeafId).SetAsync("c", Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(
+            LeafSplit("d") with { Donor = LeftLeafId }));
+        h.Leaf(LeftLeafId).AcknowledgeSplitLinkRecordedAsync(Arg.Any<GrainId>())
+            .Returns(async _ =>
+            {
+                captureLink = h.Grain.LinkLeafSplitFromCaptureAsync(
+                    LeafSplit("e", captureSibling) with { Donor = LeftLeafId });
+                captureCompletedBeforeAcknowledgementReturned =
+                    await Task.WhenAny(captureLink, Task.Delay(TimeSpan.FromSeconds(1))) == captureLink;
+            });
+
+        await h.Grain.SetAsync("c", [1]);
+        await captureLink!;
+
+        Assert.That(captureCompletedBeforeAcknowledgementReturned, Is.True,
+            "The root must release its split-link gate before awaiting a donor acknowledgement, " +
+            "so a capture link from that donor can make progress.");
+    }
+
+    [Test]
     public async Task A_capture_split_does_not_call_back_to_acknowledge_its_waiting_donor()
     {
         var h = CreateTwoLevelHarness();
@@ -98,6 +125,39 @@ public sealed partial class ShardRootGrainSplitLinkTests
             LeafSplit("d") with { Donor = LeftLeafId });
 
         await h.Leaf(LeftLeafId).DidNotReceive().AcknowledgeSplitLinkRecordedAsync(Arg.Any<GrainId>());
+        Assert.That(h.State.State.PendingChildLinks, Is.Empty);
+    }
+
+    [Test]
+    public async Task A_capture_split_during_root_promotion_is_deferred_until_the_root_is_installed()
+    {
+        var h = CreateTwoLevelHarness();
+        h.State.State.RootNodeId = LeftLeafId;
+        h.State.State.RootIsLeaf = true;
+        h.Leaf(LeftLeafId).SetAsync("c", Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(
+            LeafSplit("d") with { Donor = LeftLeafId }));
+
+        var captureSibling = GrainId.Create("leaf", "capture-sibling");
+        Task? captureLink = null;
+        var captureReturnedDuringPromotion = false;
+        h.NewRoot.InitializeAsync(Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
+            .Returns(async _ =>
+            {
+                h.Routing[NewRootId] = Table(true, (null, LeftLeafId), ("d", SiblingId));
+                h.Internals[NewRootId] = h.NewRoot;
+                captureLink = h.Grain.LinkLeafSplitFromCaptureAsync(
+                    LeafSplit("e", captureSibling) with { Donor = LeftLeafId });
+                captureReturnedDuringPromotion =
+                    await Task.WhenAny(captureLink, Task.Delay(TimeSpan.FromSeconds(1))) == captureLink;
+            });
+
+        await h.Grain.SetAsync("c", [1]);
+        await captureLink!;
+
+        Assert.That(captureReturnedDuringPromotion, Is.True,
+            "Capture on the old root leaf must return after persisting its link intent; " +
+            "root initialization waits to seed that same leaf's parent.");
+        await h.NewRoot.Received(1).AcceptSplitAsync("e", captureSibling);
         Assert.That(h.State.State.PendingChildLinks, Is.Empty);
     }
 

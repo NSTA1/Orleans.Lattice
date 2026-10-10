@@ -819,7 +819,16 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task AcknowledgeSplitLinkRecordedAsync(GrainId siblingId)
     {
-        await _splitGate.WaitAsync().ConfigureAwait(true);
+        // A checkpoint flush can synchronously run a snapshot recheck while a
+        // foreground split still owns this gate. That capture may link this
+        // donor's split before returning to the split that owns the gate; waiting
+        // here would make the outer split wait on its own gate. The durable
+        // unlinked marker is safe to leave for the next operation to re-surface.
+        if (!_splitGate.Wait(0))
+        {
+            return;
+        }
+
         try
         {
             if (state.State.UnlinkedSplitSiblingId != siblingId)
