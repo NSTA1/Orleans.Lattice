@@ -34,6 +34,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Routed reads resolve the registry once.** Opening a state subscription and resolving a fenced read's shard each made two serial registry calls for one entry's fields. Each reads the entry once now: 2.0x faster per open or resolve and 41-44% less allocated. ([#4813](https://github.com/NSTA1/Orleans.Lattice/pull/4813)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
+
+- **Performance - Snapshot exports make fewer registry reads.** An export read the routed copy, shard map and entry separately when capturing its generations and walking tombstones and prepared records. It derives them from one entry read per step: 10 serial reads drop to 4, 2.5x faster. ([#4813](https://github.com/NSTA1/Orleans.Lattice/pull/4813)) (`Orleans.Lattice.Replication`)
+
 - **Performance - Atomic tag commits read row state in one call.** A flag-mode value-and-tags commit read each tag's two index rows with serial calls, 2N round trips for N tags. It reads them all in one batched call now: 4.8-12.2x faster and 68-80% less allocated. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice`)
 
 - **Performance - Tag index coverage markers write in one batch.** Repairing a tag index's covered-tree markers wrote one marker per tree in series. They are written in one batched call now, or a bounded concurrent wave in flag mode: 3.4-14.2x faster. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice`)
