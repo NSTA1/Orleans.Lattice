@@ -44,7 +44,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **Explorer - Reliable picker inputs.** Mixed-validity paste preserves unfinished text, confirmations refuse answers from a replaced source, and calendar rendering and navigation remain usable at the first and last supported dates. ([PR](https://github.com/NSTA1/Orleans.Lattice/pull/PR_NUMBER)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Reliable picker inputs.** Mixed-validity paste preserves unfinished text, confirmations refuse answers from a replaced source, and calendar rendering and navigation remain usable at the first and last supported dates. ([#4797](https://github.com/NSTA1/Orleans.Lattice/pull/4797)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Leaf - Warm leaves make checkpoint progress.** Root and sibling leaves now arm the coverage-lag timer after durable identity is seeded, so foreground-only writes can reach snapshot-backed checkpoints without deactivation. ([#3314](https://github.com/NSTA1/Orleans.Lattice/issues/3314)) (`Orleans.Lattice`)
 - **Replication - Change-feed terminals follow their prepares.** A post-terminal tail pass recovers prepares that raced the initial partition heads, preventing an observed saga terminal from reaching consumers before its prepares. ([#4511](https://github.com/NSTA1/Orleans.Lattice/issues/4511)) (`Orleans.Lattice.Replication`)
