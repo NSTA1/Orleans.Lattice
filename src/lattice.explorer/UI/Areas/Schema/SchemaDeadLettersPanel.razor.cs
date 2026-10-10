@@ -64,6 +64,11 @@ public partial class SchemaDeadLettersPanel : IDisposable
     /// <returns>The clipped key.</returns>
     internal static string Clip(string key) => key.Length > KeyCharacters ? string.Concat(LtTextCut.Prefix(key, KeyCharacters), "...") : key;
 
+    /// <summary>Whether an entry's preview is a cut-short prefix of the value it was taken from.</summary>
+    /// <param name="entry">The entry.</param>
+    /// <returns><see langword="true"/> when the value was longer than its preview.</returns>
+    internal static bool Truncated(LatticeSchemaDeadLetterEntry entry) => entry.ValueByteLength > entry.ValuePreview.Length;
+
     private async Task CountAsync()
     {
         if (Workspace is not { } workspace || !workspace.Grants.ViewDeadLetters)

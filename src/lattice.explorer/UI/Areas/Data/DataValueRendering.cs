@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Unicode;
 using Orleans.Lattice.Explorer.Core.Data;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
@@ -67,12 +68,12 @@ internal static class DataValueRendering
                 return new DataRenderedValue("CRDT members", RenderMembers(members), null);
 
             case DataValueRenderer.Text:
-                return new DataRenderedValue("UTF-8 text", Encoding.UTF8.GetString(bytes), Join(preview, "Bytes that are not valid UTF-8 are shown as a replacement character."));
+                return new DataRenderedValue("UTF-8 text", Decode(bytes, truncated), Join(preview, "Bytes that are not valid UTF-8 are shown as a replacement character."));
 
             case DataValueRenderer.Json:
                 return TryIndent(bytes, out var json)
                     ? new DataRenderedValue("JSON", json, preview)
-                    : new DataRenderedValue("UTF-8 text", Encoding.UTF8.GetString(bytes), Join(preview, "This value is not valid JSON, so it is shown as text."));
+                    : new DataRenderedValue("UTF-8 text", Decode(bytes, truncated), Join(preview, "This value is not valid JSON, so it is shown as text."));
 
             case DataValueRenderer.Hex:
                 return new DataRenderedValue("Hex", ValueRenderer.HexDump(bytes), preview);
@@ -183,6 +184,26 @@ internal static class DataValueRendering
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Decodes bytes as UTF-8, invalid sequences as replacement characters. A preview
+    /// cut inside a character drops the partial character rather than showing it as
+    /// one, since those bytes were not invalid, only not fetched.
+    /// </summary>
+    /// <param name="bytes">The bytes.</param>
+    /// <param name="truncated">Whether the bytes are a prefix of a longer value.</param>
+    /// <returns>The text.</returns>
+    internal static string Decode(byte[] bytes, bool truncated)
+    {
+        if (!truncated)
+        {
+            return Encoding.UTF8.GetString(bytes);
+        }
+
+        var chars = new char[bytes.Length];
+        Utf8.ToUtf16(bytes, chars, out _, out var written, replaceInvalidSequences: true, isFinalBlock: false);
+        return new string(chars, 0, written);
     }
 
     private static string? Join(string? first, string second) => first is null ? second : first + " " + second;
