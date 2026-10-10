@@ -58,8 +58,6 @@ public sealed class ExplorerSession : IExplorerSession
                 return IsConfigured;
             }
 
-            _initialized = true;
-
             var configuration = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
 
             // No persisted configuration yet: fall back to the launcher-friendly
@@ -82,6 +80,7 @@ public sealed class ExplorerSession : IExplorerSession
                 await Connection.ConfigureAsync(configuration.ToConnectionSettings(), cancellationToken).ConfigureAwait(false);
             }
 
+            _initialized = true;
             return IsConfigured;
         }
         finally
@@ -102,13 +101,13 @@ public sealed class ExplorerSession : IExplorerSession
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            _initialized = true;
             await _store.SaveAsync(configuration, cancellationToken).ConfigureAwait(false);
             // Expose the configuration before reconfiguring the connection (see
             // InitializeAsync) so connection-status observers see Current set.
             Current = configuration;
             IsConfigured = true;
             await Connection.ConfigureAsync(configuration.ToConnectionSettings(), cancellationToken).ConfigureAwait(false);
+            _initialized = true;
         }
         finally
         {

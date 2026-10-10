@@ -23,8 +23,8 @@ public interface IExplorerSession
 
     /// <summary>
     /// Loads any persisted configuration and, when present and valid, connects.
-    /// Idempotent: the first call performs the work and later calls return the
-    /// current state. Returns <see langword="true"/> when configured.
+    /// Idempotent after a successful call; failed or cancelled work can be retried.
+    /// Returns <see langword="true"/> when configured.
     /// </summary>
     Task<bool> InitializeAsync(CancellationToken cancellationToken = default);
 
