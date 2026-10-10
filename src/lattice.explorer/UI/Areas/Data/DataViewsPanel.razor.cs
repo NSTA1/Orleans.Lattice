@@ -72,20 +72,43 @@ public partial class DataViewsPanel : IDisposable
         }
 
         _loadedFor = workspace.Tree.StateId;
+        var token = _lifetime.Renew();
         _watch.Clear();
+        _pending = null;
+        _starting = null;
+        _cancelling = false;
         _views = workspace.Tree.Kind == DataTreeKind.View ? [workspace.Tree] : workspace.Directory.ViewsOf(workspace.Tree);
+        _statuses.Clear();
         _administrable.Clear();
         var operations = TreeAdminOperationsAccess.Of(Gate.Admin);
-        foreach (var view in _views)
+        try
         {
-            if (operations is not null && workspace.OffersAdministration && view.SourceStateId is { } source && await Gate.CanAdministerAsync(source, _lifetime.Token))
+            foreach (var view in _views)
             {
-                _administrable.Add(view.StateId);
+                if (operations is not null && workspace.OffersAdministration && view.SourceStateId is { } source)
+                {
+                    var allowed = await Gate.CanAdministerAsync(source, token);
+                    if (token.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    if (allowed)
+                    {
+                        _administrable.Add(view.StateId);
+                    }
+                }
+            }
+
+            await RefreshStatusesAsync(token);
+            if (!token.IsCancellationRequested)
+            {
+                await ResumeAsync(operations, token);
             }
         }
-
-        await RefreshStatusesAsync();
-        await ResumeAsync(operations);
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
     }
 
     /// <inheritdoc />
@@ -128,6 +151,18 @@ public partial class DataViewsPanel : IDisposable
 
     private async Task RefreshStatusesAsync()
     {
+        var token = _lifetime.Token;
+        try
+        {
+            await RefreshStatusesAsync(token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task RefreshStatusesAsync(CancellationToken token)
+    {
         _statuses.Clear();
         if (Gate.Admin is not { } admin)
         {
@@ -136,15 +171,21 @@ public partial class DataViewsPanel : IDisposable
 
         foreach (var view in _views)
         {
-            _statuses[view.StateId] = await StatusAsync(admin, view);
+            var status = await StatusAsync(admin, view, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _statuses[view.StateId] = status;
         }
     }
 
-    private async Task<TreeViewStatus?> StatusAsync(ILatticeTreeAdmin admin, DataTreeEntry view)
+    private static async Task<TreeViewStatus?> StatusAsync(ILatticeTreeAdmin admin, DataTreeEntry view, CancellationToken token)
     {
         try
         {
-            return await admin.GetViewStatusAsync(ViewName(view), _lifetime.Token);
+            return await admin.GetViewStatusAsync(ViewName(view), token);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -152,7 +193,7 @@ public partial class DataViewsPanel : IDisposable
         }
     }
 
-    private async Task ResumeAsync(ILatticeTreeAdminOperations? operations)
+    private async Task ResumeAsync(ILatticeTreeAdminOperations? operations, CancellationToken token)
     {
         if (operations is null || _administrable.Count == 0)
         {
@@ -171,9 +212,9 @@ public partial class DataViewsPanel : IDisposable
 
         try
         {
-            await _watch.ResumeAsync(operations, candidates, _lifetime.Token);
+            await _watch.ResumeAsync(operations, candidates, token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
     }
@@ -197,6 +238,7 @@ public partial class DataViewsPanel : IDisposable
 
         _pending = null;
         _starting = pending;
+        var token = _lifetime.Token;
         StateHasChanged();
         var name = ViewName(pending.View);
         try
@@ -205,41 +247,59 @@ public partial class DataViewsPanel : IDisposable
                 operations,
                 pending.Rebuild ? TreeAdminOperationKinds.ViewRebuild : TreeAdminOperationKinds.ViewReconcile,
                 name,
-                (operationId, ct) => pending.Rebuild
-                    ? operations.StartViewRebuildAsync(name, operationId, ct)
-                    : operations.StartViewReconcileAsync(name, operationId, ct),
-                _lifetime.Token);
+                async (operationId, ct) =>
+                {
+                    var handle = await (pending.Rebuild
+                        ? operations.StartViewRebuildAsync(name, operationId, ct)
+                        : operations.StartViewReconcileAsync(name, operationId, ct));
+                    ct.ThrowIfCancellationRequested();
+                    return handle;
+                },
+                token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            Toasts.Show(DataErrors.Describe(exception, pending.Rebuild ? "rebuild this view" : "reconcile this view"), LtToastTone.Danger);
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(DataErrors.Describe(exception, pending.Rebuild ? "rebuild this view" : "reconcile this view"), LtToastTone.Danger);
+            }
         }
         finally
         {
-            _starting = null;
+            if (!token.IsCancellationRequested)
+            {
+                _starting = null;
+            }
         }
     }
 
     private async Task CancelAsync()
     {
+        var token = _lifetime.Token;
         _cancelling = true;
         try
         {
-            await _watch.CancelAsync(_lifetime.Token);
+            await _watch.CancelAsync(token);
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            Toasts.Show(DataErrors.Describe(exception, "stop this operation"), LtToastTone.Danger);
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(DataErrors.Describe(exception, "stop this operation"), LtToastTone.Danger);
+            }
         }
         finally
         {
-            _cancelling = false;
+            if (!token.IsCancellationRequested)
+            {
+                _cancelling = false;
+            }
         }
     }
 
@@ -247,11 +307,12 @@ public partial class DataViewsPanel : IDisposable
 
     private void OnWatchFinished(LatticeOperationStatus status)
     {
+        var token = _lifetime.Token;
         var view = FollowedView;
         var name = FollowedName;
         _ = InvokeAsync(async () =>
         {
-            if (_lifetime.IsLeft)
+            if (token.IsCancellationRequested)
             {
                 return;
             }
@@ -270,7 +331,20 @@ public partial class DataViewsPanel : IDisposable
                     _watch.Clear();
                     if (view is not null && Gate.Admin is { } admin)
                     {
-                        _statuses[view.StateId] = await StatusAsync(admin, view);
+                        try
+                        {
+                            var refreshed = await StatusAsync(admin, view, token);
+                            if (token.IsCancellationRequested)
+                            {
+                                return;
+                            }
+
+                            _statuses[view.StateId] = refreshed;
+                        }
+                        catch (OperationCanceledException) when (token.IsCancellationRequested)
+                        {
+                            return;
+                        }
                     }
 
                     break;

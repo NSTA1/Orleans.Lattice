@@ -60,23 +60,44 @@ public partial class DataDeadLettersPanel : IDisposable
 
     private async Task ReloadAsync()
     {
+        var token = _lifetime.Renew();
         _entries = [];
         _continuation = null;
         _selected = null;
         _count = null;
+        _error = null;
+        _loading = true;
         if (Reader() is { } reader && Workspace is { } workspace)
         {
             try
             {
-                _count = await reader.CountAsync(workspace.Tree.StateId, _lifetime.Token);
+                var count = await reader.CountAsync(workspace.Tree.StateId, token);
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                _count = count;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 // The count is a summary; the list below reports a failure.
             }
+
+            if (!token.IsCancellationRequested)
+            {
+                await ReadPageAsync(reader, workspace.Tree.StateId, token);
+            }
+
+            return;
         }
 
-        await LoadMoreAsync();
+        _loading = false;
+        _error = "This Explorer has no state API to read dead letters through.";
     }
 
     private async Task LoadMoreAsync()
@@ -92,24 +113,40 @@ public partial class DataDeadLettersPanel : IDisposable
             return;
         }
 
+        await ReadPageAsync(reader, workspace.Tree.StateId, _lifetime.Token);
+    }
+
+    private async Task ReadPageAsync(IDeadLetterReader reader, string treeId, CancellationToken token)
+    {
         _loading = true;
         _error = null;
         try
         {
-            var page = await reader.ListAsync(workspace.Tree.StateId, PageSize, _continuation, _lifetime.Token);
+            var page = await reader.ListAsync(treeId, PageSize, _continuation, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             _entries = [.. _entries, .. page.Entries];
             _continuation = page.HasMore ? page.ContinuationToken : null;
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            _error = DataErrors.Describe(exception, "read this tree's dead letters");
+            if (!token.IsCancellationRequested)
+            {
+                _error = DataErrors.Describe(exception, "read this tree's dead letters");
+            }
         }
         finally
         {
-            _loading = false;
+            if (!token.IsCancellationRequested)
+            {
+                _loading = false;
+            }
         }
     }
 
