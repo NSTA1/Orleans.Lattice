@@ -1113,22 +1113,44 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             var builder = _grainFactory.BeginAtomicWrite(opId)
                 .ForTree(treeId).Set(key, value)
                 .ForTree(_indexTreeId);
-            foreach (var tag in tags)
+            if (FlagMode)
             {
-                ValidateTag(tag);
-                var tagRow = RowKey(tag, treeId, key);
-                var keyRow = KeyRowKey(treeId, key, tag);
-                if (FlagMode)
+                // Every row is minted against its own current state, so the
+                // states must be read before anything is staged. They used to
+                // be read one GetAsync at a time - two serial index-tree round
+                // trips per tag ahead of the saga. The rows are distinct keys
+                // read without any intervening write, so one GetManyAsync
+                // returns exactly the states those reads returned: GetManyAsync
+                // fans the keys out to their owning shards in parallel, decodes
+                // values through the same value decoder, and reports a key the
+                // access gate withholds as absent, which GetAsync also returned
+                // as null. Validation is hoisted ahead of the read so a rejected
+                // tag costs no round trip at all.
+                var rowKeys = new List<string>(tags.Length * 2);
+                foreach (var tag in tags)
                 {
-                    var (tagState, tagDelta) = await MintFlagEnableRowAsync(tagRow, cancellationToken).ConfigureAwait(false);
-                    var (keyState, keyDelta) = await MintFlagEnableRowAsync(keyRow, cancellationToken).ConfigureAwait(false);
-                    builder.SetWithDelta(tagRow, tagState, tagDelta);
-                    builder.SetWithDelta(keyRow, keyState, keyDelta);
+                    ValidateTag(tag);
+                    rowKeys.Add(RowKey(tag, treeId, key));
+                    rowKeys.Add(KeyRowKey(treeId, key, tag));
                 }
-                else
+
+                var states = await _indexTree.GetManyAsync(rowKeys, cancellationToken).ConfigureAwait(false);
+
+                // Staged in the order the per-tag loop staged them: tag-major
+                // row, then its key-major mirror, tag by tag.
+                foreach (var rowKey in rowKeys)
                 {
-                    builder.Set(tagRow, Flag);
-                    builder.Set(keyRow, Flag);
+                    var (state, delta) = MintFlagEnableRow(states.GetValueOrDefault(rowKey));
+                    builder.SetWithDelta(rowKey, state, delta);
+                }
+            }
+            else
+            {
+                foreach (var tag in tags)
+                {
+                    ValidateTag(tag);
+                    builder.Set(RowKey(tag, treeId, key), Flag);
+                    builder.Set(KeyRowKey(treeId, key, tag), Flag);
                 }
             }
             await builder.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -1157,11 +1179,12 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     // identical dot and never authors a duplicate enable. An aborting saga drops
     // the staged enable on every cluster exactly as it drops the staged value
     // write (the enable never became visible), so a flag enable needs no
-    // byte-inverse disable for compensation.
-    private async Task<(byte[] State, byte[] Delta)> MintFlagEnableRowAsync(string rowKey, CancellationToken cancellationToken)
+    // byte-inverse disable for compensation. The caller reads the row's current
+    // state (null when absent) - batched across every row of the write - so this
+    // step is pure.
+    private (byte[] State, byte[] Delta) MintFlagEnableRow(byte[]? bytes)
     {
         var replicaId = _replicaId!;
-        var bytes = await _indexTree.GetAsync(rowKey, cancellationToken).ConfigureAwait(false);
         switch (_membershipMode)
         {
             case LatticeMergeMode.OrFlag:
@@ -1195,7 +1218,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             }
             default:
                 throw new InvalidOperationException(
-                    $"MintFlagEnableRowAsync is only valid under a flag membership mode, not '{_membershipMode}'.");
+                    $"MintFlagEnableRow is only valid under a flag membership mode, not '{_membershipMode}'.");
         }
     }
 
@@ -1481,12 +1504,54 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 AddRowTree(set, rowKey, segments);
             }
         }
-        foreach (var treeId in set)
-        {
-            await WriteRowAsync(CoveredMarkerKey(treeId), cancellationToken).ConfigureAwait(false);
-        }
+        await WriteMarkerRowsAsync(set, cancellationToken).ConfigureAwait(false);
         _hintCache = new HashSet<string>(set, StringComparer.Ordinal);
         return set.ToList();
+    }
+
+    // Persists one covered-tree marker per discovered tree for the self-heal
+    // above. The markers used to be written one awaited WriteRowAsync at a time;
+    // they are distinct, independent, idempotent rows, so their relative order is
+    // immaterial. Under LwwRegister every marker is the same constant presence
+    // value, so the whole set collapses into one SetManyAsync, which fans out to
+    // the owning shards in parallel and is non-atomic exactly as the loop was.
+    // Under a flag mode each marker is an enable delta minted against its own
+    // row, so they cannot collapse into one value write; they are issued in a
+    // wave bounded by RemoveRowConcurrencyLimit instead, as the flag-mode add
+    // does.
+    private async Task WriteMarkerRowsAsync(SortedSet<string> treeIds, CancellationToken cancellationToken)
+    {
+        if (treeIds.Count == 0)
+        {
+            return;
+        }
+
+        if (!FlagMode)
+        {
+            var entries = new List<KeyValuePair<string, byte[]>>(treeIds.Count);
+            foreach (var treeId in treeIds)
+            {
+                entries.Add(new KeyValuePair<string, byte[]>(CoveredMarkerKey(treeId), Flag));
+            }
+            await _indexTree.SetManyAsync(entries, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var wave = new List<Task>(Math.Min(treeIds.Count, RemoveRowConcurrencyLimit));
+        foreach (var treeId in treeIds)
+        {
+            wave.Add(WriteRowAsync(CoveredMarkerKey(treeId), cancellationToken));
+            if (wave.Count >= RemoveRowConcurrencyLimit)
+            {
+                await Task.WhenAll(wave).ConfigureAwait(false);
+                wave.Clear();
+            }
+        }
+
+        if (wave.Count > 0)
+        {
+            await Task.WhenAll(wave).ConfigureAwait(false);
+        }
     }
 
     private async Task EnsureHintAsync(string treeId, CancellationToken cancellationToken)

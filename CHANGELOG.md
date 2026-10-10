@@ -34,6 +34,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Atomic tag commits read row state in one call.** A flag-mode value-and-tags commit read each tag's two index rows with serial calls, 2N round trips for N tags. It reads them all in one batched call now: 4.8-12.2x faster and 68-80% less allocated. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice`)
+
+- **Performance - Tag index coverage markers write in one batch.** Repairing a tag index's covered-tree markers wrote one marker per tree in series. They are written in one batched call now, or a bounded concurrent wave in flag mode: 3.4-14.2x faster. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice`)
+
+- **Performance - Cross-tree decision stamps fan out concurrently.** Stamping a replicated cross-tree decision issued and confirmed each participant tree's sequence one grain call at a time. Those calls run concurrently now, so stamp latency is about one round trip instead of one per tree. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice.Replication`)
+
 - **Performance - Repository-context scans reuse sort comparers.** Hot streaming scans now reuse comparison delegates instead of allocating one per call. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Performance - Repository-context operation ids.** Chunk operation ids staged every part through a StringBuilder and a fresh array before hashing. They stage UTF-8 into one stack or pooled buffer and hash it once now: 26-38% faster and 99% less allocated. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
