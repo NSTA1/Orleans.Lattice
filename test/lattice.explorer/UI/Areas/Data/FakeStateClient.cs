@@ -60,6 +60,12 @@ internal sealed class FakeStateClient : ILatticeStateClient
     /// </summary>
     public TaskCompletionSource? TreeTagIndexGate { get; set; }
 
+    /// <summary>Overrides a dead-letter count reply, including replies already in flight when cancelled.</summary>
+    public Func<DeadLetterCountRequest, CancellationToken, Task<DeadLetterCountResponse>>? DeadLetterCountReply { get; set; }
+
+    /// <summary>Overrides a dead-letter page reply, including replies already in flight when cancelled.</summary>
+    public Func<DeadLetterQueueRequest, CancellationToken, Task<DeadLetterQueuePage>>? DeadLetterPageReply { get; set; }
+
     /// <summary>When set, a continuation scan throws this.</summary>
     public Exception? ContinuationFault { get; set; }
 
@@ -273,6 +279,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<DeadLetterCountResponse> GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(GetDeadLetterCountAsync));
+        if (DeadLetterCountReply is { } reply)
+        {
+            return reply(request, cancellationToken);
+        }
+
         ThrowIfFaulted(nameof(GetDeadLetterCountAsync));
         return Task.FromResult(new DeadLetterCountResponse
         {
@@ -285,6 +296,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(ListDeadLettersAsync) + ":" + (request.PageToken ?? "first"));
+        if (DeadLetterPageReply is { } reply)
+        {
+            return reply(request, cancellationToken);
+        }
+
         ThrowIfFaulted(nameof(ListDeadLettersAsync));
         var letters = DeadLetters.TryGetValue(request.TreeId, out var found) ? found : [];
         var (items, next) = Page(letters, request.PageToken, request.PageSize);

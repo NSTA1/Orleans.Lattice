@@ -294,6 +294,25 @@ public sealed partial class LtDateTimeInputTests : ShellDesignTestContext
         });
     }
 
+    [TestCase(int.MinValue)]
+    [TestCase(int.MaxValue)]
+    public void An_impossible_browser_offset_does_not_break_the_field(int offset)
+    {
+        var module = JSInterop.SetupModule(ShellDesignAssets.DateTimeModuleSpecifier);
+        module.Mode = JSRuntimeMode.Loose;
+        module.Setup<LtBrowserZone?>("zone").SetResult(new LtBrowserZone { Id = "Not/AZone", OffsetMinutes = offset });
+
+        var cut = RenderField(p => p.Add(x => x.Value, Now));
+
+        cut.WaitUntil(() => Assert.That(module.Invocations.Count(invocation => invocation.Identifier == "zone"), Is.EqualTo(1)));
+        cut.Find("input.lt-datetime__input").Change("2026-09-27T08:15:00Z");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-datetime__local"), Is.Empty);
+            Assert.That(cut.Instance.Value, Is.EqualTo(new DateTimeOffset(2026, 9, 27, 8, 15, 0, TimeSpan.Zero)));
+        });
+    }
+
     [Test]
     public void Disabled_reaches_the_entry_and_the_picker_button()
     {

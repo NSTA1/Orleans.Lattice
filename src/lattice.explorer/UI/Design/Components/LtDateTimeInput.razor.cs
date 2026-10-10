@@ -322,7 +322,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
             return found;
         }
 
-        if (zone.OffsetMinutes is { } minutes && Math.Abs(minutes) <= 14 * 60)
+        if (zone.OffsetMinutes is >= -14 * 60 and <= 14 * 60 and { } minutes)
         {
             var offset = TimeSpan.FromMinutes(minutes);
             var name = LtTimeText.Offset(offset);
