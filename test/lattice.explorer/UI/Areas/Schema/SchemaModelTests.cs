@@ -252,6 +252,35 @@ public sealed class SchemaModelTests
     }
 
     [Test]
+    public void A_truncated_preview_cut_inside_a_character_still_reads_as_text()
+    {
+        // "caf\u00e9" is 63 61 66 C3 A9; a byte budget of four cuts the e-acute in half.
+        var cut = "caf\u00e9"u8[..4].ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaFormat.Preview(cut, truncated: true), Is.EqualTo("caf"));
+            Assert.That(SchemaFormat.Preview(cut), Is.EqualTo("636166C3"), "A whole value that ends mid-character is not UTF-8.");
+            Assert.That(SchemaFormat.Preview([0xFF, 0x61, 0xC3], truncated: true), Is.EqualTo("FF61C3"), "Invalid bytes before the cut still read as hexadecimal.");
+            Assert.That(SchemaFormat.Preview([0xE2, 0x82], truncated: true), Is.EqualTo("E282"), "A preview with no whole character is shown as hexadecimal.");
+        });
+    }
+
+    [Test]
+    public void A_dead_letter_preview_is_truncated_only_when_the_value_was_longer()
+    {
+        var cut = new LatticeSchemaDeadLetterEntry("k", "caf\u00e9"u8[..4].ToArray(), 5, "r", LatticeSchemaDeadLetterSource.LocalRejected, DateTimeOffset.UnixEpoch);
+        var whole = new LatticeSchemaDeadLetterEntry("k", "caf"u8.ToArray(), 3, "r", LatticeSchemaDeadLetterSource.LocalRejected, DateTimeOffset.UnixEpoch);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaDeadLettersPanel.Truncated(cut), Is.True);
+            Assert.That(SchemaDeadLettersPanel.Truncated(whole), Is.False);
+            Assert.That(SchemaFormat.Preview(cut.ValuePreview, SchemaDeadLettersPanel.Truncated(cut)), Is.EqualTo("caf"));
+        });
+    }
+
+    [Test]
     public void A_clipped_preview_never_ends_in_half_an_emoji()
     {
         // A cut between the two halves of a surrogate pair is drawn as the replacement character.

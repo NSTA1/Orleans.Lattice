@@ -1,5 +1,6 @@
+using System.Buffers;
 using System.Globalization;
-using System.Text;
+using System.Text.Unicode;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Schema;
 
@@ -127,25 +128,37 @@ internal static class SchemaFormat
     /// hexadecimal. Always rendered as text, never as markup.
     /// </summary>
     /// <param name="bytes">The bytes, or <see langword="null"/> for none.</param>
+    /// <param name="truncated">
+    /// Whether <paramref name="bytes"/> are a byte-bounded prefix of a longer value, so they
+    /// may end part-way through a character that the cut split.
+    /// </param>
     /// <returns>The text; empty for none.</returns>
-    public static string Preview(byte[]? bytes)
+    public static string Preview(byte[]? bytes, bool truncated = false)
     {
         if (bytes is not { Length: > 0 })
         {
             return string.Empty;
         }
 
-        string text;
-        try
+        var text = TryDecode(bytes, truncated, out var decoded) ? decoded : Convert.ToHexString(bytes);
+        return text.Length > PreviewCharacters ? string.Concat(LtTextCut.Prefix(text, PreviewCharacters), "...") : text;
+    }
+
+    private static bool TryDecode(byte[] bytes, bool truncated, out string text)
+    {
+        // A truncated preview is cut at a byte budget, not a character boundary, so it can
+        // end part-way through a character. Decoding it as a non-final block drops only that
+        // incomplete tail; bytes that are not UTF-8 anywhere else still read as hexadecimal.
+        var chars = new char[bytes.Length];
+        var status = Utf8.ToUtf16(bytes, chars, out _, out var written, replaceInvalidSequences: false, isFinalBlock: !truncated);
+        if (status is not (OperationStatus.Done or OperationStatus.NeedMoreData) || written == 0)
         {
-            text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
-        }
-        catch (DecoderFallbackException)
-        {
-            text = Convert.ToHexString(bytes);
+            text = string.Empty;
+            return false;
         }
 
-        return text.Length > PreviewCharacters ? string.Concat(LtTextCut.Prefix(text, PreviewCharacters), "...") : text;
+        text = new string(chars, 0, written);
+        return true;
     }
 
     /// <summary>A byte count, such as "1,024 bytes".</summary>

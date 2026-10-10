@@ -147,7 +147,8 @@ internal static class SchemaCardText
         };
     }
 
-    private static string Plural(string count, string unit) => count == "1" ? unit : unit + "s";
+    // The count as written decides nothing: "01" and "1.0" are both one.
+    private static string Plural(string count, string unit) => Number(count) == "1" ? unit : unit + "s";
 
     private static string Quote(string text) => "\"" + text + "\"";
 }

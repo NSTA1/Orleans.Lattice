@@ -46,6 +46,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Cut previews read as text.** A dead-letter preview, or a Data value shown as UTF-8 text, cut inside a multi-byte character now drops the partial character instead of showing hexadecimal or a replacement character. ([#4808](https://github.com/NSTA1/Orleans.Lattice/issues/4808), [#4810](https://github.com/NSTA1/Orleans.Lattice/issues/4810)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Schema card singular counts.** A size or length bound typed as `01` or `1.0` reads "1 byte" or "1 character", not "1 bytes". ([#4809](https://github.com/NSTA1/Orleans.Lattice/issues/4809)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Session recovery and preferences.** Failed or cancelled configuration reads can be retried, malformed preference values no longer crash reads, and late work after session disposal cannot alter saved preferences. ([#4801](https://github.com/NSTA1/Orleans.Lattice/pull/4801)) (`Orleans.Lattice.Explorer.Core`)
 
 - **Explorer - Workspace reads.** Switching trees or opening a view discards late dead-letter counts, pages and errors, view-status replies and administration checks. Tracked view actions stay with their originating workspace. ([#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800)) (`Orleans.Lattice.Explorer.UI`)

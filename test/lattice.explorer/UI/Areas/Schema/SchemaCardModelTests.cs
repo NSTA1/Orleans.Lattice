@@ -36,6 +36,7 @@ public sealed class SchemaCardModelTests
         yield return new TestCaseData("whole", Card(SchemaCardKind.NumberRange, "n", card => card.IntegerOnly = true), "n must be a whole number");
         yield return new TestCaseData("text length", Card(SchemaCardKind.TextLength, "s", card => { card.Minimum = "1"; card.Maximum = "5"; }), "s must be text of 1 to 5 characters");
         yield return new TestCaseData("list length", Card(SchemaCardKind.ListLength, "l", card => card.Maximum = "1"), "l must be a list of at most 1 item");
+        yield return new TestCaseData("padded length", Card(SchemaCardKind.TextLength, "s", card => card.Minimum = "01"), "s must be text of at least 1 character");
         yield return new TestCaseData("format", Card(SchemaCardKind.Format, "e", card => card.Format = SchemaTextFormat.Email), "e must be an email address");
         yield return new TestCaseData("starts", Card(SchemaCardKind.TextMatch, "s", card => card.MatchText = "x"), "s must start with \"x\"");
         yield return new TestCaseData("ends", Card(SchemaCardKind.TextMatch, "s", card => { card.Match = SchemaTextMatch.EndsWith; card.MatchText = "x"; }), "s must end with \"x\"");
@@ -48,6 +49,7 @@ public sealed class SchemaCardModelTests
         yield return new TestCaseData("json", Card(SchemaCardKind.Encoding), "The value must be one JSON document");
         yield return new TestCaseData("size", Card(SchemaCardKind.MaxSize, string.Empty, card => card.MaxBytes = "1024"), "The value must be at most 1,024 bytes");
         yield return new TestCaseData("one byte", Card(SchemaCardKind.MaxSize, string.Empty, card => card.MaxBytes = "1"), "The value must be at most 1 byte");
+        yield return new TestCaseData("one byte padded", Card(SchemaCardKind.MaxSize, string.Empty, card => card.MaxBytes = "01"), "The value must be at most 1 byte");
         yield return new TestCaseData("optional", Card(SchemaCardKind.TextLength, "s", card => { card.Maximum = "3"; card.Optional = true; }), "s must be text of at most 3 characters, when present");
         yield return new TestCaseData("any of", Card(SchemaCardKind.AnyOf, string.Empty, card => card.Alternatives = [Card(SchemaCardKind.Type, "a"), Card(SchemaCardKind.Required, "b")]), "At least one of these must hold: a must be text or b must be present as text, a number or true or false");
     }

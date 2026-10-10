@@ -130,6 +130,21 @@ public sealed class DataHelperTests
     }
 
     [Test]
+    public void A_text_preview_cut_inside_a_character_drops_it_rather_than_showing_a_replacement()
+    {
+        // "caf\u00e9" is 63 61 66 C3 A9; a preview of four bytes cuts the e-acute in half.
+        var cut = "caf\u00e9"u8[..4].ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DataValueRendering.Render(cut, true, DataValueRenderer.Text).Content, Is.EqualTo("caf"));
+            Assert.That(DataValueRendering.Render(cut, true, DataValueRenderer.Json).Content, Is.EqualTo("caf"));
+            Assert.That(DataValueRendering.Render(cut, false, DataValueRenderer.Text).Content, Is.EqualTo("caf\uFFFD"), "A whole value ending mid-character really is invalid.");
+            Assert.That(DataValueRendering.Render([0xFF, 0x61, 0xC3], true, DataValueRenderer.Text).Content, Is.EqualTo("\uFFFDa"), "Invalid bytes before the cut are still replaced.");
+        });
+    }
+
+    [Test]
     public void Each_renderer_reads_the_bytes_its_own_way_and_notes_a_preview()
     {
         var json = Encoding.UTF8.GetBytes("{\"a\":1}");

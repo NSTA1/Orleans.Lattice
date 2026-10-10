@@ -78,7 +78,7 @@
                         <LtDefinition Term="Diverted">@SchemaFormat.Time(entry.TimestampUtc)</LtDefinition>
                         <LtDefinition Term="Size">@SchemaFormat.Size(entry.ValueByteLength)</LtDefinition>
                     </LtDefinitionList>
-                    <pre class="lt-schema-value" tabindex="0" aria-label="The rejected value's first bytes">@SchemaFormat.Preview(entry.ValuePreview)</pre>
+                    <pre class="lt-schema-value" tabindex="0" aria-label="The rejected value's first bytes">@SchemaFormat.Preview(entry.ValuePreview, Truncated(entry))</pre>
                 </Detail>
             </LtTable>
 
