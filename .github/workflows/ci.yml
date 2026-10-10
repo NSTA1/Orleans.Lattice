@@ -1086,6 +1086,9 @@ jobs:
       - name: Self-test the leg aggregator
         run: python3 .github/workflows/summarise-test-legs-selftest.py
 
+      - name: Self-test coverage sharding and upload completeness
+        run: python3 .github/workflows/coverage-matrix-selftest.py
+
       # The closing-keyword gate is an inline heredoc, so nothing in this
       # repository could execute it until this self-test existed: its only
       # exercise was the pull request it happened to be guarding, whose verdict
