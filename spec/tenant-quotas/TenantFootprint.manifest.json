@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-footprint",
+  "refinement": "RefinementFootprint.md",
+  "nonBehaviouralActions": [],
+  "counts": {
+    "invariants": 5,
+    "properties": 3,
+    "actions": 8,
+    "mutations": 13,
+    "behaviourRows": 15,
+    "distinctStates": 62964
+  }
+}

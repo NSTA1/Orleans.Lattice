@@ -1,0 +1,11 @@
+MODULE: DeliverDropsLatest
+TARGET: UsageConverges
+CLASS: Temporal
+SUMMARY: usage delivery never installs the peer slot
+PERTURBS: DeliverUsage
+
+--- FIND
+         slots' = [slots EXCEPT ![r][o] = Max(@, old)]
+--- REPLACE
+         slots' = slots
+--- END

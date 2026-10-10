@@ -20,12 +20,13 @@ namespace Orleans.Lattice.Tenancy;
 /// associative (see <see cref="LocalUsageSample.Add"/>).
 /// </para>
 /// <para>
-/// Quota consistency is converged best-effort with <b>bounded overshoot</b>:
+/// Quota consistency is converged best-effort with <b>soft admission</b>:
 /// because each cluster admits against a fold that includes other clusters' last
 /// <em>published</em> slot (not their live, unpublished usage), concurrent
-/// cross-cluster writes can momentarily push the true global usage slightly over
-/// a quota before the slots re-converge. This is expected and is the cost of a
-/// lock-free, consensus-free aggregate.
+/// cross-cluster writes can push the true global usage over a quota before the
+/// slots re-converge. No unconditional numerical overshoot bound exists without
+/// bounds on arrival rate, write size, metering delay and replication delay.
+/// This is expected and is the cost of a lock-free, consensus-free aggregate.
 /// </para>
 /// </remarks>
 [GenerateSerializer]

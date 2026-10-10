@@ -1,0 +1,10 @@
+MODULE: FoldWrapsOverflow
+TARGET: ScopeCorrect
+CLASS: Invariant
+SUMMARY: an overflowing aggregate wraps to zero instead of saturating
+
+--- FIND
+Fold(s) == Sat(s["a"] + s["b"])
+--- REPLACE
+Fold(s) == IF s["a"] + s["b"] > StorageMax THEN 0 ELSE s["a"] + s["b"]
+--- END

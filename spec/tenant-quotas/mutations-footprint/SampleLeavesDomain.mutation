@@ -1,0 +1,11 @@
+MODULE: SampleLeavesDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a metering result exceeds its non-negative bounded storage domain
+PERTURBS: Sample
+
+--- FIND
+    /\ sample' = [sample EXCEPT ![r] = live[r]]
+--- REPLACE
+    /\ sample' = [sample EXCEPT ![r] = live[r] + 3]
+--- END

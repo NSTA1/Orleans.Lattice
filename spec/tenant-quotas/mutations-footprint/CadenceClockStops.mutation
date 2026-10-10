@@ -1,0 +1,11 @@
+MODULE: CadenceClockStops
+TARGET: UsageConverges
+CLASS: Temporal
+SUMMARY: the cadence driver never advances a suppressed samples refresh age
+PERTURBS: ClockTick
+
+--- FIND
+    /\ age' = [r \in Regions |-> IF age[r] < Refresh THEN age[r] + 1 ELSE age[r]]
+--- REPLACE
+    /\ age' = age
+--- END

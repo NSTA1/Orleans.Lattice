@@ -1,0 +1,13 @@
+MODULE: CommitNotAccounted
+TARGET: AccountingCorrect
+CLASS: Invariant
+SUMMARY: a committed local write disappears from metered storage
+PERTURBS: Commit
+
+--- FIND
+    /\ live' = [live EXCEPT ![r] = @ + 1]
+    /\ UNCHANGED <<scope, band, age, inbound, sample, published, slots, decision>>
+--- REPLACE
+    /\ live' = live
+    /\ UNCHANGED <<scope, band, age, inbound, sample, published, slots, decision>>
+--- END
