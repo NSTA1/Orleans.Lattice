@@ -42,8 +42,11 @@ internal static class TreeBootstrapReadFence
         ArgumentNullException.ThrowIfNull(logicalTreeId);
 
         var registry = grainFactory.GetLatticeRegistry();
-        var physical = await registry.ResolveAsync(logicalTreeId);
+        // One registry read yields both the routed copy and its shard map
+        // (ResolveAsync is GetEntryAsync(id)?.PhysicalTreeId ?? id), so the
+        // pair is also a consistent snapshot rather than two separate reads.
         var entry = await registry.GetEntryAsync(logicalTreeId);
+        var physical = entry?.PhysicalTreeId ?? logicalTreeId;
         var shardCount = (await optionsResolver.ResolveAsync(physical)).ShardCount;
         return new Shards(physical, RoutedShardIndices.Resolve(shardCount, entry?.ShardMap));
     }

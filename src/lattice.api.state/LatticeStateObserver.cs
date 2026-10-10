@@ -101,9 +101,10 @@ internal sealed class LatticeStateObserver(
         }
 
         var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(effectiveTreeId).ConfigureAwait(false)
-            ?? effectiveTreeId;
+        // One registry read serves both the alias resolution and the partition
+        // count: ResolveAsync is exactly GetEntryAsync(id)?.PhysicalTreeId ?? id.
         var entry = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
+        var physicalTreeId = entry?.PhysicalTreeId ?? effectiveTreeId;
         var partitions = Math.Max(1, entry?.WalPartitions ?? _options.Get(effectiveTreeId).WalPartitions);
 
         // Auth-backed visibility. The change feed tails the write-ahead log
