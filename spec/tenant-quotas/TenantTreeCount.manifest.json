@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-tree-count",
+  "refinement": "RefinementTreeCount.md",
+  "nonBehaviouralActions": [],
+  "counts": {
+    "invariants": 4,
+    "properties": 2,
+    "actions": 3,
+    "mutations": 7,
+    "behaviourRows": 8,
+    "distinctStates": 636
+  }
+}

@@ -1,0 +1,10 @@
+MODULE: BurstDividesFirst
+TARGET: TruthfulCreate
+CLASS: Invariant
+SUMMARY: integer division loses small quotas burst headroom
+
+--- FIND
+Effective == limit + ((limit * burst) \div 100)
+--- REPLACE
+Effective == limit + ((limit \div 100) * burst)
+--- END

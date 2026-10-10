@@ -1,0 +1,13 @@
+MODULE: ProbeNeverRefreshes
+TARGET: EventualCreateRefusal
+CLASS: Temporal
+SUMMARY: future admission keeps a pre-registration count forever
+PERTURBS: Probe
+
+--- FIND
+    /\ observed' = Cardinality(owned)
+    /\ allow' = (Cardinality(owned) + 1 <= Effective)
+--- REPLACE
+    /\ observed' = observed
+    /\ allow' = allow
+--- END

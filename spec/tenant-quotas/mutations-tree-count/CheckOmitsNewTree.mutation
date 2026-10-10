@@ -1,0 +1,11 @@
+MODULE: CheckOmitsNewTree
+TARGET: TruthfulCreate
+CLASS: Invariant
+SUMMARY: the admission checks the old count without charging this create
+PERTURBS: CheckCreate
+
+--- FIND
+         IF Cardinality(owned) + 1 <= Effective THEN "admitted" ELSE "refused"]
+--- REPLACE
+         IF Cardinality(owned) <= Effective THEN "admitted" ELSE "refused"]
+--- END
