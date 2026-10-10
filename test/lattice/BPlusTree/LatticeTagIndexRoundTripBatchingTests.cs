@@ -33,6 +33,7 @@ public partial class LatticeTagIndexRoundTripBatchingTests
     {
         public readonly SortedDictionary<string, byte[]> Data = new(StringComparer.Ordinal);
         public int SetAsyncCalls;
+        public int GetAsyncCalls;
         public int SetManyAsyncCalls;
         public int GetManyAsyncCalls;
         public int DeleteAsyncCalls;
@@ -77,7 +78,11 @@ public partial class LatticeTagIndexRoundTripBatchingTests
             tree.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(true));
 
             tree.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(ci => Task.FromResult(Data.TryGetValue(ci.Arg<string>(), out var v) ? v : null));
+                .Returns(ci =>
+                {
+                    Interlocked.Increment(ref GetAsyncCalls);
+                    return Task.FromResult(Data.TryGetValue(ci.Arg<string>(), out var v) ? v : null);
+                });
 
             tree.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(ci =>

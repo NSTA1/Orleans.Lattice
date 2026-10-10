@@ -51,6 +51,20 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// being serial, exactly as (2) does for deletes.
 /// </para>
 /// <para>
+/// (7) the atomic (cross-tree transactional) commit under a flag membership
+/// mode - each row's enable delta is minted against that row's own state, and
+/// the commit read those states with one <c>GetAsync</c> per row, 2N sequential
+/// reads before the transaction could even be staged. The states are only read,
+/// never written between reads, so one <c>GetManyAsync</c> fetches them all.
+/// </para>
+/// <para>
+/// (8) the covered-marker self-heal in <c>GetCoveredTreesAsync</c> - a tree
+/// found by scanning membership rather than through its marker had its marker
+/// written back with its own awaited <c>SetAsync</c>, one per missing tree. The
+/// markers carry the same constant value under distinct keys, so they collapse
+/// into one <c>SetManyAsync</c> exactly as (1) does.
+/// </para>
+/// <para>
 /// <b>Read the yielding-store lanes, not the completed-task ones.</b> All three
 /// changes trade many small calls for fewer larger ones, and a store that
 /// returns an already-completed task prices a round trip at approximately zero -
@@ -85,6 +99,7 @@ public class TagIndexBatchedRoundTripBenchmarks
     private const char Sep = '\0';
     private const string TreeId = "orders-tree";
     private const string KeyMajorPrefix = "\0k\0";
+    private const string CoveredMarkerPrefix = "\0covered\0";
 
     /// <summary>Mirrors the production concurrency cap on the removal wave.</summary>
     private const int RemoveRowConcurrencyLimit = 32;
@@ -117,6 +132,8 @@ public class TagIndexBatchedRoundTripBenchmarks
     private AsyncTagStore _asyncStore = null!;
     private InMemoryTagStore _subject = null!;
     private AsyncTagStore _asyncSubject = null!;
+    private List<string> _mintRowKeys = null!;
+    private string[] _markerKeys = null!;
 
     /// <summary>
     /// Number of tags on the key the add / remove lanes write. Five is the
@@ -191,6 +208,32 @@ public class TagIndexBatchedRoundTripBenchmarks
         _orphanCandidates = [.. orphanRows];
         _asyncSubject = new AsyncTagStore(_subject);
 
+        // The atomic flag-mode mint fixture: a tag-major row and its key-major
+        // mirror per tag, in the staging order the commit reads them. Every
+        // other tag's tag-major row already carries state, so both arms mint
+        // over a mix of present and absent rows rather than an all-absent one
+        // the batched read could short-circuit.
+        _mintRowKeys = new List<string>(TagCount * 2);
+        for (var t = 0; t < TagCount; t++)
+        {
+            var rowKey = RowKey(_tags[t], TreeId, "mint-key");
+            if (t % 2 == 0)
+            {
+                _store.Seed(rowKey, [1, 2, 3]);
+            }
+
+            _mintRowKeys.Add(rowKey);
+            _mintRowKeys.Add(KeyRowKey(TreeId, "mint-key", _tags[t]));
+        }
+
+        // One covered marker per tree carrying membership. The lanes reuse
+        // TagCount as the tree count so the two widths match the other lanes.
+        _markerKeys = new string[TagCount];
+        for (var t = 0; t < TagCount; t++)
+        {
+            _markerKeys[t] = CoveredMarkerPrefix + "tree-" + t.ToString("D2", CultureInfo.InvariantCulture);
+        }
+
         AssertLanesAgree();
     }
 
@@ -226,6 +269,22 @@ public class TagIndexBatchedRoundTripBenchmarks
         {
             throw new InvalidOperationException(
                 $"Flag-mode add lanes disagree: serial={serialAdds}, wave={waveAdds}.");
+        }
+
+        var serialMint = MintFlagRows_SerialReads_Async().GetAwaiter().GetResult();
+        var batchedMint = MintFlagRows_BatchedRead_Async().GetAwaiter().GetResult();
+        if (serialMint != batchedMint)
+        {
+            throw new InvalidOperationException(
+                $"Atomic flag mint lanes disagree: serial={serialMint}, batched={batchedMint}.");
+        }
+
+        var serialMarkers = CoveredMarkers_Serial_Async().GetAwaiter().GetResult();
+        var batchedMarkers = CoveredMarkers_Batched_Async().GetAwaiter().GetResult();
+        if (serialMarkers != batchedMarkers)
+        {
+            throw new InvalidOperationException(
+                $"Covered-marker lanes disagree: serial={serialMarkers}, batched={batchedMarkers}.");
         }
     }
 
@@ -661,6 +720,68 @@ public class TagIndexBatchedRoundTripBenchmarks
         return written;
     }
 
+    // ── (7) Atomic flag-mode commit: 2N serial row reads vs one batched read ──
+
+    [Benchmark(Description = "atomic flag mint: 2N serial GetAsync (yielding store)")]
+    public async Task<int> MintFlagRows_SerialReads_Async()
+    {
+        var minted = 0;
+        for (var i = 0; i < _mintRowKeys.Count; i++)
+        {
+            var state = await _asyncStore.GetAsync(_mintRowKeys[i], CancellationToken.None);
+            minted += MintFlagEnableRow(state);
+        }
+
+        return minted;
+    }
+
+    [Benchmark(Description = "atomic flag mint: one batched GetManyAsync (yielding store)")]
+    public async Task<int> MintFlagRows_BatchedRead_Async()
+    {
+        var minted = 0;
+        var states = await _asyncStore.GetManyAsync(_mintRowKeys, CancellationToken.None);
+        for (var i = 0; i < _mintRowKeys.Count; i++)
+        {
+            minted += MintFlagEnableRow(states.GetValueOrDefault(_mintRowKeys[i]));
+        }
+
+        return minted;
+    }
+
+    /// <summary>
+    /// Stands in for the per-row enable mint: the minted counter depends on the
+    /// row's own state, which is why each row needs that state read first.
+    /// </summary>
+    private static int MintFlagEnableRow(byte[]? state) => state is null ? 1 : state.Length + 1;
+
+    // ── (8) Covered-marker self-heal: N serial marker writes vs one batched write ──
+
+    [Benchmark(Description = "covered markers: N serial SetAsync (yielding store)")]
+    public async Task<int> CoveredMarkers_Serial_Async()
+    {
+        var written = 0;
+        for (var i = 0; i < _markerKeys.Length; i++)
+        {
+            await _asyncStore.SetAsync(_markerKeys[i], Flag, CancellationToken.None);
+            written++;
+        }
+
+        return written;
+    }
+
+    [Benchmark(Description = "covered markers: one batched SetManyAsync (yielding store)")]
+    public async Task<int> CoveredMarkers_Batched_Async()
+    {
+        var entries = new List<KeyValuePair<string, byte[]>>(_markerKeys.Length);
+        for (var i = 0; i < _markerKeys.Length; i++)
+        {
+            entries.Add(new KeyValuePair<string, byte[]>(_markerKeys[i], Flag));
+        }
+
+        await _asyncStore.SetManyAsync(entries, CancellationToken.None);
+        return entries.Count;
+    }
+
     /// <summary>
     /// The narrowest stand-in for the tag index's backing tree: the call shapes
     /// the lanes contrast, over a plain dictionary. Every method returns a
@@ -696,6 +817,9 @@ public class TagIndexBatchedRoundTripBenchmarks
 
         public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken) =>
             Task.FromResult(_map.ContainsKey(key));
+
+        public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken) =>
+            Task.FromResult(_map.TryGetValue(key, out var value) ? value : null);
 
         /// <summary>
         /// The flag-membership write shape: a row's enable delta is minted
@@ -757,6 +881,12 @@ public class TagIndexBatchedRoundTripBenchmarks
         {
             await Task.Yield();
             return await inner.ExistsAsync(key, cancellationToken);
+        }
+
+        public async Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            return await inner.GetAsync(key, cancellationToken);
         }
 
         public async Task EnableAsync(string key, CancellationToken cancellationToken)
