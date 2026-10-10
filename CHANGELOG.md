@@ -56,6 +56,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Schema card singular counts.** A size or length bound typed as `01` or `1.0` reads "1 byte" or "1 character", not "1 bytes". ([#4809](https://github.com/NSTA1/Orleans.Lattice/issues/4809)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Tenancy - Usage sample freshness.** Changed usage below publication hysteresis is refreshed within five minutes of metering-clock time, so stable small quota crossings and subsequent recovery no longer remain invisible to admission indefinitely. ([#4805](https://github.com/NSTA1/Orleans.Lattice/issues/4805)) (`Orleans.Lattice.Tenancy`)
+
 - **Tenancy - Canceled rate leases.** A canceled budget-refresh cycle no longer installs delayed grants or prunes existing enforcement from an incomplete rate enumeration. ([#4804](https://github.com/NSTA1/Orleans.Lattice/issues/4804)) (`Orleans.Lattice.Tenancy`)
 
 - **Tenancy - Usage overflow.** Local tree roll-ups and cross-cluster usage sums saturate at the signed 64-bit ceiling instead of wrapping negative and reopening footprint quota admission. ([#4803](https://github.com/NSTA1/Orleans.Lattice/issues/4803)) (`Orleans.Lattice.Tenancy`)

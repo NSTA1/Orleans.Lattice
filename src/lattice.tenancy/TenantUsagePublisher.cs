@@ -18,14 +18,18 @@ namespace Orleans.Lattice.Tenancy;
 /// <see cref="ClusterOptions.ClusterId"/>); the store's CRDT merge converges it
 /// with every other cluster's slot. It remembers the last sample it published per
 /// tenant so <see cref="UsagePublishHysteresis"/> can compare a fresh roll-up
-/// against it and suppress sub-threshold movements.
+/// against it and suppress sub-threshold movements. A changed sample is refreshed
+/// after at most five minutes of supplied cadence-clock time, so damping cannot
+/// permanently hide a small quota crossing.
 /// </remarks>
 internal sealed class TenantUsagePublisher
 {
     private readonly ITenantUsageStore _store;
     private readonly IOptionsMonitor<TenantUsageAccountingOptions> _options;
     private readonly string _clusterId;
-    private readonly ConcurrentDictionary<string, LocalUsageSample> _lastPublished = new(StringComparer.Ordinal);
+    private const long MaxSuppressionTicks = 5 * TimeSpan.TicksPerMinute;
+    private readonly ConcurrentDictionary<string, (LocalUsageSample Sample, long PublishedTicks)> _lastPublished =
+        new(StringComparer.Ordinal);
 
     /// <summary>Initializes a new <see cref="TenantUsagePublisher"/>.</summary>
     /// <param name="store">The durable usage store this cluster's slot is published into.</param>
@@ -58,7 +62,7 @@ internal sealed class TenantUsagePublisher
     public LocalUsageSample LastPublished(TenantId tenant)
     {
         var key = RequireTenantKey(tenant);
-        return _lastPublished.TryGetValue(key, out var sample) ? sample : LocalUsageSample.Empty;
+        return _lastPublished.TryGetValue(key, out var published) ? published.Sample : LocalUsageSample.Empty;
     }
 
     /// <summary>
@@ -66,7 +70,8 @@ internal sealed class TenantUsagePublisher
     /// <paramref name="tenant"/> and, when the roll-up clears the hysteresis band
     /// relative to the last published sample, publishes it into the tenant's
     /// per-cluster usage slot stamped with <paramref name="clock"/>. A sub-threshold
-    /// movement is suppressed and no write occurs.
+    /// movement is suppressed for at most five minutes of supplied cadence-clock
+    /// time. An unchanged sample does not need refreshing.
     /// </summary>
     /// <param name="tenant">The tenant whose usage is being published. Must be an initialised tenant id.</param>
     /// <param name="perTree">The tenant's per-tree usage samples on this cluster. Must not be <c>null</c>.</param>
@@ -85,10 +90,14 @@ internal sealed class TenantUsagePublisher
         var key = RequireTenantKey(tenant);
 
         var candidate = LocalUsageSample.RollUp(perTree);
-        var last = _lastPublished.TryGetValue(key, out var previous) ? previous : LocalUsageSample.Empty;
+        var hasPrevious = _lastPublished.TryGetValue(key, out var previous);
+        var last = hasPrevious ? previous.Sample : LocalUsageSample.Empty;
+        var refreshDue = hasPrevious && candidate != last
+            && (Int128)clock.WallClockTicks - previous.PublishedTicks >= MaxSuppressionTicks;
 
         var options = _options.CurrentValue;
-        if (!UsagePublishHysteresis.ShouldPublish(last, candidate, options.PublishMinAbsoluteDelta, options.PublishMinRelativeDelta))
+        if (!refreshDue
+            && !UsagePublishHysteresis.ShouldPublish(last, candidate, options.PublishMinAbsoluteDelta, options.PublishMinRelativeDelta))
         {
             return false;
         }
@@ -97,7 +106,7 @@ internal sealed class TenantUsagePublisher
         record.SetLocalSample(_clusterId, candidate, clock, _clusterId);
         await _store.PublishAsync(record, cancellationToken).ConfigureAwait(false);
 
-        _lastPublished[key] = candidate;
+        _lastPublished[key] = (candidate, clock.WallClockTicks);
         return true;
     }
 

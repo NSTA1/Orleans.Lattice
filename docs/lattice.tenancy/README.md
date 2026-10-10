@@ -57,7 +57,7 @@ and its [gRPC binding](../lattice.api.tenantadmin.grpc/README.md).
   `AddLatticeAuth` have all already run on the same builder.
 - **Coordination-free multi-cluster.** Tenant definitions and usage are convergent
   CRDT state - a registry record merges field by field, and usage enforcement reads a
-  convergent sum (no locks, no consensus) with bounded, quantified overshoot - so they
+  convergent sum (no locks, no consensus) with soft sampled admission - so they
   converge across every cluster the `sys-tenant-*` trees replicate to.
   `AddLatticeTenancy` automatically declares `sys-tenant-registry` in the static
   replication map as `LwwRegister` only when replication is registered, regardless
@@ -416,7 +416,9 @@ never suddenly throttles an existing workload.
   running tenancy without resource governance.
 - **A tenant's first non-empty sample always publishes.** Republishing a usage slot is gated
   by a hysteresis band (`PublishMinAbsoluteDelta` / `PublishMinRelativeDelta`) so a
-  stream of negligible movements does not churn the registry. That band damps churn
+  stream of negligible movements does not churn the registry. A changed sample is
+  nevertheless refreshed after five minutes of supplied metering-clock time, so
+  a stable small quota crossing cannot be hidden forever (#4805). That band damps churn
   *between successive samples*, so it is deliberately not applied to a tenant's
   first publish: until the slot exists admission is fail-open and no quota binds at
   all, so a tenant whose whole footprint sits below the absolute floor (default
@@ -510,13 +512,18 @@ override):
   by the tenant's region statuses. The map holds another cluster's slot only once
   the `sys-tenant-usage` tree replicates between them; until then the global fold
   equals this cluster's own sample. Enforcement admits against the global fold,
-  giving a single global budget rather than `limit x clusters`, with bounded
-  transient overshoot. The monotonic overage tallies use grow-only `GCounter`s (one
+  giving a single global budget rather than `limit x clusters`, with soft
+  sampled admission. A numerical overshoot bound additionally requires bounds on
+  arrivals, write sizes, metering and replication delays. The monotonic overage
+  tallies use grow-only `GCounter`s (one
   per bytes, keys, memory, and tree-count dimension), but they are not metered from
   the global fold: whatever the scope, each cluster accrues the overage of its own
   local usage above the tenant's whole steady-state cap into its own component, and
   the converged tally sums the components. Slots are republished on a
   cadence with hysteresis so continuous usage does not flood the replication path.
+  A changed sample is refreshed after five minutes of supplied metering-clock time
+  even below the band; with available metering and replication, a stable small
+  quota crossing therefore reaches later admission. Unchanged samples do not churn.
 - **`PerCluster` (fallback).** Each cluster admits against only its own local usage
   slot, so effective global capacity is `limit x clusters`. Selectable, cluster-wide,
   by operators who prefer hard-partitioned capacity. The scope changes only which

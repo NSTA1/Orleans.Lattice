@@ -15,6 +15,8 @@ namespace Orleans.Lattice.Tenancy;
 /// once a sample has actually been published. A first publish (no prior sample)
 /// is always allowed through, because until the slot exists quota admission is in
 /// its fail-open state and no quota can bind at all.
+/// The publisher separately bounds suppression of a changed sample to five
+/// minutes; this significance predicate alone does not provide freshness.
 /// </remarks>
 internal static class UsagePublishHysteresis
 {
