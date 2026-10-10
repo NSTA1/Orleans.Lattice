@@ -38,6 +38,11 @@ internal sealed class DirectorySuggestionSource(ILatticeAuthAdmin? admin, Direct
     public async ValueTask<LtSuggestionSet> SuggestAsync(string text, int limit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(text);
+        if (limit <= 0)
+        {
+            return LtSuggestionSet.Empty;
+        }
+
         if (admin is null)
         {
             return LtSuggestionSet.Unavailable(UnavailableReason);

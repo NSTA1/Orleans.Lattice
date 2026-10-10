@@ -190,6 +190,42 @@ public sealed class DataHelperTests
         });
     }
 
+    [TestCase(160, false)]
+    [TestCase(159, false)]
+    [TestCase(160, true)]
+    [TestCase(159, true)]
+    public void Inline_hex_clipping_keeps_whole_bytes(int maximum, bool truncated)
+    {
+        var bytes = Enumerable.Repeat((byte)0xFF, 100).ToArray();
+        var inline = DataValueRendering.Inline(bytes, truncated, maximum);
+        var hex = inline[..^3];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inline, Does.EndWith("...").And.Length.AtMost(maximum));
+            Assert.That(hex.Length % 2, Is.Zero, "Every displayed byte needs both hexadecimal digits.");
+            Assert.That(Convert.FromHexString(hex), Is.EqualTo(bytes[..(hex.Length / 2)]));
+        });
+    }
+
+    [TestCase("{\"a\":1,}")]
+    [TestCase("{/* explanation */\"a\":1}")]
+    public void Json_selection_and_inline_preview_accept_the_automatic_renderers_json(string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var automatic = DataValueRendering.Render(bytes, false, DataValueRenderer.Auto);
+        var selected = DataValueRendering.Render(bytes, false, DataValueRenderer.Json);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(automatic.FormatText, Is.EqualTo("JSON"));
+            Assert.That(selected.FormatText, Is.EqualTo("JSON"));
+            Assert.That(selected.Content, Is.EqualTo(automatic.Content));
+            Assert.That(selected.Note, Is.Null);
+            Assert.That(DataValueRendering.Inline(bytes, false), Is.EqualTo("{\"a\":1}"));
+        });
+    }
+
     [Test]
     public void An_inline_preview_of_a_truncated_value_says_the_value_continues()
     {
