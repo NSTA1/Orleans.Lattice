@@ -58,7 +58,7 @@ The coordinating parent ran isolated source perturbations with exact byte
 snapshots restored after each arm. Omitting the real publisher store call made
 `MeterOnceAsync_changed_resident_reports_publish_merge_and_refuse_later_admission`
 fail with expected slot bytes 100, actual 0. Replacing the meter's resident byte
-projection with zero made that detector and
+projection with an empty byte count made that detector and
 `A_metering_cycle_counts_data_held_by_a_backfilled_tenant_tree` fail with expected
 bytes 100 and 400 respectively, actual 0. Omitting the real controller's
 `TenantQuotaEvaluator.Admit` call made the changed-report detector fail because
