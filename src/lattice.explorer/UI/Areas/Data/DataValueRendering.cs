@@ -32,6 +32,12 @@ internal static class DataValueRendering
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
+    private static readonly JsonDocumentOptions JsonReading = new()
+    {
+        CommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
+
     /// <summary>The renderers offered for a value, members only when the state API decoded some.</summary>
     /// <param name="hasMembers">Whether CRDT members are available.</param>
     public static IReadOnlyList<DataValueRenderer> Offered(bool hasMembers) => hasMembers
@@ -108,8 +114,14 @@ internal static class DataValueRendering
         // Two hex digits per byte fill the cell exactly, so the length check alone
         // never marks the bytes a hex preview leaves out (#4354).
         var continues = truncated || (rendered.Format == ValueFormat.Hex && hexBytes < bytes.Length);
+        var prefixLength = maximum - 3;
+        if (rendered.Format == ValueFormat.Hex)
+        {
+            prefixLength -= prefixLength % 2;
+        }
+
         return text.Length > maximum || continues
-            ? string.Concat(LtTextCut.Prefix(text, maximum - 3), "...")
+            ? string.Concat(LtTextCut.Prefix(text, prefixLength), "...")
             : text;
     }
 
@@ -162,7 +174,7 @@ internal static class DataValueRendering
     {
         try
         {
-            using var document = JsonDocument.Parse(bytes);
+            using var document = JsonDocument.Parse(bytes, JsonReading);
             json = JsonSerializer.Serialize(document.RootElement, Indented);
             return true;
         }
@@ -177,7 +189,7 @@ internal static class DataValueRendering
     {
         try
         {
-            using var document = JsonDocument.Parse(bytes);
+            using var document = JsonDocument.Parse(bytes, JsonReading);
             return JsonSerializer.Serialize(document.RootElement, Compacted);
         }
         catch (JsonException)

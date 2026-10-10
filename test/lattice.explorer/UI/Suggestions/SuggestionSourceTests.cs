@@ -136,6 +136,28 @@ public sealed class SuggestionSourceTests
         });
     }
 
+    [TestCase(0)]
+    [TestCase(-1)]
+    public async Task Directory_suggestions_with_no_capacity_are_empty_without_querying(int limit)
+    {
+        var admin = Substitute.For<ILatticeAuthAdmin>();
+        admin.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>()).Returns(new DirectorySearchResult
+        {
+            Available = true,
+            Principals = [Principal("alice", "Alice")],
+        });
+
+        var answer = await new DirectorySuggestionSource(admin, DirectoryPrincipalKind.User)
+            .SuggestAsync("alice", limit, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(answer.Items, Is.Empty);
+            Assert.That(answer.IsAvailable, Is.True);
+            Assert.That(admin.ReceivedCalls(), Is.Empty);
+        });
+    }
+
     [Test]
     public async Task Without_a_directory_the_answer_is_unavailable_unless_stored_groups_may_stand_in()
     {
