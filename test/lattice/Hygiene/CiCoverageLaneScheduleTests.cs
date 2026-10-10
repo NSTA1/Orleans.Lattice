@@ -112,6 +112,7 @@ public sealed class CiCoverageLaneScheduleTests
         var yaml = Read();
         var check = Job(yaml, "measured");
         var coverage = Job(yaml, "coverage");
+        var plan = Job(yaml, "plan");
 
         Assert.Multiple(() =>
         {
@@ -134,6 +135,10 @@ public sealed class CiCoverageLaneScheduleTests
             Assert.That(coverage, Does.Match(@"(?m)^    needs:.*\bmeasured\b"),
                 $"the coverage job in {CoverageWorkflow} must need the check job, or it starts before "
                 + "any verdict exists");
+
+            Assert.That(plan, Does.Contain("needs.measured.outputs.measure != 'false'")
+                .And.Contain("!cancelled()"),
+                "planning must preserve the nightly skip and fail-open measurement verdict");
 
             var condition = Regex.Match(coverage, @"^    if:\s*(?<expr>.+?)\s*$", RegexOptions.Multiline);
             Assert.That(condition.Success, Is.True,

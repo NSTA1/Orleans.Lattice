@@ -60,6 +60,31 @@ public sealed class CiCoverageUploadCompletenessTests
     }
 
     /// <summary>
+    /// Every matrix leg must publish its complete report before the aggregate upload.
+    /// </summary>
+    [Test]
+    public void The_upload_requires_a_complete_artifact_from_every_planned_leg()
+    {
+        var verify = Step("Verify all coverage legs are complete");
+        var artifact = Step("Upload coverage leg");
+        var marker = Step("Save complete coverage leg");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(artifact, Does.Contain("steps.test.outputs.complete == 'true'")
+                .And.Contain("actions/upload-artifact@")
+                .And.Contain("github.run_attempt")
+                .And.Contain("matrix.leg.id"));
+            Assert.That(marker, Does.Contain("steps.test.outputs.complete == 'true'"));
+            Assert.That(verify, Does.Contain("needs.plan.outputs.legs")
+                .And.Contain(".[].id")
+                .And.Contain("complete/${leg}")
+                .And.Contain("exit 1")
+                .And.Contain("complete=true"));
+        });
+    }
+
+    /// <summary>
     /// The test step must be addressable as <c>test</c>, detect an aborted test host from
     /// the vstest output, and write its verdict before it can exit on a failed suite.
     /// </summary>

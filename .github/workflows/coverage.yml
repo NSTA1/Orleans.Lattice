@@ -3,16 +3,18 @@ name: Coverage
 # Coverage is measured on main only, once a night. The README coverage badge
 # reads the default branch's coverage from Codecov, and Codecov only learns
 # main's coverage from an upload made on a main commit, which a scheduled run on
-# main is. This deliberately does NOT run on pull_request: the full non-chaos
-# suite (every test/*.Tests.csproj, including the durable active-active and
+# main is. This deliberately does NOT run on pull_request: the coverage-relevant
+# suites (including the browser suite, durable active-active and
 # other Azurite integration tests) is expensive, and paying it on every PR would
 # slow the PR feedback loop for no badge benefit. The change-scoped
 # build-and-test job in ci.yml remains the PR gate.
 #
 # Why nightly rather than on every push. This lane builds the whole solution and
-# runs every non-chaos suite under coverlet, the browser UI suite included, which
-# takes about an hour - by far the most expensive workflow in the repository -
-# and main takes merges faster than that. Run on every push with
+# runs the non-chaos, non-Coyote, non-TLC suites under coverlet, including browsers.
+# Coverage uses CI's shard partitions and duration estimates on parallel runners.
+# Before sharding this took over 150 minutes; the historic replay below explains
+# why it remains nightly even though parallelism reduces elapsed time.
+# Main took merges faster than the old serial run. Run on every push with
 # `cancel-in-progress: true`, most runs were cancelled part way (22 of the 35
 # runs from #3327 to #3473), and GitHub rolls a cancelled check run up as a
 # FAILURE, so main showed a red cross on most of its commits although nothing had
@@ -38,6 +40,9 @@ name: Coverage
 # tonight's run exists and, once the slot is two hours past with none, dispatches
 # this workflow with `catch_up: true`. Whichever of the schedule and the
 # catch-up arrives first measures; the other skips (see the `measured` job).
+# Still observed on 8-10 October: scheduled events were created at 10:35,
+# 10:34 and 09:51 UTC, 6h34m-7h19m after the slot. Sharding cannot fix event
+# delivery; keep catch-up until GitHub restores timely schedule delivery.
 on:
   schedule:
     # 03:17 UTC. The quietest hour on main - not one of those 207 pushes landed
@@ -137,7 +142,7 @@ jobs:
             echo "measure=true" >> "$GITHUB_OUTPUT"
           fi
 
-  coverage:
+  plan:
     needs: measured
     # Measure unless the check positively found this commit already measured. Only
     # an explicit 'false' skips, so a missing verdict measures, and `!cancelled()`
@@ -145,11 +150,35 @@ jobs:
     # run red, so the failure is not hidden).
     if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' }}
     runs-on: ubuntu-latest
-    # A backstop, not a budget: without it one hung run would hold the lane - and
-    # any dispatch waiting behind it - for GitHub's six-hour default. The suites
-    # carry their own ten-minute hang dumps below; this is about twice the longest
-    # recent run (69 minutes).
+    timeout-minutes: 5
+    outputs:
+      legs: ${{ steps.matrix.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Plan coverage shards
+        id: matrix
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/plan-coverage-matrix.py --output-matrix /tmp/coverage-matrix.json
+          echo "legs=$(cat /tmp/coverage-matrix.json)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Coverage plan"
+            echo
+            echo "$(jq length /tmp/coverage-matrix.json) parallel legs using CI's shard partitions and duration estimates."
+            echo "Chaos, Coyote, exhaustive TLC and smoke TLC are NOT run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  coverage:
+    needs: [measured, plan]
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
+    name: Coverage / ${{ matrix.leg.name }}
+    runs-on: ubuntu-latest
+    # Per-leg backstop; a hung leg cannot hold the nightly lane for six hours.
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJson(needs.plan.outputs.legs) }}
 
     # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
     # AzureStorageEmulator-category integration tests drive via
@@ -184,6 +213,7 @@ jobs:
       # Browsers are cached on the project file, which is where the pinned
       # Microsoft.Playwright version lives.
       - name: Cache Playwright browsers
+        if: matrix.leg.ui
         id: pwcache
         uses: actions/cache@v5
         with:
@@ -193,6 +223,7 @@ jobs:
       # Chromium, Firefox and WebKit: the suite's apps shard runs the frame isolation
       # tests in all three engines, as ui-tests.yml does.
       - name: Install Playwright browsers
+        if: matrix.leg.ui
         run: |
           set -euo pipefail
           script="$(find test/lattice.explorer.uitests/bin/Release -name playwright.ps1 -print -quit 2>/dev/null || true)"
@@ -218,40 +249,7 @@ jobs:
             done
           done
 
-      # The TLA+ toolchain for the `Tlc` category in test/lattice, which runs
-      # TLC over every module under spec/ and over a mutant generated from each
-      # definition in its mutations/ directory. See spec/README.md and issue #2323.
-      #
-      # This lane runs every non-chaos suite with the filter
-      # `TestCategory!=Chaos&TestCategory!=Coyote`, which does NOT exclude
-      # `Tlc`, and TlcModelCheckTests FAILS (never skips) when the toolchain is
-      # absent under GITHUB_ACTIONS - deliberately, so a missing tool cannot
-      # report a green model-checking gate that checked no model. Without these
-      # two steps the whole Orleans.Lattice.Tests project failed here and its
-      # coverage went missing. Mirrors the steps in ci.yml; the version and the
-      # digest are pinned identically and `CiTlaToolchainProvisioningTests`
-      # fails if any lane drifts from the others.
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Fetch TLA+ tools
-        run: |
-          set -euo pipefail
-          mkdir -p tools
-          curl --fail --silent --show-error --location \
-            --retry 3 --retry-delay 5 --retry-all-errors \
-            --output tools/tla2tools.jar \
-            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
-          # Pinned by digest, not merely by tag. A release asset can be replaced
-          # in place, and an unverified jar on the classpath of a verification
-          # gate is the one dependency where a silent substitution would be
-          # least visible.
-          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tools/tla2tools.jar" \
-            | sha256sum --check --strict
-
+      # tla-toolchain: not-required - Coverage excludes every Tlc test, including retries.
       - name: Test with coverage
         # The upload step reads this step's `complete` output; see below.
         id: test
@@ -259,23 +257,9 @@ jobs:
         # on a loaded runner; see the equivalent step in ci.yml for the rationale.
         env:
           LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+          LEG: ${{ toJson(matrix.leg) }}
         run: |
           set -uo pipefail
-          # Exclude the benchmark/throughput test projects: microbench runs
-          # BenchmarkDotNet harnesses (not library coverage) and
-          # azure-throughput-silo is not part of Orleans.Lattice.slnx, so it is
-          # not built by the step above. The standalone lattice.integration
-          # project is intentionally included here.
-          #
-          # The pattern is '*Tests.csproj', not '*.Tests.csproj'. The browser UI
-          # project is Orleans.Lattice.Explorer.UiTests.csproj, whose suffix is
-          # '.UiTests.csproj' - it has no literal dot before 'Tests', so the
-          # stricter glob silently skipped it and its coverage would have gone
-          # missing without anything failing. Widening costs nothing: every
-          # existing project matches either way.
-          mapfile -t testProjs < <(find test -type f -name '*Tests.csproj' \
-            -not -path '*/microbench/*' \
-            -not -path '*/azure-throughput-silo/*' | sort)
           # Run every project even when one fails, then fail the step at the end.
           #
           # This loop used to run under `set -e`, so the first failing project
@@ -382,12 +366,9 @@ jobs:
             fi
 
             echo "Retrying the failed tests of ${name} (${label}) once: ${filter}"
-            dotnet test "$proj" --no-build --configuration Release \
-              --filter "$filter" \
-              --collect:"XPlat Code Coverage" \
-              --results-directory "coverage/${name}" \
-              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=${name}-${label}-retry.trx"
+            # Retry reports are subject to the same abort/completeness checks.
+            runSuite "$proj" "$name" "${label}-retry" \
+              "(${filter})&(TestCategory!=Chaos&TestCategory!=Coyote&TestCategory!=Tlc)"
           }
 
           # Runs a suite and, if it fails, retries just its failures once.
@@ -408,52 +389,17 @@ jobs:
             return 1
           }
 
-          for proj in "${testProjs[@]}"; do
+          while IFS=$'\t' read -r proj label filter; do
             name=$(basename "$proj" .csproj)
-            echo "::group::Coverage: $name"
+            echo "::group::Coverage: $name / $label"
             ok=true
-            # Chaos tests are CI-only fault-injection and excluded here to keep
-            # the coverage run deterministic; AzureStorageEmulator tests run
-            # against the Azurite service above. Coyote systematic-concurrency
-            # models run in their own opt-in CI tier and cover the same shared
-            # cores the deterministic unit tests already exercise, so they are
-            # excluded here too. The UI category is deliberately NOT excluded -
-            # browsers are installed above precisely so those paths are counted.
-            if [ "$name" = "Orleans.Lattice.Explorer.UiTests" ]; then
-              # Shard the browser suite exactly as ui-tests.yml does, reading the
-              # same ui-test-shards.json so the two lanes cannot drift.
-              #
-              # Sharding is not about speed here - the shards run sequentially - it
-              # is about how many cases one in-process Explorer web head serves.
-              # ui-tests.yml gives each shard its own runner, and therefore its own
-              # head, because a single head serving the whole journey suite starts
-              # failing cases with the shell never reporting itself measured: the
-              # interactive circuit stops establishing under the accumulated load.
-              # Running the whole suite in one `dotnet test` process here put every
-              # case back on one head and reproduced exactly that, two cases timing
-              # out after thirty seconds waiting for .lx-root[data-lx-measured].
-              # A separate process per shard restores one head per shard.
-              #
-              # The shards cover the whole project, so nothing is skipped by
-              # not running it unfiltered as well: every filter selects
-              # TestCategory=UI, and UiCategoryHygieneTests fails the build if any
-              # [TestFixture] in this assembly lacks [Category("UI")] (with a
-              # vacuity guard, so it cannot pass by scanning nothing). Within that,
-              # accessibility, journeys and apps take their namespaces, journeys-b is
-              # the complement of journeys-a, and structure the complement of all three.
-              while IFS=$'\t' read -r shard filter; do
-                runSuiteWithRetry "$proj" "$name" "$shard" "$filter" || ok=false
-              done < <(jq -r '.[] | [.shard, .filter] | @tsv' .github/workflows/ui-test-shards.json)
-            else
-              runSuiteWithRetry "$proj" "$name" "all" \
-                "TestCategory!=Chaos&TestCategory!=Coyote" || ok=false
-            fi
+            runSuiteWithRetry "$proj" "$name" "$label" "$filter" || ok=false
             if [ "$ok" != true ]; then
               failed+=("$name")
               echo "::error::Coverage run failed for ${name}."
             fi
             echo "::endgroup::"
-          done
+          done < <(jq -r '.items[] | [.project, (.shard + "-" + .tier), .filter] | @tsv' <<< "$LEG")
 
           # Report flakes loudly even though they did not fail the run. A test that
           # only passes on the second attempt is still a defect; the point of the
@@ -494,6 +440,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error::Coverage upload withheld: ${#incomplete[@]} suite(s) produced an incomplete report: ${incomplete[*]}"
             echo "complete=false" >> "$GITHUB_OUTPUT"
+            exit 1
           else
             echo "complete=true" >> "$GITHUB_OUTPUT"
           fi
@@ -513,13 +460,62 @@ jobs:
             exit 1
           fi
 
+      - name: Save complete coverage leg
+        if: ${{ !cancelled() && steps.test.outputs.complete == 'true' }}
+        run: |
+          mkdir -p coverage/complete
+          touch "coverage/complete/${{ matrix.leg.id }}"
+
+      - name: Upload coverage leg
+        if: ${{ !cancelled() && steps.test.outputs.complete == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_attempt }}-${{ matrix.leg.id }}
+          path: |
+            coverage/**/coverage.cobertura.xml
+            coverage/complete/*
+          if-no-files-found: error
+          retention-days: 3
+
+  upload:
+    needs: [measured, plan, coverage]
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download coverage legs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-${{ github.run_attempt }}-leg-*
+          path: coverage
+          merge-multiple: false
+
+      - name: Verify all coverage legs are complete
+        id: test
+        env:
+          LEGS: ${{ needs.plan.outputs.legs }}
+        run: |
+          set -euo pipefail
+          jq -e 'type == "array" and length > 0' <<< "$LEGS" > /dev/null
+          while read -r leg; do
+            artifact="coverage/coverage-${{ github.run_attempt }}-${leg}"
+            if [ ! -f "${artifact}/complete/${leg}" ] || \
+              [ -z "$(find "$artifact" -name coverage.cobertura.xml -print -quit)" ]; then
+              echo "::error::Coverage upload withheld: ${leg} did not produce a complete report."
+              exit 1
+            fi
+          done < <(jq -r '.[].id' <<< "$LEGS")
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+
       - name: Upload coverage to Codecov
         # Upload even when a project failed above, provided every suite still
         # produced a complete report: a named test failure leaves the report
         # whole, and discarding it because one suite broke is how the badge went
         # stale. A crashed or hung test host does not - its report reads the
         # assembly under test as uncovered - so the test step withholds the
-        # upload by reporting `complete` as anything but 'true'.
+        # upload by reporting `complete` as anything but 'true'. This final job
+        # also requires every planned leg's attempt-scoped artifact and marker.
         # CiCoverageUploadCompletenessTests holds this in place.
         if: ${{ !cancelled() && steps.test.outputs.complete == 'true' }}
         uses: codecov/codecov-action@v7
