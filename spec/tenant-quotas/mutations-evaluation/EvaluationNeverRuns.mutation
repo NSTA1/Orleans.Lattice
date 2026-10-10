@@ -1,0 +1,11 @@
+MODULE: EvaluationNeverRuns
+TARGET: EventuallyEvaluated
+CLASS: Temporal
+SUMMARY: a quota admission never returns a decision
+PERTURBS: Evaluate
+
+--- FIND
+    /\ result' = FirstBreach
+--- REPLACE
+    /\ result' = result
+--- END

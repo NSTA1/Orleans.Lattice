@@ -1,0 +1,12 @@
+MODULE: EvaluationLosesBurst
+TARGET: TruthfulEvaluation
+CLASS: Invariant
+SUMMARY: integer division removes headroom for small ceilings
+
+--- FIND
+Ceiling(d) == IF quotas[d] = Unbounded THEN StorageMax
+    ELSE Saturate(quotas[d] + ((quotas[d] * burst) \div 100))
+--- REPLACE
+Ceiling(d) == IF quotas[d] = Unbounded THEN StorageMax
+    ELSE Saturate(quotas[d] + ((quotas[d] \div 100) * burst))
+--- END

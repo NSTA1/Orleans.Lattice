@@ -41,6 +41,7 @@ be quiet about one.
 | [`bplustree/`](bplustree/README.md) | `BPlusTopology` | Interleaved split/fold writes, sibling-chain publication, parent routing and unlinked-sibling recovery. |
 | [`tenant-quotas/`](tenant-quotas/README.md) | `TenantFootprint` | Sampled local and converged quota admission, delayed usage publication and receiver-side accounting without a hard global reservation. |
 | [`tenant-quotas/`](tenant-quotas/README.md) | `TenantTreeCount` | Concurrent authoritative tree-count checks and registrations, including the intentional in-flight overshoot window. |
+| [`tenant-quotas/`](tenant-quotas/README.md) | `TenantQuotaEvaluation` | Footprint dimension evaluation and burst ceilings over bounded usage and quota configurations. |
 | [`tenant-rate-budget/`](tenant-rate-budget/README.md) | `TenantRateBudget` | Demand-aware silo budget leases, membership changes, delayed deliveries, cancellation and coordinator restart. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either

@@ -1,0 +1,11 @@
+MODULE: ResultLeavesDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: evaluation produces an unknown quota dimension
+PERTURBS: Evaluate
+
+--- FIND
+    /\ result' = FirstBreach
+--- REPLACE
+    /\ result' = "unknown-dimension"
+--- END
