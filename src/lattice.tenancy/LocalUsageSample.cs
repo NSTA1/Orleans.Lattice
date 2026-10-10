@@ -45,23 +45,26 @@ public readonly record struct LocalUsageSample
     /// <summary>
     /// Returns the dimension-wise sum of this sample and <paramref name="other"/>.
     /// The operation is commutative, associative, and has <see cref="Empty"/> as
-    /// its identity, so it is the join used by the cross-cluster usage fold.
+    /// its identity for non-negative samples, so it is the join used by the
+    /// cross-cluster usage fold. Totals beyond <see cref="long.MaxValue"/>
+    /// saturate there rather than wrapping negative and reopening admission.
     /// </summary>
     /// <param name="other">The sample to add.</param>
     /// <returns>The summed sample.</returns>
     public LocalUsageSample Add(LocalUsageSample other) =>
         new()
         {
-            Bytes = Bytes + other.Bytes,
-            Keys = Keys + other.Keys,
-            MemoryBytes = MemoryBytes + other.MemoryBytes,
-            TreeCount = TreeCount + other.TreeCount,
+            Bytes = SaturatingAdd(Bytes, other.Bytes),
+            Keys = SaturatingAdd(Keys, other.Keys),
+            MemoryBytes = SaturatingAdd(MemoryBytes, other.MemoryBytes),
+            TreeCount = SaturatingAdd(TreeCount, other.TreeCount),
         };
 
     /// <summary>
     /// Rolls up a set of per-tree usage samples into a single local sample: the
     /// stored bytes, live keys, and resident memory are summed across the trees,
-    /// and <see cref="TreeCount"/> is the number of trees supplied.
+    /// and <see cref="TreeCount"/> is the number of trees supplied. Resource
+    /// totals saturate at <see cref="long.MaxValue"/>.
     /// </summary>
     /// <param name="trees">The per-tree samples to roll up. Must not be <c>null</c>.</param>
     /// <returns>The rolled-up local sample.</returns>
@@ -73,9 +76,9 @@ public readonly record struct LocalUsageSample
         long bytes = 0, keys = 0, memoryBytes = 0;
         foreach (var tree in trees)
         {
-            bytes += tree.Bytes;
-            keys += tree.Keys;
-            memoryBytes += tree.MemoryBytes;
+            bytes = SaturatingAdd(bytes, tree.Bytes);
+            keys = SaturatingAdd(keys, tree.Keys);
+            memoryBytes = SaturatingAdd(memoryBytes, tree.MemoryBytes);
         }
 
         return new LocalUsageSample
@@ -85,5 +88,11 @@ public readonly record struct LocalUsageSample
             MemoryBytes = memoryBytes,
             TreeCount = trees.Count,
         };
+    }
+
+    private static long SaturatingAdd(long left, long right)
+    {
+        var sum = (Int128)left + right;
+        return sum > long.MaxValue ? long.MaxValue : (long)sum;
     }
 }
