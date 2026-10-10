@@ -46,9 +46,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **Explorer - Workspace reads.** Switching trees or opening a view discards late dead-letter counts, pages and errors, view-status replies and administration checks. Tracked view actions stay with their originating workspace. (PR link pending) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Workspace reads.** Switching trees or opening a view discards late dead-letter counts, pages and errors, view-status replies and administration checks. Tracked view actions stay with their originating workspace. ([#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Reliable picker inputs.** Paste preserves unfinished text, confirmations refuse a replaced source, calendars work at the first and last dates, and invalid browser offsets no longer crash date-time fields. ([#4797](https://github.com/NSTA1/Orleans.Lattice/pull/4797); PR link pending) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Reliable picker inputs.** Paste preserves unfinished text, confirmations refuse a replaced source, calendars work at the first and last dates, and invalid browser offsets no longer crash date-time fields. ([#4797](https://github.com/NSTA1/Orleans.Lattice/pull/4797), [#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Tests - Atomic restart fault classification.** The restart probe now recognizes the exact in-memory reminder-table shutdown fault as silo churn while retaining atomic visibility and quiesced-read assertions. ([#4795](https://github.com/NSTA1/Orleans.Lattice/issues/4795)) (`Orleans.Lattice`)
 
