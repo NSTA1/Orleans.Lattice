@@ -140,6 +140,22 @@ public sealed class LtMultiComboBoxTests : ShellDesignTestContext
     }
 
     [Test]
+    public void A_refused_pasted_value_keeps_the_unfinished_value_after_the_last_separator()
+    {
+        IReadOnlyList<string>? values = null;
+        var cut = RenderBox(new FakeSuggestionSource(Regions), [], v => values = v);
+
+        cut.Find("input").Input("eu-west, mars-1, us");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(values, Is.EqualTo(new[] { "eu-west" }));
+            Assert.That(cut.Find("input").GetAttribute("value"), Is.EqualTo("mars-1, us"));
+            Assert.That(cut.Find(".lt-field__error").TextContent, Does.Contain("No region is named mars-1."));
+        });
+    }
+
+    [Test]
     public void Duplicates_are_ignored()
     {
         IReadOnlyList<string>? values = null;

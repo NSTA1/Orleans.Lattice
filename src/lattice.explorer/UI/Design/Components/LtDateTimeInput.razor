@@ -64,11 +64,11 @@
                 </div>
             }
             <div class="lt-datetime__month-row">
-                <button type="button" class="lt-datetime__nav" aria-label="Previous month" @onclick="() => ShowMonth(-1)">
+                <button type="button" class="lt-datetime__nav" aria-label="Previous month" disabled="@(_month == DateOnly.MinValue)" @onclick="() => ShowMonth(-1)">
                     <svg class="lt-datetime__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 3 L5 8 L10 13" /></svg>
                 </button>
                 <p id="@MonthId" class="lt-datetime__month" aria-live="polite">@MonthText</p>
-                <button type="button" class="lt-datetime__nav" aria-label="Next month" @onclick="() => ShowMonth(1)">
+                <button type="button" class="lt-datetime__nav" aria-label="Next month" disabled="@(_month.Year == 9999 && _month.Month == 12)" @onclick="() => ShowMonth(1)">
                     <svg class="lt-datetime__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3 L11 8 L6 13" /></svg>
                 </button>
             </div>
@@ -87,7 +87,11 @@
                         <tr>
                             @foreach (var day in week)
                             {
-                                var current = day;
+                                if (day is not { } current)
+                                {
+                                    <td role="gridcell" class="lt-datetime__cell"></td>
+                                    continue;
+                                }
                                 var selected = SelectedDay == current;
                                 <td role="gridcell" aria-selected="@(selected ? "true" : "false")" class="lt-datetime__cell">
                                     @if (current == _active)

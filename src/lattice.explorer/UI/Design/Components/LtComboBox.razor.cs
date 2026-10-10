@@ -252,20 +252,21 @@ public partial class LtComboBox : IAsyncDisposable
     /// value names nothing the source lists, or when <see cref="RejectExisting"/> and it
     /// already exists; otherwise <see langword="true"/>, including an empty value
     /// (whether one is required is the page's rule) and a source that cannot list
-    /// its values.
+    /// its values. A check superseded by a new value or source is refused.
     /// </returns>
     public async Task<bool> ConfirmAsync()
     {
         var text = _text;
+        var source = Source;
         if (!CanSuggest || text.Length == 0)
         {
             return true;
         }
 
         var exists = await ExistsAsync(text).ConfigureAwait(true);
-        if (!string.Equals(text, _text, StringComparison.Ordinal))
+        if (_disposed || !ReferenceEquals(source, Source) || !string.Equals(text, _text, StringComparison.Ordinal))
         {
-            // The text changed while the check ran; the newer text is judged on its own.
+            // An answer belongs to both its text and its source, not to the next field state.
             return false;
         }
 
