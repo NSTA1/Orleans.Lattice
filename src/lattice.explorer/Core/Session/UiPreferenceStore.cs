@@ -8,6 +8,8 @@ namespace Orleans.Lattice.Explorer.Core.Session;
 /// values persisted as a single document through an
 /// <see cref="IUiPreferenceBackingStore"/>. Registered with a scoped lifetime so
 /// each session hydrates its own mirror once, then serves reads synchronously.
+/// Malformed entries are ignored; disposal prevents pending hydration and later
+/// mutations from changing the mirror or starting new backing-store writes.
 /// </summary>
 public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
 {
@@ -94,6 +96,11 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
                 return;
             }
 
+            if (_disposed)
+            {
+                return;
+            }
+
             if (blob is not null)
             {
                 try
@@ -104,7 +111,7 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
                         _entries.Clear();
                         foreach (var (key, entry) in map)
                         {
-                            if (key is not null && entry is not null)
+                            if (key is not null && entry is not null && entry.Json is not null)
                             {
                                 _entries[key] = entry;
                             }
@@ -177,6 +184,11 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _entries[key] = new PreferenceEntry
             {
                 Json = JsonSerializer.Serialize(value),
@@ -202,6 +214,11 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             if (_entries.Remove(key))
             {
                 _deserialized.Remove(key);
@@ -223,6 +240,11 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             var live = new HashSet<string>(liveOwners, StringComparer.Ordinal);
             var changed = false;
 

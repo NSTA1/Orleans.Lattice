@@ -10,6 +10,40 @@ public class ExplorerSessionTests
     private static ExplorerConfiguration ValidConfig(string endpoint = "http://localhost:5199") =>
         new() { Endpoint = endpoint, AllowUnencryptedHttp2 = true };
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task InitializeAsync_failed_load_can_be_retried(bool cancelled)
+    {
+        var store = Substitute.For<IExplorerConfigStore>();
+        var failure = cancelled
+            ? (Exception)new OperationCanceledException()
+            : new IOException("temporary read failure");
+        store.LoadAsync(Arg.Any<CancellationToken>()).Returns(
+            Task.FromException<ExplorerConfiguration?>(failure),
+            Task.FromResult<ExplorerConfiguration?>(ValidConfig()));
+        var connection = Substitute.For<ILatticeStateConnection>();
+        var session = new ExplorerSession(store, connection);
+
+        Assert.That(async () => await session.InitializeAsync(), Throws.TypeOf(failure.GetType()));
+        Assert.That(await session.InitializeAsync(), Is.True);
+        await store.Received(2).LoadAsync(Arg.Any<CancellationToken>());
+        await connection.Received(1).ConfigureAsync(Arg.Any<LatticeConnectionSettings>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task InitializeAsync_failed_apply_does_not_suppress_loading_saved_configuration()
+    {
+        var store = Substitute.For<IExplorerConfigStore>();
+        store.SaveAsync(Arg.Any<ExplorerConfiguration>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new IOException("temporary write failure")));
+        store.LoadAsync(Arg.Any<CancellationToken>()).Returns(ValidConfig());
+        var session = new ExplorerSession(store, Substitute.For<ILatticeStateConnection>());
+
+        Assert.That(async () => await session.ApplyAsync(ValidConfig()), Throws.TypeOf<IOException>());
+        Assert.That(await session.InitializeAsync(), Is.True);
+        await store.Received(1).LoadAsync(Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public async Task InitializeAsync_WithStoredConfig_ConnectsAndReportsConfigured()
     {

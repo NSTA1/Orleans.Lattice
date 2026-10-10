@@ -15,6 +15,23 @@ public class UiPreferenceStoreTests
         => new(backing, clock ?? new MutableTimeProvider(), Retention);
 
     [Test]
+    public async Task EnsureLoaded_null_payload_is_discarded_without_losing_valid_siblings()
+    {
+        var backing = new InMemoryUiPreferenceBackingStore();
+        await backing.SetAsync(UiPreferenceStore.BackingKey,
+            """{"broken":{"Json":null,"TouchedUnixMs":1704067200000},"valid":{"Json":"42","TouchedUnixMs":1704067200000}}""");
+        var store = CreateStore(backing);
+
+        await store.EnsureLoadedAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.TryGet<int>("broken", out _), Is.False);
+            Assert.That(store.GetOrDefault("valid", 0), Is.EqualTo(42));
+        });
+    }
+
+    [Test]
     public void IsLoaded_BeforeEnsureLoaded_IsFalse()
     {
         var store = CreateStore(new InMemoryUiPreferenceBackingStore());
