@@ -75,8 +75,10 @@ internal sealed class TenantRateBudgetCoordinator
     /// <returns>A task that completes when the cycle has been applied.</returns>
     public async Task RunLeaseCycleAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var options = _options.CurrentValue;
         var siloCount = await _siloCountProvider.GetLiveSiloCountAsync(cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         if (siloCount < 1)
         {
             siloCount = 1;
@@ -87,6 +89,7 @@ internal sealed class TenantRateBudgetCoordinator
 
         await foreach (var spec in _rateProvider.GetConfiguredRatesAsync(cancellationToken).ConfigureAwait(false))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var tenantKey = spec.Tenant.Value;
             if (tenantKey is null)
             {
@@ -128,9 +131,13 @@ internal sealed class TenantRateBudgetCoordinator
 
             var emission = TenantTokenBucket.ComputeEmissionIntervalTicks(share, frequency);
             var tolerance = TenantTokenBucket.ComputeBurstToleranceTicks(share, spec.BurstPercent, frequency);
+            // A collaborator may complete after the cycle's deadline without
+            // observing cancellation. Its late grant must not replace a bucket.
+            cancellationToken.ThrowIfCancellationRequested();
             _limiter.Configure(spec.Tenant, emission, tolerance);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         _limiter.RetainOnly(configured);
     }
 }
