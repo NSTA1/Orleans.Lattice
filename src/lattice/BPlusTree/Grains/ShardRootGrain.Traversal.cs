@@ -840,7 +840,7 @@ internal sealed partial class ShardRootGrain
         // The capture caller clears the donor marker after this durable link
         // completes. Calling back into that leaf here would deadlock its
         // capture turn while it awaits the root.
-        await LinkSplitAsync(splitResult, 0, acknowledgeDonors: false);
+        await LinkSplitAsync(splitResult, 0, acknowledgeDonors: false, deferIfBusy: true);
     }
 
     /// <summary>
@@ -852,11 +852,26 @@ internal sealed partial class ShardRootGrain
     private async Task<SplitResult?> LinkSplitAsync(
         SplitResult splitResult,
         int height,
-        bool acknowledgeDonors = true)
+        bool acknowledgeDonors = true,
+        bool deferIfBusy = false)
     {
         using var routingMutation = EnterRoutingMutation();
         List<LinkWork> work;
-        await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        if (deferIfBusy)
+        {
+            // Linking another split may be seeding this capture caller's parent.
+            // Persist the obligation instead of waiting on that caller's root gate.
+            if (!_splitLinkGate.Wait(0))
+            {
+                var deferred = new List<LinkWork>(1) { new(splitResult, height, null) };
+                await RecordPendingChildLinksAsync(deferred, trackInFlight: false);
+                return null;
+            }
+        }
+        else
+        {
+            await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
         try
         {
             work = await LinkSplitLockedAsync(splitResult, height);

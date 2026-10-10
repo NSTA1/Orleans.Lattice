@@ -117,6 +117,33 @@ public sealed partial class ShardRootGrainSplitLinkTests
     }
 
     [Test]
+    public async Task A_capture_link_during_parent_seeding_is_deferred_without_waiting_for_the_root_gate()
+    {
+        var h = CreateTwoLevelHarness();
+        var captureSibling = GrainId.Create("leaf", "capture-sibling");
+        Task? captureLink = null;
+        var captureReturnedWhileParentWaited = false;
+        h.Leaf(LeftLeafId).SetAsync("c", Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(
+            LeafSplit("d") with { Donor = LeftLeafId }));
+        h.Node(LeftParentId).AcceptSplitAsync("d", SiblingId).Returns(async _ =>
+        {
+            captureLink = h.Grain.LinkLeafSplitFromCaptureAsync(
+                LeafSplit("e", captureSibling) with { Donor = LeftLeafId });
+            captureReturnedWhileParentWaited =
+                await Task.WhenAny(captureLink, Task.Delay(TimeSpan.FromSeconds(1))) == captureLink;
+            return (SplitResult?)null;
+        });
+
+        await h.Grain.SetAsync("c", [1]);
+        await captureLink!;
+
+        Assert.That(captureReturnedWhileParentWaited, Is.True,
+            "A parent seeding the donor must not wait for capture to acquire the root's held split-link gate.");
+        await h.Node(LeftParentId).Received(1).AcceptSplitAsync("e", captureSibling);
+        Assert.That(h.State.State.PendingChildLinks, Is.Empty);
+    }
+
+    [Test]
     public async Task A_capture_split_does_not_call_back_to_acknowledge_its_waiting_donor()
     {
         var h = CreateTwoLevelHarness();
