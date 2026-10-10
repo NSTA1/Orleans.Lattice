@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-evaluation",
+  "refinement": "RefinementQuotaEvaluation.md",
+  "nonBehaviouralActions": [],
+  "counts": {
+    "invariants": 2,
+    "properties": 1,
+    "actions": 1,
+    "mutations": 9,
+    "behaviourRows": 3,
+    "distinctStates": 124416
+  }
+}

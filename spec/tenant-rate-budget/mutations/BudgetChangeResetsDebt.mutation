@@ -1,0 +1,18 @@
+MODULE: BudgetChangeResetsDebt
+TARGET: BudgetChangeDeferred
+CLASS: Action
+SUMMARY: changing registry budget incorrectly resets active bucket debt before refresh
+PERTURBS: ChangeBudget
+
+--- FIND
+    /\ rate' = newRate
+    /\ changed' = TRUE
+    /\ UNCHANGED <<live, joined, left, restarted, now, phase, cycles, age,
+                   grant, configured, emission, tolerance, tat, demand, cancelled>>
+--- REPLACE
+    /\ rate' = newRate
+    /\ changed' = TRUE
+    /\ tat' = [s \in Silos |-> 0]
+    /\ UNCHANGED <<live, joined, left, restarted, now, phase, cycles, age,
+                   grant, configured, emission, tolerance, demand, cancelled>>
+--- END

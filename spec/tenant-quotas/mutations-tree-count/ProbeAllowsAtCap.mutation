@@ -1,0 +1,11 @@
+MODULE: ProbeAllowsAtCap
+TARGET: ProbeTruth
+CLASS: Invariant
+SUMMARY: later count checks allow a tenant already at its cap
+PERTURBS: Probe
+
+--- FIND
+    /\ allow' = (Cardinality(owned) + 1 <= Effective)
+--- REPLACE
+    /\ allow' = TRUE
+--- END

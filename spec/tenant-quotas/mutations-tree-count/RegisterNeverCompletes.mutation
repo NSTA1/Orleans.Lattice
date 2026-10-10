@@ -1,0 +1,12 @@
+MODULE: RegisterNeverCompletes
+TARGET: AllCreatesFinish
+CLASS: Temporal
+SUMMARY: an admitted tree registration waits forever
+PERTURBS: Register
+
+--- FIND
+    /\ phase[q] = "admitted"
+--- REPLACE
+    /\ FALSE
+    /\ phase[q] = "admitted"
+--- END

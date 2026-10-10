@@ -1,0 +1,11 @@
+MODULE: CountLeavesDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a count probe returns a count outside the finite registry domain
+PERTURBS: Probe
+
+--- FIND
+    /\ observed' = Cardinality(owned)
+--- REPLACE
+    /\ observed' = Cardinality(owned) + 4
+--- END

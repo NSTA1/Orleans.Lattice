@@ -1,0 +1,17 @@
+# Pairs with NoStaleAuthority. Only a captured deadline the silo has renewed
+# past may pass while the silo's lease still stands; the mutant lets an
+# unrenewed one pass too, while the silo still trusts the old snapshot.
+MODULE: CaptureAgesWhileTied
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: a captured deadline the silo has not renewed past lapses on its own
+PERTURBS: CaptureAges
+
+--- FIND
+    /\ pend[t] = "open"
+    /\ pend' = [pend EXCEPT ![t] = "lapsed"]
+--- REPLACE
+\* MUTATION: an unrenewed capture lapses early.
+    /\ pend[t] \in {"open", "tied"}
+    /\ pend' = [pend EXCEPT ![t] = "lapsed"]
+--- END

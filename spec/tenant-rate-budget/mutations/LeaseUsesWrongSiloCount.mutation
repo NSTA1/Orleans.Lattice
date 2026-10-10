@@ -1,0 +1,11 @@
+MODULE: LeaseUsesWrongSiloCount
+TARGET: LeaseSnapshotExact
+CLASS: Action
+SUMMARY: the allocation snapshot uses an extra silo
+PERTURBS: BeginLease
+
+--- FIND
+         [rate |-> rate, count |-> Cardinality(live), local |-> demand[s],
+--- REPLACE
+         [rate |-> rate, count |-> Cardinality(live) + 1, local |-> demand[s],
+--- END

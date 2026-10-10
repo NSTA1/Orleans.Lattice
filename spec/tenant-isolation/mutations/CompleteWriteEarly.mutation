@@ -1,0 +1,16 @@
+# Pairs with NoStaleAuthority. The advance returns as soon as it starts,
+# without waiting for acknowledgements or lease expiry.
+MODULE: CompleteWriteEarly
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: the write returns before every captured silo acknowledged or lapsed
+PERTURBS: CompleteWrite
+
+--- FIND
+    /\ wstate = "advancing" /\ alive[wsilo]
+    /\ \A t \in Silos : pend[t] \in {"no", "lapsed"}
+--- REPLACE
+\* MUTATION: the wait is skipped.
+    /\ wstate = "advancing" /\ alive[wsilo]
+    /\ TRUE
+--- END

@@ -56,6 +56,14 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Schema card singular counts.** A size or length bound typed as `01` or `1.0` reads "1 byte" or "1 character", not "1 bytes". ([#4809](https://github.com/NSTA1/Orleans.Lattice/issues/4809)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Tenancy - Policy lease margin.** Epoch publication still invalidates or waits out subscribers whose recorded lease has passed but remains inside the clock-rate margin, preventing a completed policy change from leaving a slower silo authoritative on stale policy. ([#4806](https://github.com/NSTA1/Orleans.Lattice/issues/4806)) (`Orleans.Lattice.Tenancy`)
+
+- **Tenancy - Usage sample freshness.** Changed usage below publication hysteresis is refreshed within five minutes of metering-clock time, so stable small quota crossings and subsequent recovery no longer remain invisible to admission indefinitely. ([#4805](https://github.com/NSTA1/Orleans.Lattice/issues/4805)) (`Orleans.Lattice.Tenancy`)
+
+- **Tenancy - Canceled rate leases.** A canceled budget-refresh cycle no longer installs delayed grants or prunes existing enforcement from an incomplete rate enumeration. ([#4804](https://github.com/NSTA1/Orleans.Lattice/issues/4804)) (`Orleans.Lattice.Tenancy`)
+
+- **Tenancy - Usage overflow.** Local tree roll-ups and cross-cluster usage sums saturate at the signed 64-bit ceiling instead of wrapping negative and reopening footprint quota admission. ([#4803](https://github.com/NSTA1/Orleans.Lattice/issues/4803)) (`Orleans.Lattice.Tenancy`)
+
 - **Explorer - Session recovery and preferences.** Failed or cancelled configuration reads can be retried, malformed preference values no longer crash reads, and late work after session disposal cannot alter saved preferences. ([#4801](https://github.com/NSTA1/Orleans.Lattice/pull/4801)) (`Orleans.Lattice.Explorer.Core`)
 
 - **Explorer - Workspace reads.** Switching trees or opening a view discards late dead-letter counts, pages and errors, view-status replies and administration checks. Tracked view actions stay with their originating workspace. ([#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800)) (`Orleans.Lattice.Explorer.UI`)

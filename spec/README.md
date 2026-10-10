@@ -39,6 +39,11 @@ be quiet about one.
 | [`wal/`](wal/README.md) | `WalMove` | A WAL partition moving between storage providers: fence, quiesced copy, placement switch and shard crash. |
 | [`bplustree/`](bplustree/README.md) | `SplitLink` | A leaf split completing on the donor, the shard root recording and applying the child link, and a root crash between them. |
 | [`bplustree/`](bplustree/README.md) | `BPlusTopology` | Interleaved split/fold writes, sibling-chain publication, parent routing and unlinked-sibling recovery. |
+| [`tenant-quotas/`](tenant-quotas/README.md) | `TenantFootprint` | Sampled local and converged quota admission, delayed usage publication and receiver-side accounting without a hard global reservation. |
+| [`tenant-quotas/`](tenant-quotas/README.md) | `TenantTreeCount` | Concurrent authoritative tree-count checks and registrations, including the intentional in-flight overshoot window. |
+| [`tenant-quotas/`](tenant-quotas/README.md) | `TenantQuotaEvaluation` | Footprint dimension evaluation and burst ceilings over bounded usage and quota configurations. |
+| [`tenant-rate-budget/`](tenant-rate-budget/README.md) | `TenantRateBudget` | Demand-aware silo budget leases, membership changes, delayed deliveries, cancellation and coordinator restart. |
+| [`tenant-isolation/`](tenant-isolation/README.md) | `TenantIsolation` | Tenant policy epoch, lease and snapshot freshness, publication failures, membership recovery and epoch restart. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

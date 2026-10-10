@@ -1,0 +1,11 @@
+MODULE: DeliverStaleOverwrites
+TARGET: SlotMonotonic
+CLASS: Action
+SUMMARY: duplicate old usage replaces a newer cluster slot
+PERTURBS: DeliverUsage
+
+--- FIND
+         slots' = [slots EXCEPT ![r][o] = Max(@, old)]
+--- REPLACE
+         slots' = [slots EXCEPT ![r][o] = old]
+--- END

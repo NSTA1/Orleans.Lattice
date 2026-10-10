@@ -1,0 +1,16 @@
+# Pairs with EpochMonotonic. The grain persists nothing, so a re-activation must
+# take a fresh incarnation; reusing the old one restarts the version at zero and
+# an epoch silos have seen supersedes the new one.
+MODULE: EpochRestartReusesIncarnation
+TARGET: EpochMonotonic
+CLASS: Action
+SUMMARY: a re-activated epoch grain reuses the previous incarnation
+PERTURBS: EpochRestart
+BOUNDS: MaxRestarts = 1
+
+--- FIND
+    /\ epoch' = <<epoch[1] + 1, 0>>
+--- REPLACE
+\* MUTATION: the incarnation is reused.
+    /\ epoch' = <<epoch[1], 0>>
+--- END

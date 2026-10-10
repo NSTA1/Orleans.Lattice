@@ -1,0 +1,11 @@
+MODULE: EvaluationIgnoresTrees
+TARGET: TruthfulEvaluation
+CLASS: Invariant
+SUMMARY: the evaluator skips a sampled tree count breach
+PERTURBS: Evaluate
+
+--- FIND
+    /\ result' = FirstBreach
+--- REPLACE
+    /\ result' = IF FirstBreach = "trees" THEN "admit" ELSE FirstBreach
+--- END

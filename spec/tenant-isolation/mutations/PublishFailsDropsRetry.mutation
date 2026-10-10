@@ -1,0 +1,20 @@
+# Pairs with PublicationWindowTracked. The hook swallows the failed advance and
+# forgets it, so the write returns ahead of its coverage with nothing tracking
+# the debt. The base records the failure and keeps a background re-publish owed.
+MODULE: PublishFailsDropsRetry
+TARGET: PublicationWindowTracked
+CLASS: Invariant
+SUMMARY: a failed publication returns with no re-publish owed
+PERTURBS: PublishFails
+BOUNDS: MaxFailures = 1
+
+--- FIND
+    /\ wstate' = "failed"
+    /\ returnedVer' = regVer
+    /\ pend' = [t \in Silos |-> "no"]
+--- REPLACE
+\* MUTATION: the failure is forgotten.
+    /\ wstate' = "idle"
+    /\ returnedVer' = regVer
+    /\ pend' = [t \in Silos |-> "no"]
+--- END

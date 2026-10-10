@@ -1,0 +1,10 @@
+MODULE: EvaluationRejectsUnbounded
+TARGET: TruthfulEvaluation
+CLASS: Invariant
+SUMMARY: a null ceiling is treated as a zero ceiling
+
+--- FIND
+Breach(d) == quotas[d] # Unbounded /\ usage[d] > Ceiling(d)
+--- REPLACE
+Breach(d) == IF quotas[d] = Unbounded THEN usage[d] > 0 ELSE usage[d] > Ceiling(d)
+--- END

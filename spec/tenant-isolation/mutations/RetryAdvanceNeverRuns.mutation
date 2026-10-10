@@ -1,0 +1,16 @@
+# Pairs with EveryCommitEventuallyCovered. Without the background re-publish a
+# write whose publication failed is never covered, so peers may trust their old
+# snapshot indefinitely.
+MODULE: RetryAdvanceNeverRuns
+TARGET: EveryCommitEventuallyCovered
+CLASS: Temporal
+SUMMARY: the background loop never re-publishes an owed advance
+PERTURBS: RetryAdvance
+BOUNDS: NumSilos = 1, MaxFailures = 1
+
+--- FIND
+    /\ wstate = "failed" /\ alive[wsilo] /\ owes[wsilo]
+--- REPLACE
+\* MUTATION: the loop never runs.
+    /\ FALSE /\ wstate = "failed" /\ alive[wsilo] /\ owes[wsilo]
+--- END

@@ -1,0 +1,10 @@
+MODULE: ScopeAlwaysLocal
+TARGET: ScopeCorrect
+CLASS: Invariant
+SUMMARY: GlobalConverged silently reads only this cluster
+
+--- FIND
+Usage(r) == IF scope = "GlobalConverged" THEN Fold(slots[r]) ELSE slots[r][r]
+--- REPLACE
+Usage(r) == slots[r][r]
+--- END

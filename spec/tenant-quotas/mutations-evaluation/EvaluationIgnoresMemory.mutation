@@ -1,0 +1,11 @@
+MODULE: EvaluationIgnoresMemory
+TARGET: TruthfulEvaluation
+CLASS: Invariant
+SUMMARY: the evaluator skips a resident memory breach
+PERTURBS: Evaluate
+
+--- FIND
+    /\ result' = FirstBreach
+--- REPLACE
+    /\ result' = IF FirstBreach = "memory" THEN "admit" ELSE FirstBreach
+--- END

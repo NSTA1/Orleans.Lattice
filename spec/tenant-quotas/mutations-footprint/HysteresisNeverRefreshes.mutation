@@ -1,0 +1,11 @@
+MODULE: HysteresisNeverRefreshes
+TARGET: EventualRefusal
+CLASS: Temporal
+SUMMARY: a stable sub-threshold quota crossing never refreshes its published slot
+PERTURBS: Publish
+
+--- FIND
+    /\ published[r] = 0 \/ sample[r] - published[r] >= band \/ age[r] >= Refresh
+--- REPLACE
+    /\ published[r] = 0 \/ sample[r] - published[r] >= band
+--- END

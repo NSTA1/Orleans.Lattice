@@ -1,0 +1,11 @@
+MODULE: RefreshResetsDebt
+TARGET: RefreshPreservesDebt
+CLASS: Action
+SUMMARY: a same-parameter refresh mints another burst
+PERTURBS: Deliver
+
+--- FIND
+          /\ tat' = [tat EXCEPT ![s] = IF install /\ ~same THEN 0 ELSE @]
+--- REPLACE
+          /\ tat' = [tat EXCEPT ![s] = IF install THEN 0 ELSE @]
+--- END

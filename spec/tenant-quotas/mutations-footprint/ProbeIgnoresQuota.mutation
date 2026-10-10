@@ -1,0 +1,13 @@
+MODULE: ProbeIgnoresQuota
+TARGET: EventualRefusal
+CLASS: Temporal
+SUMMARY: every later admission still allows after converged over-quota usage
+PERTURBS: Probe
+
+--- FIND
+    /\ decision' = [decision EXCEPT ![r] = [value |-> Usage(r), expected |-> ExpectedUsage(r), allow |-> Allowed(r)]]
+    /\ UNCHANGED <<scope, band, age, phase, live, inbound, sample, published, slots>>
+--- REPLACE
+    /\ decision' = [decision EXCEPT ![r] = [value |-> Usage(r), expected |-> ExpectedUsage(r), allow |-> TRUE]]
+    /\ UNCHANGED <<scope, band, age, phase, live, inbound, sample, published, slots>>
+--- END

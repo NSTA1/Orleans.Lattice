@@ -1,0 +1,11 @@
+MODULE: SampleInventsUsage
+TARGET: SampleSound
+CLASS: Invariant
+SUMMARY: the meter charges a write not present in storage
+PERTURBS: Sample
+
+--- FIND
+    /\ sample' = [sample EXCEPT ![r] = live[r]]
+--- REPLACE
+    /\ sample' = [sample EXCEPT ![r] = live[r] + 1]
+--- END

@@ -1,0 +1,16 @@
+# Pairs with PublicationWindowTracked. A writer that crashes owing a re-publish
+# must leave the write tracked until membership declares it dead; the mutant
+# forgets it, so nothing covers the returned write.
+MODULE: SiloCrashForgetsWrite
+TARGET: PublicationWindowTracked
+CLASS: Invariant
+SUMMARY: a writer crash drops the write it returned ahead of coverage
+PERTURBS: SiloCrash
+BOUNDS: NumSilos = 1, MaxCrashes = 1, MaxFailures = 1
+
+--- FIND
+    /\ wstate' = IF wsilo = s /\ Writing THEN "crashed" ELSE wstate
+--- REPLACE
+\* MUTATION: the write is forgotten.
+    /\ wstate' = IF wsilo = s /\ Writing THEN "idle" ELSE wstate
+--- END

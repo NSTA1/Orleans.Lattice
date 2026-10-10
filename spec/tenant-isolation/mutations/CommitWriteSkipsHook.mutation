@@ -1,0 +1,19 @@
+# Pairs with WriterReadsOwnWrite. The mutation hook neither schedules the local
+# rebuild nor marks an advance in flight, so the committing silo keeps trusting
+# a snapshot that misses its own write. The base marks both before publishing.
+MODULE: CommitWriteSkipsHook
+TARGET: WriterReadsOwnWrite
+CLASS: Invariant
+SUMMARY: the commit does not mark the writer's snapshot out of date
+PERTURBS: CommitWrite
+
+--- FIND
+    /\ stale' = [stale EXCEPT ![s] = TRUE]
+    /\ scanDirty' = [scanDirty EXCEPT ![s] = scanning[s] \/ scanDirty[s]]
+    /\ owes' = [owes EXCEPT ![s] = TRUE]
+--- REPLACE
+\* MUTATION: the hook is skipped.
+    /\ stale' = stale
+    /\ scanDirty' = scanDirty
+    /\ owes' = owes
+--- END

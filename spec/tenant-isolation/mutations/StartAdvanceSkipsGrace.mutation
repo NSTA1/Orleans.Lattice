@@ -1,0 +1,24 @@
+# Pairs with NoStaleAuthority. A re-activated epoch grain has an empty lease
+# table, so leases its previous activation granted are invisible to the capture.
+# The base holds the advance open for the grace; the mutant completes at once.
+MODULE: StartAdvanceSkipsGrace
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: an advance on a fresh activation does not wait out the grace
+PERTURBS: StartAdvance
+BOUNDS: MaxRestarts = 1
+
+--- FIND
+    /\ wstate' = "advancing"
+    /\ epoch' = <<epoch[1], epoch[2] + 1>>
+    /\ knows' = [t \in Silos |-> FALSE]
+    /\ pend' = [t \in Silos |-> Capture(t)]
+    /\ graceWait' = graceOpen
+--- REPLACE
+\* MUTATION: the grace is not waited out.
+    /\ wstate' = "advancing"
+    /\ epoch' = <<epoch[1], epoch[2] + 1>>
+    /\ knows' = [t \in Silos |-> FALSE]
+    /\ pend' = [t \in Silos |-> Capture(t)]
+    /\ graceWait' = FALSE
+--- END

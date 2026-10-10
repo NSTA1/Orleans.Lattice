@@ -1,0 +1,13 @@
+MODULE: AcquireIgnoresDebt
+TARGET: LocalAdmissionBound
+CLASS: Action
+SUMMARY: admission skips the GCRA debt comparison
+PERTURBS: Acquire
+
+--- FIND
+    /\ demand[s] < 2
+    /\ now >= tat[s] - tolerance[s]
+--- REPLACE
+    /\ demand[s] < 2
+    /\ TRUE
+--- END

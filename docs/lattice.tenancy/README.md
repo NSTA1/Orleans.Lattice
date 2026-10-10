@@ -57,7 +57,7 @@ and its [gRPC binding](../lattice.api.tenantadmin.grpc/README.md).
   `AddLatticeAuth` have all already run on the same builder.
 - **Coordination-free multi-cluster.** Tenant definitions and usage are convergent
   CRDT state - a registry record merges field by field, and usage enforcement reads a
-  convergent sum (no locks, no consensus) with bounded, quantified overshoot - so they
+  convergent sum (no locks, no consensus) with soft sampled admission - so they
   converge across every cluster the `sys-tenant-*` trees replicate to.
   `AddLatticeTenancy` automatically declares `sys-tenant-registry` in the static
   replication map as `LwwRegister` only when replication is registered, regardless
@@ -227,7 +227,7 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   also kept current by a cluster-wide tenant-policy epoch. Before a registry write
   returns, the committing silo advances the epoch and pushes it to every silo, which
   marks its snapshot out of date and rebuilds; the write completes once every silo
-  has acknowledged, or has had its lease lapse. Each silo holds its snapshot
+  has acknowledged, or has had its recorded lease plus the clock-rate margin lapse. Each silo holds its snapshot
   authoritative only while it holds a live lease from the epoch (renewed every third
   of `PolicySnapshotLeaseDuration`) and has compiled the latest epoch it has seen.
   A silo that cannot know it is current - its lease has lapsed, it has been told of a
@@ -238,7 +238,7 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   timestamp read. A restarted epoch holds each write open for about 1.1 times the
   lease (one lease plus a tenth), or until
   every silo cluster membership does not report dead has leased from it, so no silo
-  leased by its previous incarnation stays authoritative. One window is bounded
+  leased by its previous incarnation stays authoritative. The guarantee assumes no silo clock runs slower than the epoch grain's by more than the margin over one lease. Two windows remain open: failed publication lets the write return while peers retain old authority until the background re-publish succeeds (the committing silo stays non-authoritative); the writer-crash window is bounded
   rather than closed: a silo that crashes after committing a registry write but
   before publishing it leaves the other silos unaware of that write until cluster
   membership declares it dead, at which point every surviving silo rebuilds. Each
@@ -416,7 +416,9 @@ never suddenly throttles an existing workload.
   running tenancy without resource governance.
 - **A tenant's first non-empty sample always publishes.** Republishing a usage slot is gated
   by a hysteresis band (`PublishMinAbsoluteDelta` / `PublishMinRelativeDelta`) so a
-  stream of negligible movements does not churn the registry. That band damps churn
+  stream of negligible movements does not churn the registry. A changed sample is
+  nevertheless refreshed after five minutes of supplied metering-clock time, so
+  a stable small quota crossing cannot be hidden forever (#4805). That band damps churn
   *between successive samples*, so it is deliberately not applied to a tenant's
   first publish: until the slot exists admission is fail-open and no quota binds at
   all, so a tenant whose whole footprint sits below the absolute floor (default
@@ -510,13 +512,18 @@ override):
   by the tenant's region statuses. The map holds another cluster's slot only once
   the `sys-tenant-usage` tree replicates between them; until then the global fold
   equals this cluster's own sample. Enforcement admits against the global fold,
-  giving a single global budget rather than `limit x clusters`, with bounded
-  transient overshoot. The monotonic overage tallies use grow-only `GCounter`s (one
+  giving a single global budget rather than `limit x clusters`, with soft
+  sampled admission. A numerical overshoot bound additionally requires bounds on
+  arrivals, write sizes, metering and replication delays. The monotonic overage
+  tallies use grow-only `GCounter`s (one
   per bytes, keys, memory, and tree-count dimension), but they are not metered from
   the global fold: whatever the scope, each cluster accrues the overage of its own
   local usage above the tenant's whole steady-state cap into its own component, and
   the converged tally sums the components. Slots are republished on a
   cadence with hysteresis so continuous usage does not flood the replication path.
+  A changed sample is refreshed after five minutes of supplied metering-clock time
+  even below the band; with available metering and replication, a stable small
+  quota crossing therefore reaches later admission. Unchanged samples do not churn.
 - **`PerCluster` (fallback).** Each cluster admits against only its own local usage
   slot, so effective global capacity is `limit x clusters`. Selectable, cluster-wide,
   by operators who prefer hard-partitioned capacity. The scope changes only which

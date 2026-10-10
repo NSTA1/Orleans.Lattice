@@ -1,0 +1,11 @@
+MODULE: ShareBoundOverallocated
+TARGET: ShareBound
+CLASS: Invariant
+SUMMARY: allocation exceeds its captured cluster rate
+PERTURBS: BeginLease
+
+--- FIND
+          total |-> total, share |-> Share(rate, Cardinality(live), demand[s], total)]]
+--- REPLACE
+          total |-> total, share |-> rate + 1]]
+--- END

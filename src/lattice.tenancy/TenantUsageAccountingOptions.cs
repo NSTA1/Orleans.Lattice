@@ -26,7 +26,9 @@ public sealed class TenantUsageAccountingOptions
     /// smaller movement is suppressed by the hysteresis gate so a stream of
     /// negligible deltas does not churn the registry. Defaults to
     /// <c>64 * 1024</c> (64 KiB / keys / trees). Negative values are treated as
-    /// zero by the hysteresis gate.
+    /// zero by the hysteresis gate. A changed sample is nevertheless refreshed
+    /// after five minutes of metering-clock time, so damping cannot hide a stable
+    /// quota crossing permanently.
     /// </summary>
     public long PublishMinAbsoluteDelta { get; set; } = 64 * 1024;
 
@@ -38,6 +40,7 @@ public sealed class TenantUsageAccountingOptions
     /// that dimension's significance band, which is the larger of the absolute
     /// floor and this relative fraction of the last value. Defaults to <c>0.05</c>
     /// (5%). Negative values are treated as zero by the hysteresis gate.
+    /// A changed sample is refreshed after five minutes even below this band.
     /// </summary>
     public double PublishMinRelativeDelta { get; set; } = 0.05;
 

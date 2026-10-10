@@ -1,0 +1,11 @@
+MODULE: JoinNotPublished
+TARGET: JoinStartsUnconfigured
+CLASS: Action
+SUMMARY: membership joins are not reflected in the live set
+PERTURBS: Join
+
+--- FIND
+    /\ live' = live \cup {"b"}
+--- REPLACE
+    /\ live' = live
+--- END

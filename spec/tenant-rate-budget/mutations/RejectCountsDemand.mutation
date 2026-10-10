@@ -1,0 +1,21 @@
+MODULE: RejectCountsDemand
+TARGET: RejectedDemandUnchanged
+CLASS: Action
+SUMMARY: a refused operation changes admitted demand within the model domain
+PERTURBS: Reject
+
+--- FIND
+Reject(s) ==
+    /\ s \in live
+    /\ configured[s]
+    /\ now < tat[s] - tolerance[s]
+    /\ UNCHANGED vars
+--- REPLACE
+Reject(s) ==
+    /\ s \in live
+    /\ configured[s]
+    /\ now < tat[s] - tolerance[s]
+    /\ demand' = [demand EXCEPT ![s] = IF @ = 2 THEN 1 ELSE @ + 1]
+    /\ UNCHANGED <<live, rate, changed, joined, left, restarted, now, phase, cycles,
+                   age, grant, configured, emission, tolerance, tat, cancelled>>
+--- END

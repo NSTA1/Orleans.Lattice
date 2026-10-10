@@ -1,0 +1,13 @@
+MODULE: PublishSuppressedForever
+TARGET: UsageConverges
+CLASS: Temporal
+SUMMARY: hysteresis suppresses every positive local sample permanently
+PERTURBS: Publish
+
+--- FIND
+    /\ published' = [published EXCEPT ![r] = sample[r]]
+    /\ slots' = [slots EXCEPT ![r][r] = Max(@, sample[r])]
+--- REPLACE
+    /\ published' = published
+    /\ slots' = slots
+--- END

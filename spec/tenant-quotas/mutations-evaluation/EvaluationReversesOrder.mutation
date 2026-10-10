@@ -1,0 +1,12 @@
+MODULE: EvaluationReversesOrder
+TARGET: TruthfulEvaluation
+CLASS: Invariant
+SUMMARY: keys precede bytes in the deterministic first breach order
+
+--- FIND
+FirstBreach == IF Breach("bytes") THEN "bytes" ELSE
+    IF Breach("keys") THEN "keys" ELSE
+--- REPLACE
+FirstBreach == IF Breach("keys") THEN "keys" ELSE
+    IF Breach("bytes") THEN "bytes" ELSE
+--- END

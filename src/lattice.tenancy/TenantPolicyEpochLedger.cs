@@ -17,7 +17,11 @@ namespace Orleans.Lattice.Tenancy;
 /// acknowledge within <see cref="AckTimeout"/> is waited out: the advance does not
 /// complete until that subscriber's recorded lease deadline, plus a clock-rate
 /// margin, has passed, because the silo's own deadline was measured from before
-/// the grant and so has expired by then. Either way, when the advance completes
+/// the grant and so has expired by then. A lease whose recorded deadline has passed
+/// but whose deadline plus the margin has not is still pushed to and waited for, for
+/// the same reason; only a lease past both is skipped and dropped from the table.
+/// Either way, provided no silo's clock runs slower than the grain's by more than
+/// the margin over one lease, when the advance completes
 /// no silo can still hold authority over a pre-advance snapshot.
 /// </para>
 /// <para>
@@ -136,7 +140,7 @@ internal sealed class TenantPolicyEpochLedger<TSubscriber>
 
     /// <summary>
     /// Advances the epoch and completes once every leased subscriber has
-    /// acknowledged it or had its lease expire, and once the fresh-incarnation
+    /// acknowledged it or had its lease plus the clock-rate margin expire, and once the fresh-incarnation
     /// grace period has elapsed.
     /// </summary>
     /// <param name="notify">Pushes the new epoch to one subscriber; its completion is the acknowledgement.</param>
@@ -160,7 +164,10 @@ internal sealed class TenantPolicyEpochLedger<TSubscriber>
             List<TSubscriber>? expired = null;
             foreach (var lease in _leases)
             {
-                if (lease.Value > now)
+                // A silo whose clock runs slower than this one still trusts its lease
+                // until the recorded deadline plus the margin, so only a lease past both
+                // is safe to skip and drop.
+                if (Add(lease.Value, Margin) > now)
                 {
                     live.Add(lease);
                 }

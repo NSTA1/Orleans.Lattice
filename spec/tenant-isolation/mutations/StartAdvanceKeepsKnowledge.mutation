@@ -1,0 +1,19 @@
+# Pairs with NoStaleAuthority. The epoch grain completes an advance without
+# publishing an epoch any silo has not seen, so a delivered push supersedes
+# nothing and a peer keeps trusting its old snapshot after the write returns.
+MODULE: StartAdvanceKeepsKnowledge
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: the advance does not bump the epoch silos compare against
+PERTURBS: StartAdvance
+
+--- FIND
+    /\ wstate' = "advancing"
+    /\ epoch' = <<epoch[1], epoch[2] + 1>>
+    /\ knows' = [t \in Silos |-> FALSE]
+--- REPLACE
+\* MUTATION: silos still hold the current epoch.
+    /\ wstate' = "advancing"
+    /\ epoch' = <<epoch[1], epoch[2] + 1>>
+    /\ knows' = knows
+--- END

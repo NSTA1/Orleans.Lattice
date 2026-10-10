@@ -1,0 +1,11 @@
+MODULE: EvaluationIgnoresBytes
+TARGET: TruthfulEvaluation
+CLASS: Invariant
+SUMMARY: the evaluator skips bytes even when they breach
+PERTURBS: Evaluate
+
+--- FIND
+    /\ result' = FirstBreach
+--- REPLACE
+    /\ result' = IF FirstBreach = "bytes" THEN "admit" ELSE FirstBreach
+--- END

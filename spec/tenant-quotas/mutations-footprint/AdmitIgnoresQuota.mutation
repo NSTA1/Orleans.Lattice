@@ -1,0 +1,19 @@
+MODULE: AdmitIgnoresQuota
+TARGET: AdmissionTruth
+CLASS: Invariant
+SUMMARY: an initial admission records allow even above the sampled quota
+PERTURBS: Admit
+
+--- FIND
+    /\ phase' = [phase EXCEPT ![r] = IF Allowed(r) THEN "admitted" ELSE "refused"]
+--- REPLACE
+    /\ phase' = [phase EXCEPT ![r] = "admitted"]
+--- END
+
+--- FIND
+    /\ decision' = [decision EXCEPT ![r] = [value |-> Usage(r), expected |-> ExpectedUsage(r), allow |-> Allowed(r)]]
+    /\ UNCHANGED <<scope, band, age, live, inbound, sample, published, slots>>
+--- REPLACE
+    /\ decision' = [decision EXCEPT ![r] = [value |-> Usage(r), expected |-> ExpectedUsage(r), allow |-> TRUE]]
+    /\ UNCHANGED <<scope, band, age, live, inbound, sample, published, slots>>
+--- END

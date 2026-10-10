@@ -1,0 +1,16 @@
+# Pairs with NoStaleAuthority. A writer that crashed after committing and
+# before publishing is covered only by every survivor treating its snapshot as
+# out of date when membership declares it dead; the mutant skips that.
+MODULE: DeclareDeadNoInvalidate
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: membership declaring a silo dead does not invalidate surviving snapshots
+PERTURBS: DeclareDead
+BOUNDS: MaxCrashes = 1
+
+--- FIND
+    /\ stale' = [t \in Silos |-> stale[t] \/ alive[t]]
+--- REPLACE
+\* MUTATION: survivors are not invalidated.
+    /\ stale' = stale
+--- END

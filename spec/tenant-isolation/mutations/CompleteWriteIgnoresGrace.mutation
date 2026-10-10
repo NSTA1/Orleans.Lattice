@@ -1,0 +1,20 @@
+# Pairs with NoStaleAuthority. The ledger completes the advance without
+# waiting out the grace a fresh activation owes, so a silo holding a lease from
+# the previous activation keeps trusting its old snapshot.
+MODULE: CompleteWriteIgnoresGrace
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: the write returns while the fresh-activation grace is still owed
+PERTURBS: CompleteWrite
+BOUNDS: MaxRestarts = 1
+
+--- FIND
+    /\ ~graceWait
+    /\ wstate' = "idle"
+    /\ coveredVer' = regVer /\ returnedVer' = regVer
+--- REPLACE
+\* MUTATION: the grace is ignored.
+    /\ TRUE
+    /\ wstate' = "idle"
+    /\ coveredVer' = regVer /\ returnedVer' = regVer
+--- END

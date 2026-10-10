@@ -1,0 +1,15 @@
+# Pairs with NoStaleAuthority. The advance stops waiting for an unacknowledged
+# silo at the recorded deadline rather than at the deadline plus the margin, so
+# it completes while a slower silo still trusts the lease.
+MODULE: LeaseAgesLapsesCaptureAtDeadline
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: a captured lease stops holding the advance at its recorded deadline
+PERTURBS: LeaseAges
+
+--- FIND
+                IF pend[t] = "tied" /\ next = "none" THEN "lapsed" ELSE pend[t]]
+--- REPLACE
+\* MUTATION: the margin is not waited out.
+                IF pend[t] = "tied" THEN "lapsed" ELSE pend[t]]
+--- END

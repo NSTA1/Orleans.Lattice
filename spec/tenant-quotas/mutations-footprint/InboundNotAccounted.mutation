@@ -1,0 +1,13 @@
+MODULE: InboundNotAccounted
+TARGET: AccountingCorrect
+CLASS: Invariant
+SUMMARY: inbound apply bypasses accounting as well as admission
+PERTURBS: ApplyReplication
+
+--- FIND
+    /\ live' = [live EXCEPT ![r] = @ + 1]
+    /\ UNCHANGED <<scope, band, age, phase, sample, published, slots, decision>>
+--- REPLACE
+    /\ live' = live
+    /\ UNCHANGED <<scope, band, age, phase, sample, published, slots, decision>>
+--- END

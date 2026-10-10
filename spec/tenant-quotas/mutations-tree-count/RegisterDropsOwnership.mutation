@@ -1,0 +1,11 @@
+MODULE: RegisterDropsOwnership
+TARGET: RegistrationAccounted
+CLASS: Invariant
+SUMMARY: a completed registration never lands in the owned-tree count
+PERTURBS: Register
+
+--- FIND
+    /\ owned' = owned \cup {q}
+--- REPLACE
+    /\ owned' = owned
+--- END
