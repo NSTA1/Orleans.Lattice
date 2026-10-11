@@ -1,0 +1,18 @@
+MODULE: AbortRollsBudgetWindow
+TARGET: ProbeReadOnly
+CLASS: Action
+SUMMARY: an aborted Merkle walk resets the remediation traffic budget
+PERTURBS: LocaliseAbort
+
+--- FIND
+    /\ loc' = {}
+    /\ UNCHANGED dataVars
+    /\ UNCHANGED locEpoch
+    /\ UNCHANGED envVars /\ UNCHANGED guardVars
+--- REPLACE
+    /\ loc' = {}
+    /\ consumed' = 0
+    /\ UNCHANGED dataVars
+    /\ UNCHANGED locEpoch
+    /\ UNCHANGED envVars /\ UNCHANGED <<failures, open, cooled>>
+--- END

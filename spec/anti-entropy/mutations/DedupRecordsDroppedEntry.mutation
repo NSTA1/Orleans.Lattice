@@ -1,0 +1,14 @@
+MODULE: DedupRecordsDroppedEntry
+TARGET: DedupSound
+CLASS: Invariant
+SUMMARY: a lost entry's identity is recorded as applied, so its re-ship is deduplicated away
+PERTURBS: Drop
+
+--- FIND
+    /\ inflight' = inflight \ {m}
+    /\ UNCHANGED <<aStore, bStore, applied, hwm, wal, journal, walFloor, clock>>
+--- REPLACE
+    /\ inflight' = inflight \ {m}
+    /\ applied' = applied \cup {IdOf(m)}
+    /\ UNCHANGED <<aStore, bStore, hwm, wal, journal, walFloor, clock>>
+--- END

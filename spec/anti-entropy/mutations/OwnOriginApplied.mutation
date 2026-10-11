@@ -1,0 +1,11 @@
+MODULE: OwnOriginApplied
+TARGET: NoOwnOriginApplied
+CLASS: Invariant
+SUMMARY: the receiver applies an entry stamped with its own origin
+PERTURBS: DeliverB
+
+--- FIND
+    /\ IF m.org = "B" \/ IdOf(m) \in applied
+--- REPLACE
+    /\ IF IdOf(m) \in applied
+--- END

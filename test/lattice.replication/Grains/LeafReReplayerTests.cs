@@ -202,6 +202,25 @@ public sealed class LeafReReplayerTests
     }
 
     [Test]
+    public async Task ReplayAsync_reships_a_delete_entry_as_a_delete()
+    {
+        // A lost delete must be repaired as a delete: re-shipping it with any
+        // other op would resurrect the key, or write a row, on the peer.
+        var read = new WalReReplayReadResult
+        {
+            Entries = new[] { Entry("b", ticks: 150) with { Op = MutationKind.Delete } },
+        };
+
+        var (outcome, sink) = await RunAsync(read, new[] { Range("a", "m") }, peerCursor: Hlc(100));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Attempted, Is.True);
+            Assert.That(sink.LastEntries.Single().Op, Is.EqualTo(MutationKind.Delete));
+            Assert.That(sink.LastEntries.Single().Timestamp, Is.EqualTo(Hlc(150)));
+        });
+    }
+    [Test]
     public async Task ReplayAsync_excludes_foreign_origin_entries()
     {
         var read = new WalReReplayReadResult

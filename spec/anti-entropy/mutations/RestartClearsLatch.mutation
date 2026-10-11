@@ -1,0 +1,13 @@
+MODULE: RestartClearsLatch
+TARGET: LatchPermanent
+CLASS: Action
+SUMMARY: a probe-grain re-activation clears the durable digest latch
+PERTURBS: Restart
+BOUNDS: MaxEnv = 2
+
+--- FIND
+    /\ UNCHANGED <<latch, epoch, optOut>>
+--- REPLACE
+    /\ latch' = FALSE
+    /\ UNCHANGED <<epoch, optOut>>
+--- END

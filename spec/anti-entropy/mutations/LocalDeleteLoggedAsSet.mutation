@@ -1,0 +1,11 @@
+MODULE: LocalDeleteLoggedAsSet
+TARGET: WalComplete
+CLASS: Invariant
+SUMMARY: a local delete is acknowledged as a tombstone but journalled in the WAL as a Set, so re-replay would resurrect the key on the peer
+PERTURBS: AWrite
+
+--- FIND
+    /\ wal' = wal \cup {[k |-> k, ts |-> clock + 1, del |-> d]}
+--- REPLACE
+    /\ wal' = wal \cup {[k |-> k, ts |-> clock + 1, del |-> FALSE]}
+--- END

@@ -1,0 +1,11 @@
+MODULE: WindowNeverRolls
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the traffic-budget window never rolls over, so remediation stays gated
+PERTURBS: WindowRoll
+
+--- FIND
+    /\ consumed' = 0
+--- REPLACE
+    /\ consumed' = consumed
+--- END

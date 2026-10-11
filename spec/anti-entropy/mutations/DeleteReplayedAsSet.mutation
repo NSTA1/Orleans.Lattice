@@ -1,0 +1,11 @@
+MODULE: DeleteReplayedAsSet
+TARGET: ReplayAboveCursor
+CLASS: Action
+SUMMARY: leaf re-replay re-ships a retained delete as a set, so the repair resurrects the key on the peer instead of deleting it
+PERTURBS: ReReplay
+
+--- FIND
+    /\ inflight' = inflight \cup {RepairMsg(r.k, r.ts, r.del) : r \in Selection}
+--- REPLACE
+    /\ inflight' = inflight \cup {RepairMsg(r.k, r.ts, FALSE) : r \in Selection}
+--- END

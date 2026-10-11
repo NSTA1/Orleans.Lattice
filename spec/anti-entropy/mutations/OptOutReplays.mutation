@@ -1,0 +1,16 @@
+MODULE: OptOutReplays
+TARGET: OptOutSilent
+CLASS: Action
+SUMMARY: leaf re-replay ignores the AutoRemediateOnDigestMismatch opt-out
+PERTURBS: ReReplay
+
+--- FIND
+    /\ ~optOut
+    /\ ~Blocking
+    /\ consumed < Budget
+    /\ ~WalTrimmed
+--- REPLACE
+    /\ ~Blocking
+    /\ consumed < Budget
+    /\ ~WalTrimmed
+--- END

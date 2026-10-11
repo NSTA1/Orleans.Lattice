@@ -1,0 +1,11 @@
+MODULE: ReplayBelowCursor
+TARGET: ReplayAboveCursor
+CLASS: Action
+SUMMARY: leaf re-replay re-ships retained entries at or below the peer's cursor
+PERTURBS: ReReplay
+
+--- FIND
+    /\ inflight' = inflight \cup {RepairMsg(r.k, r.ts, r.del) : r \in Selection}
+--- REPLACE
+    /\ inflight' = inflight \cup {RepairMsg(r.k, r.ts, r.del) : r \in {q \in wal : q.k \in loc}}
+--- END

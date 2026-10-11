@@ -1,0 +1,12 @@
+MODULE: FallbackPreemptsReplay
+TARGET: FallbackOnlyOnSkip
+CLASS: Action
+SUMMARY: the bootstrap fallback runs although a targeted re-replay was available
+PERTURBS: Fallback
+
+--- FIND
+    /\ consumed < Budget
+    /\ WalTrimmed \/ Selection = {}
+--- REPLACE
+    /\ consumed < Budget
+--- END

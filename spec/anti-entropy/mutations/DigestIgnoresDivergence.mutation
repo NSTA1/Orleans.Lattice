@@ -1,0 +1,11 @@
+MODULE: DigestIgnoresDivergence
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the digest comparison reports a match although content diverged
+PERTURBS: ProbeCompare
+
+--- FIND
+    /\ IF Diverged # {} THEN phase' = "mismatch" ELSE phase' \in {"idle", "mismatch"}
+--- REPLACE
+    /\ phase' = "idle"
+--- END

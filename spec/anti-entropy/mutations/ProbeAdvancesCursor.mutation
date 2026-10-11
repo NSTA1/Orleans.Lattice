@@ -1,0 +1,14 @@
+MODULE: ProbeAdvancesCursor
+TARGET: ProbeReadOnly
+CLASS: Action
+SUMMARY: the digest comparison advances the peer's high-water-mark cursor
+PERTURBS: ProbeCompare
+
+--- FIND
+    /\ IF Diverged # {} THEN phase' = "mismatch" ELSE phase' \in {"idle", "mismatch"}
+    /\ UNCHANGED dataVars
+--- REPLACE
+    /\ IF Diverged # {} THEN phase' = "mismatch" ELSE phase' \in {"idle", "mismatch"}
+    /\ hwm' = clock
+    /\ UNCHANGED <<aStore, bStore, inflight, applied, wal, journal, walFloor, clock>>
+--- END

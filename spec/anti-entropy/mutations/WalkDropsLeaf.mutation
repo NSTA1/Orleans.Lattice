@@ -1,0 +1,11 @@
+MODULE: WalkDropsLeaf
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the Merkle walk always omits one diverged range from its localisation
+PERTURBS: Localise
+
+--- FIND
+          /\ loc' = S
+--- REPLACE
+          /\ loc' = S \ {CHOOSE j \in Keys : TRUE}
+--- END

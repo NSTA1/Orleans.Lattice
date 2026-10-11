@@ -1,0 +1,11 @@
+MODULE: StaleTopologyWalk
+TARGET: LocaliseFresh
+CLASS: Action
+SUMMARY: the Merkle walk localises against the physical tree it resolved before a topology change
+PERTURBS: Localise
+
+--- FIND
+    /\ locEpoch' = epoch
+--- REPLACE
+    /\ UNCHANGED locEpoch
+--- END

@@ -1,0 +1,16 @@
+MODULE: ReplayReadsRetiredWal
+TARGET: ReplayAboveCursor
+CLASS: Action
+SUMMARY: leaf re-replay reads the logical tree name's WAL, which after an alias swap is the retired physical tree's log, not the log of the physical tree the walk resolved
+PERTURBS: ReReplay
+BOUNDS: MaxSwap = 1
+
+--- FIND
+    /\ Selection # {}
+    /\ inflight' = inflight \cup {RepairMsg(r.k, r.ts, r.del) : r \in Selection}
+    /\ consumed' = consumed + Cardinality(Selection)
+--- REPLACE
+    /\ {r \in retired : r.k \in loc /\ r.ts > hwm} # {}
+    /\ inflight' = inflight \cup {RepairMsg(r.k, r.ts, r.del) : r \in {x \in retired : x.k \in loc /\ x.ts > hwm}}
+    /\ consumed' = consumed + Cardinality({r \in retired : r.k \in loc /\ r.ts > hwm})
+--- END
