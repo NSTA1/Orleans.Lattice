@@ -1,0 +1,11 @@
+MODULE: RefreshInvalidBinding
+TARGET: RefreshedBinding
+CLASS: Action
+SUMMARY: routing refresh loses the physical identity
+PERTURBS: Refresh
+
+--- FIND
+        /\ route' = [route EXCEPT ![l] = alias[l]]
+--- REPLACE
+        /\ route' = [route EXCEPT ![l] = IF alias[l] = "a" THEN "b" ELSE "a"]
+--- END

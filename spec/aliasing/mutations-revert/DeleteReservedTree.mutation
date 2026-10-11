@@ -1,0 +1,11 @@
+MODULE: DeleteReservedTree
+TARGET: ReservationBlocksDelete
+CLASS: Action
+SUMMARY: deletion crosses a live revert reservation
+PERTURBS: Delete
+
+--- FIND
+    /\ ~deleted /\ ~reservation
+--- REPLACE
+    /\ ~deleted
+--- END

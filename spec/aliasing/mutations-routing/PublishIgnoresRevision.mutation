@@ -1,0 +1,13 @@
+MODULE: PublishIgnoresRevision
+TARGET: NoStalePublication
+CLASS: Invariant
+SUMMARY: physical identity equality accepts a stale intent after ABA
+PERTURBS: Publish
+
+--- FIND
+        /\ running /\ phase[l] = "armed"
+        /\ alias[l] = source[l] /\ version[l] = expected[l]
+--- REPLACE
+        /\ running /\ phase[l] = "armed"
+        /\ alias[l] = source[l]
+--- END

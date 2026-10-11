@@ -1,0 +1,13 @@
+MODULE: SupersedeKeepsRevision
+TARGET: RevisionAdvances
+CLASS: Action
+SUMMARY: a later alias publication leaves cached map revisions unchanged
+PERTURBS: Supersede
+
+--- FIND
+        /\ map' = [map EXCEPT ![l] = p]
+        /\ version' = [version EXCEPT ![l] = @ + 1]
+--- REPLACE
+        /\ map' = [map EXCEPT ![l] = p]
+        /\ version' = version
+--- END

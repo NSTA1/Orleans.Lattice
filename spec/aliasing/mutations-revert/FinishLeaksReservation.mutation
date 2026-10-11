@@ -1,0 +1,11 @@
+MODULE: FinishLeaksReservation
+TARGET: FinishedReservationReleased
+CLASS: Invariant
+SUMMARY: successful revert leaves lifecycle admission reserved
+PERTURBS: Finish
+
+--- FIND
+    /\ reservation' = FALSE /\ phase' = "done"
+--- REPLACE
+    /\ reservation' = reservation /\ phase' = "done"
+--- END

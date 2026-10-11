@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-routing",
+  "refinement": "RefinementRouting.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 4,
+    "properties": 6,
+    "actions": 11,
+    "mutations": 12,
+    "behaviourRows": 19,
+    "distinctStates": 25937
+  },
+  "variants": {
+    "TwoFaults": { "distinctStates": 42909 }
+  }
+}

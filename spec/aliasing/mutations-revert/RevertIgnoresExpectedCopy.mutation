@@ -1,0 +1,15 @@
+MODULE: RevertIgnoresExpectedCopy
+TARGET: NoStaleRevert
+CLASS: Invariant
+SUMMARY: unconditional revert overwrites a competing later copy
+PERTURBS: Revert
+
+--- FIND
+    /\ phase' = IF alias = observed THEN "reverted" ELSE "failed"
+    /\ alias' = IF alias = observed THEN previous ELSE alias
+    /\ map' = IF alias = observed THEN previous ELSE map
+--- REPLACE
+    /\ phase' = "reverted"
+    /\ alias' = previous
+    /\ map' = previous
+--- END

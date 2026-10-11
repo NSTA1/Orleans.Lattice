@@ -128,6 +128,48 @@ public partial class LatticeRegistryGrainTests
         await targets[1].Received(2).ReleaseRetainedRedirectAsync("logical");
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task ReceiveReminder_refuses_ABA_predecessor_with_newer_operation_or_map_version(bool changeOperation)
+    {
+        var pending = new FakePersistentState<Dictionary<string, AliasRoutingMoveState>>();
+        string? checkpoint = null;
+        pending.OnWriteState = state => checkpoint ??= JsonSerializer.Serialize(state);
+        IGrainFactory factory = null!;
+        IOptionsMonitor<LatticeOptions> options = null!;
+        var (grain, rows, sources, targets, _) = ArrangeAliasMove("fence", pending,
+            captureDependencies: (f, o) => { factory = f; options = o; });
+        Assert.ThrowsAsync<IOException>(() => grain.SetAliasAsync("logical", "target"));
+        pending.State = JsonSerializer.Deserialize<Dictionary<string, AliasRoutingMoveState>>(checkpoint!)!;
+        var map = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, 2);
+        map.Version = rows["logical"].ShardMap!.Version + (changeOperation ? 0 : 2);
+        var returnedSource = rows["logical"] with
+        {
+            PhysicalTreeId = null,
+            AliasRoutingOperationId = changeOperation ? "move-away-and-back" : null,
+            ShardMap = map,
+        };
+        rows["logical"] = returnedSource;
+        foreach (var shard in sources.Concat(targets))
+            shard.ClearReceivedCalls();
+
+        var reactivated = new LatticeRegistryGrain(factory, options, aliasRoutingState: pending);
+        await reactivated.ReceiveReminder("alias-routing-recovery", default);
+
+        Assert.That(rows["logical"], Is.SameAs(returnedSource),
+            "physical identity returned to the predecessor, but its publication epoch did not");
+        Assert.That(pending.State, Is.Empty);
+        foreach (var source in sources)
+        {
+            await source.DidNotReceive().MarkRetainedRedirectAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>());
+            await source.Received(1).ClearRetainedRedirectIfOwnedAsync(
+                Arg.Is<string>(id => id.StartsWith("alias:logical->target:")));
+        }
+        foreach (var target in targets)
+            await target.DidNotReceive().ReleaseRetainedRedirectAsync(Arg.Any<string>());
+    }
+
     [Test]
     public async Task ReceiveReminder_rehydrates_prepublication_intent_and_moves_forward_without_caller_retry()
     {

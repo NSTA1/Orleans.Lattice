@@ -1,0 +1,11 @@
+MODULE: RestampSkipsLineage
+TARGET: LineageBeforeRevert
+CLASS: Action
+SUMMARY: reverted contents retain the restored copy's lineage
+PERTURBS: Restamp
+
+--- FIND
+    /\ lineage' = lineage + 1 /\ phase' = "stamped"
+--- REPLACE
+    /\ lineage' = lineage /\ phase' = "stamped"
+--- END

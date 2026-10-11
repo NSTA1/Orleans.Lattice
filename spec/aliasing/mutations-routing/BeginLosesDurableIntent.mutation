@@ -1,0 +1,12 @@
+MODULE: BeginLosesDurableIntent
+TARGET: DurableMove
+CLASS: Action
+SUMMARY: initiating a move loses its durable announcement at interruption
+PERTURBS: Begin
+
+--- FIND
+        /\ UNCHANGED <<alias, map, version, redirect, owner, route, running, faults, overwritten>>
+--- REPLACE
+        /\ running' = FALSE
+        /\ UNCHANGED <<alias, map, version, redirect, owner, route, faults, overwritten>>
+--- END

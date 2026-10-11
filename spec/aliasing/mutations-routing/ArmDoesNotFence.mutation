@@ -1,0 +1,11 @@
+MODULE: ArmDoesNotFence
+TARGET: FenceBeforePublication
+CLASS: Action
+SUMMARY: publication can run before the source redirect is armed
+PERTURBS: Arm
+
+--- FIND
+        /\ redirect' = [redirect EXCEPT ![l][source[l]] = destination[l]]
+--- REPLACE
+        /\ redirect' = redirect
+--- END
