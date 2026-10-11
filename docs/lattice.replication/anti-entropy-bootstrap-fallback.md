@@ -19,7 +19,7 @@ The snapshot is bounded to the `[StartKey, EndKey)` covering ranges the [Merkle 
 
 - `ISnapshotProvider.ExportAsync(treeName, ranges, asOfHlc, ct)` yields only entries whose key falls inside at least one range, using the same ordinal half-open `[StartKey, EndKey)` membership (`LeafReReplayRange.Contains`) the re-replay selection uses, so the two stages localise on byte-identical boundaries.
 
-The fallback ships **committed projection rows only**: prepared (not-yet-decided) saga rows and tombstoned keys are skipped, since the committed projection already reflects every decided value. Each row becomes a `Set` stamped with the local cluster id, capped per pass and always shipping at least one entry. The `Set` carries the exported row's `ExpiresAtTicks` verbatim, and the default provider's committed-projection rows carry the source entry's absolute expiry (as for [whole-tree bootstrap](snapshot-bootstrap.md#semantics)), so on a last-writer-wins tree a key that has a TTL on the source keeps it when it is re-shipped. On a typed CRDT tree the receiver folds the row's full state through a state-based merge that does not apply the carried expiry, so the key is written there as a durable entry.
+The fallback ships **committed rows only**: prepared (not-yet-decided) saga rows and live rows with no value are skipped. A live row becomes a `Set`; a retained committed tombstone becomes a `Delete` with a null value and its original delete clock. Both carry the local cluster id and are capped per pass, always shipping at least one eligible entry. This lets the fallback repair a lost delete even when its WAL record is trimmed or below the peer's cursor. The `Set` carries the exported row's `ExpiresAtTicks` verbatim, and the default provider's committed-projection rows carry the source entry's absolute expiry (as for [whole-tree bootstrap](snapshot-bootstrap.md#semantics)), so on a last-writer-wins tree a key that has a TTL on the source keeps it when it is re-shipped. On a typed CRDT tree the receiver folds the row's full state through a state-based merge that does not apply the carried expiry, so the key is written there as a durable entry.
 
 ## Scope and limitations
 
@@ -27,6 +27,7 @@ The fallback ships **committed projection rows only**: prepared (not-yet-decided
 - **Cross-cluster push needs a real transport.** The re-ship goes through `IReplicationTransport`; the default no-op transport delivers nothing and returns an unaccepted ack, so every repair pass reports zero entries shipped and counts toward the remediation circuit breaker. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair, exactly as for leaf re-replay.
 - **Committed projection only.** Prepared-saga rows are not re-shipped; per-entry origin is stamped as the local cluster id on the wire, matching the existing whole-tree bootstrap convention. For CRDT-mode trees the re-shipped value is the committed state at snapshot time applied through the receiver's per-tree merge mode, consistent with whole-tree bootstrap semantics.
 - **Bounded per pass.** A divergence larger than the entry/byte caps makes partial progress per cadence.
+- **Retained tombstones only.** A delete whose tombstone has already been reaped after its retention/grace period is absent from the snapshot and cannot be repaired by this fallback.
 
 ## Enabling it
 

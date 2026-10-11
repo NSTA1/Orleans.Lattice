@@ -15,9 +15,12 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <para>
 /// Re-shipped entries carry their committed-projection clock verbatim and are
 /// deduplicated at the receiver on <c>(originClusterId, hlc, key, op)</c>, so
-/// re-sending is idempotent. The pass re-ships committed projection rows only: prepared
-/// (not-yet-decided) saga rows and tombstoned keys are skipped, since the
-/// committed projection already reflects every decided value.
+/// re-sending is idempotent. The pass re-ships committed rows only: prepared
+/// (not-yet-decided) saga rows are skipped. A committed tombstone row the scoped
+/// export still carries ships as a <see cref="MutationKind.Delete"/> stamped with
+/// the tombstone's own clock, as the whole-tree bootstrap drain applies it, so a
+/// delete the peer lost behind a trimmed WAL or below its cursor is repaired
+/// rather than left as a permanently resurrected value.
 /// </para>
 /// </summary>
 internal static class BootstrapFallbackPlanner
@@ -25,7 +28,7 @@ internal static class BootstrapFallbackPlanner
     /// <summary>
     /// Exports the scoped snapshot of <paramref name="ranges"/> from the local
     /// <paramref name="snapshotProvider"/>, converts the committed-projection
-    /// rows to <see cref="WalRecord"/> sets, and re-ships them to
+    /// rows to <see cref="WalRecord"/> sets (and committed tombstone rows to deletes), and re-ships them to
     /// <paramref name="peer"/> bounded by the configured caps. Emits the
     /// <see cref="LatticeReplicationMetrics.BootstrapFallbackTriggered"/>,
     /// <see cref="LatticeReplicationMetrics.BootstrapFallbackEntries"/>, and
@@ -75,23 +78,37 @@ internal static class BootstrapFallbackPlanner
         long bytes = 0;
         await foreach (var entry in stream.Entries.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            // Committed projection rows only: skip prepared (not-yet-decided)
-            // saga rows, tombstones, and rows with no value to ship.
-            if (entry.IsPrepared || entry.IsTombstone || entry.Value is null)
+            // Committed rows only: skip prepared (not-yet-decided) saga rows and
+            // live rows with no value to ship. A committed tombstone ships as a
+            // Delete: the committed projection carries live keys only, so
+            // skipping it would leave a peer that missed the delete holding the
+            // old value for ever.
+            if (entry.IsPrepared || (!entry.IsTombstone && entry.Value is null))
             {
                 continue;
             }
 
-            var record = new WalRecord
-            {
-                TreeId = treeName,
-                Op = MutationKind.Set,
-                Key = entry.Key,
-                Value = entry.Value,
-                Timestamp = entry.Timestamp,
-                OriginClusterId = originClusterId,
-                ExpiresAtTicks = entry.ExpiresAtTicks,
-            };
+            var record = entry.IsTombstone
+                ? new WalRecord
+                {
+                    TreeId = treeName,
+                    Op = MutationKind.Delete,
+                    Key = entry.Key,
+                    Value = null,
+                    Timestamp = entry.Timestamp,
+                    IsTombstone = true,
+                    OriginClusterId = originClusterId,
+                }
+                : new WalRecord
+                {
+                    TreeId = treeName,
+                    Op = MutationKind.Set,
+                    Key = entry.Key,
+                    Value = entry.Value,
+                    Timestamp = entry.Timestamp,
+                    OriginClusterId = originClusterId,
+                    ExpiresAtTicks = entry.ExpiresAtTicks,
+                };
 
             var est = EstimateBytes(record);
 

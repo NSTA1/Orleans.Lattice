@@ -101,6 +101,52 @@ public partial class ReplicationDigestProbeGrainTests
         });
     }
 
+    [Test]
+    public async Task Below_cursor_lost_delete_is_reshipped_as_a_delete_by_the_bootstrap_fallback()
+    {
+        // The peer missed a delete whose WAL record sits at or below its cursor
+        // (a later write advanced the high-water-mark past it), so targeted
+        // re-replay filters it out and yields RangeEmpty. The live tree no longer
+        // projects the key; it holds a tombstone, which the default provider's
+        // export carries as a committed tombstone row.
+        var walPage = new WalShardPage
+        {
+            Entries = new[]
+            {
+                new WalShardSequencedEntry { Sequence = 0, Entry = OrphanDelete("fruit:apple", ticks: 100) },
+            },
+            NextSequence = 1,
+        };
+
+        var (grain, _, replicationTransport) = CreateRemediationGrain(
+            walPage: walPage,
+            snapshotRows: new[] { CommittedTombstone("fruit:apple", ticks: 100) },
+            peerCursor: Hlc(500));
+
+        var sent = new List<ReplicationBatch>();
+        replicationTransport.SendAsync(Arg.Do<ReplicationBatch>(sent.Add), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ReplicationAck { Accepted = true }));
+
+        using var shipped = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName, LatticeReplicationMetrics.BootstrapFallbackEntriesName);
+
+        await grain.ProcessNextPhaseAsync();
+
+        // On the pre-fix code the fallback dropped the tombstone row, found
+        // nothing to ship (skipped{reason=empty}), and the peer kept the deleted
+        // value permanently while every later pass repeated the same no-op.
+        var entry = sent.SelectMany(b => b.Envelope!.Value.Entries).Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipped.Measurements.Single().Value, Is.EqualTo(1L));
+            Assert.That(entry.Op, Is.EqualTo(MutationKind.Delete));
+            Assert.That(entry.IsTombstone, Is.True);
+            Assert.That(entry.Key, Is.EqualTo("fruit:apple"));
+            Assert.That(entry.Timestamp, Is.EqualTo(Hlc(100)));
+            Assert.That(entry.TreeId, Is.EqualTo(Tree));
+        });
+    }
+
     // ---- Factory + fakes -------------------------------------------------
 
     private static (
@@ -211,6 +257,19 @@ public partial class ReplicationDigestProbeGrainTests
             OriginClusterId = Origin,
         };
 
+    private static WalRecord OrphanDelete(string key, long ticks)
+        => new()
+        {
+            TreeId = Tree,
+            Op = MutationKind.Delete,
+            Key = key,
+            Timestamp = Hlc(ticks),
+            IsTombstone = true,
+            OriginClusterId = Origin,
+        };
+
+    private static SnapshotEntry CommittedTombstone(string key, long ticks)
+        => new() { Key = key, Value = Array.Empty<byte>(), Timestamp = Hlc(ticks), IsTombstone = true };
     private static SnapshotEntry Committed(string key, long ticks)
         => new() { Key = key, Value = new byte[8], Timestamp = Hlc(ticks) };
 
