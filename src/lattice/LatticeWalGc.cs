@@ -148,22 +148,23 @@ public sealed class LatticeWalGc(
         DateTimeOffset? LastAdvanceUtc,
         DateTimeOffset FirstObservedUtc);
 
-    // Resolved lazily so a host that never registered the storage-usage
-    // sink (or replaced the WAL GC in isolation in a unit test) still works;
-    // the over-threshold gauge is simply not driven by the GC in that case.
+    // Cache only a successful resolution: an optional sink unavailable on the
+    // first pass must not disable publication for the lifetime of the silo.
     private LatticeStorageUsageMetrics? _storageMetricsCache;
-    private bool _storageMetricsResolved;
 
     private LatticeStorageUsageMetrics? _storageMetrics
     {
         get
         {
-            if (!_storageMetricsResolved)
+            var cached = Volatile.Read(ref _storageMetricsCache);
+            if (cached is not null)
             {
-                _storageMetricsCache = services.GetService<LatticeStorageUsageMetrics>();
-                _storageMetricsResolved = true;
+                return cached;
             }
-            return _storageMetricsCache;
+            var resolved = services.GetService<LatticeStorageUsageMetrics>();
+            return resolved is null
+                ? null
+                : Interlocked.CompareExchange(ref _storageMetricsCache, resolved, null) ?? resolved;
         }
     }
 
@@ -540,7 +541,7 @@ public sealed class LatticeWalGc(
                 ? WalGcCursorFloorState.Available
                 : WalGcCursorFloorState.NoCursorReported;
 
-        // Sample retained bytes once up front so a byte-pressure trigger is
+        // Sample occupancy bytes once up front so a byte-pressure trigger is
         // decided against the pre-trim footprint. Returns null when the
         // policy is disabled or the provider does not support byte accounting.
         //
@@ -558,9 +559,9 @@ public sealed class LatticeWalGc(
             ? await ceilingResolver.GetWalMaxRetainedBytesAsync(treeName).ConfigureAwait(false)
             : resolved.WalMaxRetainedBytes;
 
-        var (ceiling, retainedBefore, logicalBefore) = await SampleRetainedBytesAsync(
+        var (ceiling, occupancyBefore, logicalBefore) = await SampleOccupancyBytesAsync(
             ResolvePartitionProvider, resolved, effectiveCeiling, treeName, partitions, cancellationToken).ConfigureAwait(false);
-        var triggered = EvaluateBytePressureTrigger(treeName, resolved, ceiling, retainedBefore);
+        var triggered = EvaluateBytePressureTrigger(treeName, resolved, ceiling, occupancyBefore);
         if (triggered)
         {
             LatticeMetrics.StoragePolicyTrimTriggered.Add(
@@ -624,10 +625,10 @@ public sealed class LatticeWalGc(
             // ceiling with no consumer cursor is the canonical
             // "lagging consumer pins the WAL" advisory case where the
             // breach is published but no bytes are reclaimed.
-            var over0 = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedBefore);
+            var over0 = FinishBytePressure(treeName, resolved, ceiling, occupancyBefore, occupancyBefore);
             return new LatticeWalGcReport(
                 treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitionsVisited, 0,
-                ceiling, retainedBefore, retainedBefore, triggered, over0, cursorFloorState, blockingConsumerId,
+                ceiling, occupancyBefore, occupancyBefore, triggered, over0, cursorFloorState, blockingConsumerId,
                 blockingConsumerIds, false, logicalBefore,
                 EvaluateCeilingSatisfiability(ceiling, logicalBefore));
         }
@@ -658,7 +659,7 @@ public sealed class LatticeWalGc(
         // recreate issue #3094 on any tree with no materialiser wired. Setting
         // the ceiling non-positive disables the hold outright.
         //
-        // A null `retainedBefore` - byte accounting unavailable from the
+        // A null `occupancyBefore` - byte accounting unavailable from the
         // provider - now DECLINES the hold rather than holding through it, which
         // is the reverse of what this did while the knob was opt-in. The old
         // reading was that trimming on an unrun byte measurement is the same
@@ -689,7 +690,7 @@ public sealed class LatticeWalGc(
             && cursorAuthority is WalGcCursorAuthority.Volatile
                 or WalGcCursorAuthority.Unreadable;
         var holdHasBudget = holdConfigured
-            && retainedBefore is { } rb && rb < holdCeiling!.Value;
+            && occupancyBefore is { } rb && rb < holdCeiling!.Value;
 
         if (holdHasBudget)
         {
@@ -747,7 +748,7 @@ public sealed class LatticeWalGc(
                 LatticeMetrics.WalGcDurabilityHoldForced.Add(
                     1,
                     treeTag,
-                    retainedBefore is null
+                    occupancyBefore is null
                         ? LatticeMetrics.ReasonHoldForcedUnmeasurableFootprint
                         : LatticeMetrics.ReasonHoldForcedCeilingExhausted,
                     tenantTag);
@@ -761,13 +762,13 @@ public sealed class LatticeWalGc(
             RecordFloorHeadDistance(treeTag, tenantTag, partition, shardScan.FloorHeadDistance);
         }
 
-        var (_, retainedAfter, logicalAfter) = await SampleRetainedBytesAsync(
+        var (_, occupancyAfter, logicalAfter) = await SampleOccupancyBytesAsync(
             ResolvePartitionProvider, resolved, effectiveCeiling, treeName, partitions, cancellationToken).ConfigureAwait(false);
-        var overThreshold = FinishBytePressure(treeName, resolved, ceiling, retainedBefore, retainedAfter);
+        var overThreshold = FinishBytePressure(treeName, resolved, ceiling, occupancyBefore, occupancyAfter);
 
         return new LatticeWalGcReport(
             treeName, minCursor, ttlCeiling, causalStable, blockedFloor, partitionsVisited, totalTrimmed,
-            ceiling, retainedBefore, retainedAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId,
+            ceiling, occupancyBefore, occupancyAfter, triggered, overThreshold, cursorFloorState, blockingConsumerId,
             blockingConsumerIds, retainedBacklog, logicalAfter,
             EvaluateCeilingSatisfiability(ceiling, logicalAfter));
     }
@@ -792,7 +793,7 @@ public sealed class LatticeWalGc(
     /// quantity to reach for, but it is <see langword="null"/> whenever no byte
     /// sample is taken - neither <see cref="LatticeOptions.WalMaxRetainedBytes"/>
     /// nor the durability hold's <see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>
-    /// is set, so <c>SampleRetainedBytesAsync</c> returns early - or the provider
+    /// is set, so <c>SampleOccupancyBytesAsync</c> returns early - or the provider
     /// cannot account bytes. Before the hold became default-on that was the
     /// default deployment, in which a stranded tree had no corrective signal at
     /// all. The stop reason is decided by the scan itself on every pass, so it
@@ -2413,25 +2414,25 @@ public sealed class LatticeWalGc(
     /// Finalises the byte-pressure accounting for a completed WAL GC
     /// trim pass and returns whether the post-trim footprint still breaches
     /// the ceiling. When a byte-pressure trigger reclaimed bytes
-    /// (<paramref name="retainedBefore"/> &gt; <paramref name="retainedAfter"/>),
+    /// (<paramref name="occupancyBefore"/> &gt; <paramref name="occupancyAfter"/>),
     /// increments <see cref="LatticeMetrics.StoragePolicyBytesReclaimed"/> by
     /// the freed byte count. Updates the per-tree hysteresis latch against the
     /// post-trim footprint: a trim that drove WAL occupancy below the low-water mark
     /// (<see cref="LatticeOptions.WalBytePressureReclaimTarget"/> of the ceiling)
-    /// disarms the policy so it does not re-trigger until retained crosses the
+    /// disarms the policy so it does not re-trigger until occupancy crosses the
     /// ceiling again. Also pushes the over-threshold flag to the observable
     /// storage gauge so the 0/1 series tracks the WAL GC's own sampling between
     /// aggregator scrapes. Returns <see langword="false"/> when the policy is
     /// disabled or byte accounting is unsupported.
     /// </summary>
-    private bool FinishBytePressure(string treeName, LatticeOptions resolved, long? ceiling, long? retainedBefore, long? retainedAfter)
+    private bool FinishBytePressure(string treeName, LatticeOptions resolved, long? ceiling, long? occupancyBefore, long? occupancyAfter)
     {
-        if (ceiling is not { } cap || retainedAfter is not { } after)
+        if (ceiling is not { } cap || occupancyAfter is not { } after)
         {
             return false;
         }
 
-        if (retainedBefore is { } before && before > after)
+        if (occupancyBefore is { } before && before > after)
         {
             LatticeMetrics.StoragePolicyBytesReclaimed.Add(
                 before - after,
@@ -2468,9 +2469,9 @@ public sealed class LatticeWalGc(
     /// <see langword="false"/> when the policy is disabled or byte accounting
     /// is unsupported.
     /// </summary>
-    private bool EvaluateBytePressureTrigger(string treeName, LatticeOptions resolved, long? ceiling, long? retained)
+    private bool EvaluateBytePressureTrigger(string treeName, LatticeOptions resolved, long? ceiling, long? occupancy)
     {
-        if (ceiling is not { } cap || retained is not { } bytes)
+        if (ceiling is not { } cap || occupancy is not { } bytes)
         {
             // Policy disabled or byte accounting unsupported: clear any latch
             // so a re-enable starts from a clean disarmed state.
@@ -2556,7 +2557,7 @@ public sealed class LatticeWalGc(
     /// by a deployment that configured a ceiling.
     /// </para>
     /// </summary>
-    private static async Task<(long? Ceiling, long? Retained, long? Logical)> SampleRetainedBytesAsync(
+    private static async Task<(long? Ceiling, long? Occupancy, long? Logical)> SampleOccupancyBytesAsync(
         Func<int, IWalStorageProvider?> resolveProvider,
         LatticeOptions resolved,
         long? effectiveCeiling,
@@ -2578,7 +2579,7 @@ public sealed class LatticeWalGc(
             //
             // Since the hold became default-on this branch is the common case
             // rather than the opt-in one, so a tree with byte pressure disabled
-            // now pays one retained-bytes sample per GC pass where it previously
+            // now pays one occupancy-bytes sample per GC pass where it previously
             // paid none. That is a per-pass, per-partition provider call, not a
             // per-entry one, and it is the measurement the hold is bounded by:
             // declining to take it would not save the work, it would disable the
@@ -2589,27 +2590,27 @@ public sealed class LatticeWalGc(
                 return (null, null, null);
             }
 
-            var holdSample = await SampleRetainedBytesCoreAsync(
+            var holdSample = await SampleOccupancyBytesCoreAsync(
                 resolveProvider, treeName, partitions, cancellationToken).ConfigureAwait(false);
-            return (null, holdSample.Retained, holdSample.Logical);
+            return (null, holdSample.Occupancy, holdSample.Logical);
         }
 
-        var sample = await SampleRetainedBytesCoreAsync(
+        var sample = await SampleOccupancyBytesCoreAsync(
             resolveProvider, treeName, partitions, cancellationToken).ConfigureAwait(false);
-        return (ceiling, sample.Retained, sample.Logical);
+        return (ceiling, sample.Occupancy, sample.Logical);
     }
 
     /// <summary>
-    /// Sums a tree's retained occupancy and logical payload across partitions,
+    /// Sums a tree's physical occupancy and logical payload across partitions,
     /// independent of which policy asked for it.
     /// </summary>
-    private static async Task<(long? Retained, long? Logical)> SampleRetainedBytesCoreAsync(
+    private static async Task<(long? Occupancy, long? Logical)> SampleOccupancyBytesCoreAsync(
         Func<int, IWalStorageProvider?> resolveProvider,
         string treeName,
         int partitions,
         CancellationToken cancellationToken)
     {
-        long retained = 0;
+        long occupancy = 0;
         long logical = 0;
         var anySupported = false;
         var anyLogicalSupported = false;
@@ -2659,11 +2660,11 @@ public sealed class LatticeWalGc(
             }
 
             anySupported = true;
-            retained += bytes;
+            occupancy += bytes;
         }
 
         return (
-            anySupported ? retained : null,
+            anySupported ? occupancy : null,
             anyLogicalSupported ? logical : null);
     }
 

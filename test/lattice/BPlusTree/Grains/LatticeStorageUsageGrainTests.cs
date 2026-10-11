@@ -161,7 +161,8 @@ public sealed class LatticeStorageUsageGrainTests
             walPartitions: 1,
             shardBehaviour: _ => Usage(leaf: 1_000, snapshot: 137_000, liveKeys: 9),
             walBehaviour: _ => Task.FromResult(500L),
-            treeId: tree);
+            treeId: tree,
+            walPhysicalBehaviour: _ => Task.FromResult(800L));
 
         await grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -171,7 +172,9 @@ public sealed class LatticeStorageUsageGrainTests
                 "the leaf-state gauge must report the summed shard footprint, not a zero");
             Assert.That(ReadGauge(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(274_000),
                 "the snapshot gauge must report the summed shard footprint, not a zero");
-            Assert.That(ReadGauge(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(276_500));
+            Assert.That(ReadGauge(LatticeMetrics.StorageWalPhysicalBytesName, tree), Is.EqualTo(800));
+            Assert.That(ReadGauge(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(500));
+            Assert.That(ReadGauge(LatticeMetrics.StorageTotalBytesName, tree), Is.EqualTo(276_800));
             Assert.That(ReadGauge(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1),
                 "a report assembled from the shard roots is a deep measurement");
         });
@@ -203,6 +206,7 @@ public sealed class LatticeStorageUsageGrainTests
         {
             Assert.That(ReadGauge(LatticeMetrics.StorageLeafStateBytesName, tree), Is.EqualTo(0));
             Assert.That(ReadGauge(LatticeMetrics.StorageSnapshotBytesName, tree), Is.EqualTo(0));
+            Assert.That(ReadGauge(LatticeMetrics.StorageWalPhysicalBytesName, tree), Is.EqualTo(0));
             Assert.That(ReadGauge(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(1),
                 "an empty tree was still measured, so the depth gauge must say so");
         });

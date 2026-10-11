@@ -189,6 +189,12 @@ public sealed class LatticeWalUsageGrainTests
             Assert.That(report.WalRetainedBytes, Is.EqualTo(100L));
             Assert.That(report.WalPhysicalBytes, Is.EqualTo(800L));
             Assert.That(
+                Orleans.Lattice.Testing.GaugeScrape.ReadSingle(
+                    LatticeMetrics.Meter, "orleans.lattice.storage.wal_physical_bytes",
+                    LatticeMetrics.TagTree, TreeId),
+                Is.EqualTo(800L),
+                "the production WAL poll must publish the physical magnitude, not just its verdict");
+            Assert.That(
                 ReadOverThresholdGauge(TreeId),
                 Is.EqualTo(1),
                 "comparing the 100 retained bytes against the 500-byte ceiling reports compliance while the WAL uses 800");

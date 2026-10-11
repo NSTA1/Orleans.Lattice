@@ -307,13 +307,13 @@ SafeMaxLeafKeys = floor(788 * 0.75) = 591
 
 ## Measuring retained storage at runtime
 
-The three sizing surfaces above are *design-time* models. To read the **exact retained on-wire bytes** a tree is costing right now - not an entry-count estimate - call [`ILattice.GetStorageUsageAsync`](api.md#storage-usage). It fans out across the tree's shards and WAL partitions and returns a `TreeStorageUsageReport` with `WalRetainedBytes` (the live WAL payload), `WalPhysicalBytes` (every byte the WAL backend holds for the tree, framing and trimmed-but-not-yet-reclaimed bytes included; the retained figure when the provider reports no physical size), `SnapshotBytes`, `LeafStateBytes`, and a `TotalBytes` that sums `WalPhysicalBytes`, `SnapshotBytes` and `LeafStateBytes` - the physical WAL figure, not the retained one. It also carries the tree's `LiveKeys` total and the `WalMaxRetainedBytes` ceiling in effect for it. A cluster-wide roll-up across every registered tree is available via [`ILatticeAdmin.GetTotalStorageUsageAsync`](api.md#ilatticeadmin).
+The three sizing surfaces above are *design-time* models. To read the **WAL physical occupancy and snapshot/leaf payload bytes** a tree is costing right now - not an entry-count estimate - call [`ILattice.GetStorageUsageAsync`](api.md#storage-usage). It fans out across the tree's shards and WAL partitions and returns a `TreeStorageUsageReport` with `WalRetainedBytes` (the live WAL payload), `WalPhysicalBytes` (every byte the WAL backend holds for the tree, framing and trimmed-but-not-yet-reclaimed bytes included; the retained figure when the provider reports no physical size), `SnapshotBytes`, `LeafStateBytes`, and a `TotalBytes` that sums `WalPhysicalBytes`, `SnapshotBytes` and `LeafStateBytes` - the physical WAL figure, not the retained one. It also carries the tree's `LiveKeys` total and the `WalMaxRetainedBytes` ceiling in effect for it. A cluster-wide roll-up across every registered tree is available via [`ILatticeAdmin.GetTotalStorageUsageAsync`](api.md#ilatticeadmin).
 
 Reports are coalesced behind a short TTL cache (`LatticeOptions.StorageUsageCacheTtl`, default 10 s) so repeated dashboard scrapes stay cheap. `Partial = true` marks a report as a **lower bound** rather than an exact figure, for either of two reasons: a WAL provider that does not implement byte accounting (`IWalStorageProvider.GetRetainedByteSizeAsync` returns the `-1` "unsupported" sentinel), or a shard root / WAL partition that failed or timed out during the fan-out. A surface that did not answer contributes **nothing** - not a zero - because summing its zeroes would understate the tree while still presenting the total as complete. Consumers should render a partial figure as "n/a" rather than a misleading number. One failing surface never aborts the report, and the next sample after the surface recovers is exact again.
 
 The fan-out is bounded at both levels so a large cluster's roll-up degrades in *latency* rather than collapsing into response-deadline failures. `MaxConcurrentStorageUsageSurfaces` (default 16) caps the shard-root and WAL-partition reads in flight for one tree; `MaxConcurrentStorageUsageTrees` (default 8) caps how many trees a cluster-wide roll-up samples at once. The two multiply, so the cluster-wide peak is 128 concurrent grain calls regardless of tree count or shard width. Concurrency bounds cap the burst but not the total work, so a cluster-wide roll-up is additionally bounded in time by `StorageUsageRollupBudget` (default 20 s): when it expires the roll-up stops dispatching and returns what it has, marking the report `Partial` rather than failing the whole call on the response deadline. See [Configuration](configuration.md#maxconcurrentstorageusagetrees).
 
-The same figures are published as observable gauges on the `orleans.lattice` meter (`storage.wal_bytes`, `storage.snapshot_bytes`, `storage.leaf_state_bytes`, `storage.total_bytes`), alongside a companion `storage.usage_deep_published` 0/1 gauge that reports whether the three deep surfaces were actually measured for the tree, and surfaced on the bundled **Overview** Grafana dashboard. See [Metrics](metrics.md) for the full instrument list.
+The same figures are published as observable gauges on the `orleans.lattice` meter (`storage.wal_bytes` for retained payload, `storage.wal_physical_bytes` for physical occupancy, `storage.snapshot_bytes`, `storage.leaf_state_bytes`, `storage.total_bytes`), alongside a companion `storage.usage_deep_published` 0/1 gauge that reports whether the three deep surfaces were actually measured for the tree, and surfaced on the bundled **Overview** Grafana dashboard. See [Metrics](metrics.md) for the full instrument list.
 
 ### Self-populating gauges in a multi-silo cluster
 
@@ -329,7 +329,7 @@ Migration is handled by a staleness horizon. When a tree's aggregator moves to a
 
 ### Advisory byte-pressure WAL retention
 
-WAL retention is normally bounded by consumer cursors and an optional wall-clock TTL (`LatticeOptions.WalRetention`). For a size-based safety valve, set `LatticeOptions.WalMaxRetainedBytes` - an **advisory** per-tree ceiling on the WAL's on-disk occupancy. When set, each `ILatticeWalGc.RunOnceAsync` pass samples that occupancy - physical bytes, dead bytes not yet compacted included, or the retained payload for a provider that cannot report a physical size - before and after its safe trim:
+WAL retention is normally bounded by consumer cursors and an optional wall-clock TTL (`LatticeOptions.WalRetention`). For a size-based safety valve, set `LatticeOptions.WalMaxRetainedBytes` - an **advisory** per-tree ceiling on the WAL's on-disk occupancy. The option and `LATTICE_WAL_MAX_RETAINED_BYTES` environment-variable names are legacy compatibility names: neither switches the comparison to retained payload. Read `storage.wal_physical_bytes`, not `storage.wal_bytes`, to compare the magnitude with this ceiling. When set, each `ILatticeWalGc.RunOnceAsync` pass samples that occupancy - physical bytes, dead bytes not yet compacted included, or the retained payload for a provider that cannot report a physical size - before and after its safe trim:
 
 - If the pre-trim total exceeds the ceiling, the policy schedules a byte-pressure trim and increments `orleans.lattice.storage.policy.trim_triggered` (tagged `reason=byte_pressure`). The bytes actually freed are reported on `orleans.lattice.storage.policy.bytes_reclaimed` and on the report's `RetainedBytesBefore` / `RetainedBytesAfter` fields.
 - The trim **never crosses the safe frontier** (the minimum consumer cursor, overruled where available by the durable materialiser offset floor, intersected with the causal-stable frontier and held below the blocked floor). If the trim cannot bring occupancy back under the ceiling, the data is preserved, `orleans.lattice.storage.policy.over_threshold` reports `1`, and the write path is unaffected. The breach is advisory; the durability invariant wins. The flag compares occupancy with the ceiling and asserts no cause: a lagging consumer or pin holding bytes sets it, and so does a tree that reclaimed everything it was entitled to and is only waiting for compaction to return its dead bytes.
@@ -337,6 +337,38 @@ WAL retention is normally bounded by consumer cursors and an optional wall-clock
 `WalBytePressureReclaimTarget` (default `0.8`) is the low-water fraction of the ceiling that disarms the policy, providing hysteresis so a tree hovering near the ceiling does not thrash: byte pressure arms when the sampled occupancy crosses the full ceiling and keeps re-triggering until a trim drives it at or below `WalBytePressureReclaimTarget * WalMaxRetainedBytes`, after which growth inside the band does not re-trigger until the ceiling is crossed again. Leaving `WalMaxRetainedBytes` at its default `null` disables the policy entirely with zero hot-path cost.
 
 > **Production caution - set at least one absolute cap.** With every retention knob at its default (`WalRetention = null`, `WalMaxRetainedBytes = null`), the only active bound on WAL size is the consumer cursor frontier. The log shrinks as consumers catch up, but a **permanently lagging or dead consumer pins it and grows it without limit** - and `WalMaxRetainedBytes` will *not* rescue you, because it is advisory and never trims past a live cursor. Only `WalRetention` (a wall-clock floor on consumer lag) trims past a stuck consumer. Any deployment where unbounded growth is unacceptable should set `WalRetention`, and where a hard size budget matters, `WalMaxRetainedBytes` as well. See [How the retention bounds interact](wal.md#how-the-retention-bounds-interact) in the WAL reference for the full bound-by-bound breakdown.
+
+### Verifying bounded physical WAL occupancy
+
+For a disk-growth exit check, use a steady-state window that includes real GC
+passes and enough traffic/elapsed time to observe a compaction cycle. Measure
+each tree with `storage.wal_physical_bytes` (`max by (tree)` across silos), or
+independent physical directory measurements. Require present, fresh samples;
+missing samples are not a zero. Retained `storage.wal_bytes` falling is not
+evidence that disk space was returned. Physical occupancy must not show sustained
+growth across equivalent steady-state windows, but that condition alone is
+necessary, not sufficient: an idle tree can be flat while retaining dead space.
+
+Pair occupancy with `wal.compactions` deltas by trigger and
+`wal.compaction.reclaimed_bytes` deltas. Advancing compactions with positive
+reclamation demonstrate the sawtooth returning space. Flat compaction arms are
+benign only when no shard is due for compaction; all arms flat while a shard's
+actual payload dead ratio reaches `CompactionThreshold`, or its dead payload
+reaches an enabled `CompactionMaximumDeadBytes`, require investigation. Evaluate
+these thresholds per shard, not against the tree-wide sum. Do not treat
+`physical - retained` as exact dead payload: it includes record framing, so its
+ratio can overestimate the payload-only ratio the file provider tests.
+
+Do not require `storage.policy.over_threshold == 0` as a universal exit condition.
+The ceiling is advisory, and normal independently-phased shard sawteeth can
+cross it when live payload exceeds half the ceiling under the default 0.5
+compaction ratio. A breach announces occupancy, not a failed trim or a pin.
+The policy reclaim counter alone is also insufficient: it emits only for
+positive physical reclamation on trees with an advisory ceiling configured.
+Size that ceiling against the working set and check compaction evidence rather
+than treating lifetime reclamation or flat retained bytes as proof of recovery.
+See [file WAL compaction](../lattice.storage.file/README.md) and
+[metrics](metrics.md) for the accounting and instruments.
 
 ## Key trade-offs
 

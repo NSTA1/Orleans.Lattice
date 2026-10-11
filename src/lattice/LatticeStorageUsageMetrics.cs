@@ -8,7 +8,8 @@ namespace Orleans.Lattice;
 /// <see cref="LatticeMetrics.Meter"/>. The per-tree storage-usage aggregator
 /// pushes the latest <see cref="TreeStorageUsageReport"/> for each tree here
 /// (already coalesced behind <see cref="LatticeOptions.StorageUsageCacheTtl"/>),
-/// and the six observable gauges - <c>storage.wal_bytes</c>,
+/// and the observable gauges - <c>storage.wal_bytes</c>,
+/// <c>storage.wal_physical_bytes</c>,
 /// <c>storage.snapshot_bytes</c>, <c>storage.leaf_state_bytes</c>,
 /// <c>storage.total_bytes</c>, the 0/1 <c>storage.policy.over_threshold</c>
 /// gauge, and the 0/1 <c>storage.usage_deep_published</c> depth gauge - read
@@ -128,6 +129,12 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
             description: "Retained WAL bytes for the tree.");
 
         meter.CreateObservableGauge(
+            LatticeMetrics.StorageWalPhysicalBytesName,
+            static () => ObserveAll(static r => r.WalPhysicalBytes, requireDeep: false),
+            unit: "By",
+            description: "Physical WAL occupancy bytes for the tree, including framing and trimmed payload not yet reclaimed. Falls back to retained bytes when physical accounting is unsupported. This is the quantity compared against the legacy WalMaxRetainedBytes advisory ceiling.");
+
+        meter.CreateObservableGauge(
             LatticeMetrics.StorageSnapshotBytesName,
             static () => ObserveAll(static r => r.SnapshotBytes, requireDeep: true),
             unit: "By",
@@ -143,13 +150,13 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
             LatticeMetrics.StorageTotalBytesName,
             static () => ObserveAll(static r => r.TotalBytes, requireDeep: true),
             unit: "By",
-            description: "Sum of the three storage surfaces for the tree; the WAL term is physical occupancy after a deep publish and the retained WAL bytes after a WAL-only poll.");
+            description: "Physical WAL occupancy plus snapshot blob and leaf/shard-root state bytes for the tree. WAL-only polls refresh the physical WAL term while preserving the last deep snapshot and leaf-state measurements.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StoragePolicyOverThresholdName,
             static () => ObserveAllOverThreshold(),
             unit: "1",
-            description: "1 when the tree's WAL occupancy bytes currently breach the advisory ceiling, else 0.");
+            description: "1 when the tree's physical WAL occupancy bytes currently breach the legacy WalMaxRetainedBytes advisory ceiling, else 0. Compare storage.wal_physical_bytes, not the retained storage.wal_bytes series.");
 
         meter.CreateObservableGauge(
             LatticeMetrics.StorageUsageDeepPublishedName,
@@ -280,9 +287,10 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
     }
 
     /// <summary>
-    /// Refreshes only the WAL-bytes series and the WAL-bytes
-    /// publish-timestamp for a tree, without touching the snapshot,
-    /// leaf-state, or total surfaces. Called by the cluster-wide
+    /// Refreshes the retained and physical WAL-byte series and the
+    /// publish-timestamp for a tree. Preserves the snapshot and leaf-state
+    /// measurements and recomputes the total with the fresh physical WAL term.
+    /// Called by the cluster-wide
     /// background poller and the per-tree WAL-only aggregator so the
     /// byte-pressure path and the <c>storage.wal_bytes</c> gauge stay
     /// timely without paying the cost of a deep leaf/snapshot fan-out.
@@ -317,38 +325,34 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
         var now = _time.GetUtcNow();
         _reports.AddOrUpdate(
             report.TreeId,
-            _ => (new TreeStorageUsageReport
+            static (_, arg) => (new TreeStorageUsageReport
             {
-                TreeId = report.TreeId,
-                WalRetainedBytes = report.WalRetainedBytes,
+                TreeId = arg.Report.TreeId,
+                WalRetainedBytes = arg.Report.WalRetainedBytes,
+                WalPhysicalBytes = arg.Report.WalPhysicalBytes,
                 SnapshotBytes = 0,
                 LeafStateBytes = 0,
-                TotalBytes = report.WalRetainedBytes,
+                TotalBytes = arg.Report.WalPhysicalBytes,
                 Partial = false,
-                SampledAt = report.SampledAt,
-            }, false, now),
-            (_, existing) =>
+                SampledAt = arg.Report.SampledAt,
+            }, false, arg.Now),
+            static (_, existing, arg) =>
             {
                 var prev = existing.Report;
-                var merged = new TreeStorageUsageReport
+                var merged = prev with
                 {
-                    TreeId = prev.TreeId,
-                    WalRetainedBytes = report.WalRetainedBytes,
-                    SnapshotBytes = prev.SnapshotBytes,
-                    LeafStateBytes = prev.LeafStateBytes,
-                    TotalBytes = report.WalRetainedBytes + prev.SnapshotBytes + prev.LeafStateBytes,
-                    Partial = prev.Partial,
-                    SampledAt = report.SampledAt,
-                    // The shallow WAL poll carries no ceiling, so the last deep
-                    // report's value is carried forward rather than dropped.
-                    WalMaxRetainedBytes = prev.WalMaxRetainedBytes,
+                    WalRetainedBytes = arg.Report.WalRetainedBytes,
+                    WalPhysicalBytes = arg.Report.WalPhysicalBytes,
+                    TotalBytes = arg.Report.WalPhysicalBytes + prev.SnapshotBytes + prev.LeafStateBytes,
+                    SampledAt = arg.Report.SampledAt,
                 };
-                return (merged, existing.DeepMeasured, now);
-            });
+                return (merged, existing.DeepMeasured, arg.Now);
+            },
+            (Report: report, Now: now));
     }
 
     /// <summary>
-    /// Records whether the named tree's WAL occupancy bytes currently breach
+    /// Records whether the named tree's physical WAL occupancy bytes currently breach
     /// the advisory ceiling, driving the <c>storage.policy.over_threshold</c>
     /// 0/1 gauge. Pushed by the per-tree aggregator and by the WAL garbage
     /// collector after each byte-pressure evaluation so the gauge tracks the
