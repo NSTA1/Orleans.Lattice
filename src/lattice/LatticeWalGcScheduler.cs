@@ -5324,7 +5324,7 @@ internal sealed class LatticeWalGcScheduler(
         {
             throw;
         }
-        catch (TimeoutException ex)
+        catch (TimeoutException ex) when (ex is not ILatticeDomainFault)
         {
             // The probe did not return in time. Reported separately from a
             // fault because it means the opposite thing about the leaf: the
@@ -5338,7 +5338,9 @@ internal sealed class LatticeWalGcScheduler(
             // evidence that reactivation-by-grain-call cannot reach the leaves
             // that need it, which is a finding about the REMEDY and not about
             // the tree. That distinction is unavailable while a timeout is
-            // folded into 'attempted'.
+            // folded into 'attempted'. A typed domain timeout is a callee
+            // verdict, not evidence of a still-running activation; the fault
+            // arm below preserves its diagnosis and the same bounded cooldown.
             logger.LogWarning(
                 ex,
                 "WAL GC could not confirm reactivation of leaf {Leaf} on tree {Tree} to clear blocking pin {Consumer} within the cluster response timeout; the activation request was delivered and may still be running, so this is not evidence the touch was wasted. The tree stays blocked and the attempt is retried after the cooldown.",

@@ -93,6 +93,12 @@ if (string.Equals(suite, "coveragestall", StringComparison.OrdinalIgnoreCase))
     return stallSummary.HasCriticalValidationErrors || stallSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "domainfaultcatch", StringComparison.OrdinalIgnoreCase))
+{
+    var catchSummary = BenchmarkRunner.Run<DomainFaultCatchBenchmarks>(config);
+    return catchSummary.HasCriticalValidationErrors || catchSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "walclockfloor", StringComparison.OrdinalIgnoreCase))
 {
     var floorSummary = BenchmarkRunner.Run<WalClockFloorHotPathBenchmarks>(config);

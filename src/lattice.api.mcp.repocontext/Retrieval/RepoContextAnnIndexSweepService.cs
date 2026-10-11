@@ -350,7 +350,7 @@ internal sealed class RepoContextAnnIndexSweepService(
                         unarmed.Add(repoId);
                     }
                 }
-                catch (TimeoutException ex)
+                catch (TimeoutException ex) when (ex is not ILatticeDomainFault)
                 {
                     deferred++;
                     unarmed.Add(repoId);

@@ -85,6 +85,20 @@ public sealed class LatticeBackupCaptureServiceTopologyTests
     }
 
     [Test]
+    public void BuildTopologyAsync_preserves_domain_faults_instead_of_recording_a_disabled_digest()
+    {
+        var lattice = LatticeOver(FoldedMap());
+        var fault = new LeafProjectionStaleException("projection fell off the WAL");
+        lattice.GetLeafProjectionDigestForRangeAsync(
+                3, Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(fault);
+
+        var actual = Assert.ThrowsAsync<LeafProjectionStaleException>(
+            async () => await LatticeBackupCaptureService.BuildTopologyAsync(lattice, null, null, CancellationToken.None));
+        Assert.That(actual, Is.SameAs(fault));
+    }
+
+    [Test]
     public async Task BuildTopologyAsync_names_a_digest_placeholder_by_its_physical_shard_index()
     {
         var lattice = LatticeOver(FoldedMap());

@@ -82,6 +82,73 @@ public class LatticeReplicationGrpcServiceProbeCancellationTests
     }
 
     [Test]
+    public async Task ProbeDigest_still_reports_a_disabled_digest_as_unavailable()
+    {
+        var factory = FactoryWhoseDigestReadCancels();
+        factory.GetGrain<ILattice>("tree").GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<LeafProjectionDigest>(new InvalidOperationException("digest disabled")));
+        var service = CreateService(factory);
+
+        var response = await service.ProbeDigest(
+            new DigestProbeRequestBox { Value = new DigestProbeRequest { TreeName = "tree", ShardIndex = 0 } },
+            new TestServerCallContext(CancellationToken.None));
+
+        Assert.That(response.Value.DigestAvailable, Is.False);
+    }
+
+    [Test]
+    public async Task ProbeMerkleWalk_still_reports_a_disabled_digest_as_unavailable()
+    {
+        var factory = FactoryWhoseDigestReadCancels();
+        factory.GetGrain<ILattice>("tree").GetLeafProjectionDigestForRangeAsync(
+                Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<LeafProjectionDigest>(new InvalidOperationException("digest disabled")));
+        var service = CreateService(factory);
+
+        var response = await service.ProbeMerkleWalk(
+            new MerkleWalkProbeRequestBox { Value = new MerkleWalkProbeRequest { TreeName = "tree", ShardIndex = 0 } },
+            new TestServerCallContext(CancellationToken.None));
+
+        Assert.That(response.Value, Is.EqualTo(MerkleWalkProbeResponse.Unavailable));
+    }
+
+    [Test]
+    public void ProbeDigest_preserves_domain_faults_instead_of_reporting_digest_unavailable()
+    {
+        var fault = new LeafProjectionStaleException("projection unavailable");
+        var factory = FactoryWhoseDigestReadCancels();
+        factory.GetGrain<ILattice>("tree").GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<LeafProjectionDigest>(fault));
+        var service = CreateService(factory);
+
+        var actual = Assert.ThrowsAsync<LeafProjectionStaleException>(
+            async () => await service.ProbeDigest(
+                new DigestProbeRequestBox { Value = new DigestProbeRequest { TreeName = "tree", ShardIndex = 0 } },
+                new TestServerCallContext(CancellationToken.None)));
+        Assert.That(actual, Is.SameAs(fault));
+    }
+
+    [Test]
+    public void ProbeMerkleWalk_preserves_domain_faults_instead_of_reporting_range_unavailable()
+    {
+        var fault = new LeafProjectionStaleException("projection unavailable");
+        var factory = FactoryWhoseDigestReadCancels();
+        factory.GetGrain<ILattice>("tree").GetLeafProjectionDigestForRangeAsync(
+                Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<LeafProjectionDigest>(fault));
+        var service = CreateService(factory);
+
+        var actual = Assert.ThrowsAsync<LeafProjectionStaleException>(
+            async () => await service.ProbeMerkleWalk(
+                new MerkleWalkProbeRequestBox
+                {
+                    Value = new MerkleWalkProbeRequest { TreeName = "tree", ShardIndex = 0 },
+                },
+                new TestServerCallContext(CancellationToken.None)));
+        Assert.That(actual, Is.SameAs(fault));
+    }
+
+    [Test]
     public void ProbeDigest_propagates_caller_cancellation_instead_of_reporting_digest_unavailable()
     {
         using var cts = new CancellationTokenSource();

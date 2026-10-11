@@ -503,7 +503,7 @@ internal sealed class ShardHealingOrchestratorGrain(
         {
             await ConsolidationGrain(physicalTreeId, plan.DonorShardIndex).StartAsync(plan.SurvivorShardIndex);
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
         {
             // The coordinator is busy on a different survivor, or a split is in
             // flight on one of the pair. Both are transient and both are the

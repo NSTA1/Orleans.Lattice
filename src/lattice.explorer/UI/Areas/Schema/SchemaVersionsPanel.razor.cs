@@ -130,7 +130,7 @@ public partial class SchemaVersionsPanel : IDisposable
         catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception) when (exception is not ILatticeDomainFault)
         {
             // The facade throws this, and only this, when versioning is not registered.
             _versioningMissing = true;
