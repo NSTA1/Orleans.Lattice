@@ -18,19 +18,22 @@ public partial class AtomicWriteGrainTests
         var (grain, _, _, lattice, shard) = CreateGrain(
             configureFactory: f => f.GetGrain<ITreeDeletionGrain>(TreeId).IsDiscardedAsync().Returns(true));
         var attempts = 0;
+        var routingReadsAtRefusal = -1;
         shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
             .Returns<Task<WalRecord?>>(_ =>
             {
                 attempts++;
+                routingReadsAtRefusal = RoutingReadCount(lattice);
                 throw new InvalidOperationException("This tree has been deleted and is no longer accessible.");
             });
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
         Assert.That(attempts, Is.EqualTo(1), "the refusal is not retried");
-        // One routing read to prepare and one for the broadcast's drift pass:
-        // no refresh follows the refusal to another copy.
-        await lattice.Received(2).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        Assert.That(routingReadsAtRefusal, Is.EqualTo(3),
+            "routing is resolved for prepare, terminal freshness, and terminal drift before the refusal.");
+        Assert.That(RoutingReadCount(lattice), Is.EqualTo(routingReadsAtRefusal),
+            "no routing read may follow a terminal refused by a discarded copy.");
     }
 
     [Test]
@@ -39,18 +42,26 @@ public partial class AtomicWriteGrainTests
         var (grain, _, _, lattice, shard) = CreateGrain(
             configureFactory: f => f.GetGrain<ITreeDeletionGrain>(TreeId).IsDiscardedAsync().Returns(true));
         var attempts = 0;
+        var routingReadsAtRefusal = -1;
         shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
             .Returns<Task<WalRecord?>>(_ =>
             {
                 attempts++;
+                routingReadsAtRefusal = RoutingReadCount(lattice);
                 throw new StaleTreeRoutingException(TreeId, TreeId, "restored-copy");
             });
 
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
         Assert.That(attempts, Is.EqualTo(1), "the terminal is not re-sent after the refusal");
-        await lattice.Received(2).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        Assert.That(routingReadsAtRefusal, Is.EqualTo(3),
+            "routing is resolved for prepare, terminal freshness, and terminal drift before the refusal.");
+        Assert.That(RoutingReadCount(lattice), Is.EqualTo(routingReadsAtRefusal),
+            "no routing read may follow a stale-tree terminal refused by a discarded copy.");
     }
+
+    private static int RoutingReadCount(ILattice lattice) =>
+        lattice.ReceivedCalls().Count(call => call.GetMethodInfo().Name == "GetRoutingAsync");
 
     [Test]
     public void MarkOneShardAsync_surfaces_a_deleted_tree_refusal_by_a_copy_that_was_not_discarded()
