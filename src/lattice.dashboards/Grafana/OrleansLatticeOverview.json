@@ -990,7 +990,7 @@
     {
       "id": 23,
       "title": "Storage footprint by tree",
-      "description": "Byte-accurate retained footprint per tree, broken down by surface: WAL bytes, snapshot blob bytes, and summed leaf/shard-root state bytes. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. The snapshot and leaf-state series additionally report no data until the tree has had a deep storage-usage publish, which only an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call drives - the continuous background poller measures WAL bytes only. So a tree showing a WAL line and no snapshot or leaf-state line has not been measured on those surfaces; consult 'Storage usage measurement depth by tree' before reading their absence as emptiness (issue #2693). Each tree's footprint is published by its storage-usage aggregators on whichever silos currently host them, and a tree's WAL-only and deep aggregators are placed independently, so more than one silo can export the same tree's series. This panel therefore takes max by (tree) across silos rather than summing, which would double-count the tree, and deliberately ignores the $silo selector - filtering by silo would hide every tree whose aggregator lives elsewhere.",
+      "description": "Physical WAL occupancy and retained WAL payload are separate lines; physical is the quantity compared with the legacy WalMaxRetainedBytes ceiling, and includes framing and dead payload not yet reclaimed. Snapshot blob and summed leaf/shard-root state bytes are separate storage surfaces. Sourced from the observable storage-usage gauges; a tree on an unsupported provider reports no data rather than a misleading zero. The snapshot and leaf-state series additionally report no data until the tree has had a deep storage-usage publish, which only an explicit ILatticeAdmin.RefreshStorageUsageAsync or ILattice.GetStorageUsageAsync call drives - the continuous background poller measures WAL bytes only. So a tree showing a WAL line and no snapshot or leaf-state line has not been measured on those surfaces; consult 'Storage usage measurement depth by tree' before reading their absence as emptiness (issue #2693). Each tree's footprint is published by its storage-usage aggregators on whichever silos currently host them, and a tree's WAL-only and deep aggregators are placed independently, so more than one silo can export the same tree's series. This panel therefore takes max by (tree) across silos rather than summing, which would double-count the tree, and deliberately ignores the $silo selector - filtering by silo would hide every tree whose aggregator lives elsewhere.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -1002,7 +1002,12 @@
         {
           "refId": "WAL",
           "expr": "max by (tree) (orleans_lattice_storage_wal_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
-          "legendFormat": "{{tree}} wal"
+          "legendFormat": "{{tree}} wal retained"
+        },
+        {
+          "refId": "WAL_PHYSICAL",
+          "expr": "max by (tree) (orleans_lattice_storage_wal_physical_bytes{tree=~\"$tree\",cluster=~\"$cluster\"})",
+          "legendFormat": "{{tree}} wal physical (ceiling quantity)"
         },
         {
           "refId": "SNAP",
