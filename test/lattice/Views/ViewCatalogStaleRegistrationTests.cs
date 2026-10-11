@@ -28,6 +28,7 @@ namespace Orleans.Lattice.Tests.Views;
 public sealed class ViewCatalogStaleRegistrationTests
 {
     private const string Provider = "tests.stale-catalog.v1";
+    private const string ThresholdProvider = "tests.stale-catalog.threshold.v1";
     private static readonly TimeSpan Barrier = TimeSpan.FromSeconds(30);
 
     private TestCluster _cluster = null!;
@@ -219,6 +220,85 @@ public sealed class ViewCatalogStaleRegistrationTests
     }
 
     [Test]
+    public async Task A_view_recreated_with_a_different_provider_payload_never_keeps_the_deleted_payloads_projection()
+    {
+        // The provider contract binds a projection version, not a payload, so a
+        // delete and re-create over the same source, provider and version can
+        // differ only in the durable payload (here a predicate threshold). The
+        // primary's settled entry still holds the deleted payload's projection. The
+        // re-create is written straight to the registry, as another silo's factory
+        // does, so the maintainer's next activation is placed on the primary.
+        const string viewName = "stale-catalog-payload";
+        const string sourceTreeId = "stale-catalog-payload-src";
+        var source = _cluster.Client.GetGrain<ILattice>(sourceTreeId);
+        await source.SetAsync("low", [3]);
+        await source.SetAsync("high", [7]);
+
+        var view = await ViewFactory(_cluster.Primary).CreateAsync(
+            source, viewName, new LatticeRuntimeViewProjectionDescriptor(ThresholdProvider, [5]));
+        await view.WaitForSourceHeadAsync(Barrier);
+        Assert.That(await view.GetAsync("low"), Is.Null, "Precondition: threshold 5 excludes the low key.");
+        await AssertMaintainerOnAsync(viewName, _cluster.Primary);
+        var catalog = Services(_cluster.Primary).GetRequiredService<IViewCatalog>();
+        var stale = catalog.TryGet(viewName);
+        Assert.That(stale, Is.Not.Null);
+
+        await ViewFactory(_cluster.SecondarySilos[0]).DeleteAsync(viewName);
+        await _cluster.Client.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey).RegisterAsync(new RuntimeViewRegistration
+        {
+            ViewName = viewName,
+            SourceTreeId = sourceTreeId,
+            ProjectionTypeName = typeof(ThresholdProjection).FullName!,
+            ProjectionVersion = "v1",
+            ProjectionProviderKey = ThresholdProvider,
+            ProjectionProviderPayload = [1],
+        });
+
+        var maintainer = GrainFactory(_cluster.Primary).GetGrain<IViewMaintainerGrain>(viewName);
+        await maintainer.EnsureActiveAsync();
+        await AssertMaintainerOnAsync(viewName, _cluster.Primary);
+        Assert.That(catalog.TryGet(viewName), Is.Not.Null.And.Not.SameAs(stale), "The deleted payload's entry must be replaced by the durable re-create.");
+
+        var recreated = await ViewFactory(_cluster.Primary).GetAsync(viewName);
+        Assert.That(recreated, Is.Not.Null);
+        await recreated!.WaitForSourceHeadAsync(Barrier);
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await recreated.GetAsync("low"), Is.EqualTo(new byte[] { 3 }), "The re-created view must project with its own payload's threshold.");
+            Assert.That(await recreated.GetAsync("high"), Is.EqualTo(new byte[] { 7 }));
+        });
+    }
+
+    [Test]
+    public void A_rehydrated_entry_is_bound_to_the_full_durable_record_it_was_built_from()
+    {
+        var services = Services(_cluster.Primary);
+        var record = new RuntimeViewRegistration
+        {
+            ViewName = "stale-catalog-binding",
+            SourceTreeId = "stale-catalog-binding-src",
+            ProjectionTypeName = typeof(ThresholdProjection).FullName!,
+            ProjectionVersion = "v1",
+            ProjectionProviderKey = ThresholdProvider,
+            ProjectionProviderPayload = [4],
+        };
+
+        var registration = RuntimeViewRehydrator.Resolve(
+            record,
+            services,
+            services.GetRequiredService<RuntimeViewProjectionProviderCatalog>(),
+            NullLogger.Instance);
+
+        Assert.That(registration, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(registration!.DurableRecord, Is.EqualTo(record));
+            Assert.That(registration.DurableRecord, Is.Not.EqualTo(record with { ProjectionProviderPayload = [5] }), "A different payload is a different binding.");
+            Assert.That(registration.DurableRecord, Is.Not.EqualTo(record with { ProjectionTypeName = "Other.Type" }), "A different projection type is a different binding.");
+        });
+    }
+
+    [Test]
     public async Task A_failed_background_persist_moves_the_factorys_entry_to_persist_failed()
     {
         const string viewName = "stale-catalog-factory-persist-fails";
@@ -297,7 +377,10 @@ public sealed class ViewCatalogStaleRegistrationTests
             siloBuilder.Services.AddSingleton<PlacementStrategy, PreferLocalPlacement>();
             siloBuilder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
                 Provider,
-                (_, context) => new LatticeViewDefinition(context.ViewName, new IdentityProjection())));
+                (_, context) => new LatticeViewDefinition(context.ViewName, new IdentityProjection()))
+                .AddRuntimeProjectionProvider(
+                ThresholdProvider,
+                (_, context) => new LatticeViewDefinition(context.ViewName, new ThresholdProjection(context.Payload[0]))));
         }
     }
 
@@ -309,6 +392,18 @@ public sealed class ViewCatalogStaleRegistrationTests
         {
             MutationKind.Set => [ViewWrite.Upsert(mutation.Key!, mutation.Value!, mutation.Timestamp)],
             MutationKind.Delete => [ViewWrite.Delete(mutation.Key!, mutation.Timestamp)],
+            _ => [],
+        };
+    }
+
+    private sealed class ThresholdProjection(byte threshold) : ILatticeViewProjection
+    {
+        public string ProjectionVersion => "v1";
+
+        public IEnumerable<ViewWrite> Project(LatticeMutation mutation) => mutation.Kind switch
+        {
+            MutationKind.Set when mutation.Value![0] >= threshold => [ViewWrite.Upsert(mutation.Key!, mutation.Value!, mutation.Timestamp)],
+            MutationKind.Set or MutationKind.Delete => [ViewWrite.Delete(mutation.Key!, mutation.Timestamp)],
             _ => [],
         };
     }

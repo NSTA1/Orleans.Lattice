@@ -168,7 +168,9 @@ internal sealed partial class ViewMaintainerGrain(
     /// record can only be a later re-create or the definition the failed write
     /// never replaced, so it supersedes the entry; the mark therefore cannot
     /// shield a stale definition from a re-create indefinitely. Replacing or
-    /// removing an entry discards its mark.
+    /// removing an entry discards its mark. A record matches the entry only when it is
+    /// the full durable binding the entry was built from (see <see cref="IsBoundTo"/>),
+    /// including the provider payload, which the reconstructed projection cannot expose.
     /// </remarks>
     private async Task ReconcileCatalogRegistrationAsync()
     {
@@ -210,11 +212,7 @@ internal sealed partial class ViewMaintainerGrain(
             return;
         }
 
-        if (string.Equals(record.SourceTreeId, cached.SourceTreeId, StringComparison.Ordinal)
-            && string.Equals(record.ProjectionVersion, cached.ProjectionVersion, StringComparison.Ordinal)
-            && string.Equals(record.ProjectionProviderKey, cached.ProjectionProviderKey, StringComparison.Ordinal)
-            && record.IsAggregation == cached.IsAggregation
-            && record.Accumulative == cached.Accumulative)
+        if (IsBoundTo(cached, record))
         {
             return;
         }
@@ -229,6 +227,26 @@ internal sealed partial class ViewMaintainerGrain(
             logger.LogInformation("View '{ViewName}' replaced this silo's stale catalog entry with its durable runtime registration.", ViewName);
         }
     }
+
+    /// <summary>
+    /// Whether <paramref name="cached"/> already projects <paramref name="record"/>.
+    /// A re-hydrated entry is compared against the full durable record it was built
+    /// from, so a delete and re-create over the same source, provider and version
+    /// that changes only the provider payload or projection type is still a
+    /// different binding. The provider contract pins a projection version, not a
+    /// payload, so comparing the reconstructed shape alone would keep the deleted
+    /// definition's projection. Only an entry registered directly through
+    /// <see cref="IViewCatalog.Register"/> carries no durable record; it falls back
+    /// to the shape it can expose.
+    /// </summary>
+    private static bool IsBoundTo(ViewRegistration cached, RuntimeViewRegistration record) =>
+        cached.DurableRecord is { } bound
+            ? bound.Equals(record)
+            : string.Equals(record.SourceTreeId, cached.SourceTreeId, StringComparison.Ordinal)
+                && string.Equals(record.ProjectionVersion, cached.ProjectionVersion, StringComparison.Ordinal)
+                && string.Equals(record.ProjectionProviderKey, cached.ProjectionProviderKey, StringComparison.Ordinal)
+                && record.IsAggregation == cached.IsAggregation
+                && record.Accumulative == cached.Accumulative;
 
     private bool IsStartupDeclared()
     {

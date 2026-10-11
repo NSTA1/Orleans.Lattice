@@ -148,7 +148,7 @@ internal sealed class LatticeViewFactory(
         var durable = IsStartupDeclared(viewName)
             ? null
             : BuildDurableRegistration(registration, runtimeProjection);
-        return (registration, durable);
+        return (durable is null ? registration : registration with { DurableRecord = durable }, durable);
     }
 
     private void ValidateReplicationTopology(string viewName, string sourceTreeId) =>

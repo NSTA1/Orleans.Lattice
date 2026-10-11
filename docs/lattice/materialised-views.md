@@ -337,6 +337,16 @@ persisted registration exactly. Missing providers, malformed state, empty or
 mismatched versions, and provider failures leave the maintainer dormant rather
 than rebuilding through different logic.
 
+Each silo reconciles its runtime catalog entry with the durable registration on
+activation. A durable delete or a recreation with a different source, projection
+type, provider payload or version retires the stale cached entry, even if the
+reconstructed projection has the same shape. Replacement compares the full
+durable registration and is conditional on the exact cached
+registration instance, so reconciliation cannot overwrite a concurrently created
+registration. A factory registration awaiting persistence is protected until
+that attempt settles; a failed attempt does not permanently mask a different
+durable registration.
+
 Filter-only `PredicateLatticeViewProjection` definitions receive the built-in
 predicate descriptor automatically. Predicate value/key selectors, aggregation
 delegates, folds, and other application state require an explicit provider. The

@@ -36,6 +36,16 @@ internal sealed record ViewRegistration(
     bool Accumulative = false,
     string? ProjectionProviderKey = null)
 {
+    /// <summary>
+    /// The full durable runtime registration this entry was re-hydrated from, or
+    /// <see langword="null"/> for an entry registered directly (startup-declared or
+    /// through <see cref="IViewCatalog.Register"/>). It carries the identity the
+    /// reconstructed projection cannot expose - the provider payload and the
+    /// projection type name - so a durable re-create that differs only there is
+    /// recognised as a different binding rather than mistaken for this one.
+    /// </summary>
+    public RuntimeViewRegistration? DurableRecord { get; init; }
+
     /// <summary>Whether this view is an aggregation (grouped reduce) view.</summary>
     public bool IsAggregation => AggregationProjection is not null;
 
