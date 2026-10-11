@@ -26,8 +26,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// <para>
 /// <b>Both halves are measured.</b> The startup report compares this process's budget
 /// with the previous process's measured drain, carried across the restart by
-/// <see cref="RepoContextDrainHistory"/>. The running report multiplies the live
-/// resident activation count by the per-activation cost that same drain measured. No
+/// <see cref="RepoContextDrainHistory"/>. The running report fits fixed overhead
+/// and concurrent aggregate service rate from multiple clean wall-time samples. No
 /// constant is invented at either end: with no recorded drain the service reports
 /// that it cannot project, which is the honest answer and is distinguishable in the
 /// exposition from a projection of zero.
@@ -153,7 +153,9 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
     private RepoContextDrainProjection? _peakProjection;
     private int? _resident;
     private int? _peakResident;
-    private bool? _lastReportedExceeds;
+    private int? _lastReportedState;
+    private double _lastReportedSeconds;
+    private long _lastReportedAt;
     private CancellationTokenSource? _pollCancellation;
     private Task? _pollLoop;
 
@@ -285,14 +287,13 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
 
     /// <summary>
     /// Samples residency once, updates the instant and windowed-peak projections, and
-    /// reports a change in whether the peak projection fits the budget.
+    /// reports threshold or material changes, with an unchanged fifteen-minute refresh.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Reporting on transition rather than on every poll is what keeps this usable: a
-    /// line per poll would be noise an operator filters out, and the filtered line
-    /// would be the one that mattered. Exposed so a test can drive one poll instead of
-    /// waiting one out.
+    /// Reports unknown/fits/thin/exceeded/floor transitions and changes of at least
+    /// 20% and five seconds since the last report. Unchanged findings refresh after
+    /// fifteen minutes. Exposed so a test can drive a poll without waiting.
     /// </para>
     /// <para>
     /// The transition follows the <b>peak</b> over the trailing window rather than the
@@ -344,10 +345,19 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
             _projection = instant;
             _peakProjection = peak;
 
-            report = peak is { } gate && _lastReportedExceeds != gate.ExceedsBudget;
-            if (peak is { } latched)
+            var state = peak is not { } value ? 0
+                : value.ExceedsBudget ? 3
+                : value.IsLowerBound ? 4
+                : value.IsThin ? 2 : 1;
+            var seconds = peak?.ProjectedDrain.TotalSeconds ?? 0;
+            report = _lastReportedState != state
+                || Stopwatch.GetElapsedTime(_lastReportedAt, now) >= TimeSpan.FromMinutes(15)
+                || Math.Abs(seconds - _lastReportedSeconds) >= Math.Max(5, _lastReportedSeconds * 0.2);
+            if (report)
             {
-                _lastReportedExceeds = latched.ExceedsBudget;
+                _lastReportedState = state;
+                _lastReportedSeconds = seconds;
+                _lastReportedAt = now;
             }
         }
 
@@ -355,13 +365,24 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
         {
             ReportProjection(reported, instant);
         }
+        else if (report)
+        {
+            _logger.LogWarning(
+                "RepoContext drain service-rate forecast is uncalibrated: residency is unavailable, "
+                + "fewer than two distinct clean drains were measured, the current set exceeds calibration, "
+                + "or the last drain is incomplete. No projected duration or all-clear is available. "
+                + "The {GrantSeconds:F0}s container grant reserves {ReserveSeconds:F0}s for shutdown unwind, "
+                + "leaving the enforced {BudgetSeconds:F0}s budget.",
+                _resolution.StopGracePeriod.TotalSeconds,
+                (_resolution.StopGracePeriod - _resolution.ShutdownBudget).TotalSeconds,
+                _resolution.ShutdownBudget.TotalSeconds);
+        }
 
         return instant;
     }
 
     private void ReportProjection(RepoContextDrainProjection peak, RepoContextDrainProjection? instant)
     {
-        var costMilliseconds = (_forecast.PerActivationCost ?? TimeSpan.Zero).TotalMilliseconds;
         var instantClause = instant is { } now
             ? string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
@@ -374,25 +395,25 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
             _logger.LogError(
                 "RepoContext projects a drain of {Qualifier}{ProjectedSeconds:F1}s against a {BudgetSeconds:F0}s "
                 + "shutdown budget: the peak of {Resident} resident activations over the last {WindowMinutes:F0} "
-                + "minutes ({Instant}), at the {CostMilliseconds:F1}ms each the last drain measured{CostQualifier}, "
-                + "will NOT deactivate in time. The next stop is expected to be abandoned and to exit {ExitCode}, "
+                + "minutes ({Instant}), using measured concurrent service rate and fixed shutdown overhead "
+                + "with an upper-percentile residual and 20% safety margin (or elapsed wall-time floor), "
+                + "is estimated NOT to deactivate in time. The next stop risks abandonment and exit {ExitCode}, "
                 + "tearing down leaf activations without banking their projection checkpoints. This is reported "
                 + "now, while the container is running, so it can be acted on before that stop: gate the stop on "
                 + "the windowed peak rather than on an instant reading, raise the service's stop_grace_period and "
-                + "the {Key} that declares it together to at least {RequiredSeconds:F0}s, or reduce the resident set.",
+                + "the {Key} that declares it together to at least {RequiredSeconds:F0}s, or reduce the resident set. "
+                + "The declared grant is {GrantSeconds:F0}s, including {ReserveSeconds:F0}s unwind reserve.",
                 peak.IsLowerBound ? "AT LEAST " : string.Empty,
                 peak.ProjectedDrain.TotalSeconds,
                 peak.Budget.TotalSeconds,
                 peak.ResidentActivations,
                 windowMinutes,
                 instantClause,
-                costMilliseconds,
-                peak.IsLowerBound
-                    ? " (a FLOOR: that drain was abandoned before it finished, so the real cost is higher)"
-                    : string.Empty,
                 RepoContextExitCode.DrainAbandoned,
                 RepoContextShutdownBudget.StopGracePeriodKey,
-                peak.RequiredStopGracePeriod.TotalSeconds);
+                peak.RequiredStopGracePeriod.TotalSeconds,
+                _resolution.StopGracePeriod.TotalSeconds,
+                (_resolution.StopGracePeriod - peak.Budget).TotalSeconds);
             return;
         }
 
@@ -402,27 +423,32 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
                 "RepoContext projects a drain of AT LEAST {ProjectedSeconds:F1}s against a {BudgetSeconds:F0}s "
                 + "shutdown budget from the peak of {Resident} resident activations over the last "
                 + "{WindowMinutes:F0} minutes ({Instant}). That floor fits, but it proves nothing: the "
-                + "{CostMilliseconds:F1}ms per activation it scales was measured on a drain that was abandoned "
+                + "elapsed wall time was measured on a drain that was abandoned "
                 + "before it finished, so the real cost is higher by an unknown margin. Treat a stop as unproven "
                 + "until a drain completes and records a real measurement.",
                 peak.ProjectedDrain.TotalSeconds,
                 peak.Budget.TotalSeconds,
                 peak.ResidentActivations,
                 windowMinutes,
-                instantClause,
-                costMilliseconds);
+                instantClause);
             return;
         }
 
-        _logger.LogInformation(
+        _logger.Log(
+            peak.IsThin ? LogLevel.Warning : LogLevel.Information,
             "RepoContext projects a drain of {ProjectedSeconds:F1}s against a {BudgetSeconds:F0}s shutdown budget "
             + "from the peak of {Resident} resident activations over the last {WindowMinutes:F0} minutes "
-            + "({Instant}), which fits.",
+            + "({Instant}), which fits{Headroom}. This is a measured concurrent service-rate estimate "
+            + "including fixed overhead, upper-percentile residual and 20% safety margin, not a guarantee. "
+            + "The {GrantSeconds:F0}s container grant includes {ReserveSeconds:F0}s unwind reserve.",
             peak.ProjectedDrain.TotalSeconds,
             peak.Budget.TotalSeconds,
             peak.ResidentActivations,
             windowMinutes,
-            instantClause);
+            instantClause,
+            peak.IsThin ? " but leaves thin headroom" : string.Empty,
+            _resolution.StopGracePeriod.TotalSeconds,
+            (_resolution.StopGracePeriod - peak.Budget).TotalSeconds);
     }
 
     /// <summary>Disposes the meter these gauges are published on.</summary>
@@ -633,7 +659,7 @@ public sealed class RepoContextDrainForecastService : IHostedService, IDisposabl
     }
 
     private IEnumerable<Measurement<double>> ObserveProjectionLowerBound()
-        => _forecast.PerActivationCost is null
-            ? []
-            : [new Measurement<double>(_forecast.PerActivationCostIsLowerBound ? 1d : 0d)];
+        => PeakProjection is { } projection
+            ? [new Measurement<double>(projection.IsLowerBound ? 1d : 0d)]
+            : [];
 }

@@ -52,6 +52,7 @@ public static class RepoContextDrainHistory
     private const string DurationKey = "durationSeconds";
     private const string ResidentKey = "residentActivations";
     private const string StrandedKey = "strandedActivations";
+    internal const int MaximumCompletedDrains = 16;
 
     /// <summary>
     /// Resolves the history file's path inside <paramref name="directory"/>.
@@ -163,7 +164,30 @@ public static class RepoContextDrainHistory
             return null;
         }
 
-        return new RepoContextDrainObservation(observedAt, outcome, budget.Value, duration, resident, stranded);
+        List<RepoContextDrainObservation>? completed = null;
+        for (var i = 0; i < MaximumCompletedDrains; i++)
+        {
+            var prefix = $"completed{i}";
+            if (!fields.TryGetValue(prefix + ObservedAtKey, out var sampleAt))
+            {
+                continue;
+            }
+
+            if (DateTimeOffset.TryParse(sampleAt, CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind, out var sampleTime)
+                && TryReadCount(fields, prefix + ResidentKey, out var sampleResident)
+                && sampleResident is > 0
+                && TryReadSeconds(fields, prefix + DurationKey, out var sampleDuration)
+                && sampleDuration > TimeSpan.Zero
+                && TryReadSeconds(fields, prefix + BudgetKey, out var sampleBudget))
+            {
+                (completed ??= []).Add(new(sampleTime, RepoContextDrainOutcome.Completed,
+                    sampleBudget ?? budget.Value, sampleDuration, sampleResident));
+            }
+        }
+
+        return new RepoContextDrainObservation(observedAt, outcome, budget.Value, duration, resident, stranded,
+            completed?.AsReadOnly());
     }
 
     /// <summary>
@@ -198,6 +222,24 @@ public static class RepoContextDrainHistory
             lines.Add($"{StrandedKey}={stranded.ToString(CultureInfo.InvariantCulture)}");
         }
 
+        if (observation.CompletedDrains is { } completed)
+        {
+            for (var i = 0; i < Math.Min(completed.Count, MaximumCompletedDrains); i++)
+            {
+                var sample = completed[i];
+                if (!IsCalibrationSample(sample))
+                {
+                    continue;
+                }
+
+                var prefix = $"completed{i}";
+                lines.Add($"{prefix}{ObservedAtKey}={sample.ObservedAtUtc.ToUniversalTime():O}");
+                lines.Add($"{prefix}{ResidentKey}={sample.ResidentActivations!.Value.ToString(CultureInfo.InvariantCulture)}");
+                lines.Add($"{prefix}{DurationKey}={sample.Duration!.Value.TotalSeconds.ToString("R", CultureInfo.InvariantCulture)}");
+                lines.Add($"{prefix}{BudgetKey}={sample.Budget.TotalSeconds.ToString("R", CultureInfo.InvariantCulture)}");
+            }
+        }
+
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
@@ -225,7 +267,35 @@ public static class RepoContextDrainHistory
                 Directory.CreateDirectory(directory);
             }
 
-            File.WriteAllText(path, Render(observation));
+            var previous = Read(path);
+            var completed = new List<RepoContextDrainObservation>(MaximumCompletedDrains);
+            if ((previous?.CompletedDrains ?? observation.CompletedDrains) is { } samples)
+            {
+                foreach (var sample in samples)
+                {
+                    if (IsCalibrationSample(sample))
+                    {
+                        completed.Add(sample with { CompletedDrains = null });
+                    }
+                }
+            }
+
+            if (previous is { } last && IsCalibrationSample(last)
+                && last.ObservedAtUtc != observation.ObservedAtUtc
+                && !completed.Exists(sample => sample.ObservedAtUtc == last.ObservedAtUtc))
+            {
+                completed.Add(last with { CompletedDrains = null });
+            }
+
+            if (completed.Count > MaximumCompletedDrains)
+            {
+                completed.RemoveRange(0, completed.Count - MaximumCompletedDrains);
+            }
+
+            observation = observation with { CompletedDrains = completed.Count == 0 ? null : completed.AsReadOnly() };
+            var temporaryPath = path + ".tmp";
+            File.WriteAllText(temporaryPath, Render(observation));
+            File.Move(temporaryPath, path, overwrite: true);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
@@ -233,6 +303,12 @@ public static class RepoContextDrainHistory
             return false;
         }
     }
+
+    internal static bool IsCalibrationSample(RepoContextDrainObservation observation)
+        => observation.Outcome == RepoContextDrainOutcome.Completed
+            && observation.ResidentActivations is > 0
+            && observation.Duration > TimeSpan.Zero
+            && observation.StrandedActivations is null or 0;
 
     private static bool TryReadCount(
         IReadOnlyDictionary<string, string> fields,
@@ -269,6 +345,11 @@ public static class RepoContextDrainHistory
             || double.IsNaN(seconds)
             || double.IsInfinity(seconds)
             || seconds < 0d)
+        {
+            return false;
+        }
+
+        if (seconds >= TimeSpan.MaxValue.TotalSeconds)
         {
             return false;
         }
