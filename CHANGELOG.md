@@ -60,7 +60,21 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **WAL - Partition-local floor-holder repair.** Candidate samples and admission compare each pin with its own partition floor, preserving distinct-leaf drive capacity without letting another partition authorize prefetch. Samples remain bounded. ([#3611](https://github.com/NSTA1/Orleans.Lattice/issues/3611)) (`Orleans.Lattice`)
+
 - **Explorer - Configuration save lifetime.** Configuration and history-retention replies no longer post success or failure messages after leaving the tree page. ([#4839](https://github.com/NSTA1/Orleans.Lattice/issues/4839)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Core - Single-shard timeout attribution.** SetMany preserves the exact callee timeout rather than reporting an envelope-budget breach; genuine local deadlines still refuse outstanding writes. ([#4833](https://github.com/NSTA1/Orleans.Lattice/issues/4833)) (`Orleans.Lattice`)
+
+- **Shard - Retryable consolidation cleanup.** The survivor retains its routing fence until leaf seals are durably lifted; leaf and shard persistence failures preserve the retry obligation, preventing retained rows from becoming unreadable after interrupted reclaim. ([#4832](https://github.com/NSTA1/Orleans.Lattice/issues/4832)) (`Orleans.Lattice`)
+
+- **Core - Domain refusals retain their meaning.** API, backup, replication, vector, resize and Explorer catch paths preserve callee domain faults rather than treating them as local deadlines, cancellation, busy work or missing data. Accepted undo intent stays pending on refusal. ([#3376](https://github.com/NSTA1/Orleans.Lattice/issues/3376)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Data`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Vector`, `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Explorer.UI`)
+
+- **Indexing - Resumed progress and membership freshness.** Embedding progress accumulates across resumed drives; membership counts expose the completed scan vintage instead of implying an instantaneous census. ([#3485](https://github.com/NSTA1/Orleans.Lattice/issues/3485)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Replay - Admission and recovery under pressure.** Admission uses circulating permits and measured wait time; caught-up leaves skip permit demand, refused cohorts spread retries, and stranded-leaf probes back off without declaring permanent failure. ([#4071](https://github.com/NSTA1/Orleans.Lattice/issues/4071), [#3612](https://github.com/NSTA1/Orleans.Lattice/issues/3612), [#3521](https://github.com/NSTA1/Orleans.Lattice/issues/3521)) (`Orleans.Lattice`)
+
+- **Docs - Scanned-through checkpoint rationale.** Replay progress names and capture comments distinguish scanned offsets from applied data and attempted checkpoint commits from durable coverage. Runtime behavior is unchanged. ([#3187](https://github.com/NSTA1/Orleans.Lattice/issues/3187), [#3189](https://github.com/NSTA1/Orleans.Lattice/issues/3189)) (`Orleans.Lattice`)
 
 - **Explorer - Backup reads stay current.** Schedule replies and errors stay with their tree, changing the capture tree discards late base-backup lookups, and starting an operation invalidates in-flight cached lists. ([#4821](https://github.com/NSTA1/Orleans.Lattice/issues/4821)) (`Orleans.Lattice.Explorer.UI`)
 
@@ -96,7 +110,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Config - Self-index tick above the timer ceiling.** A `LATTICE_SELFINDEX_TICK_SECONDS` longer than a grain timer can wait (about 49.7 days) failed repository onboarding and every keep-alive re-arm, and one just under it failed at random. The tick now runs at the ceiling. ([#3991](https://github.com/NSTA1/Orleans.Lattice/issues/3991)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **Host - A host built but never started leaked its metrics listener.** The RepoContext host's eagerly-built metrics collector, meters and activation census were released only at `ApplicationStopped`, so a host disposed without being started, or whose build threw, left a live process-wide `MeterListener` allocating on every Lattice measurement. They are now owned by the host and released when it is disposed. ([#3792](https://github.com/NSTA1/Orleans.Lattice/issues/3792)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+- **Host - Metrics listener disposal.** RepoContext releases its collector, meters and activation census when the host is disposed, including hosts never started and failed builds, preventing a leaked process-wide listener. ([#3792](https://github.com/NSTA1/Orleans.Lattice/issues/3792)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Vector - A NaN-scoring vector outranked real matches.** A vector with a non-finite component scored NaN, which compares false against every score, so it could take rank 0 or evict the k-th real hit depending on insertion order. NaN now ranks below every numeric score. ([#4291](https://github.com/NSTA1/Orleans.Lattice/issues/4291)) (`Orleans.Lattice.Vector`)
 
@@ -170,9 +184,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Gates - Two gates now see what they claim to.** The instrument priming enrolment gate compares each generator-owned row whole, so a stale row fails it, and the bucket closing-list guard counts soft references such as `Relates to #N` as claims. ([#4257](https://github.com/NSTA1/Orleans.Lattice/issues/4257), [#4121](https://github.com/NSTA1/Orleans.Lattice/issues/4121)) (`repository-wide`)
 
-- **Gates - The domain-fault marker guard reaches beyond core.** The `ILatticeDomainFault` guard moved to a shared base that each package enrols in. `Orleans.Lattice.Replication` is now scanned alongside core; the remaining packages are tracked separately. ([#3375](https://github.com/NSTA1/Orleans.Lattice/issues/3375)) (`repository-wide`)
+- **Gates - Domain-fault coverage across packages.** The shared guard now enrolls all remaining exception-declaring packages, and their domain refusals carry the marker without changing exception bases or wire identities. ([#3375](https://github.com/NSTA1/Orleans.Lattice/issues/3375), [#4562](https://github.com/NSTA1/Orleans.Lattice/issues/4562)) (`repository-wide`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Data`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Vector`, `Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **Performance - Benchmark cohorts no longer overlap a draining revision.** The Azure Container Apps rig took a silo-count change as done once the latest revision was ready, so a superseded revision drained into the next cohort. Scaling and parking now wait until every superseded revision has retired. ([#3588](https://github.com/NSTA1/Orleans.Lattice/issues/3588)) (`repository-wide`)
+- **Performance - Benchmark cohort isolation.** Scaling and parking the Azure Container Apps rig wait for superseded revisions to retire, preventing a draining silo from contaminating the next cohort. ([#3588](https://github.com/NSTA1/Orleans.Lattice/issues/3588)) (`repository-wide`)
 
 ### Security
 
