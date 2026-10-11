@@ -1401,7 +1401,9 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// <para>
     /// Idempotent: reclaiming a slot that is not sealed is a no-op and
     /// contributes nothing to the returned count, so a re-driven consolidation
-    /// converges. Slots recorded under a different virtual shard count are
+    /// converges. The shard routing fence is kept until every leaf has durably
+    /// lifted its seal, so a failed leaf call remains retryable after shard
+    /// reactivation. Slots recorded under a different virtual shard count are
     /// left untouched. Throws
     /// <see cref="InvalidOperationException"/> when an adaptive split on this
     /// shard is actively migrating one of the requested slots away.

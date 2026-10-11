@@ -36,6 +36,34 @@ public partial class TreeShardConsolidationGrainTests
     private static Harness Reactivate(Harness previous)
         => CreateGrain(existingState: previous.State, leafEntries: DonorChain());
 
+    [Test]
+    public async Task RunConsolidationPass_reclaim_timeout_retries_swap_before_publishing_survivor()
+    {
+        var first = CreateGrain(
+            existingState: InFlightState(ShardConsolidationPhase.Swap),
+            leafEntries: DonorChain());
+        first.Survivor.ReclaimSlotsAsync(Arg.Any<int[]>(), VirtualShardCount)
+            .Returns(Task.FromException<int>(new TimeoutException("survivor leaf unseal timed out")));
+
+        Assert.ThrowsAsync<TimeoutException>(() => first.Grain.RunConsolidationPassAsync());
+
+        Assert.That(first.State.State.Phase, Is.EqualTo(ShardConsolidationPhase.Swap));
+        Assert.That(first.State.State.InProgress, Is.True);
+        Assert.That(first.Log.Entries.Count(e => e == "survivor.MergeMany"), Is.GreaterThan(0),
+            "The authoritative drain must actually have run before reclaim.");
+        Assert.That(first.Log.Entries, Does.Not.Contain("registry.ReassignSlots"),
+            "A failed reclaim must not publish a survivor with sealed leaves.");
+        await first.Donor.DidNotReceive().RetireAsync();
+
+        var resumed = Reactivate(first);
+        await resumed.Grain.RunConsolidationPassAsync();
+
+        await resumed.Survivor.Received(1).ReclaimSlotsAsync(Arg.Any<int[]>(), VirtualShardCount);
+        Assert.That(resumed.Log.IndexOf("registry.ReassignSlots"),
+            Is.GreaterThan(resumed.Log.IndexOf("survivor.ReclaimSlots")));
+        AssertFoldLanded(resumed);
+    }
+
     private static void AssertFoldLanded(Harness h)
     {
         Assert.Multiple(() =>

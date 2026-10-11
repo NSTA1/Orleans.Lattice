@@ -91,22 +91,36 @@ internal sealed partial class ShardRootGrain
         var removed = 0;
         for (var i = 0; i < sortedSlots.Length; i++)
         {
-            if (moved.Remove(sortedSlots[i])) removed++;
+            if (moved.ContainsKey(sortedSlots[i])) removed++;
         }
 
         if (removed == 0) return 0;
 
-        if (moved.Count == 0)
+        // Keep the routing fence until every leaf has durably lifted its seal.
+        // Removing it first loses the retry obligation if a leaf RPC fails:
+        // a reactivated shard sees no moved slots and skips the remaining
+        // leaves, which still return null for retained keys (issue #4832).
+        // The coordinator has already drained the frozen donor, so unsealed
+        // leaf data is authoritative, while routed reads remain fenced here.
+        var leavesUnmarked = await UnmarkLeavesMovedAwayAsync(sortedSlots, virtualShardCount);
+
+        var remaining = new Dictionary<int, int>(moved);
+        for (var i = 0; i < sortedSlots.Length; i++)
+            remaining.Remove(sortedSlots[i]);
+        state.State.MovedAwaySlots = remaining;
+        if (remaining.Count == 0)
             state.State.MovedAwayVirtualShardCount = null;
 
-        await WriteShardStateAsync();
-
-        // Lift the leaf-side seal after the shard-side record is durable. The
-        // ordering matters on crash recovery: a shard that has persisted the
-        // reclaim but not yet reached every leaf is re-driven by the
-        // coordinator's idempotent retry, whereas the reverse order could
-        // leave leaves serving slots the shard record still rejects.
-        var leavesUnmarked = await UnmarkLeavesMovedAwayAsync(sortedSlots, virtualShardCount);
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch
+        {
+            state.State.MovedAwaySlots = moved;
+            state.State.MovedAwayVirtualShardCount = recordedVsc;
+            throw;
+        }
 
         logger.LogInformation(
             "Shard {ShardIndex} of tree {TreeId} reclaimed {SlotCount} virtual slot(s) across {LeafCount} leaf/leaves during consolidation.",

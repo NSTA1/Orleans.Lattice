@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public class ShardRootGrainConsolidationTests
+public partial class ShardRootGrainConsolidationTests
 {
     private const string TreeId = "consolidation-tree";
     private const int SurvivorShardIndex = 0;
@@ -34,14 +34,18 @@ public class ShardRootGrainConsolidationTests
         public required ShardRootGrain Grain { get; init; }
         public required IBPlusLeafGrain Leaf { get; init; }
         public required FakePersistentState<ShardRootState> State { get; init; }
+        public required IGrainFactory Factory { get; init; }
     }
 
-    private static Harness CreateHarness(int shardIndex = SurvivorShardIndex, int leafChainLength = 1)
+    private static Harness CreateHarness(
+        int shardIndex = SurvivorShardIndex,
+        int leafChainLength = 1,
+        FakePersistentState<ShardRootState>? persistentState = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", $"{TreeId}/{shardIndex}"));
 
-        var state = new FakePersistentState<ShardRootState>();
+        var state = persistentState ?? new FakePersistentState<ShardRootState>();
         state.State.RootNodeId = GrainId.Create("leaf", "leaf-0");
         state.State.RootIsLeaf = true;
 
@@ -69,7 +73,7 @@ public class ShardRootGrainConsolidationTests
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance,
             TestMutationObservers.NoObservers());
 
-        return new Harness { Grain = grain, Leaf = leaf, State = state };
+        return new Harness { Grain = grain, Leaf = leaf, State = state, Factory = factory };
     }
 
     private static void SealSlots(Harness harness, params int[] slots)
@@ -165,24 +169,28 @@ public class ShardRootGrainConsolidationTests
     }
 
     [Test]
-    public async Task ReclaimSlots_persists_before_touching_the_leaves()
+    public async Task ReclaimSlots_keeps_the_shard_fence_until_every_leaf_is_unsealed()
     {
-        // Ordering matters on crash recovery: a shard that persisted the
-        // reclaim but has not yet reached every leaf is re-driven by the
-        // coordinator's idempotent retry, whereas the reverse order could
-        // leave leaves serving slots the shard record still rejects.
+        // A failed leaf RPC must leave the shard fence as the durable retry
+        // obligation, rather than making the next reclaim skip the leaves.
         var harness = CreateHarness(leafChainLength: 2);
         SealSlots(harness, 1);
 
         var writesAtFirstLeafCall = -1;
+        var fencedLeaves = 0;
         harness.Leaf
             .When(l => l.UnmarkSlotsMovedAwayAsync(Arg.Any<int[]>(), Arg.Any<int>()))
-            .Do(_ => writesAtFirstLeafCall = writesAtFirstLeafCall < 0 ? harness.State.WriteCount : writesAtFirstLeafCall);
+            .Do(_ =>
+            {
+                writesAtFirstLeafCall = writesAtFirstLeafCall < 0 ? harness.State.WriteCount : writesAtFirstLeafCall;
+                if (harness.State.State.MovedAwaySlots.ContainsKey(1)) fencedLeaves++;
+            });
 
         await harness.Grain.ReclaimSlotsAsync([1], VirtualShardCount);
 
-        Assert.That(writesAtFirstLeafCall, Is.GreaterThanOrEqualTo(1),
-            "The shard-level reclaim must be durable before any leaf seal is lifted.");
+        Assert.That(writesAtFirstLeafCall, Is.Zero);
+        Assert.That(fencedLeaves, Is.EqualTo(2), "Every leaf must be unsealed while the routing fence still holds.");
+        Assert.That(harness.State.WriteCount, Is.EqualTo(1));
     }
 
     // --- ReclaimSlotsAsync: idempotence and safety ---
