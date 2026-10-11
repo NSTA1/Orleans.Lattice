@@ -1,0 +1,11 @@
+MODULE: RedirectInstalledOnCompletionRestoreOmitsRedirect
+TARGET: RedirectInstalledOnCompletion
+CLASS: Invariant
+SUMMARY: restore completes without arming the retained copy for stale routers
+PERTURBS: RestoreRedirect
+
+--- FIND
+    /\ redirect' = [redirect EXCEPT ![source] = "restored"]
+--- REPLACE
+    /\ redirect' = redirect
+--- END

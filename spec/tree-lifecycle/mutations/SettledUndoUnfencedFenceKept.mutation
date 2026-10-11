@@ -1,0 +1,11 @@
+MODULE: SettledUndoUnfencedFenceKept
+TARGET: SettledUndoUnfenced
+CLASS: Invariant
+SUMMARY: undo returns with the original physical shards still fenced
+PERTURBS: UndoClear
+
+--- FIND
+    /\ fenced' = {} /\ mirror' = FALSE /\ undoable' = FALSE
+--- REPLACE
+    /\ fenced' = fenced /\ mirror' = FALSE /\ undoable' = FALSE
+--- END

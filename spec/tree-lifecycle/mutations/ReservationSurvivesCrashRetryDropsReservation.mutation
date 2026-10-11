@@ -1,0 +1,14 @@
+MODULE: ReservationSurvivesCrashRetryDropsReservation
+TARGET: ReservationSurvivesCrash
+CLASS: Action
+SUMMARY: an unsuccessful retry silently drops the durable alias reservation
+PERTURBS: Retry
+
+--- FIND
+    /\ running' = TRUE
+    /\ UNCHANGED <<alias, maps, operation, phase, source, captured, copied, fenced,
+--- REPLACE
+    /\ running' = FALSE
+    /\ operation' = "none"
+    /\ UNCHANGED <<alias, maps, phase, source, captured, copied, fenced,
+--- END

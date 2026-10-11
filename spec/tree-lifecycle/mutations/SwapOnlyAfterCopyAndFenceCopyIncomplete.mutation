@@ -1,0 +1,13 @@
+MODULE: SwapOnlyAfterCopyAndFenceCopyIncomplete
+TARGET: SwapOnlyAfterCopyAndFence
+CLASS: Invariant
+SUMMARY: the snapshot advances while a routed shard has not been copied
+PERTURBS: CopyComplete
+
+--- FIND
+    /\ copied = captured
+    /\ phase' = "fence"
+--- REPLACE
+    /\ copied \subseteq captured
+    /\ phase' = "fence"
+--- END

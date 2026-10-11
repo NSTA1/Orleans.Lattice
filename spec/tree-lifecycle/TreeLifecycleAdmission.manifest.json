@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-admission",
+  "refinement": "RefinementAdmission.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 4,
+    "properties": 5,
+    "actions": 17,
+    "mutations": 17,
+    "behaviourRows": 24,
+    "distinctStates": 198
+  },
+  "variants": {
+    "ReplicatedTwoFaults": { "distinctStates": 114 }
+  }
+}

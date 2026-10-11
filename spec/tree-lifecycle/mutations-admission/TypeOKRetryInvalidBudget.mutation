@@ -1,0 +1,15 @@
+MODULE: TypeOKRetryInvalidBudget
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: retry recovers a fault budget outside the declared domain
+PERTURBS: Retry
+
+--- FIND
+    /\ running' = TRUE
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, undo,
+                   cleared, replicated, enabledReplication, faults, compensated>>
+--- REPLACE
+    /\ running' = TRUE /\ faults' = MaxFaults + 1
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, undo,
+                   cleared, replicated, enabledReplication, compensated>>
+--- END

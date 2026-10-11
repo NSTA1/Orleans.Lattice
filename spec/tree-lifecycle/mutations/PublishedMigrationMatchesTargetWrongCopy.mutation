@@ -1,0 +1,13 @@
+MODULE: PublishedMigrationMatchesTargetWrongCopy
+TARGET: PublishedMigrationMatchesTarget
+CLASS: Invariant
+SUMMARY: a late migration writes its diff onto a new alias target rather than refusing it
+PERTURBS: MigrationPublish
+
+--- FIND
+    /\ operation \notin {"resize", "undo"} /\ alias = migrationCopy
+    /\ maps' = [maps EXCEPT ![migrationCopy] = target]
+--- REPLACE
+    /\ operation \notin {"resize", "undo"}
+    /\ maps' = [maps EXCEPT ![alias] = target]
+--- END

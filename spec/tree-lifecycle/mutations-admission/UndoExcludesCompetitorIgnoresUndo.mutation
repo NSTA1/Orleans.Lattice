@@ -1,0 +1,11 @@
+MODULE: UndoExcludesCompetitorIgnoresUndo
+TARGET: UndoExcludesCompetitor
+CLASS: Action
+SUMMARY: competing work ignores a pending or running undo
+PERTURBS: CompetitorAdmit
+
+--- FIND
+    /\ resize \notin {"announced", "active"} /\ undo \in {"idle", "done"}
+--- REPLACE
+    /\ resize \notin {"announced", "active"}
+--- END

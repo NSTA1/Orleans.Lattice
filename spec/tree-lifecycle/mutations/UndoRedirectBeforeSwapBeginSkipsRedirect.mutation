@@ -1,0 +1,11 @@
+MODULE: UndoRedirectBeforeSwapBeginSkipsRedirect
+TARGET: UndoRedirectBeforeSwap
+CLASS: Invariant
+SUMMARY: undo starts after the redirect step instead of arming the resized copy
+PERTURBS: UndoBegin
+
+--- FIND
+    /\ operation' = "undo" /\ phase' = "redirect"
+--- REPLACE
+    /\ operation' = "undo" /\ phase' = "clear"
+--- END

@@ -1,0 +1,18 @@
+MODULE: TypeOkRetryInvalidFaultBudget
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: retry restores a crash counter outside the declared finite budget
+PERTURBS: Retry
+
+--- FIND
+    /\ running' = TRUE
+    /\ UNCHANGED <<alias, maps, operation, phase, source, captured, copied, fenced,
+                   redirect, mirror, undoable, migration, target, migrationCopy,
+                   faults, deleted, resizeUsed, restoreUsed, reshardUsed>>
+--- REPLACE
+    /\ running' = TRUE
+    /\ faults' = MaxFaults + 1
+    /\ UNCHANGED <<alias, maps, operation, phase, source, captured, copied, fenced,
+                   redirect, mirror, undoable, migration, target, migrationCopy,
+                   deleted, resizeUsed, restoreUsed, reshardUsed>>
+--- END

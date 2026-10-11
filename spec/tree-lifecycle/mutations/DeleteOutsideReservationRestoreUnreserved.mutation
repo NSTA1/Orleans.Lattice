@@ -1,0 +1,11 @@
+MODULE: DeleteOutsideReservationRestoreUnreserved
+TARGET: DeleteOutsideReservation
+CLASS: Invariant
+SUMMARY: a shadow build can start on an already deleted tree
+PERTURBS: RestoreBegin
+
+--- FIND
+    /\ running /\ ~deleted /\ ~restoreUsed
+--- REPLACE
+    /\ running /\ ~restoreUsed
+--- END

@@ -1,0 +1,11 @@
+MODULE: NoMigrationDuringResizeBeginIgnoresReshard
+TARGET: NoMigrationDuringResize
+CLASS: Invariant
+SUMMARY: resize captures a map while an admitted reshard is changing it
+PERTURBS: ResizeBegin
+
+--- FIND
+    /\ operation = "none" /\ migration \in {"idle", "done"}
+--- REPLACE
+    /\ operation = "none"
+--- END

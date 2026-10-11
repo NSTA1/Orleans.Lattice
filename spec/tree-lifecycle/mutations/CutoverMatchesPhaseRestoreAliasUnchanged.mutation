@@ -1,0 +1,11 @@
+MODULE: CutoverMatchesPhaseRestoreAliasUnchanged
+TARGET: CutoverMatchesPhase
+CLASS: Invariant
+SUMMARY: restore advances past its swap without moving the alias to the shadow
+PERTURBS: RestoreSwap
+
+--- FIND
+    /\ alias' = "restored" /\ phase' = "redirect"
+--- REPLACE
+    /\ alias' = alias /\ phase' = "redirect"
+--- END

@@ -1,0 +1,11 @@
+MODULE: ReshardReturnsCompletionNeverBanks
+TARGET: ReshardReturns
+CLASS: Temporal
+SUMMARY: the target is reached but durable reshard completion never advances
+PERTURBS: ReshardComplete
+
+--- FIND
+    /\ migration' = "done"
+--- REPLACE
+    /\ migration' = migration
+--- END

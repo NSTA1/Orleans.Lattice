@@ -1,0 +1,11 @@
+MODULE: RedirectInstalledOnCompletionRevertKeepsOldRedirect
+TARGET: RedirectInstalledOnCompletion
+CLASS: Invariant
+SUMMARY: revert returns without clearing the previous redirect and arming the shadow
+PERTURBS: RevertRedirect
+
+--- FIND
+    /\ redirect' = [redirect EXCEPT ![source] = "none", !["restored"] = source]
+--- REPLACE
+    /\ redirect' = redirect
+--- END

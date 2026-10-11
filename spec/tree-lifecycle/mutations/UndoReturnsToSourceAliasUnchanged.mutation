@@ -1,0 +1,11 @@
+MODULE: UndoReturnsToSourceAliasUnchanged
+TARGET: UndoReturnsToSource
+CLASS: Invariant
+SUMMARY: undo reports its swap while keeping the resized alias
+PERTURBS: UndoSwap
+
+--- FIND
+    /\ alias' = source /\ phase' = "clear"
+--- REPLACE
+    /\ alias' = alias /\ phase' = "clear"
+--- END

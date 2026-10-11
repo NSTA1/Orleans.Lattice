@@ -1,0 +1,11 @@
+MODULE: CopyCoversRoutedShardsPinnedRange
+TARGET: CopyCoversRoutedShards
+CLASS: Invariant
+SUMMARY: resize enumerates the pinned count instead of sparse routed shard indices
+PERTURBS: ResizeBegin
+
+--- FIND
+    /\ captured' = Owners(maps[alias])
+--- REPLACE
+    /\ captured' = {0, 1}
+--- END

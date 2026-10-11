@@ -1,0 +1,11 @@
+MODULE: OperationReturnsReservationNeverReleased
+TARGET: OperationReturns
+CLASS: Temporal
+SUMMARY: completion persists but the idle reminder never releases its reservation
+PERTURBS: ReleaseReservation
+
+--- FIND
+    /\ operation' = "none" /\ phase' = "idle"
+--- REPLACE
+    /\ operation' = operation /\ phase' = "idle"
+--- END

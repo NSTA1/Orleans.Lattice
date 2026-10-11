@@ -1,0 +1,11 @@
+MODULE: CutoverMatchesPhaseRevertAliasUnchanged
+TARGET: CutoverMatchesPhase
+CLASS: Invariant
+SUMMARY: revert advances to redirect fixup without moving the alias back
+PERTURBS: RevertSwap
+
+--- FIND
+    /\ alias' = source /\ phase' = "redirect"
+--- REPLACE
+    /\ alias' = alias /\ phase' = "redirect"
+--- END

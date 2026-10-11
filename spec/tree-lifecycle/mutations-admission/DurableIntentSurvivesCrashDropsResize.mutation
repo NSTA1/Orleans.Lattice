@@ -1,0 +1,13 @@
+MODULE: DurableIntentSurvivesCrashDropsResize
+TARGET: DurableIntentSurvives
+CLASS: Action
+SUMMARY: a crash erases the published resize record
+PERTURBS: Crash
+
+--- FIND
+    /\ running' = FALSE /\ faults' = faults + 1
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, undo,
+--- REPLACE
+    /\ running' = FALSE /\ faults' = faults + 1 /\ resize' = "idle"
+    /\ UNCHANGED <<competitor, resizeUsed, competitorUsed, alias, undo,
+--- END

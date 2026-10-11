@@ -1,0 +1,11 @@
+MODULE: UndoSettlesRetryRechecksReplication
+TARGET: UndoSettles
+CLASS: Temporal
+SUMMARY: retry refuses an already-cleared unwind when replication later becomes enabled
+PERTURBS: UndoFinish
+
+--- FIND
+    /\ running /\ undo = "swapping" /\ cleared
+--- REPLACE
+    /\ running /\ undo = "swapping" /\ cleared /\ ~replicated
+--- END

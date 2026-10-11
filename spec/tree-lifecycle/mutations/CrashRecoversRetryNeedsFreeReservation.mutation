@@ -1,0 +1,14 @@
+MODULE: CrashRecoversRetryNeedsFreeReservation
+TARGET: CrashRecovers
+CLASS: Temporal
+SUMMARY: retry refuses the reservation that its own interrupted operation still holds
+PERTURBS: Retry
+
+--- FIND
+    /\ ~running
+    /\ running' = TRUE
+--- REPLACE
+    /\ ~running
+    /\ operation = "none"
+    /\ running' = TRUE
+--- END

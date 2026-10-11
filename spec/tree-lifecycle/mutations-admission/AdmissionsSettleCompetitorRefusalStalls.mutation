@@ -1,0 +1,21 @@
+MODULE: AdmissionsSettleCompetitorRefusalStalls
+TARGET: AdmissionsSettle
+CLASS: Temporal
+SUMMARY: a refused competitor retains its announcement and treats a completed resize record as permanently busy
+PERTURBS: CompetitorRefuse, CompetitorAdmit
+
+--- FIND
+    /\ resize \in {"announced", "active"} \/ undo \notin {"idle", "done"}
+    /\ competitor' = "done"
+--- REPLACE
+    /\ resize \in {"announced", "active"} \/ undo \notin {"idle", "done"}
+    /\ competitor' = "announced"
+--- END
+
+--- FIND
+    /\ resize \notin {"announced", "active"} /\ undo \in {"idle", "done"}
+    /\ competitor' = "active"
+--- REPLACE
+    /\ resize = "idle" /\ undo \in {"idle", "done"}
+    /\ competitor' = "active"
+--- END
