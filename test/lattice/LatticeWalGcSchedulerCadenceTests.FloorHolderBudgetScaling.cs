@@ -169,20 +169,24 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         {
             Assert.That(equalPartitionBudgets, Is.All.EqualTo(4));
             Assert.That(equalPartitionBudgets.Sum(), Is.EqualTo(CandidateBudgetAt(4_096)));
-            Assert.That(skewedPartitionBudgets[0], Is.EqualTo(8));
-            Assert.That(skewedPartitionBudgets.Skip(1), Is.All.EqualTo(1));
-            Assert.That(skewedPartitionBudgets.Sum(), Is.LessThanOrEqualTo(CandidateBudgetAt(2_104)));
+            Assert.That(skewedPartitionBudgets, Is.All.EqualTo(4));
+            Assert.That(skewedPartitionBudgets.Skip(1), Is.All.EqualTo(4));
+            Assert.That(
+                skewedPartitionBudgets.Sum(),
+                Is.LessThanOrEqualTo(Math.Max(
+                    CandidateBudgetAt(2_104),
+                    8 * LatticeWalGcScheduler.MaxReactivationTouchesPerPass)));
             Assert.That(
                 PartitionCandidateBudgetAt(0, 4_096, 8),
-                Is.EqualTo(1),
-                "a newly observed partition still retains its own offset-floor candidate.");
+                Is.EqualTo(LatticeWalGcScheduler.MaxReactivationTouchesPerPass),
+                "a newly observed partition must retain enough candidates to fill one distinct-leaf drive pass.");
             Assert.That(
                 PartitionCandidateBudgetAt(int.MaxValue, int.MaxValue),
                 Is.EqualTo(LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample));
             Assert.That(
                 PartitionCandidateBudgetAt(1, int.MaxValue, 300),
-                Is.EqualTo(1),
-                "when active partitions outnumber the aggregate cap, each still retains its floor slot.");
+                Is.EqualTo(LatticeWalGcScheduler.MaxReactivationTouchesPerPass),
+                "each partition retains enough candidates for a drive pass even when the active partition count exceeds the aggregate tree budget.");
             Assert.That(
                 LatticeWalGcScheduler.ScaleUnmeasuredFloorHolderPartitionBudget(8, 1),
                 Is.EqualTo(8));
@@ -192,8 +196,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 "before partition populations are measured, the configured partition count must keep the aggregate initial sample within the tree budget.");
             Assert.That(
                 LatticeWalGcScheduler.ScaleUnmeasuredFloorHolderPartitionBudget(8, 12),
-                Is.EqualTo(1),
-                "every active partition retains one floor slot even when partition count exceeds the tree budget.");
+                Is.EqualTo(LatticeWalGcScheduler.MaxReactivationTouchesPerPass),
+                "each unmeasured partition retains enough candidates for one drive pass even when partition count exceeds the tree budget.");
         });
     }
 

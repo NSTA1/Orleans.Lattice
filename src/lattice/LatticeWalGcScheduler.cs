@@ -748,7 +748,7 @@ internal sealed class LatticeWalGcScheduler(
         int treePopulation,
         int partitionCount)
     {
-        if (partitionPopulation <= 0 || treePopulation <= 0 || partitionCount <= 0)
+        if (partitionCount <= 0)
         {
             return 1;
         }
@@ -758,13 +758,23 @@ internal sealed class LatticeWalGcScheduler(
             MaxFloorHolderClassificationsPerSweep,
             MaxFloorHolderRemedyCandidatesPerSample,
             FloorHolderPinsPerRemedyCandidate);
-        var budgetAfterFloorSlots = Math.Max(0, treeBudget - partitionCount);
-        var proportionalShare = 1 + (int)((long)budgetAfterFloorSlots * partitionPopulation / treePopulation);
-        return Math.Clamp(proportionalShare, 1, treeBudget);
+        var partitionMinimum = Math.Min(treeBudget, MaxReactivationTouchesPerPass);
+        var budgetAfterPartitionMinimums = (int)Math.Max(
+            0L,
+            treeBudget - ((long)partitionMinimum * partitionCount));
+        var proportionalShare = partitionMinimum;
+        if (partitionPopulation > 0 && treePopulation > 0)
+        {
+            proportionalShare += (int)((long)budgetAfterPartitionMinimums * partitionPopulation / treePopulation);
+        }
+
+        return Math.Clamp(proportionalShare, partitionMinimum, treeBudget);
     }
 
     internal static int ScaleUnmeasuredFloorHolderPartitionBudget(int treeBudget, int partitionCount) =>
-        Math.Max(1, treeBudget / Math.Max(1, partitionCount));
+        Math.Max(
+            Math.Min(treeBudget, MaxReactivationTouchesPerPass),
+            treeBudget / Math.Max(1, partitionCount));
 
     private int ScaleFloorHolderBudget(string treeId, int baseBudget, int ceiling, int pinsPerUnit) =>
         ScaleFloorHolderBudget(
@@ -6103,21 +6113,21 @@ internal sealed class LatticeWalGcScheduler(
         // PerSweep on any tree small enough not to need more, and scales with the
         // measured tree population above that (issue #3279). Offset sample caps
         // divide one tree-wide offset-candidate budget proportionally across the
-        // measured partition populations, with at least one slot per partition
-        // so every partition's floor remains represented; before the first
-        // partition measurement, the same cap is divided evenly using the
-        // tree's pinned partition count. The two
+        // measured partition populations, with enough slots per partition to
+        // cover one pass's distinct-leaf touch budget; before the first
+        // partition measurement, the same minimum is combined with an even
+        // division using the tree's pinned partition count. The two
         // were one constant until the remedy that #3178 hung off this sample was
         // measured starving on it: the pool saturated at 8 on 43 of 43 sweeps of a
         // 20,992-pin tree while the drive it feeds averaged 1.79 of its own budget
         // of 4. Collected only when this arm owes a classification, and bounded in
         // memory rather than sorted at the end. Offset-bearing candidates are
         // kept in a separate list per partition, so the total remains bounded
-        // by the tree-wide candidate budget, except when there are more active
-        // partitions than that budget (one floor slot is mandatory per active
-        // partition). This spends a bounded sample allocation per active
-        // partition: sharing one list would make busy partitions evict the only
-        // floor candidate from another partition again (issue #3611).
+        // by max(tree-wide candidate budget, partition count x touch budget).
+        // Sharing one list would make busy partitions evict the only floor
+        // candidate from another partition again (issue #3611), while a single
+        // slot per partition can starve distinct-leaf drives when several
+        // leaves share a partition floor.
         //
         // The unusable list is global because its pins constrain the HLC floor;
         // offset-bearing lists are partition-local because each offset constrains
