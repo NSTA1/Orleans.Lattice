@@ -50,6 +50,7 @@ public partial class TreeShardSplitGrainTests
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = physicalShardCount,
+                ShardMap = existingMap ?? ShardMap.CreateDefault(virtualShardCount, physicalShardCount),
             }));
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory);
         // Default allocation hands back currentMaxFromMap + 1 - matches the
@@ -132,6 +133,17 @@ public partial class TreeShardSplitGrainTests
         Assert.That(state.State.OriginalShardMap, Is.Not.Null);
 
         await source.Received(1).BeginSplitAsync(2, Arg.Any<int[]>(), 16);
+    }
+
+    [Test]
+    public async Task InitiateSplit_reads_map_alias_and_fence_from_one_registry_entry()
+    {
+        var (grain, _, _, registry, _, _) = CreateGrain(virtualShardCount: 16, physicalShardCount: 2, sourceShardIndex: 0);
+
+        await grain.InitiateSplitStateAsync(0);
+
+        await registry.DidNotReceive().GetShardMapAsync(Arg.Any<string>());
+        await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
     }
 
     [Test]
