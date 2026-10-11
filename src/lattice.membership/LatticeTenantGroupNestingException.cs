@@ -10,6 +10,8 @@ namespace Orleans.Lattice.Membership;
 /// never join the tenant tier at all. The invariant is enforced for every caller,
 /// platform operators included, and the rejection is fail-closed: nothing is
 /// written before this exception is raised.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,7 +28,7 @@ namespace Orleans.Lattice.Membership;
 /// serializable type.
 /// </para>
 /// </remarks>
-public sealed class LatticeTenantGroupNestingException : ArgumentException
+public sealed class LatticeTenantGroupNestingException : ArgumentException, ILatticeDomainFault
 {
     /// <summary>
     /// The parent group id of the rejected edge. Empty on the parameterless /

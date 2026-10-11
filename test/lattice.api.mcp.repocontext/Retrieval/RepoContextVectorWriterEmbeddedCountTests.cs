@@ -202,6 +202,9 @@ public sealed class RepoContextVectorWriterEmbeddedCountTests
             Assert.That(served.Pending, Is.False,
                 "and reports it as current, because the walk stamped the memo at the "
                 + "generation the read observes.");
+            Assert.That(served.AsOf, Is.Not.Null);
+            Assert.That(writer.ReadEmbeddedCount(RepoId).AsOf, Is.EqualTo(served.AsOf),
+                "The passive health read must carry the same timestamp without refreshing.");
         });
     }
 

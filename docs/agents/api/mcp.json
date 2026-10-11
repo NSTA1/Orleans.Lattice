@@ -17291,7 +17291,7 @@
       ],
       "response": {
         "type": "RepoIndexProgress",
-        "shape": "Structured JSON projection of RepoIndexProgress returned by the handler, including pending/walking/reconciling/applying/vectorising/done phases and resetting while repocontext_reset_index sweeps. With source indexing disabled, accepted passes can report zero file, content and symbol counters because only agent-memory embedding runs."
+        "shape": "Structured JSON projection of RepoIndexProgress returned by the handler, including pending/walking/reconciling/applying/vectorising/done phases and resetting while repocontext_reset_index sweeps. filesEmbedded is stored-file work accumulated across resumed drives, monotonic within the same attempt and startedAt, reset for a fresh job, and not corpus coverage. With source indexing disabled, accepted passes can report zero file, content and symbol counters because only agent-memory embedding runs."
       },
       "errors": [
         {
@@ -17358,7 +17358,7 @@
       ],
       "response": {
         "type": "RepoContextRepoListResult",
-        "shape": "Structured JSON projection of RepoContextRepoListResult returned by the handler. In memory-only mode a registered repository remains listed with fileCount zero, and embeddedVectorCount can still be non-zero because memory entries are embedded sources."
+        "shape": "Structured JSON projection of RepoContextRepoListResult returned by the handler. Each row carries embeddedVectorCountAsOf, the UTC start of the completed membership scan that produced embeddedVectorCount; it is absent before the first completed scan and stays unchanged with the old count while embeddedVectorCountPending is true. The scan-time anchor exposes lag without promising a transactional snapshot or a live ANN passage count. In memory-only mode a registered repository remains listed with fileCount zero, and embeddedVectorCount can still be non-zero because memory entries are embedded sources."
       },
       "errors": [
         {

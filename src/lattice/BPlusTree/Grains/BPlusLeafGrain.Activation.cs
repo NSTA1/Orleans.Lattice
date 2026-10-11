@@ -558,7 +558,13 @@ internal sealed partial class BPlusLeafGrain
     /// cancellation as well as by acquisition: this is a process-wide static
     /// that is never rebuilt, so a leak on the cancel path would be permanent.
     /// </summary>
-    internal static int QueuedReplayPermitWaitersForTest => Volatile.Read(ref _queuedReplayPermitWaiters);
+    internal static int QueuedReplayPermitWaitersForTest => QueuedReplayPermitWaiters;
+
+    /// <summary>
+    /// Current silo-wide replay queue depth. This is pressure evidence, not
+    /// proof that any particular leaf is waiting for a replay permit.
+    /// </summary>
+    internal static int QueuedReplayPermitWaiters => Volatile.Read(ref _queuedReplayPermitWaiters);
 
     /// <summary>
     /// Test-only view of <see cref="_replayConcurrencyCeiling"/>. Exposed so a
@@ -1150,23 +1156,25 @@ internal sealed partial class BPlusLeafGrain
     /// <returns><see langword="true"/> when the caller may queue.</returns>
     /// <remarks>
     /// <para>
-    /// <b>The bound is derived from the resolved ceiling and from nothing else.</b>
-    /// The gate is a process-wide static sized from this silo's own CPU grant, so
-    /// a bound expressed as "N per permit" needs no retuning between a 2-vCPU box
-    /// and a 64-vCPU one. Silo count is deliberately not an input: scaling out
+    /// <b>The bound is derived from the permits still in circulation.</b>
+    /// The gate is a process-wide static sized from this silo's own CPU grant.
+    /// Withheld permits are subtracted from the resolved ceiling, so memory
+    /// backpressure shrinks the queue with its service capacity (issue #4071).
+    /// A bound expressed as "N per circulating permit" needs no retuning between
+    /// a 2-vCPU box and a 64-vCPU one. Silo count is deliberately not an input: scaling out
     /// adds pools rather than dividing one, so scaling this bound by cluster size
     /// would shrink aggregate replay capacity exactly as capacity was being added,
     /// and the resources the gate protects - local CPU, the local managed heap -
     /// have no cluster-wide term at all.
     /// </para>
     /// <para>
-    /// <b>Bulk is refused one whole ceiling's worth of queue earlier than
+    /// <b>Bulk is refused one circulating pool's worth of queue earlier than
     /// interactive, and that reservation is what makes this a priority and not
     /// merely a cap.</b> A bound that refused both classes at the same depth would
     /// refuse the interactive read as readily as the <c>O(corpus)</c> walk that
     /// filled the queue - the walk would simply win the race more often, because
-    /// it arrives in bulk. Reserving the last <c>ceiling</c> slots for interactive
-    /// work means a saturated gate still admits a full ceiling of foreground reads
+    /// it arrives in bulk. Reserving one slot per circulating permit for interactive
+    /// work means a saturated gate still admits a circulating pool of foreground reads
     /// while background fan-out is turned away.
     /// </para>
     /// <para>
@@ -1197,9 +1205,10 @@ internal sealed partial class BPlusLeafGrain
             return true;
         }
 
-        var interactive = (int)Math.Min(int.MaxValue, (long)ceiling * queueDepthPerPermit);
+        var circulating = CirculatingReplayPermits(ceiling, Volatile.Read(ref _withheldReplayPermits));
+        var interactive = (int)Math.Min(int.MaxValue, (long)circulating * queueDepthPerPermit);
         bound = admissionClass == LatticeReplayAdmissionClass.Bulk
-            ? Math.Max(1, interactive - ceiling)
+            ? Math.Max(1, interactive - circulating)
             : interactive;
 
         return admitted < bound;
@@ -1543,8 +1552,8 @@ internal sealed partial class BPlusLeafGrain
         TimeSpan maxQueueWait)
     {
         var head =
-            $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), at or "
-            + $"above the {bound} admitted for a {admissionClass} caller against a ceiling of "
+            $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), with a "
+            + $"limit of {bound} admitted for a {admissionClass} caller against a ceiling of "
             + $"{ceiling} permit(s), and ";
 
         if (verdict == ReplayPermitDrainVerdict.NoProgress)
@@ -1570,9 +1579,10 @@ internal sealed partial class BPlusLeafGrain
             + $"the queue is not draining: the smoothed queue wait is {smoothedWait.TotalMilliseconds:F0} ms, "
             + $"at or above the {nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} of "
             + $"{maxQueueWait.TotalMilliseconds:F0} ms. This activation was refused admission rather than queued "
-            + "behind work it could not outlast. Retry after a backoff, or raise "
+            + "behind work it could not outlast, even below the queue-depth limit. Retry after a backoff. "
             + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitQueueDepthPerPermit)} "
-            + "(zero restores an unbounded queue). If orleans.lattice.wal.replay.permit_hold is long, the "
+            + "set to zero disables replay admission refusals; raising it does not cure a slow queue. "
+            + "If orleans.lattice.wal.replay.permit_hold is long, the "
             + "replays themselves are slow and the queue is a symptom.";
     }
 
@@ -1619,21 +1629,19 @@ internal sealed partial class BPlusLeafGrain
         // fan-out and every leaf it reaches inherits the classification without
         // knowing the seam exists.
         //
-        // BOTH halves must hold (issue #3290). The depth bound alone is derived
-        // purely from supply - `ceiling` is min(ProcessorCount, ContainerCpuGrant)
-        // - while the queue is filled purely by demand, cluster-wide fan-out that
-        // contains no CPU term. So it refused the SAME healthy fan-out on a small
-        // host that it waved through on a large one: measured at peak 31 waiters
-        // against a bound of 64 on 16 processors, and peak 40 against a bound of
-        // 16 on 4, where it refused ordinary registry activations. Depth is
-        // therefore necessary but not sufficient; the queue must also be failing
-        // to drain, which is the only half that carries a latency term and the
-        // only half that distinguishes a wide fan-out from a wedged one.
+        // Depth alone still cannot refuse healthy fan-out (#3290). A fresh
+        // excessive mean is evidence of harm even below that bound (#4071).
+        // No-progress still needs depth: quietness alone must not refuse a new
+        // burst. A disabled bound and an empty queue retain unconditional admission.
         var admissionClass = LatticeReplayAdmissionContext.Current;
-        if (!TryAdmitReplayPermitWaiter(
-                options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound)
-            && ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out var sinceProgress)
-                is var verdict and not ReplayPermitDrainVerdict.Draining)
+        var belowBound = TryAdmitReplayPermitWaiter(
+            options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound);
+        var sinceProgress = TimeSpan.Zero;
+        var verdict = bound > 0 && queued > 0
+            ? ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out sinceProgress)
+            : ReplayPermitDrainVerdict.Draining;
+        if (verdict == ReplayPermitDrainVerdict.WaitExceeded
+            || (!belowBound && verdict == ReplayPermitDrainVerdict.NoProgress))
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
 
@@ -4108,15 +4116,15 @@ internal sealed partial class BPlusLeafGrain
         // _pendingTx bucket is fully populated across every partition
         // before any terminal drains it. See the DeferredTerminal
         // docstring for the saga atomicity rationale.
-        // Per-partition max-applied is tracked so the final reconciled
+        // Per-partition scanned-through progress is tracked so the final reconciled
         // SetCheckpointOffsetAsync (after pass 2's terminals lift the
-        // pending-tx clamps) advances each partition's checkpoint to
-        // the actual highest offset observed during replay, not the
-        // pass-1 clamped value.
+        // pending-tx clamps) advances each partition's checkpoint to the
+        // highest offset scanned during replay, including records skipped as
+        // another leaf's work (#2270), not the pass-1 clamped value.
         var deferredTerminals = new List<DeferredTerminal>();
         var deferredOffsets = new DeferredOffsetLedger(partitionCount);
-        var perPartitionMaxApplied = new long[partitionCount];
-        for (var p = 0; p < partitionCount; p++) perPartitionMaxApplied[p] = -1L;
+        var perPartitionMaxScanned = new long[partitionCount];
+        for (var p = 0; p < partitionCount; p++) perPartitionMaxScanned[p] = -1L;
         var warmReplayProven = true;
 
         // Pass-1 absorb frontier. A deferred terminal is only safe to apply in
@@ -4179,7 +4187,7 @@ internal sealed partial class BPlusLeafGrain
             long persistedCheckpoint = GetPersistedCheckpointForPartition(partition);
             var checkpoint = checkpointOverride ?? persistedCheckpoint;
             warmReplayProven &= CanProveWarmReplayStart(partition, checkpoint);
-            perPartitionMaxApplied[partition] = checkpoint;
+            perPartitionMaxScanned[partition] = checkpoint;
 
             // Durable-frontier fall-off guard (issue #945: silent durable data
             // loss). The cold-cache-reset override (checkpointOverride = -1, set
@@ -4350,12 +4358,12 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayOwnership, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
+            var (advanced, maxScanned) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayOwnership, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
-            if (maxApplied > perPartitionMaxApplied[partition])
-                perPartitionMaxApplied[partition] = maxApplied;
+            if (maxScanned > perPartitionMaxScanned[partition])
+                perPartitionMaxScanned[partition] = maxScanned;
 
             // The warm-cache proof needs this partition's window read whole, and
             // a filtered replay (issue #3565) cannot show that by density: its
@@ -4408,7 +4416,7 @@ internal sealed partial class BPlusLeafGrain
             ResolveUnresolvedReplayWork(terminal.Partition, terminal.Offset);
             if (await TryFlushRecoveredCeilingAsync(
                 terminal.Partition,
-                perPartitionMaxApplied[terminal.Partition],
+                perPartitionMaxScanned[terminal.Partition],
                 deferredOffsets,
                 projection,
                 cancellationToken))
@@ -4431,8 +4439,9 @@ internal sealed partial class BPlusLeafGrain
 
         // Final reconciliation: every pending-tx clamp has lifted now
         // that the terminals have drained, so the per-partition
-        // checkpoint can advance to the actual maxApplied observed
-        // during pass 1. Without this step, a partition whose
+        // checkpoint can advance to the highest offset scanned during
+        // pass 1, including entries skipped as another leaf's work
+        // (#2270). Without this step, a partition whose
         // pass-1 SetCheckpointOffsetAsync was clamped behind an
         // unresolved prepare (whose terminal would later land in
         // pass 2) would stay at the clamped offset forever, even
@@ -4441,15 +4450,15 @@ internal sealed partial class BPlusLeafGrain
         // already absorbed into the Cache.
         for (var partition = 0; partition < partitionCount; partition++)
         {
-            var maxApplied = perPartitionMaxApplied[partition];
-            if (maxApplied <= GetPersistedCheckpointForPartition(partition))
+            var maxScanned = perPartitionMaxScanned[partition];
+            if (maxScanned <= GetPersistedCheckpointForPartition(partition))
                 continue;
-            using (LatticeApplyOffsetContext.BeginScope(partition, maxApplied))
+            using (LatticeApplyOffsetContext.BeginScope(partition, maxScanned))
             {
                 var current = GetCurrentCheckpointForPartition(partition);
-                if (maxApplied > current)
+                if (maxScanned > current)
                 {
-                    await projection.SetCheckpointOffsetAsync(maxApplied, cancellationToken);
+                    await projection.SetCheckpointOffsetAsync(maxScanned, cancellationToken);
                     anyAdvanced = true;
                 }
             }
@@ -4457,7 +4466,7 @@ internal sealed partial class BPlusLeafGrain
 
         if (warmReplayProven && !_warmCacheTopologyChanged && _warmCacheHydrations == 1
             && !_warmCacheReplayFailed && _warmCacheReplaysInFlight == 1)
-            _warmCacheProvenOffsets = perPartitionMaxApplied;
+            _warmCacheProvenOffsets = perPartitionMaxScanned;
         return anyAdvanced;
     }
 
@@ -6314,18 +6323,20 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Flushes <paramref name="partition"/>'s projection checkpoint up to the
-    /// highest offset below which every entry is fully applied, and returns
+    /// highest offset scanned by this replay, subject to the unresolved-work
+    /// clamps below, and returns
     /// <c>true</c> when the durable position actually advanced. Shared by the
     /// per-slice flush in pass 1 and the per-terminal flush in pass 2 so both
     /// compute the ceiling from one place and can never drift apart.
     /// <para>
     /// The ceiling is the minimum of three bounds, so it can never license a
     /// checkpoint (or the durable materialiser pin it drives) past an offset
-    /// that is not yet applied:
+    /// this leaf has not safely consumed:
     /// </para>
     /// <list type="number">
-    /// <item><paramref name="maxApplied"/> - the highest offset this replay has
-    /// reached in the partition.</item>
+    /// <item><paramref name="maxScanned"/> - the highest offset this replay has
+    /// scanned in the partition, including entries skipped as another leaf's
+    /// work.</item>
     /// <item>One below the partition's lowest still-unresolved deferred offset
     /// (<see cref="DeferredOffsetLedger.MinUnresolved"/>), because a deferred
     /// mutation is applied only when it drains.</item>
@@ -6335,7 +6346,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> applies this
     /// clamp internally too; applying it here as well keeps the cadence from
     /// issuing redundant force-flushes while a prepare sits open below
-    /// <paramref name="maxApplied"/>.</item>
+    /// <paramref name="maxScanned"/>.</item>
     /// </list>
     /// <para>
     /// The flush is skipped unless it strictly advances the partition's current
@@ -6349,15 +6360,15 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<bool> TryFlushRecoveredCeilingAsync(
         int partition,
-        long maxApplied,
+        long maxScanned,
         DeferredOffsetLedger deferredOffsets,
         ILeafProjection projection,
         CancellationToken cancellationToken)
     {
-        if (maxApplied < 0)
+        if (maxScanned < 0)
             return false;
 
-        var ceiling = maxApplied;
+        var ceiling = maxScanned;
         var minDeferred = deferredOffsets.MinUnresolved(partition);
         if (minDeferred != long.MaxValue && minDeferred - 1 < ceiling)
             ceiling = minDeferred - 1;
@@ -6387,25 +6398,26 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Banks the applied prefix of a partition after
+    /// Banks the checkpoint-safe replay prefix after
     /// <see cref="ILeafProjection.Apply(in LatticeMutation)"/> failed, so the
     /// failure costs the replay only the entry it could not apply rather than
     /// every entry the slice had already absorbed (issue #3084).
     /// <para>
-    /// <paramref name="maxApplied"/> is the caller's running ceiling, which is
-    /// advanced only after a successful apply, so it already excludes
-    /// <paramref name="failedOffset"/>.
+    /// <paramref name="maxScanned"/> is the caller's scanned-through frontier.
+    /// It excludes <paramref name="failedOffset"/>; earlier scanned entries
+    /// were applied by this leaf, skipped as another leaf's work, or remain
+    /// below the deferred-work clamp.
     /// <see cref="TryFlushRecoveredCeilingAsync"/> then applies the same
     /// deferred-terminal and unresolved-prepare clamps the foot-of-slice flush
-    /// uses, so this can never license a checkpoint past an offset that is not
-    /// durably applied.
+    /// uses, so this can never license a checkpoint past an offset this leaf
+    /// has not safely consumed.
     /// </para>
     /// <para>
     /// A snapshot capture driven by that flush can contain partial effects of
     /// the entry that failed, because the projection is mutated in place. That
-    /// is safe and is not an over-advance: the checkpoint still names
-    /// <paramref name="maxApplied"/>, so the resumed replay re-applies from
-    /// <paramref name="failedOffset"/>, and every mutation apply is an
+    /// is safe and is not an over-advance: the checkpoint remains below
+    /// <paramref name="failedOffset"/>, so the resumed replay re-applies from
+    /// that offset, and every mutation apply is an
     /// idempotent CRDT merge. The snapshot is therefore permitted to cover
     /// more than the checkpoint claims, never less.
     /// </para>
@@ -6420,7 +6432,7 @@ internal sealed partial class BPlusLeafGrain
         IGrainContext context,
         string treeId,
         int partition,
-        long maxApplied,
+        long maxScanned,
         long failedOffset,
         DeferredOffsetLedger deferredOffsets,
         ILeafProjection projection,
@@ -6432,7 +6444,7 @@ internal sealed partial class BPlusLeafGrain
         {
             advanced = await TryFlushRecoveredCeilingAsync(
                 partition,
-                maxApplied,
+                maxScanned,
                 deferredOffsets,
                 projection,
                 cancellationToken);
@@ -6454,14 +6466,14 @@ internal sealed partial class BPlusLeafGrain
         ReplayLogger(context)?.LogWarning(
             applyFailure,
             "Leaf {GrainId} could not apply offset {FailedOffset} of tree {TreeId} partition {Partition}. "
-            + "Progress up to offset {MaxApplied} has been banked ({Advanced}); this activation will fail "
-            + "and the next will resume from the shorter gap rather than re-reading this slice from the "
-            + "same offset.",
+            + "Replay had scanned through offset {MaxScanned}; the safe checkpoint advance was {Advanced}. "
+            + "This activation will fail and the next will resume from the shorter gap rather than re-reading "
+            + "this slice from the same offset.",
             context.GrainId,
             failedOffset,
             treeId,
             partition,
-            maxApplied,
+            maxScanned,
             advanced ? "the checkpoint advanced" : "the checkpoint was already at or above the ceiling");
     }
 
@@ -6658,7 +6670,7 @@ internal sealed partial class BPlusLeafGrain
     /// the visible-state contract requires us to wait.
     /// </para>
     /// </summary>
-    private async Task<(bool Advanced, long MaxApplied)> ReplayPartitionAsync(
+    private async Task<(bool Advanced, long MaxScanned)> ReplayPartitionAsync(
         string treeId,
         int partition,
         long checkpoint,
@@ -6899,20 +6911,11 @@ internal sealed partial class BPlusLeafGrain
 
         var fromExclusive = checkpoint;
 
-        // NAMING (issue #2270): this tracks the highest offset SCANNED, not
-        // applied. It is bumped below for every entry the loop reads,
-        // including entries ShouldApplyDuringReplay rejects as another
-        // leaf's work. The name is a known misnomer, retained here only to
-        // keep this change off the merge path of concurrent work in this
-        // file; the semantics it feeds (ProjectionCheckpointOffset) are
-        // documented on BPlusLeafGrain.ProjectionAdmin.cs and pinned by
-        // BPlusLeafGrainTests.CheckpointScanSemantics. Do NOT "correct" the
-        // behaviour to match the name: advancing only over applied entries
-        // would strand a leaf that owns nothing in this partition at its old
-        // checkpoint forever and pin the WAL GC retention floor
-        // (LatticeWalGc.ComputeMaterialiserOffsetFloorAsync) for the whole
-        // tree.
-        long maxApplied = checkpoint;
+        // This is the highest offset scanned, not applied. It advances for
+        // every entry the loop reads, including entries skipped as another
+        // leaf's work (#2270). The checkpoint and WAL-retention contract is
+        // pinned by BPlusLeafGrainTests.CheckpointScanSemantics.
+        long maxScanned = checkpoint;
 
         // Exact, POST-filter count of the entries THIS leaf takes through the
         // projection rebuild seam - the unit MaxLeafReplayEntries is actually
@@ -7010,13 +7013,13 @@ internal sealed partial class BPlusLeafGrain
                         ex,
                         "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford a commit-log "
                         + "read from offset {FromExclusive}; narrowing the slice budget to {SliceBudget} entries and "
-                        + "retrying. Progress up to offset {MaxApplied} is already banked.",
+                        + "Replay had scanned through offset {MaxScanned}; any safe prefix is already banked.",
                         context.GrainId,
                         treeId,
                         partition,
                         fromExclusive,
                         narrowedTo,
-                        maxApplied),
+                        maxScanned),
                     cancellationToken);
             }
             catch (Exception ex) when (IsReadMemoryPressure(ex))
@@ -7062,14 +7065,14 @@ internal sealed partial class BPlusLeafGrain
                 ReplayLogger(context)?.LogError(
                     ex,
                     "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford even a "
-                    + "single-entry commit-log read from offset {FromExclusive}. Progress up to offset "
-                    + "{MaxApplied} has been banked; this activation will fail and the next will resume from "
+                    + "single-entry commit-log read from offset {FromExclusive}. Replay had scanned through "
+                    + "offset {MaxScanned}; any safe prefix was banked. This activation will fail and the next will resume from "
                     + "the shorter gap.",
                     context.GrainId,
                     treeId,
                     partition,
                     fromExclusive,
-                    maxApplied);
+                    maxScanned);
                 throw;
             }
 
@@ -7086,8 +7089,8 @@ internal sealed partial class BPlusLeafGrain
                 // held only to ascending offsets, and the caller proves its window
                 // by the retained floor once the partition is read.
                 if (replayOwnership.Filter.IsUnbounded
-                        ? entry.Offset != maxApplied + 1
-                        : entry.Offset <= maxApplied)
+                        ? entry.Offset != maxScanned + 1
+                        : entry.Offset <= maxScanned)
                     _warmCacheReplayFailed = true;
 
                 // Issue #3601. A DeleteRange disjoint from this leaf's range is
@@ -7303,7 +7306,7 @@ internal sealed partial class BPlusLeafGrain
                         // the in-memory clamp, which is the pre-#2165
                         // behaviour.
                         //
-                        // Issue #2746. maxApplied has not yet taken THIS entry
+                        // Issue #2746. maxScanned has not yet taken THIS entry
                         // into account (it advances at the foot of the loop),
                         // so it is exactly "the highest offset already consumed
                         // below this one". Handing it and the window's opening
@@ -7316,7 +7319,7 @@ internal sealed partial class BPlusLeafGrain
                                 entry.Offset,
                                 entry.Mutation,
                                 maxDurableUnresolvedWork,
-                                consumedBelowOffset: maxApplied,
+                                consumedBelowOffset: maxScanned,
                                 windowStartCheckpoint: checkpoint))
                         {
                             deferredOffsets.Add(partition, entry.Offset);
@@ -7366,11 +7369,11 @@ internal sealed partial class BPlusLeafGrain
                         // next activation resumes from a strictly shorter gap.
                         //
                         // What this deliberately does NOT do is skip the entry.
-                        // The ceiling is maxApplied, which is assigned BELOW
-                        // this block, so at the moment of the throw it still
-                        // holds the last fully-applied offset and excludes this
-                        // one. Advancing past an entry this leaf owns would be
-                        // silent data loss - strictly worse than the stall.
+                        // The ceiling is maxScanned, assigned BELOW this block,
+                        // so the failed entry is excluded. Earlier skipped
+                        // entries can be included because they do not belong to
+                        // this leaf; advancing past an owned, unapplied entry
+                        // would be silent data loss - strictly worse than the stall.
                         //
                         // The catch is not narrowed to memory-pressure types.
                         // Banking progress that genuinely happened is correct
@@ -7393,7 +7396,7 @@ internal sealed partial class BPlusLeafGrain
                                 context,
                                 treeId,
                                 partition,
-                                maxApplied,
+                                maxScanned,
                                 entry.Offset,
                                 deferredOffsets,
                                 projection,
@@ -7488,7 +7491,7 @@ internal sealed partial class BPlusLeafGrain
                 // because the checkpoint records how far this leaf has READ
                 // the partition, not how much of it was its own. Moving this
                 // inside the filter is a severe regression, not a tightening -
-                // see the declaration of maxApplied above.
+                // see the declaration of maxScanned above.
                 //
                 // Since the key-range push-down (issue #3565) most such entries
                 // never reach this loop at all: storage drops them, and the slice
@@ -7496,8 +7499,8 @@ internal sealed partial class BPlusLeafGrain
                 // because the reader always delivers the window's last examined
                 // entry - routing-only when it is foreign - so the next offset
                 // this loop sees is at or beyond every record that was dropped.
-                if (entry.Offset > maxApplied)
-                    maxApplied = entry.Offset;
+                if (entry.Offset > maxScanned)
+                    maxScanned = entry.Offset;
 
                 if (maxRecordsPerTurn > 0 && ++recordsSinceYield >= maxRecordsPerTurn)
                 {
@@ -7517,7 +7520,7 @@ internal sealed partial class BPlusLeafGrain
             // not-yet-durably-applied offset.
             await TryFlushRecoveredCeilingAsync(
                 partition,
-                maxApplied,
+                maxScanned,
                 deferredOffsets,
                 projection,
                 cancellationToken);
@@ -7527,19 +7530,19 @@ internal sealed partial class BPlusLeafGrain
         // contiguous, fully-applied prefix (the TryFlushRecoveredCeilingAsync
         // clamps above), so partial replay progress is durable across a
         // mid-replay teardown (issue #1513). What it deliberately does NOT do
-        // here is advance the checkpoint to the FULL maxApplied: a partition
+        // here is advance the checkpoint to the FULL maxScanned: a partition
         // may still hold an undrained deferred terminal or an unresolved
-        // prepare below maxApplied, so the remaining advance up to maxApplied
+        // prepare below maxScanned, so the remaining advance up to maxScanned
         // is left to the post-pass-2 reconciliation step in
         // ReplayWalSinceCheckpointAsync, which waits until every deferred
         // terminal has applied (lifting the pending-tx clamps) before advancing
-        // each partition's persisted checkpoint to its maxApplied. The
+        // each partition's persisted checkpoint to its maxScanned. The
         // incremental flush is bounded strictly below those pending offsets by
         // construction, so it never over-advances: (a) a partition that
         // observed a prepare in pass 1 is held behind the prepare's offset, and
         // (b) a partition that deferred a terminal is held behind that
         // terminal's offset until it drains. Returning the per-partition
-        // maxApplied here gives the caller the data it needs to do the
+        // maxScanned here gives the caller the data it needs to do the
         // post-pass-2 advance with full knowledge of every partition's outcome.
         // The retire arm, on the same quantity as the commit arm above and as
         // its exact complement. A leaf whose own applied-entry count came in
@@ -7558,7 +7561,7 @@ internal sealed partial class BPlusLeafGrain
         // partition's work whenever the replay was cancelled inside it - see
         // the comment at that site (issue #2411).
 
-        return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
+        return (Advanced: maxScanned > checkpoint, MaxScanned: maxScanned);
     }
 
     private static ILogger? ReplayLogger(IGrainContext context) =>

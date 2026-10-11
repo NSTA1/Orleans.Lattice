@@ -658,7 +658,7 @@ internal sealed class TreeReshardGrain(
             {
                 await ConsolidationGrain(plan.DonorShardIndex).StartAsync(plan.SurvivorShardIndex);
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
             {
                 // A split or another fold holds one side of the pair. Transient;
                 // un-record the intent and re-plan next tick.
@@ -898,7 +898,7 @@ internal sealed class TreeReshardGrain(
                 "Reshard dispatched split of shard {ShardIndex} for tree {TreeId}",
                 sourceShardIndex, TreeId);
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
         {
             // Split already in progress for a different parameter set, or
             // source owns fewer than two slots - skip this shard and let the

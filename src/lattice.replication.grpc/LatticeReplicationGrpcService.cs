@@ -817,7 +817,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         {
             throw;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
         {
             // Projection-digest maintenance is disabled (or latched off)
             // for this tree locally. Report the digest as unavailable so
@@ -992,7 +992,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         {
             throw;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
         {
             // Projection-digest maintenance is disabled (or latched off)
             // for this tree locally. Report the range digest as unavailable

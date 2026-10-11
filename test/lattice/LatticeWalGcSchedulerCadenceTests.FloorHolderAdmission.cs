@@ -234,6 +234,30 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [Test]
+    public async Task An_unresolved_offset_pin_does_not_make_a_tree_with_admitted_partition_floors_read_blocked()
+    {
+        var storage = new LeafStateBook();
+        storage.PutLive(LivenessLeafGrainId(0), OrphanSweepTree);
+
+        var pins = new FakePinStore();
+        pins.Seed(OrphanSweepTree, "unresolvable-consumer", UsablePin, FloorOffset - 1);
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(0), UsablePin, FloorOffset);
+
+        using var admission = new AdmissionRecorder(OrphanSweepTree);
+
+        var leaves = await DriveAsync(pins, storage);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(leaves.Touched, Does.Contain(LivenessLeafGrainId(0)),
+                "the resolved partition floor remains eligible even when an unrelated pin id cannot be resolved.");
+            Assert.That(admission.Admitted, Is.GreaterThan(0),
+                "unresolved offset pins do not identify a partition floor and must not block the tree-level verdict.");
+            Assert.That(admission.Blocked, Is.Zero);
+        });
+    }
+
+    [Test]
     public async Task An_inadmissible_floor_holder_blocks_a_tree_whose_other_candidates_are_admissible()
     {
         // The discrimination test, and the one that cannot be satisfied by an

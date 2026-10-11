@@ -114,13 +114,13 @@ internal sealed partial class BPlusLeafGrain
         }
 
         _pendingCheckpointOffsetsByPartition = null;
-        // A forward checkpoint advance here is driven by cache-resident applies
-        // (foreground writes or WAL tail replay folded into the in-memory cache
-        // before SetCheckpointOffsetAsync queued the advance). Latch that so the
-        // graceful-deactivation snapshot capture knows this activation produced
-        // cache-backed coverage it may safely persist - as opposed to a cold
-        // reactivation whose checkpoint was merely restored from state (see
-        // TryCaptureSnapshotOnDeactivateAsync and the #1535 no-loss gate).
+        // Latch this activation's forward checkpoint commit attempt, not merely
+        // a checkpoint restored from state. Since #2270, replay advances over
+        // SCANNED entries, including other leaves' work; this does not prove
+        // every scanned entry was applied to this cache. The #1535 capture gate
+        // in TryCaptureSnapshotOnDeactivateCoreAsync explains the consumer-min
+        // pin and unresolved-work clamps that make that distinction safe.
+        // This prologue runs before PersistAsync, and rollback retains the latch.
         _checkpointAdvancedThisActivation = true;
         // The checkpoint offset is a field of the published ChildDigestSnapshot,
         // so an advance must propagate upward even when the projection hash
@@ -167,13 +167,13 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// <c>_checkpointAdvancedThisActivation</c> is deliberately NOT rolled back.
-    /// It records that this activation produced cache-backed coverage, which
-    /// remains true after a failed checkpoint write - the applies happened in
-    /// the in-memory cache and the rows are still held. It is what authorises
-    /// the graceful-deactivation snapshot capture, and that capture is precisely
-    /// what turns those in-memory rows into durable coverage for the prefix the
-    /// checkpoint could not record. Rolling it back would suppress the one
-    /// mechanism that makes this failure recoverable; see
+    /// It records a forward checkpoint commit attempt, not a successful persist
+    /// or proof that every scanned entry was applied here (#2270). Rollback does
+    /// not undo this activation's cache applies or replay progress. Retaining the
+    /// latch lets the graceful-deactivation snapshot capture bank that progress;
+    /// the capture's coverage calculation and the pin's persisted-checkpoint
+    /// bound still limit what may be trimmed. Rolling it back would suppress
+    /// that recovery mechanism after a failed write; see
     /// <c>A_faulting_checkpoint_flush_no_longer_cancels_the_snapshot_capture_barrier</c>.
     /// </para>
     /// </remarks>

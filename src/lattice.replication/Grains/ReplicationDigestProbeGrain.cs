@@ -233,7 +233,7 @@ internal sealed class ReplicationDigestProbeGrain(
             {
                 local = await lattice.GetLeafProjectionDigestAsync(shard, CancellationToken.None).ConfigureAwait(true);
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
             {
                 // Projection-digest maintenance is disabled/latched for
                 // the tree. Stop probing permanently for this activation.

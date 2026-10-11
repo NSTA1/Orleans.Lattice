@@ -1424,7 +1424,7 @@ internal sealed class LatticeBackupCaptureService(
                 .ConfigureAwait(false);
             return Convert.ToHexStringLower(digest.Hash);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
         {
             // MaintainProjectionDigest is disabled for this tree; the structural
             // digest cannot be re-derived on restore for this shard, so record a

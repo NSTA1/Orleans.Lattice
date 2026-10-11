@@ -829,8 +829,8 @@ internal sealed class TreeResizeGrain(
     /// <summary>
     /// Runs the phase-aware unwind for an accepted undo from inside a phase turn,
     /// then records its outcome in the intent slot. A failure the unwind cannot
-    /// recover from on a retry - the <see cref="InvalidOperationException"/>
-    /// family, such as an old tree whose data has already been purged - withdraws
+    /// recover from on a retry - an unmarked <see cref="InvalidOperationException"/>,
+    /// such as an old tree whose data has already been purged - withdraws
     /// the intent and records the reason, so the loop does not retry an
     /// impossible unwind forever and the caller polling
     /// <see cref="GetUndoProgressAsync"/> is told why; any other failure leaves the
@@ -844,7 +844,7 @@ internal sealed class TreeResizeGrain(
         {
             await ExecuteUndoAsync();
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
         {
             Logger.LogError(ex,
                 "Undo of resize {OperationId} for tree {TreeId} could not be applied and was withdrawn.",
@@ -929,12 +929,14 @@ internal sealed class TreeResizeGrain(
             // seen here. Fails closed: a fence that cannot be read refuses the undo.
             // Raised as InvalidOperationException, which a requested undo's phase
             // loop treats as unrecoverable and withdraws with this reason.
+            // Domain failures from the read keep their classification and leave
+            // an accepted undo pending; an unreadable fence never permits it.
             int? fenced;
             try
             {
                 fenced = await FindBootstrapFencedShardAsync();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not ILatticeDomainFault)
             {
                 throw new InvalidOperationException(
                     $"Could not establish whether a snapshot bootstrap is draining into tree '{TreeId}'; the resize cannot be undone until it can.", ex);

@@ -20,15 +20,14 @@ namespace Orleans.Lattice;
 /// other axis is what the pass is stopping at (issue #3178).
 /// </para>
 /// <para>
-/// <b><see cref="LeafGrainId"/> is what makes a budget mean what it says.</b>
+/// <b><see cref="LeafGrainId"/> is what makes a sample budget mean what it says.</b>
 /// A leaf publishes one pin per WAL partition and
 /// <c>BPlusLeafGrain.FlushDurableMaterialiserFrontierAsync</c> reads its clock
 /// once for the whole batch, so all of a leaf's partition pins carry a
-/// byte-identical frontier - structurally, not probabilistically. Keyed by
-/// consumer id, a sample of eight on an eight-partition tree is therefore one
-/// leaf, and the reactivation touches it licenses all resolve to that same leaf
-/// grain. Deduplicating on the leaf is what turns a budget of N into N leaves
-/// rather than N/partitions.
+/// byte-identical frontier - structurally, not probabilistically. The global
+/// HLC-unusable sample deduplicates those pins by leaf. Offset samples are
+/// partition-local: the same leaf may appear once in several samples because
+/// each of its partition pins can independently hold a floor.
 /// </para>
 /// <para>
 /// <see cref="LeafResolved"/> is carried rather than inferred from

@@ -32,9 +32,8 @@ public partial class BPlusLeafGrainTests
     /// bound rather than a magic number.
     /// </summary>
     /// <remarks>
-    /// <b>Also seeds a stalled queue (issue #3290).</b> Refusal is now a
-    /// conjunction: the queue must be past the depth bound <em>and</em> failing
-    /// to drain. Depth alone was never sufficient evidence of harm - it is
+    /// <b>Also seeds a slow queue.</b> A fresh excessive wait now refuses even
+    /// below the depth bound (issue #4071). Depth alone is not evidence of harm - it is
     /// derived from <c>ceiling * depthPerPermit</c>, where the ceiling is a
     /// supply-side CPU quantity and the queue is filled by demand-side fan-out,
     /// so the same healthy activation storm was admitted on a 16-processor host
@@ -42,8 +41,8 @@ public partial class BPlusLeafGrainTests
     /// tests aimed at their actual subject, which is that a refusal is typed,
     /// counted, and does not inflate the waiter count - not at which predicate
     /// produced it. The one test here that asserts <em>admission</em> gets the
-    /// same stalled queue and is still admitted, which is the useful converse:
-    /// a stalled queue alone does not refuse either.
+    /// no-progress evidence without an excessive mean and is still admitted
+    /// below the interactive bound, preserving the bulk reservation.
     /// </remarks>
     private static async Task<int> SeedAdmittedWaitersAsync(Func<int, int> queuedForCeiling)
     {
@@ -168,6 +167,88 @@ public partial class BPlusLeafGrainTests
             + "inflate exactly the population this change exists to shrink");
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    [NonParallelizable]
+    public async Task A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound(bool bulk)
+    {
+        await SeedAdmittedWaitersAsync(_ => 1);
+
+        var treeId = UniqueReplayPermitTree();
+        var refusals = new ConcurrentBag<KeyValuePair<string, object?>[]>();
+        try
+        {
+            var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+                preloadedSnapshot: null, persistedCheckpoint: 0, walHead: 0);
+            state.State.TreeId = treeId;
+
+            using (ListenForSaturationRefusals(treeId, refusals))
+            using (bulk ? LatticeReplayAdmissionContext.BeginBulkScope() : null)
+            {
+                var refusal = Assert.ThrowsAsync<LatticeSaturatedException>(
+                    async () => await LeafActivationHarness.ActivateAsync(
+                        (IGrainBase)grain, CancellationToken.None),
+                    "a fresh mean at the maximum wait must refuse even when queue slots remain");
+
+                Assert.That(
+                    refusal!.SaturationSource,
+                    Is.EqualTo(LatticeSaturationSource.ReplayPermitAdmission));
+                Assert.That(refusal.Message, Does.Contain("smoothed queue wait"));
+                Assert.That(refusal.Message, Does.Not.Contain("waiter(s), at or above")
+                    .And.Contain("even below the queue-depth limit"));
+            }
+            Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.EqualTo(1));
+        }
+        finally
+        {
+            ClearSeededAdmittedWaiters();
+        }
+
+        Assert.That(refusals, Has.Count.EqualTo(1));
+        Assert.That(ArmOf(refusals.Single()), Is.EqualTo("wait_exceeded"),
+            "the time-denominated arm must not be vetoed by the count-denominated bound");
+    }
+
+    [Test]
+    [NonParallelizable]
+    public async Task A_no_progress_queue_at_the_circulating_bound_is_refused()
+    {
+        var options = new LatticeOptions();
+        var ceiling = await SeedAdmittedWaitersAsync(_ => options.WalReplayPermitQueueDepthPerPermit);
+        var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest!;
+        var treeId = UniqueReplayPermitTree();
+        var refusals = new ConcurrentBag<KeyValuePair<string, object?>[]>();
+        try
+        {
+            Assert.That(ceiling, Is.GreaterThan(1), "withholding must shrink a genuinely wider gate");
+            for (var i = 0; i < ceiling - 1; i++)
+                Assert.That(gate.Wait(0), Is.True);
+            BPlusLeafGrain.SeedWithheldReplayPermitsForTest(ceiling - 1);
+            BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
+                TimeSpan.Zero, options.WalReplayPermitMaxQueueWait + TimeSpan.FromSeconds(1));
+            var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+                preloadedSnapshot: null, persistedCheckpoint: 0, walHead: 0);
+            state.State.TreeId = treeId;
+            using (ListenForSaturationRefusals(treeId, refusals))
+            {
+                Assert.ThrowsAsync<LatticeSaturatedException>(
+                    async () => await LeafActivationHarness.ActivateAsync(
+                        (IGrainBase)grain, CancellationToken.None));
+            }
+            Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest,
+                Is.EqualTo(options.WalReplayPermitQueueDepthPerPermit));
+        }
+        finally
+        {
+            BPlusLeafGrain.SeedWithheldReplayPermitsForTest(0);
+            while (gate.CurrentCount < ceiling)
+                gate.Release();
+            ClearSeededAdmittedWaiters();
+        }
+        Assert.That(refusals, Has.Count.EqualTo(1));
+        Assert.That(ArmOf(refusals.Single()), Is.EqualTo("no_progress"));
+    }
+
     [Test]
     [NonParallelizable]
     public async Task An_interactive_activation_is_still_admitted_where_bulk_is_refused()
@@ -182,6 +263,8 @@ public partial class BPlusLeafGrainTests
 
         try
         {
+            BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
+                TimeSpan.Zero, options.WalReplayPermitMaxQueueWait + TimeSpan.FromSeconds(1));
             Assert.That(
                 LatticeReplayAdmissionContext.Current,
                 Is.EqualTo(LatticeReplayAdmissionClass.Interactive),

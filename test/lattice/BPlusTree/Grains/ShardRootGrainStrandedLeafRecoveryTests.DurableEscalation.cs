@@ -76,10 +76,8 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
     /// <summary>
     /// <b>The arm this file exists for.</b> A shard root that is recycled and
     /// strands the same leaf again must report that the recovery has been
-    /// applied twice - which is the only available evidence that a fresh read
-    /// was already issued and the leaf still did not answer, and therefore the
-    /// only thing that separates "the shard root was parked on a dead read" from
-    /// "the leaf itself cannot be read".
+    /// applied twice. This is historical evidence about probes, not proof of
+    /// permanent failure or evidence localising the cause to the leaf.
     /// <para>
     /// The second activation's <em>own</em> run is asserted to have restarted
     /// from scratch, and that assertion is doing real work: it establishes that
@@ -114,9 +112,8 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
                 + "the escalation could be coming from activation-scoped state and this test "
                 + "would prove nothing about durability");
 
-            Assert.That(secondStall.Message, Does.Contain("fault is inside that leaf activation"),
-                "the escalated reading must reach an operator through the message, not only "
-                + "through a typed slot nothing logs");
+            Assert.That(secondStall.Message, Does.Not.Contain("fault is inside that leaf activation"));
+            Assert.That(secondStall.Message, Does.Contain("not proof of permanent failure"));
             Assert.That(secondStall.Message, Does.Contain("2 times"));
         });
 

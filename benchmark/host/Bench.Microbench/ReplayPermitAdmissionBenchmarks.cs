@@ -128,6 +128,28 @@ public class ReplayPermitAdmissionBenchmarks
     }
 
     /// <summary>
+    /// Measures the circulating-capacity depth bound together with the existing
+    /// time verdict used by activation admission (issue #4071).
+    /// Includes state reseeding on every invocation; this is an allocation probe,
+    /// not an end-to-end activation latency measurement.
+    /// </summary>
+    [Benchmark]
+    public bool AdmissionCirculatingBound()
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 6, queued: 1);
+        BPlusLeafGrain.SeedWithheldReplayPermitsForTest(2);
+        BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
+            MaxQueueWait, sinceLastProgress: TimeSpan.Zero);
+        var belowBound = BPlusLeafGrain.TryAdmitReplayPermitWaiter(
+            4, LatticeReplayAdmissionClass.Interactive, out var queued, out var bound);
+        var verdict = bound > 0 && queued > 0
+            ? BPlusLeafGrain.ClassifyReplayPermitQueueDrain(MaxQueueWait, out _)
+            : BPlusLeafGrain.ReplayPermitDrainVerdict.Draining;
+        return verdict == BPlusLeafGrain.ReplayPermitDrainVerdict.WaitExceeded
+            || (!belowBound && verdict == BPlusLeafGrain.ReplayPermitDrainVerdict.NoProgress);
+    }
+
+    /// <summary>
     /// The fold that feeds the mean, driven on the acquisition outcome. It runs
     /// once per terminated wait and now also stamps the sample the arm above
     /// reads, so it is measured to show that stamping is free.

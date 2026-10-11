@@ -102,22 +102,20 @@ internal sealed partial class BPlusLeafGrain
     internal int CheckpointPersistCountSinceRecheckForTest => _checkpointPersistCountSinceRecheck;
 
     /// <summary>
-    /// Set once this activation genuinely advances a per-partition projection
-    /// checkpoint over cache-resident applies - i.e. the pending-advance branch
-    /// of <see cref="FlushPendingCheckpointAsync"/> runs, which only happens
-    /// after foreground writes or a WAL tail replay have folded new entries
-    /// into the in-memory cache and moved the checkpoint forward. It is the
-    /// safety precondition for the graceful-deactivation snapshot capture
-    /// (<see cref="TryCaptureSnapshotOnDeactivateAsync"/>): a checkpoint that
-    /// advanced this way is, by construction, backed by data the cache holds,
-    /// so capturing that cache and stamping the new checkpoint truthfully
-    /// records coverage. A leaf that merely reactivated cold - its persisted
-    /// checkpoint restored from state or a rehydrate that reset uncovered
-    /// partitions to <c>-1</c>, with no forward apply this activation - never
-    /// sets this, so the deactivation hook does not capture an empty/partial
-    /// cache and falsely claim coverage of a prefix the WAL alone still holds
-    /// (the #1535 no-loss invariant). Reset to <c>false</c> on every fresh
-    /// activation because it is a plain instance field, never persisted.
+    /// Set when this activation attempts a forward per-partition projection
+    /// checkpoint commit in <c>ApplyPendingCheckpointAdvance</c>. It is set
+    /// before the durable write and retained if that write fails, so it does
+    /// not guarantee a successful persist. Since #2270, replay checkpoints
+    /// record SCANNED-through progress, including entries owned by other leaves,
+    /// not only cache-resident applies. This activation-local progress signal
+    /// participates in the graceful-deactivation capture gate
+    /// (<see cref="TryCaptureSnapshotOnDeactivateAsync"/>); its safety also
+    /// depends on the consumer-min retention pin and unresolved-work clamps
+    /// described at that gate, not on every scanned entry residing in this cache.
+    /// Merely restoring a checkpoint from state, or lowering uncovered partitions
+    /// to <c>-1</c> during rehydrate, does not set it. Reset to <c>false</c>
+    /// on every fresh activation because it is a plain instance field, never
+    /// persisted.
     /// </summary>
     private bool _checkpointAdvancedThisActivation;
 
@@ -170,7 +168,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>.
     /// This latch drives the off-cadence coverage-deficit capture in
     /// <see cref="MaybeRunPeriodicSnapshotRecheckAsync"/> exactly once, after
-    /// the tail replay re-advances the partition over cache-resident applies
+    /// the tail replay re-advances the partition's scanned-through checkpoint
     /// (the same <see cref="_checkpointAdvancedThisActivation"/> /
     /// <see cref="_cacheRebuiltFromWalStartThisActivation"/> no-loss precondition
     /// the graceful-deactivation capture already trusts). Reset to <c>false</c>
@@ -361,9 +359,10 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// Recorded from the CLAMPED ceiling that
-    /// <c>TryFlushRecoveredCeilingAsync</c> already computes - <c>maxApplied</c>
-    /// bounded below the lowest unresolved deferred terminal and below any
-    /// unresolved saga prepare - and never from raw <c>maxApplied</c>. That
+    /// <c>TryFlushRecoveredCeilingAsync</c> already computes - the scanned-through
+    /// <c>maxScanned</c> bounded below the lowest unresolved deferred terminal
+    /// and below any unresolved saga prepare - and never from raw
+    /// <c>maxScanned</c>. That
     /// choice is load-bearing TWICE over, and a later reader must not
     /// "simplify" it away:
     /// </para>
@@ -827,14 +826,12 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Consecutive coverage-lag ticks a leaf must show an unchanged durable
     /// checkpoint, while holding live data, before
-    /// <see cref="IsCheckpointStalledBehindLiveData"/> routes it to the
+    /// <see cref="IsCheckpointStalledBehindLiveDataAsync"/> routes it to the
     /// starvation drive (issue #3389).
     /// <para>
-    /// Greater than one so that a leaf which is merely idle between writes is
-    /// not charged a WAL replay: an idle leaf legitimately shows an unchanged
-    /// checkpoint. It is the PERSISTENCE of that reading across ticks, on a
-    /// leaf that holds rows, which distinguishes a frozen checkpoint from a
-    /// quiet one.
+    /// Greater than one to debounce transient stalls. An unchanged checkpoint
+    /// alone does not distinguish a quiet leaf from a frozen one: the drive
+    /// additionally requires unscanned WAL work on a partition holding rows.
     /// </para>
     /// </summary>
     private const int CheckpointStallTicksBeforeDrive = 3;
@@ -851,6 +848,11 @@ internal sealed partial class BPlusLeafGrain
     /// unchanged while the leaf held live data.
     /// </summary>
     private int _consecutiveCheckpointStallTicks;
+
+    private uint _checkpointStallRearms;
+    private bool[]? _checkpointStallLiveData;
+    private ILeafReplayCoordinatorGrain?[]? _checkpointStallCoordinators;
+    private string? _checkpointStallCoordinatorTreeId;
 
     /// <summary>
     /// Whether this leaf holds rows and its durable checkpoint, though present,
@@ -883,7 +885,7 @@ internal sealed partial class BPlusLeafGrain
     /// after the freeze.
     /// </para>
     /// <para>
-    /// <b>Detection is temporal because the leaf holds no static witness.</b>
+    /// <b>Detection starts with a temporal debounce.</b>
     /// The highest applied WAL offset is a replay-time local, not persisted
     /// state, so "checkpoint is behind live data" cannot be read directly from
     /// a field. What CAN be read is whether the checkpoint moved between ticks.
@@ -891,15 +893,21 @@ internal sealed partial class BPlusLeafGrain
     /// sound precisely because checkpoints are monotonic non-decreasing: an
     /// unchanged sum therefore means no partition advanced, with no collision
     /// to worry about, and a changed sum means at least one did.
+    /// Once the threshold is reached, a live partition's exclusive WAL head
+    /// must be beyond <c>checkpoint + 1</c>. Otherwise the leaf is caught up
+    /// and must not ask for a replay permit (issue #3612). The probe repeats
+    /// on a later opportunity, so a new append cannot be latched out.
     /// </para>
     /// <para>
     /// <b>It cannot latch into hammering.</b> The stall counter is reset when
-    /// the drive is requested, so a leaf that stays frozen is re-driven at most
+    /// the drive is considered, so a leaf that stays frozen is re-driven at most
     /// once per <see cref="CheckpointStallTicksBeforeDrive"/> ticks rather than
     /// on every tick, and the drive owns its own permit, budget, timeout and
     /// single-flight latch. A drive refused admission to the replay gate is
     /// backed off for further thresholds on top of that (issue #3575). It
-    /// relaxes no no-loss precondition: the drive advances the checkpoint only
+    /// re-arms with zero to two additional ticks of per-leaf jitter, even on
+    /// a refused or deferred opportunity, so activation cohorts disperse.
+    /// It relaxes no no-loss precondition: the drive advances the checkpoint only
     /// from offsets it actually read out of the WAL, so this adds no route to
     /// stamping coverage the leaf has not earned.
     /// </para>
@@ -912,7 +920,8 @@ internal sealed partial class BPlusLeafGrain
     /// one, and those have different causes and different remedies.
     /// </para>
     /// </summary>
-    private bool IsCheckpointStalledBehindLiveData(int partitionCount)
+    internal async ValueTask<bool> IsCheckpointStalledBehindLiveDataAsync(
+        int partitionCount, CancellationToken cancellationToken)
     {
         long signature = 0;
         var anyCheckpointed = false;
@@ -946,7 +955,8 @@ internal sealed partial class BPlusLeafGrain
         // Unchanged. That is only a fault if there are rows whose durability
         // depends on the checkpoint advancing: a genuinely empty leaf has
         // nothing to lose and must not be charged a replay on every tick.
-        var liveData = ComputePartitionsWithLiveData(partitionCount);
+        var liveData = _checkpointStallLiveData = ComputePartitionsWithLiveData(
+            partitionCount, _checkpointStallLiveData);
         var holdsLiveData = false;
         for (var p = 0; p < liveData.Length; p++)
         {
@@ -968,10 +978,33 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
-        // Re-arm rather than latch: a leaf that stays frozen is re-driven once
-        // per threshold, not once per tick.
-        _consecutiveCheckpointStallTicks = 0;
-        return true;
+        // Re-arm on every opportunity, including a refused or deferred drive.
+        // Mixing the opportunity with the leaf id also breaks repeated cohorts.
+        var mixed = ((ulong)(uint)context.GrainId.GetHashCode() + ++_checkpointStallRearms)
+            * 0x9E3779B97F4A7C15UL;
+        _consecutiveCheckpointStallTicks = -(int)((mixed >> 32) % 3);
+        if (_checkpointStallCoordinators is null
+            || _checkpointStallCoordinators.Length != partitionCount
+            || !string.Equals(_checkpointStallCoordinatorTreeId, state.State.TreeId, StringComparison.Ordinal))
+        {
+            _checkpointStallCoordinators = new ILeafReplayCoordinatorGrain?[partitionCount];
+            _checkpointStallCoordinatorTreeId = state.State.TreeId;
+        }
+        for (var p = 0; p < liveData.Length; p++)
+        {
+            if (!liveData[p])
+                continue;
+
+            var coordinator = _checkpointStallCoordinators[p] ??=
+                grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{state.State.TreeId}/{p}");
+            var head = await coordinator.GetHeadOffsetAsync(cancellationToken);
+            // WAL heads are exclusive; checkpoints are inclusive. Subtract
+            // from the head rather than add to the checkpoint to avoid overflow.
+            if (head - 1 > GetCurrentCheckpointForPartition(p))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -2323,9 +2356,11 @@ internal sealed partial class BPlusLeafGrain
         // Capture once per activation, off the cadence, as soon as the tail
         // replay has re-advanced a partition past the coverage the stale
         // snapshot recorded - gated by the SAME no-loss precondition the
-        // graceful-deactivation capture trusts (a checkpoint advanced over
-        // cache-resident applies, or a full cold rebuild), so we never stamp
-        // coverage the cache does not hold. Coverage advances strictly (current
+        // graceful-deactivation capture trusts (an activation-local forward
+        // checkpoint commit attempt, or a full cold rebuild). That gate explains
+        // why scanned-through progress does not require other leaves' entries
+        // in this cache and how unresolved own work remains protected.
+        // Coverage advances strictly (current
         // > the inherited snapshot offset), so even if teardown interrupts a
         // full replay each activation banks a STRICTLY higher snapshot: a
         // monotone escape that needs no single activation to finish the
@@ -2627,17 +2662,28 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // Safety gate (the #1535 no-loss invariant). Capture only when the
-        // in-memory cache faithfully holds every checkpointed prefix it would
-        // stamp as covered. Two independent activations satisfy that:
-        //   (a) this activation advanced a checkpoint over cache-resident applies
-        //       (foreground writes or a completed tail replay) -
+        // cache can cover this leaf's own data in the prefix being stamped.
+        // Two independent activation-local progress signals admit capture:
+        //   (a) this activation attempted a forward checkpoint commit -
         //       _checkpointAdvancedThisActivation; or
         //   (b) this activation cold-rebuilt the cache from the WAL start over a
         //       pre-existing durable checkpoint (persisted offset > 0) whose
         //       prefix provably survives in the readable WAL (the #945 fall-off
-        //       guard passed), so the cache holds the entire readable window, a
-        //       superset of the checkpointed prefix -
+        //       guard passed), rebuilding this leaf's data in that window -
         //       _cacheRebuiltFromWalStartThisActivation.
+        // Signal (a) is NOT proof that every checkpointed entry was applied
+        // here: since #2270, replay checkpoints advance over SCANNED entries,
+        // including other leaves' work. Each leaf covers only its own data.
+        // ResolveDurablePinForPartition bounds this leaf's pin by its persisted
+        // checkpoint and durable snapshot coverage; LatticeWalGc takes the
+        // minimum across consumers (and honours uncovered Zero block pins),
+        // so our scan past another leaf's entry cannot release that leaf's pin.
+        // Our own unapplied replay work is protected separately:
+        // TryFlushRecoveredCeilingAsync clamps below deferredOffsets' unresolved
+        // terminals and unrecorded unresolved prepares; durably recorded replay
+        // work is recoverable from leaf state rather than needing a WAL re-read.
+        // The latch is set before PersistAsync and survives rollback (#4017);
+        // it signals progress, not durable coverage on its own.
         // Signal (b) is what closes the residual #1537 gap: an already-converged
         // leaf (checkpoint already at head) cold-reactivates and rebuilds its
         // full cache but advances no checkpoint, so (a) alone stays false and the
@@ -2645,7 +2691,8 @@ internal sealed partial class BPlusLeafGrain
         // checkpoint) never satisfies (b), and a leaf that merely reactivated cold
         // WITHOUT a full rebuild (its persisted checkpoint restored from state
         // with a non-empty cache, or a rehydrate that reset uncovered partitions
-        // to -1 with no forward apply) satisfies neither and does not capture, so
+        // to -1 with no forward checkpoint commit attempt) satisfies neither
+        // and does not capture, so
         // it can never write a snapshot claiming coverage of data the cache never
         // held. The one shape that could make a -1 rebuild unfaithful - a trimmed
         // WAL prefix with no covering snapshot - throws at activation (the #945
@@ -2963,7 +3010,7 @@ internal sealed partial class BPlusLeafGrain
         // that found the projection stale: that verdict cannot clear by replay,
         // so the drive is skipped until a persisted checkpoint moves (issue
         // #3450).
-        if (IsCheckpointStalledBehindLiveData(starvationPartitionCount))
+        if (await IsCheckpointStalledBehindLiveDataAsync(starvationPartitionCount, cancellationToken))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
             await DriveStarvedCheckpointFromTimerAsync(starvationPartitionCount);

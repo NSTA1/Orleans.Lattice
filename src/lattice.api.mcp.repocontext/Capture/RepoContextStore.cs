@@ -1791,6 +1791,7 @@ internal sealed partial class RepoContextStore
             FileCount = fileCount,
             EmbeddedVectorCount = embeddedVectorCount.Count,
             EmbeddedVectorCountPending = embeddedVectorCount.Pending,
+            EmbeddedVectorCountAsOf = embeddedVectorCount.AsOf,
             IndexedCommit = indexedCommit,
         };
     }

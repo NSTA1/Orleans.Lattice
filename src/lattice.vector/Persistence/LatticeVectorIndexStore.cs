@@ -209,7 +209,7 @@ public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
                         hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                     }
                     catch (TimeoutException timeout)
-                        when (timeout is not ScanPageStalledException &&
+                        when (timeout is not ILatticeDomainFault &&
                               attempt < DefaultScanTimeoutResumeAttempts &&
                               !cancellationToken.IsCancellationRequested)
                     {
@@ -217,8 +217,9 @@ public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
                         // a timeout observed during shutdown is not something to
                         // spend a resume budget on.
                         //
-                        // ScanPageStalledException derives from TimeoutException
-                        // but is deliberately excluded, because the core scan
+                        // Domain timeouts must retain their caller-visible remedy,
+                        // not silently acquire this runtime-response retry budget.
+                        // ScanPageStalledException is also excluded: the core scan
                         // helpers already resume it on their own budget. Catching
                         // it here would restart a walk that core had ALREADY
                         // resumed to exhaustion, multiplying the two budgets and

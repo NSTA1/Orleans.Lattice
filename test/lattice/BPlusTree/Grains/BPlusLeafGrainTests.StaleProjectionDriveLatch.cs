@@ -38,6 +38,7 @@ public partial class BPlusLeafGrainTests
     public async Task Coverage_lag_ticks_classify_a_stale_leaf_once_and_do_not_throw()
     {
         var treeId = UniqueCoverageRepairTreeId("stale-latch-ticks");
+        var wal = new GrowingWal();
         var decision = FallOffLogDecision.TailReplay;
         var staleClassifications = 0;
 
@@ -46,6 +47,7 @@ public partial class BPlusLeafGrainTests
             reClassifyEveryN: 1000,
             saveFailure: null,
             treeId: treeId,
+            replayCoordinator: wal.Coordinator,
             detectorDecision: () =>
             {
                 if (decision == FallOffLogDecision.SnapshotThenWal)
@@ -59,6 +61,7 @@ public partial class BPlusLeafGrainTests
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
         await ((ILeafProjection)grain).SetCheckpointOffsetAsync(4, CancellationToken.None);
+        wal.GrowTo(5);
 
         // From here on the WAL is "trimmed past" the checkpoint.
         decision = FallOffLogDecision.SnapshotThenWal;

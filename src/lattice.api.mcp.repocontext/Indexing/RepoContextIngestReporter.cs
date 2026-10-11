@@ -275,7 +275,14 @@ internal sealed class RepoContextIngestReporter : IDisposable
                 _files.Add(unchanged, r, new KeyValuePair<string, object?>(OutcomeTagKey, FileUnchangedTag), LatticeTenantLabel.Platform);
             }
 
-            var embedded = RepoContextIngestPass.Advance(ref pass.FilesEmbedded, update.FilesEmbedded);
+            var embedded = update.FilesEmbeddedDelta is { } delta
+                ? delta
+                : RepoContextIngestPass.Advance(ref pass.FilesEmbedded, update.FilesEmbedded);
+            if (update.FilesEmbeddedDelta is not null)
+            {
+                ArgumentOutOfRangeException.ThrowIfNegative(embedded);
+                pass.FilesEmbedded = checked(pass.FilesEmbedded + embedded);
+            }
             if (embedded > 0)
             {
                 _filesEmbedded.Add(embedded, r, LatticeTenantLabel.Platform);
