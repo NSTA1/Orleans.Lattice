@@ -44,7 +44,8 @@ public partial class AtomicWriteGrainTests
         IWalSaturationSignal? signal,
         FakePersistentState<AtomicWriteState>? existingState = null,
         LatticeOptions? options = null,
-        Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null)
+        Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null,
+        IWalPartitionSaturationSignal? partitionSignal = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("atomic-write", $"{TreeId}/{OperationId}"));
@@ -53,12 +54,19 @@ public partial class AtomicWriteGrainTests
         if (signal is not null)
         {
             sc.AddSingleton(signal);
+            if (signal is IWalPartitionSaturationSignal registeredPartitionSignal)
+            {
+                sc.AddSingleton(registeredPartitionSignal);
+            }
+        }
+        if (partitionSignal is not null)
+        {
+            sc.AddSingleton(partitionSignal);
         }
         if (lifetime is not null)
         {
             sc.AddSingleton(lifetime);
         }
-        context.ActivationServices.Returns(sc.BuildServiceProvider());
 
         var grainFactory = Substitute.For<IGrainFactory>();
         var lattice = Substitute.For<ILattice>();
@@ -95,6 +103,10 @@ public partial class AtomicWriteGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(opts);
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
+
+        sc.AddSingleton<IOptionsMonitor<LatticeOptions>>(optionsMonitor);
+        sc.AddSingleton(new LatticeOptionsResolver(grainFactory, optionsMonitor));
+        context.ActivationServices.Returns(sc.BuildServiceProvider());
 
         var state = existingState ?? new FakePersistentState<AtomicWriteState>();
         PreparedKeysReadBack.Stub(shard, () => state.State.Entries.Select(e => e.Key));
