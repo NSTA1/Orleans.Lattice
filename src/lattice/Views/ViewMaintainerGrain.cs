@@ -398,7 +398,10 @@ internal sealed partial class ViewMaintainerGrain(
         var walTreeId = string.IsNullOrEmpty(state.State.BoundPhysicalTreeId)
             ? await ResolveSourcePhysicalAsync(sourceTreeId)
             : state.State.BoundPhysicalTreeId;
-        batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
+        // Saturation is sampled per physical WAL id, so back-pressure is read under
+        // the bound physical id too: after a resize / undo / restore / revert the
+        // logical id names no sampled log and would read Healthy forever.
+        batchSize = ApplyBackpressureBatchScaling(walTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Hold every entry of this log the view has not durably consumed against
@@ -1372,24 +1375,26 @@ internal sealed partial class ViewMaintainerGrain(
         UpdateBackpressureDeferral();
     }
 
-    // Reads the source tree's current WAL saturation regime, honouring the
+    // Reads the source's current WAL saturation regime, honouring the
     // ObeySourceBackpressure switch and a missing signal (returns Healthy in both
-    // cases, i.e. full-rate draining).
-    private WalSaturationState GetSourceSaturationState(string sourceTreeId)
+    // cases, i.e. full-rate draining). The sampler keys its signal by the PHYSICAL
+    // WAL tree id, so callers pass the physical id they drain, never the logical
+    // alias.
+    private WalSaturationState GetSourceSaturationState(string walTreeId)
     {
         if (saturationSignal is null || !Options.ObeySourceBackpressure)
         {
             return WalSaturationState.Healthy;
         }
 
-        return saturationSignal.GetCurrentState(sourceTreeId);
+        return saturationSignal.GetCurrentState(walTreeId);
     }
 
     // Scales the configured per-pass batch down under source back-pressure and, when
     // the source is not healthy, records the self-throttle on the metrics surface.
-    private int ApplyBackpressureBatchScaling(string sourceTreeId, int batchSize, LatticeViewOptions options)
+    private int ApplyBackpressureBatchScaling(string walTreeId, int batchSize, LatticeViewOptions options)
     {
-        var saturation = GetSourceSaturationState(sourceTreeId);
+        var saturation = GetSourceSaturationState(walTreeId);
         if (saturation == WalSaturationState.Healthy)
         {
             return batchSize;
@@ -1408,21 +1413,32 @@ internal sealed partial class ViewMaintainerGrain(
     // source's current saturation regime so the next ticks back off while it is hot.
     private void UpdateBackpressureDeferral()
     {
-        var registration = catalog.TryGet(ViewName);
-        if (registration is null || _shipViewSuppressed)
-        {
-            _backpressureResumeUtc = DateTime.MinValue;
-            return;
-        }
-
-        var options = Options;
-        var pauseMs = ViewBackpressure.PauseMs(
-            GetSourceSaturationState(registration.SourceTreeId),
-            options.ThrottledPauseMs,
-            options.SaturatedPauseMs);
+        var pauseMs = ComputeBackpressurePauseMs();
 
         _backpressureResumeUtc = pauseMs > 0
             ? DateTime.UtcNow.AddMilliseconds(pauseMs)
             : DateTime.MinValue;
+    }
+
+    // The tick-skip window for the source's current saturation regime, read under
+    // the physical WAL id the view is bound to (the id the sampler keys by). An
+    // unbound maintainer has drained nothing yet and falls back to the logical id,
+    // which is the physical id of a never-swapped source.
+    internal int ComputeBackpressurePauseMs()
+    {
+        var registration = catalog.TryGet(ViewName);
+        if (registration is null || _shipViewSuppressed)
+        {
+            return 0;
+        }
+
+        var options = Options;
+        var walTreeId = string.IsNullOrEmpty(state.State.BoundPhysicalTreeId)
+            ? registration.SourceTreeId
+            : state.State.BoundPhysicalTreeId;
+        return ViewBackpressure.PauseMs(
+            GetSourceSaturationState(walTreeId),
+            options.ThrottledPauseMs,
+            options.SaturatedPauseMs);
     }
 }

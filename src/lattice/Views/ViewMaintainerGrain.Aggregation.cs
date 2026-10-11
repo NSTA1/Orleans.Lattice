@@ -49,7 +49,7 @@ internal sealed partial class ViewMaintainerGrain
         var batchSize = options.BatchSize > 0 ? options.BatchSize : LatticeViewOptions.DefaultBatchSize;
         var sourceTreeId = registration.SourceTreeId;
         var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
-        batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
+        batchSize = ApplyBackpressureBatchScaling(walTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Hold every entry of this log the view has not durably consumed against

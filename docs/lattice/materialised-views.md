@@ -364,6 +364,11 @@ that first activates over a source whose alias already resolves to a different
 physical tree likewise builds from that tree's current state rather than
 replaying its log.
 
+The retained cursor, consumer registration and lag report follow that same
+physical WAL binding, for both filter and aggregation views. A position from
+the replacement WAL must not advance a pin on the former copy. Deleting the
+view releases its bound physical consumer and any legacy logical registration.
+
 The rebind is **event-driven**. The tree registry pushes the alias change to every
 view maintainer sourcing that tree the moment the swap commits, and the next drain
 re-resolves and heals. A missed push is caught by a coarse backstop
@@ -904,12 +909,12 @@ with a smaller batch. Each self-throttled pass is emitted on
 `orleans.lattice.view.source_backpressure` (tagged with the observed source
 regime). Set `ObeySourceBackpressure` to `false` to opt out and always drain at
 full rate. The throttle engages only while the source is actually saturated, so
-leaving it on costs nothing on a healthy source. The maintainer reads the signal
-under the source's logical id, while the signal is sampled under the id of the
-write-ahead log the source's writes land in, so while the source resolves to a
-different physical copy - after a resize or undo, a shadow-cutover restore or revert,
-a schema remediation or an administrative alias change (see [Source-identity rebind](#source-identity-rebind)) - the
-maintainer does not see that copy's saturation and drains at full rate.
+leaving it on costs nothing on a healthy source. Both filter and aggregation
+drains, and the background tick deferral, read the signal under the physical
+WAL identity they are bound to. They therefore follow the replacement source's
+saturation after a resize/undo, shadow restore/revert, schema remediation or
+administrative alias change (see [Source-identity rebind](#source-identity-rebind));
+a stale signal under the logical alias does not throttle a different copy.
 
 Separately from this client-side self-throttle, the maintainer's catch-up reads
 no longer contend with foreground writes at the WAL grain itself. Each
