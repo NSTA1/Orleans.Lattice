@@ -130,6 +130,26 @@ internal sealed class TreeShardSplitGrain(
     }
 
     /// <summary>
+    /// <see cref="GetPhysicalTreeIdAsync"/> for a caller that has already read
+    /// the logical tree's registry entry: binds to the entry's physical tree
+    /// (<c>ResolveAsync</c> is <c>GetEntryAsync(id)?.PhysicalTreeId ?? id</c>)
+    /// instead of paying a second registry round trip, unless a binding is
+    /// already held.
+    /// </summary>
+    private string BindPhysicalTreeId(TreeRegistryEntry? entry)
+    {
+        if (_physicalTreeId is not null) return _physicalTreeId;
+        if (state.State.InProgress && state.State.PhysicalTreeId is { } bound)
+        {
+            _physicalTreeId = bound;
+            return bound;
+        }
+
+        _physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
+        return _physicalTreeId;
+    }
+
+    /// <summary>
     /// Whether the logical tree's registry entry still describes the physical
     /// tree this split is bound to. See <see cref="ShardMapCommitFence"/>.
     /// </summary>
@@ -285,11 +305,13 @@ internal sealed class TreeShardSplitGrain(
     /// </summary>
     internal async Task InitiateSplitStateAsync(int sourceShardIndex)
     {
+        // One registry entry carries the shard map, the alias and any in-flight
+        // cutover, so the map, the bound physical tree and the fence below are
+        // read as one consistent pair rather than as separate options, map and
+        // entry round trips that could each observe a different registry state.
         var registry = grainFactory.GetLatticeRegistry();
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-
-        var currentMap = await registry.GetShardMapAsync(TreeId)
-            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+        var entry = await registry.GetEntryAsync(TreeId);
+        var currentMap = await RegistryEntryShardMap.ResolveAsync(registry, optionsResolver, TreeId, entry);
 
         // Find virtual slots currently owned by the source shard.
         var ownedSlots = new List<int>();
@@ -305,8 +327,8 @@ internal sealed class TreeShardSplitGrain(
         // the alias: the map read above would then describe the copy while the
         // shards below belong to the replaced tree (issue #4264). Checked before
         // a shard index is allocated, so a refusal leaves nothing behind.
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        if (!ShardMapCommitFence.Admits(await registry.GetEntryAsync(TreeId), TreeId, physicalTreeId))
+        var physicalTreeId = BindPhysicalTreeId(entry);
+        if (!ShardMapCommitFence.Admits(entry, TreeId, physicalTreeId))
             throw new InvalidOperationException(
                 $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while an alias cutover of the tree is in progress.");
 

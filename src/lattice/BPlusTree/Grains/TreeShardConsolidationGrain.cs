@@ -189,6 +189,26 @@ internal sealed class TreeShardConsolidationGrain(
     }
 
     /// <summary>
+    /// <see cref="GetPhysicalTreeIdAsync"/> for a caller that has already read
+    /// the logical tree's registry entry: binds to the entry's physical tree
+    /// (<c>ResolveAsync</c> is <c>GetEntryAsync(id)?.PhysicalTreeId ?? id</c>)
+    /// instead of paying a second registry round trip, unless a binding is
+    /// already held.
+    /// </summary>
+    private string BindPhysicalTreeId(TreeRegistryEntry? entry)
+    {
+        if (_physicalTreeId is not null) return _physicalTreeId;
+        if (state.State.InProgress && state.State.PhysicalTreeId is { } bound)
+        {
+            _physicalTreeId = bound;
+            return bound;
+        }
+
+        _physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
+        return _physicalTreeId;
+    }
+
+    /// <summary>
     /// Whether the logical tree's registry entry still describes the physical
     /// tree this fold is bound to. See <see cref="ShardMapCommitFence"/>.
     /// </summary>
@@ -263,9 +283,13 @@ internal sealed class TreeShardConsolidationGrain(
         // not to whichever one an earlier fold on this coordinator used.
         _physicalTreeId = null;
         var registry = grainFactory.GetLatticeRegistry();
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
 
-        var currentMap = await registry.GetShardMapAsync(TreeId);
+        // One registry entry carries the shard map, the alias and any in-flight
+        // cutover, so the plan, the bound physical tree and the fence below are
+        // read as one consistent pair instead of as separate options, map,
+        // alias and entry round trips.
+        var entry = await registry.GetEntryAsync(TreeId);
+        var currentMap = entry?.ShardMap;
         if (currentMap is null)
         {
             // A tree that has never changed topology has no persisted map, and
@@ -278,8 +302,13 @@ internal sealed class TreeShardConsolidationGrain(
             // to slot-owned counting. An empty reassignment persists the live map
             // (or this default) inside one registry call, so it cannot erase a
             // concurrent split's reassignment the way a get-then-set could.
-            var defaultMap = ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
+            var defaultMap = await RegistryEntryShardMap.ResolveAsync(registry, optionsResolver, TreeId, entry);
             currentMap = await registry.ReassignSlotsAsync(TreeId, [], survivorShardIndex, defaultMap);
+
+            // The materialisation wrote the entry, so the alias and cutover the
+            // fence checks are re-read after it rather than taken from the
+            // pre-write snapshot. Rare: once per tree, on its first fold.
+            entry = await registry.GetEntryAsync(TreeId);
         }
 
         if (!ShardConsolidationPlanner.TryPlan(
@@ -300,13 +329,13 @@ internal sealed class TreeShardConsolidationGrain(
                 $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated into shard {survivorShardIndex}: {reason}");
         }
 
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
+        var physicalTreeId = BindPhysicalTreeId(entry);
 
         // Refuse while an alias cutover has carried another tree's map onto the
         // logical entry but not yet swapped the alias: the plan above would then
         // describe the copy while the shards below belong to the replaced tree
         // (issue #4264).
-        if (!ShardMapCommitFence.Admits(await registry.GetEntryAsync(TreeId), TreeId, physicalTreeId))
+        if (!ShardMapCommitFence.Admits(entry, TreeId, physicalTreeId))
             throw new InvalidOperationException(
                 $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while an alias cutover of the tree is in progress.");
 

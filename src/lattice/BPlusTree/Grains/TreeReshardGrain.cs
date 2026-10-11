@@ -136,8 +136,13 @@ internal sealed class TreeReshardGrain(
         // owns at least two slots, so a target above the slot count can never be
         // reached and would leave the coordinator in progress indefinitely. The
         // 4096 cap still applies to a tree whose map declares more slots.
+        // One registry entry carries both the map and the physical tree the
+        // empty-tree probe and fast path address, so neither pays a separate
+        // GetShardMapAsync or ResolveAsync round trip.
         var registry = grainFactory.GetLatticeRegistry();
-        var currentMap = await registry.GetShardMapAsync(TreeId)
+        var entry = await registry.GetEntryAsync(TreeId);
+        var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
+        var currentMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var virtualShardCount = currentMap.VirtualShardCount;
         var maxShardCount = Math.Min(virtualShardCount, LatticeConstants.DefaultVirtualShardCount);
@@ -163,13 +168,13 @@ internal sealed class TreeReshardGrain(
         // repin ShardCount atomically and rebuild the default identity map
         // without activating the coordinator machinery. No data has to move,
         // so a grow and a shrink are the same single registry write.
-        if (newShardCount != currentCount && await IsObservablyEmptyAsync(resolved, currentMap))
+        if (newShardCount != currentCount && await IsObservablyEmptyAsync(resolved, currentMap, physicalTreeId))
         {
             var previousIndices = currentMap.GetPhysicalShardIndices();
             var previousHighestShardIndex = Math.Max(
                 resolved.ShardCount - 1,
                 previousIndices.Count > 0 ? previousIndices[previousIndices.Count - 1] : -1);
-            await ApplyEmptyTreeResharAsync(registry, currentMap, newShardCount, virtualShardCount, previousHighestShardIndex);
+            await ApplyEmptyTreeResharAsync(registry, currentMap, newShardCount, virtualShardCount, previousHighestShardIndex, physicalTreeId);
             return;
         }
 
@@ -296,11 +301,12 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     /// <param name="resolved">The resolved per-tree options supplying the budget.</param>
     /// <param name="currentMap">The shard map observed by the caller, used to enumerate physical shards.</param>
+    /// <param name="physicalTreeId">The physical tree the caller read alongside <paramref name="currentMap"/>.</param>
     /// <returns><see langword="true"/> only when the tree was positively observed to be empty.</returns>
-    private async Task<bool> IsObservablyEmptyAsync(LatticeOptions resolved, ShardMap currentMap) =>
+    private async Task<bool> IsObservablyEmptyAsync(LatticeOptions resolved, ShardMap currentMap, string physicalTreeId) =>
         await TreeEmptinessProbe.IsObservablyEmptyAsync(
             grainFactory,
-            await ResolvePhysicalTreeIdAsync(),
+            physicalTreeId,
             currentMap.GetPhysicalShardIndices(),
             resolved.EmptyTreeProbeBudget);
 
@@ -413,7 +419,13 @@ internal sealed class TreeReshardGrain(
 
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var registry = grainFactory.GetLatticeRegistry();
-        var currentMap = await registry.GetShardMapAsync(TreeId)
+
+        // The map and the physical tree whose shards are probed below are both
+        // projections of one registry entry: read it once rather than paying
+        // GetShardMapAsync and ResolveAsync as two more serial round trips on
+        // every tick.
+        var entry = await registry.GetEntryAsync(TreeId);
+        var currentMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
 
         var physicalShards = currentMap.GetPhysicalShardIndices();
@@ -431,7 +443,7 @@ internal sealed class TreeReshardGrain(
         // Filter to eligible sources: owns ≥ 2 slots AND is not already
         // splitting. Splits-in-flight are counted separately and reduce the
         // remaining dispatch budget so we do not over-dispatch.
-        var physicalTreeId = await ResolvePhysicalTreeIdAsync();
+        var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
         var splittingTasks = new List<Task<bool>>(physicalShards.Count);
         var splittingIndices = new List<int>(physicalShards.Count);
         var splittingSlotCounts = new List<int>(physicalShards.Count);
@@ -532,7 +544,6 @@ internal sealed class TreeReshardGrain(
     {
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var registry = grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(TreeId);
 
         // Reconcile: drop folds that finished or were abandoned, and learn the
         // survivor of each one still running.
@@ -580,7 +591,13 @@ internal sealed class TreeReshardGrain(
         // driving them inline would hold this coordinator's turn, and with it
         // every IsReshardCompleteAsync poll, for as long as they take.
 
-        var map = await registry.GetShardMapAsync(TreeId)
+        // The map and the physical tree the healing-fold check below addresses
+        // are both projections of one registry entry, read once here - after
+        // the progress reads above, so the map is as fresh as it was when it
+        // had its own GetShardMapAsync round trip.
+        var entry = await registry.GetEntryAsync(TreeId);
+        var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
+        var map = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalCount = map.GetPhysicalShardIndices().Count;
 
@@ -892,12 +909,6 @@ internal sealed class TreeReshardGrain(
         }
     }
 
-    private async Task<string> ResolvePhysicalTreeIdAsync()
-    {
-        var registry = grainFactory.GetLatticeRegistry();
-        return await registry.ResolveAsync(TreeId);
-    }
-
     /// <summary>
     /// What a reshard refused, or paused, by a resize's hold on shard migrations
     /// (issue #4452) tells the operator: why, how long it lasts, and the remedy.
@@ -1031,7 +1042,8 @@ internal sealed class TreeReshardGrain(
         ShardMap currentMap,
         int newShardCount,
         int virtualShardCount,
-        int previousHighestShardIndex)
+        int previousHighestShardIndex,
+        string physicalTreeId)
     {
         var newMap = ShardMap.CreateDefault(virtualShardCount, newShardCount);
 
@@ -1039,7 +1051,6 @@ internal sealed class TreeReshardGrain(
         // shrink retired. Return them to service before any router can be
         // handed the map, or every operation on their slots would be refused as
         // stale routing. The tree is observably empty, so they hold nothing.
-        var physicalTreeId = await ResolvePhysicalTreeIdAsync();
         var indices = newMap.GetPhysicalShardIndices();
         var ownedSlots = new List<int>[indices.Count];
         for (var i = 0; i < ownedSlots.Length; i++) ownedSlots[i] = [];

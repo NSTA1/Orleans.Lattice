@@ -40,6 +40,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Compaction, resize and merge make fewer registry reads.** A tree's routed copy and shard map were fetched with calls separate from its entry; both now come from one entry read: compaction topology drops from 3 calls to 1 (3x), resize and merge set-up halve theirs (2x). ([#4820](https://github.com/NSTA1/Orleans.Lattice/pull/4820)) (`Orleans.Lattice`)
 
+- **Performance - Shard split, fold and reshard make fewer registry reads.** Starting a split or a fold read the shard map, routed copy and commit fence with separate calls; one entry read now serves all three (4 calls to 1, about 4x). Each reshard tick drops from 3 calls to 2. ([#4823](https://github.com/NSTA1/Orleans.Lattice/pull/4823)) (`Orleans.Lattice`)
+
 - **Performance - Atomic tag commits read row state in one call.** A flag-mode value-and-tags commit read each tag's two index rows with serial calls, 2N round trips for N tags. It reads them all in one batched call now: 4.8-12.2x faster and 68-80% less allocated. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice`)
 
 - **Performance - Tag index coverage markers write in one batch.** Repairing a tag index's covered-tree markers wrote one marker per tree in series. They are written in one batched call now, or a bounded concurrent wave in flag mode: 3.4-14.2x faster. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice`)
