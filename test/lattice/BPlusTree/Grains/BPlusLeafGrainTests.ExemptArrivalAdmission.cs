@@ -163,7 +163,7 @@ public partial class BPlusLeafGrainTests
 
         var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest!;
         var held = HoldEveryReplayPermit(gate);
-        SeedOneBelowInteractiveBound();
+        var seeded = SeedOneBelowInteractiveBound();
 
         Task? queued = null;
         Task? activation = null;
@@ -174,6 +174,8 @@ public partial class BPlusLeafGrainTests
                 Is.EqualTo(BPlusLeafGrain.ReplayAdmissionPhase.QueuedForPermit),
                 "precondition: the competitor sits one waiter below the bound, so it must be admitted and "
                 + "park on the full gate.");
+            Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.EqualTo(seeded + 1),
+                "the real non-exempt competitor must occupy the final admitted waiter slot.");
 
             activation = LeafActivationHarness.ActivateAsync(subject, CancellationToken.None);
             Assert.That(AwaitAdmissionVerdict(subject, activation),
@@ -185,6 +187,8 @@ public partial class BPlusLeafGrainTests
             var refusal = Assert.ThrowsAsync<LatticeSaturatedException>(
                 async () => await activation.WaitAsync(ExemptArrivalSettle));
             Assert.That(refusal!.SaturationSource, Is.EqualTo(LatticeSaturationSource.ReplayPermitAdmission));
+            Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.EqualTo(seeded + 1),
+                "the refused subject must not register another arrival.");
 
             ReleaseReplayPermits(gate, ref held);
             Assert.DoesNotThrowAsync(
@@ -228,8 +232,8 @@ public partial class BPlusLeafGrainTests
 
     /// <summary>
     /// Puts the admitted-waiter count one below the interactive bound and marks
-    /// the queue as failing to drain, so the refusal predicate can fire and one
-    /// more counted waiter tips the next interactive caller over the bound.
+    /// the queue as making no progress without an excessive fresh wait mean,
+    /// so one more counted waiter tips the next interactive caller over the bound.
     /// </summary>
     /// <returns>The seeded waiter count.</returns>
     private static int SeedOneBelowInteractiveBound()
@@ -242,11 +246,11 @@ public partial class BPlusLeafGrainTests
         var seeded = bound - 1;
         BPlusLeafGrain.SeedReplayAdmissionStateForTest(ExemptArrivalCeiling, seeded);
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
-            options.WalReplayPermitMaxQueueWait, sinceLastProgress: TimeSpan.Zero);
+            TimeSpan.Zero, sinceLastProgress: options.WalReplayPermitMaxQueueWait + TimeSpan.FromSeconds(1));
 
-        Assert.That(BPlusLeafGrain.IsReplayPermitQueueNotDraining(options.WalReplayPermitMaxQueueWait), Is.True,
-            "precondition: the drain half of the refusal predicate must hold, or depth alone never refuses "
-            + "and the bound is not live.");
+        Assert.That(BPlusLeafGrain.ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out _),
+            Is.EqualTo(BPlusLeafGrain.ReplayPermitDrainVerdict.NoProgress),
+            "precondition: exercise depth-qualified no-progress, not the independent slow-wait arm (#4071).");
         return seeded;
     }
 
