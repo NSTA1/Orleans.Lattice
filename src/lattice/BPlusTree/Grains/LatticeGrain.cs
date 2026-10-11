@@ -2769,6 +2769,13 @@ internal sealed partial class LatticeGrain(
                     {
                         await single.WaitAsync(singleWait.Duration);
                     }
+                    catch (TimeoutException) when (single.Exception?.InnerException is TimeoutException)
+                    {
+                        // WaitAsync also forwards a callee's timeout. Re-await
+                        // its faulted task so a domain subtype and its identity
+                        // survive; a pending task means the envelope expired.
+                        await single;
+                    }
                     catch (TimeoutException)
                     {
                         // Same abandonment contract as the multi-shard branch:
