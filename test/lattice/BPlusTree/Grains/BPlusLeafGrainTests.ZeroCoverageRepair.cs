@@ -140,7 +140,9 @@ public partial class BPlusLeafGrainTests
             string? treeId = null,
             Func<FallOffLogDecision>? detectorDecision = null,
             Func<int, FallOffLogDecision>? detectorDecisionForPartition = null,
-            int? maxConcurrentReplays = null)
+            int? maxConcurrentReplays = null,
+            ILeafReplayCoordinatorGrain? replayCoordinator = null,
+            string? replicaId = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -181,12 +183,15 @@ public partial class BPlusLeafGrainTests
                 });
         }
 
-        var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
-        coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(persistedCheckpoint < 0 ? 0L : persistedCheckpoint));
-        coord.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
-        coord.ReadSliceAsync(Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(Array.Empty<CommitLogSliceEntry>()));
+        var coord = replayCoordinator ?? Substitute.For<ILeafReplayCoordinatorGrain>();
+        if (replayCoordinator is null)
+        {
+            coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(persistedCheckpoint < 0 ? 0L : persistedCheckpoint));
+            coord.GetTailOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
+            coord.ReadSliceAsync(Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(Array.Empty<CommitLogSliceEntry>()));
+        }
 
         // TailReplay throughout by default: the fall-off-log advisory must NOT be
         // the thing that drives any capture observed here. That is the whole
@@ -214,7 +219,7 @@ public partial class BPlusLeafGrainTests
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString("N")));
+        context.GrainId.Returns(GrainId.Create("leaf", replicaId ?? Guid.NewGuid().ToString("N")));
         context.ActivationServices.Returns(services);
 
         var state = new FakePersistentState<LeafNodeState>();

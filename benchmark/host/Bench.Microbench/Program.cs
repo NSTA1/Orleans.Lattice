@@ -87,6 +87,12 @@ for (var i = 0; i < args.Length - 1; i++)
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
 }
 
+if (string.Equals(suite, "coveragestall", StringComparison.OrdinalIgnoreCase))
+{
+    var stallSummary = BenchmarkRunner.Run<CoverageStallTimerBenchmarks>(config);
+    return stallSummary.HasCriticalValidationErrors || stallSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "walclockfloor", StringComparison.OrdinalIgnoreCase))
 {
     var floorSummary = BenchmarkRunner.Run<WalClockFloorHotPathBenchmarks>(config);

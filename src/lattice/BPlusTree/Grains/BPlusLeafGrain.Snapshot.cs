@@ -828,14 +828,12 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Consecutive coverage-lag ticks a leaf must show an unchanged durable
     /// checkpoint, while holding live data, before
-    /// <see cref="IsCheckpointStalledBehindLiveData"/> routes it to the
+    /// <see cref="IsCheckpointStalledBehindLiveDataAsync"/> routes it to the
     /// starvation drive (issue #3389).
     /// <para>
-    /// Greater than one so that a leaf which is merely idle between writes is
-    /// not charged a WAL replay: an idle leaf legitimately shows an unchanged
-    /// checkpoint. It is the PERSISTENCE of that reading across ticks, on a
-    /// leaf that holds rows, which distinguishes a frozen checkpoint from a
-    /// quiet one.
+    /// Greater than one to debounce transient stalls. An unchanged checkpoint
+    /// alone does not distinguish a quiet leaf from a frozen one: the drive
+    /// additionally requires unscanned WAL work on a partition holding rows.
     /// </para>
     /// </summary>
     private const int CheckpointStallTicksBeforeDrive = 3;
@@ -852,6 +850,11 @@ internal sealed partial class BPlusLeafGrain
     /// unchanged while the leaf held live data.
     /// </summary>
     private int _consecutiveCheckpointStallTicks;
+
+    private uint _checkpointStallRearms;
+    private bool[]? _checkpointStallLiveData;
+    private ILeafReplayCoordinatorGrain?[]? _checkpointStallCoordinators;
+    private string? _checkpointStallCoordinatorTreeId;
 
     /// <summary>
     /// Whether this leaf holds rows and its durable checkpoint, though present,
@@ -884,7 +887,7 @@ internal sealed partial class BPlusLeafGrain
     /// after the freeze.
     /// </para>
     /// <para>
-    /// <b>Detection is temporal because the leaf holds no static witness.</b>
+    /// <b>Detection starts with a temporal debounce.</b>
     /// The highest applied WAL offset is a replay-time local, not persisted
     /// state, so "checkpoint is behind live data" cannot be read directly from
     /// a field. What CAN be read is whether the checkpoint moved between ticks.
@@ -892,15 +895,21 @@ internal sealed partial class BPlusLeafGrain
     /// sound precisely because checkpoints are monotonic non-decreasing: an
     /// unchanged sum therefore means no partition advanced, with no collision
     /// to worry about, and a changed sum means at least one did.
+    /// Once the threshold is reached, a live partition's exclusive WAL head
+    /// must be beyond <c>checkpoint + 1</c>. Otherwise the leaf is caught up
+    /// and must not ask for a replay permit (issue #3612). The probe repeats
+    /// on a later opportunity, so a new append cannot be latched out.
     /// </para>
     /// <para>
     /// <b>It cannot latch into hammering.</b> The stall counter is reset when
-    /// the drive is requested, so a leaf that stays frozen is re-driven at most
+    /// the drive is considered, so a leaf that stays frozen is re-driven at most
     /// once per <see cref="CheckpointStallTicksBeforeDrive"/> ticks rather than
     /// on every tick, and the drive owns its own permit, budget, timeout and
     /// single-flight latch. A drive refused admission to the replay gate is
     /// backed off for further thresholds on top of that (issue #3575). It
-    /// relaxes no no-loss precondition: the drive advances the checkpoint only
+    /// re-arms with zero to two additional ticks of per-leaf jitter, even on
+    /// a refused or deferred opportunity, so activation cohorts disperse.
+    /// It relaxes no no-loss precondition: the drive advances the checkpoint only
     /// from offsets it actually read out of the WAL, so this adds no route to
     /// stamping coverage the leaf has not earned.
     /// </para>
@@ -913,7 +922,8 @@ internal sealed partial class BPlusLeafGrain
     /// one, and those have different causes and different remedies.
     /// </para>
     /// </summary>
-    private bool IsCheckpointStalledBehindLiveData(int partitionCount)
+    internal async ValueTask<bool> IsCheckpointStalledBehindLiveDataAsync(
+        int partitionCount, CancellationToken cancellationToken)
     {
         long signature = 0;
         var anyCheckpointed = false;
@@ -947,7 +957,8 @@ internal sealed partial class BPlusLeafGrain
         // Unchanged. That is only a fault if there are rows whose durability
         // depends on the checkpoint advancing: a genuinely empty leaf has
         // nothing to lose and must not be charged a replay on every tick.
-        var liveData = ComputePartitionsWithLiveData(partitionCount);
+        var liveData = _checkpointStallLiveData = ComputePartitionsWithLiveData(
+            partitionCount, _checkpointStallLiveData);
         var holdsLiveData = false;
         for (var p = 0; p < liveData.Length; p++)
         {
@@ -969,10 +980,33 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
-        // Re-arm rather than latch: a leaf that stays frozen is re-driven once
-        // per threshold, not once per tick.
-        _consecutiveCheckpointStallTicks = 0;
-        return true;
+        // Re-arm on every opportunity, including a refused or deferred drive.
+        // Mixing the opportunity with the leaf id also breaks repeated cohorts.
+        var mixed = ((ulong)(uint)context.GrainId.GetHashCode() + ++_checkpointStallRearms)
+            * 0x9E3779B97F4A7C15UL;
+        _consecutiveCheckpointStallTicks = -(int)((mixed >> 32) % 3);
+        if (_checkpointStallCoordinators is null
+            || _checkpointStallCoordinators.Length != partitionCount
+            || !string.Equals(_checkpointStallCoordinatorTreeId, state.State.TreeId, StringComparison.Ordinal))
+        {
+            _checkpointStallCoordinators = new ILeafReplayCoordinatorGrain?[partitionCount];
+            _checkpointStallCoordinatorTreeId = state.State.TreeId;
+        }
+        for (var p = 0; p < liveData.Length; p++)
+        {
+            if (!liveData[p])
+                continue;
+
+            var coordinator = _checkpointStallCoordinators[p] ??=
+                grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{state.State.TreeId}/{p}");
+            var head = await coordinator.GetHeadOffsetAsync(cancellationToken);
+            // WAL heads are exclusive; checkpoints are inclusive. Subtract
+            // from the head rather than add to the checkpoint to avoid overflow.
+            if (head - 1 > GetCurrentCheckpointForPartition(p))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -2964,7 +2998,7 @@ internal sealed partial class BPlusLeafGrain
         // that found the projection stale: that verdict cannot clear by replay,
         // so the drive is skipped until a persisted checkpoint moves (issue
         // #3450).
-        if (IsCheckpointStalledBehindLiveData(starvationPartitionCount))
+        if (await IsCheckpointStalledBehindLiveDataAsync(starvationPartitionCount, cancellationToken))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
             await DriveStarvedCheckpointFromTimerAsync(starvationPartitionCount);
