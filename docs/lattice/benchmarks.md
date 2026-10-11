@@ -378,6 +378,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `walbatchbuffertrims` | The transient WAL record batch buffer the leaf's CRDT batch-apply and two merge-batch commit-log dispatches built per call, against a pooled rental above a size threshold, with a below-threshold control lane. |
 | `setkeytrims` | The base64 string the OR-set and RW-set delta accessors built on every staged remove only to probe a dictionary, against encoding into a stack or pooled span and probing through an alternate lookup. |
 | `replayscanloop` | The leaf replay scan loop bounded by the exclusive WAL head, which made one extra empty slice read past the newest entry per pass, against bounding it by the newest offset (head - 1). |
+| `coveragestall` | The shipping coverage timer stall eligibility, including its per-live-partition WAL-head probe and jittered re-arm, for caught-up and lagging one-row leaves. Uses allocation-free coordinator and runtime fakes. |
 
 ```powershell
 $env:BENCH_MICROBENCH_SUITE = 'catalog'

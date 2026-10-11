@@ -63,15 +63,18 @@ public partial class BPlusLeafGrainTests
     {
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         var treeId = UniqueCoverageRepairTreeId("timer-drive-refused");
+        var wal = new GrowingWal();
         var (grain, _, _, _) = CreateLeafForCoverageRepair(
             persistedCheckpoint: -1L,
             reClassifyEveryN: 1000,
             treeId: treeId,
-            maxConcurrentReplays: TimerAdmissionCeiling);
+            maxConcurrentReplays: TimerAdmissionCeiling,
+            replayCoordinator: wal.Coordinator);
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
         await ((ILeafProjection)grain).SetCheckpointOffsetAsync(4, CancellationToken.None);
+        wal.GrowTo(5);
 
         var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest!;
         var held = HoldTimerShare(gate);

@@ -1,3 +1,4 @@
+using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -60,12 +61,14 @@ public partial class BPlusLeafGrainTests
     public async Task Coverage_lag_tick_routes_a_leaf_whose_checkpoint_has_frozen_to_the_drive()
     {
         var treeId = UniqueCoverageRepairTreeId("checkpoint-frozen");
+        var wal = new GrowingWal();
 
         var (grain, _, _, _) = CreateLeafForCoverageRepair(
             persistedCheckpoint: -1L,
             reClassifyEveryN: 1000,
             saveFailure: null,
-            treeId: treeId);
+            treeId: treeId,
+            replayCoordinator: wal.Coordinator);
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
@@ -77,6 +80,7 @@ public partial class BPlusLeafGrainTests
         // One persist, then never again. This is the frozen state: a real,
         // non-negative checkpoint that stops advancing while writes continue.
         await ((ILeafProjection)grain).SetCheckpointOffsetAsync(4, CancellationToken.None);
+        wal.GrowTo(5);
 
         Assert.Multiple(() =>
         {
@@ -232,16 +236,22 @@ public partial class BPlusLeafGrainTests
     public async Task A_permanently_frozen_leaf_is_driven_at_a_bounded_rate_rather_than_every_tick()
     {
         var treeId = UniqueCoverageRepairTreeId("checkpoint-frozen-rearm");
+        var wal = new GrowingWal();
 
         var (grain, _, _, _) = CreateLeafForCoverageRepair(
             persistedCheckpoint: -1L,
             reClassifyEveryN: 1000,
             saveFailure: null,
-            treeId: treeId);
+            treeId: treeId,
+            replayCoordinator: wal.Coordinator);
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         SeedRow(grain);
         await ((ILeafProjection)grain).SetCheckpointOffsetAsync(4, CancellationToken.None);
+        wal.GrowTo(5);
+        wal.Coordinator.ReadSliceAsync(
+                Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>(Array.Empty<CommitLogSliceEntry>()));
 
         // Three full threshold windows' worth of ticks.
         const int windows = 3;

@@ -1097,11 +1097,19 @@ internal sealed partial class BPlusLeafGrain
     /// runs on every checkpoint flush and at deactivation - would force a leaf
     /// to materialise itself in full to answer a question about routing, which
     /// is exactly the cost bounded hydration exists to avoid.
+    /// A caller may supply its activation-local partition buffer to avoid a
+    /// fresh allocation; its flags are cleared before every walk.
+    /// The key walk still pays the sorted dictionary enumerator's traversal
+    /// stack allocation; removing it requires a different cache enumeration seam.
     /// </para>
     /// </summary>
-    private bool[] ComputePartitionsWithLiveData(int partitionCount)
+    private bool[] ComputePartitionsWithLiveData(int partitionCount, bool[]? reusable = null)
     {
-        var hasData = new bool[partitionCount];
+        var hasData = reusable is { } buffer && buffer.Length == partitionCount
+            ? buffer
+            : new bool[partitionCount];
+        if (ReferenceEquals(hasData, reusable))
+            Array.Clear(hasData);
         var remaining = partitionCount;
         foreach (var key in Cache.EnumerateKeysUnordered())
         {
