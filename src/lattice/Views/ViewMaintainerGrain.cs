@@ -140,6 +140,127 @@ internal sealed partial class ViewMaintainerGrain(
     {
         await EnsureGenerationNamingPinnedAsync();
         PublishActivationReadPositions();
+        await ReconcileCatalogRegistrationAsync();
+    }
+
+    /// <summary>
+    /// Corrects this silo's catalog entry for a runtime view against the durable
+    /// runtime-view registry, which is the cluster-wide authority for every view
+    /// not declared at startup.
+    /// </summary>
+    /// <remarks>
+    /// The catalog is a per-silo cache with no cross-silo invalidation:
+    /// <see cref="ILatticeViewFactory.DeleteAsync"/> removes the entry only on the
+    /// silo that served the delete, so a silo that created or re-hydrated the view
+    /// earlier keeps the deleted definition. Without this check a maintainer
+    /// activating there would resurrect the deleted view over its old source, or
+    /// project the old source into a view re-created under the same name over a
+    /// different one. Every delete deactivates the maintainer, so checking once per
+    /// activation covers every activation that follows a delete. Only entries
+    /// created through a runtime projection provider are checked; an entry
+    /// registered directly through <see cref="IViewCatalog.Register"/> is
+    /// catalog-only by design. A transient registry fault leaves the entry
+    /// untouched, as it was before this check. An entry the factory registered
+    /// ahead of its background registry write is left untouched while that write
+    /// is in flight: a missing or different record may simply predate it. If the
+    /// write failed, a missing record is still not evidence of a delete (the entry
+    /// is catalog-only until a restart, as the factory logs), but a different
+    /// record can only be a later re-create or the definition the failed write
+    /// never replaced, so it supersedes the entry; the mark therefore cannot
+    /// shield a stale definition from a re-create indefinitely. Replacing or
+    /// removing an entry discards its mark.
+    /// </remarks>
+    private async Task ReconcileCatalogRegistrationAsync()
+    {
+        var cached = catalog.TryGet(ViewName);
+        if (cached is null || IsStartupDeclared())
+        {
+            return;
+        }
+
+        var durability = catalog.GetDurability(cached);
+        if (durability == ViewCatalogDurability.PersistInFlight)
+        {
+            return;
+        }
+
+        RuntimeViewRegistration? record;
+        try
+        {
+            record = await FindDurableRegistrationAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "View '{ViewName}' could not verify its catalog entry against the durable runtime registry.", ViewName);
+            return;
+        }
+
+        if (record is null)
+        {
+            // Only a runtime-provider entry is backed by the durable registry. An
+            // entry registered directly through IViewCatalog.Register (no provider
+            // key) is catalog-only by design, so its missing record proves nothing.
+            if (durability == ViewCatalogDurability.Settled
+                && cached.ProjectionProviderKey is not null
+                && catalog.TryReplace(cached, replacement: null))
+            {
+                logger.LogInformation("View '{ViewName}' has no durable runtime registration; discarded this silo's stale catalog entry.", ViewName);
+            }
+
+            return;
+        }
+
+        if (string.Equals(record.SourceTreeId, cached.SourceTreeId, StringComparison.Ordinal)
+            && string.Equals(record.ProjectionVersion, cached.ProjectionVersion, StringComparison.Ordinal)
+            && string.Equals(record.ProjectionProviderKey, cached.ProjectionProviderKey, StringComparison.Ordinal)
+            && record.IsAggregation == cached.IsAggregation
+            && record.Accumulative == cached.Accumulative)
+        {
+            return;
+        }
+
+        var resolved = RuntimeViewRehydrator.Resolve(
+            record,
+            context.ActivationServices,
+            context.ActivationServices.GetRequiredService<RuntimeViewProjectionProviderCatalog>(),
+            logger);
+        if (catalog.TryReplace(cached, resolved))
+        {
+            logger.LogInformation("View '{ViewName}' replaced this silo's stale catalog entry with its durable runtime registration.", ViewName);
+        }
+    }
+
+    private bool IsStartupDeclared()
+    {
+        var startup = context.ActivationServices.GetService<IReadOnlyList<StartupViewRegistration>>();
+        if (startup is null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < startup.Count; i++)
+        {
+            if (string.Equals(startup[i].ViewName, ViewName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<RuntimeViewRegistration?> FindDurableRegistrationAsync()
+    {
+        var records = await grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey).ListAsync();
+        for (var i = 0; i < records.Count; i++)
+        {
+            if (string.Equals(records[i].ViewName, ViewName, StringComparison.Ordinal))
+            {
+                return records[i];
+            }
+        }
+
+        return null;
     }
 
     private string ViewName => context.GrainId.Key.ToString()!;
