@@ -69,6 +69,12 @@ claiming that a split is merely busy, a pair is not foldable, or versioning is
 not registered. A digest probe skips a failed pass without permanently disabling
 subsequent probes.
 
+An accepted resize undo stays pending when its dependencies raise a domain
+refusal; a shutdown or unreadable bootstrap fence is not proof the undo is
+permanently impossible. WAL GC distinguishes a callee's domain timeout from
+a response deadline: it records the former as a fault, not as an undelivered
+activation. Both leave the tree blocked and preserve bounded cooldowns.
+
 ## The idempotency-key contract
 
 `LatticeIdempotencyKey` is a small value carrying a single field:
