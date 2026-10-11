@@ -45,6 +45,11 @@ public sealed class LtProgressTests : ShellDesignTestContext
     [TestCase(8, 8, 100)]
     [TestCase(12, 8, 100)]
     [TestCase(-1, 8, 0)]
+    [TestCase(long.MaxValue / 2, long.MaxValue, 49)]
+    [TestCase(long.MaxValue - 1, long.MaxValue, 99)]
+    [TestCase(long.MaxValue, long.MaxValue, 100)]
+    [TestCase(long.MaxValue, long.MaxValue - 1, 100)]
+    [TestCase(long.MinValue, long.MaxValue, 0)]
     public void The_percentage_never_reaches_100_before_every_unit_is_done_and_is_clamped(long value, long maximum, int expected)
     {
         var cut = Render<LtProgress>(p => p.Add(x => x.Label, "Progress").Add(x => x.Value, value).Add(x => x.Maximum, maximum));

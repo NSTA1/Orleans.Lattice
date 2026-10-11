@@ -65,6 +65,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Progress and tab consistency.** Large progress totals retain exact percentages without overflow; renaming or disabling a tab refreshes its header and active panel together. ([#4850](https://github.com/NSTA1/Orleans.Lattice/issues/4850)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Automatic telemetry budgets.** Long windows and small point budgets use coarser automatic steps beyond the preset ladder without bypassing maximum-step limits. ([#4850](https://github.com/NSTA1/Orleans.Lattice/issues/4850)) (`Orleans.Lattice.Explorer.UI`)
+
 - **WAL - Partition-local floor-holder repair.** Candidate samples and admission compare each pin with its own partition floor, preserving distinct-leaf drive capacity without letting another partition authorize prefetch. Samples remain bounded. ([#3611](https://github.com/NSTA1/Orleans.Lattice/issues/3611)) (`Orleans.Lattice`)
 
 - **Explorer - Configuration save lifetime.** Configuration and history-retention replies no longer post success or failure messages after leaving the tree page. ([#4839](https://github.com/NSTA1/Orleans.Lattice/issues/4839)) (`Orleans.Lattice.Explorer.UI`)
