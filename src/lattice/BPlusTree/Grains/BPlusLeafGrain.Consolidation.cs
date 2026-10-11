@@ -121,7 +121,18 @@ internal sealed partial class BPlusLeafGrain
                 _deliverySequence++;
             }
 
-            await PersistAsync();
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                // Keep the unseal retryable on this activation too. Delivery
+                // sequences and versions can advance again on retry, but losing
+                // the seal in memory would skip the write disk still needs.
+                state.State.MovedAwaySlots = existing;
+                throw;
+            }
         }
         finally
         {

@@ -117,7 +117,10 @@ stateDiagram-v2
    orphan data. The table is lifted only if a later shard consolidation
    folds *T* back into *S* - and only after *T*'s entries for those slots
    have been drained onto *S* - at which point *S*'s leaves re-ship the
-   reclaimed rows to their read caches.
+   reclaimed rows to their read caches. The survivor keeps its shard routing
+   fence until every leaf has durably lifted its seal. A leaf-call timeout or
+   shard reactivation therefore leaves the reclaim retryable; the coordinator
+   does not publish the survivor in the routing map until that retry succeeds.
 
 The coordinator state is persisted before any side effect, so a silo crash
 mid-split is recovered by the keepalive reminder, which resumes from the

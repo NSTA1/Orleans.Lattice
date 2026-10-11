@@ -21,6 +21,29 @@ public partial class BPlusLeafGrainTests
 {
     private const int ConsolidationVirtualShardCount = 16;
 
+    [Test]
+    public async Task UnmarkSlotsMovedAway_after_persist_failure_keeps_seal_and_retries_durable_lift()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        const string key = "seed-00408";
+        byte[] value = [4, 8];
+        await grain.SetAsync(key, value);
+        var slot = ShardMap.GetVirtualSlot(key, ConsolidationVirtualShardCount);
+        await grain.MarkSlotsMovedAwayAsync([slot], ConsolidationVirtualShardCount);
+        var writesBefore = state.WriteCount;
+        state.ThrowOnWrite = new IOException("leaf state write failed");
+
+        Assert.ThrowsAsync<IOException>(() => grain.UnmarkSlotsMovedAwayAsync([slot], ConsolidationVirtualShardCount));
+
+        Assert.That(state.State.MovedAwaySlots, Is.EqualTo(new[] { slot }));
+        Assert.That(await grain.GetAsync(key), Is.Null, "A failed lift must remain sealed and retryable.");
+        Assert.That(grain.EntriesForTest.Keys, Does.Contain(key));
+        await grain.UnmarkSlotsMovedAwayAsync([slot], ConsolidationVirtualShardCount);
+        Assert.That(state.WriteCount, Is.EqualTo(writesBefore + 1), "The retry must actually persist the lifted seal.");
+        Assert.That(await grain.GetAsync(key), Is.EqualTo(value).AsCollection);
+    }
+
     // --- Validation ---
 
     [Test]
