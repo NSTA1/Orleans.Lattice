@@ -12,6 +12,31 @@ reuse economics, usage accounting, and the shared token counter they all budget
 in. Every tool here is read-only and clears the same fail-closed authorization
 gate as the rest of the surface.
 
+## Approximate-index maintenance
+
+Opening a persisted ANN index probes its source count to detect a shortfall. A
+count-budget timeout or an aborted enumeration is **unknown**, not evidence that
+the index is behind. Neither starts a repair walk. A completed count above the
+held count does start repair; writes deferred during a build remain known work
+and are replayed independently.
+
+Unknown counts retry after one minute, doubling to two, four, eight, then at most
+ten minutes between attempts. A completed count resets that backoff. The build
+coordinator keeps its phase timer armed while verification is pending, even when
+the durable index is Ready, and stands down after verification and any repair
+complete. The loaded index can still serve while confirmation is pending; Ready
+is not a fresh coverage measurement. A retraining turn suppresses the count
+probe, and the handle's single turn prevents probes from overlapping retraining.
+
+Every retrain (including an attempt that fails) logs its submitted record count,
+UTF-8 key plus value payload bytes, key deletes, prefix-delete requests, elapsed
+seconds, and completed/failed outcome as **WAL input**. These are measured at the
+index-store write seam: a failed request may have committed only part of its
+batch, so submitted bytes are not confirmed durable bytes. The report excludes
+WAL framing, replication overhead, and the records removed by a prefix delete.
+It does not measure physical WAL occupancy, pinned bytes, or when reclamation
+will occur. No write pacing or checkpoint policy is changed by this accounting.
+
 ## The shared token counter
 
 A single byte-pair-encoding (BPE) token counter underpins every figure on this

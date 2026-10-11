@@ -23,6 +23,12 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
     /// <summary>How many records have been written, in total, across every call.</summary>
     public int RecordsWritten { get; private set; }
 
+    /// <summary>Total UTF-8 key and value payload bytes written by the rig.</summary>
+    public long PayloadBytesWritten { get; private set; }
+
+    /// <summary>A write failure injected before any record is committed.</summary>
+    public Exception? WriteFault { get; set; }
+
     /// <summary>How many prefix scans have been issued against the store.</summary>
     public int Scans { get; private set; }
 
@@ -62,10 +68,15 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
         IReadOnlyList<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entries);
+        if (WriteFault is { } fault)
+        {
+            return Task.FromException(fault);
+        }
         foreach (var (key, value) in entries)
         {
             _records[key] = value;
             RecordsWritten++;
+            PayloadBytesWritten += System.Text.Encoding.UTF8.GetByteCount(key) + value.LongLength;
         }
 
         return Task.CompletedTask;

@@ -8,8 +8,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 
 /// <summary>
 /// Unit coverage for <see cref="RepoContextAnnIndexHandle"/> driven directly, so
-/// the arms a registry-level test cannot reach are exercised: the shortfall repair
-/// when the source cannot be counted at all, the retrain the maintenance turn owns,
+/// the arms a registry-level test cannot reach are exercised: the unknown count
+/// retry policy, the retrain the maintenance turn owns,
 /// the write and flush short-circuits, and the post-dispose behaviour.
 /// <para>
 /// The handle is advanced a step at a time and nothing here starts work of its
@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class RepoContextAnnIndexHandleTests
+public sealed partial class RepoContextAnnIndexHandleTests
 {
     private const string RepoId = "acme";
 
@@ -26,7 +26,7 @@ public sealed class RepoContextAnnIndexHandleTests
 
     private CancellationToken Ct => TestContext.CurrentContext.CancellationToken;
 
-    private static RepoContextAnnOptions Options(double retrainFraction = 0d) => new()
+    private static RepoContextAnnOptions Options(double retrainFraction = 0d, TimeProvider? clock = null) => new()
     {
         MinimumTrainingCount = 8,
         PartitionCount = 4,
@@ -35,6 +35,7 @@ public sealed class RepoContextAnnIndexHandleTests
         IngestBatchSize = 16,
         MaxItemsPerChunk = 8,
         RetrainAfterUpdateFraction = retrainFraction,
+        TimeProvider = clock ?? TimeProvider.System,
     };
 
     private sealed class Rig : IDisposable
@@ -262,73 +263,6 @@ public sealed class RepoContextAnnIndexHandleTests
             Assert.That(async () => await rig.Handle.FlushAsync(Ct), Throws.Nothing);
         });
         Assert.That(rig.Store.RecordsWritten, Is.EqualTo(writes));
-    }
-
-    [Test]
-    public async Task A_source_that_cannot_be_counted_is_repaired_rather_than_abandoned()
-    {
-        // The count is only a hint that decides whether to SKIP the repair, so
-        // failing to obtain it must mean "repair", not "give up". Letting the abort
-        // propagate is what made a whole index build fail on a real deployment
-        // (#1844): the probe walks the repository's entire vector prefix and on a
-        // large cold tree can outrun even a generous reconnect budget.
-        using var rig = new Rig();
-        rig.SeedRing(16);
-        await rig.Handle.EnsureBuiltAsync(Ct);
-
-        // Restart onto the persisted index, and add a vector the persisted index
-        // does not hold, so there is a genuine shortfall to repair.
-        rig.Restart();
-        rig.Source.Set("vec-999999", RepoContextKeys.File(RepoId, "src/Late.cs"), Rig.Unit(1));
-        rig.Source.FailNextCounts(1, static () => new EnumerationAbortedException("reconnect budget exhausted"));
-
-        Assert.That(async () => await rig.Handle.EnsureBuiltAsync(Ct), Throws.Nothing,
-            "an uncountable source must not fail the build");
-
-        var outcome = await rig.Handle.SearchAsync(Rig.Unit(1), 5, Ct);
-        Assert.Multiple(() =>
-        {
-            Assert.That(rig.Handle.IsServing, Is.True);
-            Assert.That(outcome.State, Is.Not.EqualTo(RepoContextAnnServingState.Bootstrapping));
-            Assert.That(outcome.Matches.Select(static m => m.VectorId), Does.Contain("vec-999999"),
-                "treating 'unknown' as 'possibly behind' is what keeps the repair on the safe path");
-        });
-    }
-
-    [Test]
-    public async Task A_source_whose_count_ran_out_of_budget_is_repaired_on_the_same_reasoning()
-    {
-        // The sibling of the test above, and the reason the catch was widened rather
-        // than a second handler added. There are now two ways the count can be
-        // unavailable - the store losing the enumerator (#1844) and the source
-        // declining to spend more wall clock on the walk (#2447) - and the
-        // distinction matters in a log line and nowhere else. Neither yields a
-        // figure, and a missing figure has exactly one safe reading here: possibly
-        // behind, therefore repair.
-        //
-        // Worth pinning separately because the failure mode of getting it wrong is
-        // silent. A budget-stopped count that propagated would fail the build; one
-        // that returned its partial figure would under-count, read as "not behind",
-        // and skip this repair with no error anywhere.
-        using var rig = new Rig();
-        rig.SeedRing(16);
-        await rig.Handle.EnsureBuiltAsync(Ct);
-
-        rig.Restart();
-        rig.Source.Set("vec-999999", RepoContextKeys.File(RepoId, "src/Late.cs"), Rig.Unit(1));
-        rig.Source.FailNextCounts(
-            1, static () => new RepoContextCountBudgetExceededException(RepoId, 12, TimeSpan.FromSeconds(10)));
-
-        Assert.That(async () => await rig.Handle.EnsureBuiltAsync(Ct), Throws.Nothing,
-            "a count abandoned on its own budget must not fail the build either");
-
-        var outcome = await rig.Handle.SearchAsync(Rig.Unit(1), 5, Ct);
-        Assert.Multiple(() =>
-        {
-            Assert.That(rig.Handle.IsServing, Is.True);
-            Assert.That(outcome.Matches.Select(static m => m.VectorId), Does.Contain("vec-999999"),
-                "an unknown count must repair, however it came to be unknown");
-        });
     }
 
     [Test]

@@ -42,7 +42,7 @@ public sealed partial class RepoContextAnnIndexBuildGrainTests
 
     private static EmbeddingSpaceTag Space => AnnPlaneFixture.Space;
 
-    private static RepoContextAnnOptions PlaneOptions() => new()
+    private static RepoContextAnnOptions PlaneOptions(TimeProvider? clock = null) => new()
     {
         MinimumTrainingCount = 8,
         PartitionCount = 4,
@@ -51,6 +51,7 @@ public sealed partial class RepoContextAnnIndexBuildGrainTests
         IngestBatchSize = 8,
         MaxItemsPerChunk = 8,
         RetrainAfterUpdateFraction = 0d,
+        TimeProvider = clock ?? TimeProvider.System,
     };
 
     /// <summary>

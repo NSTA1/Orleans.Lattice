@@ -120,6 +120,13 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
     }
 
     /// <summary>
+    /// Reads pending count verification without opening or allocating a plane.
+    /// A Ready index can still need this confirmation after a count timeout.
+    /// </summary>
+    internal bool HasPendingSourceCount(string repoId, EmbeddingSpaceTag space)
+        => _entries.TryGetValue(new PlaneKey(repoId, space), out var handle) && handle.SourceCountPending;
+
+    /// <summary>
     /// The reporter metering whether each plane holds a partitioning. Exposed so a
     /// test can read the arms without a meter listener.
     /// </summary>
