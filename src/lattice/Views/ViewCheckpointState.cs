@@ -147,4 +147,43 @@ internal sealed class ViewCheckpointState
     /// </remarks>
     [Id(9)]
     public long? LegacyGenerationCeiling { get; set; }
+
+    /// <summary>
+    /// Per-partition read position the maintainer had reached when it last
+    /// persisted while an atomic batch was still staged, or <see langword="null"/>
+    /// when nothing was staged. The persisted <see cref="AppliedOffsets"/> are
+    /// held back below the oldest staged entry, so a restart re-reads entries the
+    /// previous activation had already applied or resolved. Every re-read entry at
+    /// or below this fence is replayed only into the staging bookkeeping: an
+    /// ordinary write is not re-applied over a newer flushed batch, and a batch
+    /// absent from <see cref="ReplayFenceStagedTransactions"/> is treated as
+    /// already resolved rather than re-staged.
+    /// </summary>
+    [Id(10)]
+    public Dictionary<int, long>? ReplayFenceOffsets { get; set; }
+
+    /// <summary>
+    /// The physical source tree id whose write-ahead log
+    /// <see cref="ReplayFenceOffsets"/> addresses. A fence recorded against any
+    /// other log is ignored.
+    /// </summary>
+    [Id(11)]
+    public string? ReplayFenceWalTreeId { get; set; }
+
+    /// <summary>
+    /// The atomic transactions still staged when <see cref="ReplayFenceOffsets"/>
+    /// was recorded. Only these are re-staged from entries at or below the fence.
+    /// </summary>
+    [Id(12)]
+    public List<Guid>? ReplayFenceStagedTransactions { get; set; }
+
+    /// <summary>
+    /// The highest HLC of any ordinary write, or flushed overlapping prepare,
+    /// recorded against each still-staged source key when
+    /// <see cref="ReplayFenceOffsets"/> was recorded. Restored on replay because
+    /// a flushed batch below the fence is not re-staged and so cannot record its
+    /// prepares against the overlapping batch again.
+    /// </summary>
+    [Id(13)]
+    public Dictionary<string, HybridLogicalClock>? ReplayFenceSupersession { get; set; }
 }

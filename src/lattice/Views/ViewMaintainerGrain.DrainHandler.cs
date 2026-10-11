@@ -33,10 +33,28 @@ internal sealed partial class ViewMaintainerGrain
             {
                 case StagingDisposition.Apply:
                     owner.RecordOrdinaryOverStagedKey(mutation);
-                    onApply(mutation);
+
+                    // A fenced replay re-reads a write an earlier activation already
+                    // applied; applying it again would land it over any newer batch
+                    // that activation flushed, which the flush cannot repeat.
+                    if (!owner.IsReplayFenced(entry.Partition, entry.Offset))
+                    {
+                        onApply(mutation);
+                    }
+
                     break;
 
                 case StagingDisposition.Stage:
+                    if (owner.IsReplayFenced(entry.Partition, entry.Offset)
+                        && !owner.IsReplayStaged(mutation.TransactionId))
+                    {
+                        // Resolved (flushed or aborted) before the fence was recorded.
+                        // Re-staging a resolved batch would pin a batch whose other entries may lie
+                        // below an already-advanced checkpoint and never be re-read.
+                        owner.MarkResolved(mutation.TransactionId);
+                        break;
+                    }
+
                     owner.HandleStagingEntry(
                         mutation, entry.Partition, entry.Offset, terminalCommit, terminalAbort, completedTransactions);
                     break;

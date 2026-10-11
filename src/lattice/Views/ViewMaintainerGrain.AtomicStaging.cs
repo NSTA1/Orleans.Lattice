@@ -53,6 +53,12 @@ internal sealed partial class ViewMaintainerGrain
     private readonly Dictionary<int, long> _stagingReadOffsets = new();
     private string? _stagingReadWalTreeId;
 
+    // Replay fence armed from the persisted checkpoint for a pass that re-reads
+    // entries an earlier activation already applied or resolved (see
+    // ViewCheckpointState.ReplayFenceOffsets); null when no replay is fenced.
+    private Dictionary<int, long>? _replayFenceOffsets;
+    private HashSet<Guid>? _replayFenceStaged;
+
     // Bounded set of transaction ids already committed-and-applied or aborted
     // in this activation, so a late prepare/terminal that the held-back
     // checkpoint re-reads (or a sibling read later in the same pass than its
@@ -384,6 +390,7 @@ internal sealed partial class ViewMaintainerGrain
         {
             _stagingReadOffsets.Clear();
             _stagingReadWalTreeId = null;
+            ArmReplayFence(walTreeId);
             return persisted;
         }
 
@@ -429,6 +436,188 @@ internal sealed partial class ViewMaintainerGrain
                 _stagingReadOffsets[partition] = offset;
             }
         }
+    }
+
+    /// <summary>
+    /// Arms the persisted replay fence before a pass that resumes from the
+    /// held-back checkpoint with nothing staged in memory (a fresh activation, or
+    /// a rebuild that kept the checkpoint), restoring the supersession HLCs the
+    /// skipped flushed batches had recorded. The persisted fence always contains
+    /// any fence already armed in this activation, so reloading it is safe. A
+    /// fence recorded against another physical log is discarded.
+    /// </summary>
+    private void ArmReplayFence(string walTreeId)
+    {
+        if (_staging.Count != 0)
+        {
+            return;
+        }
+
+        if (state.State.ReplayFenceOffsets is not { Count: > 0 } offsets)
+        {
+            _replayFenceOffsets = null;
+            _replayFenceStaged = null;
+            return;
+        }
+
+        if (!string.Equals(state.State.ReplayFenceWalTreeId, walTreeId, StringComparison.Ordinal))
+        {
+            ClearReplayFence();
+            return;
+        }
+
+        _replayFenceOffsets = new Dictionary<int, long>(offsets);
+        _replayFenceStaged = new HashSet<Guid>(state.State.ReplayFenceStagedTransactions ?? []);
+        if (state.State.ReplayFenceSupersession is { } supersession)
+        {
+            foreach (var (key, hlc) in supersession)
+            {
+                _ordinaryHlcOverStagedKey[key] = hlc;
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when an entry was already read by an earlier pass
+    /// that persisted the armed replay fence, so it must not be re-applied.
+    /// </summary>
+    private bool IsReplayFenced(int partition, long offset)
+        => _replayFenceOffsets is { } fence
+            && fence.TryGetValue(partition, out var fenced)
+            && offset <= fenced;
+
+    /// <summary>
+    /// <see langword="true"/> when <paramref name="txId"/> was still staged when the
+    /// armed replay fence was recorded, so its fenced entries are re-staged.
+    /// </summary>
+    private bool IsReplayStaged(Guid txId) => _replayFenceStaged?.Contains(txId) == true;
+
+    /// <summary>
+    /// Records the replay fence for the coming checkpoint write: the read position
+    /// reached (never below a still-unpassed armed fence), the batches still
+    /// staged (plus armed batches not yet re-read), and their supersession HLCs.
+    /// Clears it once nothing is staged and any armed fence has been passed.
+    /// Returns <see langword="true"/> when the persisted fence changed and so must
+    /// be written even if the checkpoint did not move.
+    /// </summary>
+    private bool UpdateReplayFence(
+        string walTreeId,
+        IReadOnlyDictionary<int, long> readFrom,
+        IReadOnlyDictionary<int, long> advanced)
+    {
+        var position = new Dictionary<int, long>(readFrom);
+        foreach (var (partition, offset) in advanced)
+        {
+            if (offset > position.GetValueOrDefault(partition, -1))
+            {
+                position[partition] = offset;
+            }
+        }
+
+        var staged = new HashSet<Guid>(_staging.Keys);
+        var supersession = new Dictionary<string, HybridLogicalClock>(_ordinaryHlcOverStagedKey, StringComparer.Ordinal);
+        if (_replayFenceOffsets is { } armed)
+        {
+            var passed = true;
+            foreach (var (partition, fenced) in armed)
+            {
+                if (position.GetValueOrDefault(partition, -1) < fenced)
+                {
+                    passed = false;
+                    position[partition] = fenced;
+                }
+            }
+
+            if (passed)
+            {
+                _replayFenceOffsets = null;
+                _replayFenceStaged = null;
+            }
+            else
+            {
+                foreach (var txId in _replayFenceStaged!)
+                {
+                    if (!_resolved.Contains(txId))
+                    {
+                        staged.Add(txId);
+                    }
+                }
+
+                if (state.State.ReplayFenceSupersession is { } prior)
+                {
+                    foreach (var (key, hlc) in prior)
+                    {
+                        if (!supersession.TryGetValue(key, out var live) || hlc.CompareTo(live) > 0)
+                        {
+                            supersession[key] = hlc;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (staged.Count == 0)
+        {
+            return ClearReplayFence();
+        }
+
+        var changed = !string.Equals(state.State.ReplayFenceWalTreeId, walTreeId, StringComparison.Ordinal)
+            || !SameEntries(state.State.ReplayFenceOffsets, position)
+            || !SameEntries(state.State.ReplayFenceSupersession, supersession)
+            || state.State.ReplayFenceStagedTransactions is not { } persisted
+            || persisted.Count != staged.Count
+            || !persisted.TrueForAll(staged.Contains);
+        if (!changed)
+        {
+            return false;
+        }
+
+        state.State.ReplayFenceWalTreeId = walTreeId;
+        state.State.ReplayFenceOffsets = position;
+        state.State.ReplayFenceStagedTransactions = [.. staged];
+        state.State.ReplayFenceSupersession = supersession;
+        return true;
+    }
+
+    /// <summary>
+    /// Drops the persisted and armed replay fence; the caller's next checkpoint
+    /// write persists the removal. Returns <see langword="true"/> when a persisted
+    /// fence was present.
+    /// </summary>
+    private bool ClearReplayFence()
+    {
+        _replayFenceOffsets = null;
+        _replayFenceStaged = null;
+        if (state.State.ReplayFenceOffsets is null && state.State.ReplayFenceWalTreeId is null
+            && state.State.ReplayFenceStagedTransactions is null && state.State.ReplayFenceSupersession is null)
+        {
+            return false;
+        }
+
+        state.State.ReplayFenceOffsets = null;
+        state.State.ReplayFenceWalTreeId = null;
+        state.State.ReplayFenceStagedTransactions = null;
+        state.State.ReplayFenceSupersession = null;
+        return true;
+    }
+
+    private static bool SameEntries<TKey, TValue>(Dictionary<TKey, TValue>? persisted, Dictionary<TKey, TValue> live)
+        where TKey : notnull
+    {
+        if (persisted is null || persisted.Count != live.Count)
+        {
+            return false;
+        }
+
+        foreach (var (key, value) in live)
+        {
+            if (!persisted.TryGetValue(key, out var other) || !EqualityComparer<TValue>.Default.Equals(value, other))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

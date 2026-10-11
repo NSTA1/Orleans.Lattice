@@ -663,6 +663,7 @@ internal sealed partial class ViewMaintainerGrain(
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
         RecordDrainReadOffsets(walTreeId, readFrom, advancedOffsets);
+        var replayFenceChanged = UpdateReplayFence(walTreeId, readFrom, advancedOffsets);
         ApplyCheckpointHoldBack(advancedOffsets, partitions);
 
         var offsetsAdvanced = false;
@@ -678,7 +679,7 @@ internal sealed partial class ViewMaintainerGrain(
         state.State.HighestAppliedTimestamp = highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
 
-        if (offsetsAdvanced || appliedCount > 0)
+        if (offsetsAdvanced || appliedCount > 0 || replayFenceChanged)
         {
             LowerReadPositions(walTreeId, state.State.AppliedOffsets);
             await state.WriteStateAsync();
