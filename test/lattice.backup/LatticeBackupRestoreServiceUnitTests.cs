@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Backup.Tests;
@@ -77,6 +78,76 @@ public sealed class LatticeBackupRestoreServiceUnitTests
 
         return (service, catalog, sink);
     }
+
+    [Test]
+    public void RevertRestoreAsync_admits_a_stamped_shadow_without_resolving_the_target_alias()
+    {
+        var (service, registry) = CreateRevertService(new TreeRegistryEntry { RestoreShadowOfTreeId = "orders" });
+
+        Assert.ThrowsAsync<RevertReachedSwapException>(() => service.RevertRestoreAsync(RevertResult("orders-shadow")));
+
+        _ = registry.Received(1).GetEntryAsync("orders-shadow");
+        _ = registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public void RevertRestoreAsync_admits_the_current_physical_tree_through_the_target_alias()
+    {
+        var (service, registry) = CreateRevertService(new TreeRegistryEntry());
+        registry.ResolveAsync("orders").Returns(Task.FromResult("orders-shadow"));
+
+        Assert.ThrowsAsync<RevertReachedSwapException>(() => service.RevertRestoreAsync(RevertResult("orders-shadow")));
+
+        _ = registry.Received(1).ResolveAsync("orders");
+    }
+
+    [Test]
+    public void RevertRestoreAsync_rejects_a_physical_tree_that_is_neither_a_shadow_nor_the_current_tree()
+    {
+        var (service, registry) = CreateRevertService(new TreeRegistryEntry { RestoreShadowOfTreeId = "other" });
+        registry.ResolveAsync("orders").Returns(Task.FromResult("orders"));
+
+        Assert.ThrowsAsync<LatticeRestoreValidationException>(
+            () => service.RevertRestoreAsync(RevertResult("orders-shadow")));
+    }
+
+    private static LatticeRestoreResult RevertResult(string shadow) => new(
+        "backup-id", "orders", LatticeRestoreMode.ShadowCutover, "op-revert", new[] { "backup-id" }, 0)
+    {
+        PreviousPhysicalTreeId = "orders",
+        ShadowPhysicalTreeId = shadow,
+    };
+
+    private (LatticeBackupRestoreService Service, ILatticeRegistry Registry) CreateRevertService(
+        TreeRegistryEntry shadowEntry)
+    {
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetEntryAsync("orders-shadow").Returns(Task.FromResult<TreeRegistryEntry?>(shadowEntry));
+
+        // Validation passing is observed as reaching the alias swap, which the
+        // harness stops at rather than standing the deletion grain up.
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        grainFactory.GetGrain<ITreeDeletionGrain>(Arg.Any<string>()).Returns(_ => throw new RevertReachedSwapException());
+
+        var gate = Substitute.For<ILatticeAccessGate>();
+        gate.AuthorizeAsync(Arg.Any<LatticeAccessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Allow()));
+
+        var service = new LatticeBackupRestoreService(
+            grainFactory,
+            Substitute.For<ILatticeBackupSink>(),
+            Substitute.For<ILatticeBackupCatalogStore>(),
+            new BackupAccessAuthorizer(gate),
+            _serializer,
+            Substitute.For<ITagIndexReconcileTrigger>(),
+            Substitute.For<IServiceProvider>(),
+            Substitute.For<ILatticeBackupTenantScope>(),
+            NullLogger<LatticeBackupRestoreService>.Instance);
+        return (service, registry);
+    }
+
+    private sealed class RevertReachedSwapException : Exception;
 
     [Test]
     public async Task RestoreAsync_returns_dispatched_result_when_dispatcher_handles_it()

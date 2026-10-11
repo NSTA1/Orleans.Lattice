@@ -249,41 +249,57 @@ internal sealed class LatticeStateObserver(
         string? continuationToken,
         CancellationToken cancellationToken)
     {
-        var cursor = new long[partitions];
-
         if (string.IsNullOrEmpty(continuationToken))
         {
             // Fresh subscription: start from the live tail so only changes
-            // committed after the subscription opens are delivered.
+            // committed after the subscription opens are delivered. The
+            // partitions are independent shards, so their tails are read
+            // concurrently: opening costs one WAL round trip, not one per
+            // partition.
+            var tails = new Task<long>[partitions];
             for (var p = 0; p < partitions; p++)
             {
-                var grain = _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{p}");
-                cursor[p] = await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
+                tails[p] = _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{p}")
+                    .GetNextSequenceAsync(cancellationToken).AsTask();
             }
 
-            return cursor;
+            return await Task.WhenAll(tails).ConfigureAwait(false);
         }
 
         var decoded = DecodeToken(continuationToken, partitions);
+        var checks = new Task[partitions];
         for (var p = 0; p < partitions; p++)
         {
-            var grain = _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{p}");
-            var nextSequence = await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
-            var liveCount = await grain.GetLiveEntryCountAsync(cancellationToken).ConfigureAwait(false);
-            var earliestRetained = nextSequence - liveCount;
-
-            // A resume offset below the earliest still-retained sequence means
-            // the missed changes have been trimmed: surface an explicit expiry
-            // rather than a silent gap.
-            if (decoded[p] < earliestRetained)
-            {
-                throw new LatticeStateCursorExpiredException();
-            }
-
-            cursor[p] = decoded[p];
+            checks[p] = EnsureResumableAsync(
+                _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{p}"), decoded[p], cancellationToken);
         }
 
-        return cursor;
+        await Task.WhenAll(checks).ConfigureAwait(false);
+        return decoded;
+    }
+
+    /// <summary>
+    /// Throws <see cref="LatticeStateCursorExpiredException"/> when
+    /// <paramref name="resumeOffset"/> falls below the earliest sequence the
+    /// partition still retains. Each partition keeps its own read order (the
+    /// next sequence, then the live count); partitions are checked concurrently.
+    /// </summary>
+    private static async Task EnsureResumableAsync(
+        IWalShardGrain grain,
+        long resumeOffset,
+        CancellationToken cancellationToken)
+    {
+        var nextSequence = await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
+        var liveCount = await grain.GetLiveEntryCountAsync(cancellationToken).ConfigureAwait(false);
+        var earliestRetained = nextSequence - liveCount;
+
+        // A resume offset below the earliest still-retained sequence means
+        // the missed changes have been trimmed: surface an explicit expiry
+        // rather than a silent gap.
+        if (resumeOffset < earliestRetained)
+        {
+            throw new LatticeStateCursorExpiredException();
+        }
     }
 
     private bool TryProject(StateObserveRequest request, WalRecord entry, out StateChangeKind kind)
