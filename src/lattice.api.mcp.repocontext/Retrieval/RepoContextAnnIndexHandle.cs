@@ -1278,7 +1278,12 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         }
 
         await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
-        _sourceCountPending = false;
+        // Deferred replay refreshes known writes but deliberately skipped the
+        // count. A restored build still needs verification on its next turn.
+        if (deferred is null)
+        {
+            _sourceCountPending = false;
+        }
     }
 
     private async Task MaintainAsync(DurableVectorIndex index, CancellationToken cancellationToken)

@@ -1,4 +1,5 @@
 using System.Reflection;
+using Orleans.Lattice.Vector;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 using Orleans.Lattice.Vector.Persistence;
 
@@ -6,6 +7,60 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 
 public sealed partial class RepoContextAnnIndexHandleTests
 {
+    [Test]
+    public async Task Advance_restored_build_deferred_replay_preserves_verification_until_completed_count()
+    {
+        var clock = new AdvanceableTimeProvider();
+        using var rig = new Rig(Options(clock: clock));
+        rig.SeedRing(64);
+        VectorIndexBuildProgress progress;
+        do
+        {
+            progress = await rig.Handle.AdvanceAsync(Ct);
+            Assert.That(progress.Phase, Is.Not.EqualTo(VectorIndexBuildPhase.Ready));
+        } while (progress.VectorsIndexed == 0);
+        rig.Restart();
+        progress = await rig.Handle.AdvanceAsync(Ct);
+        Assert.That(progress.Phase, Is.Not.EqualTo(VectorIndexBuildPhase.Ready),
+            "the restored build must still be streaming when the real write arrives");
+        const string Revised = "vec-000000";
+        var distinctive = Rig.Unit(3);
+        rig.Source.Set(Revised, RepoContextKeys.File(RepoId, "src/File0.cs"), distinctive);
+        await rig.Handle.ApplyWriteAsync(
+            [new RepoContextAnnVectorUpdate(Revised, RepoContextKeys.File(RepoId, "src/File0.cs"), distinctive)],
+            [], Ct);
+        var counts = rig.Source.CountCalls;
+        await rig.Handle.EnsureBuiltAsync(Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Source.CountCalls, Is.EqualTo(counts),
+                "deferred replay deliberately bypasses the count");
+            Assert.That(rig.Handle.SourceCountPending, Is.True,
+                "replaying known writes cannot complete restored source-count verification");
+        });
+        var outcome = await rig.Handle.SearchAsync(distinctive, 1, Ct);
+        Assert.That(outcome.Matches[0].Score, Is.GreaterThan(0.9d));
+        rig.Source.FailNextCounts(1, static () =>
+            new RepoContextCountBudgetExceededException(RepoId, 12, TimeSpan.FromSeconds(10)));
+        await rig.Handle.AdvanceAsync(Ct);
+        await rig.Handle.ApplyWriteAsync(
+            [new RepoContextAnnVectorUpdate(Revised, RepoContextKeys.File(RepoId, "src/File0.cs"), distinctive)],
+            [], Ct);
+        await rig.Handle.AdvanceAsync(Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Source.CountCalls, Is.EqualTo(counts + 1));
+            Assert.That(rig.Handle.SourceCountPending, Is.True);
+        });
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await rig.Handle.AdvanceAsync(Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Source.CountCalls, Is.EqualTo(counts + 2));
+            Assert.That(rig.Handle.SourceCountPending, Is.False);
+        });
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task Advance_unknown_count_does_not_repair_and_retries_only_after_backoff(bool budgetExpired)
