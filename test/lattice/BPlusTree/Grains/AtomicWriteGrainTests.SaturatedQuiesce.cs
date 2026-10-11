@@ -5,6 +5,7 @@ using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -91,6 +92,104 @@ public partial class AtomicWriteGrainTests
         await signal.DidNotReceive().WaitForHealthyAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>());
         await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_partition_only_signal_uses_bound_physical_tree()
+    {
+        const string key = "partition-only-signal-key";
+        const string physicalTreeId = "physical-copy";
+        const int walPartitions = 2;
+        var partition = WalPartitionHash.Compute(key, walPartitions);
+        var partitionSignal = Substitute.For<IWalPartitionSaturationSignal>();
+        partitionSignal.GetCurrentState(Arg.Any<string>(), Arg.Any<int>())
+            .Returns(WalSaturationState.Saturated);
+        partitionSignal.WaitForHealthyAsync(
+                physicalTreeId, partition, Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (grain, _, lattice, _) = CreateGrainWithSignal(
+            signal: null,
+            partitionSignal: partitionSignal,
+            options: new LatticeOptions { TxRegistryShardCount = 1, WalPartitions = walPartitions });
+        var routing = new RoutingInfo(
+            physicalTreeId,
+            ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount));
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<RoutingInfo>(routing));
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(routing));
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries((key, [1])));
+
+        partitionSignal.Received().GetCurrentState(physicalTreeId, partition);
+        await partitionSignal.Received(1).WaitForHealthyAsync(
+            physicalTreeId, partition, Arg.Any<CancellationToken>());
+        partitionSignal.DidNotReceive().GetCurrentState(TreeId, Arg.Any<int>());
+        await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_repeated_quiesce_routing_changes_fail_before_dispatch()
+    {
+        const string key = "repeated-routing-change-key";
+        const int walPartitions = 2;
+        var entries = MakeEntries((key, [1]));
+        var map = ShardMap.CreateDefault(
+            LatticeConstants.DefaultVirtualShardCount,
+            LatticeConstants.DefaultShardCount);
+        var existing = new FakePersistentState<AtomicWriteState>();
+        existing.State.Phase = AtomicWritePhase.Execute;
+        existing.State.TreeId = TreeId;
+        existing.State.Entries = entries;
+        existing.State.PreValues = [new AtomicPreValue { Key = key }];
+        existing.State.NextIndex = 0;
+        existing.State.TouchedShards = [map.Resolve(key)];
+        existing.State.TransactionId = Guid.NewGuid();
+        existing.State.KeyFingerprint = ComputeFingerprint((key, [1]));
+        existing.State.AtomicBatchSize = 1;
+        existing.State.SagaStartedAtTicks = DateTimeOffset.UtcNow.UtcTicks;
+        existing.State.BoundPhysicalTreeId = TreeId;
+        existing.State.RoutingEpoch = 0;
+        existing.State.WalPartitions = [WalPartitionHash.Compute(key, walPartitions)];
+
+        var signal = Substitute.For<IWalSaturationSignal, IWalPartitionSaturationSignal>();
+        var partitionSignal = (IWalPartitionSaturationSignal)signal;
+        partitionSignal.GetCurrentState(Arg.Any<string>(), Arg.Any<int>())
+            .Returns(WalSaturationState.Saturated);
+        partitionSignal.WaitForHealthyAsync(
+                Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (grain, state, lattice, _) = CreateGrainWithSignal(
+            signal,
+            existingState: existing,
+            options: new LatticeOptions { TxRegistryShardCount = 1, WalPartitions = walPartitions });
+        var routingReads = 0;
+        RoutingInfo NextRouting()
+        {
+            var nextMap = ShardMap.CreateDefault(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+            nextMap.Version = Math.Min(++routingReads, 12);
+            return new RoutingInfo(TreeId, nextMap);
+        }
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(NextRouting()));
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(NextRouting()));
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => grain.ExecuteAsync(TreeId, entries));
+
+        Assert.That(ex!.Message, Does.Contain("routing epoch kept changing"));
+        Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Execute),
+            "unstable routing must fail while the saga is still undecided");
+        Assert.That(state.State.NextIndex, Is.Zero,
+            "routing refreshes must not checkpoint the batch as dispatched");
+        await lattice.DidNotReceive().SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
     }
 
     [Test]

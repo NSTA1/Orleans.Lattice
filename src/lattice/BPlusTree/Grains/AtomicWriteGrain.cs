@@ -2021,10 +2021,13 @@ internal sealed partial class AtomicWriteGrain(
     /// Saga-coordinator quiesce gate: with a persisted partition
     /// snapshot and an <see cref="IWalPartitionSaturationSignal"/>,
     /// waits only on captured partitions that report
-    /// <see cref="WalSaturationState.Saturated"/>. Otherwise it falls
-    /// back to the tree-wide
-    /// <see cref="IWalSaturationSignal"/>. The signal is queried under
-    /// the bound physical tree id, or <paramref name="treeId"/> while
+    /// <see cref="WalSaturationState.Saturated"/>. This interface is
+    /// resolved independently of the tree-wide
+    /// <see cref="IWalSaturationSignal"/>; a partition-only host is
+    /// supported. The tree-wide signal is the fallback when the
+    /// partition signal or its snapshot is unavailable. The selected
+    /// signal is queried under the bound physical tree id, or
+    /// <paramref name="treeId"/> while
     /// unbound, and recovery is awaited up to
     /// <c>min(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout)</c>.
     /// Returns <see cref="SagaQuiesceOutcome.Proceed"/> on clean recovery,
@@ -2053,11 +2056,11 @@ internal sealed partial class AtomicWriteGrain(
     /// </summary>
     private async Task<SagaQuiesceOutcome> QuiesceOnSaturatedAsync(string treeId)
     {
-        var signal = ResolveSaturationSignal();
-        if (signal is null) return SagaQuiesceOutcome.Proceed;
-        var saturationTreeId = state.State.BoundPhysicalTreeId ?? treeId;
         var partitionSignal = GrainContext.ActivationServices?.GetService<IWalPartitionSaturationSignal>();
         var partitionScoped = partitionSignal is not null && state.State.WalPartitions.Count > 0;
+        var signal = partitionScoped ? null : ResolveSaturationSignal();
+        if (!partitionScoped && signal is null) return SagaQuiesceOutcome.Proceed;
+        var saturationTreeId = state.State.BoundPhysicalTreeId ?? treeId;
         if (partitionScoped)
         {
             var anySaturated = false;
@@ -2071,7 +2074,7 @@ internal sealed partial class AtomicWriteGrain(
             }
             if (!anySaturated) return SagaQuiesceOutcome.Proceed;
         }
-        else if (signal.GetCurrentState(saturationTreeId) != WalSaturationState.Saturated)
+        else if (signal!.GetCurrentState(saturationTreeId) != WalSaturationState.Saturated)
         {
             return SagaQuiesceOutcome.Proceed;
         }
@@ -2137,7 +2140,7 @@ internal sealed partial class AtomicWriteGrain(
             }
             else
             {
-                await signal.WaitForHealthyAsync(saturationTreeId, cts.Token).ConfigureAwait(true);
+                await signal!.WaitForHealthyAsync(saturationTreeId, cts.Token).ConfigureAwait(true);
             }
             var refreshed = await grainFactory.GetGrain<ILattice>(treeId)
                 .GetRoutingAsync(forceRefresh: true);
@@ -2165,7 +2168,7 @@ internal sealed partial class AtomicWriteGrain(
             var stillSaturated = partitionScoped
                 ? state.State.WalPartitions.Any(partition =>
                     partitionSignal!.GetCurrentState(saturationTreeId, partition) == WalSaturationState.Saturated)
-                : signal.GetCurrentState(saturationTreeId) == WalSaturationState.Saturated;
+                : signal!.GetCurrentState(saturationTreeId) == WalSaturationState.Saturated;
             if (!stillSaturated)
             {
                 return SagaQuiesceOutcome.Proceed;
@@ -3240,7 +3243,22 @@ internal sealed partial class AtomicWriteGrain(
             return;
         }
 
-        await RefreshRoutingSnapshotAsync(routing);
+        await CaptureUnboundRoutingSnapshotAsync(routing);
+    }
+
+    private async Task CaptureUnboundRoutingSnapshotAsync(RoutingInfo routing)
+    {
+        var touched = new SortedSet<int>(state.State.TouchedShards);
+        foreach (var entry in state.State.Entries)
+        {
+            touched.Add(routing.Map.Resolve(entry.Key));
+        }
+
+        var walPartitions = await ResolveWalPartitionsAsync(routing, state.State.Entries);
+        state.State.TouchedShards = [.. touched];
+        state.State.BoundPhysicalTreeId = routing.PhysicalTreeId;
+        state.State.RoutingEpoch = routing.Map.Version;
+        state.State.WalPartitions = walPartitions;
     }
 
     /// <summary>
@@ -3461,6 +3479,8 @@ internal sealed partial class AtomicWriteGrain(
         using (LatticePreparedContext.BeginScope())
         {
             var bindingMoves = 0;
+            const int MaxQuiesceRoutingChanges = 3;
+            var quiesceRoutingChanges = 0;
             if (state.State.BoundPhysicalTreeId is null
                 && state.State.NextIndex < state.State.Entries.Count)
             {
@@ -3539,10 +3559,11 @@ internal sealed partial class AtomicWriteGrain(
                 var batchStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                 try
                 {
-                    // Quiesce-on-Saturated saga gate. When the
-                    // silo-scoped saturation signal reports the tree
-                    // as Saturated, park the saga on
-                    // WaitForHealthyAsync up to
+                    // Quiesce-on-Saturated saga gate. It checks the
+                    // captured partitions when partition-scoped
+                    // signaling is available, otherwise the
+                    // tree-wide fallback, and parks on the selected
+                    // signal's WaitForHealthyAsync up to
                     // min(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout)
                     // before dispatching the batched SetManyAsync.
                     // The pre-saga-quiesce-gate budget was a fixed 5
@@ -3566,14 +3587,21 @@ internal sealed partial class AtomicWriteGrain(
                     // off and re-issues the saga (same operationId)
                     // to resume - far cheaper than a re-dispatched
                     // batched SetManyAsync against a throttled
-                    // account.
+                    // account. A map-epoch change during recovery
+                    // refreshes the snapshot and participant set
+                    // before retrying; repeated changes are bounded
+                    // and fail before dispatch or a commit decision.
                     var quiesceOutcome = await QuiesceOnSaturatedAsync(state.State.TreeId).ConfigureAwait(true);
                     if (quiesceOutcome == SagaQuiesceOutcome.RoutingChanged)
                     {
                         await EnsureParticipantRowAsync().ConfigureAwait(true);
+                        if (++quiesceRoutingChanges > MaxQuiesceRoutingChanges)
+                        {
+                            break;
+                        }
                         continue;
                     }
-                    if (quiesceOutcome == SagaQuiesceOutcome.StillSaturated)
+                    else if (quiesceOutcome == SagaQuiesceOutcome.StillSaturated)
                     {
                         LatticeMetrics.RecordSaturationRefusal(state.State.TreeId, LatticeSaturationSource.AtomicWriteSaga);
                         throw new LatticeSaturatedException(
@@ -3893,6 +3921,12 @@ internal sealed partial class AtomicWriteGrain(
                     throw;
                 }
                 return;
+            }
+
+            if (quiesceRoutingChanges > MaxQuiesceRoutingChanges)
+            {
+                throw new InvalidOperationException(
+                    $"Atomic-write saga {OperationKey} could not dispatch because the shard-map routing epoch kept changing.");
             }
         }
 

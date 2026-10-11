@@ -1022,10 +1022,12 @@ only those captured WAL partitions; a saturated unrelated partition does
 not stall the batch. The wait is capped at the smaller of a 30-second saga
 ceiling and the tree's `LatticeOptions.WalAppendDispatchTimeout`, so the
 saga's quiesce always wins over the writer-side admission deadline; it
-returns early once the host starts stopping. If partition-scoped signaling
-is unavailable but a tree-wide signal is registered, it retains that more
-restrictive signal and wait. If neither signal is registered, the optional
-quiesce remains skipped.
+returns early once the host starts stopping. When the partition-scoped
+interface is available and the snapshot contains partitions, it is used
+independently; no tree-wide signal is required. If the partition interface
+or a usable partition snapshot is unavailable, a registered tree-wide
+signal remains the fail-closed fallback. If neither usable signal is
+registered, the optional quiesce remains skipped.
 The signal is queried under the captured physical tree id, matching the WAL
 writer's key. If the shard-map epoch changes before the commit decision,
 the saga refreshes and persists its route snapshot, includes both the old

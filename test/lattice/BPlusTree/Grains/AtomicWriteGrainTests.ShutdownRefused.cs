@@ -44,7 +44,8 @@ public partial class AtomicWriteGrainTests
         IWalSaturationSignal? signal,
         FakePersistentState<AtomicWriteState>? existingState = null,
         LatticeOptions? options = null,
-        Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null)
+        Microsoft.Extensions.Hosting.IHostApplicationLifetime? lifetime = null,
+        IWalPartitionSaturationSignal? partitionSignal = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("atomic-write", $"{TreeId}/{OperationId}"));
@@ -53,10 +54,14 @@ public partial class AtomicWriteGrainTests
         if (signal is not null)
         {
             sc.AddSingleton(signal);
-            if (signal is IWalPartitionSaturationSignal partitionSignal)
+            if (signal is IWalPartitionSaturationSignal registeredPartitionSignal)
             {
-                sc.AddSingleton(partitionSignal);
+                sc.AddSingleton(registeredPartitionSignal);
             }
+        }
+        if (partitionSignal is not null)
+        {
+            sc.AddSingleton(partitionSignal);
         }
         if (lifetime is not null)
         {
