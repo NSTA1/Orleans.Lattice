@@ -538,6 +538,7 @@ internal sealed partial class ViewMaintainerGrain(
         // (highest applied plus the staging blocked-floor) after the flush.
         var collected = new List<ViewWrite>();
         var completedTransactions = new List<Guid>();
+        SeedStillStagedCompletedTransactions(completedTransactions);
         // Classify while folding: the drain loop already visits every projected
         // write, so record the range-kind classifications here instead of
         // re-walking the whole buffer with separate .Exists passes after the drain
@@ -563,7 +564,8 @@ internal sealed partial class ViewMaintainerGrain(
             },
             completedTransactions);
 
-        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
+        var readFrom = DrainReadCheckpoints(walTreeId, state.State.AppliedOffsets);
+        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, readFrom)
         {
             HighestApplied = state.State.HighestAppliedTimestamp,
             BatchSize = batchSize,
@@ -660,6 +662,7 @@ internal sealed partial class ViewMaintainerGrain(
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
+        RecordDrainReadOffsets(walTreeId, readFrom, advancedOffsets);
         ApplyCheckpointHoldBack(advancedOffsets, partitions);
 
         var offsetsAdvanced = false;

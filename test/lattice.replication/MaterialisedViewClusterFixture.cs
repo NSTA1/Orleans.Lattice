@@ -102,6 +102,13 @@ internal sealed class MaterialisedViewClusterFixture
                 BackstopViewName,
                 o => o.MaxStagedTransactions = 1);
 
+            // A reserved view name with a two-entry drain batch so an atomic
+            // batch's commit terminal can sit further past its staged prepare
+            // than one drain pass reads.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                NarrowBatchStagingViewName,
+                o => o.BatchSize = 2);
+
             // A reserved view name with a deliberately tiny cross-tree readiness
             // timeout so the joint-flip liveness path (degrade to per-tree-slice
             // atomicity when a participant view never becomes ready) is exercised
@@ -187,6 +194,12 @@ internal sealed class MaterialisedViewClusterFixture
     /// bounded-buffer staging backstop fires on the second staged transaction.
     /// </summary>
     public const string BackstopViewName = "mv-atomic-backstop-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>BatchSize = 2</c> so a staged atomic
+    /// batch's terminal lies beyond one drain pass of its held-back checkpoint.
+    /// </summary>
+    public const string NarrowBatchStagingViewName = "mv-atomic-narrow-batch-view";
 
     /// <summary>
     /// View name pre-configured with a tiny <c>CrossTreeReadinessTimeout</c> so

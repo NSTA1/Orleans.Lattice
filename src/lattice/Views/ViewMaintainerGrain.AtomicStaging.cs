@@ -43,6 +43,16 @@ internal sealed partial class ViewMaintainerGrain
     // prepares and per-shard terminals are spread across partition cursors.
     private readonly Dictionary<Guid, StagedTransaction> _staging = new();
 
+    // In-activation read position per partition while anything is staged. The
+    // persisted resume offset is held back below the lowest staged entry so a
+    // restart re-stages the batch, but within the activation the staged entries
+    // are already buffered, so the next pass resumes reading where the last one
+    // stopped. Resuming from the held-back offset instead re-reads the same
+    // bounded window forever whenever the batch's terminal lies more than one
+    // drain batch past its prepare on the same partition.
+    private readonly Dictionary<int, long> _stagingReadOffsets = new();
+    private string? _stagingReadWalTreeId;
+
     // Bounded set of transaction ids already committed-and-applied or aborted
     // in this activation, so a late prepare/terminal that the held-back
     // checkpoint re-reads (or a sibling read later in the same pass than its
@@ -216,6 +226,22 @@ internal sealed partial class ViewMaintainerGrain
         return tx.AtomicBatchSize > 0 && tx.PreparesByIndex.Count >= tx.AtomicBatchSize;
     }
 
+    /// <summary>
+    /// Seeds a pass's completed list with every batch already complete but still
+    /// staged (a cross-tree batch awaiting its joint decision), so it is retried
+    /// on this pass even though the pass resumes reading past its terminal.
+    /// </summary>
+    private void SeedStillStagedCompletedTransactions(List<Guid> completed)
+    {
+        foreach (var (txId, tx) in _staging)
+        {
+            if (IsComplete(tx))
+            {
+                completed.Add(txId);
+            }
+        }
+    }
+
     private void MarkResolved(Guid txId)
     {
         if (!_resolved.Add(txId))
@@ -313,6 +339,65 @@ internal sealed partial class ViewMaintainerGrain
         }
 
         return floor;
+    }
+
+    /// <summary>
+    /// The per-partition offsets a drain pass resumes reading from: the persisted
+    /// (held-back) checkpoint, advanced to the in-activation read position while a
+    /// batch is still staged against the same physical WAL.
+    /// </summary>
+    private IReadOnlyDictionary<int, long> DrainReadCheckpoints(string walTreeId, Dictionary<int, long> persisted)
+    {
+        if (_staging.Count == 0 || _stagingReadOffsets.Count == 0
+            || !string.Equals(_stagingReadWalTreeId, walTreeId, StringComparison.Ordinal))
+        {
+            _stagingReadOffsets.Clear();
+            _stagingReadWalTreeId = null;
+            return persisted;
+        }
+
+        var merged = new Dictionary<int, long>(persisted);
+        foreach (var (partition, offset) in _stagingReadOffsets)
+        {
+            if (offset > merged.GetValueOrDefault(partition, -1))
+            {
+                merged[partition] = offset;
+            }
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// Records where this pass stopped reading (before the checkpoint hold-back)
+    /// so the next pass resumes there while a batch stays staged; clears the
+    /// position once nothing is staged, when the persisted checkpoint is exact.
+    /// </summary>
+    private void RecordDrainReadOffsets(
+        string walTreeId,
+        IReadOnlyDictionary<int, long> readFrom,
+        IReadOnlyDictionary<int, long> advanced)
+    {
+        _stagingReadOffsets.Clear();
+        if (_staging.Count == 0)
+        {
+            _stagingReadWalTreeId = null;
+            return;
+        }
+
+        _stagingReadWalTreeId = walTreeId;
+        foreach (var (partition, offset) in readFrom)
+        {
+            _stagingReadOffsets[partition] = offset;
+        }
+
+        foreach (var (partition, offset) in advanced)
+        {
+            if (offset > _stagingReadOffsets.GetValueOrDefault(partition, -1))
+            {
+                _stagingReadOffsets[partition] = offset;
+            }
+        }
     }
 
     /// <summary>

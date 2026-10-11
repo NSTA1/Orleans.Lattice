@@ -62,6 +62,7 @@ internal sealed partial class ViewMaintainerGrain
         // the maintainer reports its own cursor after the fold below.
         var contributions = new List<AggregationContribution>();
         var completedTransactions = new List<Guid>();
+        SeedStillStagedCompletedTransactions(completedTransactions);
         // Classify while folding: the drain loop already visits every projected
         // contribution, so record whether any is a RangeReconcile here instead of
         // re-walking the whole buffer with a separate .Exists pass after the drain.
@@ -81,7 +82,8 @@ internal sealed partial class ViewMaintainerGrain
             },
             completedTransactions);
 
-        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
+        var readFrom = DrainReadCheckpoints(walTreeId, state.State.AppliedOffsets);
+        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, readFrom)
         {
             HighestApplied = state.State.HighestAppliedTimestamp,
             BatchSize = batchSize,
@@ -142,6 +144,7 @@ internal sealed partial class ViewMaintainerGrain
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
+        RecordDrainReadOffsets(walTreeId, readFrom, advancedOffsets);
         ApplyCheckpointHoldBack(advancedOffsets, partitions);
 
         var offsetsAdvanced = false;
