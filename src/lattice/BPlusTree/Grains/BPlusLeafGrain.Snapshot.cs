@@ -361,9 +361,10 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// <para>
     /// Recorded from the CLAMPED ceiling that
-    /// <c>TryFlushRecoveredCeilingAsync</c> already computes - <c>maxApplied</c>
-    /// bounded below the lowest unresolved deferred terminal and below any
-    /// unresolved saga prepare - and never from raw <c>maxApplied</c>. That
+    /// <c>TryFlushRecoveredCeilingAsync</c> already computes - the scanned-through
+    /// <c>maxScanned</c> bounded below the lowest unresolved deferred terminal
+    /// and below any unresolved saga prepare - and never from raw
+    /// <c>maxScanned</c>. That
     /// choice is load-bearing TWICE over, and a later reader must not
     /// "simplify" it away:
     /// </para>

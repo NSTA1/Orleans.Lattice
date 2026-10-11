@@ -120,11 +120,11 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     /// <param name="consumedBelowOffset">
-    /// The highest offset this activation has already consumed - applied or
-    /// ledgered - in this partition, strictly below <paramref name="offset"/>.
-    /// Callers pass the replay loop's running <c>maxApplied</c>, which has not
-    /// yet taken <paramref name="offset"/> into account at the point of the
-    /// offer, so it is exactly "what precedes this entry in the window".
+    /// The highest offset this activation has scanned in this partition,
+    /// strictly below <paramref name="offset"/>. Callers pass the replay loop's
+    /// running <c>maxScanned</c>, which has not yet taken
+    /// <paramref name="offset"/> into account at the point of the offer, so it
+    /// is exactly "what precedes this entry in the window".
     /// </param>
     /// <param name="windowStartCheckpoint">
     /// The partition checkpoint this activation's replay window opened at, which
@@ -195,7 +195,7 @@ internal sealed partial class BPlusLeafGrain
     /// <b>This needs no threshold, budget, or tunable, and deliberately has
     /// none.</b> The predicate is self-limiting: at most one offer per
     /// partition per activation can be the window's first entry, because the
-    /// entry that satisfies it immediately advances <c>maxApplied</c> past the
+    /// entry that satisfies it immediately advances <c>maxScanned</c> past the
     /// checkpoint and no later offer in that partition can satisfy it again.
     /// The ledger can therefore exceed the cap by at most one row per
     /// partition, each one bought with a strictly shorter replay window on the
