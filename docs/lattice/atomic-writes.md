@@ -1015,21 +1015,27 @@ Reference - Shutdown back-
 pressure](api.md#shutdown-back-pressure---latticeshuttingdownexception)
 for the cross-feature contract.
 
-The saga also quiesces on the per-tree `IWalSaturationSignal` before
-each batched dispatch when the signal reports `Saturated`. The wait is
-capped at the smaller of a 30-second saga ceiling and the tree's
-`LatticeOptions.WalAppendDispatchTimeout`, so the saga's quiesce always
-wins over the writer-side admission deadline; it returns early once
-the host starts stopping, and is silently skipped when no
-`IWalSaturationSignal` is registered in DI. The gate reads the signal
-under the id the tree was addressed by, while the signal is sampled under
-the id of the write-ahead log the tree's writes land in, so on an aliased
-tree - after a resize, a shadow-cutover restore or a schema remediation,
-whose writes land in the physical copy's log - the gate does not see that
-log's saturation and the saga dispatches without waiting for it. If the
-budget elapses with the tree still `Saturated` - or the batched dispatch
-itself is refused as saturated, by the writer-side admission gate or, when
-one is configured, by the batch write's
+The saga captures the physical tree, shard-map version, touched shard set
+and distinct WAL partitions for its entries together during prepare. Before
+each batched dispatch it uses `IWalPartitionSaturationSignal` to quiesce
+only those captured WAL partitions; a saturated unrelated partition does
+not stall the batch. The wait is capped at the smaller of a 30-second saga
+ceiling and the tree's `LatticeOptions.WalAppendDispatchTimeout`, so the
+saga's quiesce always wins over the writer-side admission deadline; it
+returns early once the host starts stopping. If partition-scoped signaling
+is unavailable but a tree-wide signal is registered, it retains that more
+restrictive signal and wait. If neither signal is registered, the optional
+quiesce remains skipped.
+The signal is queried under the captured physical tree id, matching the WAL
+writer's key. If the shard-map epoch changes before the commit decision,
+the saga refreshes and persists its route snapshot, includes both the old
+and new shard participants, and re-dispatches the prepared batch against the
+new map. A physical-copy change uses the existing rebind path; repeated
+routing changes fail before the commit decision rather than committing a
+batch against a stale snapshot. If the budget elapses with a captured WAL
+partition still `Saturated` - or the batched dispatch itself is refused as
+saturated, by the writer-side admission gate or, when one is configured,
+by the batch write's
 [`SetManyFanOutBudget`](configuration.md#setmanyfanoutbudget) or
 [`SetManyEnvelopeBudget`](configuration.md#setmanyenvelopebudget) - the saga takes a saturation
 fast-path that mirrors the shutdown one: it skips the retry and the

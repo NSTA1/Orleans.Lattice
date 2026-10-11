@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using Orleans.Lattice;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 
@@ -22,6 +24,192 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class AtomicWriteGrainTests
 {
+    [Test]
+    public async Task ExecuteAsync_partition_signal_ignores_saturated_partition_outside_routing_snapshot()
+    {
+        const string key = "partition-snapshot-key";
+        const int walPartitions = 2;
+        var touchedPartition = WalPartitionHash.Compute(key, walPartitions);
+        var unrelatedPartition = 1 - touchedPartition;
+        var signal = Substitute.For<IWalSaturationSignal, IWalPartitionSaturationSignal>();
+        var partitionSignal = (IWalPartitionSaturationSignal)signal;
+        signal.GetCurrentState(Arg.Any<string>()).Returns(WalSaturationState.Saturated);
+        signal.WaitForHealthyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        partitionSignal.GetCurrentState(Arg.Any<string>(), Arg.Any<int>())
+            .Returns(call => (int)call[1] == unrelatedPartition
+                ? WalSaturationState.Saturated
+                : WalSaturationState.Healthy);
+
+        var (grain, state, lattice, _) = CreateGrainWithSignal(signal, options: new LatticeOptions
+        {
+            TxRegistryShardCount = 1,
+            WalPartitions = walPartitions,
+        });
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries((key, [1])));
+
+        await partitionSignal.DidNotReceive().WaitForHealthyAsync(
+            Arg.Any<string>(), unrelatedPartition, Arg.Any<CancellationToken>());
+        await signal.DidNotReceive().WaitForHealthyAsync(
+            Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+        Assert.That(state.State.WalPartitions, Is.EqualTo(new[] { touchedPartition }));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_partition_signal_waits_when_routed_partition_is_saturated()
+    {
+        const string key = "partition-snapshot-key";
+        const int walPartitions = 2;
+        var touchedPartition = WalPartitionHash.Compute(key, walPartitions);
+        var signal = Substitute.For<IWalSaturationSignal, IWalPartitionSaturationSignal>();
+        var partitionSignal = (IWalPartitionSaturationSignal)signal;
+        signal.GetCurrentState(Arg.Any<string>()).Returns(WalSaturationState.Healthy);
+        partitionSignal.GetCurrentState(Arg.Any<string>(), Arg.Any<int>())
+            .Returns(call => (int)call[1] == touchedPartition
+                ? WalSaturationState.Saturated
+                : WalSaturationState.Healthy);
+        partitionSignal.WaitForHealthyAsync(
+                Arg.Any<string>(), touchedPartition, Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (grain, _, lattice, _) = CreateGrainWithSignal(signal, options: new LatticeOptions
+        {
+            TxRegistryShardCount = 1,
+            WalPartitions = walPartitions,
+        });
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries((key, [1])));
+
+        await partitionSignal.Received(1).WaitForHealthyAsync(
+            Arg.Any<string>(), touchedPartition, Arg.Any<CancellationToken>());
+        await signal.DidNotReceive().WaitForHealthyAsync(
+            Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_routing_epoch_change_refreshes_participants_and_redispatches_before_commit()
+    {
+        const string key = "routing-epoch-key";
+        const int walPartitions = 2;
+        var oldMap = ShardMap.CreateDefault(
+            LatticeConstants.DefaultVirtualShardCount,
+            LatticeConstants.DefaultShardCount);
+        oldMap.Version = 7;
+        var newMap = ShardMap.CreateDefault(
+            LatticeConstants.DefaultVirtualShardCount,
+            LatticeConstants.DefaultShardCount);
+        newMap.Version = 8;
+        var virtualSlot = ShardMap.GetVirtualSlot(key, newMap.VirtualShardCount);
+        var oldShard = oldMap.Resolve(key);
+        var newShard = oldShard == 0 ? 1 : 0;
+        newMap.Slots[virtualSlot] = newShard;
+        var oldRouting = new RoutingInfo(TreeId, oldMap);
+        var newRouting = new RoutingInfo(TreeId, newMap);
+
+        var signal = Substitute.For<IWalSaturationSignal, IWalPartitionSaturationSignal>();
+        signal.GetCurrentState(Arg.Any<string>()).Returns(WalSaturationState.Healthy);
+        ((IWalPartitionSaturationSignal)signal)
+            .GetCurrentState(Arg.Any<string>(), Arg.Any<int>())
+            .Returns(WalSaturationState.Healthy);
+
+        var (grain, state, lattice, _) = CreateGrainWithSignal(signal, options: new LatticeOptions
+        {
+            TxRegistryShardCount = 1,
+            WalPartitions = walPartitions,
+        });
+        var refreshCount = 0;
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(
+                ++refreshCount <= 2 ? oldRouting : newRouting));
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries((key, [1])));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.RoutingEpoch, Is.EqualTo(newMap.Version),
+                "the routing epoch must be refreshed before the commit decision");
+            Assert.That(state.State.TouchedShards, Does.Contain(oldShard),
+                "the pre-refresh participant may still hold a prepared write");
+            Assert.That(state.State.TouchedShards, Does.Contain(newShard),
+                "the refreshed participant must be registered before re-dispatch");
+            Assert.That(state.State.WalPartitions,
+                Is.EqualTo(new[] { WalPartitionHash.Compute(key, walPartitions) }),
+                "quiescence and participants must use the WAL partition derived from the refreshed snapshot");
+        });
+        await lattice.Received(2).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_routing_epoch_change_during_quiesce_refreshes_snapshot_before_dispatch()
+    {
+        const string key = "routing-epoch-quiesce-key";
+        const int walPartitions = 2;
+        var oldMap = ShardMap.CreateDefault(
+            LatticeConstants.DefaultVirtualShardCount,
+            LatticeConstants.DefaultShardCount);
+        oldMap.Version = 11;
+        var newMap = ShardMap.CreateDefault(
+            LatticeConstants.DefaultVirtualShardCount,
+            LatticeConstants.DefaultShardCount);
+        newMap.Version = 12;
+        var virtualSlot = ShardMap.GetVirtualSlot(key, newMap.VirtualShardCount);
+        var oldShard = oldMap.Resolve(key);
+        var newShard = oldShard == 0 ? 1 : 0;
+        newMap.Slots[virtualSlot] = newShard;
+        var oldRouting = new RoutingInfo(TreeId, oldMap);
+        var newRouting = new RoutingInfo(TreeId, newMap);
+
+        var signal = Substitute.For<IWalSaturationSignal, IWalPartitionSaturationSignal>();
+        var partitionSignal = (IWalPartitionSaturationSignal)signal;
+        var partitionReads = 0;
+        partitionSignal.GetCurrentState(Arg.Any<string>(), Arg.Any<int>())
+            .Returns(_ => ++partitionReads <= 2
+                ? WalSaturationState.Saturated
+                : WalSaturationState.Healthy);
+        partitionSignal.WaitForHealthyAsync(
+                Arg.Any<string>(),
+                WalPartitionHash.Compute(key, walPartitions),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (grain, state, lattice, _) = CreateGrainWithSignal(signal, options: new LatticeOptions
+        {
+            TxRegistryShardCount = 1,
+            WalPartitions = walPartitions,
+        });
+        var refreshCount = 0;
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(
+                ++refreshCount == 1 ? oldRouting : newRouting));
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries((key, [1])));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.RoutingEpoch, Is.EqualTo(newMap.Version));
+            Assert.That(state.State.TouchedShards, Does.Contain(oldShard));
+            Assert.That(state.State.TouchedShards, Does.Contain(newShard));
+            Assert.That(state.State.WalPartitions,
+                Is.EqualTo(new[] { WalPartitionHash.Compute(key, walPartitions) }));
+        });
+        await partitionSignal.Received(1).WaitForHealthyAsync(
+            TreeId,
+            WalPartitionHash.Compute(key, walPartitions),
+            Arg.Any<CancellationToken>());
+        await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
+
     // --- Healthy / Throttled fast paths: no quiesce wait ---
 
     [Test]
