@@ -79,6 +79,24 @@ internal static class TlcCiShard
     /// <summary>The mutants of every Backup* module.</summary>
     public const string Backup = "TlcShardBackup";
 
+    /// <summary>The materialised-view base, variant and mutation runs, retaining shared controls.</summary>
+    public const string MaterialisedViews = "TlcShardMaterialisedViews";
+
+    /// <summary>The anti-entropy base and first measured mutation group.</summary>
+    public const string AntiEntropy = "TlcShardAntiEntropy";
+
+    /// <summary>The anti-entropy alias variant and second measured mutation group.</summary>
+    public const string AntiEntropy2 = "TlcShardAntiEntropy2";
+
+    /// <summary>The third measured anti-entropy mutation group.</summary>
+    public const string AntiEntropy3 = "TlcShardAntiEntropy3";
+
+    /// <summary>The resize, reshard and shadow-cutover composition runs.</summary>
+    public const string TreeLifecycle = "TlcShardTreeLifecycle";
+
+    /// <summary>The shared alias routing and cutover interaction runs.</summary>
+    public const string Aliasing = "TlcShardAliasing";
+
     /// <summary>The BPlusCascade base-model TLC run.</summary>
     public const string BPlusCascadeBase = "TlcShardBPlusCascadeBase";
 
@@ -91,7 +109,8 @@ internal static class TlcCiShard
     /// <summary>Every category <see cref="Of"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
         [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup,
-         BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2];
+         BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2,
+         MaterialisedViews, AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -107,6 +126,23 @@ internal static class TlcCiShard
         ArgumentNullException.ThrowIfNull(mutation);
 
         var name = module.Name;
+        if (string.Equals(name, "AntiEntropy", StringComparison.Ordinal))
+        {
+            return mutation.Name switch
+            {
+                "CooldownNeverHalfOpens" or "FallbackDropsTombstones" or "DeleteReplayedAsSet"
+                    or "ReplayBelowCursor" or "ReplayReadsRetiredWal" or "EchoRecordedAsApplied"
+                    or "OwnOriginApplied" or "SwapInvisibleToResolve" => AntiEntropy2,
+                "WindowNeverRolls" or "PeerWriteNotShipped" or "DigestIgnoresDivergence"
+                    or "AbortRollsBudgetWindow" or "ProbeAdvancesCursor" or "UnavailableClosesBreaker"
+                    or "StaleTopologyWalk" => AntiEntropy3,
+                _ => AntiEntropy,
+            };
+        }
+        if (LifecycleCategory(name) is { } lifecycleCategory)
+        {
+            return lifecycleCategory;
+        }
         if (string.Equals(name, "Replication", StringComparison.Ordinal))
         {
             return mutation.Name.StartsWith("EventualConvergence", StringComparison.Ordinal)
@@ -148,9 +184,9 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
+        return LifecycleCategory(module.Name) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
             ? BPlusCascadeBase
-            : null;
+            : null);
     }
 
     /// <summary>
@@ -162,6 +198,17 @@ internal static class TlcCiShard
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(variant);
+
+        if (string.Equals(module.Name, "AntiEntropy", StringComparison.Ordinal)
+            && string.Equals(variant, "Alias", StringComparison.Ordinal))
+        {
+            return AntiEntropy2;
+        }
+
+        if (LifecycleCategory(module.Name) is { } lifecycleCategory)
+        {
+            return lifecycleCategory;
+        }
 
         if (IsReplicationCompanion(module.Name))
         {
@@ -203,6 +250,13 @@ internal static class TlcCiShard
     private static bool IsReplicationCompanion(string name) =>
         name.StartsWith("Replication", StringComparison.Ordinal)
         && !string.Equals(name, "Replication", StringComparison.Ordinal);
+
+    private static string? LifecycleCategory(string name) =>
+        name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
+        : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
+        : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle
+        : name.StartsWith("Alias", StringComparison.Ordinal) ? Aliasing
+        : null;
 
     /// <summary>
     /// Adds <see cref="Of"/>'s category to a mutation case whose arguments are

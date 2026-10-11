@@ -2,6 +2,15 @@
 # Passed, full-scope items >= 0.1 minutes replace their previous estimates;
 # other rows retain their earlier provenance below. No shard or tier is removed.
 
+# New lifecycle rows are local measured item wall-clock (2026-10-11), including
+# VSTest startup: Java 17, two visible CPUs, one concurrent TLC process.
+# TreeLifecycle + TreeLifecycleAdmission: 50 successful JVM cases, 99.2 seconds, no skips.
+# Aliasing: 29 successful JVM cases in 72 seconds, no skips. The 1.8-minute
+# estimate also accommodates the preceding 28-case run's 104-second wall time.
+# AntiEntropy group 1: 18 cases in 539 seconds; group 2: nine cases in 598 seconds,
+# measured with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
+# AntiEntropy group 3: seven cases in 549 seconds after the rebase.
+
 # Per-work-item duration estimates, in minutes, used only to bin-pack the
 # matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
 # shard of an unsharded package and `all` for its single untiered invocation.
@@ -99,6 +108,11 @@
 # observed wall time; replace them with measured shard medians at the next
 # duration refresh. The smoke model runs separately in seconds.
 lattice	formal-tlc	deterministic	9.1
+lattice	formal-tlc-tree-lifecycle	deterministic	1.6
+lattice	formal-tlc-anti-entropy	deterministic	9.0
+lattice	formal-tlc-anti-entropy-2	deterministic	10.0
+lattice	formal-tlc-anti-entropy-3	deterministic	9.2
+lattice	formal-tlc-aliasing	deterministic	1.8
 lattice	formal-tlc-shard-ownership	deterministic	15.3
 lattice	formal-tlc-convergence	deterministic	14.1
 lattice	formal-tlc-replication-wal	deterministic	18.4

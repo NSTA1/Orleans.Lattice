@@ -93,6 +93,48 @@
         "note": "The TLC mutation gates are CPU-bound JVM runs, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). Sizes are test-minutes summed over the cases of CI run 37322771720, which the harness runs about four at a time, so wall-clock is about a quarter. This shard holds every Replication EventualConvergence (temporal) mutant: they share one control arm, which the harness runs once per process, about 54 test-minutes (15 minutes wall-clock in that run)."
       },
       {
+        "shard": "formal-tlc-materialised-views",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViews"],
+        "note": "Materialised-view base, variant and mutation runs. Whole modules preserve process-local single-property control reuse."
+      },
+      {
+        "shard": "formal-tlc-anti-entropy",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardAntiEntropy"],
+        "note": "Anti-entropy base and 17 mutants: 18 cases measured at 539s on Java 17 with two visible CPUs and one TLC slot. Control config headers contain mutation names, so distinct mutants do not share cached controls even when their targets match."
+      },
+      {
+        "shard": "formal-tlc-anti-entropy-2",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardAntiEntropy2"],
+        "note": "Anti-entropy alias variant and eight mutants: nine cases measured at 598s on the same two-CPU, single-TLC-slot toolchain."
+      },
+      {
+        "shard": "formal-tlc-anti-entropy-3",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardAntiEntropy3"],
+        "note": "Remaining seven anti-entropy mutants, including the expensive convergence controls: seven cases measured at 549s after the rebase with two visible CPUs and one TLC slot."
+      },
+      {
+        "shard": "formal-tlc-aliasing",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardAliasing"],
+        "note": "Shared durable alias routing and cutover interactions, retaining same-property controls with their mutations."
+      },
+      {
+        "shard": "formal-tlc-tree-lifecycle",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardTreeLifecycle"],
+        "note": "Resize/undo, grow/shrink reshard and shadow-cutover composition base, repeated-crash variant and mutants, retaining shared controls."
+      },
+      {
         "shard": "formal-tlc-rebootstrap",
         "tlc": true,
         "includeCategories": ["TlcShardReBootstrap"],
@@ -187,7 +229,7 @@
         "shard": "formal-tlc",
         "tlc": true,
         "include": ["Formal.TlcModelCheckTests"],
-        "note": "Every other TLC case: the base run of every module, variant runs of every module but AtomicCommit*, mutations of ungrouped modules (including BPlusTopology), and synthetic-module gates. BPlusTopology's 15 base/mutation cases took 13s locally, too small to justify a dedicated runner; the catch-all historically measured about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
+        "note": "Every TLC case not already claimed: ungrouped bases and variants, mutations of ungrouped modules (including BPlusTopology), and synthetic-module gates. The lifecycle, materialised-view and anti-entropy areas route their bases, variants and mutants together above this catch-all. BPlusTopology's 15 base/mutation cases took 13s locally, too small to justify a dedicated runner; the catch-all historically measured about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
       },
       {
         "shard": "rest",
