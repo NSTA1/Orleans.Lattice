@@ -37,7 +37,8 @@ public partial class ReplicationDigestProbeGrainTests
             Exception? highWaterMarkFault = null,
             int shipBatchSize = 256,
             double trafficBudgetFraction = 0.01,
-            int failureThreshold = 3)
+            int failureThreshold = 3,
+            Exception? sendFault = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("digest-probe-grain", Tree));
@@ -80,7 +81,9 @@ public partial class ReplicationDigestProbeGrainTests
         var transport = Substitute.For<IReplicationDigestProbeTransport>();
         var replicationTransport = Substitute.For<IReplicationTransport>();
         replicationTransport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new ReplicationAck { Accepted = sendAccepted }));
+            .Returns(sendFault is null
+                ? Task.FromResult(new ReplicationAck { Accepted = sendAccepted })
+                : Task.FromException<ReplicationAck>(sendFault));
         var batchEncoder = Substitute.For<IReplicationBatchEncoder>();
         var shardCounts = Substitute.For<IShardCountProvider>();
         shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -199,6 +202,31 @@ public partial class ReplicationDigestProbeGrainTests
     }
 
     [Test]
+    public async Task Second_shard_is_skipped_with_circuit_open_after_the_first_shards_reship_throws()
+    {
+        // Threshold 1 + a throwing transport: the first shard selects the orphan
+        // and its re-ship faults (a transport error reaching the peer). That is a
+        // failed repair pass and must open the breaker, exactly as a rejected
+        // re-ship does; it must not be counted as a success that resets the
+        // failure count. The second shard then sees the open circuit and skips,
+        // so only the first shard reached the transport.
+        var (grain, replicationTransport) = CreateGatingGrain(
+            shardCount: 2,
+            failureThreshold: 1,
+            peerCursor: Hlc(50),
+            sendFault: new TimeoutException("peer unreachable"));
+        using var skipped = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName, LatticeReplicationMetrics.DigestRemediationSkippedName);
+
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.That(
+            skipped.Measurements.Any(m => ReasonTag(m) == LatticeReplicationMetrics.DigestRemediationReasonCircuitOpen),
+            Is.True);
+        await replicationTransport.Received(1).SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task Second_shard_is_skipped_with_budget_exhausted_after_the_first_shard_spends_the_window()
     {
         // A one-entry per-window budget: the first shard ships its single orphan
@@ -286,6 +314,28 @@ public partial class ReplicationDigestProbeGrainTests
             Assert.That(triggered.Measurements, Is.Not.Empty);
             Assert.That(entries.Measurements, Is.Empty);
         });
+    }
+
+    [Test]
+    public async Task Second_shard_is_skipped_with_circuit_open_after_the_first_shards_fallback_faults()
+    {
+        // Threshold 1 + a below-cursor orphan whose scoped fallback export
+        // faults: the fallback helper swallows the fault, but the pass is still
+        // a failure that opens the breaker, so the second shard skips with
+        // circuit-open instead of retrying the faulting fallback.
+        var (grain, _) = CreateGatingGrain(
+            shardCount: 2,
+            failureThreshold: 1,
+            peerCursor: Hlc(500),
+            snapshotProvider: new ThrowingScopedSnapshotProvider(new InvalidOperationException("snapshot export failed")));
+        using var skipped = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName, LatticeReplicationMetrics.DigestRemediationSkippedName);
+
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.That(
+            skipped.Measurements.Any(m => ReasonTag(m) == LatticeReplicationMetrics.DigestRemediationReasonCircuitOpen),
+            Is.True);
     }
 
     /// <summary>

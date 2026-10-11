@@ -471,12 +471,17 @@ internal sealed class ReplicationDigestProbeGrain(
         var failed = false;
         try
         {
-            var reReplay = await TryReReplayLeavesAsync(options, peer, ranges).ConfigureAwait(true);
+            var (reReplay, reReplayFaulted) = await TryReReplayLeavesAsync(options, peer, ranges).ConfigureAwait(true);
             entriesShipped += reReplay.EntriesReReplayed;
 
             // A pass that selected candidates but re-shipped nothing is a
-            // failure (the sink rejected the repair traffic).
-            failed = reReplay.Attempted && reReplay.EntriesReReplayed == 0;
+            // failure (the sink rejected the repair traffic), and so is a pass
+            // whose re-replay faulted (for example a transport error reaching
+            // the peer): the helper swallows the fault to protect the cadence,
+            // but it must still count toward the breaker rather than as a
+            // success that resets the failure count or closes a half-open
+            // breaker.
+            failed = reReplayFaulted || (reReplay.Attempted && reReplay.EntriesReReplayed == 0);
 
             // Escalate to the scoped bootstrap-snapshot fallback whenever the
             // cursor-bounded WAL re-replay could not reach the divergence the
@@ -498,9 +503,9 @@ internal sealed class ReplicationDigestProbeGrain(
             if (reReplay.SkipReason is LeafReReplaySkipReason.WalTrimmed
                 or LeafReReplaySkipReason.RangeEmpty)
             {
-                var fallback = await TryBootstrapFallbackAsync(options, peer, ranges).ConfigureAwait(true);
+                var (fallback, fallbackFaulted) = await TryBootstrapFallbackAsync(options, peer, ranges).ConfigureAwait(true);
                 entriesShipped += fallback.EntriesShipped;
-                failed |= fallback.Attempted && fallback.EntriesShipped == 0;
+                failed |= fallbackFaulted || (fallback.Attempted && fallback.EntriesShipped == 0);
             }
         }
         catch (Exception ex)
@@ -580,9 +585,10 @@ internal sealed class ReplicationDigestProbeGrain(
     /// the caller to consider the bootstrap-snapshot fallback (the WAL was
     /// trimmed past the divergence, or the divergence sits at or below the
     /// peer cursor so no WAL entry was eligible); a logged-and-swallowed
-    /// failure returns <see cref="LeafReReplayOutcome.NotAttempted"/>.
+    /// failure returns <see cref="LeafReReplayOutcome.NotAttempted"/> with
+    /// <c>Faulted</c> set, so the caller counts it as a circuit-breaker failure.
     /// </returns>
-    private async Task<LeafReReplayOutcome> TryReReplayLeavesAsync(
+    private async Task<(LeafReReplayOutcome Outcome, bool Faulted)> TryReReplayLeavesAsync(
         LatticeReplicationOptions options,
         string peer,
         IReadOnlyList<LeafReReplayRange> ranges)
@@ -598,7 +604,7 @@ internal sealed class ReplicationDigestProbeGrain(
                     new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.LeafReReplaySkipReasonTag(LeafReReplaySkipReason.Disabled)),
                     LatticeTenantLabel.ForTree(TreeName),
                 });
-            return new LeafReReplayOutcome { SkipReason = LeafReReplaySkipReason.Disabled };
+            return (new LeafReReplayOutcome { SkipReason = LeafReReplaySkipReason.Disabled }, false);
         }
 
         try
@@ -613,7 +619,7 @@ internal sealed class ReplicationDigestProbeGrain(
             var walSource = new WalGrainReReplaySource(_grainFactory, TreeName, partitionCount, pageSize);
             var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, _mergeModeResolver, originClusterId);
 
-            return await LeafReReplayer.ReplayAsync(
+            var outcome = await LeafReReplayer.ReplayAsync(
                 TreeName,
                 peer,
                 originClusterId,
@@ -624,13 +630,14 @@ internal sealed class ReplicationDigestProbeGrain(
                 options.LeafReReplayMaxEntries,
                 options.LeafReReplayMaxBytes,
                 CancellationToken.None).ConfigureAwait(true);
+            return (outcome, false);
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex,
                 "Targeted leaf re-replay failed for peer {Peer} on {Context}; the repair is best-effort and will retry on the next cadence",
                 peer, LogContext);
-            return LeafReReplayOutcome.NotAttempted;
+            return (LeafReReplayOutcome.NotAttempted, true);
         }
     }
 
@@ -656,9 +663,10 @@ internal sealed class ReplicationDigestProbeGrain(
     /// The fallback outcome. A disabled fallback returns a
     /// <see cref="BootstrapFallbackSkipReason.Disabled"/> outcome; a
     /// logged-and-swallowed failure returns
-    /// <see cref="BootstrapFallbackOutcome.NotAttempted"/>.
+    /// <see cref="BootstrapFallbackOutcome.NotAttempted"/> with <c>Faulted</c>
+    /// set, so the caller counts it as a circuit-breaker failure.
     /// </returns>
-    private async Task<BootstrapFallbackOutcome> TryBootstrapFallbackAsync(
+    private async Task<(BootstrapFallbackOutcome Outcome, bool Faulted)> TryBootstrapFallbackAsync(
         LatticeReplicationOptions options,
         string peer,
         IReadOnlyList<LeafReReplayRange> ranges)
@@ -674,7 +682,7 @@ internal sealed class ReplicationDigestProbeGrain(
                     new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(BootstrapFallbackSkipReason.Disabled)),
                     LatticeTenantLabel.ForTree(TreeName),
                 });
-            return new BootstrapFallbackOutcome { SkipReason = BootstrapFallbackSkipReason.Disabled };
+            return (new BootstrapFallbackOutcome { SkipReason = BootstrapFallbackSkipReason.Disabled }, false);
         }
 
         try
@@ -682,7 +690,7 @@ internal sealed class ReplicationDigestProbeGrain(
             var originClusterId = options.ClusterId;
             var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, _mergeModeResolver, originClusterId);
 
-            return await BootstrapFallbackPlanner.PlanAsync(
+            var outcome = await BootstrapFallbackPlanner.PlanAsync(
                 TreeName,
                 peer,
                 originClusterId,
@@ -692,13 +700,14 @@ internal sealed class ReplicationDigestProbeGrain(
                 options.BootstrapFallbackMaxEntries,
                 options.BootstrapFallbackMaxBytes,
                 CancellationToken.None).ConfigureAwait(true);
+            return (outcome, false);
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex,
                 "Bootstrap-snapshot fallback failed for peer {Peer} on {Context}; the repair is best-effort and will retry on the next cadence",
                 peer, LogContext);
-            return BootstrapFallbackOutcome.NotAttempted;
+            return (BootstrapFallbackOutcome.NotAttempted, true);
         }
     }
 
