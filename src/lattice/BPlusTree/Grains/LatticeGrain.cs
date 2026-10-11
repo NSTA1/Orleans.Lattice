@@ -2769,11 +2769,11 @@ internal sealed partial class LatticeGrain(
                     {
                         await single.WaitAsync(singleWait.Duration);
                     }
-                    catch (TimeoutException) when (single.Exception?.InnerException is TimeoutException)
+                    catch (TimeoutException ex) when (ReferenceEquals(single.Exception?.InnerException, ex))
                     {
-                        // WaitAsync also forwards a callee's timeout. Re-await
-                        // its faulted task so a domain subtype and its identity
-                        // survive; a pending task means the envelope expired.
+                        // WaitAsync forwards a callee's timeout as the same
+                        // exception instance. Match it exactly so a fault that
+                        // races after the local deadline remains an envelope refusal.
                         await single;
                     }
                     catch (TimeoutException)
