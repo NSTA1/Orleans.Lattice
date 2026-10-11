@@ -267,13 +267,19 @@ internal sealed class RepoContextAnnIndexBuildGrain(
     /// it did. That monotonicity is why this cannot regress the stand-down
     /// behaviour the fault fixtures pin.
     /// </para>
+    /// <para>
+    /// Ready describes the durable index, not a completed source-count probe.
+    /// Pending verification keeps the phase timer armed through unknown-count
+    /// backoff, and is cleared only after a completed count and any repair.
+    /// </para>
     /// </remarks>
     protected override bool InProgress =>
         options.AnnIndexSchedulingEnabled
         && state.State.Space.IsSpecified
         && (!state.State.Converged
             || !_advancedThisActivation
-            || _previousProgress.Phase != VectorIndexBuildPhase.Ready);
+            || _previousProgress.Phase != VectorIndexBuildPhase.Ready
+            || registry.HasPendingSourceCount(RepoId, state.State.Space));
 
     private string GrainKey => Context.GrainId.Key.ToString() ?? string.Empty;
 
@@ -805,7 +811,8 @@ internal sealed class RepoContextAnnIndexBuildGrain(
                 progress.VectorsIndexed);
         }
 
-        if (progress.Phase != VectorIndexBuildPhase.Ready)
+        if (progress.Phase != VectorIndexBuildPhase.Ready
+            || registry.HasPendingSourceCount(repoId, space))
         {
             return;
         }

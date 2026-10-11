@@ -44,8 +44,8 @@ public enum RepoContextDrainOutcome
 /// (<see cref="Duration"/>, <see cref="ResidentActivations"/>) is what makes the
 /// residency remark in <see cref="RepoContextDrainSignal"/> actionable: drain time
 /// tracks the resident activation set, so a duration recorded <i>with</i> the
-/// residency it was measured against yields a per-activation cost, and a cost turns
-/// a live residency reading into a projected drain that can be compared with the
+/// residency it was measured against contributes to an aggregate service-rate model
+/// with fixed shutdown overhead, which can be compared with the
 /// budget <b>before</b> the next stop rather than during it.
 /// </para>
 /// </remarks>
@@ -76,13 +76,19 @@ public enum RepoContextDrainOutcome
 /// (issue #3628), and because it is what separates the part of an abandoned drain
 /// that was actually measured from the part that was cut.
 /// </param>
+/// <param name="CompletedDrains">
+/// Up to sixteen preceding clean wall-time/residency measurements, preserved across
+/// start and abandonment markers. Failed or incomplete drains are never calibration
+/// samples. Nested history on these samples is ignored.
+/// </param>
 public readonly record struct RepoContextDrainObservation(
     DateTimeOffset ObservedAtUtc,
     RepoContextDrainOutcome Outcome,
     TimeSpan Budget,
     TimeSpan? Duration,
     int? ResidentActivations,
-    int? StrandedActivations = null)
+    int? StrandedActivations = null,
+    IReadOnlyList<RepoContextDrainObservation>? CompletedDrains = null)
 {
     /// <summary>
     /// The number of activations the drain actually got through, when that is known.
@@ -147,11 +153,9 @@ public readonly record struct RepoContextDrainObservation(
     }
 
     /// <summary>
-    /// Whether <see cref="PerActivationCost"/> is only a lower bound on the real
-    /// cost: the drain was abandoned, so its duration is the budget it was cut at,
-    /// and no stranded count was recorded to separate the part it got through.
+    /// Whether the cost is incomplete evidence. An abandoned drain remains a floor
+    /// even with a stranded count: it never measures completion of the remaining work.
     /// </summary>
-    public bool PerActivationCostIsLowerBound => Outcome == RepoContextDrainOutcome.Abandoned
-        && DrainedActivations is null
+    public bool PerActivationCostIsLowerBound => Outcome != RepoContextDrainOutcome.Completed
         && PerActivationCost is not null;
 }

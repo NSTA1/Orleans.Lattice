@@ -12,12 +12,13 @@ namespace Orleans.Lattice.Tests;
 /// gauge.
 /// </summary>
 [TestFixture]
-public sealed class LatticeStorageUsageMetricsTests
+public sealed partial class LatticeStorageUsageMetricsTests
 {
     private static TreeStorageUsageReport Report(string tree, long wal, long snap, long leaf, bool partial = false) => new()
     {
         TreeId = tree,
         WalRetainedBytes = wal,
+        WalPhysicalBytes = wal,
         SnapshotBytes = snap,
         LeafStateBytes = leaf,
         TotalBytes = wal + snap + leaf,
@@ -167,6 +168,7 @@ public sealed class LatticeStorageUsageMetricsTests
         {
             TreeId = tree,
             WalRetainedBytes = 150,
+            WalPhysicalBytes = 150,
             Partial = false,
             SampledAt = DateTimeOffset.UtcNow,
         });

@@ -227,8 +227,8 @@ public readonly record struct RepoContextDrainForecast(
     }
 
     /// <summary>
-    /// Projects the drain the <b>current</b> resident activation set implies, using
-    /// the per-activation cost the last drain measured.
+    /// Projects wall time from clean drains using a nonnegative fixed overhead and
+    /// aggregate service-rate fit, plus its upper residual percentile and 20% margin.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -240,10 +240,10 @@ public readonly record struct RepoContextDrainForecast(
     /// part that was missing.
     /// </para>
     /// <para>
-    /// It returns nothing until a drain has been measured alongside its residency,
-    /// which is honest: with no measurement the only available projection would be a
-    /// per-activation constant somebody guessed, and a guessed constant multiplied by
-    /// a real count reads as a measurement while being none.
+    /// At least two distinct clean residency measurements are required to separate
+    /// overhead from throughput. Outside the measured residency range's upper end,
+    /// or after a killed/incomplete drain, the model is uncalibrated and returns
+    /// nothing. An abandoned drain can supply a floor, never a clean sample.
     /// </para>
     /// </remarks>
     /// <param name="residentActivations">The activation count resident now.</param>
@@ -252,18 +252,97 @@ public readonly record struct RepoContextDrainForecast(
     public bool TryProject(int residentActivations, out RepoContextDrainProjection projection)
     {
         projection = default;
-        if (residentActivations < 0 || PerActivationCost is not { } cost || Budget <= TimeSpan.Zero)
+        if (residentActivations < 0 || PerActivationCost is null || Budget <= TimeSpan.Zero)
         {
             return false;
         }
 
-        var projected = cost * residentActivations;
+        TimeSpan projected;
+        var lowerBound = Last?.Outcome == RepoContextDrainOutcome.Abandoned;
+        if (lowerBound)
+        {
+            // A partial drain cannot establish the completion rate of its remaining
+            // work. Keep its elapsed wall time only as a floor at the same or larger set.
+            if (Last?.ResidentActivations is not { } original || residentActivations < original)
+            {
+                return false;
+            }
+
+            projected = Last.Value.Duration!.Value;
+        }
+        else
+        {
+            if (Last is not { } last || !RepoContextDrainHistory.IsCalibrationSample(last))
+            {
+                return false;
+            }
+
+            Span<double> counts = stackalloc double[RepoContextDrainHistory.MaximumCompletedDrains + 1];
+            Span<double> durations = stackalloc double[counts.Length];
+            var length = 0;
+            if (last.CompletedDrains is { } samples)
+            {
+                for (var i = Math.Max(0, samples.Count - RepoContextDrainHistory.MaximumCompletedDrains);
+                    i < samples.Count; i++)
+                {
+                    var sample = samples[i];
+                    if (RepoContextDrainHistory.IsCalibrationSample(sample)
+                        && sample.ObservedAtUtc != last.ObservedAtUtc)
+                    {
+                        counts[length] = sample.ResidentActivations!.Value;
+                        durations[length++] = sample.Duration!.Value.TotalSeconds;
+                    }
+                }
+            }
+
+            counts[length] = last.ResidentActivations!.Value;
+            durations[length++] = last.Duration!.Value.TotalSeconds;
+            double meanCount = 0, meanDuration = 0, maximumCount = 0;
+            for (var i = 0; i < length; i++)
+            {
+                meanCount += counts[i] / length;
+                meanDuration += durations[i] / length;
+                maximumCount = Math.Max(maximumCount, counts[i]);
+            }
+
+            double variance = 0, covariance = 0;
+            for (var i = 0; i < length; i++)
+            {
+                var delta = counts[i] - meanCount;
+                variance += delta * delta;
+                covariance += delta * (durations[i] - meanDuration);
+            }
+
+            if (length < 2 || variance == 0 || residentActivations > maximumCount)
+            {
+                return false;
+            }
+
+            var secondsPerActivation = Math.Max(0, covariance / variance);
+            var overhead = Math.Max(0, meanDuration - secondsPerActivation * meanCount);
+            Span<double> residuals = stackalloc double[length];
+            for (var i = 0; i < length; i++)
+            {
+                residuals[i] = Math.Max(0, durations[i] - overhead - secondsPerActivation * counts[i]);
+            }
+
+            residuals.Sort();
+            var upperResidual = residuals[(int)Math.Ceiling(length * 0.9) - 1];
+            var seconds = (overhead + secondsPerActivation * residentActivations + upperResidual) * 1.2;
+            if (!double.IsFinite(seconds) || seconds >= TimeSpan.MaxValue.TotalSeconds)
+            {
+                return false;
+            }
+
+            projected = TimeSpan.FromSeconds(seconds);
+        }
+
         projection = new RepoContextDrainProjection(
             residentActivations,
             projected,
             Budget,
             projected.TotalSeconds / Budget.TotalSeconds,
-            PerActivationCostIsLowerBound);
+            lowerBound);
         return true;
     }
 }
@@ -277,9 +356,9 @@ public readonly record struct RepoContextDrainForecast(
 /// <param name="Budget">The budget the projection is compared against.</param>
 /// <param name="ConsumedFraction">The fraction of the budget the projection consumes.</param>
 /// <param name="IsLowerBound">
-/// Whether the projection is only a floor, because the per-activation cost it was
-/// made from came from an abandoned drain (issue #3628). A floor that exceeds the
-/// budget is a certain overrun; a floor that fits proves nothing.
+/// Whether the projection is an elapsed wall-time floor from an abandoned drain,
+/// rather than a calibrated clean service-rate estimate. A floor that fits proves
+/// nothing about completion.
 /// </param>
 public readonly record struct RepoContextDrainProjection(
     int ResidentActivations,

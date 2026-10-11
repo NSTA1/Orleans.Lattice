@@ -382,7 +382,7 @@ public sealed class RepoContextDrainHistoryTests
         {
             Assert.That(observation.DrainedActivations, Is.EqualTo(1200));
             Assert.That(observation.PerActivationCost!.Value.TotalMilliseconds, Is.EqualTo(150).Within(0.001));
-            Assert.That(observation.PerActivationCostIsLowerBound, Is.False);
+            Assert.That(observation.PerActivationCostIsLowerBound, Is.True, "known stranded count does not complete the drain");
         });
     }
 

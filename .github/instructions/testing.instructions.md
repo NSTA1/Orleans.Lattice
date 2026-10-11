@@ -1322,12 +1322,47 @@ it too (the near-miss described under "False greens"). A fixture that falls
 outside the filter is still built and never run, which is silent - so the guard
 fails the build instead.
 
-The shared bases are discovered through their per-project subclasses, so each gate's `[TestFixture]` lives under the consuming project's `Hygiene/` folder; the table below lists what each enforces.
+### ASCII text and reviewed Unicode exceptions
+
+Author ASCII text (U+0000 through U+007F). `AsciiHygieneTests` scans every
+tracked text file classified by `HygieneFiles`, across all packages and
+repo-level files, once in the core project's CI-selected
+`Orleans.Lattice.Tests.Hygiene` namespace. It does not depend on per-package
+enrolment or exclude Unicode-bearing paths. A UTF-8 BOM is consumed by the
+text reader; line endings are not part of an exception's content.
+
+`test/lattice/Hygiene/UnicodeAllowlist.tsv` preserves reviewed existing
+section banners (including U+2500), mathematical/reference notation, UI
+glyphs, language examples and Unicode test inputs without mass-normalizing
+unrelated source or docs. Every row has four tab-separated ASCII fields:
+an exact repository-relative path using `/`, the uppercase SHA-256 of the
+complete UTF-8 line without its line ending or BOM, its positive occurrence
+count in that file, and a specific justification of at least 40 characters.
+There are no directory or wildcard exceptions. Each allowed occurrence is
+consumed once; an added Unicode line, a changed excepted line, a duplicate
+beyond the count, or an unused/stale exception fails. Review any new or
+refreshed row alongside its actual line; do not blanket-regenerate the
+manifest to silence failures. Remove an exception when its line is removed
+or rewritten as ASCII. Prefer code-point escapes or HTML entities for new
+test inputs/UI glyphs when a literal is unnecessary.
+
+The ASCII gate fails on an empty examined population and reports unreadable
+files separately. Newly added files must be staged before validation, since
+the production enumeration uses `git ls-files --cached`. The existing
+`EmDashHygieneTests` still forbids U+2014 unconditionally, and
+`MojibakeHygieneTests` still detects its explicit decoding-accident needles;
+an ASCII exception does not bypass either predicate. Their per-project slice
+ownership is unchanged. Run the exact ASCII gate and detection fixture for
+ASCII-policy changes, and confirm non-zero executed and examined counts.
+
+The shared bases are discovered through their consuming subclasses; the
+table below lists what each enforces.
 
 | Gate | What it enforces | How to stay green |
 |---|---|---|
+| `AsciiHygieneTests` | Every tracked text line is ASCII or consumes a reviewed exact-path, exact-line, count-bounded Unicode exception. | Author ASCII; justify necessary literals in `test/lattice/Hygiene/UnicodeAllowlist.tsv`. Added or changed Unicode and stale exceptions fail. Runs once in the core CI content-gate namespace across the complete repository. |
 | `EmDashHygieneTests` | No em-dash (U+2014) in any tracked text file - source, tests, docs, build scripts, samples, or config. | Use a plain ASCII hyphen (`-`). Do not paste prose from word processors that auto-convert `--` to an em-dash. Runs per project over its own slice; the core project also covers repo-level files. |
-| `MojibakeHygieneTests` | No byte-level mojibake (a UTF-8 stream decoded as Windows-1252 / CP437 / CP850 and re-encoded) in any tracked text file. | Author plain ASCII. Mojibake leaks when prose or PR-body text is pasted from a terminal or editor whose code page disagrees with the UTF-8 bytes, producing nonsense runs in place of smart quotes, apostrophes, ellipses, dashes, arrows, or check-marks. Runs per project over its own slice; the core project also covers repo-level files. |
+| `MojibakeHygieneTests` | No byte-level mojibake (a UTF-8 stream decoded as Windows-1252 / CP437 / CP850 and re-encoded) in any tracked text file. | This gate detects decoding accidents, not the ASCII character class (enforced separately above). Mojibake leaks when prose or PR-body text is pasted from a terminal or editor whose code page disagrees with the UTF-8 bytes, producing nonsense runs in place of smart quotes, apostrophes, ellipses, dashes, arrows, or check-marks. Runs per project over its own slice; the core project also covers repo-level files. |
 | `DeletionMandateHygieneTests` | Retired apply-mode / staging-buffer identifiers (`AtomicApplyEntry`, `ApplyManyAtomicAsync`, `IReplicationTxBufferGrain`, and siblings) never reappear in source or test code. | Use the universal cross-cluster atomic-visibility primitive instead. Runs in the core project over the repo-level scope, and in each package project that carries a subclass over that project's own `.cs` slice. Unlike the em-dash and mojibake gates it is not carried by every slice-registered project, and a registered slice whose project carries none is not scanned for these identifiers. |
 | `IntegrationCategoryHygieneTests` | Every fixture that stands up a cluster (a `TestCluster`, `TestServer`, `IHost`, `GrpcChannel`, or any `*ClusterFixture`-suffix helper) carries a slow category. | Tag the fixture `[Category("Integration")]` (or `("Chaos")` / `("AzureStorageEmulator")`). This keeps the tiered run filters safe. Runs in every test project against that project's own assembly. |
 | `IntegrationCategoryGateEnrolmentTests` | Every test project declares a concrete `IntegrationCategoryHygieneTestsBase` subclass, so the gate above actually runs there. | Add `test/<package>/Hygiene/IntegrationCategoryHygieneTests.cs`. The base reflects over its own subclass's assembly, so an unenrolled project is silently unexamined rather than reported as uncovered - this gate is what makes the row above's "every test project" true. |

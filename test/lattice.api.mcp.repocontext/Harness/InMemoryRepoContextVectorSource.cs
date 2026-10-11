@@ -54,8 +54,8 @@ internal sealed class InMemoryRepoContextVectorSource : IRepoContextVectorSource
     /// Arms <paramref name="count"/> consecutive count probes to throw, after which
     /// counting succeeds normally. The probe is a whole-prefix key walk on the real
     /// source, so on a large cold tree it can outrun even a generous reconnect
-    /// budget - which is the case the handle must treat as "unknown, therefore
-    /// possibly behind" rather than as a build failure.
+    /// budget - which the handle treats as unknown, with no evidence for repair,
+    /// rather than as a build failure.
     /// </summary>
     /// <param name="count">How many probes should fault.</param>
     /// <param name="fault">Produces the exception each faulting probe throws.</param>

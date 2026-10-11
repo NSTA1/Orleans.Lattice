@@ -8362,9 +8362,9 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>(LeafSpanFailOpenCommitsName, unit: "{key}",
             description: "Keys a leaf committed locally although its declared span excludes them, because declared-span admission found no neighbouring leaf to forward them to (fail-open). Tagged by tree, reason (no_sibling or self_reference) and origin (client_write, merge or cross_shard_migration). A leaf with no declared span never advances it.");
 
-    // --- Storage-usage instruments (byte-accurate retained footprint) ------
+    // --- Storage-usage instruments (retained payload and physical occupancy) ------
     //
-    // The four byte gauges and the over-threshold gauge are observable gauges
+    // The five byte gauges and the over-threshold gauge are observable gauges
     // registered lazily by LatticeStorageUsageMetrics (so they cost nothing
     // when no listener is attached and are not created at all when the host
     // never wires the storage-usage singleton). Their canonical names are
@@ -8376,6 +8376,9 @@ public static class LatticeMetrics
     /// <summary>Canonical name of the observable gauge reporting per-tree retained WAL bytes (tagged <see cref="TagTree"/>).</summary>
     public const string StorageWalBytesName = "orleans.lattice.storage.wal_bytes";
 
+    /// <summary>Canonical name of the observable gauge reporting per-tree physical WAL occupancy, including framing and dead bytes, with a retained-byte fallback for providers without physical accounting (tagged <see cref="TagTree"/>).</summary>
+    public const string StorageWalPhysicalBytesName = "orleans.lattice.storage.wal_physical_bytes";
+
     /// <summary>Canonical name of the observable gauge reporting per-tree snapshot blob bytes (tagged <see cref="TagTree"/>).</summary>
     public const string StorageSnapshotBytesName = "orleans.lattice.storage.snapshot_bytes";
 
@@ -8385,7 +8388,7 @@ public static class LatticeMetrics
     /// <summary>Canonical name of the observable gauge reporting the per-tree sum of the three storage surfaces (tagged <see cref="TagTree"/>).</summary>
     public const string StorageTotalBytesName = "orleans.lattice.storage.total_bytes";
 
-    /// <summary>Canonical name of the observable 0/1 gauge that flags a tree whose WAL occupancy bytes currently breach the advisory ceiling (tagged <see cref="TagTree"/>).</summary>
+    /// <summary>Canonical name of the observable 0/1 gauge that flags a tree whose physical WAL occupancy bytes currently breach the advisory ceiling (tagged <see cref="TagTree"/>). Compare <see cref="StorageWalPhysicalBytesName"/>, not <see cref="StorageWalBytesName"/>.</summary>
     public const string StoragePolicyOverThresholdName = "orleans.lattice.storage.policy.over_threshold";
 
     /// <summary>
@@ -8399,7 +8402,7 @@ public static class LatticeMetrics
     /// <see cref="StorageTotalBytesName"/> carry a real measurement for the
     /// tree. <c>0</c> means only the cheap WAL-only refresh path has run, so
     /// those three gauges publish <b>no measurement</b> for that tree and
-    /// <see cref="StorageWalBytesName"/> is the only byte surface that has been
+    /// <see cref="StorageWalBytesName"/> and <see cref="StorageWalPhysicalBytesName"/> are the only byte surfaces that have been
     /// sampled. The gauge itself reports no measurement for a tree that has not
     /// been observed at all, so the three states - never seen, seen WAL-only,
     /// and deeply measured - are all distinguishable from

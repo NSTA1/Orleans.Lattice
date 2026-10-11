@@ -47,13 +47,9 @@ public partial class AtomicWriteGrainTests
 
         Assert.That(attempts, Is.EqualTo(3),
             "PrepareAsync must retry on each StaleShardRoutingException and succeed on the third attempt.");
-        // Routing was refreshed once per stale-routing throw on top of
-        // the initial fetch (3 prepare-side calls) plus once by
-        // BroadcastTerminalsAsync for its drift-correction pass. The
-        // saga now routes routing fetches through the forceRefresh:true
-        // overload so the per-activation StatelessWorker cache is
-        // bypassed under cascading mid-saga topology changes.
-        await lattice.Received(4).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        // Initial fetch, one freshness resolve before terminal dispatch,
+        // one refresh per stale-routing throw, and the terminal drift pass.
+        await lattice.Received(5).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -80,11 +76,9 @@ public partial class AtomicWriteGrainTests
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
         Assert.That(attempts, Is.EqualTo(2));
-        // Prepare-side: initial fetch + one refresh for the stale-tree
-        // throw. Plus one for BroadcastTerminalsAsync's drift-correction
-        // pass. Three calls in total - all via the forceRefresh:true
-        // overload.
-        await lattice.Received(3).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        // Initial fetch, freshness resolve before terminal dispatch, one
+        // refresh for the stale-tree throw, and the terminal drift pass.
+        await lattice.Received(4).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -129,11 +123,9 @@ public partial class AtomicWriteGrainTests
         await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
 
         Assert.That(attempts, Is.EqualTo(3));
-        // Prepare-side: initial fetch + one refresh per stale-routing
-        // throw (mixed shard / tree). Plus one for
-        // BroadcastTerminalsAsync's drift-correction pass. All via
-        // forceRefresh:true overload.
-        await lattice.Received(4).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        // Initial fetch, freshness resolve before terminal dispatch, one
+        // refresh per stale-routing throw, and the terminal drift pass.
+        await lattice.Received(5).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -234,11 +226,9 @@ public partial class AtomicWriteGrainTests
 
         Assert.That(attempts, Is.EqualTo(Storm + 1),
             "Deadline-bounded retry must absorb every sequential stale-routing throw and succeed on the next attempt.");
-        // Routing was refreshed once per stale-routing throw on top of
-        // the initial fetch (Storm + 1 prepare-side calls), plus one
-        // by BroadcastTerminalsAsync's drift-correction pass. All via
-        // forceRefresh:true overload.
-        await lattice.Received(Storm + 2).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        // Initial fetch, freshness resolve before terminal dispatch, one
+        // refresh per stale-routing throw, and the terminal drift pass.
+        await lattice.Received(Storm + 3).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

@@ -44,7 +44,10 @@ public sealed class RepoContextDrainForecastServiceTests
             outcome,
             Budget,
             seconds is { } value ? TimeSpan.FromSeconds(value) : null,
-            resident);
+            resident,
+            CompletedDrains: outcome == RepoContextDrainOutcome.Completed && resident is > 0 && seconds is > 0
+                ? [new(Observed.AddDays(-1), outcome, Budget, TimeSpan.FromSeconds(seconds.Value * 50_000 / resident.Value), 50_000)]
+                : null);
 
     private static RepoContextDrainForecastService Service(
         LevelLogger logger,
@@ -286,12 +289,12 @@ public sealed class RepoContextDrainForecastServiceTests
         Assert.That(projection, Is.Not.Null);
         Assert.Multiple(() =>
         {
-            Assert.That(projection!.Value.ProjectedDrain.TotalSeconds, Is.EqualTo(120).Within(1e-6));
+            Assert.That(projection!.Value.ProjectedDrain.TotalSeconds, Is.EqualTo(144).Within(1e-6));
             Assert.That(projection.Value.ExceedsBudget, Is.True);
             Assert.That(logger.Lines, Has.Count.EqualTo(1));
             Assert.That(logger.Lines[0].Level, Is.EqualTo(LogLevel.Error));
-            Assert.That(logger.Lines[0].Message, Does.Contain("will NOT deactivate in time"));
-            Assert.That(logger.Lines[0].Message, Does.Contain("160s"), "the grant the projection requires");
+            Assert.That(logger.Lines[0].Message, Does.Contain("estimated NOT to deactivate in time"));
+            Assert.That(logger.Lines[0].Message, Does.Contain("192s"), "the grant the projection requires");
         });
     }
 
@@ -400,7 +403,7 @@ public sealed class RepoContextDrainForecastServiceTests
         {
             Assert.That(logger.Lines[1].Level, Is.EqualTo(LogLevel.Error));
             Assert.That(logger.Lines[1].Message, Does.Contain("peak of 40000"));
-            Assert.That(logger.Lines[1].Message, Does.Contain("will NOT deactivate in time"));
+            Assert.That(logger.Lines[1].Message, Does.Contain("estimated NOT to deactivate in time"));
         });
     }
 
@@ -434,12 +437,12 @@ public sealed class RepoContextDrainForecastServiceTests
 
         var projection = service.PollOnce();
 
-        Assert.That(projection!.Value.IsLowerBound, Is.True);
+        Assert.That(projection, Is.Null);
         Assert.That(logger.Lines, Has.Count.EqualTo(1));
         Assert.Multiple(() =>
         {
             Assert.That(logger.Lines[0].Level, Is.EqualTo(LogLevel.Warning));
-            Assert.That(logger.Lines[0].Message, Does.Contain("AT LEAST"));
+            Assert.That(logger.Lines[0].Message, Does.Contain("uncalibrated"));
             Assert.That(logger.Lines[0].Message, Does.Not.Contain("which fits"));
         });
 
@@ -451,7 +454,7 @@ public sealed class RepoContextDrainForecastServiceTests
         {
             Assert.That(logger.Lines[1].Level, Is.EqualTo(LogLevel.Error));
             Assert.That(logger.Lines[1].Message, Does.Contain("AT LEAST"));
-            Assert.That(logger.Lines[1].Message, Does.Contain("FLOOR"));
+            Assert.That(logger.Lines[1].Message, Does.Contain("floor"));
         });
 
         var readings = Collect(service);
@@ -493,7 +496,8 @@ public sealed class RepoContextDrainForecastServiceTests
             Assert.That(service.PollOnce(), Is.Null);
             Assert.That(service.Projection, Is.Null);
             Assert.That(service.ResidentActivations, Is.Null);
-            Assert.That(logger.Lines, Is.Empty, "an unavailable reading is not a finding to alarm on");
+            Assert.That(logger.Lines, Has.Count.EqualTo(1), "unknown must not read as an all-clear");
+            Assert.That(logger.Lines[0].Message, Does.Contain("uncalibrated"));
         });
     }
 
@@ -601,14 +605,14 @@ public sealed class RepoContextDrainForecastServiceTests
             Assert.That(readings[RepoContextDrainForecastService.ResidentGaugeName], Is.EqualTo(40_000).Within(1e-6));
             Assert.That(
                 readings[RepoContextDrainForecastService.ProjectedDrainGaugeName],
-                Is.EqualTo(120).Within(1e-6));
+                Is.EqualTo(144).Within(1e-6));
             Assert.That(
                 readings[RepoContextDrainForecastService.RequiredGrantGaugeName],
-                Is.EqualTo(160).Within(1e-6));
+                Is.EqualTo(192).Within(1e-6));
             Assert.That(readings[RepoContextDrainForecastService.PeakResidentGaugeName], Is.EqualTo(40_000).Within(1e-6));
             Assert.That(
                 readings[RepoContextDrainForecastService.PeakProjectedDrainGaugeName],
-                Is.EqualTo(120).Within(1e-6));
+                Is.EqualTo(144).Within(1e-6));
             Assert.That(
                 readings[RepoContextDrainForecastService.ProjectionLowerBoundGaugeName],
                 Is.EqualTo(0).Within(1e-6));

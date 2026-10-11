@@ -415,4 +415,21 @@ internal sealed class AtomicWriteState
     /// once the discards are done.
     /// </summary>
     [Id(27)] public Dictionary<string, List<int>>? AbandonedCopyShards { get; set; }
+
+    /// <summary>
+    /// Shard-map version used to route <see cref="Entries"/> when the current
+    /// <see cref="BoundPhysicalTreeId"/> was prepared. A change before the
+    /// commit decision requires the batch to be re-routed and re-dispatched.
+    /// <see langword="null"/> identifies legacy state without a routing
+    /// snapshot.
+    /// </summary>
+    [Id(28)] public long? RoutingEpoch { get; set; }
+
+    /// <summary>
+    /// Sorted distinct WAL partitions to which this saga's entries route on
+    /// <see cref="BoundPhysicalTreeId"/>, using the same prepare-time routing
+    /// snapshot as <see cref="TouchedShards"/>. Empty on legacy state that
+    /// predates the snapshot.
+    /// </summary>
+    [Id(29)] public List<int> WalPartitions { get; set; } = [];
 }

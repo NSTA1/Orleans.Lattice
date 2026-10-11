@@ -32,7 +32,10 @@ public sealed class RepoContextDrainForecastTests
             outcome,
             Budget,
             seconds is { } value ? TimeSpan.FromSeconds(value) : null,
-            resident);
+            resident,
+            CompletedDrains: outcome == RepoContextDrainOutcome.Completed && resident is > 0 && seconds is > 0
+                ? [new(Observed.AddDays(-1), outcome, Budget, TimeSpan.FromSeconds(seconds.Value * 50_000 / resident.Value), 50_000)]
+                : null);
 
     [Test]
     public void With_no_recorded_drain_the_forecast_reports_that_it_cannot_project()
@@ -254,9 +257,9 @@ public sealed class RepoContextDrainForecastTests
         Assert.That(forecast.TryProject(8000, out var projection), Is.True);
         Assert.That(
             projection.ExceedsBudget,
-            Is.True,
-            "8000 activations at the cost this drain measured does not fit 180s, and the running poll "
-            + "must still say so");
+            Is.False,
+            "a truncated 91.9s drain supplies only a floor; it cannot establish the service rate of the remaining work");
+        Assert.That(projection.IsLowerBound, Is.True);
     }
 
     [Test]
@@ -347,7 +350,7 @@ public sealed class RepoContextDrainForecastTests
     }
 
     [Test]
-    public void A_projection_multiplies_the_live_residency_by_the_cost_the_last_drain_measured()
+    public void A_projection_uses_clean_service_rate_measurements_and_a_safety_margin()
     {
         // This is the member that answers the drain signal's standing remark - "drain
         // duration tracks the resident activation set, which nothing here bounds" -
@@ -359,10 +362,10 @@ public sealed class RepoContextDrainForecastTests
         Assert.That(forecast.TryProject(20_000, out var projection), Is.True);
         Assert.Multiple(() =>
         {
-            Assert.That(projection.ProjectedDrain.TotalSeconds, Is.EqualTo(60).Within(1e-6));
+            Assert.That(projection.ProjectedDrain.TotalSeconds, Is.EqualTo(72).Within(1e-6));
             Assert.That(projection.ResidentActivations, Is.EqualTo(20_000));
             Assert.That(projection.ExceedsBudget, Is.False);
-            Assert.That(projection.ConsumedFraction, Is.EqualTo(60.0 / 90.0).Within(1e-9));
+            Assert.That(projection.ConsumedFraction, Is.EqualTo(72.0 / 90.0).Within(1e-9));
         });
     }
 
@@ -376,7 +379,7 @@ public sealed class RepoContextDrainForecastTests
         Assert.That(forecast.TryProject(40_000, out var projection), Is.True);
         Assert.Multiple(() =>
         {
-            Assert.That(projection.ProjectedDrain.TotalSeconds, Is.EqualTo(120).Within(1e-6));
+            Assert.That(projection.ProjectedDrain.TotalSeconds, Is.EqualTo(144).Within(1e-6));
             Assert.That(projection.ExceedsBudget, Is.True, "120s does not fit a 90s budget");
             Assert.That(
                 RepoContextShutdownBudget.Derive(projection.RequiredStopGracePeriod),
@@ -391,7 +394,7 @@ public sealed class RepoContextDrainForecastTests
             Drain(RepoContextDrainOutcome.Completed, 30, resident: 10_000),
             Budget);
 
-        Assert.That(forecast.TryProject(25_000, out var thin), Is.True);
+        Assert.That(forecast.TryProject(20_000, out var thin), Is.True);
         Assert.That(forecast.TryProject(5_000, out var roomy), Is.True);
 
         Assert.Multiple(() =>
@@ -438,12 +441,13 @@ public sealed class RepoContextDrainForecastTests
             Drain(RepoContextDrainOutcome.Abandoned, 90, resident: 1_000),
             TimeSpan.FromSeconds(180));
 
-        Assert.That(forecast.TryProject(500, out var projection), Is.True);
+        Assert.That(forecast.TryProject(500, out _), Is.False, "a smaller set has no measured lower bound");
+        Assert.That(forecast.TryProject(1_000, out var projection), Is.True);
         Assert.Multiple(() =>
         {
             Assert.That(forecast.PerActivationCostIsLowerBound, Is.True);
             Assert.That(projection.IsLowerBound, Is.True);
-            Assert.That(projection.ProjectedDrain.TotalSeconds, Is.EqualTo(45).Within(1e-6));
+            Assert.That(projection.ProjectedDrain.TotalSeconds, Is.EqualTo(90).Within(1e-6));
         });
     }
 
