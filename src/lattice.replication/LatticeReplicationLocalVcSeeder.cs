@@ -86,9 +86,9 @@ internal sealed class LatticeReplicationLocalVcSeeder(
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                var liveRaw = await leaf.GetLiveRawEntriesAsync().ConfigureAwait(false);
+                var page = await leaf.GetLiveRawEntriesAndNextSiblingAsync().ConfigureAwait(false);
 
-                foreach (var entry in liveRaw)
+                foreach (var entry in page.Entries)
                 {
                     entriesScanned++;
                     if (entry.VectorClock is { } vc)
@@ -97,7 +97,7 @@ internal sealed class LatticeReplicationLocalVcSeeder(
                     }
                 }
 
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
+                leafId = page.NextSibling;
             }
         }
 

@@ -897,6 +897,22 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task DiscardPendingTransactionAsync(Guid transactionId);
 
     /// <summary>
+    /// <see cref="GetPendingMutationsForSlotsAsync"/> followed by
+    /// <see cref="GetNextSiblingAsync"/> in one grain turn, so a leaf-chain walk
+    /// that reads both pays one call per leaf instead of two.
+    /// </summary>
+    Task<LeafPendingMutationsPage> GetPendingMutationsForSlotsAndNextSiblingAsync(int[] sortedMovedSlots, int virtualShardCount);
+
+    /// <summary>
+    /// <see cref="DiscardPendingTransactionAsync"/> for every id in
+    /// <paramref name="transactionIds"/>, followed by
+    /// <see cref="GetNextSiblingAsync"/>, in one grain turn. A leaf-chain discard
+    /// walk then pays one call per leaf instead of one per transaction plus one,
+    /// and the leaf persists its discard markers at most once.
+    /// </summary>
+    Task<GrainId?> DiscardPendingTransactionsAndGetNextSiblingAsync(Guid[] transactionIds);
+
+    /// <summary>
     /// Every key this leaf holds a prepare for under
     /// <paramref name="transactionId"/> (issue #4522), including keys a leaf
     /// split left stranded here, mapped to its original prepare stamp when the
@@ -1026,6 +1042,13 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// type-alias encoding issues with nested-generic return shapes.
     /// </summary>
     Task<List<LwwEntry>> GetLiveRawEntriesAsync();
+
+    /// <summary>
+    /// <see cref="GetLiveRawEntriesAsync"/> followed by
+    /// <see cref="GetNextSiblingAsync"/> in one grain turn, so a leaf-chain walk
+    /// that reads both pays one call per leaf instead of two.
+    /// </summary>
+    Task<LeafLiveRawEntriesPage> GetLiveRawEntriesAndNextSiblingAsync();
 
     /// <summary>
     /// Merges entries into this leaf using LWW semantics, preserving original

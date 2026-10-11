@@ -105,9 +105,11 @@ public partial class LatticeReplicationLocalVcSeederTests
                     for (var l = 0; l < shardLeaves.Count; l++)
                     {
                         var leaf = Substitute.For<IBPlusLeafGrain>();
-                        leaf.GetLiveRawEntriesAsync().Returns(Task.FromResult(shardLeaves[l].ToList()));
-                        leaf.GetNextSiblingAsync().Returns(
-                            Task.FromResult<GrainId?>(l + 1 < leafIds.Length ? leafIds[l + 1] : null));
+                        leaf.GetLiveRawEntriesAndNextSiblingAsync().Returns(Task.FromResult(new LeafLiveRawEntriesPage
+                        {
+                            Entries = shardLeaves[l].ToList(),
+                            NextSibling = l + 1 < leafIds.Length ? leafIds[l + 1] : null,
+                        }));
                         factory.GetGrain<IBPlusLeafGrain>(leafIds[l]).Returns(leaf);
                     }
                 }

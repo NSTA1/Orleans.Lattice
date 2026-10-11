@@ -84,7 +84,8 @@ internal static class StalePendingClearer
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                foreach (var m in await leaf.GetPendingMutationsForSlotsAsync(allSlots, shardMap.VirtualShardCount).ConfigureAwait(false))
+                var page = await leaf.GetPendingMutationsForSlotsAndNextSiblingAsync(allSlots, shardMap.VirtualShardCount).ConfigureAwait(false);
+                foreach (var m in page.Mutations)
                 {
                     if (m.TransactionId != Guid.Empty
                         && string.Equals(m.OriginClusterId, sourceClusterId, StringComparison.Ordinal)
@@ -100,7 +101,7 @@ internal static class StalePendingClearer
                     }
                 }
 
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
+                leafId = page.NextSibling;
             }
         }
 
@@ -167,7 +168,8 @@ internal static class StalePendingClearer
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                foreach (var m in await leaf.GetPendingMutationsForSlotsAsync(allSlots, shardMap.VirtualShardCount).ConfigureAwait(false))
+                var page = await leaf.GetPendingMutationsForSlotsAndNextSiblingAsync(allSlots, shardMap.VirtualShardCount).ConfigureAwait(false);
+                foreach (var m in page.Mutations)
                 {
                     if (m.TransactionId != Guid.Empty
                         && string.Equals(m.OriginClusterId, sourceClusterId, StringComparison.Ordinal))
@@ -176,7 +178,7 @@ internal static class StalePendingClearer
                     }
                 }
 
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
+                leafId = page.NextSibling;
             }
         }
 

@@ -343,6 +343,11 @@ internal static class TypeAliases
     // start of a shard split's BeginShadowWrite phase.
     internal const string PendingMutationSnapshot = "ol.pms";
 
+    // Leaf-chain walk pages: a per-leaf payload plus the right-sibling pointer,
+    // read in one grain call instead of two.
+    internal const string LeafLiveRawEntriesPage = "ol.lln";
+    internal const string LeafPendingMutationsPage = "ol.lpn";
+
     // Atomic multi-key writes
     internal const string AtomicWriteState = "ol.aws";
     internal const string AtomicWritePhase = "ol.awp";
