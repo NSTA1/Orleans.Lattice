@@ -1150,23 +1150,25 @@ internal sealed partial class BPlusLeafGrain
     /// <returns><see langword="true"/> when the caller may queue.</returns>
     /// <remarks>
     /// <para>
-    /// <b>The bound is derived from the resolved ceiling and from nothing else.</b>
-    /// The gate is a process-wide static sized from this silo's own CPU grant, so
-    /// a bound expressed as "N per permit" needs no retuning between a 2-vCPU box
-    /// and a 64-vCPU one. Silo count is deliberately not an input: scaling out
+    /// <b>The bound is derived from the permits still in circulation.</b>
+    /// The gate is a process-wide static sized from this silo's own CPU grant.
+    /// Withheld permits are subtracted from the resolved ceiling, so memory
+    /// backpressure shrinks the queue with its service capacity (issue #4071).
+    /// A bound expressed as "N per circulating permit" needs no retuning between
+    /// a 2-vCPU box and a 64-vCPU one. Silo count is deliberately not an input: scaling out
     /// adds pools rather than dividing one, so scaling this bound by cluster size
     /// would shrink aggregate replay capacity exactly as capacity was being added,
     /// and the resources the gate protects - local CPU, the local managed heap -
     /// have no cluster-wide term at all.
     /// </para>
     /// <para>
-    /// <b>Bulk is refused one whole ceiling's worth of queue earlier than
+    /// <b>Bulk is refused one circulating pool's worth of queue earlier than
     /// interactive, and that reservation is what makes this a priority and not
     /// merely a cap.</b> A bound that refused both classes at the same depth would
     /// refuse the interactive read as readily as the <c>O(corpus)</c> walk that
     /// filled the queue - the walk would simply win the race more often, because
-    /// it arrives in bulk. Reserving the last <c>ceiling</c> slots for interactive
-    /// work means a saturated gate still admits a full ceiling of foreground reads
+    /// it arrives in bulk. Reserving one slot per circulating permit for interactive
+    /// work means a saturated gate still admits a circulating pool of foreground reads
     /// while background fan-out is turned away.
     /// </para>
     /// <para>
@@ -1197,9 +1199,10 @@ internal sealed partial class BPlusLeafGrain
             return true;
         }
 
-        var interactive = (int)Math.Min(int.MaxValue, (long)ceiling * queueDepthPerPermit);
+        var circulating = CirculatingReplayPermits(ceiling, Volatile.Read(ref _withheldReplayPermits));
+        var interactive = (int)Math.Min(int.MaxValue, (long)circulating * queueDepthPerPermit);
         bound = admissionClass == LatticeReplayAdmissionClass.Bulk
-            ? Math.Max(1, interactive - ceiling)
+            ? Math.Max(1, interactive - circulating)
             : interactive;
 
         return admitted < bound;
@@ -1543,8 +1546,8 @@ internal sealed partial class BPlusLeafGrain
         TimeSpan maxQueueWait)
     {
         var head =
-            $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), at or "
-            + $"above the {bound} admitted for a {admissionClass} caller against a ceiling of "
+            $"The per-silo WAL replay permit queue already holds {queued} admitted waiter(s), with a "
+            + $"limit of {bound} admitted for a {admissionClass} caller against a ceiling of "
             + $"{ceiling} permit(s), and ";
 
         if (verdict == ReplayPermitDrainVerdict.NoProgress)
@@ -1570,9 +1573,10 @@ internal sealed partial class BPlusLeafGrain
             + $"the queue is not draining: the smoothed queue wait is {smoothedWait.TotalMilliseconds:F0} ms, "
             + $"at or above the {nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} of "
             + $"{maxQueueWait.TotalMilliseconds:F0} ms. This activation was refused admission rather than queued "
-            + "behind work it could not outlast. Retry after a backoff, or raise "
+            + "behind work it could not outlast, even below the queue-depth limit. Retry after a backoff. "
             + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitQueueDepthPerPermit)} "
-            + "(zero restores an unbounded queue). If orleans.lattice.wal.replay.permit_hold is long, the "
+            + "set to zero disables replay admission refusals; raising it does not cure a slow queue. "
+            + "If orleans.lattice.wal.replay.permit_hold is long, the "
             + "replays themselves are slow and the queue is a symptom.";
     }
 
@@ -1619,21 +1623,19 @@ internal sealed partial class BPlusLeafGrain
         // fan-out and every leaf it reaches inherits the classification without
         // knowing the seam exists.
         //
-        // BOTH halves must hold (issue #3290). The depth bound alone is derived
-        // purely from supply - `ceiling` is min(ProcessorCount, ContainerCpuGrant)
-        // - while the queue is filled purely by demand, cluster-wide fan-out that
-        // contains no CPU term. So it refused the SAME healthy fan-out on a small
-        // host that it waved through on a large one: measured at peak 31 waiters
-        // against a bound of 64 on 16 processors, and peak 40 against a bound of
-        // 16 on 4, where it refused ordinary registry activations. Depth is
-        // therefore necessary but not sufficient; the queue must also be failing
-        // to drain, which is the only half that carries a latency term and the
-        // only half that distinguishes a wide fan-out from a wedged one.
+        // Depth alone still cannot refuse healthy fan-out (#3290). A fresh
+        // excessive mean is evidence of harm even below that bound (#4071).
+        // No-progress still needs depth: quietness alone must not refuse a new
+        // burst. A disabled bound and an empty queue retain unconditional admission.
         var admissionClass = LatticeReplayAdmissionContext.Current;
-        if (!TryAdmitReplayPermitWaiter(
-                options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound)
-            && ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out var sinceProgress)
-                is var verdict and not ReplayPermitDrainVerdict.Draining)
+        var belowBound = TryAdmitReplayPermitWaiter(
+            options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound);
+        var sinceProgress = TimeSpan.Zero;
+        var verdict = bound > 0 && queued > 0
+            ? ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out sinceProgress)
+            : ReplayPermitDrainVerdict.Draining;
+        if (verdict == ReplayPermitDrainVerdict.WaitExceeded
+            || (!belowBound && verdict == ReplayPermitDrainVerdict.NoProgress))
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
 

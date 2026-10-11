@@ -2387,9 +2387,9 @@ public class LatticeOptions
 
     /// <summary>
     /// How many activations may be <b>queued</b> for a WAL replay permit, per
-    /// permit the gate was sized to. The admitted-waiter bound is this figure
-    /// multiplied by the resolved ceiling, so it scales with the deployment's
-    /// own CPU grant and needs no retuning between a 2-vCPU box and a 64-vCPU
+    /// permit still in circulation. The admitted-waiter bound is this figure
+    /// multiplied by the resolved ceiling less withheld permits (at least one),
+    /// so it scales with the deployment's own CPU grant and needs no retuning between a 2-vCPU box and a 64-vCPU
     /// one. Defaults to
     /// <see cref="DefaultWalReplayPermitQueueDepthPerPermit"/> (4). Set to
     /// <c>0</c> to admit an unbounded queue, which is the historical shape.
@@ -2405,7 +2405,7 @@ public class LatticeOptions
     /// a backoff rather than a silent wait that cannot succeed.
     /// </para>
     /// <para>
-    /// <b>Derived from the ceiling on purpose, and from nothing else.</b> Silo
+    /// <b>Derived from local circulating capacity.</b> Silo
     /// count is deliberately <i>not</i> an input: the gate is a process-wide
     /// static, so scaling out adds pools rather than dividing one, and scaling
     /// this bound by cluster size would shrink aggregate replay capacity exactly
@@ -2414,13 +2414,10 @@ public class LatticeOptions
     /// there is no cluster-wide term for it to be adaptive to.
     /// </para>
     /// <para>
-    /// <b>Necessary but no longer sufficient (issue #3290).</b> The paragraph
-    /// above is correct that the resources are local; it was wrong to conclude
-    /// that a bound derived from them alone could judge a queue. This value now
-    /// gates refusal jointly with
-    /// <see cref="WalReplayPermitMaxQueueWait"/>, which supplies the demand-side
-    /// term it lacks. Raising this number is therefore no longer the way to stop
-    /// spurious refusals, and it should not be tuned for that reason.
+    /// Depth alone cannot refuse healthy fan-out (issue #3290). A fresh smoothed
+    /// wait reaching <see cref="WalReplayPermitMaxQueueWait"/> refuses a non-empty
+    /// queue even below this depth bound (issue #4071); the no-progress arm still
+    /// requires the depth bound. Raising this number cannot cure slow waits.
     /// </para>
     /// </summary>
     public int WalReplayPermitQueueDepthPerPermit { get; set; } =
@@ -2440,8 +2437,7 @@ public class LatticeOptions
     /// <summary>
     /// The longest smoothed WAL replay permit queue wait treated as healthy.
     /// Defaults to <see cref="DefaultWalReplayPermitMaxQueueWait"/> (5 seconds).
-    /// Set to <see cref="TimeSpan.Zero"/> to disable this half of the admission
-    /// decision, restoring the pure depth bound of issue #3284.
+    /// Set to <see cref="TimeSpan.Zero"/> to disable time-based admission refusals.
     /// <para>
     /// <b>This is the demand-side half, and it is load-bearing (issue #3290).</b>
     /// <see cref="WalReplayPermitQueueDepthPerPermit"/> multiplies a supply-side
@@ -2455,11 +2451,11 @@ public class LatticeOptions
     /// with need, loosest where the silo copes and tightest where it does not.
     /// </para>
     /// <para>
-    /// Both halves must now hold before an activation is refused. Depth says the
-    /// queue is long; this says it is <b>not draining</b>, which is the only
-    /// signal that separates a wide fan-out from the self-sustaining backlog of
-    /// issue #3284, and the only one expressed in the same units as the harm
-    /// (a request deadline is a time, not a count).
+    /// A fresh smoothed wait at or above this threshold refuses a non-empty queue
+    /// independently of its depth (issue #4071). No progress for this long still
+    /// requires the depth bound, so an idle interval cannot refuse a fresh burst.
+    /// Stale means expire after this interval. Setting
+    /// <see cref="WalReplayPermitQueueDepthPerPermit"/> to zero disables both arms.
     /// </para>
     /// </summary>
     public TimeSpan WalReplayPermitMaxQueueWait { get; set; } =

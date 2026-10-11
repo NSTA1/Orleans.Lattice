@@ -25,7 +25,8 @@ public partial class BPlusLeafGrainTests
         LeafSnapshotBlob? preloadedSnapshot,
         long persistedCheckpoint,
         long walHead,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        Action<LatticeOptions>? configureOptions = null)
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(preloadedSnapshot));
@@ -60,6 +61,7 @@ public partial class BPlusLeafGrainTests
         state.State.ProjectionCheckpointOffset = persistedCheckpoint;
 
         var baseOptions = new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero };
+        configureOptions?.Invoke(baseOptions);
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,
