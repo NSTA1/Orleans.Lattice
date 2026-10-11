@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Orleans.Lattice testing policy and the repository hygiene gates. Use when writing or running tests, choosing a test scope or tier, categorizing a fixture, or diagnosing or avoiding a CI hygiene-gate failure (em-dash, mojibake, integration-category, docs-snippet, or performance-marker gates).
+description: Orleans.Lattice testing policy and the repository hygiene gates. Use when writing or running tests, choosing a test scope or tier, categorizing a fixture, or diagnosing or avoiding a CI hygiene-gate failure (ASCII, em-dash, mojibake, integration-category, docs-snippet, or performance-marker gates).
 ---
 
 # Testing
@@ -18,6 +18,6 @@ That file is the authority for everything this skill covers - do not restate its
 - **Categorization conventions** - which `[Category(...)]` each kind of fixture carries.
 - **False greens** - the shapes of a green check that never exercised the property it names, which is worse than a red because it also asserts there is nothing to fix, and how to avoid each.
 - **The Coyote concurrency tier, the browser UI tier, and the TLA+ specification** - what each verifies and how it runs.
-- **The repository hygiene gates** - what each enforces, how to stay green, and how the gates reach CI.
+- **The repository hygiene gates** - ASCII text and reviewed Unicode exceptions, the independent em-dash and mojibake predicates, and how the gates reach CI. The master owns the precise policy and allowlist format.
 
 Open that file and follow it directly.

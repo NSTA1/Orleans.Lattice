@@ -97,6 +97,11 @@ Naming rules for every layer (namespaces, public API surface, grains, methods, t
 - Prefer `Task.FromResult` over `ValueTask` for synchronous grain returns. Exception: a hot read-path grain method that has a synchronous fast path may return `ValueTask`/`ValueTask<T>` when that saves a real same-silo allocation (e.g. `IWalShardGrain.ReadAsync`/`ReadShippingAsync`/`GetNextSequenceAsync`, which the shipper and view maintainers poll continuously on co-located activations). The upgrade is negligible when a cross-silo hop is needed anyway, so it is a safe net win; add `.AsTask()` only at fan-out call sites that must store the result in a `Task[]` for `Task.WhenAll`.
 - Use `ArgumentNullException.ThrowIfNull` for public API parameter validation.
 - Keep XML doc comments (`<summary>`) on all public types, interfaces, and members.
+- Author ASCII text. Literal Unicode requires a reviewed, justified exact-line
+  exception in `test/lattice/Hygiene/UnicodeAllowlist.tsv`. Preserve existing
+  allowed Unicode rather than normalizing unrelated files. The ASCII,
+  em-dash and mojibake gates enforce separate predicates; see
+  `.github/instructions/testing.instructions.md` for the precise policy.
 
 ## Orleans Serialization
 

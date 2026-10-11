@@ -215,7 +215,11 @@ often trip are below; the principal gates, and how to run them, are described in
 `.github/instructions/testing.instructions.md`:
 
 - No em-dash (U+2014) in any tracked text file - use a plain ASCII hyphen `-`.
-- No byte-level mojibake - author plain ASCII.
+- Author ASCII text. Literal Unicode needs a reviewed exact-line exception in
+  `test/lattice/Hygiene/UnicodeAllowlist.tsv`; existing banners, notation, UI
+  glyphs and Unicode test inputs are preserved there, not excluded by path.
+  See the testing master for the exception format and enforcement.
+- No byte-level mojibake; the decoding-accident gate remains independent.
 - C# snippets under `docs/` use the ` ```csharp verify ` fence, and every
   `verify` snippet must compile against the real public surface. A plain
   ` ```csharp ` fence is never compiled, so a missing `verify` does not fail the
