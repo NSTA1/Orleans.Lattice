@@ -1566,10 +1566,13 @@ internal sealed class LatticeStateQuery(
         {
             page = await tree.NextEntriesAsync(cursorId, pageSize, cancellationToken).ConfigureAwait(false);
         }
-        catch (InvalidOperationException ex) when (!fresh)
+        catch (InvalidOperationException ex)
+            when (!fresh && (ex is LatticeCursorSnapshotExpiredException || ex is not ILatticeDomainFault))
         {
             // A client-supplied continuation token that names an unknown, drained,
             // or already-closed cursor is a malformed request, not a server fault.
+            // Snapshot-pin expiry deliberately keeps that classification; other
+            // domain refusals must retain their own remedy.
             throw new ArgumentException(
                 $"The continuation token '{request.ContinuationToken}' is invalid or has expired.",
                 nameof(request),
@@ -2134,7 +2137,8 @@ internal sealed class LatticeStateQuery(
         {
             await tree.CloseCursorAsync(continuationToken, cancellationToken).ConfigureAwait(false);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
+            when (ex is LatticeCursorSnapshotExpiredException || ex is not ILatticeDomainFault)
         {
             // The token names an unknown, already-drained, or already-closed
             // cursor (including an expired snapshot pin): a best-effort cancel

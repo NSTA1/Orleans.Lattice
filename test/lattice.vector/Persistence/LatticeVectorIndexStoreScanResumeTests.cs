@@ -2,6 +2,7 @@ namespace Orleans.Lattice.Vector.Tests.Persistence;
 
 using Orleans.Lattice.Vector.Persistence;
 using Orleans.Lattice.Vector.Tests.Fakes;
+using NSubstitute;
 
 /// <summary>
 /// The durable index reloads itself by walking corpus-sized key ranges, and a
@@ -36,6 +37,29 @@ public sealed class LatticeVectorIndexStoreScanResumeTests
         }
 
         return seen;
+    }
+
+    [Test]
+    public void A_domain_timeout_is_not_retried_as_a_runtime_response_deadline()
+    {
+        var fault = new LatticeTransactionOutcomeUnavailableException("registry unavailable");
+        var tree = Substitute.For<ILattice>();
+        tree.EntriesAsync(
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => RefusedWalk(fault));
+        var store = new LatticeVectorIndexStore(tree);
+
+        var actual = Assert.ThrowsAsync<LatticeTransactionOutcomeUnavailableException>(() => DrainAsync(store));
+
+        Assert.That(actual, Is.SameAs(fault));
+        tree.Received(1).EntriesAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>());
+    }
+
+    private static async IAsyncEnumerable<KeyValuePair<string, byte[]>> RefusedWalk(Exception fault)
+    {
+        await Task.FromException(fault);
+        yield break;
     }
 
     [Test]

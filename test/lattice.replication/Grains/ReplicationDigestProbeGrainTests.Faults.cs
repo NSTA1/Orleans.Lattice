@@ -18,6 +18,25 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 public partial class ReplicationDigestProbeGrainTests
 {
     [Test]
+    public async Task ProcessNextPhaseAsync_domain_digest_fault_does_not_permanently_disable_probing()
+    {
+        var (grain, state, lattice, transport, _) = CreateProbeGrain();
+        var reads = 0;
+        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+            .Returns(_ => ++reads == 1
+                ? Task.FromException<LeafProjectionDigest>(new LeafProjectionStaleException("projection unavailable"))
+                : Task.FromResult(Digest([1, 2, 3])));
+
+        await grain.ProcessNextPhaseAsync();
+        state.State.LastProbeTicks = 0;
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.That(reads, Is.EqualTo(2), "a domain fault must not set the disabled-digest latch");
+        await transport.Received(1).ProbeDigestAsync(
+            "site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task ProcessNextPhaseAsync_does_not_advance_cadence_when_the_shard_map_cannot_be_resolved()
     {
         var (grain, state, lattice, _, shardCounts) = CreateProbeGrain();

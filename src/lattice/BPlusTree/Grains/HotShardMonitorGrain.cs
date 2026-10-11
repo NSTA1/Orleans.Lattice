@@ -805,7 +805,7 @@ internal sealed class HotShardMonitorGrain(
                 "Triggered autonomic split of shard {ShardIndex} for tree {TreeId} (rate={Rate:F1} ops/s, threshold={Threshold})",
                 shardIndex, TreeId, rate, threshold);
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
         {
             // Coordinator already busy on a different parameter set - ignore until next tick.
             logger.LogDebug(ex, "Could not trigger split for shard {ShardIndex} of tree {TreeId}", shardIndex, TreeId);

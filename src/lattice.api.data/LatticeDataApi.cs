@@ -331,10 +331,13 @@ internal sealed partial class LatticeDataApi(
         {
             page = await tree.NextEntriesAsync(cursorId, pageSize, cancellationToken).ConfigureAwait(false);
         }
-        catch (InvalidOperationException ex) when (!fresh)
+        catch (InvalidOperationException ex)
+            when (!fresh && (ex is LatticeCursorSnapshotExpiredException || ex is not ILatticeDomainFault))
         {
             // A client-supplied continuation token that names an unknown, drained,
             // or already-closed cursor is a malformed request, not a server fault.
+            // Snapshot-pin expiry deliberately keeps that classification; other
+            // domain refusals must retain their own remedy.
             throw new ArgumentException(
                 $"The continuation token '{request.ContinuationToken}' is invalid or has expired.",
                 nameof(request),

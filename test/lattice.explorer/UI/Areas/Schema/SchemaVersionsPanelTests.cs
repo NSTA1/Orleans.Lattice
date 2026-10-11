@@ -268,6 +268,24 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
     }
 
     [Test]
+    public void A_domain_refusal_is_not_misreported_as_missing_versioning()
+    {
+        UseEstate();
+        Schema.Faults["GetVersionConfig"] = new LeafProjectionStaleException("projection unavailable");
+
+        var cut = Open();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("[role=tabpanel] .lt-empty__body").TextContent,
+                Is.EqualTo("Could not read the version config. projection unavailable."));
+            Assert.That(cut.Find("[role=tabpanel] .lt-empty__title").TextContent,
+                Is.Not.EqualTo("Versioning is not available"));
+            Assert.That(Schema.CountOf("GetVersionConfig"), Is.GreaterThanOrEqualTo(1));
+        });
+    }
+
+    [Test]
     public void A_read_that_fails_can_be_tried_again()
     {
         UseEstate();

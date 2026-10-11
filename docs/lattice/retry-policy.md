@@ -47,6 +47,28 @@ through `SetManyAtomicAsync`. The retry policy does not coordinate
 across multiple `ILattice` calls - it only re-invokes the operation
 delegate you pass to it.
 
+## Broad exception handlers and domain refusals
+
+`ILatticeDomainFault` distinguishes a typed domain refusal from the framework
+exception it derives from. A handler written for `InvalidOperationException`,
+`TimeoutException`, or `UnauthorizedAccessException` must not silently apply a
+framework remedy to that refusal. Inspect the operation's raise surface before
+choosing a filter: the marker does not prohibit deliberate handling.
+
+For example, stale leaf projections are not invalid continuation tokens or
+disabled digests, and an unavailable transaction outcome must not consume the
+vector store's runtime response-timeout resume budget. Those faults preserve
+their original classification. Continuation APIs deliberately retain their
+invalid-token translation for `LatticeCursorSnapshotExpiredException`, and
+best-effort cursor cancellation still accepts that specific expiry.
+
+A bounded activation retry, cleanup followed by rethrow, and a transport mapping
+that faithfully represents a domain refusal can remain correct. Background
+coordinators report domain failures through their failure path rather than
+claiming that a split is merely busy, a pair is not foldable, or versioning is
+not registered. A digest probe skips a failed pass without permanently disabling
+subsequent probes.
+
 ## The idempotency-key contract
 
 `LatticeIdempotencyKey` is a small value carrying a single field:
