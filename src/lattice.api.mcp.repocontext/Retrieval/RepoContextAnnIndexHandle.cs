@@ -35,12 +35,14 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// and repaired by streaming the source for the identifiers the index does not
 /// hold. The repair direction is always the source's: nothing here ever writes to
 /// a store of record.
+/// A count that cannot complete is unknown, not a shortfall; its verification is
+/// retried with bounded backoff without starting a repair.
 /// </para>
 /// </summary>
 internal sealed class RepoContextAnnIndexHandle : IDisposable
 {
     private readonly IRepoContextVectorSource _source;
-    private readonly IVectorIndexStore _store;
+    private readonly RepoContextAnnWriteAccountingStore _store;
     private readonly RepoContextAnnOptions _options;
     private readonly DurableVectorIndexOptions _durableOptions;
     private readonly EmbeddingSpaceTag _space;
@@ -59,6 +61,11 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private VectorIndexBuildProgress _progress;
     private readonly Lock _progressGate = new();
     private int _pendingFlush;
+    private TimeSpan _unknownCountBackoff;
+    private long _unknownCountAt;
+    private volatile bool _sourceCountPending;
+    private static readonly TimeSpan InitialUnknownCountBackoff = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan MaximumUnknownCountBackoff = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// Identifiers the writer handed over while the build was still streaming, and
@@ -145,6 +152,9 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     /// </summary>
     private int _nextPartitionAttemptCount;
 
+    /// <summary>Whether source-count verification or its shortfall repair is still pending.</summary>
+    internal bool SourceCountPending => _sourceCountPending;
+
     /// <summary>Creates the handle. Nothing is opened until the first advance.</summary>
     /// <param name="repoId">The repository this index covers. Must not be <see langword="null"/>.</param>
     /// <param name="space">The embedding space this index covers.</param>
@@ -203,7 +213,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         ExpectedVectorTags = RepoContextAnnIndexRegistry.CreateMetricTags(repoId, spaceLabel, "expected");
         PartitionTags = RepoContextAnnIndexRegistry.CreateMetricTags(repoId, spaceLabel);
         _source = source;
-        _store = store;
+        _store = new RepoContextAnnWriteAccountingStore(store);
         _options = options;
         _durableOptions = options.ToDurableOptions(space, keyPrefix);
         _durableOptions.BuildObserver = buildStage;
@@ -1154,6 +1164,10 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
     private async Task CatchUpAsync(
         DurableVectorIndex index, bool probeSource, CancellationToken cancellationToken)
     {
+        if (probeSource && !_serving)
+        {
+            _sourceCountPending = true;
+        }
         // WRITES DEFERRED DURING THE BUILD ARE REPLAYED HERE, and this is taken
         // before the probe's early exit below rather than after it. That exit
         // reasons that "anything written since arrives through the writer's
@@ -1176,27 +1190,18 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             return;
         }
 
-        // A key-only walk, so this costs a fraction of the streaming enumeration and
-        // is the cheapest honest way to learn whether the persisted index is behind.
-        // In a repository holding more than one embedding space the count is an upper
-        // bound, which makes the repair run when it need not - never the reverse.
-        //
-        // AND IF THE COUNT CANNOT BE OBTAINED AT ALL, THE SAME REASONING APPLIES.
-        // The count is a hint that decides whether to SKIP the repair, so failing to
-        // get it must mean "repair", not "give up". Letting the abort propagate is
-        // what made a whole index build fail on a real deployment (#1844): the walk
-        // covers the repository's entire vector prefix, activating every leaf of a
-        // cold metadata tree, and on a large enough tree it can outrun even a
-        // generous reconnect budget. Treating exhaustion as "unknown, therefore
-        // possibly behind" keeps the build going down the path that repairs, which
-        // is the safe direction and the one the upper-bound case already takes.
-        //
-        // There are now two ways to be unknown and they are handled identically. An
-        // EnumerationAbortedException is the store losing the enumerator; a
-        // RepoContextCountBudgetExceededException is the source declining to spend
-        // more wall clock on the walk (#2447). The distinction matters in a log line
-        // and nowhere else: neither yields a figure, and a missing figure has exactly
-        // one safe reading here.
+        // A retraining turn owns the same gate as the count walk. Do not add a
+        // count to that expensive turn, nor reissue an unknown probe on each tick.
+        // Deferred writes are known work and must still be replayed independently.
+        if (deferred is null
+            && (ShouldPartition(index) || ShouldRetrain(index)
+                || (_unknownCountBackoff > TimeSpan.Zero
+                    && _options.TimeProvider.GetElapsedTime(_unknownCountAt) < _unknownCountBackoff)))
+        {
+            await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var behind = true;
         if (deferred is null)
         {
@@ -1204,22 +1209,32 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             {
                 var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
                 behind = expected > index.Count;
+                _unknownCountBackoff = TimeSpan.Zero;
             }
             catch (Exception ex) when (ex is EnumerationAbortedException or RepoContextCountBudgetExceededException)
             {
+                _unknownCountBackoff = _unknownCountBackoff == TimeSpan.Zero
+                    ? InitialUnknownCountBackoff
+                    : TimeSpan.FromTicks(Math.Min(_unknownCountBackoff.Ticks * 2, MaximumUnknownCountBackoff.Ticks));
+                _unknownCountAt = _options.TimeProvider.GetTimestamp();
+                _sourceCountPending = true;
                 _logger.LogInformation(
                     ex,
                     "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not count the "
-                    + "source within its budget; treating the persisted index as possibly behind and repairing.",
+                    + "source; coverage is unknown, so no repair is justified. Retrying the count after {RetrySeconds} seconds.",
                     _repoId,
                     _space.ModelId,
-                    _space.Dimension);
+                    _space.Dimension,
+                    _unknownCountBackoff.TotalSeconds);
+                await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
+                return;
             }
         }
 
         if (!behind)
         {
             await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
+            _sourceCountPending = false;
             return;
         }
 
@@ -1263,6 +1278,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         }
 
         await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
+        _sourceCountPending = false;
     }
 
     private async Task MaintainAsync(DurableVectorIndex index, CancellationToken cancellationToken)
@@ -1286,7 +1302,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                 _options.MinimumTrainingCount);
 
             var attemptedAt = index.Count;
-            await index.RetrainAsync(cancellationToken).ConfigureAwait(false);
+            await RetrainAsync(index, cancellationToken).ConfigureAwait(false);
             _pendingFlush = 0;
             Progress = index.Progress;
 
@@ -1342,7 +1358,7 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
                 index.UpdatesSinceTraining,
                 index.Count);
 
-            await index.RetrainAsync(cancellationToken).ConfigureAwait(false);
+            await RetrainAsync(index, cancellationToken).ConfigureAwait(false);
             _pendingFlush = 0;
             Progress = index.Progress;
             return;
@@ -1353,6 +1369,33 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             await index.FlushAsync(cancellationToken).ConfigureAwait(false);
             _pendingFlush = 0;
             Progress = index.Progress;
+        }
+    }
+
+    private async Task RetrainAsync(DurableVectorIndex index, CancellationToken cancellationToken)
+    {
+        var records = _store.RecordsSubmitted;
+        var bytes = _store.PayloadBytesSubmitted;
+        var deletes = _store.DeletesSubmitted;
+        var prefixDeletes = _store.PrefixDeletesSubmitted;
+        var startedAt = _options.TimeProvider.GetTimestamp();
+        var completed = false;
+        try
+        {
+            await index.RetrainAsync(cancellationToken).ConfigureAwait(false);
+            completed = true;
+        }
+        finally
+        {
+            _logger.LogInformation(
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} retrain "
+                + "{Outcome}: WAL input submitted {Records} records, {PayloadBytes} key/value payload bytes, "
+                + "{Deletes} key deletes and {PrefixDeletes} prefix deletes in {ElapsedSeconds} seconds. "
+                + "Payload excludes WAL framing and does not measure retained WAL bytes or reclamation.",
+                _repoId, _space.ModelId, _space.Dimension, completed ? "completed" : "failed",
+                _store.RecordsSubmitted - records, _store.PayloadBytesSubmitted - bytes,
+                _store.DeletesSubmitted - deletes, _store.PrefixDeletesSubmitted - prefixDeletes,
+                _options.TimeProvider.GetElapsedTime(startedAt).TotalSeconds);
         }
     }
 
