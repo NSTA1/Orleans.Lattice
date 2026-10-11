@@ -80,7 +80,7 @@ public partial class LtProgress
     /// every unit is done, or <see langword="null"/> for an indeterminate bar.
     /// </summary>
     public int? Percent => Maximum is > 0 and var maximum
-        ? (int)(Math.Clamp(Value, 0, maximum) * 100 / maximum)
+        ? (int)((Int128)Math.Clamp(Value, 0, maximum) * 100 / maximum)
         : null;
 
     /// <summary>The step a stepped bar has reached, such as "Step 2 of 3", or <see langword="null"/> when the bar is not stepped.</summary>

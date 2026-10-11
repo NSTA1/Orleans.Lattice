@@ -156,7 +156,10 @@ public sealed class TelemetryModelTests
             Assert.That(request.Range.EndUtc, Is.EqualTo(TelemetryTestData.Now));
             Assert.That(request.Range.Step, Is.EqualTo(TimeSpan.FromMinutes(1)), "an hour at 15s would be 241 points, one over the target");
             Assert.That(TelemetryChartRequest.AutomaticStep(TimeSpan.FromDays(7), default), Is.EqualTo(TimeSpan.FromHours(1)));
-            Assert.That(TelemetryChartRequest.AutomaticStep(TimeSpan.FromDays(400), default), Is.EqualTo(TimeSpan.FromDays(1)));
+            Assert.That(
+                TelemetryTimeRange.Between(TelemetryTestData.Now.AddDays(-400), TelemetryTestData.Now,
+                    TelemetryChartRequest.AutomaticStep(TimeSpan.FromDays(400), default)).PointCount,
+                Is.LessThanOrEqualTo(TelemetryChartRequest.TargetPoints));
         });
     }
 
@@ -168,6 +171,43 @@ public sealed class TelemetryModelTests
         var request = TelemetryChartRequest.For(TelemetryTestData.Range("q", "Q", bounds: bounds), window, TelemetryTestData.Now, false).Request!;
 
         Assert.That(request.Range.Step, Is.EqualTo(TimeSpan.FromMinutes(1)));
+    }
+
+    [TestCase(400, 100)]
+    [TestCase(7, 2)]
+    [TestCase(7, 1)]
+    public void Automatic_steps_beyond_the_ladder_fit_the_declared_point_budget(int days, int maxPoints)
+    {
+        var bounds = new TelemetryQueryBounds { MaxPoints = maxPoints };
+        var window = TelemetryWindow.FromAddress(ExplorerAddress.Parse($"/telemetry?range={days}d"));
+        var chart = TelemetryChartRequest.For(TelemetryTestData.Range("q", "Q", bounds: bounds), window, TelemetryTestData.Now, false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(chart.Problem, Is.Null, "a valid window must not be refused just because its step is beyond the preset ladder");
+            Assert.That(chart.Request, Is.Not.Null);
+        });
+        Assert.Multiple(() =>
+        {
+            Assert.That(chart.Request!.Range.PointCount, Is.LessThanOrEqualTo(maxPoints));
+            Assert.That(chart.Request.Range.Step.Ticks % TimeSpan.TicksPerSecond, Is.Zero, "backend step formatting must not erase the point-budget margin");
+            Assert.That(chart.Request.Range.Duration, Is.EqualTo(TimeSpan.FromDays(days)));
+            Assert.That(bounds.Validate(chart.Request.Range, TelemetryTestData.Now), Is.EqualTo(TelemetryBoundsViolation.None));
+        });
+    }
+
+    [Test]
+    public void A_computed_automatic_step_does_not_bypass_the_maximum_step()
+    {
+        var bounds = new TelemetryQueryBounds { MaxPoints = 2, MaxStep = TimeSpan.FromDays(1) };
+        var window = TelemetryWindow.FromAddress(ExplorerAddress.Parse("/telemetry?range=7d"));
+        var chart = TelemetryChartRequest.For(TelemetryTestData.Range("q", "Q", bounds: bounds), window, TelemetryTestData.Now, false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(chart.Request, Is.Null);
+            Assert.That(chart.Problem, Does.Contain("draws at most 2"));
+        });
     }
 
     [Test]
