@@ -34,6 +34,7 @@ internal sealed class BackupOperationList
     private ShellCallerKey _memoCaller;
     private IReadOnlyList<LatticeOperationStatus>? _memo;
     private DateTimeOffset _memoAt;
+    private long _generation;
 
     /// <summary>Creates the list.</summary>
     /// <param name="operations">The backup operations facade.</param>
@@ -58,12 +59,15 @@ internal sealed class BackupOperationList
     public async Task<IReadOnlyList<LatticeOperationStatus>> RecentAsync(CancellationToken cancellationToken)
     {
         var caller = _caller.Current;
+        long generation;
         lock (_gate)
         {
             if (_memo is { } memo && _memoCaller == caller && _time.GetUtcNow() - _memoAt < Freshness)
             {
                 return memo;
             }
+
+            generation = _generation;
         }
 
         var page = await _operations
@@ -72,8 +76,8 @@ internal sealed class BackupOperationList
 
         lock (_gate)
         {
-            // Keep the read only if the caller did not change while it was in flight.
-            if (_caller.Current == caller)
+            // Neither a caller change nor an invalidation may be undone by a late reply.
+            if (_caller.Current == caller && _generation == generation && !cancellationToken.IsCancellationRequested)
             {
                 _memo = page.Operations;
                 _memoCaller = caller;
@@ -89,6 +93,7 @@ internal sealed class BackupOperationList
     {
         lock (_gate)
         {
+            _generation++;
             _memo = null;
         }
     }

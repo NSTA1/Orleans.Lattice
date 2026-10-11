@@ -93,6 +93,8 @@ public partial class BackupSchedulesPage : IDisposable
         _treeInput = Tree;
         _scheduleMessage = null;
         _scheduleError = null;
+        _confirmCancel = false;
+        _busy = false;
         await LoadAsync();
     }
 
@@ -145,10 +147,22 @@ public partial class BackupSchedulesPage : IDisposable
 
         try
         {
-            _capabilities = await Access.ProbeAsync(scope, cancellationToken);
-            if (_capabilities.CanList)
+            var capabilities = await Access.ProbeAsync(scope, cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
             {
-                _status = await Control.GetScopeStatusAsync(scope, cancellationToken);
+                return;
+            }
+
+            _capabilities = capabilities;
+            if (capabilities.CanList)
+            {
+                var status = await Control.GetScopeStatusAsync(scope, cancellationToken);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                _status = status;
                 _statusLoaded = true;
             }
         }
@@ -158,7 +172,10 @@ public partial class BackupSchedulesPage : IDisposable
         }
         catch (Exception exception)
         {
-            _statusError = BackupsFaults.Describe(exception);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _statusError = BackupsFaults.Describe(exception);
+            }
         }
     }
 
@@ -171,6 +188,7 @@ public partial class BackupSchedulesPage : IDisposable
 
         _scheduleMessage = null;
         _scheduleError = null;
+        var token = _load.Token;
         var incremental = _kind == IncrementalKind;
         if (!CanChange(incremental))
         {
@@ -183,7 +201,7 @@ public partial class BackupSchedulesPage : IDisposable
             return;
         }
 
-        if (_interval is not { } interval)
+        if (token.IsCancellationRequested || _interval is not { } interval)
         {
             return;
         }
@@ -193,17 +211,31 @@ public partial class BackupSchedulesPage : IDisposable
         {
             await Control.ScheduleBackupAsync(
                 new LatticeBackupScheduleRequest(BackupScopeSelector.WholeTree(tree), incremental, interval),
-                _load.Token);
+                token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             _scheduleMessage = "Scheduled " + (incremental ? "an incremental" : "a full") + " backup every " + BackupsFormat.Interval(interval) + ".";
-            await LoadStatusAfterChangeAsync(tree);
+            await LoadStatusAfterChangeAsync(tree, token);
         }
-        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            _scheduleError = BackupsFaults.Describe(exception);
+        }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _scheduleError = BackupsFaults.Describe(exception);
+            }
         }
         finally
         {
-            _busy = false;
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+            }
         }
     }
 
@@ -223,27 +255,50 @@ public partial class BackupSchedulesPage : IDisposable
 
         _scheduleMessage = null;
         _scheduleError = null;
+        var token = _load.Token;
+        var incremental = _cancelIncremental;
         try
         {
-            await Control.CancelScheduleAsync(BackupScopeSelector.WholeTree(tree), _cancelIncremental, _load.Token);
-            _scheduleMessage = "Cancelled the " + (_cancelIncremental ? "incremental" : "full") + " schedule.";
-            await LoadStatusAfterChangeAsync(tree);
+            await Control.CancelScheduleAsync(BackupScopeSelector.WholeTree(tree), incremental, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _scheduleMessage = "Cancelled the " + (incremental ? "incremental" : "full") + " schedule.";
+            await LoadStatusAfterChangeAsync(tree, token);
         }
-        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            _scheduleError = BackupsFaults.Describe(exception);
+        }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _scheduleError = BackupsFaults.Describe(exception);
+            }
         }
     }
 
-    private async Task LoadStatusAfterChangeAsync(string tree)
+    private async Task LoadStatusAfterChangeAsync(string tree, CancellationToken token)
     {
         try
         {
-            _status = await Control.GetScopeStatusAsync(BackupScopeSelector.WholeTree(tree), _load.Token);
+            var status = await Control.GetScopeStatusAsync(BackupScopeSelector.WholeTree(tree), token);
+            if (!token.IsCancellationRequested)
+            {
+                _status = status;
+            }
         }
-        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            _statusError = BackupsFaults.Describe(exception);
+        }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _statusError = BackupsFaults.Describe(exception);
+            }
         }
     }
 

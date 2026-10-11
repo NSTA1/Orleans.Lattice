@@ -1,4 +1,6 @@
 using Orleans.Lattice.Api.Operations;
+using Orleans.Lattice.Api.Backup;
+using NSubstitute;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.Tests.Connection;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
@@ -70,6 +72,38 @@ public sealed class BackupOperationListTests
         control.ListFault = null;
         Assert.That(async () => await list.RecentAsync(CancellationToken.None), Is.Empty);
         Assert.That(Lists(control), Is.EqualTo(2));
+    }
+
+    [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Forget_during_a_read_prevents_the_old_reply_from_becoming_fresh_again(bool refreshFirst)
+    {
+        var control = Substitute.For<ILatticeBackupOperations>();
+        var pending = new TaskCompletionSource<LatticeOperationPage>();
+        var calls = 0;
+        var fresh = FakeBackupControl.Running("new-operation", BackupOperationKinds.Capture, "orders");
+        control.ListOperationsAsync(Arg.Any<LatticeOperationListRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ++calls == 1 ? pending.Task : Task.FromResult(new LatticeOperationPage { Operations = [fresh] }));
+        using var caller = new ShellCaller();
+        var list = new BackupOperationList(control, caller, new ManualTimeProvider());
+
+        var oldRead = list.RecentAsync(CancellationToken.None);
+        list.Forget();
+        if (refreshFirst)
+        {
+            await list.RecentAsync(CancellationToken.None);
+        }
+
+        pending.SetResult(new LatticeOperationPage { Operations = [] });
+        await oldRead;
+        var current = await list.RecentAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(2), "the pre-invalidation read must not be reused");
+            Assert.That(current.Select(status => status.OperationId), Is.EqualTo(new[] { "new-operation" }));
+        });
     }
 
     [Test]
