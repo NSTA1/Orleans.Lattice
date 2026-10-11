@@ -401,7 +401,7 @@ internal sealed class ReplicationDigestProbeGrain(
             // gated. Strictly opt-in and best-effort.
             if (outcome.Localised && outcome.LocalisedRanges is { Count: > 0 } ranges)
             {
-                await TryRemediateAsync(options, peer, ranges).ConfigureAwait(true);
+                await TryRemediateAsync(options, peer, physicalTreeId, ranges).ConfigureAwait(true);
             }
         }
         catch (Exception ex)
@@ -423,9 +423,9 @@ internal sealed class ReplicationDigestProbeGrain(
     /// bootstrap-snapshot fallback). A pass whose re-ship sink reports zero entries
     /// shipped despite candidates having been selected counts as a circuit
     /// breaker failure, as does a fault in this orchestration outside the two
-    /// repair helpers. A re-replay or fallback that throws does <b>not</b>: its
-    /// helper logs and swallows the fault and reports the pass as not attempted,
-    /// so - like every other outcome - it resets the breaker. Each skip records
+    /// repair helpers, and so does a re-replay or fallback that throws: its
+    /// helper logs and swallows the fault but reports it as faulted, so the pass
+    /// records a failure rather than resetting the breaker. Each skip records
     /// the <see cref="LatticeReplicationMetrics.DigestRemediationSkipped"/>
     /// counter and reports the
     /// <see cref="LatticeReplicationMetrics.DigestRemediationDisabledName"/>
@@ -434,10 +434,15 @@ internal sealed class ReplicationDigestProbeGrain(
     /// </summary>
     /// <param name="options">The resolved per-tree replication options.</param>
     /// <param name="peer">The diverged peer cluster id.</param>
+    /// <param name="physicalTreeId">
+    /// The physical tree id the localisation pass resolved; the retained WAL the
+    /// re-replay reads is keyed by it, not by the logical tree name.
+    /// </param>
     /// <param name="ranges">The localised diverging leaf covering ranges.</param>
     private async Task TryRemediateAsync(
         LatticeReplicationOptions options,
         string peer,
+        string physicalTreeId,
         IReadOnlyList<LeafReReplayRange> ranges)
     {
         // Master gate: all automatic remediation is opt-in. Detection has
@@ -471,7 +476,7 @@ internal sealed class ReplicationDigestProbeGrain(
         var failed = false;
         try
         {
-            var (reReplay, reReplayFaulted) = await TryReReplayLeavesAsync(options, peer, ranges).ConfigureAwait(true);
+            var (reReplay, reReplayFaulted) = await TryReReplayLeavesAsync(options, peer, physicalTreeId, ranges).ConfigureAwait(true);
             entriesShipped += reReplay.EntriesReReplayed;
 
             // A pass that selected candidates but re-shipped nothing is a
@@ -578,6 +583,13 @@ internal sealed class ReplicationDigestProbeGrain(
     /// </summary>
     /// <param name="options">The resolved per-tree replication options.</param>
     /// <param name="peer">The diverged peer cluster id.</param>
+    /// <param name="physicalTreeId">
+    /// The resolved physical tree id whose WAL partitions hold the retained
+    /// entries. After a registry alias swap (shadow-cutover restore, resize,
+    /// schema remediation, or operator alias change) the logical name's
+    /// partitions belong to the retired physical tree, so reading them would
+    /// re-ship rows the live tree no longer holds and miss the live divergence.
+    /// </param>
     /// <param name="ranges">The localised diverging leaf covering ranges.</param>
     /// <returns>
     /// The re-replay outcome. A <see cref="LeafReReplaySkipReason.WalTrimmed"/>
@@ -591,6 +603,7 @@ internal sealed class ReplicationDigestProbeGrain(
     private async Task<(LeafReReplayOutcome Outcome, bool Faulted)> TryReReplayLeavesAsync(
         LatticeReplicationOptions options,
         string peer,
+        string physicalTreeId,
         IReadOnlyList<LeafReReplayRange> ranges)
     {
         if (!options.LeafReReplayEnabled)
@@ -616,7 +629,7 @@ internal sealed class ReplicationDigestProbeGrain(
 
             var partitionCount = Math.Max(1, options.ReplogPartitions);
             var pageSize = Math.Max(1, options.ShipPartitionPageSize);
-            var walSource = new WalGrainReReplaySource(_grainFactory, TreeName, partitionCount, pageSize);
+            var walSource = new WalGrainReReplaySource(_grainFactory, physicalTreeId, partitionCount, pageSize);
             var sink = new TransportLeafReReplaySink(_replicationTransport, _batchEncoder, _mergeModeResolver, originClusterId);
 
             var outcome = await LeafReReplayer.ReplayAsync(

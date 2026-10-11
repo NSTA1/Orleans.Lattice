@@ -147,6 +147,52 @@ public partial class ReplicationDigestProbeGrainTests
         });
     }
 
+    [Test]
+    public async Task Re_replay_after_an_alias_swap_reads_the_live_physical_wal_not_the_retired_one()
+    {
+        // A registry alias swap (resize, shadow-cutover restore, schema
+        // remediation, operator alias change) repointed the logical tree to the
+        // physical tree "phys". WAL partitions are keyed by the physical id, so
+        // the live divergence is retained under "phys/0", while "{Tree}/0" is
+        // the retired physical tree's log and still holds an older, never-shipped
+        // write of the same key above the peer cursor.
+        var liveWal = new WalShardPage
+        {
+            Entries = new[]
+            {
+                new WalShardSequencedEntry { Sequence = 0, Entry = OrphanWal("fruit:apple", ticks: 200) },
+            },
+            NextSequence = 1,
+        };
+        var retiredWal = new WalShardPage
+        {
+            Entries = new[]
+            {
+                new WalShardSequencedEntry { Sequence = 0, Entry = OrphanWal("fruit:apple", ticks: 100) },
+            },
+            NextSequence = 1,
+        };
+
+        var (grain, _, replicationTransport) = CreateRemediationGrain(
+            walPage: liveWal,
+            snapshotRows: new[] { Committed("fruit:apple", ticks: 200) },
+            peerCursor: Hlc(50),
+            retiredWalPage: retiredWal);
+
+        var sent = new List<ReplicationBatch>();
+        replicationTransport.SendAsync(Arg.Do<ReplicationBatch>(sent.Add), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ReplicationAck { Accepted = true }));
+
+        await grain.ProcessNextPhaseAsync();
+
+        // On the pre-fix code the re-replay source was addressed by the logical
+        // name: it re-shipped the retired log's stale ts=100 write (a success that
+        // reset the breaker and suppressed the fallback) and never read the live
+        // ts=200 divergence.
+        var entry = sent.SelectMany(b => b.Envelope!.Value.Entries).Single();
+        Assert.That(entry.Timestamp, Is.EqualTo(Hlc(200)));
+    }
+
     // ---- Factory + fakes -------------------------------------------------
 
     private static (
@@ -155,7 +201,8 @@ public partial class ReplicationDigestProbeGrainTests
         IReplicationTransport ReplicationTransport) CreateRemediationGrain(
             WalShardPage walPage,
             IReadOnlyList<SnapshotEntry> snapshotRows,
-            HybridLogicalClock peerCursor)
+            HybridLogicalClock peerCursor,
+            WalShardPage? retiredWalPage = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("digest-probe-grain", Tree));
@@ -233,6 +280,15 @@ public partial class ReplicationDigestProbeGrainTests
         walGrain.ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(new ValueTask<WalShardPage>(walPage));
         grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(walGrain);
+        if (retiredWalPage is not null)
+        {
+            // The logical name's partitions: the retired physical tree's log
+            // after an alias swap repointed the tree to "phys".
+            var retiredGrain = Substitute.For<IWalShardGrain>();
+            retiredGrain.ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(new ValueTask<WalShardPage>(retiredWalPage.Value));
+            grainFactory.GetGrain<IWalShardGrain>($"{Tree}/0").Returns(retiredGrain);
+        }
 
         var state = new FakePersistentState<ReplicationDigestProbeState>();
         var snapshotProvider = new OrphanSnapshotProvider(snapshotRows);
