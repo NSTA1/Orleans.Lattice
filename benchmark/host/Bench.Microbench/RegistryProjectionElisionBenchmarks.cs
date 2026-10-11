@@ -50,6 +50,14 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <item><see cref="Site.SnapshotInitiate"/> - <c>TreeSnapshotGrain</c>
 /// initiating a standalone snapshot: routing GetEntry + source Resolve ->
 /// GetEntry, 2 serial reads -> 1.</item>
+/// <item><see cref="Site.RestoreShadowValidate"/> - <c>LatticeBackupRestoreService</c>
+/// validating a restore shadow on commit or revert: shadow GetEntry + target
+/// Resolve -> shadow GetEntry, the alias read only when the shadow's provenance
+/// stamp does not decide it, 2 serial reads -> 1.</item>
+/// <item><see cref="Site.CutoverPrepare"/> - a shadow-restore commit or a schema
+/// remediation cutover preparing its alias swap: target Resolve + the prepare's
+/// logical and destination GetEntry -> the two GetEntry, the replaced physical
+/// tree derived from the logical entry, 3 serial reads -> 2.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -70,11 +78,12 @@ public class RegistryProjectionElisionBenchmarks
 {
     private const string TreeId = "tree";
     private const string TargetTreeId = "target";
+    private const string ShadowTreeId = "shadow";
 
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -84,7 +93,7 @@ public class RegistryProjectionElisionBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        _registry = new RegistryStore(Hop, new Entry("tree-copy", ShardMapVersion: 7));
+        _registry = new RegistryStore(Hop, new Entry("tree-copy", ShardMapVersion: 7, RestoreShadowOf: TargetTreeId));
         var before = Separate_Projection_Reads_Async().GetAwaiter().GetResult();
         var after = Single_Entry_Read_Async().GetAwaiter().GetResult();
         if (before != after)
@@ -159,6 +168,22 @@ public class RegistryProjectionElisionBenchmarks
                 return Fold(physical, routing?.ShardMapVersion ?? 0);
             }
 
+            case Site.RestoreShadowValidate:
+            {
+                var shadow = await _registry.GetEntryAsync(ShadowTreeId);
+                var physical = await _registry.ResolveAsync(TargetTreeId);
+                var admitted = shadow?.RestoreShadowOf == TargetTreeId || physical == ShadowTreeId;
+                return Fold(ShadowTreeId, shadow?.ShardMapVersion ?? 0) + (admitted ? 1 : 0);
+            }
+
+            case Site.CutoverPrepare:
+            {
+                var physical = await _registry.ResolveAsync(TreeId);
+                var logical = await _registry.GetEntryAsync(TreeId);
+                var destination = await _registry.GetEntryAsync(ShadowTreeId);
+                return Fold(physical, (destination?.ShardMapVersion ?? 0) + (logical?.ShardMapVersion ?? 0));
+            }
+
             default:
             {
                 var total = 0L;
@@ -204,6 +229,23 @@ public class RegistryProjectionElisionBenchmarks
                 var entry = await _registry.GetEntryAsync(TreeId);
                 var target = await _registry.ResolveAsync(TargetTreeId);
                 return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0) + target.Length;
+            }
+
+            case Site.RestoreShadowValidate:
+            {
+                var shadow = await _registry.GetEntryAsync(ShadowTreeId);
+                var admitted = shadow?.RestoreShadowOf == TargetTreeId
+                    || await _registry.ResolveAsync(TargetTreeId) == ShadowTreeId;
+                return Fold(ShadowTreeId, shadow?.ShardMapVersion ?? 0) + (admitted ? 1 : 0);
+            }
+
+            case Site.CutoverPrepare:
+            {
+                var logical = await _registry.GetEntryAsync(TreeId);
+                var destination = await _registry.GetEntryAsync(ShadowTreeId);
+                return Fold(
+                    logical?.PhysicalTreeId ?? TreeId,
+                    (destination?.ShardMapVersion ?? 0) + (logical?.ShardMapVersion ?? 0));
             }
 
             case Site.SplitInitiate:
@@ -280,6 +322,12 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>A standalone snapshot initiation reading its routing entry and physical source.</summary>
         SnapshotInitiate,
+
+        /// <summary>A restore commit or revert validating a shadow it was handed against its target.</summary>
+        RestoreShadowValidate,
+
+        /// <summary>A restore commit or remediation cutover preparing its alias swap.</summary>
+        CutoverPrepare,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
@@ -292,7 +340,7 @@ public class RegistryProjectionElisionBenchmarks
         Delay1Ms,
     }
 
-    private sealed record Entry(string? PhysicalTreeId, long ShardMapVersion);
+    private sealed record Entry(string? PhysicalTreeId, long ShardMapVersion, string? RestoreShadowOf = null);
 
     /// <summary>
     /// Stands in for the registry grain: every call completes asynchronously per

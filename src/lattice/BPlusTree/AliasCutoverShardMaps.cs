@@ -53,6 +53,26 @@ internal static class AliasCutoverShardMaps
         IGrainFactory grainFactory,
         string logicalTreeId,
         string destinationPhysicalTreeId,
+        CancellationToken cancellationToken = default) =>
+        (await PrepareCutoverResolvingAsync(grainFactory, logicalTreeId, destinationPhysicalTreeId, cancellationToken))
+            .ReplacedMap;
+
+    /// <summary>
+    /// <see cref="PrepareCutoverAsync"/>, also returning the physical tree the
+    /// logical tree resolved to when the prepare read its entry. That id is the
+    /// entry's own projection (what <c>ResolveAsync(logicalTreeId)</c> returns), so
+    /// a caller that needs it alongside the prepare reads it from here instead of
+    /// paying a separate registry round trip for it.
+    /// </summary>
+    /// <returns>
+    /// The map <see cref="PrepareCutoverAsync"/> returns, and the physical tree
+    /// the logical tree resolved to before the prepare (the destination itself on
+    /// a cutover resumed after its swap).
+    /// </returns>
+    public static async Task<(ShardMap? ReplacedMap, string ReplacedPhysicalTreeId)> PrepareCutoverResolvingAsync(
+        IGrainFactory grainFactory,
+        string logicalTreeId,
+        string destinationPhysicalTreeId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -70,7 +90,7 @@ internal static class AliasCutoverShardMaps
         // entry now describes the destination, and splits since may have moved it.
         if (string.Equals(current, destinationPhysicalTreeId, StringComparison.Ordinal))
         {
-            return recorded?.ReplacedShardMap;
+            return (recorded?.ReplacedShardMap, current);
         }
 
         // A destination with no row yet is normal: a restore's or remediation's
@@ -91,7 +111,7 @@ internal static class AliasCutoverShardMaps
 
         await StampReplacedCopyAsync(
             registry, logicalTreeId, current, replaced, destination.ReplacedNextShardIndex);
-        return replaced;
+        return (replaced, current);
     }
 
     /// <summary>
