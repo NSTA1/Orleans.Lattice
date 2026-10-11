@@ -167,10 +167,10 @@ internal sealed partial class ViewMaintainerGrain
         var blockedAtHlc = ComputeBlockedAtHlc();
         if (highest > HybridLogicalClock.Zero || blockedAtHlc is not null)
         {
-            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken);
+            await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken);
         }
 
-        ApplyLag.Record(await ComputeLagAsync(sourceTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
+        ApplyLag.Record(await ComputeLagAsync(walTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
         BacklogDepth.Record(backlogRead, ViewTag, ViewTenantTag);
         if (applied > 0)
         {

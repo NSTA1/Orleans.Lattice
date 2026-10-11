@@ -40,11 +40,25 @@ internal sealed partial class ViewMaintainerGrain
         await UnregisterKeepaliveReminderAsync();
 
         // Release the source WAL pin so the GC is no longer held by this consumer.
+        // The pin is keyed by the physical log the view tails, which differs from
+        // the logical registration id once the source's identity has been swapped
+        // (resize, reshard, shadow-cutover restore), so release it under both.
+        var pinnedLogs = new HashSet<string>(StringComparer.Ordinal);
         if (!string.IsNullOrEmpty(sourceTreeId))
+        {
+            pinnedLogs.Add(sourceTreeId);
+        }
+
+        if (!string.IsNullOrEmpty(state.State.BoundPhysicalTreeId))
+        {
+            pinnedLogs.Add(state.State.BoundPhysicalTreeId);
+        }
+
+        foreach (var pinnedLog in pinnedLogs)
         {
             try
             {
-                await cursorRegistry.UnregisterAsync(sourceTreeId, ConsumerId, cancellationToken);
+                await cursorRegistry.UnregisterAsync(pinnedLog, ConsumerId, cancellationToken);
             }
             catch (Exception ex)
             {
