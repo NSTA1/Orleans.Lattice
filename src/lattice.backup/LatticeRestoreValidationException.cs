@@ -8,8 +8,10 @@ namespace Orleans.Lattice.Backup;
 /// the digest recorded on the manifest, or the requested sub-scope falls outside
 /// the captured scope. The restore aborts before installing anything, so the
 /// target tree is left untouched.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
-public sealed class LatticeRestoreValidationException : InvalidOperationException
+public sealed class LatticeRestoreValidationException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>Initializes a new instance with the specified message.</summary>
     /// <param name="message">The validation failure description.</param>

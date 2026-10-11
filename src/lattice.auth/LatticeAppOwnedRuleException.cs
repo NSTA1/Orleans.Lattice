@@ -10,6 +10,8 @@ namespace Orleans.Lattice.Auth;
 /// reconciliation, so an operator edit would be silently discarded; the store
 /// rejects it instead. The rejection is fail-closed: nothing is read or written
 /// before this exception is raised.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,7 +29,7 @@ namespace Orleans.Lattice.Auth;
 /// serializable type.
 /// </para>
 /// </remarks>
-public sealed class LatticeAppOwnedRuleException : ArgumentException
+public sealed class LatticeAppOwnedRuleException : ArgumentException, ILatticeDomainFault
 {
     /// <summary>
     /// The app-owned rule id the rejected write or delete targeted. Empty on the

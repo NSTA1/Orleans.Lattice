@@ -11,6 +11,8 @@ namespace Orleans.Lattice.Auth;
 /// direct write would bypass that confinement, so the store rejects it instead.
 /// The rejection is fail-closed: nothing is read or written before this exception
 /// is raised.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,7 +28,7 @@ namespace Orleans.Lattice.Auth;
 /// serializable type.
 /// </para>
 /// </remarks>
-public sealed class LatticeTenantOwnedRuleException : ArgumentException
+public sealed class LatticeTenantOwnedRuleException : ArgumentException, ILatticeDomainFault
 {
     /// <summary>
     /// The tenant-tier rule id the rejected write or delete targeted. Empty on the

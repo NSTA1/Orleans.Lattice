@@ -8,6 +8,8 @@ namespace Orleans.Lattice.Schema;
 /// does not satisfy the tree's <see cref="LatticeSchemaPolicy"/>. The offending
 /// write is <b>fail-closed</b>: nothing is persisted before this exception is
 /// raised, so a violation never leaves a partial write behind.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,7 +26,7 @@ namespace Orleans.Lattice.Schema;
 /// </remarks>
 [GenerateSerializer]
 [Alias(SchemaTypeAliases.LatticeSchemaViolationException)]
-public sealed class LatticeSchemaViolationException : InvalidOperationException
+public sealed class LatticeSchemaViolationException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>The logical tree id the rejected write targeted. Empty on the message-only constructors.</summary>
     [Id(0)]

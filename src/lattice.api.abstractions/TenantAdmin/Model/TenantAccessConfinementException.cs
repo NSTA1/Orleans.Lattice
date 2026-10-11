@@ -8,6 +8,8 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// another tenant's group, or a tenant-tier rule on a tree or operation the tenant
 /// may not govern. <see cref="Rule"/> names the violated confinement rule. The
 /// refusal fails closed: nothing is written before it is raised.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -24,7 +26,7 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// boundary.
 /// </para>
 /// </remarks>
-public sealed class TenantAccessConfinementException : ArgumentException
+public sealed class TenantAccessConfinementException : ArgumentException, ILatticeDomainFault
 {
     /// <summary>
     /// Initialises the exception for a write to <paramref name="tenantId"/> that

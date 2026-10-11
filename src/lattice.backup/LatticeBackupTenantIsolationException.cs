@@ -6,6 +6,8 @@ namespace Orleans.Lattice.Backup;
 /// platform tree the active tenant does not own). The operation is refused before
 /// any data is read or written, so a tenant-scoped backup can never span another
 /// tenant's namespace and a restore can never author into one.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
 /// <remarks>
 /// Mirrors <see cref="LatticeRestoreValidationException"/>: it derives directly
@@ -14,7 +16,7 @@ namespace Orleans.Lattice.Backup;
 /// that runs the backup engine rather than being returned across a grain
 /// boundary.
 /// </remarks>
-public sealed class LatticeBackupTenantIsolationException : InvalidOperationException
+public sealed class LatticeBackupTenantIsolationException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>Initializes a new instance with the specified message.</summary>
     /// <param name="message">The isolation-violation description.</param>

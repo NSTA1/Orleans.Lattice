@@ -14,6 +14,8 @@ namespace Orleans.Lattice.Membership;
 /// does not check the resolved kind. The create is <b>fail-closed</b>: nothing is
 /// written before this exception is raised, so a rejected reference is never
 /// recorded.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -29,7 +31,7 @@ namespace Orleans.Lattice.Membership;
 /// than an internal error.
 /// </para>
 /// </remarks>
-public sealed class LatticeDirectoryValidationException : ArgumentException
+public sealed class LatticeDirectoryValidationException : ArgumentException, ILatticeDomainFault
 {
     /// <summary>
     /// The principal id that failed validation. Empty on the parameterless /
