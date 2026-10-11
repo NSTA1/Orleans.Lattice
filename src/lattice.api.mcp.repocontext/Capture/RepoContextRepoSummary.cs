@@ -85,6 +85,15 @@ public sealed record RepoContextRepoSummary
     public bool EmbeddedVectorCountPending { get; init; }
 
     /// <summary>
+    /// The UTC start of the completed membership scan that produced
+    /// <see cref="EmbeddedVectorCount"/>, or null until a scan completes.
+    /// A pending refresh preserves this timestamp with the old count, so an operator
+    /// can see hours of lag rather than mistaking a freshly listed row for a fresh
+    /// measurement. This is a scan-time anchor, not a transactional snapshot.
+    /// </summary>
+    public DateTimeOffset? EmbeddedVectorCountAsOf { get; init; }
+
+    /// <summary>
     /// The commit SHA the repository's index generation was built from, or
     /// <see langword="null"/> when the repository is indexed from a mounted
     /// workspace (which has no commit anchor). For a git-ref-sourced repository this

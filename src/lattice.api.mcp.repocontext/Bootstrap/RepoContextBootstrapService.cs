@@ -949,8 +949,14 @@ internal sealed class RepoContextBootstrapService : IDisposable
                                 repoId, count, (long)elapsed.TotalMilliseconds);
                         }
 
+                        var delta = Math.Max(0, count - embedded);
+                        embedded = Math.Max(embedded, count);
                         return ReportAsync(
-                            progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct);
+                            progress, new RepoIndexProgressUpdate
+                            {
+                                FilesEmbedded = embedded,
+                                FilesEmbeddedDelta = delta,
+                            }, ct);
                     },
                     cancellationToken).ConfigureAwait(false);
             }
@@ -965,7 +971,8 @@ internal sealed class RepoContextBootstrapService : IDisposable
                     repoId);
             }
 
-            embedded = fileIngest.FilesEmbedded;
+            var finalEmbeddedDelta = Math.Max(0, fileIngest.FilesEmbedded - embedded);
+            embedded = Math.Max(embedded, fileIngest.FilesEmbedded);
 
             // Convergence is only ever asserted from a pass that actually looked, and -
             // since issue #3340 - only ever withdrawn by a pass that actually looked.
@@ -1054,7 +1061,11 @@ internal sealed class RepoContextBootstrapService : IDisposable
             // still seen by the coverage_verdict charge below the last arm (#3354).
             armFailure ??= memoryArmFailure;
 
-            await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
+            await ReportAsync(progress, new RepoIndexProgressUpdate
+                {
+                    FilesEmbedded = embedded,
+                    FilesEmbeddedDelta = finalEmbeddedDelta,
+                }, cancellationToken)
                 .ConfigureAwait(false);
 
             // Embed the per-symbol records as their own passages. This runs even when

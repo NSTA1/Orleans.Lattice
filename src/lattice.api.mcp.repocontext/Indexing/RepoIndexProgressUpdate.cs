@@ -43,7 +43,11 @@ public readonly record struct RepoIndexProgressUpdate
     [Id(7)]
     public int? ChunksCommitted { get; init; }
 
-    /// <summary>Changed files whose vectors have been stored, or null.</summary>
+    /// <summary>
+    /// The file arm's cumulative stored-file count for this drive, or null.
+    /// Older reporters use this alone; the job preserves its high-water mark.
+    /// When <see cref="FilesEmbeddedDelta"/> is supplied, that delta takes precedence.
+    /// </summary>
     [Id(8)]
     public int? FilesEmbedded { get; init; }
 
@@ -63,4 +67,13 @@ public readonly record struct RepoIndexProgressUpdate
     /// </summary>
     [Id(10)]
     public int? SymbolsEmbedded { get; init; }
+
+    /// <summary>
+    /// Newly stored file embeddings since the previous report, or null for a legacy
+    /// cumulative report. Added to the durable job total, so a resumed drive starts
+    /// its local count at zero without erasing or undercounting the earlier drive.
+    /// A final tally carries zero when every embedding was already reported.
+    /// </summary>
+    [Id(11)]
+    public int? FilesEmbeddedDelta { get; init; }
 }

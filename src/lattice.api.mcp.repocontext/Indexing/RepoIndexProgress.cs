@@ -58,7 +58,11 @@ public sealed record RepoIndexProgress
     [Id(9)]
     public int ChunksCommitted { get; init; }
 
-    /// <summary>The number of changed files whose vectors have been embedded and stored.</summary>
+    /// <summary>
+    /// File embeddings stored during this job, including changed and back-filled
+    /// files across resumed drives. Monotonic for the same attempt and start time;
+    /// a fresh job resets it to zero. This counts work, not current corpus coverage.
+    /// </summary>
     [Id(10)]
     public int FilesEmbedded { get; init; }
 

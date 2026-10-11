@@ -333,6 +333,17 @@ internal sealed class RepoIndexJobGrain(
 
     private void Merge(RepoIndexProgressUpdate update)
     {
+        var filesEmbedded = state.State.FilesEmbedded;
+        if (update.FilesEmbeddedDelta is { } delta)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(delta);
+            filesEmbedded = checked(filesEmbedded + delta);
+        }
+        else if (update.FilesEmbedded is { } embedded)
+        {
+            filesEmbedded = Math.Max(filesEmbedded, embedded);
+        }
+
         if (update.Phase is { } phase) state.State.Phase = phase;
         if (update.FilesScanned is { } scanned) state.State.FilesScanned = scanned;
         if (update.FilesAdded is { } added) state.State.FilesAdded = added;
@@ -341,7 +352,7 @@ internal sealed class RepoIndexJobGrain(
         if (update.FilesUnchanged is { } unchanged) state.State.FilesUnchanged = unchanged;
         if (update.ChunksTotal is { } chunksTotal) state.State.ChunksTotal = chunksTotal;
         if (update.ChunksCommitted is { } chunksCommitted) state.State.ChunksCommitted = chunksCommitted;
-        if (update.FilesEmbedded is { } embedded) state.State.FilesEmbedded = embedded;
+        state.State.FilesEmbedded = filesEmbedded;
         if (update.FilesContentProjected is { } contentProjected) state.State.FilesContentProjected = contentProjected;
         if (update.SymbolsEmbedded is { } symbolsEmbedded) state.State.SymbolsEmbedded = symbolsEmbedded;
     }

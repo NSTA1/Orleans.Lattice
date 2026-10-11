@@ -18,6 +18,21 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Indexing;
 [TestFixture]
 public sealed class RepoContextIngestReporterTests
 {
+    [Test]
+    public void Observe_file_deltas_take_precedence_over_drive_totals()
+    {
+        using var reporter = new RepoContextIngestReporter(new ManualTimeProvider());
+        using var capture = new IngestMeasurementCapture(reporter);
+        var pass = reporter.BeginPass(Repo);
+
+        pass.Observe(new RepoIndexProgressUpdate { FilesEmbedded = 60, FilesEmbeddedDelta = 60 });
+        pass.Observe(new RepoIndexProgressUpdate { FilesEmbedded = 26, FilesEmbeddedDelta = 26 });
+        pass.Observe(new RepoIndexProgressUpdate { FilesEmbedded = 26, FilesEmbeddedDelta = 0 });
+        pass.Observe(new RepoIndexProgressUpdate { FilesEmbedded = 26 });
+
+        Assert.That(capture.Sum(RepoContextIngestReporter.FilesEmbeddedInstrumentName), Is.EqualTo(86));
+    }
+
     private const string Repo = RepoIndexRunnerHarness.RepoId;
 
     [Test]
