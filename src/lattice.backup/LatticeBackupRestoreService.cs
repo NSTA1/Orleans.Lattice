@@ -588,11 +588,11 @@ internal sealed class LatticeBackupRestoreService(
             // previous physical tree by is recorded on the shadow for a revert, and
             // is the authoritative description of that tree's shards: when the
             // target was already aliased, splits and reshards wrote it under the
-            // target's id, never the previous tree's own. Resolved before the
-            // prepare moves the target's map, so a resumed commit can tell which
-            // physical tree the recorded map describes.
-            var replacedPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
-            var replacedMap = await AliasCutoverShardMaps.PrepareCutoverAsync(
+            // target's id, never the previous tree's own. The prepare also reports
+            // the physical tree the target resolved to before it moved the map
+            // (from the entry it already reads, not a separate Resolve), so a
+            // resumed commit can tell which physical tree the recorded map describes.
+            var (replacedMap, replacedPhysical) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(
                 grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
             var describesPrevious = string.Equals(replacedPhysical, previousPhysicalTreeId, StringComparison.Ordinal)
                 || string.Equals(replacedPhysical, shadowPhysicalTreeId, StringComparison.Ordinal);
@@ -938,18 +938,20 @@ internal sealed class LatticeBackupRestoreService(
             return;
         }
 
-        TreeRegistryEntry? entry;
-        string currentPhysical;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            entry = await registry.GetEntryAsync(physicalTreeId).ConfigureAwait(false);
-            currentPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
-        }
-
-        if (string.Equals(entry?.RestoreShadowOfTreeId, targetTreeId, StringComparison.Ordinal)
-            || string.Equals(currentPhysical, physicalTreeId, StringComparison.Ordinal))
-        {
-            return;
+            // A shadow this engine built for the target is admitted on its own
+            // provenance stamp, so the target's alias is read only when that
+            // stamp does not decide it.
+            var entry = await registry.GetEntryAsync(physicalTreeId).ConfigureAwait(false);
+            if (string.Equals(entry?.RestoreShadowOfTreeId, targetTreeId, StringComparison.Ordinal)
+                || string.Equals(
+                    await registry.ResolveAsync(targetTreeId).ConfigureAwait(false),
+                    physicalTreeId,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
         }
 
         throw new LatticeRestoreValidationException(

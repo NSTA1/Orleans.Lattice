@@ -849,7 +849,6 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// </summary>
     private async Task CutoverAsync()
     {
-        var registry = grainFactory.GetLatticeRegistry();
         var destinationTreeId = state.State.DestinationTreeId!;
         var operationId = state.State.OperationId!;
         var sourcePhysical = state.State.SourcePhysicalTreeId!;
@@ -887,8 +886,8 @@ internal sealed class LatticeSchemaRemediationGrain(
         // aliased its splits and reshards wrote the map under the logical id, never
         // the source's own. A cutover resumed after the swap gets the recorded map
         // back rather than following the new alias to the destination's.
-        var replacedPhysical = await registry.ResolveAsync(TreeId);
-        var replacedMap = await AliasCutoverShardMaps.PrepareCutoverAsync(grainFactory, TreeId, destinationPhysical);
+        var (replacedMap, replacedPhysical) =
+            await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(grainFactory, TreeId, destinationPhysical);
         RoutingInfo? retainedRouting = null;
         var describesSource = replacedMap is not null
             && (string.Equals(replacedPhysical, sourcePhysical, StringComparison.Ordinal)

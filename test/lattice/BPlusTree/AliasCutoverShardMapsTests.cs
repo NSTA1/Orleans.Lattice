@@ -121,6 +121,34 @@ public sealed class AliasCutoverShardMapsTests
     }
 
     [Test]
+    public async Task PrepareCutoverResolvingAsync_reports_the_physical_tree_ResolveAsync_returned_before_the_prepare()
+    {
+        var (logical, destination) = await RegisterAsync();
+        var unaliasedResolve = await Registry.ResolveAsync(logical);
+        var (unaliasedMap, unaliased) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
+
+        var (aliasedLogical, aliasedDestination) = await RegisterAsync();
+        var physical = $"{aliasedLogical}-physical";
+        await Registry.RegisterAsync(physical, new TreeRegistryEntry { ShardCount = 2 });
+        await SetAliasAsync(aliasedLogical, physical);
+        var aliasedResolve = await Registry.ResolveAsync(aliasedLogical);
+        var (_, aliased) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, aliasedLogical, aliasedDestination);
+
+        await AliasCutoverShardMaps.SwapCutoverAsync(Grains, logical, destination);
+        var resumedResolve = await Registry.ResolveAsync(logical);
+        var (resumedMap, resumed) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unaliased, Is.EqualTo(unaliasedResolve).And.EqualTo(logical));
+            Assert.That(aliased, Is.EqualTo(aliasedResolve).And.EqualTo(physical));
+            Assert.That(resumed, Is.EqualTo(resumedResolve).And.EqualTo(destination));
+            Assert.That(resumedMap!.Slots, Is.EqualTo(unaliasedMap!.Slots),
+                "the map half is exactly what PrepareCutoverAsync returns");
+        });
+    }
+
+    [Test]
     public async Task PrepareCutoverAsync_of_an_aliased_tree_stamps_the_logical_map_onto_the_replaced_tree()
     {
         var (logical, destination) = await RegisterAsync();
