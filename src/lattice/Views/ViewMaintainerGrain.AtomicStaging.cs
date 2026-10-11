@@ -67,6 +67,9 @@ internal sealed partial class ViewMaintainerGrain
     // dropped, reproducing the source-side last-writer-wins outcome (a committed
     // prepared Set installs under its prepare-time HLC, so a higher-HLC ordinary
     // write dominates it at the source and must dominate it in the view too).
+    // A flushed batch's prepares are folded in the same way while another staged
+    // batch still references the key, so overlapping batches resolve by prepare
+    // HLC rather than by the order in which they complete.
     private readonly Dictionary<string, int> _stagedSourceKeyRefCount = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HybridLogicalClock> _ordinaryHlcOverStagedKey = new(StringComparer.Ordinal);
 
@@ -308,6 +311,34 @@ internal sealed partial class ViewMaintainerGrain
         if (!existed || mutation.Timestamp.CompareTo(prev) > 0)
         {
             prev = mutation.Timestamp;
+        }
+    }
+
+    /// <summary>
+    /// Records every prepare of a batch that has just been flushed (or jointly
+    /// resolved) as a supersession candidate for the same source key in any
+    /// <i>other</i> still-staged batch. The source tree installs overlapping
+    /// committed prepares by last-writer-wins on their prepare-time HLC, whichever
+    /// commits first, so a batch that completes later but prepared earlier must
+    /// not overwrite the newer value in the view. Must run before
+    /// <see cref="ReleaseStagedKeys"/> so a key still referenced elsewhere keeps
+    /// its recorded HLC; a key referenced only by this batch is forgotten there.
+    /// </summary>
+    private void RecordFlushedPreparesOverStagedKeys(StagedTransaction tx)
+    {
+        foreach (var prepared in tx.PreparesByIndex.Values)
+        {
+            if (!_stagedSourceKeyRefCount.TryGetValue(prepared.Key, out var count) || count <= 1)
+            {
+                continue;
+            }
+
+            ref var prev = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                _ordinaryHlcOverStagedKey, prepared.Key, out var existed);
+            if (!existed || prepared.Timestamp.CompareTo(prev) > 0)
+            {
+                prev = prepared.Timestamp;
+            }
         }
     }
 
@@ -614,6 +645,7 @@ internal sealed partial class ViewMaintainerGrain
                 if (resolved)
                 {
                     applied += upserts.Count + deletes.Count;
+                    RecordFlushedPreparesOverStagedKeys(tx);
                     ReleaseStagedKeys(tx);
                     _staging.Remove(txId);
                     MarkResolved(txId);
@@ -633,6 +665,7 @@ internal sealed partial class ViewMaintainerGrain
                 applied += upserts.Count + deletes.Count;
             }
 
+            RecordFlushedPreparesOverStagedKeys(tx);
             ReleaseStagedKeys(tx);
             _staging.Remove(txId);
             MarkResolved(txId);
