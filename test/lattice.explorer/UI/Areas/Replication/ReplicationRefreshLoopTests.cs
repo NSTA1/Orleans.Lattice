@@ -154,4 +154,38 @@ public sealed class ReplicationRefreshLoopTests
             _refreshes++;
             return Task.CompletedTask;
         });
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_queued_tick_does_not_refresh_after_the_page_is_hidden_or_disposed(bool dispose)
+    {
+        Func<Task>? queued = null;
+        var dispatched = new TaskCompletionSource();
+        using var loop = new ReplicationRefreshLoop(_time, _visibility, Interval, work =>
+        {
+            queued = work;
+            return dispatched.Task;
+        }, () =>
+        {
+            _refreshes++;
+            return Task.CompletedTask;
+        });
+        await loop.StartAsync();
+        _time.Advance(Interval);
+        Assert.That(queued is not null, Is.True, "a visible tick was queued on the renderer");
+
+        if (dispose)
+        {
+            loop.Dispose();
+        }
+        else
+        {
+            _visibility.Set(false);
+        }
+
+        await queued!();
+        dispatched.SetResult();
+
+        Assert.That(_refreshes, Is.Zero, "visibility and lifetime must be checked when the queued work actually runs");
+    }
 }

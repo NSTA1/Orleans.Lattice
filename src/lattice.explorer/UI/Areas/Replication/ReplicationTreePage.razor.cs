@@ -62,8 +62,11 @@ public partial class ReplicationTreePage
         }
 
         _loadedTree = tree;
+        var cancellationToken = _cancellation.Renew();
         _links = null;
         _fault = null;
+        _refreshFault = null;
+        _entry = null;
         _appSlug = ReplicationTreeOwnership.TryGetAppSlug(tree, out var slug) ? slug : null;
         if (tree.Length == 0)
         {
@@ -71,12 +74,25 @@ public partial class ReplicationTreePage
             return;
         }
 
-        var config = await Data.GetConfigAsync(refresh: false, _cancellation.Token);
+        ReplicationRead<ReplicationConfigReport> config;
+        try
+        {
+            config = await Data.GetConfigAsync(refresh: false, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
         _entry = config.Value?.Trees.FirstOrDefault(entry => string.Equals(entry.TreeId, tree, StringComparison.Ordinal));
         await ReadAsync();
-        if (_cancellation.IsLeft)
+        if (cancellationToken.IsCancellationRequested)
         {
-            // Another page may be on screen: it is not declared not found.
             return;
         }
 
@@ -107,6 +123,7 @@ public partial class ReplicationTreePage
     private async Task ReadAsync()
     {
         var tree = TreeId;
+        var cancellationToken = _cancellation.Token;
         if (tree.Length == 0)
         {
             return;
@@ -114,8 +131,8 @@ public partial class ReplicationTreePage
 
         try
         {
-            var read = await Data.GetTreeLinksAsync(tree, _cancellation.Token);
-            if (!string.Equals(tree, TreeId, StringComparison.Ordinal))
+            var read = await Data.GetTreeLinksAsync(tree, cancellationToken);
+            if (cancellationToken.IsCancellationRequested || !string.Equals(tree, TreeId, StringComparison.Ordinal))
             {
                 return;
             }
@@ -137,7 +154,7 @@ public partial class ReplicationTreePage
                 _refreshFault = read.Fault;
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // The page went away.
         }

@@ -117,7 +117,9 @@ internal sealed class ReplicationRefreshLoop : IDisposable
 
         try
         {
-            await _dispatch(_refresh).ConfigureAwait(false);
+            await _dispatch(() => _disposed || !_visibility.IsVisible
+                ? Task.CompletedTask
+                : _refresh()).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is ObjectDisposedException or OperationCanceledException)
         {
