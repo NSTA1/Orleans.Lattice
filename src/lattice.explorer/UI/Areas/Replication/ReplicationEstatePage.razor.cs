@@ -75,24 +75,25 @@ public partial class ReplicationEstatePage
         }
     }
 
-    private async Task RefreshAsync()
-    {
-        _refreshing = true;
-        try
-        {
-            await LoadAsync(refresh: true);
-        }
-        finally
-        {
-            _refreshing = false;
-        }
-    }
+    private Task RefreshAsync() => LoadAsync(refresh: true);
 
     private async Task LoadAsync(bool refresh)
     {
+        var cancellationToken = _cancellation.Renew();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _refreshing = refresh;
         try
         {
-            var read = await Data.GetEstateAsync(refresh, _cancellation.Token);
+            var read = await Data.GetEstateAsync(refresh, cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             _estate = read.Value;
             _fault = read.Fault;
             _tenantBackfill = null;
@@ -101,7 +102,12 @@ public partial class ReplicationEstatePage
             {
                 try
                 {
-                    var report = await Data.GetTenantRegionStatusAsync(_cancellation.Token);
+                    var report = await Data.GetTenantRegionStatusAsync(cancellationToken);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
                     _tenantBackfill = report.Regions
                         .FirstOrDefault(region => string.Equals(
                             region.RegionId, _estate.LocalRegionId, StringComparison.Ordinal))
@@ -113,14 +119,26 @@ public partial class ReplicationEstatePage
                 }
                 catch (Exception ex)
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
                     _tenantBackfillFault = ReplicationFault.From(ex, "tenant backfill progress");
                 }
             }
             Apply();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // The page went away.
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _refreshing = false;
+            }
         }
     }
 
