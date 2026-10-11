@@ -9510,9 +9510,9 @@ public static class LatticeMetrics
     /// with the rows, and both report a scan that stalls at leaf 1 on the same
     /// leaf 307 times running exactly as they report 307 stalls spread over 307
     /// different leaves that each recovered. Those are opposite conditions: the
-    /// second is a busy tree making progress, the first is a corpus that cannot
-    /// converge at all and will not converge on its own however many times it is
-    /// retried. Reading them apart needs the <em>consecutiveness</em> of the
+    /// second is a busy tree making progress, the first has repeated zero
+    /// progress, which may reflect shared pressure or an orphaned read.
+    /// Reading them apart needs the <em>consecutiveness</em> of the
     /// zero-progress fires on one leaf identity, which is a per-shard-root
     /// quantity no counter can reconstruct after the fact.
     /// </para>
@@ -9523,12 +9523,10 @@ public static class LatticeMetrics
     ///   slow call: it is a stall, and it is not evidence of a wedge.</item>
     ///   <item><c>stranded</c> - the same leaf has now missed the ceiling on
     ///   <c>StrandedLeafStallThreshold</c> consecutive attempts with nothing
-    ///   read on any of them. The leaf is classified unreadable and the
-    ///   recovery in <c>ShardRootGrain.StrandedLeaf.cs</c> has been applied.
-    ///   Any non-zero reading on this arm is actionable, and a
-    ///   <em>climbing</em> one means the recovery is being applied repeatedly
-    ///   and is not taking - the leaf is unreadable for a reason that lives
-    ///   inside the leaf rather than in the shard root's coalescing map.</item>
+    ///   read on any of them. Recovery probes back off exponentially and are
+    ///   deferred while this silo has queued replay waiters. A climbing arm
+    ///   counts stalls, not probes, and does not prove permanent failure or
+    ///   localise the cause to the leaf activation (issue #3521).</item>
     /// </list>
     /// <para>
     /// <b>Reading a zero.</b> Both arms are primed at zero from shard-root
@@ -9541,7 +9539,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> ScanPageZeroProgressStalls =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.zero_progress_stalls", unit: "{stall}",
-            description: "Count of shard-root page-fill ceiling fires that completed no leaf, by whether the named leaf is slow this once or has been classified unreadable after consecutive zero-progress stalls.");
+            description: "Count of shard-root page-fill ceiling fires that completed no leaf, by whether the named leaf is below or at the consecutive zero-progress stall threshold; not proof of permanent failure.");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>slow</c> (a zero-progress ceiling fire on

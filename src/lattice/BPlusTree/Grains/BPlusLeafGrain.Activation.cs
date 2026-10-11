@@ -558,7 +558,13 @@ internal sealed partial class BPlusLeafGrain
     /// cancellation as well as by acquisition: this is a process-wide static
     /// that is never rebuilt, so a leak on the cancel path would be permanent.
     /// </summary>
-    internal static int QueuedReplayPermitWaitersForTest => Volatile.Read(ref _queuedReplayPermitWaiters);
+    internal static int QueuedReplayPermitWaitersForTest => QueuedReplayPermitWaiters;
+
+    /// <summary>
+    /// Current silo-wide replay queue depth. This is pressure evidence, not
+    /// proof that any particular leaf is waiting for a replay permit.
+    /// </summary>
+    internal static int QueuedReplayPermitWaiters => Volatile.Read(ref _queuedReplayPermitWaiters);
 
     /// <summary>
     /// Test-only view of <see cref="_replayConcurrencyCeiling"/>. Exposed so a

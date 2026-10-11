@@ -154,41 +154,33 @@ public sealed class ScanPageStalledException : TimeoutException, ILatticeDomainF
     /// <summary>
     /// How many <em>consecutive</em> ceiling fires this shard root has now seen
     /// that completed no leaf and named this same <see cref="LeafInFlight"/>,
-    /// counting this one. Zero when the fire made progress, named no leaf, or
-    /// named a different leaf from the previous fire (issue #3016).
+    /// counting this one. Zero when the fire made progress or named no leaf;
+    /// a different leaf starts a new run at one (issue #3016).
     /// <para>
     /// <see cref="LeavesVisited"/> says a single attempt read nothing.
-    /// <b>This says the attempts are not making each other any more likely to
-    /// succeed</b>, which is the only quantity that separates a tree that is
-    /// busy from one that cannot converge. Both present identically per
-    /// attempt: the field exists because a caller reading one exception cannot
-    /// otherwise tell a leaf replaying a long WAL window from cold - which
-    /// recovers - from one that has failed the same read 307 times running,
-    /// which does not.
+    /// This says how long the observed zero-progress sequence has continued,
+    /// not whether future attempts can converge. Shared replay or storage
+    /// pressure can produce the same sequence as an orphaned read.
     /// </para>
     /// </summary>
     [Id(7)] public int ConsecutiveZeroProgressStalls { get; set; }
 
     /// <summary>
-    /// Whether <see cref="LeafInFlight"/> has been classified <b>unreadable</b>
-    /// by this shard root: it has now missed the ceiling on enough consecutive
-    /// zero-progress attempts that retrying it unchanged cannot be expected to
-    /// behave differently, so the stranded-leaf recovery was applied before
-    /// this exception was raised (issue #3016).
+    /// Whether <see cref="LeafInFlight"/> has reached the consecutive
+    /// zero-progress stall threshold. The wire name is retained for compatibility;
+    /// this is not a verdict that the leaf is permanently unreadable.
     /// <para>
     /// <see langword="false"/> is the ordinary reading for a stall and means
-    /// only "not yet": a slow leaf is expected to recover, and the first fires
-    /// against one are indistinguishable from the first fires against a wedged
-    /// one. <see langword="true"/> is a statement about the <em>sequence</em>
-    /// and is always actionable - it says a plain retry has already been tried
-    /// and has already failed to differ.
+    /// only "not yet". When true, a recovery probe may have been applied or
+    /// deferred by bounded backoff or shared replay queue pressure.
     /// </para>
     /// </summary>
     [Id(8)] public bool LeafStranded { get; set; }
 
     /// <summary>
     /// How many times this shard root has applied the stranded-leaf recovery to
-    /// <see cref="LeafInFlight"/>, counting this occurrence, across <b>every
+    /// <see cref="LeafInFlight"/>, including this occurrence only if recovery
+    /// was applied, across <b>every
     /// activation of the shard root</b> and not merely the current one
     /// (issue #3016). Zero when the fire did not reach the classification.
     /// <para>
@@ -196,19 +188,16 @@ public sealed class ScanPageStalledException : TimeoutException, ILatticeDomainF
     /// <see cref="LeafStranded"/> together say that retrying <em>the read this
     /// activation is parked on</em> has been tried and does not differ, and the
     /// remedy for that is to stop waiting on it. This field answers the
-    /// question that remedy raises and nothing else can: <b>did dropping it
-    /// help?</b>
+    /// historical number of probes, not whether they helped.
     /// </para>
     /// <para>
     /// One means the recovery has just been applied for the first time; the
     /// next attempt will issue a genuinely fresh read and may well succeed.
-    /// <b>Greater than one means it already did that and the leaf still did not
-    /// answer</b>, so the fault is inside the leaf activation rather than in the
-    /// shard root's coalescing, and no number of further scan attempts will
-    /// converge. That distinction cannot be drawn from within one activation,
-    /// because a freshly activated shard root holds no coalesced reads and its
-    /// eviction is a no-op - so its stall looks identical to a first-ever
-    /// stall no matter how long the leaf has been unreadable.
+    /// Greater than one means earlier probes were applied, possibly before a
+    /// successful scan: this historical count is not reset on progress. It
+    /// cannot localise a fault or rule out eventual convergence. A deferred
+    /// probe leaves the count unchanged; zero is also possible after the
+    /// threshold when shared replay queue pressure has prevented all probes.
     /// </para>
     /// </summary>
     [Id(9)] public int StrandedRecoveryApplications { get; set; }

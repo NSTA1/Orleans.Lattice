@@ -80,6 +80,8 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
         /// </summary>
         public required LatticeOptions Options { get; init; }
 
+        public required Func<int> ReadCalls { get; init; }
+
         public GrainId WedgedLeafId => LeafIds[0];
 
         /// <summary>
@@ -122,7 +124,8 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
         int wedgeLeafIndex = 0,
         int leafCount = 2,
         bool asynchronousReads = false,
-        FakePersistentState<ShardRootState>? carriedState = null)
+        FakePersistentState<ShardRootState>? carriedState = null,
+        Microsoft.Extensions.Logging.ILogger<ShardRootGrain>? logger = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
@@ -150,6 +153,7 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
         }
 
         var wedged = wedgeLeafIndex;
+        var readCalls = 0;
         var readGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         for (var i = 0; i < leafCount; i++)
@@ -163,11 +167,15 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
 
             leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
-                .Returns(_ => index == wedged
-                    ? parked[index].Task
-                    : asynchronousReads
-                        ? GateThen(readGate.Task, rows)
-                        : Task.FromResult(rows.ToList()));
+                .Returns(_ =>
+                {
+                    readCalls++;
+                    return index == wedged
+                        ? parked[index].Task
+                        : asynchronousReads
+                            ? GateThen(readGate.Task, rows)
+                            : Task.FromResult(rows.ToList());
+                });
             leaf.GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(_ => Task.FromResult(rows.Select(r => r.Key).ToList()));
@@ -199,12 +207,13 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
         return new RecoveryHarness
         {
             Grain = new ShardRootGrain(context, state, factory, optionsResolver,
-                Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance,
+                logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ShardRootGrain>.Instance,
                 TestMutationObservers.NoObservers()),
             Parked = parked,
             LeafIds = ids,
             State = state,
             Options = options,
+            ReadCalls = () => readCalls,
             ReleaseReads = () => readGate.TrySetResult(),
             SetWedgedIndex = v => wedged = v,
         };
@@ -341,8 +350,8 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
                 Is.EqualTo(ShardRootGrain.StrandedLeafStallThreshold));
             Assert.That(last.LeafInFlight, Is.EqualTo(harness.WedgedLeafId.ToString()));
             Assert.That(last.LeavesVisited, Is.Zero);
-            Assert.That(last.Message, Does.Contain("UNREADABLE"),
-                "an operator reading one log line must be able to tell this from a first stall");
+            Assert.That(last.Message, Does.Contain("stalled sequence"),
+                "an operator can distinguish repeated stalls without claiming permanent failure");
         });
 
         harness.Drain();
