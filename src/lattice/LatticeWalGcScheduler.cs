@@ -540,8 +540,8 @@ internal sealed class LatticeWalGcScheduler(
     internal const int MaxFloorHolderClassificationsPerSweep = 8;
 
     /// <summary>
-    /// Hard ceiling on the floor-holder candidate pool the #3178 remedy draws
-    /// from, and on the durable reads a classifying sweep may spend filling it.
+    /// Hard ceiling on each floor-holder candidate sample the #3178 remedy
+    /// draws from, and on the durable reads spent filling that sample.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -574,13 +574,15 @@ internal sealed class LatticeWalGcScheduler(
     /// <para>
     /// <b>Why a ceiling and not an unbounded pool.</b> Each admitted candidate
     /// costs exactly one durable read in
-    /// <c>ClassifyFloorHolderPinsAsync</c>, so the pool is a read budget even
-    /// after it stops being only a diagnostic one. The offer itself is a bounded
-    /// in-memory insertion and is free; the reads are not. This is the quantity
-    /// that must stay bounded, and it is bounded here.
+    /// <c>ClassifyFloorHolderPinsAsync</c>, so each sample is a read budget even
+    /// after it stops being only a diagnostic one. A classifying sweep builds
+    /// one offset sample per partition, plus bounded samples for unusable and
+    /// unresolved pins; its total read bound therefore scales with the partition
+    /// count. The offer itself is a bounded in-memory insertion and is free; the
+    /// reads are not. This ceiling keeps each sample bounded.
     /// </para>
     /// </remarks>
-    internal const int MaxFloorHolderRemedyCandidatesPerSweep = 256;
+    internal const int MaxFloorHolderRemedyCandidatesPerSample = 256;
 
     /// <summary>
     /// Floor-holding pins that must be present before the remedy's candidate
@@ -662,7 +664,8 @@ internal sealed class LatticeWalGcScheduler(
 
     /// <summary>
     /// The floor-holding durable pin population most recently counted per tree,
-    /// which is the deficit signal both remedy budgets are scaled by (issue
+    /// which is the deficit signal the global unusable-pin sample and drive
+    /// budget are scaled by (issue
     /// #3279).
     /// </summary>
     /// <remarks>
@@ -686,16 +689,26 @@ internal sealed class LatticeWalGcScheduler(
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Scales one of the two floor-holder remedy budgets by the tree's measured
-    /// floor-holding pin population, clamped to the budget's own floor and
-    /// ceiling (issue #3279).
+    /// The most recently measured offset-bearing pin population per tree
+    /// partition, used to size each partition's candidate sample on the next
+    /// classifying sweep.
+    /// </summary>
+    private readonly Dictionary<string, Dictionary<int, int>> _floorHolderPinPopulationByPartition =
+        new(StringComparer.Ordinal);
+
+    private readonly Dictionary<string, int> _floorHolderOffsetPinPopulation =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Scales a floor-holder budget by its measured pin population, clamped to
+    /// the budget's own floor and ceiling (issue #3279).
     /// </summary>
     /// <param name="population">
-    /// The tree's measured floor-holding pin population, or a non-positive
+    /// The measured floor-holding pin population, or a non-positive
     /// value when none has been measured yet.
     /// </param>
     /// <param name="baseBudget">
-    /// The historical constant, which is also the minimum. A tree with no
+    /// The historical constant, which is also the minimum. A population with no
     /// measured population, or one below <paramref name="pinsPerUnit"/>, gets
     /// exactly this and so is unaffected by this change.
     /// </param>
@@ -730,6 +743,39 @@ internal sealed class LatticeWalGcScheduler(
         return scaled >= ceiling ? ceiling : scaled;
     }
 
+    internal static int ScaleFloorHolderPartitionBudget(
+        int partitionPopulation,
+        int treePopulation,
+        int partitionCount)
+    {
+        if (partitionCount <= 0)
+        {
+            return 1;
+        }
+
+        var treeBudget = ScaleFloorHolderBudget(
+            treePopulation,
+            MaxFloorHolderClassificationsPerSweep,
+            MaxFloorHolderRemedyCandidatesPerSample,
+            FloorHolderPinsPerRemedyCandidate);
+        var partitionMinimum = Math.Min(treeBudget, MaxReactivationTouchesPerPass);
+        var budgetAfterPartitionMinimums = (int)Math.Max(
+            0L,
+            treeBudget - ((long)partitionMinimum * partitionCount));
+        var proportionalShare = partitionMinimum;
+        if (partitionPopulation > 0 && treePopulation > 0)
+        {
+            proportionalShare += (int)((long)budgetAfterPartitionMinimums * partitionPopulation / treePopulation);
+        }
+
+        return Math.Clamp(proportionalShare, partitionMinimum, treeBudget);
+    }
+
+    internal static int ScaleUnmeasuredFloorHolderPartitionBudget(int treeBudget, int partitionCount) =>
+        Math.Max(
+            Math.Min(treeBudget, MaxReactivationTouchesPerPass),
+            treeBudget / Math.Max(1, partitionCount));
+
     private int ScaleFloorHolderBudget(string treeId, int baseBudget, int ceiling, int pinsPerUnit) =>
         ScaleFloorHolderBudget(
             _floorHolderPinPopulation.TryGetValue(treeId, out var population) ? population : 0,
@@ -738,7 +784,7 @@ internal sealed class LatticeWalGcScheduler(
             pinsPerUnit);
 
     /// <summary>
-    /// How many floor-holding candidates this sweep may admit for the tree,
+    /// How many global unusable floor-holding candidates the sample may retain,
     /// severed from the diagnostic read budget
     /// <see cref="MaxFloorHolderClassificationsPerSweep"/> (issue #3279).
     /// </summary>
@@ -746,8 +792,29 @@ internal sealed class LatticeWalGcScheduler(
         ScaleFloorHolderBudget(
             treeId,
             MaxFloorHolderClassificationsPerSweep,
-            MaxFloorHolderRemedyCandidatesPerSweep,
+            MaxFloorHolderRemedyCandidatesPerSample,
             FloorHolderPinsPerRemedyCandidate);
+
+    private int FloorHolderRemedyCandidateBudget(string treeId, int partition)
+    {
+        if (!_floorHolderPinPopulationByPartition.TryGetValue(treeId, out var populations))
+        {
+            var partitionCount = _pinnedWalPartitions.TryGetValue(treeId, out var measuredPartitionCount)
+                ? measuredPartitionCount
+                : 1;
+            return ScaleUnmeasuredFloorHolderPartitionBudget(
+                FloorHolderRemedyCandidateBudget(treeId),
+                partitionCount);
+        }
+
+        var partitionPopulation = populations.TryGetValue(partition, out var measuredPopulation)
+            ? measuredPopulation
+            : 0;
+        var treePopulation = _floorHolderOffsetPinPopulation.TryGetValue(treeId, out var measuredTreePopulation)
+            ? measuredTreePopulation
+            : 0;
+        return ScaleFloorHolderPartitionBudget(partitionPopulation, treePopulation, populations.Count);
+    }
 
     /// <summary>
     /// How many distinct leaves this pass may drive for the tree, scaled off
@@ -2940,7 +3007,7 @@ internal sealed class LatticeWalGcScheduler(
                 if (_repairableFloorHolders.TryGetValue(treeId, out var repairableHolders))
                 {
                     logger.LogInformation(
-                        "WAL GC is driving {Count} dormant floor-holding pins on tree {Tree} through the reactivation remedy. Its cursor floor reports usable, so no blocking report names these consumers. Two populations qualify. A sampled holder whose own pin frontier is at or below the blocking sentinel - which the floor skipped because its consumer is present in the live registry - is classified checkpointed_uncovered, and a proven durable checkpoint over an unusable pin is a coverage hole whose repair can only run inside an activation the dormant leaf does not have. A sampled holder whose frontier is usable is classified checkpointed_coverage_unknown and asserts no coverage hole; it is driven when its durable checkpoint offset sits on this tree's offset floor, and since issue #3310 also when it sits above the floor provided a holder AT the floor was admitted on the same sweep, because a scanned-through checkpoint advances only during replay and so freezes when the leaf deactivates, and that advance likewise needs an activation the dormant leaf does not have (issues #3168, #3178). A pin above a floor that WAS admitted becomes the floor once that level drains, so driving it is prefetch rather than the waste issue #3168 measured; a pin above a floor that was NOT admitted is still not driven, because that floor can never drain.",
+                        "WAL GC is driving {Count} dormant floor-holding pins on tree {Tree} through the reactivation remedy. Its cursor floor reports usable, so no blocking report names these consumers. Two populations qualify. A sampled holder whose own pin frontier is at or below the blocking sentinel - which the floor skipped because its consumer is present in the live registry - is classified checkpointed_uncovered, and a proven durable checkpoint over an unusable pin is a coverage hole whose repair can only run inside an activation the dormant leaf does not have. A sampled holder whose frontier is usable is classified checkpointed_coverage_unknown and asserts no coverage hole; it is driven when its durable checkpoint offset sits on its partition's offset floor, and since issue #3310 also when it sits above that floor provided a holder AT the same partition's floor was admitted on the same sweep, because a scanned-through checkpoint advances only during replay and so freezes when the leaf deactivates, and that advance likewise needs an activation the dormant leaf does not have (issues #3168, #3178). A pin above a floor that WAS admitted becomes the floor once that partition level drains, so driving it is prefetch rather than the waste issue #3168 measured; a pin above a floor that was NOT admitted is still not driven, because that partition floor can never drain.",
                         repairableHolders.ConsumerIds.Count,
                         treeId);
 
@@ -5276,7 +5343,7 @@ internal sealed class LatticeWalGcScheduler(
                 }
 
                 logger.LogInformation(
-                    "WAL GC drove leaf {Leaf} on tree {Tree} for floor-holding pin {Consumer} and graded it on the offset axis: the leaf reported {Drive}, and this consumer's own durable pin offset went from {PinOffsetBefore} to {PinOffsetAfter}, recorded as {Recorded}. The leaf's verdict is leaf-wide and reports its pins usable rather than moved, so only this pin advancing is evidence the tree's offset floor can move. A drive that does not advance it withholds the heal credit and stays eligible under the unchanged retry cooldown until its budget is spent and it is reported abandoned (issue #3185).",
+                    "WAL GC drove leaf {Leaf} on tree {Tree} for floor-holding pin {Consumer} and graded it on the offset axis: the leaf reported {Drive}, and this consumer's own durable pin offset went from {PinOffsetBefore} to {PinOffsetAfter}, recorded as {Recorded}. The leaf's verdict is leaf-wide and reports its pins usable rather than moved, so only this pin advancing is evidence its partition offset floor can move. A drive that does not advance it withholds the heal credit and stays eligible under the unchanged retry cooldown until its budget is spent and it is reported abandoned (issue #3185).",
                     leafGrainId,
                     treeId,
                     blockingConsumerId,
@@ -5640,7 +5707,7 @@ internal sealed class LatticeWalGcScheduler(
 
     /// <summary>
     /// Reads one materialiser consumer's durable pin offset, on the same axis
-    /// the tree's offset floor is computed from.
+    /// its partition offset floor is computed from.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -6043,36 +6110,47 @@ internal sealed class LatticeWalGcScheduler(
         // and must be removed from all of them.
         var located = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
-        // The lowest pins seen so far, ascending, each list capped at
-        // FloorHolderRemedyCandidateBudget - which is MaxFloorHolderClassifications-
+        // The lowest pins seen so far, ascending. The global unusable sample uses
+        // FloorHolderRemedyCandidateBudget; it is MaxFloorHolderClassifications-
         // PerSweep on any tree small enough not to need more, and scales with the
-        // measured floor-holding pin population above that (issue #3279). The two
+        // measured tree population above that (issue #3279). Offset sample caps
+        // divide one tree-wide offset-candidate budget proportionally across the
+        // measured partition populations, with enough slots per partition to
+        // cover one pass's distinct-leaf touch budget; before the first
+        // partition measurement, the same minimum is combined with an even
+        // division using the tree's pinned partition count. The two
         // were one constant until the remedy that #3178 hung off this sample was
         // measured starving on it: the pool saturated at 8 on 43 of 43 sweeps of a
         // 20,992-pin tree while the drive it feeds averaged 1.79 of its own budget
         // of 4. Collected only when this arm owes a classification, and bounded in
-        // memory rather than sorted at the end, so a 52,224-pin tree costs a
-        // constant-size list either way.
+        // memory rather than sorted at the end. Offset-bearing candidates are
+        // kept in a separate list per partition, so the total remains bounded
+        // by max(tree-wide candidate budget, partition count x touch budget).
+        // Sharing one list would make busy partitions evict the only floor
+        // candidate from another partition again (issue #3611), while a single
+        // slot per partition can starve distinct-leaf drives when several
+        // leaves share a partition floor.
         //
-        // Two lists, split on whether the pin constrains an offset floor, and
-        // that split is load-bearing (issue #3178). ComputeMaterialiserOffsetFloorAsync
+        // The unusable list is global because its pins constrain the HLC floor;
+        // offset-bearing lists are partition-local because each offset constrains
+        // only its own partition's floor. ComputeMaterialiserOffsetFloorAsync
         // skips every -1, so a -1 pin is the *weakest* pin on that axis, not the
-        // strongest. A tree that has never trimmed carries thousands of them, and
-        // a single ascending list would therefore fill entirely with pins that
-        // hold no offset floor at all and evict every pin that does. Disjoint by
-        // construction, so the classification still reads at most one durable
-        // record per admitted candidate.
+        // strongest. Keeping the lists disjoint prevents never-trimmed sentinel
+        // pins from evicting every pin that holds an offset floor.
         //
         // The ordering axis here is the offset one, and MaxFloorHolderClassifications-
         // PerSweep's own remarks state the same claim from the other end. Keep the
         // two in step: a frontier-ordered sample would not select these pins, because
         // frontier and offset advance independently (issue #3194).
-        var remedyCandidateBudget = FloorHolderRemedyCandidateBudget(treeId);
+        var globalRemedyCandidateBudget = FloorHolderRemedyCandidateBudget(treeId);
+        var offsetPartitionPopulations = classifyFloorHolders
+            ? new Dictionary<int, int>()
+            : null;
         var unusableHolders = classifyFloorHolders
-            ? new List<WalGcFloorHolderCandidate>(remedyCandidateBudget)
+            ? new List<WalGcFloorHolderCandidate>()
             : null;
         var offsetHolders = classifyFloorHolders
-            ? new List<WalGcFloorHolderCandidate>(remedyCandidateBudget)
+            ? new SortedDictionary<int, List<WalGcFloorHolderCandidate>>()
             : null;
 
         for (var i = 0; i < keys.Count; i++)
@@ -6131,13 +6209,17 @@ internal sealed class LatticeWalGcScheduler(
 
             foreach (var consumerId in pins.Keys)
             {
-                if (!located.TryGetValue(consumerId, out var foundAt))
+                var firstLocation = false;
+                if (located.TryGetValue(consumerId, out var foundAt))
                 {
-                    foundAt = new List<string>(1);
+                    foundAt.Add(keys[i]);
+                }
+                else
+                {
+                    firstLocation = true;
+                    foundAt = new List<string>(1) { keys[i] };
                     located[consumerId] = foundAt;
                 }
-
-                foundAt.Add(keys[i]);
 
                 if (unusableHolders is null || offsetHolders is null)
                 {
@@ -6147,20 +6229,41 @@ internal sealed class LatticeWalGcScheduler(
                 var offset = offsets is not null && offsets.TryGetValue(consumerId, out var pinOffset)
                     ? pinOffset
                     : -1L;
-                var resolved = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out _);
+                var resolved = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition);
                 var candidate = new WalGcFloorHolderCandidate(
                     consumerId, leafGrainId, resolved, offset, pins[consumerId]);
 
-                OfferFloorHolderCandidate(
-                    offset < 0 ? unusableHolders : offsetHolders,
-                    remedyCandidateBudget,
-                    candidate);
+                if (firstLocation && resolved && offset >= 0)
+                {
+                    var populations = offsetPartitionPopulations!;
+                    populations[partition] = populations.GetValueOrDefault(partition) + 1;
+                }
+
+                if (offset < 0)
+                {
+                    OfferFloorHolderCandidate(unusableHolders, globalRemedyCandidateBudget, candidate);
+                }
+                else
+                {
+                    var samplePartition = resolved ? partition : -1;
+                    if (!offsetHolders.TryGetValue(samplePartition, out var partitionHolders))
+                    {
+                        partitionHolders = new List<WalGcFloorHolderCandidate>();
+                        offsetHolders.Add(samplePartition, partitionHolders);
+                    }
+
+                    var sampleBudget = resolved
+                        ? FloorHolderRemedyCandidateBudget(treeId, partition)
+                        : globalRemedyCandidateBudget;
+                    OfferFloorHolderCandidate(partitionHolders, sampleBudget, candidate);
+                }
             }
         }
 
         // Record the floor-holding pin population before the classification
-        // consumes it: this is the deficit signal both remedy budgets are scaled
-        // by on the NEXT sweep (issue #3279).
+        // consumes it: the global unusable sample and drive budget use this
+        // tree-wide count on the NEXT sweep (issue #3279). The offset sample
+        // and admission budgets use the per-partition counts below.
         //
         // Sited at method-body level and ABOVE the classification block, so it
         // is deliberately NOT conditional on classifyFloorHolders. Both call
@@ -6179,6 +6282,17 @@ internal sealed class LatticeWalGcScheduler(
         // and yields a SMALLER budget - the fail-safe direction, never a larger
         // one.
         _floorHolderPinPopulation[treeId] = located.Count;
+        var offsetPartitionPopulation = 0;
+        if (offsetPartitionPopulations is not null)
+        {
+            _floorHolderPinPopulationByPartition[treeId] = offsetPartitionPopulations;
+            foreach (var partitionPopulation in offsetPartitionPopulations.Values)
+            {
+                offsetPartitionPopulation += partitionPopulation;
+            }
+
+            _floorHolderOffsetPinPopulation[treeId] = offsetPartitionPopulation;
+        }
 
         // Classify the floor's holders before anything is retired, so the states
         // recorded describe the floor as it stood when it was enumerated rather
@@ -6189,7 +6303,15 @@ internal sealed class LatticeWalGcScheduler(
         if (unusableHolders is not null && offsetHolders is not null)
         {
             repairable = await ClassifyFloorHolderPinsAsync(
-                treeId, unusableHolders, offsetHolders, located.Count, treeTag, tenantTag, stoppingToken)
+                treeId,
+                unusableHolders,
+                offsetHolders,
+                offsetPartitionPopulations!,
+                offsetPartitionPopulation,
+                located.Count,
+                treeTag,
+                tenantTag,
+                stoppingToken)
                 .ConfigureAwait(false);
         }
 
@@ -6836,8 +6958,8 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
-    /// Classifies the durable-pin state of the pins holding a tree's
-    /// materialiser offset floor, for a tree that reached the sweep without a
+    /// Classifies the durable-pin state of pins holding per-partition
+    /// materialiser offset floors, for a tree that reached the sweep without a
     /// floor-blocked report to name a blocker (issue #3158).
     /// </summary>
     /// <remarks>
@@ -6867,12 +6989,17 @@ internal sealed class LatticeWalGcScheduler(
     /// have.
     /// </para>
     /// <para>
-    /// <b>The read budget.</b> At most twice
-    /// <see cref="MaxFloorHolderClassificationsPerSweep"/> durable reads per
-    /// sweep - one cap for the pins holding no offset floor and one for the pins
-    /// holding it, which are disjoint by construction (issue #3178) - enforced
-    /// by <see cref="OfferFloorHolderCandidate"/> when the sample was built, and
-    /// independent of how many pins the tree holds. Coverage
+    /// <b>The read budget.</b> Resolved offset samples are partition-local. Each
+    /// partition retains enough candidates for one distinct-leaf drive pass,
+    /// and measured populations share any remaining tree budget proportionally;
+    /// before measurement, the registry-pinned partition count sets the initial
+    /// cap. The aggregate offset sample is bounded by the greater of the tree
+    /// candidate budget and the active partition count times the per-pass touch
+    /// budget. Unresolved positive-offset pins and pins holding no offset floor
+    /// each have a separate bounded sample. Every admitted candidate costs one
+    /// durable read; this bound is enforced by
+    /// <see cref="OfferFloorHolderCandidate"/> when the samples are built.
+    /// Coverage
     /// is then reported on
     /// <see cref="LatticeMetrics.WalGcFloorHolderClassification"/> so the small
     /// sample is visible as a small sample: without that denominator a handful
@@ -6888,7 +7015,7 @@ internal sealed class LatticeWalGcScheduler(
     /// <see cref="WalGcBlockingPinState.CheckpointedUncovered"/>, which issue
     /// #3164 drives into the existing reactivation remedy, plus the subset
     /// classified <see cref="WalGcBlockingPinState.CheckpointedCoverageUnknown"/>
-    /// whose durable offset equals the tree's offset floor, which issue #3178
+    /// whose durable offset equals its partition's offset floor, which issue #3178
     /// drives into the same remedy for liveness rather than for coverage; see
     /// <see cref="_repairableFloorHolders"/>. It is a filter over what was
     /// already read and measured, not a second pass.
@@ -6897,7 +7024,9 @@ internal sealed class LatticeWalGcScheduler(
     private async Task<FloorHolderRepairSet> ClassifyFloorHolderPinsAsync(
         string treeId,
         List<WalGcFloorHolderCandidate> unusableHolders,
-        List<WalGcFloorHolderCandidate> offsetHolders,
+        SortedDictionary<int, List<WalGcFloorHolderCandidate>> offsetHolders,
+        IReadOnlyDictionary<int, int> partitionPopulations,
+        int offsetPopulation,
         int population,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
@@ -6906,52 +7035,14 @@ internal sealed class LatticeWalGcScheduler(
         var classified = 0;
         var repairable = new List<string>();
 
-        // Issue #3258. Whether the candidate DEFINING this tree's offset floor
-        // cleared the admission gate below. Tracked as a single per-sweep bit
-        // rather than a per-candidate count because a tree has one floor per
-        // sweep however many pins sit on it, and because it is the floor's own
-        // holder that decides whether any repair is possible at all: the floor
-        // is the head of the ascending offset sample, so every other candidate
-        // is strictly above it, and the gate admits a coverage-unknown
-        // candidate at the floor, or (issue #3310) above it once one AT the
-        // floor has been admitted on the same sweep. If the floor's holder is
-        // refused, nothing can be admitted, and no existing instrument
-        // separates that from a tree with no repair to do.
-        var floorAdmitted = false;
+        // The legacy admission instrument is tree-scoped, so it is charged as
+        // admitted only when every sampled partition floor is admitted.
+        var allPartitionFloorsAdmitted = true;
+        var hasOffsetFloor = false;
 
-        // Issue #3310. How many candidates this sweep may admit on the offset
-        // axis, and the bound that replaces equality with the floor.
-        //
-        // Derive it rather than quoting it, because the two numbers that matter
-        // are computed and the constants they are computed FROM are easy to
-        // mistake for them. ScaleFloorHolderBudget(population, base, ceiling,
-        // pinsPerUnit) is population / pinsPerUnit, clamped to [base, ceiling].
-        // MaxFloorHolderClassificationsPerSweep (8) is the BASE, not the budget;
-        // MaxFloorHolderRemedyCandidatesPerSweep (256) is the CEILING, not the
-        // budget. On repo-context-vector-index at 24,432 floor-holding pins:
-        //
-        //     candidates: 24,432 / 128 = 190.9 -> 190  (base 8, ceiling 256)
-        //     touches:    24,432 / 512 =  47.7 ->  32  (base 4, ceiling 32,
-        //                                              clipped at the ceiling)
-        //
-        // So the tree could admit 190 candidates per sweep and drive 32 of them,
-        // and under the equality gate it admitted 1 to 3 and drove 0.185 per
-        // minute - 1.4% of a budget issue #3279 had already granted it. The
-        // budget was not merely under-used; on a tree whose pins do not share an
-        // offset it was unreachable.
-        //
-        // Computed from the population PARAMETER rather than from the map, so it
-        // reflects the count this sweep actually enumerated. The sample lists
-        // were sized from the previous sweep's count, which makes this the
-        // tighter of the two bounds whenever the population shrank - the
-        // fail-safe direction - and equal to it otherwise.
-        var offsetAdmissionBudget = ScaleFloorHolderBudget(
-            population,
-            MaxFloorHolderClassificationsPerSweep,
-            MaxFloorHolderRemedyCandidatesPerSweep,
-            FloorHolderPinsPerRemedyCandidate);
-        var offsetAdmitted = 0;
-
+        // The offset-axis admission cap uses the same proportional share as the
+        // candidate sample, based on this sweep's measured offset-bearing pins.
+        var perPartitionOffsetAdmissionBudget = MaxFloorHolderClassificationsPerSweep;
         // Lazily allocated. The offset-axis branch below admits nothing on the
         // overwhelming majority of sweeps - most classified holders are either
         // unusable or not on the floor - and this method runs per tree per
@@ -6959,32 +7050,69 @@ internal sealed class LatticeWalGcScheduler(
         // allocation to hold nothing. The empty case is served by a shared
         // singleton instead.
         HashSet<string>? requireOffsetAdvance = null;
-        var sampled = unusableHolders.Count + offsetHolders.Count;
+        var sampled = unusableHolders.Count;
+        foreach (var partitionSample in offsetHolders.Values)
+        {
+            sampled += partitionSample.Count;
+        }
+
         var logged = 0;
 
-        // The sample's offset list is ascending by offset, so its head IS the
-        // lowest offset this sweep saw. On a tree whose pins were all enumerated
-        // that is the tree's offset floor outright - the same minimum
-        // ComputeMaterialiserOffsetFloorAsync takes, over the same population,
-        // skipping the same -1s, which is why the -1 pins were split off into
-        // their own list rather than ranked alongside.
-        //
-        // Null when no pin constrains an offset floor at all, in which case no
-        // candidate can be admitted on the offset axis and the gate below is
-        // inert. That is the correct reading: if nothing holds an offset floor,
-        // the floor is not what is stopping the trim.
-        long? offsetFloor = offsetHolders.Count > 0 ? offsetHolders[0].Offset : null;
-
-        for (var i = 0; i < sampled; i++)
+        // Process the global HLC-unusable sample first, then each ascending
+        // partition-local offset sample. Each partition gets its own floor and
+        // admission state: a blocked floor on one partition must neither hide
+        // nor authorize candidates on another (issue #3611).
+        using var partitionSamples = offsetHolders.GetEnumerator();
+        var candidates = unusableHolders;
+        long? offsetFloor = null;
+        var floorAdmitted = false;
+        var offsetAdmitted = 0;
+        var sampleIndex = 0;
+        var candidateIndex = 0;
+        var partitionFloorPending = false;
+        while (true)
         {
+            if (candidateIndex >= candidates.Count)
+            {
+                if (partitionFloorPending)
+                {
+                    hasOffsetFloor = true;
+                    allPartitionFloorsAdmitted &= floorAdmitted;
+                    partitionFloorPending = false;
+                }
+
+                if (sampleIndex >= offsetHolders.Count)
+                {
+                    break;
+                }
+
+                partitionSamples.MoveNext();
+                var partitionSample = partitionSamples.Current;
+                candidates = partitionSample.Value;
+                offsetFloor = partitionSample.Key >= 0 && candidates.Count > 0
+                    ? candidates[0].Offset
+                    : null;
+                perPartitionOffsetAdmissionBudget = partitionSample.Key >= 0
+                    && partitionPopulations.TryGetValue(partitionSample.Key, out var partitionPopulation)
+                        ? ScaleFloorHolderPartitionBudget(
+                            partitionPopulation,
+                            offsetPopulation,
+                            partitionPopulations.Count)
+                        : MaxFloorHolderClassificationsPerSweep;
+                floorAdmitted = false;
+                offsetAdmitted = 0;
+                candidateIndex = 0;
+                sampleIndex++;
+                partitionFloorPending = offsetFloor is not null;
+                continue;
+            }
+
             if (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
 
-            var candidate = i < unusableHolders.Count
-                ? unusableHolders[i]
-                : offsetHolders[i - unusableHolders.Count];
+            var candidate = candidates[candidateIndex++];
 
             var consumerId = candidate.ConsumerId;
             var resolved = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition);
@@ -7050,7 +7178,7 @@ internal sealed class LatticeWalGcScheduler(
             // routed the candidate into one of the two sample lists and then
             // discarded. The two cases have different remedies: an offset-
             // bearing pin is still driven for liveness when its offset equals
-            // the tree offset floor (the branch below), while a pin reporting no
+            // its partition offset floor (the branch below), while a pin reporting no
             // offset can never satisfy that equality, and the gate above
             // demoted it on its usable frontier alone (a no-offset pin at
             // <= Zero stays CheckpointedUncovered and never reaches this
@@ -7070,8 +7198,8 @@ internal sealed class LatticeWalGcScheduler(
             // of blocking_pin_state covers two populations with opposite
             // meanings: the benign sentinel at offset -1, which constrains no
             // offset floor and clears as soon as the leaf checkpoints, and an
-            // offset-BEARING candidate, which can hold the floor and whose
-            // refusal there is terminal for the whole tree (issue #3258).
+            // offset-BEARING candidate, which can hold its partition floor and
+            // whose refusal there is terminal for that partition (issue #3258).
             // Primed on every classification rather than only on the recorded
             // arm, so an empty offset_usable slice - the wedge-free reading - is
             // a measured absence rather than silence.
@@ -7102,13 +7230,13 @@ internal sealed class LatticeWalGcScheduler(
             // carrying a real non-negative offset - the leaf applied and
             // published from max(persisted, pending) while activated, then
             // deactivated without persisting, and the durable pin store kept
-            // what it published. When such a candidate HOLDS the offset floor
+            // what it published. When such a candidate HOLDS its partition floor
             // the refusal here is still correct, and it is also terminal for
-            // the whole tree: every other candidate is strictly above the
-            // floor, the issue #3310 prefetch is gated on the floor's own
+            // that partition: every other candidate there is above the floor,
+            // and the issue #3310 prefetch is gated on that floor's own
             // holder having been admitted, and the pin store merges
             // monotonic-max so nothing the leaf later does can lower it. That
-            // tree's WAL is then permanently unreclaimable, which reads here as
+            // partition's WAL is then permanently unreclaimable, which reads here as
             // floor_holder_admission{status="blocked"} climbing for ever. The
             // remedy is upstream, in what a leaf may publish durably; widening
             // this gate to admit it is the silent-data-loss change the
@@ -7125,7 +7253,7 @@ internal sealed class LatticeWalGcScheduler(
                 // arm this one carries no >= 0 guard, and does not need one:
                 // the candidate offers partition on offset < 0 (see the split at
                 // roughly line 4633), so offsetHolders holds only non-negative
-                // offsets and the head of that ascending sample can never be
+                // offsets and the head of that partition's ascending sample can never be
                 // negative. That guarantee lives ~750 lines from this risk,
                 // hence the cross-reference.
                 if (offsetFloor is { } uncoveredFloor && candidate.Offset == uncoveredFloor)
@@ -7137,7 +7265,7 @@ internal sealed class LatticeWalGcScheduler(
                 && candidate.Offset >= 0
                 && offsetFloor is not null
                 && (candidate.Offset == offsetFloor || floorAdmitted)
-                && offsetAdmitted < offsetAdmissionBudget)
+                && offsetAdmitted < perPartitionOffsetAdmissionBudget)
             {
                 // Issue #3178. CheckpointedCoverageUnknown is not a coverage
                 // defect and must not be driven as one - that is #3168's finding
@@ -7193,21 +7321,20 @@ internal sealed class LatticeWalGcScheduler(
                 // level never drains, everything above it is genuinely not in
                 // the way and stays that way, and driving it would be exactly
                 // #3168's waste with none of the prefetch justification. That
-                // tree admits nothing, as it did before.
+                // partition admits nothing, as it did before.
                 //
                 // The ordering makes the test sound rather than approximate.
-                // offsetHolders is ascending and offsetFloor is its head, and
-                // the loop walks the unusable list (offset -1, refused by the
-                // >= 0 test above) and then offsetHolders in order, so every
+                // the current partition sample is ascending and offsetFloor is
+                // its head, so every
                 // candidate AT the floor - including ties - has been classified
                 // before any candidate above it is considered. floorAdmitted is
                 // therefore settled, not racing.
                 //
                 // This is also what keeps issue #3258 intact. Its instrument
-                // rests on "if the floor's own holder is inadmissible, nothing
-                // on the tree can be admitted", which was true under equality
-                // only because every other candidate sat strictly above the
-                // floor. Widening without this precondition would have made that
+                // rests on "if a partition floor's own holder is inadmissible,
+                // nothing on that partition can be admitted", which is true
+                // under equality only because every other candidate there sat
+                // above the floor. Widening without this precondition would have made that
                 // false, turned a terminal wedge into a tree that drives
                 // candidates it can never benefit from, and quietly demoted a
                 // wedge detector to a sweep counter.
@@ -7217,7 +7344,7 @@ internal sealed class LatticeWalGcScheduler(
                 // at all", so it could not separate a pin that will never be in
                 // the way from one that will be shortly. Both filters are
                 // retained - the >= 0 usability test directly above, and the
-                // ascending ordering of offsetHolders, whose head IS the floor.
+                // current partition's ascending sample, whose head IS the floor.
                 // What changes is that the ordering is now used as an ordering
                 // rather than collapsed to a point.
                 //
@@ -7255,10 +7382,9 @@ internal sealed class LatticeWalGcScheduler(
                 // here too, and when it holds the floor that refusal wedges the
                 // tree permanently (issue #3258).
                 //
-                // The bound is the remedy candidate budget, scaled off the same
-                // measured population that sized the sample (issue #3279), so no
-                // new constant is introduced and the widening cannot outrun the
-                // budget that change already justified. It is not merely a
+                // The bound is the proportional share of the current offset-pin
+                // population, so admission cannot outrun the tree-wide budget
+                // that sizes the sample (issue #3279). It is not merely a
                 // restatement of the sample cap: the cap was computed from the
                 // PREVIOUS sweep's population, this from the current one, so on
                 // a tree whose population shrank this is the tighter of the two -
@@ -7292,7 +7418,7 @@ internal sealed class LatticeWalGcScheduler(
 
                 // Issue #3258, and the invariant that survives the widening
                 // above. floorAdmitted still means strictly "the candidate
-                // DEFINING this tree's floor cleared the gate", which is the
+                // DEFINING this partition's floor cleared the gate", which is the
                 // only question that instrument asks and the reason it reads
                 // differently on a wedged tree than on a healthy one. Reaching
                 // here no longer implies equality with the floor, so the test
@@ -7330,14 +7456,14 @@ internal sealed class LatticeWalGcScheduler(
                 // but this line is a per-candidate Information-level record
                 // whose purpose is to let a reader NAME the floor's holder, and
                 // a reader needs a sample of that, not a census of up to
-                // MaxFloorHolderRemedyCandidatesPerSweep lines per tree per
+                // MaxFloorHolderRemedyCandidatesPerSample lines per tree per
                 // sweep. Widening the remedy must not widen the log. The line
                 // still reports {Sampled} as the true pool size, so the reader
                 // can see that it is reading a sample and how large the pool it
                 // was drawn from actually is.
                 logged++;
                 logger.LogInformation(
-                    "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState} at offset {PinOffset} (tree offset floor {OffsetFloor}, durable checkpoint {DurableCheckpoint}), from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. The published pin is min(checkpoint, covered): a durable checkpoint EQUAL to the pin offset means the checkpoint is the binding term and is not advancing, while one far ABOVE it means coverage is the binding term and is not restamping - opposite faults with opposite remedies, which the pin offset alone cannot separate. A null checkpoint means none was read (unreadable, absent, or orphaned); coverage is per-activation state no storage read can reach, so it is deliberately not reported here. Diagnostic, except that a usable, durably-checkpointed pin sitting on the offset floor is driven for liveness (issue #3178), as are pins ABOVE it once the floor's own holder has been admitted on the same sweep and within the tree's remedy candidate budget (issue #3310) - it does not change what the pass may trim.",
+                    "WAL GC classified floor-holding pin {Consumer} on tree {Tree} partition {Partition} as {PinState} at offset {PinOffset} (partition offset floor {OffsetFloor}, durable checkpoint {DurableCheckpoint}), from a sample of {Sampled} taken over {Population} durable pins. No floor-blocked report named a blocker on this tree, so this is the only signal naming what holds its WAL floor. The published pin is min(checkpoint, covered): a durable checkpoint EQUAL to the pin offset means the checkpoint is the binding term and is not advancing, while one far ABOVE it means coverage is the binding term and is not restamping - opposite faults with opposite remedies, which the pin offset alone cannot separate. A null checkpoint means none was read (unreadable, absent, or orphaned); coverage is per-activation state no storage read can reach, so it is deliberately not reported here. Diagnostic, except that a usable, durably-checkpointed pin sitting on the partition offset floor is driven for liveness (issue #3178), as are pins ABOVE it once that partition's floor holder has been admitted on the same sweep and within the partition's remedy candidate budget (issue #3310) - it does not change what the pass may trim.",
                     consumerId,
                     treeId,
                     partitionTag,
@@ -7348,6 +7474,12 @@ internal sealed class LatticeWalGcScheduler(
                     sampled,
                     population);
             }
+        }
+
+        if (partitionFloorPending)
+        {
+            hasOffsetFloor = true;
+            allPartitionFloorsAdmitted &= floorAdmitted;
         }
 
         RecordFloorHolderClassification(
@@ -7375,15 +7507,15 @@ internal sealed class LatticeWalGcScheduler(
         // arm that was also charged is a no-op.
         PrimeFloorHolderOffsetAdmission(treeTag, tenantTag);
 
-        // Charged only when an offset floor actually exists. With no floor
+        // Charged only when at least one offset floor actually exists. With no floor
         // there is no holder to admit or refuse, and charging "admitted" there
         // would report absence of work as success, while charging "blocked"
         // would report it as a wedge. Both are lies; the primed zeros are the
         // truth.
-        if (offsetFloor is not null)
+        if (hasOffsetFloor)
         {
             RecordFloorHolderAdmission(
-                floorAdmitted
+                allPartitionFloorsAdmitted
                     ? LatticeMetrics.FloorHolderAdmissionAdmitted
                     : LatticeMetrics.FloorHolderAdmissionBlocked,
                 treeTag,

@@ -1244,6 +1244,17 @@ sentinel) and `offset_usable` (the wedging shape that can hold the offset floor)
 tagged by tree, WAL partition, status and tenant; both arms are zero-primed for
 evaluated trees.
 
+Offset-floor repair admission is partition-local: offsets from different WAL
+partitions are not comparable. The scheduler keeps a bounded ascending candidate
+sample for each resolved partition and compares candidates with that partition's
+own floor. A partition retains enough candidates to fill one distinct-leaf drive
+pass; measured populations share any larger tree budget proportionally. Before
+the first population measurement, the initial per-partition cap uses the
+registry-pinned partition count. The aggregate offset sample is bounded by the
+larger of the tree candidate budget and the active partition count times the
+per-pass touch budget. An above-floor candidate is prefetched only after its own
+partition's floor holder was admitted.
+
 Orphan-pin removal has its own decision counters. `orleans.lattice.wal.gc.orphan_pin_sweep`
 partitions each examined durable pin into `retired`, `retire_failed`, `deferred`,
 `refused_malformed_id`, `refused_ambiguous_partition`, `live`, `unresolved` or

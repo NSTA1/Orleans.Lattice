@@ -41,8 +41,17 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         LatticeWalGcScheduler.ScaleFloorHolderBudget(
             population,
             LatticeWalGcScheduler.MaxFloorHolderClassificationsPerSweep,
-            LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSweep,
+            LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample,
             LatticeWalGcScheduler.FloorHolderPinsPerRemedyCandidate);
+
+    private static int PartitionCandidateBudgetAt(
+        int partitionPopulation,
+        int treePopulation,
+        int partitionCount = 1) =>
+        LatticeWalGcScheduler.ScaleFloorHolderPartitionBudget(
+            partitionPopulation,
+            treePopulation,
+            partitionCount);
 
     /// <summary>The leaf-drive budget at a given population.</summary>
     private static int TouchBudgetAt(int population) =>
@@ -145,6 +154,54 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [Test]
+    public void Partition_candidate_budgets_share_the_tree_budget_without_hiding_any_floor()
+    {
+        var equalPartitionBudgets = Enumerable
+            .Range(0, 8)
+            .Select(_ => PartitionCandidateBudgetAt(512, 4_096, 8))
+            .ToArray();
+        var skewedPartitionBudgets = Enumerable
+            .Range(0, 8)
+            .Select(index => PartitionCandidateBudgetAt(index == 0 ? 2_048 : 8, 2_104, 8))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(equalPartitionBudgets, Is.All.EqualTo(4));
+            Assert.That(equalPartitionBudgets.Sum(), Is.EqualTo(CandidateBudgetAt(4_096)));
+            Assert.That(skewedPartitionBudgets, Is.All.EqualTo(4));
+            Assert.That(skewedPartitionBudgets.Skip(1), Is.All.EqualTo(4));
+            Assert.That(
+                skewedPartitionBudgets.Sum(),
+                Is.LessThanOrEqualTo(Math.Max(
+                    CandidateBudgetAt(2_104),
+                    8 * LatticeWalGcScheduler.MaxReactivationTouchesPerPass)));
+            Assert.That(
+                PartitionCandidateBudgetAt(0, 4_096, 8),
+                Is.EqualTo(LatticeWalGcScheduler.MaxReactivationTouchesPerPass),
+                "a newly observed partition must retain enough candidates to fill one distinct-leaf drive pass.");
+            Assert.That(
+                PartitionCandidateBudgetAt(int.MaxValue, int.MaxValue),
+                Is.EqualTo(LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample));
+            Assert.That(
+                PartitionCandidateBudgetAt(1, int.MaxValue, 300),
+                Is.EqualTo(LatticeWalGcScheduler.MaxReactivationTouchesPerPass),
+                "each partition retains enough candidates for a drive pass even when the active partition count exceeds the aggregate tree budget.");
+            Assert.That(
+                LatticeWalGcScheduler.ScaleUnmeasuredFloorHolderPartitionBudget(8, 1),
+                Is.EqualTo(8));
+            Assert.That(
+                LatticeWalGcScheduler.ScaleUnmeasuredFloorHolderPartitionBudget(32, 8),
+                Is.EqualTo(4),
+                "before partition populations are measured, the configured partition count must keep the aggregate initial sample within the tree budget.");
+            Assert.That(
+                LatticeWalGcScheduler.ScaleUnmeasuredFloorHolderPartitionBudget(8, 12),
+                Is.EqualTo(LatticeWalGcScheduler.MaxReactivationTouchesPerPass),
+                "each unmeasured partition retains enough candidates for one drive pass even when partition count exceeds the tree budget.");
+        });
+    }
+
+    [Test]
     public void The_drive_budget_scales_with_the_floor_holding_pin_population()
     {
         Assert.Multiple(() =>
@@ -231,7 +288,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             {
                 Assert.That(
                     CandidateBudgetAt(population),
-                    Is.EqualTo(LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSweep),
+                    Is.EqualTo(LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample),
                     $"the candidate pool escaped its ceiling at {population} pins.");
                 Assert.That(
                     TouchBudgetAt(population),
@@ -253,7 +310,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // fast the tree could be repaired. The two are now distinct quantities,
         // and this pins that they cannot collapse back into one.
         Assert.That(
-            LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSweep,
+            LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample,
             Is.GreaterThan(LatticeWalGcScheduler.MaxFloorHolderClassificationsPerSweep),
             "the remedy's candidate ceiling must not be the diagnostic read budget.");
     }

@@ -339,12 +339,134 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 + "has had since issue #3158 is silently lost on exactly the population that carries it.");
     }
 
+    [Test]
+    public async Task A_leaf_holding_partition_floors_is_sampled_even_when_its_offset_is_not_the_global_minimum()
+    {
+        // Issue #3611. Offsets are partition-local. Leaf 0 holds seven of the
+        // eight partition floors, but its lowest absolute pin is still above
+        // leaf 1's p2 pin and seven other p2 pins. The old tree-wide sample
+        // therefore spends its eight places on those other leaves and never
+        // classifies leaf 0, despite it holding most of the actual floors.
+        const int Partitions = 8;
+        const int Leaves = 9;
+        var offsets = new long[Leaves][];
+        offsets[0] = [100, 101, 200, 103, 104, 105, 106, 107];
+        offsets[1] = [2000, 2001, 1, 2003, 2004, 2005, 2006, 2007];
+
+        for (var leaf = 2; leaf < Leaves; leaf++)
+        {
+            offsets[leaf] = Enumerable.Range(0, Partitions)
+                .Select(partition => partition == 2 ? (leaf - 1) * 10L : 3000 + leaf * 10L + partition)
+                .ToArray();
+        }
+
+        var storage = new LeafStateBook();
+        var pins = new FakePinStore();
+        for (var leaf = 0; leaf < Leaves; leaf++)
+        {
+            var leafId = LivenessLeafGrainId(leaf);
+            if (leaf == 1)
+            {
+                storage.PutNeverCheckpointed(leafId, OrphanSweepTree);
+            }
+            else
+            {
+                storage.Put(leafId, new LeafNodeState
+                {
+                    TreeId = OrphanSweepTree,
+                    ProjectionCheckpointOffset = 1234,
+                    ProjectionCheckpointOffsetAssigned = true,
+                    ProjectionCheckpointOffsetsByPartition = Enumerable.Repeat(1234L, Partitions).ToArray(),
+                });
+            }
+
+            for (var partition = 0; partition < Partitions; partition++)
+            {
+                pins.Seed(
+                    OrphanSweepTree,
+                    LivenessConsumerId(leaf, partition),
+                    UsablePin,
+                    offsets[leaf][partition]);
+            }
+        }
+
+        var time = new VirtualTimeProvider();
+        var (scheduler, leaves) = SchedulerRepairing(pins, storage, time, walPartitions: Partitions);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await AdvanceAtLeastAsync(time, PastMinBlockAge);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(leaves.Touched, Does.Contain(LivenessLeafGrainId(0)),
+                "a leaf holding seven partition-local floors must be sampled even though another "
+                    + "partition has a lower absolute offset.");
+            Assert.That(leaves.Touched, Does.Not.Contain(LivenessLeafGrainId(1)),
+                "a never-checkpointed floor holder must remain inadmissible and must not be driven.");
+        });
+    }
+
+    [Test]
+    public async Task An_admitted_floor_in_one_partition_does_not_authorize_prefetch_behind_a_blocked_floor_in_another()
+    {
+        // Issue #3611. Partition 0 has an admissible floor, while partition 1
+        // has a never-checkpointed floor. Leaf 2 is above partition 1's floor
+        // and must not be prefetched just because partition 0 admitted its own
+        // floor earlier in the same classification pass.
+        const int Partitions = 2;
+
+        var storage = new LeafStateBook();
+        storage.Put(
+            LivenessLeafGrainId(0),
+            new LeafNodeState
+            {
+                TreeId = OrphanSweepTree,
+                ProjectionCheckpointOffset = 1234,
+                ProjectionCheckpointOffsetAssigned = true,
+                ProjectionCheckpointOffsetsByPartition = [1234, 1234],
+            });
+        storage.PutNeverCheckpointed(LivenessLeafGrainId(1), OrphanSweepTree);
+        storage.Put(
+            LivenessLeafGrainId(2),
+            new LeafNodeState
+            {
+                TreeId = OrphanSweepTree,
+                ProjectionCheckpointOffset = 0,
+                ProjectionCheckpointOffsetAssigned = null,
+                ProjectionCheckpointOffsetsByPartition = [-1, 1234],
+            });
+
+        var pins = new FakePinStore();
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(0, 0), UsablePin, 1);
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(0, 1), UsablePin, 1000);
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(1, 0), UsablePin, 1000);
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(1, 1), UsablePin, 1);
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(2, 0), UsablePin, 2000);
+        pins.Seed(OrphanSweepTree, LivenessConsumerId(2, 1), UsablePin, 2);
+
+        var time = new VirtualTimeProvider();
+        var (scheduler, leaves) = SchedulerRepairing(pins, storage, time, walPartitions: Partitions);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await AdvanceAtLeastAsync(time, PastMinBlockAge);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(leaves.Touched, Does.Contain(LivenessLeafGrainId(0)),
+                "partition 0's own admissible floor must still be driven.");
+            Assert.That(leaves.Touched, Does.Not.Contain(LivenessLeafGrainId(1)),
+                "the never-checkpointed floor holder on partition 1 remains inadmissible.");
+            Assert.That(leaves.Touched, Does.Not.Contain(LivenessLeafGrainId(2)),
+                "partition 1's above-floor candidate must not inherit partition 0's admission.");
+        });
+    }
+
     // ---------------------------------------- throughput expressed in leaves
 
     [Test]
-    public void A_leaf_publishing_a_pin_per_partition_occupies_one_place_in_the_sample()
+    public void A_leaf_publishing_a_pin_per_partition_is_deduplicated_in_the_global_unusable_sample()
     {
-        // Acceptance criterion 4, at the selector. A leaf publishes one pin per
+        // The selector's global HLC-unusable sample. A leaf publishes one pin per
         // WAL partition, and FlushDurableMaterialiserFrontierAsync reads its
         // clock ONCE for the whole batch - so every partition pin of a leaf
         // carries a byte-identical frontier, structurally rather than
@@ -352,10 +474,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // each of partitions 0-7 of repo-context-vector-index, which is one leaf
         // described eight times.
         //
-        // Keyed by consumer id, a sample of eight on an eight-partition tree is
-        // therefore ONE leaf, and every reactivation it licenses resolves to that
-        // same leaf grain. The budget says leaves; without this it buys
-        // leaves/partitions.
+        // Offset candidates are sampled separately per partition; this test
+        // instead pins the global sample's leaf budget, where eight partition
+        // pins for one leaf must not occupy eight places.
         var candidates = new List<WalGcFloorHolderCandidate>();
 
         for (var leaf = 0; leaf < 3; leaf++)
@@ -364,16 +485,16 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             {
                 LatticeWalGcScheduler.OfferFloorHolderCandidate(candidates, FloorHolderCap,
                     new(LivenessConsumerId(leaf, partition), LivenessLeafGrainId(leaf), true,
-                        FloorOffset, UsablePin));
+                        NoUsableOffset, UsablePin));
             }
         }
 
         Assert.Multiple(() =>
         {
             Assert.That(candidates, Has.Count.EqualTo(3),
-                "twenty-four pins across three leaves must leave three candidates, not eight. Eight is the "
-                    + "cap being spent on the first leaf's partitions while the other two leaves never "
-                    + "enter the sample at all.");
+                "twenty-four unusable pins across three leaves must leave three candidates, not eight. "
+                    + "Eight is the cap being spent on the first leaf's partitions while the other two "
+                    + "leaves never enter the sample at all.");
             Assert.That(
                 candidates.Select(c => c.ConsumerId),
                 Is.EquivalentTo(new[]
@@ -391,13 +512,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // shape: five dormant leaves each publishing a pin for all eight WAL
         // partitions, all at the same frozen offset. Forty pins, five leaves.
         //
-        // This is the fixture that observes the defect rather than the unit
-        // above: the cap must bind on LEAVES, so one pass drives
-        // MaxReactivationTouchesPerPass distinct leaves. Without the
-        // deduplication the sample is eight pins of leaf 000, the budget is
-        // stamped four times against four partitions of that one leaf, and the
-        // pass drives exactly one - which is the measured field behaviour, where
-        // 3 of every 4 touches came back already-driving.
+        // The offset samples are partition-local, so the same leaf may be
+        // offered on several partitions. The touch budget must still bind on
+        // distinct leaves: without drive-side deduplication, four partition
+        // pins of leaf 000 consume the budget and the pass drives exactly one.
         const int Leaves = 5;
         const int Partitions = 8;
 
@@ -437,13 +555,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     public async Task One_pass_reaches_both_blocked_leaves_when_each_reports_a_blocking_pin_per_partition()
     {
         // Acceptance criterion 4 on the OTHER supply of consumer ids. The
-        // floor-holder sample now deduplicates by leaf, so the over-ceiling path
-        // can no longer hand the touch loop two ids for one leaf - but the
-        // blocked report still can, and does: a blocked tree names every
+        // partition-local floor-holder samples may offer a leaf on multiple
+        // partitions, and the blocked report likewise names every
         // consumer id its floor is held by, which on an eight-partition tree is
-        // eight ids per leaf. The touch loop therefore has to deduplicate too,
-        // and it has to do so BEFORE stamping the budget, or the scarce thing
-        // is spent on a call that is going to be collapsed anyway.
+        // eight ids per leaf. The touch loop therefore has to deduplicate before
+        // stamping the budget, or the scarce thing is spent on a call that is
+        // going to be collapsed anyway.
         //
         // Two leaves, eight partitions each. The budget of four is larger than
         // the number of leaves, so with the deduplication one pass reaches both;
