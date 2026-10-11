@@ -1478,8 +1478,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                     }
                 }
 
-                var liveEntries = await leaf.GetLiveRawEntriesAsync().ConfigureAwait(true);
-                foreach (var entry in liveEntries)
+                var liveEntries = await leaf.GetLiveRawEntriesAndNextSiblingAsync().ConfigureAwait(true);
+                foreach (var entry in liveEntries.Entries)
                 {
                     if (entry.ExpiresAtTicks != 0
                         || !string.Equals(entry.OriginClusterId, sourceClusterId, StringComparison.Ordinal))
@@ -1492,7 +1492,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                         entry.MergeMode ?? mergeMode);
                 }
 
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+                leafId = liveEntries.NextSibling;
             }
         }
 
@@ -1729,7 +1729,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                     }
                 }
 
-                foreach (var pending in await leaf.GetPendingMutationsForSlotsAsync(allSlots, shardMap.VirtualShardCount).ConfigureAwait(true))
+                var pendingPage = await leaf.GetPendingMutationsForSlotsAndNextSiblingAsync(allSlots, shardMap.VirtualShardCount).ConfigureAwait(true);
+                foreach (var pending in pendingPage.Mutations)
                 {
                     if (pending.TransactionId != Guid.Empty
                         && !pending.IsTombstone
@@ -1739,7 +1740,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                     }
                 }
 
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+                leafId = pendingPage.NextSibling;
             }
         }
 
@@ -1826,7 +1827,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                foreach (var entry in await leaf.GetLiveRawEntriesAsync().ConfigureAwait(true))
+                var page = await leaf.GetLiveRawEntriesAndNextSiblingAsync().ConfigureAwait(true);
+                foreach (var entry in page.Entries)
                 {
                     if (entry.ExpiresAtTicks == 0
                         && (entry.MergeMode ?? mergeMode) == LatticeMergeMode.LwwRegister
@@ -1837,7 +1839,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                     }
                 }
 
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+                leafId = page.NextSibling;
             }
         }
 
@@ -1963,6 +1965,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         }
 
         var (physicalTreeId, shardMap) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: true).ConfigureAwait(true);
+        var ids = transactionIds.ToArray();
 
         foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
         {
@@ -1971,12 +1974,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             while (leafId is not null)
             {
                 var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                foreach (var transactionId in transactionIds)
-                {
-                    await leaf.DiscardPendingTransactionAsync(transactionId).ConfigureAwait(true);
-                }
-
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+                leafId = await leaf.DiscardPendingTransactionsAndGetNextSiblingAsync(ids).ConfigureAwait(true);
             }
         }
     }

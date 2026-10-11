@@ -4173,6 +4173,13 @@ internal sealed partial class BPlusLeafGrain(
         return result;
     }
 
+    /// <inheritdoc />
+    public async Task<LeafLiveRawEntriesPage> GetLiveRawEntriesAndNextSiblingAsync()
+    {
+        var entries = await GetLiveRawEntriesAsync();
+        return new LeafLiveRawEntriesPage { Entries = entries, NextSibling = state.State.NextSibling };
+    }
+
     /// <summary>
     /// Returns all key-value entries in this leaf including tombstones,
     /// preserving the original <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> timestamps.

@@ -62,10 +62,10 @@ public partial class LatticeReplicationLocalVcSeederTests
     [Test]
     public void SeedFromTreeAsync_observes_cancellation_between_leaves()
     {
-        // Single shard, two leaves. Configure leaf-0's GetNextSibling
+        // Single shard, two leaves. Configure leaf-0's combined page read
         // to cancel the token and return leaf-1's id; the next
         // iteration's per-leaf ThrowIfCancellationRequested must fire
-        // before GetLiveRawEntriesAsync runs against leaf-1.
+        // before GetLiveRawEntriesAndNextSiblingAsync runs against leaf-1.
         var factory = Substitute.For<IGrainFactory>();
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
@@ -87,18 +87,23 @@ public partial class LatticeReplicationLocalVcSeederTests
         using var cts = new CancellationTokenSource();
 
         var leaf0 = Substitute.For<IBPlusLeafGrain>();
-        leaf0.GetLiveRawEntriesAsync().Returns(
-            Task.FromResult(new List<LwwEntry> { Entry("k1", Vector((OriginA, Hlc(1)))) }));
-        leaf0.GetNextSiblingAsync().Returns(_ =>
+        leaf0.GetLiveRawEntriesAndNextSiblingAsync().Returns(_ =>
         {
             cts.Cancel();
-            return Task.FromResult<GrainId?>(leaf1Id);
+            return Task.FromResult(new LeafLiveRawEntriesPage
+            {
+                Entries = new List<LwwEntry> { Entry("k1", Vector((OriginA, Hlc(1)))) },
+                NextSibling = leaf1Id,
+            });
         });
         factory.GetGrain<IBPlusLeafGrain>(leaf0Id).Returns(leaf0);
 
         var leaf1 = Substitute.For<IBPlusLeafGrain>();
-        leaf1.GetLiveRawEntriesAsync().Returns(
-            Task.FromResult(new List<LwwEntry> { Entry("k2", Vector((OriginA, Hlc(2)))) }));
+        leaf1.GetLiveRawEntriesAndNextSiblingAsync().Returns(Task.FromResult(new LeafLiveRawEntriesPage
+        {
+            Entries = new List<LwwEntry> { Entry("k2", Vector((OriginA, Hlc(2)))) },
+            NextSibling = null,
+        }));
         factory.GetGrain<IBPlusLeafGrain>(leaf1Id).Returns(leaf1);
 
         var seeder = new LatticeReplicationLocalVcSeeder(factory, shardCounts, resolver);
@@ -108,7 +113,7 @@ public partial class LatticeReplicationLocalVcSeederTests
             Throws.InstanceOf<OperationCanceledException>());
 
         // Leaf-1 must never be read.
-        leaf1.DidNotReceive().GetLiveRawEntriesAsync();
+        _ = leaf1.DidNotReceive().GetLiveRawEntriesAndNextSiblingAsync();
         // No durable pin.
         hwmGrain.DidNotReceive().PinSnapshotAsync(
             Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>());
@@ -167,7 +172,7 @@ public partial class LatticeReplicationLocalVcSeederTests
         factory.GetGrain<IShardRootGrain>($"{Tree}/0").Returns(shard);
 
         var leaf = Substitute.For<IBPlusLeafGrain>();
-        leaf.GetLiveRawEntriesAsync().ThrowsAsync(new InvalidOperationException("leaf read failed"));
+        leaf.GetLiveRawEntriesAndNextSiblingAsync().ThrowsAsync(new InvalidOperationException("leaf read failed"));
         factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
 
         var seeder = new LatticeReplicationLocalVcSeeder(factory, shardCounts, resolver);
@@ -335,5 +340,30 @@ public partial class LatticeReplicationLocalVcSeederTests
             Assert.That(report.Frontier!.GetClock(OriginA), Is.EqualTo(Hlc(LeafCount - 1)),
                 "Pointwise-max across a deep single-shard chain must surface the highest per-origin HLC.");
         });
+    }
+
+    [Test]
+    public async Task SeedFromTreeAsync_reads_each_leaf_with_one_grain_call()
+    {
+        // The walk takes the leaf's live entries and its next sibling from a
+        // single combined call, so a separate GetNextSiblingAsync hop per leaf
+        // must never be issued.
+        const int LeafCount = 4;
+        var leafBatches = new IReadOnlyList<LwwEntry>[LeafCount];
+        for (var i = 0; i < LeafCount; i++)
+        {
+            leafBatches[i] = new[] { Entry($"k{i}", Vector((OriginA, Hlc(i)))) };
+        }
+        var (seeder, factory, _, _, _) = CreateSeeder(shards: [leafBatches]);
+
+        await seeder.SeedFromTreeAsync(Tree);
+
+        for (var i = 0; i < LeafCount; i++)
+        {
+            var leaf = factory.GetGrain<IBPlusLeafGrain>(GrainId.Create("test-leaf", $"0-{i}"));
+            await leaf.Received(1).GetLiveRawEntriesAndNextSiblingAsync();
+            await leaf.DidNotReceive().GetNextSiblingAsync();
+            await leaf.DidNotReceive().GetLiveRawEntriesAsync();
+        }
     }
 }

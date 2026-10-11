@@ -2421,20 +2421,58 @@ internal sealed partial class BPlusLeafGrain
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.Admin);
+        if (DiscardPendingTransactionInMemory(transactionId))
+        {
+            await PersistAsync();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<GrainId?> DiscardPendingTransactionsAndGetNextSiblingAsync(Guid[] transactionIds)
+    {
+        await AwaitReplayBarrierAsync();
+
+        EnsureInternalOrigin(LatticeOperation.Admin);
+        ArgumentNullException.ThrowIfNull(transactionIds);
+        var markerChanged = false;
+        foreach (var transactionId in transactionIds)
+        {
+            markerChanged |= DiscardPendingTransactionInMemory(transactionId);
+        }
+
+        if (markerChanged)
+        {
+            await PersistAsync();
+        }
+
+        return state.State.NextSibling;
+    }
+
+    /// <inheritdoc />
+    public async Task<LeafPendingMutationsPage> GetPendingMutationsForSlotsAndNextSiblingAsync(int[] sortedMovedSlots, int virtualShardCount)
+    {
+        var mutations = await GetPendingMutationsForSlotsAsync(sortedMovedSlots, virtualShardCount);
+        return new LeafPendingMutationsPage { Mutations = mutations, NextSibling = state.State.NextSibling };
+    }
+
+    /// <summary>
+    /// Drops the pending bucket of <paramref name="transactionId"/> in memory and
+    /// returns whether the durable discard marker changed, so the caller persists.
+    /// </summary>
+    private bool DiscardPendingTransactionInMemory(Guid transactionId)
+    {
         if (transactionId == Guid.Empty)
         {
-            return;
+            return false;
         }
 
         var hadPending = _pendingTx is not null && _pendingTx.ContainsKey(transactionId);
         var markerChanged = hadPending && RememberDiscardedSagaPrepare(transactionId);
         ApplyTxAbort(transactionId);
         ClearSagaShadow(transactionId);
-        if (markerChanged)
-        {
-            await PersistAsync();
-        }
+        return markerChanged;
     }
+
 
     /// <summary>
     /// Whether a stranded prepared value with no committed-values payload can

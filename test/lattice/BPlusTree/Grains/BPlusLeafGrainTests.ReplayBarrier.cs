@@ -123,10 +123,11 @@ public partial class BPlusLeafGrainTests
         "DeleteAsync", "DeleteTrackedAsync", "DeleteRangeAsync",
         // Range and enumeration reads.
         "CountAsync", "GetStatsAsync", "GetKeysAsync", "GetEntriesAsync",
-        "GetLiveEntriesAsync", "GetLiveRawEntriesAsync",
+        "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         // Replication and delta seams.
         "GetDeltaSinceAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync",
-        "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetOriginalPrepareStampsAsync",
+        "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
+        "GetOriginalPrepareStampsAsync",
         "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync",
         // Digests and topology views computed FROM the projection.
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",
@@ -135,7 +136,7 @@ public partial class BPlusLeafGrainTests
         "ApplyTxTerminalAsync", "MarkSagaShadowAsync",
         // Drops replayed pending buckets and records the discard marker that
         // replay consults, so it must run against the fully replayed buckets.
-        "DiscardPendingTransactionAsync",
+        "DiscardPendingTransactionAsync", "DiscardPendingTransactionsAndGetNextSiblingAsync",
         // Maintenance that reads the projection.
         "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",

@@ -94,11 +94,11 @@ internal sealed partial class AtomicWriteGrain
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{copy}/{shardIndex}");
                 var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(true);
+                var transactionIds = new[] { transactionId };
                 while (leafId is { } id)
                 {
                     var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(id);
-                    await leaf.DiscardPendingTransactionAsync(transactionId).ConfigureAwait(true);
-                    leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+                    leafId = await leaf.DiscardPendingTransactionsAndGetNextSiblingAsync(transactionIds).ConfigureAwait(true);
                 }
             }
         }

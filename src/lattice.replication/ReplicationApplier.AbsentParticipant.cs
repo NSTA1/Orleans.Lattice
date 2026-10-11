@@ -87,8 +87,7 @@ internal sealed partial class ReplicationApplier
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                await leaf.DiscardPendingTransactionAsync(transactionId).ConfigureAwait(false);
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
+                leafId = await leaf.DiscardPendingTransactionsAndGetNextSiblingAsync([transactionId]).ConfigureAwait(false);
             }
         }
 
