@@ -59,8 +59,11 @@ internal static class StalePendingClearer
         IReadOnlySet<Guid>? onlyTransactions = null)
     {
         var registry = grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false)
+        // One entry read serves both the alias resolution and the routing map:
+        // ResolveAsync and GetShardMapAsync are each a projection of it.
+        var entry = await registry.GetEntryAsync(treeName).ConfigureAwait(false);
+        var physicalTreeId = entry?.PhysicalTreeId ?? treeName;
+        var shardMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
                 LatticeConstants.DefaultShardCount);
@@ -141,8 +144,11 @@ internal static class StalePendingClearer
     {
         var pending = new HashSet<Guid>();
         var registry = grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false)
+        // One entry read serves both the alias resolution and the routing map:
+        // ResolveAsync and GetShardMapAsync are each a projection of it.
+        var entry = await registry.GetEntryAsync(treeName).ConfigureAwait(false);
+        var physicalTreeId = entry?.PhysicalTreeId ?? treeName;
+        var shardMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
                 LatticeConstants.DefaultShardCount);

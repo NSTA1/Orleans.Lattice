@@ -1457,12 +1457,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         CancellationToken cancellationToken)
     {
         var capture = new BootstrapReceiverPreCapture();
-        var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
-            ?? ShardMap.GetOrCreateDefaultShared(
-                LatticeConstants.DefaultVirtualShardCount,
-                LatticeConstants.DefaultShardCount);
+        var (physicalTreeId, shardMap) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: false).ConfigureAwait(true);
         var everything = new VersionVector();
 
         foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
@@ -1681,12 +1676,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
 
         var frontier = snapshot.OpenFrontier!;
         var localClusterId = _optionsMonitor.Get(treeName).ClusterId;
-        var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await ResolveBootstrapPhysicalTreeIdAsync(treeName).ConfigureAwait(true);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
-            ?? ShardMap.GetOrCreateDefaultShared(
-                LatticeConstants.DefaultVirtualShardCount,
-                LatticeConstants.DefaultShardCount);
+        var (physicalTreeId, shardMap) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: true).ConfigureAwait(true);
         var allSlots = new int[shardMap.VirtualShardCount];
         for (var i = 0; i < allSlots.Length; i++)
         {
@@ -1826,12 +1816,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         LatticeMergeMode mergeMode,
         CancellationToken cancellationToken)
     {
-        var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await ResolveBootstrapPhysicalTreeIdAsync(treeName).ConfigureAwait(true);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
-            ?? ShardMap.GetOrCreateDefaultShared(
-                LatticeConstants.DefaultVirtualShardCount,
-                LatticeConstants.DefaultShardCount);
+        var (physicalTreeId, shardMap) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: true).ConfigureAwait(true);
         foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1886,6 +1871,30 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// The physical tree a bootstrap scan walks and the routing map it walks it
+    /// by, from one registry entry read. ResolveAsync and GetShardMapAsync are
+    /// each a projection of that entry, so reading it once saves a registry
+    /// round trip per scan and gives both values from the same entry version.
+    /// The shadow copy, when one is recorded and <paramref name="honourShadowCopy"/>
+    /// is set, overrides the physical tree exactly as
+    /// <see cref="ResolveBootstrapPhysicalTreeIdAsync"/> does.
+    /// </summary>
+    private async Task<(string PhysicalTreeId, ShardMap ShardMap)> ResolveBootstrapRoutingAsync(
+        string treeName,
+        bool honourShadowCopy)
+    {
+        var entry = await _grainFactory.GetLatticeRegistry().GetEntryAsync(treeName).ConfigureAwait(true);
+        var physicalTreeId = honourShadowCopy && state.State.UseShadowCopy && state.State.ShadowCopyTreeId is { } shadowTreeId
+            ? shadowTreeId
+            : entry?.PhysicalTreeId ?? treeName;
+        var shardMap = entry?.ShardMap
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+        return (physicalTreeId, shardMap);
     }
 
     private async Task<string> ResolveBootstrapPhysicalTreeIdAsync(string treeName)
@@ -1953,12 +1962,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             return;
         }
 
-        var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await ResolveBootstrapPhysicalTreeIdAsync(treeName).ConfigureAwait(true);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
-            ?? ShardMap.GetOrCreateDefaultShared(
-                LatticeConstants.DefaultVirtualShardCount,
-                LatticeConstants.DefaultShardCount);
+        var (physicalTreeId, shardMap) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: true).ConfigureAwait(true);
 
         foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
         {

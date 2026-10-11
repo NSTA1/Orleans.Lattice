@@ -40,6 +40,16 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <item><see cref="Site.ReshardConsolidateTick"/> - one <c>TreeReshardGrain</c>
 /// shrink tick: options GetEntry + Resolve + GetShardMap -> options GetEntry +
 /// GetEntry, 3 serial reads -> 2, paid on every tick of a shrink.</item>
+/// <item><see cref="Site.StalePendingSettle"/> - one <c>StalePendingClearer</c>
+/// pass (the pre-export capture or the post-drain clear): Resolve + GetShardMap
+/// -> GetEntry, 2 serial reads -> 1.</item>
+/// <item><see cref="Site.BootstrapReceiverScan"/> - one
+/// <c>LatticeBootstrapCoordinatorGrain</c> receiver scan (pre-capture,
+/// foreign-delete reconcile, absent-source-row probe, poisoned-saga discard):
+/// Resolve + GetShardMap -> GetEntry, 2 serial reads -> 1.</item>
+/// <item><see cref="Site.SnapshotInitiate"/> - <c>TreeSnapshotGrain</c>
+/// initiating a standalone snapshot: routing GetEntry + source Resolve ->
+/// GetEntry, 2 serial reads -> 1.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -64,7 +74,7 @@ public class RegistryProjectionElisionBenchmarks
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -134,6 +144,21 @@ public class RegistryProjectionElisionBenchmarks
                 return Fold(physical, (map ?? options?.ShardMapVersion) ?? 0);
             }
 
+            case Site.StalePendingSettle:
+            case Site.BootstrapReceiverScan:
+            {
+                var physical = await _registry.ResolveAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                return Fold(physical, map ?? 0);
+            }
+
+            case Site.SnapshotInitiate:
+            {
+                var routing = await _registry.GetEntryAsync(TreeId);
+                var physical = await _registry.ResolveAsync(TreeId);
+                return Fold(physical, routing?.ShardMapVersion ?? 0);
+            }
+
             default:
             {
                 var total = 0L;
@@ -166,6 +191,9 @@ public class RegistryProjectionElisionBenchmarks
             case Site.BootstrapFenceResolve:
             case Site.ResizeInitiate:
             case Site.CompactionTopology:
+            case Site.StalePendingSettle:
+            case Site.BootstrapReceiverScan:
+            case Site.SnapshotInitiate:
             {
                 var entry = await _registry.GetEntryAsync(TreeId);
                 return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0);
@@ -243,6 +271,15 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>One reshard shrink tick reading its options, map and physical tree.</summary>
         ReshardConsolidateTick,
+
+        /// <summary>One stale-pending clearer pass resolving the receiver's physical shards.</summary>
+        StalePendingSettle,
+
+        /// <summary>One bootstrap coordinator receiver scan resolving its physical shards.</summary>
+        BootstrapReceiverScan,
+
+        /// <summary>A standalone snapshot initiation reading its routing entry and physical source.</summary>
+        SnapshotInitiate,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
