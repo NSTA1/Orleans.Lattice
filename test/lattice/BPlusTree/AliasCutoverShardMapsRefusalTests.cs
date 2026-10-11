@@ -91,6 +91,40 @@ public sealed class AliasCutoverShardMapsRefusalTests
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
+    [TestCase(Logical)]
+    [TestCase("refusal-previous")]
+    public async Task RevertAsync_refuses_a_superseding_copy_without_writing(string previous)
+    {
+        _registry.ResolveAsync(Logical).Returns(Task.FromResult("later-copy"));
+        StubEntry(Logical, new TreeRegistryEntry { PhysicalTreeId = "later-copy", ShardCount = 2 });
+        StubEntry(Destination, new TreeRegistryEntry { ReplacedShardMap = Map(2) });
+
+        Assert.ThrowsAsync<InvalidOperationException>(
+            () => AliasCutoverShardMaps.RevertAsync(_grains, Logical, Destination, previous));
+
+        await _registry.DidNotReceive().RemoveAliasAsync(Arg.Any<string>());
+        await _registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await _registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
+        await _registry.DidNotReceive().SwapAliasAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
+    }
+
+    [Test]
+    public async Task RevertAsync_without_a_recorded_map_still_fences_the_shadow_it_read()
+    {
+        _registry.ResolveAsync(Logical).Returns(Task.FromResult(Destination));
+        StubEntry(Logical, new TreeRegistryEntry { PhysicalTreeId = Destination, ShardCount = 3 });
+        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3 });
+        StubEntry("refusal-previous", new TreeRegistryEntry { ShardCount = 2 });
+
+        await AliasCutoverShardMaps.RevertAsync(_grains, Logical, Destination, "refusal-previous");
+
+        await _registry.Received(1).SwapAliasAsync(
+            Logical, "refusal-previous", Arg.Is<ShardMap>(m => m.Slots.SequenceEqual(Map(2).Slots)),
+            Arg.Any<int?>(), Destination);
+        await _registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+    }
+
     private void StubEntry(string treeId, TreeRegistryEntry entry) =>
         _registry.GetEntryAsync(treeId).Returns(Task.FromResult<TreeRegistryEntry?>(entry));
 

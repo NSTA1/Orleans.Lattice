@@ -80,14 +80,14 @@ public sealed class LatticeBackupRestoreServiceUnitTests
     }
 
     [Test]
-    public void RevertRestoreAsync_admits_a_stamped_shadow_without_resolving_the_target_alias()
+    public void RevertRestoreAsync_validates_a_stamped_shadow_and_checks_the_current_alias()
     {
         var (service, registry) = CreateRevertService(new TreeRegistryEntry { RestoreShadowOfTreeId = "orders" });
 
         Assert.ThrowsAsync<RevertReachedSwapException>(() => service.RevertRestoreAsync(RevertResult("orders-shadow")));
 
         _ = registry.Received(1).GetEntryAsync("orders-shadow");
-        _ = registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
+        _ = registry.Received(1).ResolveAsync("orders");
     }
 
     [Test]
@@ -98,7 +98,7 @@ public sealed class LatticeBackupRestoreServiceUnitTests
 
         Assert.ThrowsAsync<RevertReachedSwapException>(() => service.RevertRestoreAsync(RevertResult("orders-shadow")));
 
-        _ = registry.Received(1).ResolveAsync("orders");
+        _ = registry.Received(2).ResolveAsync("orders");
     }
 
     [Test]
@@ -123,6 +123,7 @@ public sealed class LatticeBackupRestoreServiceUnitTests
     {
         var registry = Substitute.For<ILatticeRegistry>();
         registry.GetEntryAsync("orders-shadow").Returns(Task.FromResult<TreeRegistryEntry?>(shadowEntry));
+        registry.ResolveAsync("orders").Returns(Task.FromResult("orders-shadow"));
 
         // Validation passing is observed as reaching the alias swap, which the
         // harness stops at rather than standing the deletion grain up.

@@ -193,8 +193,9 @@ internal static class AliasCutoverShardMaps
     /// logical map, which describes the shadow, onto the shadow's own entry. A
     /// previous tree equal to the logical id moves the tree back onto its own
     /// shards. When no map was recorded (a cutover from before the capture
-    /// existed) or the alias no longer resolves to the shadow (a resumed revert),
-    /// only the alias is moved, as before.
+    /// existed), the previous copy's available routing metadata is used. A retry
+    /// already on the previous copy changes nothing; an unrelated later copy is
+    /// refused. Every swap fences the physical identity observed before it.
     /// </summary>
     public static async Task RevertAsync(
         IGrainFactory grainFactory,
@@ -211,10 +212,13 @@ internal static class AliasCutoverShardMaps
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
         var registry = grainFactory.GetLatticeRegistry();
         var moveBackToSelf = string.Equals(previousPhysicalTreeId, logicalTreeId, StringComparison.Ordinal);
+        var current = await ValidateRevertBindingAsync(
+            registry, logicalTreeId, shadowPhysicalTreeId, previousPhysicalTreeId);
+        if (string.Equals(current, previousPhysicalTreeId, StringComparison.Ordinal))
+            return;
 
         if (!string.IsNullOrEmpty(shadowPhysicalTreeId)
             && !string.Equals(shadowPhysicalTreeId, previousPhysicalTreeId, StringComparison.Ordinal)
-            && string.Equals(await registry.ResolveAsync(logicalTreeId), shadowPhysicalTreeId, StringComparison.Ordinal)
             && await RestoredMapAsync(registry, shadowPhysicalTreeId, previousPhysicalTreeId, moveBackToSelf)
                 is { } restored)
         {
@@ -238,14 +242,32 @@ internal static class AliasCutoverShardMaps
             return;
         }
 
-        if (moveBackToSelf)
+        var previous = await RequireEntryAsync(registry, previousPhysicalTreeId, RevertOperation);
+        var previousMap = moveBackToSelf ? previous.UnaliasedShardMap ?? EffectiveMap(previous) : EffectiveMap(previous);
+        var previousNext = moveBackToSelf && previous.UnaliasedShardMap is not null
+            ? previous.UnaliasedNextShardIndex : previous.NextShardIndex;
+        await registry.SwapAliasAsync(
+            logicalTreeId, previousPhysicalTreeId, previousMap, previousNext, expectedPhysicalTreeId: current);
+    }
+
+    /// <summary>
+    /// Refuses a revert superseded by an unrelated physical copy, before a caller
+    /// changes lineage or takes its reservation. The revert rechecks this binding
+    /// and fences its eventual swap; this read is not a lock.
+    /// </summary>
+    internal static async Task<string> ValidateRevertBindingAsync(
+        ILatticeRegistry registry, string logicalTreeId, string? shadowPhysicalTreeId, string previousPhysicalTreeId)
+    {
+        var current = await registry.ResolveAsync(logicalTreeId);
+        if (!string.Equals(current, previousPhysicalTreeId, StringComparison.Ordinal)
+            && !string.IsNullOrEmpty(shadowPhysicalTreeId)
+            && !string.Equals(current, shadowPhysicalTreeId, StringComparison.Ordinal))
         {
-            await registry.RemoveAliasAsync(logicalTreeId);
+            throw new InvalidOperationException(
+                $"Cannot revert the alias of tree '{logicalTreeId}': it now resolves to '{current}', "
+                + $"not the restore's shadow '{shadowPhysicalTreeId}'. A later cutover superseded this restore.");
         }
-        else
-        {
-            await registry.SetAliasAsync(logicalTreeId, previousPhysicalTreeId);
-        }
+        return current;
     }
 
     /// <summary>
