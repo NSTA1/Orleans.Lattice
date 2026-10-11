@@ -16,11 +16,15 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// Duplicates are ignored. Each chip's remove control names the
 /// value it removes.
 /// </remarks>
-public partial class LtMultiComboBox
+public partial class LtMultiComboBox : IDisposable
 {
     private static readonly char[] Separators = [',', ';', '\n', '\r', '\t'];
 
     private LtComboBox? _box;
+    private readonly ComponentLifetime _edits = new();
+    private ILtSuggestionSource? _lastSource;
+    private LtComboBoxMode _lastMode;
+    private bool _lastDisabled;
     private IReadOnlyList<string> _values = [];
     private IReadOnlyList<string>? _lastValues;
     private string _text = string.Empty;
@@ -82,7 +86,8 @@ public partial class LtMultiComboBox
     /// </summary>
     /// <returns>
     /// <see langword="false"/> when the typed text was refused (it names nothing the
-    /// source lists, in <see cref="LtComboBoxMode.PickExisting"/>); otherwise
+    /// source lists, in <see cref="LtComboBoxMode.PickExisting"/>), or the edit was
+    /// superseded while its values were being checked; otherwise
     /// <see langword="true"/>.
     /// </returns>
     public async Task<bool> ConfirmAsync()
@@ -92,17 +97,30 @@ public partial class LtMultiComboBox
             return true;
         }
 
-        await AddAsync(_text).ConfigureAwait(true);
-        return _error is null;
+        return await TryAddAsync(_text).ConfigureAwait(true) && _error is null;
     }
+
+    /// <inheritdoc />
+    public void Dispose() => _edits.Leave();
 
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
         if (!ReferenceEquals(Values, _lastValues))
         {
+            _edits.Renew();
             _lastValues = Values;
             _values = Values ?? [];
+            _error = null;
+        }
+
+        if (!ReferenceEquals(Source, _lastSource) || Mode != _lastMode || Disabled != _lastDisabled)
+        {
+            _edits.Renew();
+            _lastSource = Source;
+            _lastMode = Mode;
+            _lastDisabled = Disabled;
+            _error = null;
         }
     }
 
@@ -115,7 +133,11 @@ public partial class LtMultiComboBox
         {
             // A typed or pasted separator adds everything before it.
             var rest = text[(comma + 1)..];
-            await AddAsync(text[..comma]).ConfigureAwait(true);
+            if (!await TryAddAsync(text[..comma]).ConfigureAwait(true))
+            {
+                return;
+            }
+
             if (_error is null)
             {
                 _text = rest;
@@ -125,10 +147,22 @@ public partial class LtMultiComboBox
                 _text += ", " + rest.TrimStart();
             }
         }
+        else
+        {
+            _edits.Renew();
+        }
     }
 
-    private async Task AddAsync(string text)
+    private Task AddAsync(string text) => TryAddAsync(text);
+
+    private async Task<bool> TryAddAsync(string text)
     {
+        var edit = _edits.Renew();
+        if (edit.IsCancellationRequested || Disabled)
+        {
+            return false;
+        }
+
         _error = null;
         var added = new List<string>(_values.Count + 1);
         added.AddRange(_values);
@@ -141,6 +175,11 @@ public partial class LtMultiComboBox
             }
 
             var exists = Source is null || _box is null ? null : await _box.ExistsAsync(part).ConfigureAwait(true);
+            if (edit.IsCancellationRequested)
+            {
+                return false;
+            }
+
             if (Mode == LtComboBoxMode.PickExisting && exists == false)
             {
                 refused.Add(part);
@@ -158,10 +197,13 @@ public partial class LtMultiComboBox
             _lastValues = added;
             await ValuesChanged.InvokeAsync(added).ConfigureAwait(true);
         }
+
+        return !edit.IsCancellationRequested;
     }
 
     private async Task RemoveAsync(string value)
     {
+        var edit = _edits.Renew();
         var remaining = new List<string>(_values.Count);
         foreach (var candidate in _values)
         {
@@ -174,7 +216,7 @@ public partial class LtMultiComboBox
         _values = remaining;
         _lastValues = remaining;
         await ValuesChanged.InvokeAsync(remaining).ConfigureAwait(true);
-        if (_box is not null)
+        if (!edit.IsCancellationRequested && _box is not null)
         {
             await _box.FocusAsync().ConfigureAwait(true);
         }

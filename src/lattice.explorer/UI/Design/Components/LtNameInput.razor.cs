@@ -40,6 +40,7 @@ public partial class LtNameInput : IDisposable
     private readonly ComponentLifetime _lifetime = new();
     private ElementReference _input;
     private ILtSuggestionSource? _source;
+    private Func<string, CancellationToken, Task<string?>>? _validate;
     private string _text = string.Empty;
     private string? _lastValue;
     private string? _note;
@@ -150,8 +151,8 @@ public partial class LtNameInput : IDisposable
     /// on a submit.
     /// </summary>
     /// <returns>
-    /// <see langword="false"/> when the name is refused, or changed while it was being
-    /// checked; otherwise <see langword="true"/>, including an empty name (whether one is
+    /// <see langword="false"/> when the name is refused, or its text, source or validator
+    /// changed while it was being checked; otherwise <see langword="true"/>, including an empty name (whether one is
     /// required is the page's rule) and a check that could not answer.
     /// </returns>
     public async Task<bool> ConfirmAsync()
@@ -196,6 +197,7 @@ public partial class LtNameInput : IDisposable
     {
         if (!string.Equals(Value, _lastValue, StringComparison.Ordinal))
         {
+            _lifetime.Renew();
             _lastValue = Value;
             _text = Value ?? string.Empty;
             ClearVerdict();
@@ -205,7 +207,15 @@ public partial class LtNameInput : IDisposable
         {
             // Another source - another tree, another tenant - makes every verdict stale.
             _source = Existing;
+            _lifetime.Renew();
             _pump.Cancel();
+            ClearVerdict();
+        }
+
+        if (!Equals(Validate, _validate))
+        {
+            _validate = Validate;
+            _lifetime.Renew();
             ClearVerdict();
         }
     }
@@ -223,6 +233,7 @@ public partial class LtNameInput : IDisposable
 
     private async Task OnInputAsync(ChangeEventArgs args)
     {
+        _lifetime.Renew();
         _text = args.Value as string ?? string.Empty;
         _lastValue = _text;
         ClearVerdict();
@@ -265,13 +276,19 @@ public partial class LtNameInput : IDisposable
 
     private async Task<bool> CheckAsync(string text)
     {
-        var token = _lifetime.Token;
+        var token = _lifetime.Renew();
         bool? exists = null;
         if (Existing is { } source)
         {
             try
             {
-                exists = Exists(await source.SuggestAsync(text, ExistsLimit, token).ConfigureAwait(true), text);
+                var answer = await source.SuggestAsync(text, ExistsLimit, token).ConfigureAwait(true);
+                if (token.IsCancellationRequested)
+                {
+                    return false;
+                }
+
+                exists = Exists(answer, text);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -279,11 +296,16 @@ public partial class LtNameInput : IDisposable
             }
             catch (Exception)
             {
+                if (token.IsCancellationRequested)
+                {
+                    return false;
+                }
+
                 _note = CheckFailedNote;
             }
         }
 
-        if (_lifetime.IsLeft || !string.Equals(text, _text.Trim(), StringComparison.Ordinal))
+        if (token.IsCancellationRequested || !CanCheck || !string.Equals(text, _text.Trim(), StringComparison.Ordinal))
         {
             return false;
         }
@@ -309,11 +331,16 @@ public partial class LtNameInput : IDisposable
         }
         catch (Exception)
         {
+            if (token.IsCancellationRequested)
+            {
+                return false;
+            }
+
             _note = CheckFailedNote;
             return true;
         }
 
-        if (_lifetime.IsLeft || !string.Equals(text, _text.Trim(), StringComparison.Ordinal))
+        if (token.IsCancellationRequested || !CanCheck || !string.Equals(text, _text.Trim(), StringComparison.Ordinal))
         {
             return false;
         }
