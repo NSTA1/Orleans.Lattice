@@ -12,7 +12,7 @@ protocol; it is not a read-fenced import and is not conflated with this path.
 |---------------|---------------|------------------|
 | `resize`, `resizeUsed` | Durable resize announcement and bounded request budget | `TreeResizeState.InProgress`, `TreeResizeGrain.InitiateResizeStateAsync`; the budget is a modelling device. |
 | `competitor`, `competitorUsed` | Published migration/read-fence record and bounded request | `TreeShardSplitState`, `TreeShardConsolidationState`, `LatticeBootstrapCoordinatorGrain`; the budget is a modelling device. |
-| `alias` | Before or after resize cutover | `TreeRegistryEntry.PhysicalTreeId`. |
+| `alias` | Original, resize replacement, or unrelated later serving copy | `TreeRegistryEntry.PhysicalTreeId`. |
 | `undo` | Request, clearance, compensation and completion | `TreeResizeUndoState`, `TreeResizeGrain.UndoResizeCoreAsync`. |
 | `cleared` | Persisted once-per-operation unwind clearance | `TreeResizeUndoState.UnwindClearedOperationId`. |
 | `replicated`, `enabledReplication` | Replication policy and bounded policy change | `ILatticeReplicationContext.ResolveMergeMode`; the change budget is a modelling device. |
@@ -65,7 +65,11 @@ protocol; it is not a read-fenced import and is not conflated with this path.
 ## Limits
 
 The model permits one resize announcement and one competing announcement, one
-after-swap undo request, one replication-policy enable, and finite crashes.
+after-swap undo request, one later alias cutover before that request, one
+replication-policy enable, and finite crashes. The later-cutover check is the
+pre-compensation identity refusal, not a simulation of a cutover during every
+undo await. Previously-cleared third-copy refusal and the commit-time expected
+identity are additionally pinned by the production regression cases for #4858.
 An undo request may overtake an already-admitted competitor. The interlock
 prevents new admission, not retroactive cancellation of an active operation.
 The physical-binding and commit-time map checks for an overtaken migration

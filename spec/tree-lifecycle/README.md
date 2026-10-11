@@ -21,7 +21,8 @@ replicated trees are refused before compensation, while an already-cleared
 retry must finish if replication becomes enabled later. Crash/retry preserves
 both announcements and that clearance. Its `ReplicatedTwoFaults` variant starts
 replicated and permits two faults (166 states); the base can enable replication
-before or after clearance (262 states). It also permits a later alias cutover before undo admission and requires the superseding copy to remain unchanged.
+before or after clearance (262 states). It also permits a later alias cutover
+before undo admission and requires the superseding copy to remain unchanged.
 
 ## Instance and interactions
 
@@ -60,8 +61,10 @@ The physical maps are moved atomically here; `BackupCutover` and the registry
 detectors prove alias/map coherence and stale-router healing.
 
 The instance admits one resize before one restore, one reshard, and a revert.
-Restore waits until the resize's undo window has ended; **no guarantee about a
-restore racing a still-undoable resize is claimed**. Snapshot streaming and the
+In `TreeLifecycle`, restore waits until the resize's undo window has ended.
+`TreeLifecycleAdmission` adds a separate narrow check of a later alias cutover
+before undo admission. Neither model claims arbitrary interleavings of a
+cutover with every compensation await or with already-started undo. Snapshot streaming and the
 individual split/fold sweep, freeze, merge and reclaim phases are deliberately
 the companion modules' scope. A successful operation does not imply the
 different features' complete Cartesian product was checked.
