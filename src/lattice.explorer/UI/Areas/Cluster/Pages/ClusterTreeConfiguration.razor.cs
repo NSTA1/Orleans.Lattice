@@ -78,8 +78,15 @@ public partial class ClusterTreeConfiguration : IDisposable
         var admin = Facades.RequireTreeAdmin();
         var config = ClusterLoad<TreeConfigurationReport>.RunAsync(ct => admin.GetTreeConfigAsync(TreeId, ct), _lifetime.Token);
         var retention = ClusterLoad<TreeHistoryRetention>.RunAsync(ct => admin.GetHistoryRetentionAsync(TreeId, ct), _lifetime.Token);
-        Show(await config);
-        ShowRetention(await retention);
+        var configuration = await config;
+        var history = await retention;
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
+        Show(configuration);
+        ShowRetention(history);
     }
 
     private void Show(ClusterLoad<TreeConfigurationReport> config)
@@ -145,6 +152,11 @@ public partial class ClusterTreeConfiguration : IDisposable
         var result = await ClusterLoad<TreeConfigurationReport>.RunAsync(
             ct => Facades.RequireTreeAdmin().SetTreeConfigAsync(TreeId, update, ct),
             _lifetime.Token);
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _saving = false;
 
         if (result.Value is not null)
@@ -165,6 +177,11 @@ public partial class ClusterTreeConfiguration : IDisposable
             return;
         }
 
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         var window = _window;
 
         TreeHistoryRetentionMode? mode = Enum.TryParse<TreeHistoryRetentionMode>(_mode, out var parsedMode) ? parsedMode : null;
@@ -173,6 +190,11 @@ public partial class ClusterTreeConfiguration : IDisposable
         var result = await ClusterLoad<TreeHistoryRetention>.RunAsync(
             ct => Facades.RequireTreeAdmin().SetHistoryRetentionAsync(TreeId, mode, window, ct),
             _lifetime.Token);
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _saving = false;
 
         if (result.Value is not null)

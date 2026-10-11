@@ -60,6 +60,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Configuration save lifetime.** Configuration and history-retention replies no longer post success or failure messages after leaving the tree page. ([#4839](https://github.com/NSTA1/Orleans.Lattice/issues/4839)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Backup reads stay current.** Schedule replies and errors stay with their tree, changing the capture tree discards late base-backup lookups, and starting an operation invalidates in-flight cached lists. ([#4821](https://github.com/NSTA1/Orleans.Lattice/issues/4821)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Value rendering.** Cut UTF-8 previews omit partial characters, hex previews keep whole bytes, and JSON selection and table compaction accept the same comments and trailing commas as Automatic. ([#4808](https://github.com/NSTA1/Orleans.Lattice/issues/4808), [#4810](https://github.com/NSTA1/Orleans.Lattice/issues/4810), [#4816](https://github.com/NSTA1/Orleans.Lattice/issues/4816)) (`Orleans.Lattice.Explorer.UI`)
@@ -78,7 +80,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Workspace reads.** Switching trees or opening a view discards late dead-letter counts, pages and errors, view-status replies and administration checks. Tracked view actions stay with their originating workspace. ([#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Reliable picker inputs.** Paste preserves unfinished text, confirmations refuse replaced sources, calendars work at the first and last dates, invalid offsets do not crash date-time fields, and nonpositive directory suggestion limits return no values without querying. ([#4797](https://github.com/NSTA1/Orleans.Lattice/pull/4797), [#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800), [#4816](https://github.com/NSTA1/Orleans.Lattice/issues/4816)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Reliable picker inputs.** Paste keeps unfinished text; stale name checks and multi-value edits cannot overwrite new input or selections. Calendars support date limits, invalid offsets are refused, and nonpositive suggestion limits query nothing. ([#4797](https://github.com/NSTA1/Orleans.Lattice/pull/4797), [#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800), [#4816](https://github.com/NSTA1/Orleans.Lattice/issues/4816), [#4839](https://github.com/NSTA1/Orleans.Lattice/issues/4839)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Tests - Atomic restart fault classification.** The restart probe now recognizes the exact in-memory reminder-table shutdown fault as silo churn while retaining atomic visibility and quiesced-read assertions. ([#4795](https://github.com/NSTA1/Orleans.Lattice/issues/4795)) (`Orleans.Lattice`)
 
