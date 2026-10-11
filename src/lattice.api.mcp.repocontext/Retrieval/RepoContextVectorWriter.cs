@@ -1956,7 +1956,9 @@ internal sealed class RepoContextVectorWriter
         var carried = _countMemo.TryGetValue(repoId, out var memo) ? memo : (EmbeddedCountMemo?)null;
         if (carried is { } current && current.Generation == generation)
         {
-            return Task.FromResult(RepoContextEmbeddedCount.Exact(current.Count));
+            // The existing Task result carries the larger timestamped struct (112 B
+            // on x64). ReadEmbeddedCount is the allocation-free passive-read seam.
+            return Task.FromResult(RepoContextEmbeddedCount.Exact(current.Count) with { AsOf = current.AsOf });
         }
 
         // Read the memo before scheduling, not after: a refresh that happened to finish
@@ -1964,7 +1966,7 @@ internal sealed class RepoContextVectorWriter
         // count whose staleness is stated is worth more than one that is occasionally,
         // unpredictably fresher.
         StartEmbeddedCountRefresh(repoId);
-        return Task.FromResult(RepoContextEmbeddedCount.PendingRefresh(carried?.Count));
+        return Task.FromResult(RepoContextEmbeddedCount.PendingRefresh(carried?.Count) with { AsOf = carried?.AsOf });
     }
 
     /// <summary>Reads the existing count memo without starting a membership scan.</summary>
@@ -1972,7 +1974,7 @@ internal sealed class RepoContextVectorWriter
     {
         var generation = _cache.ReadGeneration(repoId);
         return _countMemo.TryGetValue(repoId, out var memo)
-            ? new RepoContextEmbeddedCount { Count = memo.Count, Pending = memo.Generation != generation }
+            ? new RepoContextEmbeddedCount { Count = memo.Count, Pending = memo.Generation != generation, AsOf = memo.AsOf }
             : RepoContextEmbeddedCount.PendingRefresh(null);
     }
 
@@ -2083,6 +2085,7 @@ internal sealed class RepoContextVectorWriter
             // does, so a membership write that lands mid-scan supersedes this result
             // instead of memoising a count it never reflected.
             var generation = _cache.CaptureGeneration(repoId);
+            var asOf = DateTimeOffset.UtcNow;
 
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
             var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
@@ -2110,7 +2113,7 @@ internal sealed class RepoContextVectorWriter
             // capture: the next read misses, serves this count as PENDING rather than
             // exact, and schedules a refresh. Staleness is therefore represented in the
             // answer instead of being silently served as exact (issue 1992).
-            _countMemo[repoId] = new EmbeddedCountMemo(generation, enabled);
+            _countMemo[repoId] = new EmbeddedCountMemo(generation, enabled, asOf);
             return enabled;
         }, cancellationToken);
     }
@@ -2120,7 +2123,8 @@ internal sealed class RepoContextVectorWriter
     /// </summary>
     /// <param name="Generation">The <see cref="RepoContextVectorCache"/> generation the count was scanned at.</param>
     /// <param name="Count">The counted live embedded sources.</param>
-    private readonly record struct EmbeddedCountMemo(long Generation, long Count);
+    /// <param name="AsOf">The UTC start of the completed scan.</param>
+    private readonly record struct EmbeddedCountMemo(long Generation, long Count, DateTimeOffset AsOf);
 
     /// <summary>
     /// The dot-authoring replica identity for a membership flag enable. When the host

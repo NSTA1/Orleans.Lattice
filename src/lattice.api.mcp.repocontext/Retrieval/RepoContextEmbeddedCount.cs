@@ -41,6 +41,14 @@ public readonly record struct RepoContextEmbeddedCount
     /// </summary>
     public bool Pending { get; init; }
 
+    /// <summary>
+    /// The UTC start of the last completed membership scan, or null when no scan
+    /// timestamp is known. Carried unchanged while refreshing. A scan spans time,
+    /// not a transactional snapshot; its start conservatively includes the scan's
+    /// own duration in the age of the served count.
+    /// </summary>
+    public DateTimeOffset? AsOf { get; init; }
+
     /// <summary>An exact count computed against the caller's membership generation.</summary>
     /// <param name="count">The counted live embedded sources.</param>
     /// <returns>An exact, non-pending count.</returns>

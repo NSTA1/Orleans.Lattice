@@ -350,6 +350,8 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "the index down), the running file and chunk counters, the cumulative "
                     + "index-run count (a run-start tally that rises on every reconcile and back-fill, not a "
                     + "retry counter), and "
+                    + "filesEmbedded (stored-file work accumulated across resumed drives, monotonic within "
+                    + "one attempt and startedAt, reset only for a fresh job; not corpus coverage), and "
                     + "timing. Because onboarding runs in the background and survives a client disconnect or a "
                     + "host restart, poll this tool with the repository id to follow a long onboarding pass to "
                     + "completion. A repository that was never onboarded reports status 'None'. Read-only.",
@@ -587,7 +589,10 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "membership scan rather than measured on demand: it is absent when no scan has completed "
                     + "yet (which is not the same as zero), and 'embeddedVectorCountPending' is true whenever "
                     + "a refresh is outstanding - expect that throughout an active ingest, and poll again once "
-                    + "it settles for an exact figure. Read-only.",
+                    + "it settles for an exact figure. 'embeddedVectorCountAsOf' is the UTC start of the "
+                    + "completed scan that produced the served count, absent until one completes and carried "
+                    + "unchanged while pending, so even hours of count lag are explicit. It is a scan-time "
+                    + "anchor, not a transactional snapshot or a live ANN vector count. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

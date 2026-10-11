@@ -7,7 +7,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// settle is a no-op, so a double settle can never count a pass twice.
 /// </summary>
 /// <remarks>
-/// Progress reports carry run-cumulative figures, not deltas. The pass keeps a
+/// Progress reports carry run-cumulative figures, with an explicit delta for file
+/// embedding work across resumed drives. The pass keeps a
 /// high-water mark per figure and records only the growth beyond it, so a figure
 /// re-reported unchanged records nothing and a smaller figure reported after a
 /// larger one is never subtracted from a counter.

@@ -33,6 +33,33 @@ public sealed class RepoContextStoreVectorCountTests
 
     private CancellationToken Ct => TestContext.CurrentContext.CancellationToken;
 
+    [Test]
+    public async Task A_listing_exposes_the_age_of_the_served_count_snapshot()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var (store, writer) = Resolve(harness);
+        await SeedRepoMarkerAsync(harness, RepoId, Ct);
+        await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
+        var beforeScan = DateTimeOffset.UtcNow;
+        await writer.ScanEmbeddedAsync(RepoId, Ct);
+        var afterScan = DateTimeOffset.UtcNow;
+
+        var original = (await store.ListReposAsync(Ct)).Repos.Single(r => r.RepoId == RepoId);
+        await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/B.cs") }, Ct);
+        var stale = (await store.ListReposAsync(Ct)).Repos.Single(r => r.RepoId == RepoId);
+
+        var originalStamp = original.EmbeddedVectorCountAsOf;
+        Assert.Multiple(() =>
+        {
+            Assert.That(originalStamp, Is.InRange(beforeScan, afterScan));
+            Assert.That(stale.EmbeddedVectorCountAsOf, Is.EqualTo(originalStamp),
+                "A pending refresh must not re-stamp the old count with the listing time.");
+            Assert.That(stale.EmbeddedVectorCount, Is.EqualTo(1));
+            Assert.That(stale.EmbeddedVectorCountPending, Is.True);
+        });
+    }
+
     private static (RepoContextStore Store, RepoContextVectorWriter Writer) Resolve(RepoContextMcpHarness harness)
         => (harness.Services.GetRequiredService<RepoContextStore>(),
             harness.Services.GetRequiredService<RepoContextVectorWriter>());
@@ -192,6 +219,8 @@ public sealed class RepoContextStoreVectorCountTests
         {
             Assert.That(summary.EmbeddedVectorCount, Is.Null,
                 "The first listing reports the count as not yet measured rather than as zero.");
+            Assert.That(summary.EmbeddedVectorCountAsOf, Is.Null,
+                "A never-measured count must not carry a fabricated freshness timestamp.");
             Assert.That(summary.EmbeddedVectorCountPending, Is.True,
                 "and says a walk is outstanding, which is what makes the null readable.");
         });
