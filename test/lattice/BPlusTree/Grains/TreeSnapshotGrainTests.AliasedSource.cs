@@ -22,6 +22,44 @@ public partial class TreeSnapshotGrainTests
     {
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         registry.ResolveAsync(SourceTreeId).Returns(Task.FromResult(physicalTreeId));
+        registry.GetEntryAsync(SourceTreeId).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+                PhysicalTreeId = physicalTreeId,
+            }));
+    }
+
+    [Test]
+    public async Task Initiate_resolves_the_alias_from_the_routing_entry_without_a_separate_resolve()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        AliasSource(grainFactory);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        await grain.InitiateSnapshotStateAsync(DestTreeId, SnapshotMode.Offline, ShardCount);
+
+        Assert.That(state.State.SourcePhysicalTreeId, Is.EqualTo(AliasedPhysicalTreeId));
+        await registry.Received(1).GetEntryAsync(SourceTreeId);
+        await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task Initiate_with_a_logical_id_still_resolves_the_physical_source_separately()
+    {
+        const string logicalTreeId = "logical-tree";
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        AliasSource(grainFactory);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        await grain.InitiateSnapshotStateAsync(
+            DestTreeId, SnapshotMode.Offline, ShardCount, logicalTreeId: logicalTreeId);
+
+        Assert.That(state.State.SourcePhysicalTreeId, Is.EqualTo(AliasedPhysicalTreeId));
+        await registry.Received(1).GetEntryAsync(logicalTreeId);
+        await registry.Received(1).ResolveAsync(SourceTreeId);
     }
 
     [Test]

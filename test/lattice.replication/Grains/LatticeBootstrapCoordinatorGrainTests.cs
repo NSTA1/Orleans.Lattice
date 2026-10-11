@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.Lattice.Replication.Tests.Fakes;
@@ -59,6 +60,10 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var authoritativeTreeId = treeName;
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(treeName).Returns(_ => Task.FromResult(authoritativeTreeId));
+        registry.GetEntryAsync(treeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            string.Equals(authoritativeTreeId, treeName, StringComparison.Ordinal)
+                ? null
+                : new TreeRegistryEntry { PhysicalTreeId = authoritativeTreeId }));
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         resize.BeginBootstrapCopyAsync(Arg.Any<string>()).Returns(call => $"{treeName}/shadow");
         resize.IsBootstrapCopyReadyAsync(Arg.Any<string>()).Returns(true);

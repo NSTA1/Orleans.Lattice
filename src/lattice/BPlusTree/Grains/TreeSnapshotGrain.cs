@@ -264,9 +264,15 @@ internal sealed class TreeSnapshotGrain(
         // empty data. A resize coordinator addresses this grain by an already
         // resolved physical id, which resolves to itself. System trees never
         // resolve aliases: the registry is itself a system tree.
+        // When no logical id was supplied the routing read above already fetched
+        // the source's own entry, and ResolveAsync is a projection of it
+        // (PhysicalTreeId ?? id), so that entry answers without a second
+        // registry round trip.
         var sourcePhysicalTreeId = SourceTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
             ? SourceTreeId
-            : await registry.ResolveAsync(SourceTreeId);
+            : string.Equals(routingTreeId, SourceTreeId, StringComparison.Ordinal)
+                ? sourceEntry?.PhysicalTreeId ?? SourceTreeId
+                : await registry.ResolveAsync(SourceTreeId);
         if (string.IsNullOrEmpty(sourcePhysicalTreeId)) sourcePhysicalTreeId = SourceTreeId;
 
         // Snapshot every field the mutation set touches so a failing
