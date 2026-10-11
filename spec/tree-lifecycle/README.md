@@ -11,7 +11,7 @@ shrink variant starts with three physical shards and permits two crashes.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `TreeLifecycle` | 13 | 4 | 25 | 27 | 40 | 1,190 |
-| `TreeLifecycleAdmission` | 4 | 5 | 17 | 17 | 24 | 198 |
+| `TreeLifecycleAdmission` | 5 | 5 | 18 | 19 | 26 | 262 |
 
 `TreeLifecycleAdmission` separately checks the publish-before-read admission
 handshake between a resize and a split/fold or legacy in-place receiver
@@ -20,8 +20,8 @@ active phase. It also checks after-swap undo's persisted replication clearance:
 replicated trees are refused before compensation, while an already-cleared
 retry must finish if replication becomes enabled later. Crash/retry preserves
 both announcements and that clearance. Its `ReplicatedTwoFaults` variant starts
-replicated and permits two faults (114 states); the base can enable replication
-before or after clearance (198 states).
+replicated and permits two faults (166 states); the base can enable replication
+before or after clearance (262 states). It also permits a later alias cutover before undo admission and requires the superseding copy to remain unchanged.
 
 ## Instance and interactions
 
@@ -75,3 +75,11 @@ requires the mutant to fail on that **named property**, not merely any error.
 Progress mutations retain fairness and strand a real phase.
 
 See [Refinement.md](Refinement.md) for the production seams and their detectors.
+
+## Defect found
+
+The supersession extension exposed #4858: resize undo unconditionally replaced
+a later restore or administrative alias. The production fix refuses a third
+physical identity before compensation and uses the registry's expected-state
+fence. Its fresh and previously-cleared regression cases stay in the core
+resize suite; the admission mutants retain the abstract counterexample.

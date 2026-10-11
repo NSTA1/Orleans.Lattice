@@ -5,7 +5,7 @@ SUMMARY: replication refusal nevertheless moves the serving alias
 PERTURBS: UndoRefuse
 
 --- FIND
-    /\ running /\ undo = "checking" /\ replicated
+    /\ running /\ undo = "checking" /\ (replicated \/ alias = "later")
     /\ undo' = "done"
     /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, cleared,
 --- REPLACE

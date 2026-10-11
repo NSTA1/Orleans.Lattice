@@ -77,19 +77,19 @@ CompetitorFinish ==
 
 \* A request is acknowledged separately from its replication decision.
 UndoRequest ==
-    /\ running /\ resize = "done" /\ alias = "new" /\ undo = "idle"
+    /\ running /\ resize = "done" /\ alias \in {"new", "later"} /\ undo = "idle"
     /\ undo' = "checking"
     /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, cleared,
                    replicated, enabledReplication, running, faults, compensated>>
 
 UndoClearance ==
-    /\ running /\ undo = "checking" /\ ~replicated
+    /\ running /\ undo = "checking" /\ ~replicated /\ alias = "new"
     /\ cleared' = TRUE /\ undo' = "armed"
     /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias,
                    replicated, enabledReplication, running, faults, compensated>>
 
 UndoRefuse ==
-    /\ running /\ undo = "checking" /\ replicated
+    /\ running /\ undo = "checking" /\ (replicated \/ alias = "later")
     /\ undo' = "done"
     /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, cleared,
                    replicated, enabledReplication, running, faults, compensated>>
@@ -113,6 +113,12 @@ UndoFinish ==
     /\ running /\ undo = "swapping" /\ cleared
     /\ alias' = "old" /\ undo' = "done"
     /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, cleared,
+                   replicated, enabledReplication, running, faults, compensated>>
+
+LaterCutover ==
+    /\ running /\ resize = "done" /\ alias = "new" /\ undo = "idle"
+    /\ alias' = "later"
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, undo, cleared,
                    replicated, enabledReplication, running, faults, compensated>>
 
 Crash ==
@@ -146,6 +152,7 @@ Next ==
     \/ EnableReplication
     \/ UndoCompensate
     \/ UndoFinish
+    \/ LaterCutover
     \/ Crash
     \/ Retry
     \/ Stutter
@@ -160,7 +167,7 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Progress)
 TypeOK ==
     /\ resize \in Phases /\ competitor \in Phases
     /\ resizeUsed \in BOOLEAN /\ competitorUsed \in BOOLEAN
-    /\ alias \in {"old", "new"}
+    /\ alias \in {"old", "new", "later"}
     /\ undo \in {"idle", "checking", "armed", "swapping", "done"}
     /\ cleared \in BOOLEAN /\ replicated \in BOOLEAN
     /\ enabledReplication \in BOOLEAN /\ running \in BOOLEAN
@@ -177,7 +184,10 @@ ClearanceBeforeCompensation ==
     (compensated \/ undo \in {"armed", "swapping"}) => cleared
 
 RefusedUndoLeavesAlias ==
-    undo = "done" /\ ~cleared => alias = "new"
+    undo = "done" /\ ~cleared => alias \in {"new", "later"}
+
+SupersedingCopyPreserved ==
+    alias = "later" => ~cleared /\ ~compensated
 
 ClearanceWasUnreplicated ==
     [][(~cleared /\ cleared') => ~replicated]_vars

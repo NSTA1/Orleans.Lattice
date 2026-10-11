@@ -1,0 +1,11 @@
+MODULE: SupersedingCopyPreservedClearanceIgnoresAlias
+TARGET: SupersedingCopyPreserved
+CLASS: Invariant
+SUMMARY: resize undo clears compensation against an unrelated later serving copy
+PERTURBS: UndoClearance
+
+--- FIND
+    /\ running /\ undo = "checking" /\ ~replicated /\ alias = "new"
+--- REPLACE
+    /\ running /\ undo = "checking" /\ ~replicated
+--- END

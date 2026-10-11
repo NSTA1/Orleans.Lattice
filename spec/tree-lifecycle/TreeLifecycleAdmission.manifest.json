@@ -3,14 +3,14 @@
   "refinement": "RefinementAdmission.md",
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
-    "invariants": 4,
+    "invariants": 5,
     "properties": 5,
-    "actions": 17,
-    "mutations": 17,
-    "behaviourRows": 24,
-    "distinctStates": 198
+    "actions": 18,
+    "mutations": 19,
+    "behaviourRows": 26,
+    "distinctStates": 262
   },
   "variants": {
-    "ReplicatedTwoFaults": { "distinctStates": 114 }
+    "ReplicatedTwoFaults": { "distinctStates": 166 }
   }
 }

@@ -1,6 +1,6 @@
 # Admission mutation controls
 
-These 17 controls cover every invariant, action property, temporal property
+These 19 controls cover every invariant, action property, temporal property
 and behavioural action of `TreeLifecycleAdmission`. Each mutant is applied
 to the current source and checked against a clean control with the same
 single-property configuration. A named violation is required; a parser,
