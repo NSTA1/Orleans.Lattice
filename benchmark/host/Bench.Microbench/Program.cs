@@ -126,7 +126,7 @@ if (string.Equals(suite, "blockedcensus", StringComparison.OrdinalIgnoreCase))
 if (string.Equals(suite, "partitionfloorsampling", StringComparison.OrdinalIgnoreCase))
 {
     var samplingSummary = BenchmarkRunner.Run<WalGcPartitionFloorSamplingBenchmarks>(config);
-    return samplingSummary.HasCriticalValidationErrors ? 1 : 0;
+    return samplingSummary.HasCriticalValidationErrors || samplingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "sharetouch", StringComparison.OrdinalIgnoreCase))

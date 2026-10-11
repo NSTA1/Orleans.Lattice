@@ -6987,11 +6987,15 @@ internal sealed class LatticeWalGcScheduler(
     /// have.
     /// </para>
     /// <para>
-    /// <b>The read budget.</b> Resolved offset samples share one tree-wide
-    /// candidate cap proportionally, with one mandatory floor slot per active
-    /// partition; unresolved positive-offset pins and pins holding no offset
-    /// floor each have one additional bounded sample. Every admitted candidate
-    /// costs one durable read; this bound is enforced by
+    /// <b>The read budget.</b> Resolved offset samples are partition-local. Each
+    /// partition retains enough candidates for one distinct-leaf drive pass,
+    /// and measured populations share any remaining tree budget proportionally;
+    /// before measurement, the registry-pinned partition count sets the initial
+    /// cap. The aggregate offset sample is bounded by the greater of the tree
+    /// candidate budget and the active partition count times the per-pass touch
+    /// budget. Unresolved positive-offset pins and pins holding no offset floor
+    /// each have a separate bounded sample. Every admitted candidate costs one
+    /// durable read; this bound is enforced by
     /// <see cref="OfferFloorHolderCandidate"/> when the samples are built.
     /// Coverage
     /// is then reported on
