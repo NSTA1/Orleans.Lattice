@@ -155,7 +155,8 @@ internal sealed partial class ViewMaintainerGrain
     /// tree-deletion machinery: the active generation, any generation awaiting
     /// reclamation, and every prior generation (each of which still holds shard
     /// state - reclamation only clears a generation's keys, it does not purge its
-    /// shards). The generation-0 legacy <c>view-{name}</c> tree is always included.
+    /// shards). The generation-0 legacy <c>view-{name}</c> tree is always included,
+    /// as is the next (shadow) generation an interrupted rebuild may have left behind.
     /// Returns the highest generation number that was deleted, so the caller can
     /// advance the checkpoint past it.
     /// </summary>
@@ -171,6 +172,12 @@ internal sealed partial class ViewMaintainerGrain
         {
             generations.Add(state.State.PendingReclaimGeneration);
         }
+
+        // The shadow generation a derive-locally rebuild builds into. An
+        // interrupted rebuild (a projection fault, a cancel, a silo crash) leaves
+        // it partially written with no durable record, and the checkpoint reset
+        // below would otherwise adopt it as the next view's live tree.
+        generations.Add(state.State.ActiveGeneration + 1);
 
         foreach (var generation in generations)
         {

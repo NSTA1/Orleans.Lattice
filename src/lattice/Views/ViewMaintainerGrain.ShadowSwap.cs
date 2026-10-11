@@ -35,7 +35,9 @@ namespace Orleans.Lattice.Views;
 /// <see cref="ViewCheckpointState.ActiveGeneration"/> unchanged, so the prior
 /// generation keeps serving; the orphaned shadow under the
 /// <c>ActiveGeneration + 1</c> tree id is exactly the next rebuild attempt's
-/// target and is cleared before that attempt re-builds, so it never leaks. The
+/// target and is cleared before that attempt re-builds. If no rebuild follows,
+/// decommission deletes that shadow generation too and advances the checkpoint
+/// past it, so a view re-created under the same name never adopts it. The
 /// swap is a single write, so it either fully happens or not at all.
 /// </para>
 /// <para>
