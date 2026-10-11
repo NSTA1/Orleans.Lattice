@@ -179,7 +179,7 @@ public sealed class TlcModelCheckTests
     /// that change announce itself and its README restate the count.
     /// </para>
     /// </summary>
-    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcModules))]
     public void The_base_specification_holds(SpecModule module)
     {
         AssertBaseSpecificationHolds(module);
@@ -235,7 +235,7 @@ public sealed class TlcModelCheckTests
     /// reason to exist.
     /// </para>
     /// </summary>
-    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Variants))]
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcVariants))]
     public void Each_variant_configuration_holds(SpecModule module, string variant)
     {
         ArgumentNullException.ThrowIfNull(module);
@@ -304,7 +304,7 @@ public sealed class TlcModelCheckTests
     /// and one that stopped being needed would never be noticed.
     /// </para>
     /// </summary>
-    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Mutations))]
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcMutations))]
     public void Each_property_fires_under_its_mutation_and_not_on_the_base(SpecModule module, SpecMutation mutation)
     {
         ArgumentNullException.ThrowIfNull(module);

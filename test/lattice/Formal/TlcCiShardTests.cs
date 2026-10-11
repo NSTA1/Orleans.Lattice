@@ -44,9 +44,9 @@ public sealed class TlcCiShardTests
     [Test]
     public void Every_category_routes_at_least_one_case_of_the_repository()
     {
-        var routed = SpecModuleCases.Modules()
-            .Concat(SpecModuleCases.Mutations())
-            .Concat(SpecModuleCases.Variants())
+        var routed = SpecModuleCases.TlcModules()
+            .Concat(SpecModuleCases.TlcMutations())
+            .Concat(SpecModuleCases.TlcVariants())
             .SelectMany(Categories)
             .Distinct()
             .ToList();
