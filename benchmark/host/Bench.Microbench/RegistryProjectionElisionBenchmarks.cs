@@ -28,6 +28,18 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <item><see cref="Site.MergeInitiate"/> - <c>TreeMergeGrain</c> initiating a
 /// merge: source Resolve + options GetEntry + GetShardMap, plus the target
 /// Resolve -> source GetEntry plus the target Resolve, 4 serial reads -> 2.</item>
+/// <item><see cref="Site.SplitInitiate"/> - <c>TreeShardSplitGrain</c> initiating a
+/// shard split: alias Resolve + options GetEntry + GetShardMap + fence GetEntry
+/// -> one GetEntry carrying map, alias and fence, 4 serial reads -> 1.</item>
+/// <item><see cref="Site.ConsolidationInitiate"/> - <c>TreeShardConsolidationGrain</c>
+/// initiating a fold: options GetEntry + GetShardMap + alias Resolve + fence
+/// GetEntry -> one GetEntry, 4 serial reads -> 1.</item>
+/// <item><see cref="Site.ReshardSplitTick"/> - one <c>TreeReshardGrain</c> grow
+/// tick: options GetEntry + GetShardMap + Resolve -> options GetEntry + GetEntry,
+/// 3 serial reads -> 2, paid on every tick of a reshard.</item>
+/// <item><see cref="Site.ReshardConsolidateTick"/> - one <c>TreeReshardGrain</c>
+/// shrink tick: options GetEntry + Resolve + GetShardMap -> options GetEntry +
+/// GetEntry, 3 serial reads -> 2, paid on every tick of a shrink.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -52,7 +64,7 @@ public class RegistryProjectionElisionBenchmarks
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -102,6 +114,26 @@ public class RegistryProjectionElisionBenchmarks
                 return Fold(source, (map ?? options?.ShardMapVersion) ?? 0) + target.Length;
             }
 
+            case Site.SplitInitiate:
+            case Site.ConsolidationInitiate:
+            {
+                var physical = await _registry.ResolveAsync(TreeId);
+                var options = await _registry.GetEntryAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                var fence = await _registry.GetEntryAsync(TreeId);
+                var admitted = (fence?.PhysicalTreeId ?? TreeId) == physical;
+                return Fold(physical, (map ?? options?.ShardMapVersion) ?? 0) + (admitted ? 1 : 0);
+            }
+
+            case Site.ReshardSplitTick:
+            case Site.ReshardConsolidateTick:
+            {
+                var options = await _registry.GetEntryAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                var physical = await _registry.ResolveAsync(TreeId);
+                return Fold(physical, (map ?? options?.ShardMapVersion) ?? 0);
+            }
+
             default:
             {
                 var total = 0L;
@@ -146,6 +178,23 @@ public class RegistryProjectionElisionBenchmarks
                 return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0) + target.Length;
             }
 
+            case Site.SplitInitiate:
+            case Site.ConsolidationInitiate:
+            {
+                var entry = await _registry.GetEntryAsync(TreeId);
+                var physical = entry?.PhysicalTreeId ?? TreeId;
+                var admitted = (entry?.PhysicalTreeId ?? TreeId) == physical;
+                return Fold(physical, entry?.ShardMapVersion ?? 0) + (admitted ? 1 : 0);
+            }
+
+            case Site.ReshardSplitTick:
+            case Site.ReshardConsolidateTick:
+            {
+                var options = await _registry.GetEntryAsync(TreeId);
+                var entry = await _registry.GetEntryAsync(TreeId);
+                return Fold(entry?.PhysicalTreeId ?? TreeId, (entry?.ShardMapVersion ?? options?.ShardMapVersion) ?? 0);
+            }
+
             default:
             {
                 var total = 0L;
@@ -182,6 +231,18 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>A merge initiation resolving source and target topology.</summary>
         MergeInitiate,
+
+        /// <summary>A shard split initiation reading its map, alias and commit fence.</summary>
+        SplitInitiate,
+
+        /// <summary>A shard consolidation initiation reading its map, alias and commit fence.</summary>
+        ConsolidationInitiate,
+
+        /// <summary>One reshard grow tick reading its options, map and physical tree.</summary>
+        ReshardSplitTick,
+
+        /// <summary>One reshard shrink tick reading its options, map and physical tree.</summary>
+        ReshardConsolidateTick,
     }
 
     /// <summary>How a simulated grain call completes.</summary>

@@ -57,6 +57,7 @@ public partial class TreeReshardGrainTests
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = physicalShardCount,
+                ShardMap = existingMap ?? ShardMap.CreateDefault(virtualShardCount, physicalShardCount),
             }));
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, opts);
 

@@ -116,12 +116,15 @@ public partial class TreeShardConsolidationGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(TreeId).Returns(TreeId);
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2 }));
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory);
 
         ShardMap? persistedMap = existingMap ?? ShardMap.CreateDefault(VirtualShardCount, 2);
         registry.GetShardMapAsync(TreeId).Returns(_ => Task.FromResult<ShardMap?>(persistedMap));
+        // The entry carries the live map, exactly as the registry's own entry
+        // does, so a coordinator reading map and alias as one pair sees every
+        // reassignment applied below.
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2, ShardMap = persistedMap }));
         // Mirrors LatticeRegistryGrain.ReassignSlotsAsync: the slot diff is
         // applied to the live map inside the call, so a coordinator carrying a
         // stale fallback view cannot erase another coordinator's reassignment.
@@ -413,6 +416,17 @@ public partial class TreeShardConsolidationGrainTests
         Assert.That(h.State.State.Phase, Is.EqualTo(ShardConsolidationPhase.Drain));
 
         await h.Donor.Received(1).BeginSplitAsync(0, Arg.Any<int[]>(), VirtualShardCount);
+    }
+
+    [Test]
+    public async Task StartAsync_reads_map_alias_and_fence_from_one_registry_entry()
+    {
+        var h = CreateGrain(donorShardIndex: 1, survivorShardIndex: 0);
+
+        await h.Grain.StartAsync(0);
+
+        await h.Registry.DidNotReceive().GetShardMapAsync(Arg.Any<string>());
+        await h.Registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
     }
 
     [Test]

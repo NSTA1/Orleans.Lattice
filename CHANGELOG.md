@@ -40,6 +40,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Compaction, resize and merge make fewer registry reads.** A tree's routed copy and shard map were fetched with calls separate from its entry; both now come from one entry read: compaction topology drops from 3 calls to 1 (3x), resize and merge set-up halve theirs (2x). ([#4820](https://github.com/NSTA1/Orleans.Lattice/pull/4820)) (`Orleans.Lattice`)
 
+- **Performance - Shard split, fold and reshard make fewer registry reads.** Starting a split or a fold read the shard map, routed copy and commit fence with separate calls; one entry read now serves all three (4 calls to 1, about 4x). Each reshard tick drops from 3 calls to 2. ([#4823](https://github.com/NSTA1/Orleans.Lattice/pull/4823)) (`Orleans.Lattice`)
+
 - **Performance - Atomic tag commits read row state in one call.** A flag-mode value-and-tags commit read each tag's two index rows with serial calls, 2N round trips for N tags. It reads them all in one batched call now: 4.8-12.2x faster and 68-80% less allocated. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice`)
 
 - **Performance - Tag index coverage markers write in one batch.** Repairing a tag index's covered-tree markers wrote one marker per tree in series. They are written in one batched call now, or a bounded concurrent wave in flag mode: 3.4-14.2x faster. ([#4812](https://github.com/NSTA1/Orleans.Lattice/pull/4812)) (`Orleans.Lattice`)
@@ -57,6 +59,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ### Fixed
+
+- **Explorer - Configuration save lifetime.** Configuration and history-retention replies no longer post success or failure messages after leaving the tree page. ([#4839](https://github.com/NSTA1/Orleans.Lattice/issues/4839)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Backup reads stay current.** Schedule replies and errors stay with their tree, changing the capture tree discards late base-backup lookups, and starting an operation invalidates in-flight cached lists. ([#4821](https://github.com/NSTA1/Orleans.Lattice/issues/4821)) (`Orleans.Lattice.Explorer.UI`)
 
@@ -76,7 +80,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Workspace reads.** Switching trees or opening a view discards late dead-letter counts, pages and errors, view-status replies and administration checks. Tracked view actions stay with their originating workspace. ([#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Reliable picker inputs.** Paste preserves unfinished text, confirmations refuse replaced sources, calendars work at the first and last dates, invalid offsets do not crash date-time fields, and nonpositive directory suggestion limits return no values without querying. ([#4797](https://github.com/NSTA1/Orleans.Lattice/pull/4797), [#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800), [#4816](https://github.com/NSTA1/Orleans.Lattice/issues/4816)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Reliable picker inputs.** Paste keeps unfinished text; stale name checks and multi-value edits cannot overwrite new input or selections. Calendars support date limits, invalid offsets are refused, and nonpositive suggestion limits query nothing. ([#4797](https://github.com/NSTA1/Orleans.Lattice/pull/4797), [#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800), [#4816](https://github.com/NSTA1/Orleans.Lattice/issues/4816), [#4839](https://github.com/NSTA1/Orleans.Lattice/issues/4839)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Tests - Atomic restart fault classification.** The restart probe now recognizes the exact in-memory reminder-table shutdown fault as silo churn while retaining atomic visibility and quiesced-read assertions. ([#4795](https://github.com/NSTA1/Orleans.Lattice/issues/4795)) (`Orleans.Lattice`)
 
