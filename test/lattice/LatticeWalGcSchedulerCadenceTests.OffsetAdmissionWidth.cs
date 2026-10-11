@@ -289,7 +289,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // Derivations, written out because the constants are easy to mistake for
         // the budgets. ScaleFloorHolderBudget is population / pinsPerUnit,
         // clamped to [base, ceiling]. MaxFloorHolderClassificationsPerSweep (8)
-        // is the BASE, not the budget; MaxFloorHolderRemedyCandidatesPerSweep
+        // is the BASE, not the budget; MaxFloorHolderRemedyCandidatesPerSample
         // (256) is the CEILING, not the budget.
         Assert.Multiple(() =>
         {
@@ -298,7 +298,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 LatticeWalGcScheduler.ScaleFloorHolderBudget(
                     24_432,
                     LatticeWalGcScheduler.MaxFloorHolderClassificationsPerSweep,
-                    LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSweep,
+                    LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample,
                     LatticeWalGcScheduler.FloorHolderPinsPerRemedyCandidate),
                 Is.EqualTo(190),
                 "repo-context-vector-index's measured population of 24,432 floor-holding pins yields a "
@@ -319,9 +319,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 LatticeWalGcScheduler.ScaleFloorHolderBudget(
                     int.MaxValue,
                     LatticeWalGcScheduler.MaxFloorHolderClassificationsPerSweep,
-                    LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSweep,
+                    LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample,
                     LatticeWalGcScheduler.FloorHolderPinsPerRemedyCandidate),
-                Is.EqualTo(LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSweep),
+                Is.EqualTo(LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample),
                 "an absurd population must clamp at the ceiling and not above it. The widening spends "
                     + "this budget rather than replacing it, so the ceiling is what bounds the range.");
 
@@ -329,7 +329,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 LatticeWalGcScheduler.ScaleFloorHolderBudget(
                     0,
                     LatticeWalGcScheduler.MaxFloorHolderClassificationsPerSweep,
-                    LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSweep,
+                    LatticeWalGcScheduler.MaxFloorHolderRemedyCandidatesPerSample,
                     LatticeWalGcScheduler.FloorHolderPinsPerRemedyCandidate),
                 Is.EqualTo(LatticeWalGcScheduler.MaxFloorHolderClassificationsPerSweep),
                 "and an unmeasured tree falls back to the historical base, so it behaves exactly as it "
