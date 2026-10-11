@@ -5,6 +5,8 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// <summary>One tab of an <see cref="LtTabs"/>: its title in the tab list, and its panel.</summary>
 public partial class LtTab : IDisposable
 {
+    private (string Title, bool Disabled)? _presentation;
+
     /// <summary>
     /// A stable, lower-case id for the tab, unique within its <see cref="LtTabs"/>,
     /// such as <c>keys</c>. It is what <see cref="LtTabs.ActiveId"/> names.
@@ -39,6 +41,18 @@ public partial class LtTab : IDisposable
         }
 
         Parent.Register(this);
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        var presentation = (Title, Disabled);
+        var changed = _presentation is { } previous && previous != presentation;
+        _presentation = presentation;
+        if (changed)
+        {
+            Parent.TabChanged();
+        }
     }
 
     /// <inheritdoc />

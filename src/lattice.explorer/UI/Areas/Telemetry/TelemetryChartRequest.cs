@@ -80,7 +80,10 @@ internal sealed record TelemetryChartRequest(TelemetryQueryRequest? Request, str
             : new TelemetryChartRequest(null, problem, note);
     }
 
-    /// <summary>The finest ladder step that keeps <paramref name="duration"/> within the point target and the entry's budget.</summary>
+    /// <summary>
+    /// The finest ladder step that keeps <paramref name="duration"/> within the point
+    /// target and the entry's budget, or a computed coarser step when the ladder is exhausted.
+    /// </summary>
     /// <param name="duration">The window's length.</param>
     /// <param name="bounds">The entry's bounds.</param>
     /// <returns>The step.</returns>
@@ -95,7 +98,11 @@ internal sealed record TelemetryChartRequest(TelemetryQueryRequest? Request, str
             }
         }
 
-        return TelemetryDurations.AutomaticSteps[^1];
+        // Inclusive endpoints yield floor(duration / step) + 1 points, so the
+        // step must be strictly greater than duration / budget. Whole seconds
+        // keep that margin when the backend formats the step to milliseconds.
+        var seconds = duration.Ticks / TimeSpan.TicksPerSecond / budget;
+        return TimeSpan.FromSeconds(seconds + 1);
     }
 
     private static string? Describe(TelemetryQueryBounds bounds, TelemetryBoundsViolation violation, TelemetryTimeRange range) =>

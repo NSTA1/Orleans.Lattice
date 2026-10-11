@@ -86,6 +86,8 @@ public partial class LtTabs : IAsyncDisposable
 
     internal string PanelElementId(LtTab tab) => _id + "-panel-" + tab.Id;
 
+    internal void TabChanged() => StateHasChanged();
+
     internal void Register(LtTab tab)
     {
         if (_tabs.Any(existing => string.Equals(existing.Id, tab.Id, StringComparison.Ordinal)))

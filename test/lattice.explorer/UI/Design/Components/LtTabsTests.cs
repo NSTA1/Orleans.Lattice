@@ -178,6 +178,51 @@ public sealed class LtTabsTests : ShellDesignTestContext
     }
 
     [Test]
+    public void Updated_tab_parameters_refresh_the_header_and_active_panel_together()
+    {
+        var unavailable = false;
+        var cut = Render<LtTabs>(p => p
+            .Add(x => x.Label, "Tree views")
+            .Add(x => x.ActiveId, "history")
+            .Add(x => x.ChildContent, builder =>
+            {
+                builder.OpenComponent<LtTab>(0);
+                builder.AddAttribute(1, nameof(LtTab.Id), "keys");
+                builder.AddAttribute(2, nameof(LtTab.Title), "Keys");
+                builder.AddAttribute(3, nameof(LtTab.ChildContent), (RenderFragment)(content => content.AddContent(0, "Keys panel")));
+                builder.CloseComponent();
+                builder.OpenComponent<LtTab>(4);
+                builder.AddAttribute(5, nameof(LtTab.Id), "history");
+                builder.AddAttribute(6, nameof(LtTab.Title), unavailable ? "History unavailable" : "History");
+                builder.AddAttribute(7, nameof(LtTab.Disabled), unavailable);
+                builder.AddAttribute(8, nameof(LtTab.ChildContent), (RenderFragment)(content => content.AddContent(0, "History panel")));
+                builder.CloseComponent();
+            }));
+
+        unavailable = true;
+        cut.Render();
+
+        Assert.Multiple(() =>
+        {
+            var tabs = cut.FindAll("[role=tab]");
+            Assert.That(tabs[1].TextContent, Is.EqualTo("History unavailable"));
+            Assert.That(tabs[1].HasAttribute("disabled"), Is.True);
+            Assert.That(tabs[0].GetAttribute("aria-selected"), Is.EqualTo("true"));
+            Assert.That(cut.Find("[role=tabpanel]").TextContent, Is.EqualTo("Keys panel"));
+        });
+
+        unavailable = false;
+        cut.Render();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find("[role=tab][aria-selected=true]").TextContent, Is.EqualTo("History"));
+            Assert.That(cut.Find("[role=tab][aria-selected=true]").HasAttribute("disabled"), Is.False);
+            Assert.That(cut.Find("[role=tabpanel]").TextContent, Is.EqualTo("History panel"));
+        });
+    }
+
+    [Test]
     public void A_tab_outside_a_tab_set_is_rejected()
     {
         Assert.That(
