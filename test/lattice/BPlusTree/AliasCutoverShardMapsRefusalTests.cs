@@ -125,6 +125,21 @@ public sealed class AliasCutoverShardMapsRefusalTests
         await _registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
     }
 
+    [TestCase(null)]
+    [TestCase("")]
+    public async Task RevertAsync_without_a_shadow_identity_cannot_replace_another_copy(string? shadow)
+    {
+        _registry.ResolveAsync(Logical).Returns(Task.FromResult(Destination));
+        StubEntry(Logical, new TreeRegistryEntry { PhysicalTreeId = Destination, ShardCount = 3 });
+
+        Assert.ThrowsAsync<InvalidOperationException>(
+            () => AliasCutoverShardMaps.RevertAsync(_grains, Logical, shadow, Logical));
+
+        await _registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
+        await _registry.DidNotReceive().SwapAliasAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
+    }
+
     private void StubEntry(string treeId, TreeRegistryEntry entry) =>
         _registry.GetEntryAsync(treeId).Returns(Task.FromResult<TreeRegistryEntry?>(entry));
 

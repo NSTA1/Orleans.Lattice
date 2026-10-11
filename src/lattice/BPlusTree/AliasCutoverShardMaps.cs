@@ -260,8 +260,8 @@ internal static class AliasCutoverShardMaps
     {
         var current = await registry.ResolveAsync(logicalTreeId);
         if (!string.Equals(current, previousPhysicalTreeId, StringComparison.Ordinal)
-            && !string.IsNullOrEmpty(shadowPhysicalTreeId)
-            && !string.Equals(current, shadowPhysicalTreeId, StringComparison.Ordinal))
+            && (string.IsNullOrEmpty(shadowPhysicalTreeId)
+                || !string.Equals(current, shadowPhysicalTreeId, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
                 $"Cannot revert the alias of tree '{logicalTreeId}': it now resolves to '{current}', "
