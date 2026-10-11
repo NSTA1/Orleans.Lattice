@@ -261,6 +261,7 @@ internal sealed partial class ViewMaintainerGrain
                 if (resolved)
                 {
                     applied += upserts.Count + deletes.Count;
+                    RecordFlushedPreparesOverStagedKeys(tx);
                     ReleaseStagedKeys(tx);
                     _staging.Remove(txId);
                     MarkResolved(txId);
@@ -275,6 +276,7 @@ internal sealed partial class ViewMaintainerGrain
             // so the whole batch becomes visible together.
             await FlipLocalSliceAsync(viewTree, txId, upserts, deletes, cancellationToken);
             applied += upserts.Count + deletes.Count;
+            RecordFlushedPreparesOverStagedKeys(tx);
             ReleaseStagedKeys(tx);
             _staging.Remove(txId);
             MarkResolved(txId);
