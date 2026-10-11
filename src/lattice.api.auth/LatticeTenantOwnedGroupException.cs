@@ -12,6 +12,8 @@ namespace Orleans.Lattice.Api.Auth;
 /// malformed ids included, so an operator cannot mint a group a tenant would
 /// otherwise own. The refusal is fail-closed: nothing is read or written before
 /// this exception is raised.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,7 +29,7 @@ namespace Orleans.Lattice.Api.Auth;
 /// in-process by the facade and is deliberately not an Orleans serializable type.
 /// </para>
 /// </remarks>
-public sealed class LatticeTenantOwnedGroupException : ArgumentException
+public sealed class LatticeTenantOwnedGroupException : ArgumentException, ILatticeDomainFault
 {
     /// <summary>
     /// The reserved group id the rejected write targeted. Empty on the

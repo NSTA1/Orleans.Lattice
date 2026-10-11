@@ -8,6 +8,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// record, presented a token whose claim was already released, presented a token
 /// ahead of the record's fence that the lock did not issue and is not holding, or
 /// wrote from a region other than the one the claim was taken in.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// <para>
 /// It derives from <see cref="McpException"/> so the refusal is projected as the
 /// protocol's own tool error instead of being translated into a generic host fault,
@@ -24,7 +26,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// Orleans serialization attributes. That is also why it needs no companion
 /// <c>[RegisterCopier]</c> deep copier.
 /// </remarks>
-public sealed class RepoContextClaimConflictException : McpException
+public sealed class RepoContextClaimConflictException : McpException, ILatticeDomainFault
 {
     /// <summary>Initialises a new instance with no diagnostic context.</summary>
     public RepoContextClaimConflictException()

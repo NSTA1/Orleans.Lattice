@@ -7,8 +7,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// therefore not comparable. Carrying a distinct type lets the future retrieval
 /// seam fail closed and surface a precise diagnostic rather than returning a
 /// meaningless similarity score.
+/// Implements <c>ILatticeDomainFault</c> so framework-recovery handlers can
+/// distinguish this deliberate domain refusal from an infrastructure failure.
 /// </summary>
-internal sealed class EmbeddingSpaceMismatchException : InvalidOperationException
+internal sealed class EmbeddingSpaceMismatchException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>Creates the exception with a human-readable diagnostic message.</summary>
     /// <param name="message">A description of how the two spaces diverged.</param>
