@@ -37,6 +37,7 @@ public partial class BackupCapturePage : IDisposable
     ];
 
     private readonly ComponentLifetime _disposed = new();
+    private readonly ComponentLifetime _baseLoad = new();
     private readonly List<string> _setTrees = [];
     private string _kind = FullKind;
     private string? _name;
@@ -77,6 +78,7 @@ public partial class BackupCapturePage : IDisposable
     public void Dispose()
     {
         _disposed.Leave();
+        _baseLoad.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -97,6 +99,7 @@ public partial class BackupCapturePage : IDisposable
 
     private Task SetKindAsync(string value)
     {
+        _baseLoad.Renew();
         _kind = value is IncrementalKind or SetKind ? value : FullKind;
         _error = null;
 
@@ -106,7 +109,7 @@ public partial class BackupCapturePage : IDisposable
         if (_kind == SetKind && !string.IsNullOrEmpty(tree) && !_setTrees.Contains(tree, StringComparer.Ordinal))
         {
             _setTrees.Add(tree);
-            _tree = null;
+            SetTree(string.Empty);
         }
 
         return Task.CompletedTask;
@@ -114,6 +117,7 @@ public partial class BackupCapturePage : IDisposable
 
     private void SetTree(string value)
     {
+        _baseLoad.Renew();
         _tree = value;
         _bases = null;
         _base = null;
@@ -148,6 +152,7 @@ public partial class BackupCapturePage : IDisposable
 
     private async Task FindBasesAsync()
     {
+        var token = _baseLoad.Renew();
         var tree = _tree?.Trim();
         if (string.IsNullOrEmpty(tree))
         {
@@ -161,13 +166,24 @@ public partial class BackupCapturePage : IDisposable
         {
             var page = await Access.ListBackupsAsync(
                 new BackupCatalogRequest { PageSize = 50, OrderByCreatedDescending = true, Kind = BackupKind.Full, TreeId = tree },
-                _disposed.Token);
+                token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             _bases = page.Entries;
             _base = page.Entries.Count > 0 ? page.Entries[0].Id : null;
         }
-        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _disposed.Token))
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            _error = BackupsFaults.Describe(exception);
+        }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _error = BackupsFaults.Describe(exception);
+            }
         }
     }
 

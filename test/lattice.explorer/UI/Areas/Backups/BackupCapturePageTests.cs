@@ -129,6 +129,55 @@ public sealed class BackupCapturePageTests : BackupsTestContext
     }
 
     [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Finding_bases_for_a_replaced_tree_cannot_change_the_current_form(bool fails)
+    {
+        var pending = new TaskCompletionSource<BackupCatalogPage>();
+        Backups.List = request => request.TreeId == "orders"
+            ? pending.Task
+            : Task.FromResult(new BackupCatalogPage { Entries = [FakeBackupControl.Manifest("stock-base", tree: "stock")] });
+        var cut = RenderAt<BackupCapturePage>("backups/new?tree=orders");
+        Select(cut, "Kind", "incremental");
+
+        var oldRead = cut.FindAll("button").Single(button => button.TextContent == "Find full backups of this tree")
+            .ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.ListBackupsAsync)), Is.EqualTo(1)));
+        Input(cut, "Tree", "stock");
+        cut.FindAll("button").Single(button => button.TextContent == "Find full backups of this tree").Click();
+        cut.WaitUntil(() => Assert.That(SelectNamed(cut, "Base backup").QuerySelector("option[selected]")?.GetAttribute("value"), Is.EqualTo("stock-base")));
+
+        await cut.InvokeAsync(() =>
+        {
+            if (fails)
+            {
+                pending.SetException(new InvalidOperationException("old tree unavailable"));
+            }
+            else
+            {
+                pending.SetResult(new BackupCatalogPage { Entries = [FakeBackupControl.Manifest("orders-base")] });
+            }
+        });
+        await oldRead;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SelectNamed(cut, "Base backup").QuerySelectorAll("option").Select(option => option.GetAttribute("value")),
+                Is.EqualTo(new[] { "stock-base" }));
+            Assert.That(cut.FindAll("[role=alert]"), Is.Empty);
+        });
+        Input(cut, "Name", "stock incremental");
+        cut.Find("form").Submit();
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupOperations.StartIncrementalBackupAsync)), Is.EqualTo(1)));
+        var request = Backups.LastOf<LatticeBackupIncrementalCaptureRequest>(nameof(ILatticeBackupOperations.StartIncrementalBackupAsync));
+        Assert.Multiple(() =>
+        {
+            Assert.That(request.Scope.TreeId, Is.EqualTo("stock"));
+            Assert.That(request.BaseBackupId, Is.EqualTo("stock-base"));
+        });
+    }
+
+    [Test]
     public void Finding_bases_needs_a_tree_and_reports_a_refusal()
     {
         var cut = RenderAt<BackupCapturePage>("backups/new");

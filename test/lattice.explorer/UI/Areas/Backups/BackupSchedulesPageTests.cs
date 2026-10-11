@@ -76,6 +76,102 @@ public sealed class BackupSchedulesPageTests : BackupsTestContext
     }
 
     [Test]
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_replaced_tree_status_reply_cannot_overwrite_the_current_schedules(bool fails)
+    {
+        var pending = new TaskCompletionSource<BackupScopeStatus?>();
+        Backups.ScopeStatus = scope => scope.TreeId == "orders"
+            ? pending.Task
+            : Task.FromResult<BackupScopeStatus?>(new BackupScopeStatus(
+                scope, false, true, null, null, null, null, BackupScopeRunOutcome.Success, 7,
+                runtimeIncrementalBackupInterval: TimeSpan.FromHours(2)));
+        var cut = RenderAt<BackupSchedulesPage>("backups/schedules?tree=orders");
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.GetScopeStatusAsync)), Is.EqualTo(1)));
+
+        await cut.InvokeAsync(() => Navigation.NavigateTo("backups/schedules?tree=stock"));
+        cut.Render();
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Chain depth: 7.")));
+        var renderCount = cut.RenderCount;
+        await cut.InvokeAsync(() =>
+        {
+            if (fails)
+            {
+                pending.SetException(new InvalidOperationException("old tree unavailable"));
+            }
+            else
+            {
+                pending.SetResult(new BackupScopeStatus(
+                    BackupScopeSelector.WholeTree("orders"), true, false, null, null, null, null,
+                    BackupScopeRunOutcome.Failure, 99, TimeSpan.FromHours(12)));
+            }
+        });
+        cut.WaitUntil(() => Assert.That(cut.RenderCount, Is.GreaterThan(renderCount)));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Markup, Does.Contain("Chain depth: 7.").And.Not.Contain("Chain depth: 99."));
+            Assert.That(cut.FindAll("[role=alert]"), Is.Empty);
+            Assert.That(cut.FindAll("tbody tr")[1].TextContent, Does.Contain("Registered").And.Contain("2 h"));
+        });
+    }
+
+    [Test]
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public async Task A_schedule_change_finishing_after_navigation_cannot_refresh_or_report_on_the_next_tree(bool cancel, bool fails)
+    {
+        var pending = new TaskCompletionSource();
+        Backups.Schedule = _ => pending.Task;
+        Backups.CancelSchedule = (_, _) => pending.Task;
+        Backups.ScopeStatuses["orders"] = new BackupScopeStatus(
+            BackupScopeSelector.WholeTree("orders"), true, false, null, null, null, null, BackupScopeRunOutcome.None, 1);
+        Backups.ScopeStatuses["stock"] = new BackupScopeStatus(
+            BackupScopeSelector.WholeTree("stock"), false, false, null, null, null, null, BackupScopeRunOutcome.None, 7);
+        var cut = RenderAt<BackupSchedulesPage>("backups/schedules?tree=orders");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("form.lt-backups-form"), Has.Count.EqualTo(1)));
+        Task change;
+        if (cancel)
+        {
+            cut.Find("tbody button").Click();
+            change = cut.FindAll("[role=alertdialog] button").Single(button => button.TextContent == "Cancel schedule")
+                .ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        }
+        else
+        {
+            change = cut.Find("form.lt-backups-form").SubmitAsync();
+        }
+
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(cancel
+            ? nameof(ILatticeBackupControl.CancelScheduleAsync)
+            : nameof(ILatticeBackupControl.ScheduleBackupAsync)), Is.EqualTo(1)));
+        await cut.InvokeAsync(() => Navigation.NavigateTo("backups/schedules?tree=stock"));
+        cut.Render();
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Chain depth: 7.")));
+        await cut.InvokeAsync(() =>
+        {
+            if (fails)
+            {
+                pending.SetException(new InvalidOperationException("old tree unavailable"));
+            }
+            else
+            {
+                pending.SetResult();
+            }
+        });
+        await change;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.GetScopeStatusAsync)), Is.EqualTo(2));
+            Assert.That(cut.Markup, Does.Contain("Chain depth: 7."));
+            Assert.That(cut.FindAll("form.lt-backups-form [role=status], [role=alert]"), Is.Empty);
+            Assert.That(cut.Find("form.lt-backups-form button[type=submit]").HasAttribute("disabled"), Is.False);
+        });
+    }
+
+    [Test]
     public void A_bad_interval_is_refused_before_any_call()
     {
         var cut = RenderAt<BackupSchedulesPage>("backups/schedules?tree=orders");
