@@ -112,6 +112,8 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.BPlusTree.CrossTreeReceiverTerminal"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.CrossTreeReceiverTreeFinalize"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.DirtyLeavesSnapshot"] = ReadModel,
+            ["Orleans.Lattice.BPlusTree.LeafLiveRawEntriesPage"] = ReadModel,
+            ["Orleans.Lattice.BPlusTree.LeafPendingMutationsPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardShippingPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.OrphanedLeafRepairPage"] = ReadModel,
