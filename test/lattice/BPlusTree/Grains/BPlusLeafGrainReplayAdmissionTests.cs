@@ -109,6 +109,23 @@ public sealed class BPlusLeafGrainReplayAdmissionTests
             "interactive must still be admitted in the queue reserved for it.");
     }
 
+    [TestCase(6, 2, 16, 12)]
+    [TestCase(6, 5, 4, 3)]
+    [TestCase(6, 6, 4, 3)]
+    [TestCase(6, 0, 24, 18)]
+    public void Admission_bound_uses_circulating_permits(
+        int ceiling, int withheld, int interactive, int bulk)
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling, bulk);
+        BPlusLeafGrain.SeedWithheldReplayPermitsForTest(withheld);
+        Assert.That(BPlusLeafGrain.TryAdmitReplayPermitWaiter(
+            4, LatticeReplayAdmissionClass.Bulk, out _, out var bulkBound), Is.False);
+        Assert.That(bulkBound, Is.EqualTo(bulk));
+        Assert.That(BPlusLeafGrain.TryAdmitReplayPermitWaiter(
+            4, LatticeReplayAdmissionClass.Interactive, out _, out var interactiveBound), Is.True);
+        Assert.That(interactiveBound, Is.EqualTo(interactive));
+    }
+
     /// <summary>
     /// Bulk is never excluded outright, however narrow the configured depth.
     /// </summary>
