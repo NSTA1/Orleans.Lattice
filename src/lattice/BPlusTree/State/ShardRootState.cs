@@ -209,9 +209,9 @@ internal sealed class ShardRootState
     [Id(17)] public LeafAccessModelSnapshot? LeafAccessModel { get; set; }
 
     /// <summary>
-    /// The leaf most recently classified unreadable by this shard's scan-page
+    /// The leaf most recently probed by this shard's scan-page
     /// stranded-leaf recovery, as its grain identity, or <see langword="null"/>
-    /// when no leaf has ever been classified (issue #3016).
+    /// when no recovery probe has been applied (issue #3016).
     /// <para>
     /// Paired with <see cref="StrandedScanRecoveries"/>, and durable for a
     /// reason that does not apply to the consecutive-stall run the
@@ -220,7 +220,7 @@ internal sealed class ShardRootState
     /// nowhere, and the remedy it selects - dropping that entry - acts on
     /// activation-scoped state, so scoping the run to the activation is
     /// correct. This pair counts something else: how many times the remedy has
-    /// been <em>applied to this leaf and failed to take</em>. A fresh
+    /// been applied to this leaf. It does not record whether the probe helped. A fresh
     /// activation holds no coalesced reads, so its eviction is a no-op by
     /// construction and its first stall is indistinguishable from a first-ever
     /// stall - which is precisely why that evidence cannot live in the
@@ -229,7 +229,7 @@ internal sealed class ShardRootState
     /// <para>
     /// Adding this slot is backward-compatible: state persisted before the
     /// field existed deserializes with <c>StrandedScanLeafId = null</c>, the
-    /// correct "nothing has ever been classified" state.
+    /// correct "nothing has ever been probed" state.
     /// </para>
     /// </summary>
     [Id(18)] public string? StrandedScanLeafId { get; set; }
@@ -238,14 +238,12 @@ internal sealed class ShardRootState
     /// How many times the stranded-leaf recovery has been applied to
     /// <see cref="StrandedScanLeafId"/>, across every activation of this shard
     /// root (issue #3016). Reset to one whenever a different leaf is
-    /// classified, so it is always a count for the leaf currently named.
+    /// probed, so it is always a count for the leaf currently named.
     /// <para>
     /// One means the recovery has just been applied for the first time and may
-    /// yet take. <b>Greater than one is the reading that localises the fault:</b>
-    /// the coalesced read was already dropped on an earlier occasion, so the
-    /// read that stalled this time was issued fresh to the leaf and the leaf
-    /// still did not answer. No remedy available to the shard root can change
-    /// that, and continuing to retry will not either.
+    /// yet take. Greater than one records earlier probes, possibly before a
+    /// successful scan, since this count is not cleared on progress. It cannot
+    /// localise a fault or rule out eventual convergence (issue #3521).
     /// </para>
     /// </summary>
     [Id(19)] public int StrandedScanRecoveries { get; set; }

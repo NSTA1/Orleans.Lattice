@@ -1236,12 +1236,14 @@ internal sealed partial class ShardRootGrain
         var progress = ClassifyScanPageStall(walk);
         var stranded = progress == ScanPageLeafProgress.Stranded;
         var consecutive = _consecutiveZeroProgressStalls;
-        var applications = stranded ? state.State.StrandedScanRecoveries : 0;
+        var leafLabel = leafInFlight?.ToString();
+        var applications = stranded && state.State.StrandedScanLeafId == leafLabel
+            ? state.State.StrandedScanRecoveries : 0;
 
         // Deliberately in the message and the typed slot only, never a metric
         // tag: leaf identity is unbounded cardinality, and the counter above is
         // already attributable by tree, shard and phase.
-        var which = leafInFlight is { } id ? $", leaf {id}" : string.Empty;
+        var which = leafLabel is not null ? $", leaf {leafLabel}" : string.Empty;
 
         var where = phase switch
         {
@@ -1261,10 +1263,15 @@ internal sealed partial class ShardRootGrain
         // two were indistinguishable for the 307 attempts behind issue #3016.
         var run = stranded
             ? $" This is the {consecutive}th consecutive ceiling fire on this shard that completed "
-                + "no leaf and named this same leaf, so the leaf is classified UNREADABLE rather "
-                + "than slow: retrying it unchanged has already been tried and did not differ. The "
-                + "coalesced read the retries were attaching to has been abandoned so the next "
-                + "attempt issues a fresh one."
+                + "no leaf and named this same leaf. This stalled sequence does not prove a "
+                + "permanent leaf fault. "
+                + (_scanRecoveryApplied
+                    ? "The coalesced read has been abandoned so the next attempt issues a fresh one."
+                    : _scanReplayQueued > 0
+                        ? $"Recovery is deferred with {_scanReplayQueued} queued replay waiter(s) on "
+                            + "this silo; shared pressure is observed, but this leaf's cause is unknown."
+                        : "Recovery is deferred by bounded exponential backoff; the existing read "
+                            + "remains coalesced and can still complete.")
             : consecutive > 1
                 ? $" This is the {consecutive}th consecutive ceiling fire on this shard that "
                     + "completed no leaf and named this same leaf."
@@ -1277,10 +1284,8 @@ internal sealed partial class ShardRootGrain
         // count is durable precisely so that reading cannot recur (issue #3016).
         var took = stranded && applications > 1
             ? $" The recovery has now been applied to this leaf {applications} times across every "
-                + "activation of this shard root, so a fresh read was already issued on an earlier "
-                + "occasion and the leaf still did not answer: the fault is inside that leaf "
-                + "activation rather than in this shard root's read coalescing, and no further "
-                + "scan attempt will converge without the leaf being made readable."
+                + "activation of this shard root. Earlier recovery probes are historical evidence, "
+                + "not proof of permanent failure; scans can still converge when pressure drains."
             : string.Empty;
 
         return new ScanPageStalledException(
@@ -1297,7 +1302,7 @@ internal sealed partial class ShardRootGrain
             Operation = walk.Operation,
             Phase = PhaseLabel(phase),
             LeavesVisited = leaves,
-            LeafInFlight = leafInFlight?.ToString(),
+            LeafInFlight = leafLabel,
             ConsecutiveZeroProgressStalls = consecutive,
             LeafStranded = stranded,
             StrandedRecoveryApplications = applications,

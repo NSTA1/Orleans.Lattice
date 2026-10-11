@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// How a zero-progress page-fill ceiling fire is classified: whether the leaf
 /// it named is merely slow this once, or has missed the ceiling on enough
-/// consecutive attempts to be treated as unreadable.
+/// consecutive attempts to warrant a bounded recovery probe.
 /// </summary>
 internal enum ScanPageLeafProgress
 {
@@ -24,8 +24,8 @@ internal enum ScanPageLeafProgress
     /// <summary>
     /// The same leaf has now missed the ceiling on
     /// <see cref="ShardRootGrain.StrandedLeafStallThreshold"/> consecutive
-    /// attempts with nothing read on any of them, so it is classified
-    /// unreadable and the recovery is applied.
+    /// attempts with nothing read on any of them. This is a stalled sequence,
+    /// not proof of permanent failure; recovery may be deferred.
     /// </summary>
     Stranded,
 }
@@ -34,14 +34,13 @@ internal sealed partial class ShardRootGrain
 {
     /// <summary>
     /// How many consecutive zero-progress ceiling fires on one leaf identity it
-    /// takes before that leaf is classified unreadable rather than slow.
+    /// takes before a bounded recovery probe is considered.
     /// <para>
     /// <b>It must be greater than one, and that is the whole design.</b> A
     /// single fire cannot distinguish the two conditions even in principle: a
-    /// leaf replaying a long WAL window from cold and a leaf that will never
-    /// answer produce byte-identical first attempts. Only the <em>sequence</em>
-    /// separates them, so the threshold is the number of attempts the shard
-    /// root is willing to spend establishing that a retry does not differ.
+    /// leaf replaying a long WAL window from cold and an orphaned read produce
+    /// byte-identical attempts. A sequence warrants a recovery probe, but
+    /// cannot distinguish permanent damage from shared pressure.
     /// </para>
     /// <para>
     /// Three, because two is one observation of "it happened again" and is met
@@ -68,6 +67,11 @@ internal sealed partial class ShardRootGrain
     /// <see cref="_zeroProgressLeafId"/>.
     /// </summary>
     private int _consecutiveZeroProgressStalls;
+
+    private int _stallsUntilRecovery;
+    private int _recoveryStallInterval = StrandedLeafStallThreshold;
+    private bool _scanRecoveryApplied;
+    private int _scanReplayQueued;
 
     private bool _scanPageZeroProgressOutcomesPrimed;
 
@@ -120,9 +124,9 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Classifies a ceiling fire that is about to fault, and applies the
     /// stranded-leaf recovery when the classification crosses from slow to
-    /// unreadable (issue #3016).
+    /// repeatedly stalled (issues #3016 and #3521).
     /// <para>
-    /// <b>The condition being detected is a fixed point, not a slow call.</b>
+    /// <b>The condition being detected is repeated zero progress.</b>
     /// The fire that brought us here read nothing, so <see cref="TryBankPartialScanPage{T}"/>
     /// had nothing to bank and the caller was told to retry from the
     /// continuation token it already held. That retry re-issues an
@@ -156,6 +160,8 @@ internal sealed partial class ShardRootGrain
     private ScanPageLeafProgress ClassifyScanPageStall(ScanPageWalk walk)
     {
         PrimeScanPageZeroProgressOutcomes();
+        _scanRecoveryApplied = false;
+        _scanReplayQueued = 0;
 
         // Progress on this attempt, or no leaf to attribute it to: neither is
         // evidence that any single leaf cannot be read.
@@ -169,6 +175,8 @@ internal sealed partial class ShardRootGrain
         {
             _zeroProgressLeafId = leafId;
             _consecutiveZeroProgressStalls = 1;
+            _stallsUntilRecovery = 0;
+            _recoveryStallInterval = StrandedLeafStallThreshold;
         }
         else
         {
@@ -182,7 +190,19 @@ internal sealed partial class ShardRootGrain
         }
 
         RecordScanPageZeroProgressStall(1, LatticeMetrics.OutcomeScanPageLeafStrandedTag);
-        RecoverStrandedLeaf(leafId);
+        _scanReplayQueued = BPlusLeafGrain.QueuedReplayPermitWaiters;
+        if (_stallsUntilRecovery > 0)
+            _stallsUntilRecovery--;
+
+        // A queued replay is evidence of shared pressure, not a leaf fault.
+        // Keep the existing call: eviction cannot cancel it and only adds load.
+        if (_scanReplayQueued == 0 && _stallsUntilRecovery == 0)
+        {
+            RecoverStrandedLeaf(leafId);
+            _scanRecoveryApplied = true;
+            _recoveryStallInterval = Math.Min(_recoveryStallInterval * 2, StrandedLeafStallThreshold * 16);
+            _stallsUntilRecovery = _recoveryStallInterval;
+        }
         return ScanPageLeafProgress.Stranded;
     }
 
@@ -195,10 +215,12 @@ internal sealed partial class ShardRootGrain
     {
         _zeroProgressLeafId = null;
         _consecutiveZeroProgressStalls = 0;
+        _stallsUntilRecovery = 0;
+        _recoveryStallInterval = StrandedLeafStallThreshold;
     }
 
     /// <summary>
-    /// The recovery applied to a leaf classified unreadable: the shard root
+    /// The recovery probe for a repeatedly stalled leaf: the shard root
     /// stops depending on the read it is parked on (issue #3016).
     /// <para>
     /// <b>Why evicting the coalesced read <em>is</em> the recovery, rather than
@@ -210,7 +232,7 @@ internal sealed partial class ShardRootGrain
     /// handing it to every caller, and no attempt after the first ever reaches
     /// the leaf at all. Dropping the entry is the one action available to the
     /// shard root that makes the next attempt genuinely different from this
-    /// one, and it is enough: a leaf whose old read was orphaned by a lost
+    /// one: a leaf whose old read was orphaned by a lost
     /// activation answers the fresh read immediately, and the scan converges on
     /// the very next attempt with no operator action and no
     /// <c>reset_index</c>.
@@ -225,12 +247,11 @@ internal sealed partial class ShardRootGrain
     /// <para>
     /// <b>This does not claim to unwedge the leaf.</b> If the leaf's own
     /// activation is what is parked, the fresh read queues behind whatever is
-    /// holding it and stalls too - the classification simply holds, the
-    /// <c>stranded</c> arm keeps climbing, and every subsequent attempt is
-    /// reported as what it is. That is a strictly better failure than the one
-    /// it replaces: a climbing <c>stranded</c> arm says the recovery is being
-    /// applied and is not taking, which localises the fault to inside the leaf,
-    /// whereas 307 identical stalls said nothing at all.
+    /// holding it and stalls too. Further evictions back off by doubling the
+    /// number of stalled page fills between probes, capped at sixteen times the
+    /// threshold. Replay queue pressure defers eviction altogether. Progress or
+    /// a different leaf resets this activation-scoped backoff. Neither the run
+    /// nor the durable application count proves where a fault lies.
     /// </para>
     /// </summary>
     private void RecoverStrandedLeaf(GrainId leafId)
@@ -239,14 +260,13 @@ internal sealed partial class ShardRootGrain
         var applications = NoteStrandedLeafRecoveryApplied(leafId);
 
         logger.LogWarning(
-            "Shard {Shard} of tree '{Tree}' has classified leaf {Leaf} unreadable after {Stalls} "
+            "Shard {Shard} of tree '{Tree}' observed leaf {Leaf} stalled after {Stalls} "
             + "consecutive scan-page ceiling fires that completed no leaf. {Abandoned} coalesced "
             + "read(s) for that leaf were abandoned so the next attempt issues a fresh read "
             + "instead of attaching to the parked one. This recovery has now been applied to this "
-            + "leaf {Applications} time(s) across every activation of this shard root; once that "
-            + "count exceeds one, an earlier attempt already issued a fresh read and the leaf "
-            + "still did not answer, so the fault is inside that leaf activation rather than in "
-            + "this shard root and no further scan attempt will converge.",
+            + "leaf {Applications} time(s) across activations of this shard root. This count does "
+            + "not prove a permanent leaf fault or exclude shared replay/storage pressure. "
+            + "Repeated recovery probes back off; scans can still converge when pressure drains.",
             MyShardIndex,
             TreeId,
             leafId,
@@ -265,8 +285,8 @@ internal sealed partial class ShardRootGrain
     /// activation is parked on, and the remedy it selects acts on that
     /// activation's own map, so both are correctly activation-scoped -
     /// persisting the run would strand a fresh activation's first stall on a
-    /// verdict reached about a read it never held. This count is evidence about
-    /// the <em>leaf</em>, and specifically about whether the remedy took. A
+    /// verdict reached about a read it never held. This count is historical
+    /// evidence about recovery probes, not their success. A
     /// fresh activation holds no coalesced reads, so its eviction is
     /// necessarily a no-op and its stall is byte-identical to a first-ever
     /// stall; the observation "a fresh read was already issued and the leaf
@@ -280,8 +300,8 @@ internal sealed partial class ShardRootGrain
     /// have to happen on every settled page fill - the hot read path - to be
     /// timely, and would put a storage write there to maintain a field that is
     /// read only when a leaf strands. A stale record costs nothing: it is read
-    /// only by a later stranding, where "this leaf has been classified
-    /// unreadable before" remains true and remains the useful reading. A
+    /// only by a later stranding, where "this leaf has had recovery probes
+    /// before" remains true. A
     /// different leaf stranding resets it, so the count always names the leaf
     /// it is reported against.
     /// </para>
