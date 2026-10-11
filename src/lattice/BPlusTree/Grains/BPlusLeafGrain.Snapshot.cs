@@ -102,22 +102,20 @@ internal sealed partial class BPlusLeafGrain
     internal int CheckpointPersistCountSinceRecheckForTest => _checkpointPersistCountSinceRecheck;
 
     /// <summary>
-    /// Set once this activation genuinely advances a per-partition projection
-    /// checkpoint over cache-resident applies - i.e. the pending-advance branch
-    /// of <see cref="FlushPendingCheckpointAsync"/> runs, which only happens
-    /// after foreground writes or a WAL tail replay have folded new entries
-    /// into the in-memory cache and moved the checkpoint forward. It is the
-    /// safety precondition for the graceful-deactivation snapshot capture
-    /// (<see cref="TryCaptureSnapshotOnDeactivateAsync"/>): a checkpoint that
-    /// advanced this way is, by construction, backed by data the cache holds,
-    /// so capturing that cache and stamping the new checkpoint truthfully
-    /// records coverage. A leaf that merely reactivated cold - its persisted
-    /// checkpoint restored from state or a rehydrate that reset uncovered
-    /// partitions to <c>-1</c>, with no forward apply this activation - never
-    /// sets this, so the deactivation hook does not capture an empty/partial
-    /// cache and falsely claim coverage of a prefix the WAL alone still holds
-    /// (the #1535 no-loss invariant). Reset to <c>false</c> on every fresh
-    /// activation because it is a plain instance field, never persisted.
+    /// Set when this activation attempts a forward per-partition projection
+    /// checkpoint commit in <c>ApplyPendingCheckpointAdvance</c>. It is set
+    /// before the durable write and retained if that write fails, so it does
+    /// not guarantee a successful persist. Since #2270, replay checkpoints
+    /// record SCANNED-through progress, including entries owned by other leaves,
+    /// not only cache-resident applies. This activation-local progress signal
+    /// participates in the graceful-deactivation capture gate
+    /// (<see cref="TryCaptureSnapshotOnDeactivateAsync"/>); its safety also
+    /// depends on the consumer-min retention pin and unresolved-work clamps
+    /// described at that gate, not on every scanned entry residing in this cache.
+    /// Merely restoring a checkpoint from state, or lowering uncovered partitions
+    /// to <c>-1</c> during rehydrate, does not set it. Reset to <c>false</c>
+    /// on every fresh activation because it is a plain instance field, never
+    /// persisted.
     /// </summary>
     private bool _checkpointAdvancedThisActivation;
 
@@ -170,7 +168,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>.
     /// This latch drives the off-cadence coverage-deficit capture in
     /// <see cref="MaybeRunPeriodicSnapshotRecheckAsync"/> exactly once, after
-    /// the tail replay re-advances the partition over cache-resident applies
+    /// the tail replay re-advances the partition's scanned-through checkpoint
     /// (the same <see cref="_checkpointAdvancedThisActivation"/> /
     /// <see cref="_cacheRebuiltFromWalStartThisActivation"/> no-loss precondition
     /// the graceful-deactivation capture already trusts). Reset to <c>false</c>
@@ -2358,9 +2356,11 @@ internal sealed partial class BPlusLeafGrain
         // Capture once per activation, off the cadence, as soon as the tail
         // replay has re-advanced a partition past the coverage the stale
         // snapshot recorded - gated by the SAME no-loss precondition the
-        // graceful-deactivation capture trusts (a checkpoint advanced over
-        // cache-resident applies, or a full cold rebuild), so we never stamp
-        // coverage the cache does not hold. Coverage advances strictly (current
+        // graceful-deactivation capture trusts (an activation-local forward
+        // checkpoint commit attempt, or a full cold rebuild). That gate explains
+        // why scanned-through progress does not require other leaves' entries
+        // in this cache and how unresolved own work remains protected.
+        // Coverage advances strictly (current
         // > the inherited snapshot offset), so even if teardown interrupts a
         // full replay each activation banks a STRICTLY higher snapshot: a
         // monotone escape that needs no single activation to finish the
@@ -2662,17 +2662,28 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // Safety gate (the #1535 no-loss invariant). Capture only when the
-        // in-memory cache faithfully holds every checkpointed prefix it would
-        // stamp as covered. Two independent activations satisfy that:
-        //   (a) this activation advanced a checkpoint over cache-resident applies
-        //       (foreground writes or a completed tail replay) -
+        // cache can cover this leaf's own data in the prefix being stamped.
+        // Two independent activation-local progress signals admit capture:
+        //   (a) this activation attempted a forward checkpoint commit -
         //       _checkpointAdvancedThisActivation; or
         //   (b) this activation cold-rebuilt the cache from the WAL start over a
         //       pre-existing durable checkpoint (persisted offset > 0) whose
         //       prefix provably survives in the readable WAL (the #945 fall-off
-        //       guard passed), so the cache holds the entire readable window, a
-        //       superset of the checkpointed prefix -
+        //       guard passed), rebuilding this leaf's data in that window -
         //       _cacheRebuiltFromWalStartThisActivation.
+        // Signal (a) is NOT proof that every checkpointed entry was applied
+        // here: since #2270, replay checkpoints advance over SCANNED entries,
+        // including other leaves' work. Each leaf covers only its own data.
+        // ResolveDurablePinForPartition bounds this leaf's pin by its persisted
+        // checkpoint and durable snapshot coverage; LatticeWalGc takes the
+        // minimum across consumers (and honours uncovered Zero block pins),
+        // so our scan past another leaf's entry cannot release that leaf's pin.
+        // Our own unapplied replay work is protected separately:
+        // TryFlushRecoveredCeilingAsync clamps below deferredOffsets' unresolved
+        // terminals and unrecorded unresolved prepares; durably recorded replay
+        // work is recoverable from leaf state rather than needing a WAL re-read.
+        // The latch is set before PersistAsync and survives rollback (#4017);
+        // it signals progress, not durable coverage on its own.
         // Signal (b) is what closes the residual #1537 gap: an already-converged
         // leaf (checkpoint already at head) cold-reactivates and rebuilds its
         // full cache but advances no checkpoint, so (a) alone stays false and the
@@ -2680,7 +2691,8 @@ internal sealed partial class BPlusLeafGrain
         // checkpoint) never satisfies (b), and a leaf that merely reactivated cold
         // WITHOUT a full rebuild (its persisted checkpoint restored from state
         // with a non-empty cache, or a rehydrate that reset uncovered partitions
-        // to -1 with no forward apply) satisfies neither and does not capture, so
+        // to -1 with no forward checkpoint commit attempt) satisfies neither
+        // and does not capture, so
         // it can never write a snapshot claiming coverage of data the cache never
         // held. The one shape that could make a -1 rebuild unfaithful - a trimmed
         // WAL prefix with no covering snapshot - throws at activation (the #945
