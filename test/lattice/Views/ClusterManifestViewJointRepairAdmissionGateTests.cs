@@ -97,6 +97,21 @@ public sealed class ClusterManifestViewJointRepairAdmissionGateTests
     }
 
     [Test]
+    public async Task IsOpenAsync_capability_loss_invalidates_open_manifest_verdict_without_membership_change()
+    {
+        var manifests = Substitute.For<IClusterManifestProvider>();
+        var membership = Substitute.For<IClusterMembershipService>();
+        var (gate, marker) = CreateGate(manifests, membership);
+        manifests.Current.Returns(Manifest(marker, 1, (Current, true), (Peer, true)));
+        membership.CurrentSnapshot.Returns(Members(1, (Current, SiloStatus.Active), (Peer, SiloStatus.Active)));
+        Assert.That(await gate.IsOpenAsync(), Is.True);
+
+        manifests.Current.Returns(Manifest(marker, 2, (Current, true), (Peer, false)));
+        Assert.That(await gate.IsOpenAsync(), Is.False,
+            "An earlier admission cannot become a permanent certificate after the manifest changes.");
+    }
+
+    [Test]
     public async Task IsOpenAsync_recreated_gate_rederives_closed_membership_instead_of_remembering_prior_admission()
     {
         var manifests = Substitute.For<IClusterManifestProvider>();
