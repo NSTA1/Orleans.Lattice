@@ -2,7 +2,9 @@
 
 This finite model documents required admission semantics. It is not proof
 that the pending source-confirmation or joint-publication candidates implement
-them. All detector verdicts remain explicitly Pending.
+them. Maintainer admission verdicts remain explicitly Pending. The separately
+accepted decision-before-terminal producer rows are a rely-guarantee, not a
+claim that the maintainer validates fabricated terminal records.
 
 ## Variable mapping
 
@@ -21,10 +23,10 @@ them. All detector verdicts remain explicitly Pending.
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `Decide` | Commit before announcing any terminal | Source atomic decision, not maintainer terminal presence. | Pending: no accepted detector for the model's source decision/append interleaving. |
+| `Decide` | Commit before announcing any terminal | `AtomicWriteGrain.RecordTerminalDecisionAsync`; source-producer rely-guarantee, not maintainer terminal presence. | Yes: `AtomicWriteGrainTests.Commit_terminal_waits_for_the_durable_decision_response` holds the decision response at both normal and cross-tree producer entrypoints. |
 | `SupersedeTwin` | Fair later source write corrects a contradictory same-clock tombstone tuple | Source environment step, not a claim of normal revision reuse. | Pending: no accepted detector for this adversarial tuple correction. |
 | `Install` | Source becomes readable independently of terminal delivery | Candidate source-confirmation path. | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_distinguishes_equal_bytes_at_different_versions_in_every_reader_snapshot`. |
-| `AppendTerminal` | Deliver each distinct shard terminal separately | `ViewMaintainerGrain.HandleStagingEntry`. | Pending: proposed detector `MaterialisedViewRebuildSplitSagaTests.A_rebuild_between_two_shard_commits_does_not_strand_the_later_shard`. |
+| `AppendTerminal` | The producer may announce a terminal only after its decision completes; shard delivery remains independently scheduled | `AtomicWriteGrain.BroadcastTerminalsAsync`, `ShardRootGrain.AppendTxTerminalAsync`. | Yes: `AtomicWriteGrainTests.Commit_terminal_waits_for_the_durable_decision_response`, `AtomicWriteGrainTests.RunSagaAsync_commit_records_the_decision_before_broadcasting_terminals` and `AtomicWriteGrainTests.FinalizeAsync_records_the_decision_before_broadcasting_terminals`. |
 | `Read` | Stage each partition; dropped ordinary progress is not an applied replacement | `ViewMaintainerGrain.HandleStagingEntry`, `ViewMaintainerGrain.IsSupersededByOrdinary`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_whose_omitted_key_relies_on_a_dropped_ordinary_write_waits_for_the_newer_source_write`. |
 | `Confirm` | Compare one coherent logical tuple and captured pending-decision witness against the prepare | Candidate `GetVisibleRawEntriesAsync`; committed undrained metadata can supersede an older coherent materialised row, without a synthetic projection mutation. | Pending: proposed detectors `BPlusLeafGrainTests.GetVisibleRawEntries_committed_pending_value_and_version_come_from_one_row` and `MaterialisedViewDecisionBeforeTerminalTests.Committed_batch_logged_before_its_leaves_drain_confirms_against_the_decision`. |
 | `Retry` | Defer the whole batch and continue reading/rechecking | `ViewMaintainerGrain.FlushCompletedFilterBatchesAsync`; candidate gates retain whole batch identity. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
@@ -42,7 +44,7 @@ them. All detector verdicts remain explicitly Pending.
 | Spec property | Code-level property | Detector |
 |---------------|---------------------|----------|
 | `CheckpointHeld` | A wholly deferred batch remains replayable | Pending: proposed detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
-| `TerminalSound` | A terminal is not a substitute for its prior committed decision | Pending: source decision/terminal discrimination is not accepted here. |
+| `TerminalSound` | A terminal is not a substitute for its prior committed decision; the source producer awaits that decision before broadcasting | Yes: `AtomicWriteGrainTests.Commit_terminal_waits_for_the_durable_decision_response`; removing the decision await independently at either commit producer fails its held-response case. This is not maintainer rejection of a fabricated terminal. |
 | `HistoryRetained` | Accumulative registrations retain every revision, bypassing current-state U/T filtering | Pending: accepted history bypass evidence exists, but this compound admission/history mapping remains unaccepted. |
 | `VersionIdentity` | Identity compares clock, bytes and tombstone kind, not byte equality | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_distinguishes_equal_bytes_at_different_versions_in_every_reader_snapshot`; same-clock tombstone-kind control is formal-only. |
 | `RegistrationSound` | An expected participant cannot register before its local eligibility evidence | Pending: cross-tree candidate source admission remains unresolved. |
