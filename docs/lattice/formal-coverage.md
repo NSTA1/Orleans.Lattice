@@ -95,8 +95,11 @@ rebuild floor. Its omission-visible guard is a contract awaiting production
 acceptance, not a proof of two-batch dependency closure or cross-tree snapshots.
 The physical-rebind companion separates capture, scan, validation and install.
 An alias move after validation may publish the coherent captured tuple and heal
-later; it never relabels that scan using a fresh alias. Failure/restart and staging
-isolation mappings remain partial. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
+later; it never relabels that scan using a fresh alias. Captured-tuple publication,
+failed-before-commit and committed-lost-response recovery now have accepted
+production detectors, as do simultaneous immutable bound/candidate offset holds
+across rejected/repeated candidates and snapshot-role changes. Candidate-specific
+GC and physical staging isolation remain partial. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
 
 Each companion has a dedicated deterministic-only TLC shard. The fence/horizon
 serial no-build commands took 48.434 and 124.659 seconds with one JVM slot,
@@ -104,6 +107,10 @@ two visible CPUs and a 2 GiB heap cap on a shared host; peak heap was not measur
 Independent aggregation/rebind commands took 95.417 and 117.545 seconds with
 one JVM slot, two visible CPUs and an 1800 MB heap cap. These are whole-command
 costs including paired controls, not sums of tests waiting for a shared JVM slot.
+The combined four-companion harness also passes all 71 cases after the main
+rebase, in 316.566 seconds with one JVM slot, two visible CPUs and an 1800 MB
+heap cap. These measurements do not include the still-unaccepted general staging
+and source-admission companions.
 A green finite model is not a production refinement certificate: the acceptance
 gate intentionally remains red until discriminating production detector evidence
 justifies every pending verdict.
