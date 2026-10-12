@@ -213,6 +213,7 @@ internal sealed partial class ViewMaintainerGrain
     /// <inheritdoc />
     public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
     {
+        await GuardJointMaintenanceAdmissionAsync(cancellationToken);
         using var viewWriteScope = ViewWriteContext.BeginScope();
         await ReleaseUncommittedJointOwnershipAsync();
         if (HasJointOwnership)

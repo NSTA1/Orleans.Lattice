@@ -6,6 +6,57 @@ namespace Orleans.Lattice.Tests.Views;
 
 public partial class ViewMaintainerReplayFlushTests
 {
+    [TestCase("decommission")]
+    [TestCase("rebuild")]
+    [TestCase("reconcile")]
+    public async Task Closed_upgrade_gate_blocks_public_maintenance_with_pending_acknowledgement_without_effects(string maintenance)
+    {
+        var view = new FakeViewTree();
+        var coordinator = new MemoizingCoordinator(view).Arm();
+        var gate = Substitute.For<IViewJointRepairAdmissionGate>();
+        var open = false;
+        gate.IsOpenAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(open));
+        coordinator.Grain.AcknowledgeRepairAsync(Arg.Any<string>()).Returns(_ =>
+        {
+            Assert.That(open, Is.True, "Public maintenance must not send a new acknowledgement RPC to an old coordinator.");
+            throw new InvalidOperationException("Acknowledgement reached after admission reopened.");
+        });
+        var checkpoint = new FakePersistentState<ViewCheckpointState>();
+        var h = Create(view, checkpoint, coordinator: coordinator.Grain, admissionGate: gate);
+        checkpoint.State.ActiveGeneration = 3;
+        checkpoint.State.AppliedOffsets[0] = 7;
+        checkpoint.State.PendingCrossTreeRepairAcknowledgements.Add(CrossTreeOperationId);
+        var durable = CloneCheckpoint(checkpoint.State);
+        var writes = 0;
+        checkpoint.OnWriteState = _ => writes++;
+
+        Task MaintainAsync() => maintenance switch
+        {
+            "decommission" => h.Grain.DecommissionAsync(),
+            "rebuild" => h.Grain.RebuildAsync(),
+            "reconcile" => h.Grain.ReconcileAsync(),
+            _ => throw new ArgumentOutOfRangeException(nameof(maintenance)),
+        };
+        var blocked = Assert.ThrowsAsync<InvalidOperationException>(MaintainAsync);
+        Assert.That(blocked!.Message, Does.Contain("joint protocol admission"));
+        Assert.That(coordinator.Grain.ReceivedCalls(), Is.Empty);
+        Assert.That(view.Tree.ReceivedCalls(), Is.Empty);
+        Assert.That(writes, Is.Zero);
+        Assert.That(checkpoint.State.ActiveGeneration, Is.EqualTo(durable.ActiveGeneration));
+        Assert.That(checkpoint.State.AppliedOffsets, Is.EqualTo(durable.AppliedOffsets));
+        Assert.That(checkpoint.State.PendingCrossTreeRepairAcknowledgements,
+            Is.EqualTo(durable.PendingCrossTreeRepairAcknowledgements));
+
+        open = true;
+        // Decommission must deliver the retained acknowledgement before teardown.
+        // The injected response fault stops before unrelated reminder/tree work.
+        var resumed = Assert.ThrowsAsync<InvalidOperationException>(() => h.Grain.DecommissionAsync());
+        Assert.That(resumed!.Message, Is.EqualTo("Acknowledgement reached after admission reopened."));
+        await coordinator.Grain.Received(1).AcknowledgeRepairAsync(ViewName);
+        Assert.That(checkpoint.State.ActiveGeneration, Is.EqualTo(3));
+        Assert.That(checkpoint.State.PendingCrossTreeRepairAcknowledgements, Does.Contain(CrossTreeOperationId));
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task Closed_upgrade_gate_pauses_before_any_coordinator_RPC_and_resumes_automatically(bool legacy)

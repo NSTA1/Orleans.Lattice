@@ -886,6 +886,12 @@ not a consensus-locked deployment inventory, and cannot make old code enforce
 new persistent-state obligations. An already admitted protocol-1 obligation is
 never downgraded if admission subsequently closes.
 
+While mixed-version joint protocol admission is closed, explicit rebuild,
+reconcile, and decommission also reject maintenance of a view with pending
+joint ownership or acknowledgements. They retain its checkpoint and generation
+without sending coordinator RPCs or tearing down state. Maintenance can be
+retried once admission reopens; ordinary automatic drain resumption is unchanged.
+
 ## Replication modes
 
 A view declares, through `LatticeViewOptions.ReplicationMode`, how its tree is

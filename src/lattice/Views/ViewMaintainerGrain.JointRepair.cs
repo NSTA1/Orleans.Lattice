@@ -31,6 +31,16 @@ internal sealed partial class ViewMaintainerGrain
         return false;
     }
 
+    private async Task GuardJointMaintenanceAdmissionAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (await PauseJointProtocolForUpgradeAsync(cancellationToken))
+        {
+            throw new InvalidOperationException(
+                $"View '{ViewName}' cannot perform maintenance while joint protocol admission is closed; its pending checkpoint and generation remain retained.");
+        }
+    }
+
     private async Task<bool> ResumeCapturedJointRepairsAsync(CancellationToken cancellationToken)
     {
         _jointRepairsWaitingOnPeers.Clear();

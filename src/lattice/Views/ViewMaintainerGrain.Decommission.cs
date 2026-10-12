@@ -17,6 +17,7 @@ internal sealed partial class ViewMaintainerGrain
     /// <inheritdoc />
     public async Task DecommissionAsync(CancellationToken cancellationToken = default)
     {
+        await GuardJointMaintenanceAdmissionAsync(cancellationToken);
         await AcknowledgeRetiredJointRepairsAsync();
         await ReleaseUncommittedJointOwnershipAsync();
         if (HasJointOwnership)
