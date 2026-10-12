@@ -999,6 +999,7 @@ internal sealed partial class ViewMaintainerGrain
         var tallies = new Dictionary<Guid, TerminalTally>();
         var crossTreeOperations = new Dictionary<Guid, string>();
         var preparedKeys = new Dictionary<Guid, Dictionary<string, HybridLogicalClock>>();
+        var ordinaryKeys = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
         var boundToThisLog = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal);
         var scanLimit = Options.RebuildPrepareScanLimit > 0
             ? Options.RebuildPrepareScanLimit
@@ -1042,7 +1043,14 @@ internal sealed partial class ViewMaintainerGrain
                     break;
                 }
 
-                if (Classify(mutation, out var commit, out var abort) != StagingDisposition.Stage)
+                var disposition = Classify(mutation, out var commit, out var abort);
+                if (disposition == StagingDisposition.Apply)
+                {
+                    NoteHighest(ordinaryKeys, mutation.Key, mutation.Timestamp);
+                    continue;
+                }
+
+                if (disposition != StagingDisposition.Stage)
                 {
                     continue;
                 }
@@ -1137,7 +1145,7 @@ internal sealed partial class ViewMaintainerGrain
         if (lowered)
         {
             _pendingRebuildFence = new RebuildReplayFence(
-                walTreeId, fence, [.. replayed], ReflectedSupersession(tallies, preparedKeys, replayed));
+                walTreeId, fence, [.. replayed], ReflectedSupersession(tallies, preparedKeys, ordinaryKeys, replayed));
         }
     }
 
@@ -1150,10 +1158,19 @@ internal sealed partial class ViewMaintainerGrain
     /// batch that prepared the same key earlier and commits later must not
     /// overwrite it. Only committed batches count (an aborted prepare never
     /// reached the source), and only keys a replayed batch also prepared.
+    /// <para>
+    /// The ordinary writes in the scanned window count the same way. A replayed
+    /// batch already decided below the heads (still staged at the rebuild) can
+    /// complete on a resumed pass that ends before re-reading a later ordinary
+    /// write to one of its keys; every later pass then reads that write fenced,
+    /// as reflected, so without its HLC here the batch's older value would
+    /// overwrite it permanently.
+    /// </para>
     /// </summary>
     private static Dictionary<string, HybridLogicalClock>? ReflectedSupersession(
         Dictionary<Guid, TerminalTally> tallies,
         Dictionary<Guid, Dictionary<string, HybridLogicalClock>> preparedKeys,
+        Dictionary<string, HybridLogicalClock> ordinaryKeys,
         HashSet<Guid> replayed)
     {
         var replayedKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -1181,14 +1198,29 @@ internal sealed partial class ViewMaintainerGrain
                 }
 
                 supersession ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
-                if (!supersession.TryGetValue(key, out var prev) || hlc.CompareTo(prev) > 0)
-                {
-                    supersession[key] = hlc;
-                }
+                NoteHighest(supersession, key, hlc);
+            }
+        }
+
+        foreach (var (key, hlc) in ordinaryKeys)
+        {
+            if (replayedKeys.Contains(key))
+            {
+                supersession ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+                NoteHighest(supersession, key, hlc);
             }
         }
 
         return supersession;
+    }
+
+    private static void NoteHighest(Dictionary<string, HybridLogicalClock> highest, string key, HybridLogicalClock hlc)
+    {
+        ref var prev = ref CollectionsMarshal.GetValueRefOrAddDefault(highest, key, out var seen);
+        if (!seen || hlc.CompareTo(prev) > 0)
+        {
+            prev = hlc;
+        }
     }
 
     /// <summary>
