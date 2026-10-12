@@ -81,6 +81,10 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
         if (mutation == 1)
         {
             RestoreDictionary(h.Grain, "_staging", oldStaging);
+            h.SourceRows[(New, "old-only")] = new LwwEntry
+            {
+                Key = "old-only", Value = [1], Timestamp = Clock(11),
+            };
         }
         Assert.That(h.State.State.BoundPhysicalTreeId, Is.EqualTo(New));
         Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(1),
@@ -221,6 +225,7 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
         public List<(string Tree, List<KeyValuePair<string, byte[]>> Writes)> AtomicWrites { get; } = [];
         public List<(string Tree, long From)> Reads { get; } = [];
         public List<(string Tree, long Generation, long Offset)> PublishedSnapshots { get; } = [];
+        public Dictionary<(string Tree, string Key), LwwEntry> SourceRows { get; } = [];
         private readonly Dictionary<string, List<(long Offset, LatticeMutation Mutation)>> _logs = new();
         private readonly Dictionary<string, long> _heads = new() { [Old] = 7, [New] = 2, [Third] = 5 };
 
@@ -231,6 +236,7 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
                 .Select(x => x.Mutation.TransactionId).ToHashSet();
             return keys.Select(key =>
             {
+                if (SourceRows.TryGetValue((physical, key), out var observation)) return (LwwEntry?)observation;
                 LatticeMutation? winner = null;
                 foreach (var (_, mutation) in entries)
                 {
