@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-rebind",
+  "refinement": "RefinementRebind.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 8,
+    "properties": 4,
+    "actions": 17,
+    "mutations": 19,
+    "behaviourRows": 27,
+    "distinctStates": 21086
+  },
+  "variants": {
+    "NoCrash": { "distinctStates": 8143 }
+  }
+}

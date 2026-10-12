@@ -1,0 +1,11 @@
+MODULE: TypeOKReadPastWal
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the ordinary reader banks a position past the end of its captured WAL
+PERTURBS: ReadOrdinary
+
+--- FIND
+    /\ seen' = seen \cup {1} /\ read' = read + 1
+--- REPLACE
+    /\ seen' = seen \cup {1} /\ read' = Len(log) + 1
+--- END

@@ -1,0 +1,13 @@
+MODULE: StagingNamesBoundLogRetainOldStage
+TARGET: StagingNamesBoundLog
+CLASS: Invariant
+SUMMARY: a successful physical rebind carries the retired WAL's staged prepare into the new generation
+PERTURBS: Install
+
+--- FIND
+    /\ read' = floor /\ checkpoint' = floor
+    /\ staged' = FALSE /\ stageOrigin' = 0
+--- REPLACE
+    /\ read' = floor /\ checkpoint' = floor
+    /\ staged' = staged /\ stageOrigin' = stageOrigin
+--- END

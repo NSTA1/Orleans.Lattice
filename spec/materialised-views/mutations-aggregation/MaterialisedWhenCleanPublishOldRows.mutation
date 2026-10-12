@@ -1,0 +1,11 @@
+MODULE: MaterialisedWhenCleanPublishOldRows
+TARGET: MaterialisedWhenClean
+CLASS: Invariant
+SUMMARY: materialisation clears its work flag without publishing the regrouped numeric rows
+PERTURBS: Materialise
+
+--- FIND
+    /\ materialised' = [materialised EXCEPT ![g] = sums[g]]
+--- REPLACE
+    /\ materialised' = materialised
+--- END

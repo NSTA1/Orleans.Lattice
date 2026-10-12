@@ -1,0 +1,14 @@
+MODULE: BindingConvergesStaleScanNotRejected
+TARGET: BindingConverges
+CLASS: Temporal
+SUMMARY: a stale captured source is never rejected so a topology move strands the rebuild
+PERTURBS: RejectStale
+
+--- FIND
+RejectStale ==
+    /\ ~Idle /\ candidate # alias
+--- REPLACE
+RejectStale ==
+    /\ FALSE
+    /\ ~Idle /\ candidate # alias
+--- END

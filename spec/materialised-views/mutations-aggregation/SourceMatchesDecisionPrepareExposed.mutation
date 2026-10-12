@@ -1,0 +1,14 @@
+MODULE: SourceMatchesDecisionPrepareExposed
+TARGET: SourceMatchesDecision
+CLASS: Invariant
+SUMMARY: an undecided prepare is installed into source state on WAL append
+PERTURBS: AppendPrepare
+
+--- FIND
+    /\ log' = Append(log, e)
+    /\ UNCHANGED <<stamps, outcome, source, read, checkpoint, staged,
+--- REPLACE
+    /\ log' = Append(log, e)
+    /\ source' = Replace(source, e)
+    /\ UNCHANGED <<stamps, outcome, read, checkpoint, staged,
+--- END

@@ -16,6 +16,8 @@ source identity swap followed by the view's rebind onto the new physical log.
 | `MaterialisedViewTail` | 7 | 5 | 17 | 22 | 27 | 121,488 |
 | `MaterialisedViewFence` | 4 | 2 | 9 | 9 | 13 | 194 |
 | `MaterialisedViewHorizon` | 4 | 5 | 15 | 16 | 22 | 20,794 |
+| `MaterialisedViewAggregation` | 9 | 2 | 12 | 18 | 21 | 24,072 |
+| `MaterialisedViewRebind` | 8 | 4 | 17 | 19 | 27 | 21,086 |
 
 The `ThreeWrites` variant (`MaterialisedViewTail.ThreeWrites.cfg`) raises the
 source write budget to three, which lets a trim, a swap and a rebuild each fall
@@ -170,3 +172,54 @@ real step.
 
 See [RefinementTail.md](RefinementTail.md) for the production seams and their
 detectors.
+
+## Focused aggregation and physical-rebind companions
+
+`MaterialisedViewAggregation` checks numeric membership and count/sum slots at
+every intermediate state using retract/add arithmetic, including regrouping,
+retraction, duplicate replay, a crash after internal commit, rebuild overlap and
+ordinary-versus-prepared replacement. HLC stamps and WAL order are independent.
+Its revision-set composition deliberately distinguishes accumulative history:
+superseded Set/Delete revisions are retained within a generation rather than
+source-latest filtered. Explicit rebuild may collapse history to its scan seed;
+it does not invent revisions no longer recoverable from source or retained WAL.
+The `Delete` variant retracts the ordinary member and disables crash injection;
+its exhaustive state census is 7,176, distinct from the base.
+
+Source confirmation is not itself an atomicity proof. The aggregation companion
+also gates a batch omitting a superseded member until its replacement is already
+visible, and checks that pre-flush observation with a separate invariant.
+Public group materialisation is a separate step for ordinary writes: the
+internal membership/slot invariant is not a claim that every ordinary public
+group row changes atomically with its internal rows. See
+[RefinementAggregation.md](RefinementAggregation.md) for exact contracts and
+production remediation evidence.
+
+`MaterialisedViewRebind` captures a physical source/floor tuple, holds it while
+scanning, rejects a stale source candidate, and publishes the generation,
+physical binding and resume point together while discarding retired staging.
+It composes source prepare decisions, physically addressed WAL writes, cursor
+GC, concurrent alias moves (including after validation but before publication),
+interrupted scans and crash recovery. Its action
+property checks each intermediate cutover, not merely eventual self-heal.
+`NoCrash` isolates the same interactions without activation failure and reaches
+8,143 distinct states. See [RefinementRebind.md](RefinementRebind.md).
+
+Both companions are bounded intended protocols. Their refinement notes expose
+unaccepted production remediation rather than turning a clean model into a
+claim that the current implementation is proven correct.
+
+### Measured independent shard weights
+
+Each command selected one module through `TlcModelCheckTests` with `--no-build`,
+`LATTICE_TLC_CONCURRENCY=1`, two visible CPUs and an 1800 MB JVM heap. The
+measurements are whole-command wall times, not sums of individual test durations
+(which include waiting for the TLC slot and shared control runs).
+
+| Module | Harness cases | Whole-command seconds | Exhaustive state census |
+|--------|---------------|-----------------------|-------------------------|
+| `MaterialisedViewAggregation` | 20 (18 paired mutations, base, Delete) | 95.42 | 24,072 / 7,176 |
+| `MaterialisedViewRebind` | 21 (19 paired mutations, base, NoCrash) | 86.82 | 21,086 / 8,143 |
+
+These are separate shard groups, not one directory-wide materialised-view group.
+The repository CI routing and final matrix balance are integrated separately.

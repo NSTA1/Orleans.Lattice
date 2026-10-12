@@ -1,0 +1,12 @@
+MODULE: NoAbortedContributionAbortFold
+TARGET: NoAbortedContribution
+CLASS: Invariant
+SUMMARY: an aborted staged batch is folded into membership despite its terminal decision
+PERTURBS: Flush
+
+--- FIND
+    /\ members' = IF outcome = "commit" THEN FoldBatch(members) ELSE members
+--- REPLACE
+    /\ members' = IF outcome = "commit" THEN FoldBatch(members)
+                  ELSE Replace(Replace(members, 2), 3)
+--- END

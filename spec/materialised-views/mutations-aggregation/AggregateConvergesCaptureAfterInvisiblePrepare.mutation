@@ -1,0 +1,11 @@
+MODULE: AggregateConvergesCaptureAfterInvisiblePrepare
+TARGET: AggregateConverges
+CLASS: Temporal
+SUMMARY: rebuild captures the WAL head and skips prepared entries still invisible to its source scan
+PERTURBS: StartRebuild
+
+--- FIND
+    /\ floor' = checkpoint
+--- REPLACE
+    /\ floor' = Len(log)
+--- END

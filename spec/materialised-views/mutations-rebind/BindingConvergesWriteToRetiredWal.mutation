@@ -1,0 +1,11 @@
+MODULE: BindingConvergesWriteToRetiredWal
+TARGET: BindingConverges
+CLASS: Temporal
+SUMMARY: a source write changes the current physical state but appends to the retired physical log
+PERTURBS: Write
+
+--- FIND
+    /\ logs' = [logs EXCEPT ![alias] = Append(@, 1)]
+--- REPLACE
+    /\ logs' = [logs EXCEPT ![3 - alias] = Append(@, 1)]
+--- END

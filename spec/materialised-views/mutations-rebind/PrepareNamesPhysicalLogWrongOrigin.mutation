@@ -1,0 +1,11 @@
+MODULE: PrepareNamesPhysicalLogWrongOrigin
+TARGET: PrepareNamesPhysicalLog
+CLASS: Invariant
+SUMMARY: a prepared transaction is tagged with a different physical log than the log that owns its offset
+PERTURBS: Prepare
+
+--- FIND
+    /\ txOrigin' = alias
+--- REPLACE
+    /\ txOrigin' = 3 - alias
+--- END

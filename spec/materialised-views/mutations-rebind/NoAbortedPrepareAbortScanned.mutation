@@ -1,0 +1,11 @@
+MODULE: NoAbortedPrepareAbortScanned
+TARGET: NoAbortedPrepare
+CLASS: Invariant
+SUMMARY: terminal materialisation installs an aborted source value and rebuild subsequently scans it
+PERTURBS: Decide
+
+--- FIND
+    /\ source' = IF outcome' = "commit"
+--- REPLACE
+    /\ source' = IF outcome' \in {"commit", "abort"}
+--- END

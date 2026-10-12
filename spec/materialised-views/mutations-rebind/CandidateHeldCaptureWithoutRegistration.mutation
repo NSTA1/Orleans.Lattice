@@ -1,0 +1,11 @@
+MODULE: CandidateHeldCaptureWithoutRegistration
+TARGET: CandidateHeld
+CLASS: Invariant
+SUMMARY: rebuild captures the new physical resume floor without first registering a read hold
+PERTURBS: BeginRebuild
+
+--- FIND
+    /\ held' = [held EXCEPT ![candidate'] = floor']
+--- REPLACE
+    /\ held' = [held EXCEPT ![candidate'] = -1]
+--- END

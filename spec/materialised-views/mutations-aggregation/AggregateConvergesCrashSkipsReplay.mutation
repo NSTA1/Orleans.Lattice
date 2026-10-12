@@ -1,0 +1,11 @@
+MODULE: AggregateConvergesCrashSkipsReplay
+TARGET: AggregateConverges
+CLASS: Temporal
+SUMMARY: a crash resumes from speculative read progress and discards its unflushed prepares
+PERTURBS: Crash
+
+--- FIND
+    /\ read' = checkpoint /\ staged' = {} /\ rebuilding' = FALSE
+--- REPLACE
+    /\ read' = read /\ staged' = {} /\ rebuilding' = FALSE
+--- END

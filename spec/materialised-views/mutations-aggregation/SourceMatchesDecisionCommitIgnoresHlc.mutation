@@ -1,0 +1,11 @@
+MODULE: SourceMatchesDecisionCommitIgnoresHlc
+TARGET: SourceMatchesDecision
+CLASS: Invariant
+SUMMARY: committing an older prepared value overwrites the newer ordinary source winner
+PERTURBS: Decide
+
+--- FIND
+          IF Stamp(e) > Stamp(source[k]) THEN e ELSE source[k]]
+--- REPLACE
+          e]
+--- END

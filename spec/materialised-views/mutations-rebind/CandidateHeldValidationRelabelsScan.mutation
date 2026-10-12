@@ -1,0 +1,21 @@
+MODULE: CandidateHeldValidationRelabelsScan
+TARGET: CandidateHeld
+CLASS: Invariant
+SUMMARY: validation relabels an already scanned and registered candidate with the newly moved alias
+PERTURBS: Validate
+
+--- FIND
+Validate ==
+    /\ phase = "scanned" /\ candidate = alias
+    /\ phase' = "validated"
+    /\ UNCHANGED <<stamps, alias, logs, source, txOrigin, outcome, moves,
+         bound, generation, view, read, checkpoint, staged, stageOrigin,
+         candidate, floor, shadow, held, trim, crashes, rebuilt>>
+--- REPLACE
+Validate ==
+    /\ phase = "scanned"
+    /\ phase' = "validated" /\ candidate' = alias
+    /\ UNCHANGED <<stamps, alias, logs, source, txOrigin, outcome, moves,
+         bound, generation, view, read, checkpoint, staged, stageOrigin,
+         floor, shadow, held, trim, crashes, rebuilt>>
+--- END

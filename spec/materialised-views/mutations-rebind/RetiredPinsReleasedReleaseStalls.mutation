@@ -1,0 +1,12 @@
+MODULE: RetiredPinsReleasedReleaseStalls
+TARGET: RetiredPinsReleased
+CLASS: Temporal
+SUMMARY: a retired physical read registration remains pinned after the generation and binding swap
+PERTURBS: ReleaseRetired
+
+--- FIND
+    /\ p # bound /\ (Idle \/ p # candidate) /\ held[p] # -1
+--- REPLACE
+    /\ FALSE
+    /\ p # bound /\ (Idle \/ p # candidate) /\ held[p] # -1
+--- END

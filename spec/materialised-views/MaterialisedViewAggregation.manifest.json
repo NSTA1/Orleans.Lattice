@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-aggregation",
+  "refinement": "RefinementAggregation.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 9,
+    "properties": 2,
+    "actions": 12,
+    "mutations": 18,
+    "behaviourRows": 21,
+    "distinctStates": 24072
+  },
+  "variants": {
+    "Delete": { "distinctStates": 7176 }
+  }
+}
