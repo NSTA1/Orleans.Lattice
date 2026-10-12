@@ -93,6 +93,12 @@ internal static class TlcCiShard
     /// <summary>The focused captured physical source and generation rebind runs.</summary>
     public const string MaterialisedViewRebind = "TlcShardMaterialisedViewRebind";
 
+    /// <summary>The independent-clock ready replacement closure runs.</summary>
+    public const string MaterialisedViewReadyClosure = "TlcShardMaterialisedViewReadyClosure";
+
+    /// <summary>The coherent revision and expected-participant admission runs.</summary>
+    public const string MaterialisedViewSourceAdmission = "TlcShardMaterialisedViewSourceAdmission";
+
     /// <summary>The anti-entropy base and first measured mutation group.</summary>
     public const string AntiEntropy = "TlcShardAntiEntropy";
 
@@ -123,6 +129,7 @@ internal static class TlcCiShard
          BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2,
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
+         MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
@@ -269,6 +276,8 @@ internal static class TlcCiShard
         : name == "MaterialisedViewHorizon" ? MaterialisedViewHorizon
         : name == "MaterialisedViewAggregation" ? MaterialisedViewAggregation
         : name == "MaterialisedViewRebind" ? MaterialisedViewRebind
+        : name == "MaterialisedViewReadyClosure" ? MaterialisedViewReadyClosure
+        : name == "MaterialisedViewSourceAdmission" ? MaterialisedViewSourceAdmission
         : name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
         : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
         : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle

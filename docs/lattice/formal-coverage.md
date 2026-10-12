@@ -77,6 +77,8 @@ single-property control; no skipped run is counted as evidence.
 | `MaterialisedViewHorizon` | 20,794 | 33,456 (`FullScan`) | 16 | 18 | Pending |
 | `MaterialisedViewAggregation` | 24,072 | 7,176 (`Delete`) | 18 | 20 | Partial |
 | `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 20 | 22 | Partial |
+| `MaterialisedViewReadyClosure` | 46,846 | 39,651 (`History`); 31,577 (`TwoConsumers`) | 12 | 15 | Pending |
+| `MaterialisedViewSourceAdmission` | 20,184 | 836 (`CrossTree`); 14,904 (`History`); 660 (`PendingSource`) | 18 | 22 | Pending |
 
 The fence companion checks an established two-batch prefix, source-HLC winners
 at different WAL arrival offsets, peer-delayed publication and a persisted fence
@@ -105,6 +107,18 @@ controls. Their grain transport and registry census are controlled, so they do
 not certify cluster or registry durability. Physical staging isolation remains
 partial. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
 
+The ready-closure companion checks three overlapping two-key batches with crossed
+independent clocks, transitive replacement closure, an external eligibility hold
+distinct from consumed WAL heads, crash replay and atomic local snapshots. Its
+two-consumer variant permits independent lag, not a simultaneous cross-view flip.
+The source-admission companion separates commit decision, source application and
+terminal arrival. It checks coherent timestamp/value/tombstone identity, absent
+or older source lag, actually applied replacement entitlement, history bypass and
+an abstract expected-participant certificate. Neither companion models physical
+transaction-ID reuse after rebind (#4895), and neither certifies logical committed
+source visibility before leaf terminal application. See the
+[staging composition contract and limits](../../spec/view-staging/README.md).
+
 Each companion has a dedicated deterministic-only TLC shard. The fence/horizon
 serial no-build commands took 48.434 and 124.659 seconds with one JVM slot,
 two visible CPUs and a 2 GiB heap cap on a shared host; peak heap was not measured.
@@ -113,8 +127,10 @@ one JVM slot, two visible CPUs and an 1800 MB heap cap. These are whole-command
 costs including paired controls, not sums of tests waiting for a shared JVM slot.
 The combined four-companion harness also passes all 71 cases after the main
 rebase, in 316.566 seconds with one JVM slot, two visible CPUs and an 1800 MB
-heap cap. These measurements do not include the still-unaccepted general staging
-and source-admission companions.
+heap cap. Independent ready-closure/source-admission commands passed all 37
+cases in 94.200 and 153.253 seconds respectively, with one JVM slot, two visible
+CPUs and an 1800 MiB heap cap; peak heap was not measured. These are finite-model
+measurements, not production acceptance or predicted CI costs.
 A green finite model is not a production refinement certificate: the acceptance
 gate intentionally remains red until discriminating production detector evidence
 justifies every pending verdict.

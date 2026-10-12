@@ -128,6 +128,20 @@
         "note": "MaterialisedViewRebind base, NoCrash and twenty paired mutants: 22/22 cases, zero skips. Independent one-JVM/two-CPU/1800MB no-build command measured 117.545s including distinct mutation-specific controls; captured source/floor publication, late alias movement and simultaneous bound/candidate floor protection."
       },
       {
+        "shard": "formal-tlc-view-ready-closure",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewReadyClosure"],
+        "note": "ReadyClosure base, History, TwoConsumers and twelve paired mutants: 15/15 cases, zero skips. Independent one-JVM/two-CPU/1800MiB no-build command measured 94.200s including distinct controls; independent clocks, transitive replacement closure, external eligibility hold and per-consumer atomic snapshots."
+      },
+      {
+        "shard": "formal-tlc-view-source-admission",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewSourceAdmission"],
+        "note": "SourceAdmission base, CrossTree, History, PendingSource and eighteen paired mutants: 22/22 cases, zero skips. Independent one-JVM/two-CPU/1800MiB no-build command measured 153.253s including distinct controls; coherent row identity, source-apply lag, omission entitlement and expected-participant closure."
+      },
+      {
         "shard": "formal-tlc-anti-entropy",
         "tlc": true,
         "tiers": ["deterministic"],

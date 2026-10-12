@@ -56,6 +56,8 @@ be quiet about one.
 | [`materialised-views/`](materialised-views/README.md#focused-replay-and-horizon-companions) | `MaterialisedViewHorizon` | Non-aligned prepare and shard-terminal partitions, post-terminal all-partition horizons, rebuild planning, backstop abandonment and crash recovery. |
 | [`materialised-views/`](materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) | `MaterialisedViewAggregation` | Numeric membership and count/sum deltas, durable per-group publication obligations, ordinary/prepared supersession and retained history revisions. |
 | [`materialised-views/`](materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) | `MaterialisedViewRebind` | Captured physical scan/floor/generation identity, read holds, staging invalidation, late alias movement and crash recovery. |
+| [`view-staging/`](view-staging/README.md) | `MaterialisedViewReadyClosure` | Independent per-key clocks, transitive replacement closure outside the eligible flush set, per-consumer atomic snapshots, history and replay checkpoints. |
+| [`view-staging/`](view-staging/README.md) | `MaterialisedViewSourceAdmission` | Coherent row/version/kind identity, source-apply lag, already-applied omission entitlement, history bypass and expected cross-tree participants. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table
