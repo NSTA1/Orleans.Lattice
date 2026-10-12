@@ -88,6 +88,24 @@ public sealed partial class InternalOriginGuardIntegrationTests
     }
 
     [Test]
+    public void Shard_GetRawEntriesIncludingTombstonesAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("origin-guard-read-tombstones/0");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await shard.GetRawEntriesIncludingTombstonesAsync(["k"]));
+    }
+
+    [Test]
+    public void Shard_GetRawVersionsAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("origin-guard-read-versions/0");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await shard.GetRawVersionsAsync(["k"]));
+    }
+
+    [Test]
     public void Shard_ExistsAsync_direct_external_call_without_internal_origin_is_refused()
     {
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("origin-guard-read-exists/0");
