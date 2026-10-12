@@ -271,6 +271,8 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             foreach (var physical in new[] { Old, New, Third })
             {
                 var root = Substitute.For<IShardRootGrain>();
+                root.GetVisibleRawEntriesAsync(Arg.Any<List<string>>())
+                    .Returns(call => Task.FromResult(h.VisibleRows(physical, call.Arg<List<string>>())));
                 factory.GetGrain<IShardRootGrain>($"{physical}/0").Returns(root);
             }
             var trees = new Dictionary<string, ILattice>();
