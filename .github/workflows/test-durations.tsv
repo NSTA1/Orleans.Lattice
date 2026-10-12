@@ -18,6 +18,8 @@
 # Aggregation 20/20 cases in 95.417s; strengthened Rebind 22/22 cases in
 # 117.545s, including distinct mutation-specific controls and command startup.
 # These use one JVM slot, two visible CPUs and an 1800MB heap ceiling; no skips.
+# MaterialisedViewJointRepair: all 29 base/variant/mutation cases in 97.221
+# seconds including VSTest startup, with those same settings (2026-10-12).
 
 # Per-work-item duration estimates, in minutes, used only to bin-pack the
 # matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
@@ -127,6 +129,7 @@ lattice	formal-tlc-view-ready-closure	deterministic	1.57
 lattice	formal-tlc-view-source-admission	deterministic	4.00
 # ResolvedIdentity whole no-build command 61.3854248s; Java17, 1 JVM, 2 CPU, Xmx1800MiB, all sixteen paired controls included.
 lattice	formal-tlc-view-resolved-identity	deterministic	1.03
+lattice	formal-tlc-view-joint-repair	deterministic	1.62
 lattice	formal-tlc-tree-lifecycle	deterministic	1.6
 lattice	formal-tlc-anti-entropy	deterministic	9.0
 lattice	formal-tlc-anti-entropy-2	deterministic	10.0

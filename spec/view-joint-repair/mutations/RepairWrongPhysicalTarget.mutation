@@ -1,0 +1,11 @@
+MODULE: RepairWrongPhysicalTarget
+TARGET: EffectExact
+CLASS: Invariant
+SUMMARY: the repair writes the other physical generation instead of its captured target
+PERTURBS: PublishRepair
+
+--- FIND
+    /\ rows' = [v \in Views |-> [rows[v] EXCEPT ![target[v]] = captured[v]]]
+--- REPLACE
+    /\ rows' = [v \in Views |-> [rows[v] EXCEPT ![1-target[v]] = captured[v]]]
+--- END

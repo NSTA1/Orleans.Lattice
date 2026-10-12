@@ -1,0 +1,18 @@
+{
+  "mutations": "mutations",
+  "refinement": "RefinementJointRepair.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 16,
+    "properties": 3,
+    "actions": 21,
+    "mutations": 25,
+    "behaviourRows": 38,
+    "distinctStates": 11006
+  },
+  "variants": {
+    "Legacy": { "distinctStates": 144 },
+    "SingleTarget": { "distinctStates": 4572 },
+    "TwoFaults": { "distinctStates": 16437 }
+  }
+}

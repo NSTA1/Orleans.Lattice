@@ -1,0 +1,11 @@
+MODULE: RepairOriginalMissingPeer
+TARGET: OriginalEntitled
+CLASS: Invariant
+SUMMARY: the original intent is decided with an incomplete participant set
+PERTURBS: DecideOriginal
+
+--- FIND
+    /\ Live /\ ~decided /\ registered = Views
+--- REPLACE
+    /\ Live /\ ~decided
+--- END

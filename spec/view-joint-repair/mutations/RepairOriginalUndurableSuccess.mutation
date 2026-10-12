@@ -1,0 +1,13 @@
+MODULE: RepairOriginalUndurableSuccess
+TARGET: CompletionDurable
+CLASS: Invariant
+SUMMARY: original completion returns success without a durable applied marker
+PERTURBS: CompleteOriginal
+
+--- FIND
+    /\ applied' = TRUE
+    /\ reported' = [reported EXCEPT !["original"] = TRUE]
+--- REPLACE
+    /\ applied' = FALSE
+    /\ reported' = [reported EXCEPT !["original"] = TRUE]
+--- END

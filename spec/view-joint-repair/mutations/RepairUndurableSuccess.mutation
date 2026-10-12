@@ -1,0 +1,13 @@
+MODULE: RepairUndurableSuccess
+TARGET: CompletionDurable
+CLASS: Invariant
+SUMMARY: repair completion returns success without durable repair application
+PERTURBS: CompleteRepair
+
+--- FIND
+    /\ repairApplied' = TRUE
+    /\ reported' = [reported EXCEPT !["repair"] = TRUE]
+--- REPLACE
+    /\ repairApplied' = FALSE
+    /\ reported' = [reported EXCEPT !["repair"] = TRUE]
+--- END

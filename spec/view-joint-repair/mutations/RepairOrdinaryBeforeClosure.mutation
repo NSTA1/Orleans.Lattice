@@ -1,0 +1,11 @@
+MODULE: RepairOrdinaryBeforeClosure
+TARGET: PublicationFenced
+CLASS: Invariant
+SUMMARY: ordinary publication advances a participant before joint repair finishes
+PERTURBS: Ordinary
+
+--- FIND
+    /\ repairApplied /\ source[v] > rows[v][bound[v]]
+--- REPLACE
+    /\ applied /\ source[v] > rows[v][bound[v]]
+--- END

@@ -1,0 +1,11 @@
+MODULE: RepairRegisterLost
+TARGET: LifecycleEnds
+CLASS: Temporal
+SUMMARY: ready registration never records the participant, stranding original admission
+PERTURBS: Register
+
+--- FIND
+    /\ registered' = registered \cup {v}
+--- REPLACE
+    /\ registered' = registered
+--- END

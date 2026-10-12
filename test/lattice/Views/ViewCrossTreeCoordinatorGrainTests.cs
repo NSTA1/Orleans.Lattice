@@ -182,6 +182,8 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
 
         Assert.That(decision.Applied, Is.False);
         Assert.That(decision.Degraded, Is.False);
+        Assert.That(h.State.State.Decided, Is.False,
+            "A missing original participant cannot acquire a durable joint intent.");
         Assert.That(h.State.State.WaitSet, Is.EquivalentTo(new[] { "v1", "v2" }));
         Assert.That(h.State.State.Slices.ContainsKey("v1"), Is.True);
         Assert.That(h.State.WriteCount, Is.GreaterThanOrEqualTo(1));

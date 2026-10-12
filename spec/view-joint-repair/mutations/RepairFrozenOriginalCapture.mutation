@@ -1,0 +1,15 @@
+MODULE: RepairFrozenOriginalCapture
+TARGET: FreshCaptureCoherent
+CLASS: Action
+SUMMARY: fresh readiness copies the original revision instead of a newer admitted source tuple
+PERTURBS: Capture
+
+--- FIND
+    /\ captured' = [captured EXCEPT ![v] = source[v]]
+    /\ target' = [target EXCEPT ![v] = bound[v]]
+    /\ first' = [first EXCEPT ![v] = source[v]]
+--- REPLACE
+    /\ captured' = [captured EXCEPT ![v] = 1]
+    /\ target' = [target EXCEPT ![v] = bound[v]]
+    /\ first' = [first EXCEPT ![v] = 1]
+--- END

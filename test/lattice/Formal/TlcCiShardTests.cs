@@ -198,6 +198,8 @@ public sealed class TlcCiShardTests
                         ? TlcCiShard.MaterialisedViewSourceAdmission
                         : module.Name == "MaterialisedViewResolvedIdentity"
                         ? TlcCiShard.MaterialisedViewResolvedIdentity
+                        : module.Name == "MaterialisedViewJointRepair"
+                        ? TlcCiShard.MaterialisedViewJointRepair
                         : module.Name.StartsWith("MaterialisedView", StringComparison.Ordinal)
                         ? TlcCiShard.MaterialisedViews
                         : module.Name.StartsWith("AntiEntropy", StringComparison.Ordinal)
@@ -232,6 +234,8 @@ public sealed class TlcCiShardTests
         });
     }
 
+    [TestCase("materialised-views", TlcCiShard.MaterialisedViews)]
+    [TestCase("view-joint-repair", TlcCiShard.MaterialisedViewJointRepair)]
     [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
     [TestCase("aliasing", TlcCiShard.Aliasing)]
     public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)

@@ -149,6 +149,13 @@
         "note": "ResolvedIdentity base, SameLog, FailedCandidate, LostCandidate and sixteen paired mutants: 20/20 cases, zero skips. Independent one-JVM/two-CPU/1800MiB no-build command measured 61.385s; actual-tail cache ownership, reused transaction IDs, same-log rebuild and uncertain publication responses."
       },
       {
+        "shard": "formal-tlc-view-joint-repair",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewJointRepair"],
+        "note": "Fresh joint-repair base, Legacy, SingleTarget and TwoFaults variants, and 25 typed mutation/control pairs: all 29 cases measured at 97.221 seconds including VSTest startup on Java 17, two visible CPUs and one TLC slot. Isolated from the existing materialised-view tail work; bounded two-participant repair, automatic historical completion cleanup and durable acknowledgement closure."
+      },
+      {
         "shard": "formal-tlc-anti-entropy",
         "tlc": true,
         "tiers": ["deterministic"],

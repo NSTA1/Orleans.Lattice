@@ -1,0 +1,21 @@
+MODULE: RepairFailedWriteMemoized
+TARGET: CompletionDurable
+CLASS: Invariant
+SUMMARY: failed completion persistence leaves a success-shaped in-memory result
+PERTURBS: PersistFailure
+
+--- FIND
+PersistFailure ==
+    /\ Live /\ faults < MaxFaults
+    /\ ((decided /\ ~applied /\ stage = One) \/
+        (repairDecided /\ ~repairApplied /\ stage = [v \in Views |-> 2]))
+    /\ faults' = faults + 1
+    /\ reported' = [reported EXCEPT !["original"] = applied, !["repair"] = repairApplied]
+--- REPLACE
+PersistFailure ==
+    /\ Live /\ faults < MaxFaults
+    /\ ((decided /\ ~applied /\ stage = One) \/
+        (repairDecided /\ ~repairApplied /\ stage = [v \in Views |-> 2]))
+    /\ faults' = faults + 1
+    /\ reported' = [k \in {"original","repair"} |-> TRUE]
+--- END

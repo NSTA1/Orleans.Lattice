@@ -1,0 +1,22 @@
+MODULE: RepairCrashDropsCapture
+TARGET: CaptureFrozen
+CLASS: Invariant
+SUMMARY: reactivation forgets the durable captured payload while retaining its first-capture witness
+PERTURBS: Crash
+
+--- FIND
+Crash ==
+    /\ Live /\ faults < MaxFaults
+    /\ faults' = faults + 1
+    /\ reported' = [reported EXCEPT !["original"] = applied, !["repair"] = repairApplied]
+    /\ UNCHANGED <<Coordinator,source,bound,rows,stage,Snapshots,retired,ordinarySeen>>
+--- REPLACE
+Crash ==
+    /\ Live /\ faults < MaxFaults
+    /\ faults' = faults + 1
+    /\ reported' = [reported EXCEPT !["original"] = applied, !["repair"] = repairApplied]
+    /\ captured' = Zero
+    /\ UNCHANGED <<legacy,registered,decided,applied,degraded,target,first,firstTarget,
+                   repairDecided,repairApplied,acknowledged,cleared,source,bound,
+                   rows,stage,Snapshots,retired,ordinarySeen>>
+--- END

@@ -1,0 +1,11 @@
+MODULE: RepairSplitPublication
+TARGET: JointVisible
+CLASS: Invariant
+SUMMARY: the repair flips only one participant rather than the original complete set
+PERTURBS: PublishRepair
+
+--- FIND
+    /\ stage' = [v \in Views |-> 2]
+--- REPLACE
+    /\ stage' = [stage EXCEPT ![1] = 2]
+--- END

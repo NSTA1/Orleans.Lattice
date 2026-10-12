@@ -1,0 +1,11 @@
+MODULE: RepairFreshPeerMissing
+TARGET: FreshEntitled
+CLASS: Invariant
+SUMMARY: original registrations count as fresh repair readiness
+PERTURBS: DecideRepair
+
+--- FIND
+    /\ Live /\ applied /\ ~repairDecided /\ Fresh = Views
+--- REPLACE
+    /\ Live /\ applied /\ ~repairDecided /\ Fresh # {}
+--- END

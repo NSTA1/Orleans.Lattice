@@ -1,0 +1,11 @@
+MODULE: RepairLegacyCertified
+TARGET: LegacyNeverCertified
+CLASS: Invariant
+SUMMARY: a historical original completion is allowed to invent fresh repair readiness
+BOUNDS: LegacyMode = 1
+
+--- FIND
+Live == ~cleared /\ ~degraded /\ ~legacy
+--- REPLACE
+Live == ~cleared /\ ~degraded
+--- END
