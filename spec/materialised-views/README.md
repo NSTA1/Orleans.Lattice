@@ -17,7 +17,7 @@ source identity swap followed by the view's rebind onto the new physical log.
 | `MaterialisedViewFence` | 4 | 2 | 9 | 9 | 13 | 194 |
 | `MaterialisedViewHorizon` | 4 | 5 | 15 | 16 | 22 | 20,794 |
 | `MaterialisedViewAggregation` | 9 | 2 | 12 | 18 | 21 | 24,072 |
-| `MaterialisedViewRebind` | 8 | 4 | 17 | 19 | 27 | 21,086 |
+| `MaterialisedViewRebind` | 8 | 4 | 17 | 20 | 27 | 21,086 |
 
 The `ThreeWrites` variant (`MaterialisedViewTail.ThreeWrites.cfg`) raises the
 source write budget to three, which lets a trim, a swap and a rebuild each fall
@@ -219,7 +219,7 @@ measurements are whole-command wall times, not sums of individual test durations
 | Module | Harness cases | Whole-command seconds | Exhaustive state census |
 |--------|---------------|-----------------------|-------------------------|
 | `MaterialisedViewAggregation` | 20 (18 paired mutations, base, Delete) | 95.42 | 24,072 / 7,176 |
-| `MaterialisedViewRebind` | 21 (19 paired mutations, base, NoCrash) | 86.82 | 21,086 / 8,143 |
+| `MaterialisedViewRebind` | 22 (20 paired mutations, base, NoCrash) | 117.55 | 21,086 / 8,143 |
 
 These are separate shard groups, not one directory-wide materialised-view group.
 The repository CI routing and final matrix balance are integrated separately.

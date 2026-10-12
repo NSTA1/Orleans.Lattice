@@ -208,7 +208,7 @@ ResumeNamesBoundLog == Idle /\ bound = alias => checkpoint <= Len(logs[bound])
 BindingHeld == held[bound] # -1
 CandidateHeld == ~Idle => held[candidate] # -1 /\ held[candidate] <= floor
 CursorTrimEntitled == \A p \in Physical :
-    (p = bound /\ p = alias) \/ (~Idle /\ p = candidate) =>
+    (p = bound) \/ (~Idle /\ p = candidate) =>
        trim[p] <= Required(p)
 NoAbortedPrepare == outcome # "commit" => view # 2
 CutoverKeepsCommittedSnapshot ==
