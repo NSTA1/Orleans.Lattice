@@ -2,6 +2,7 @@
   <Project Path="src/lattice.apps/Orleans.Lattice.Apps.csproj" />
   <Project Path="test/lattice.apps/Orleans.Lattice.Apps.Tests.csproj" />
   <Project Path="src/lattice/Orleans.Lattice.csproj" />
+  <Project Path="samples/Explorer/Apps/TaskBoard/src/TaskBoard.csproj" />
   <Project Path="src/lattice.api.abstractions/Orleans.Lattice.Api.Abstractions.csproj" />
   <Project Path="src/lattice.api.state/Orleans.Lattice.Api.State.csproj" />
   <Project Path="src/lattice.api.state.grpc/Orleans.Lattice.Api.State.Grpc.csproj" />
