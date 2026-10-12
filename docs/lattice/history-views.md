@@ -30,6 +30,11 @@ mutation's hybrid logical clock. Because distinct mutations carry distinct HLCs,
 distinct revisions map to distinct view keys, so nothing folds and the complete
 per-key timeline is retained.
 
+Committed atomic revisions remain history even when a later ordinary revision
+supersedes them in current source state. Independent clocks on overlapping
+batches do not turn history into a current-winner projection: normal draining
+and lost-response replay retain each revision under its own history key.
+
 Each revision is stored as a `HistoryRow` carrying the kind of mutation
 (a set, a delete, a CRDT delta, or a range-tombstone marker), the originating
 cluster, and - for last-writer-wins values - a content hash and length plus,
