@@ -23,6 +23,7 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
         nameof(IShardRootGrain.GetRawEntryAsync),
         nameof(IShardRootGrain.GetRawEntriesAsync),
         nameof(IShardRootGrain.GetRawEntriesIncludingTombstonesAsync),
+        nameof(IShardRootGrain.GetVisibleRawEntriesAsync),
         nameof(IShardRootGrain.GetRawVersionsAsync),
         nameof(IShardRootGrain.GetOrSetAsync),
         nameof(IShardRootGrain.SetIfVersionAsync),

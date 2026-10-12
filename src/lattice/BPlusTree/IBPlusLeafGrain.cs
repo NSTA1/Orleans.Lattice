@@ -97,6 +97,14 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys);
 
     /// <summary>
+    /// Returns index-aligned logical rows, including tombstones and expired rows.
+    /// Pending values and their metadata are resolved together against one
+    /// transaction-decision view, so committed prepares are visible before their
+    /// terminals drain. Raw prepare capture must use <see cref="GetRawEntriesAsync"/>.
+    /// </summary>
+    Task<List<LwwEntry?>> GetVisibleRawEntriesAsync(List<string> keys);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns a <see cref="GetOrSetResult"/> containing
     /// the existing value when the key is live, or <c>null</c> existing value when the

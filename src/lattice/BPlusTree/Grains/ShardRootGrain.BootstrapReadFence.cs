@@ -84,6 +84,7 @@ internal sealed partial class ShardRootGrain
         nameof(IShardRootGrain.GetRawEntryAsync) => true,
         nameof(IShardRootGrain.GetRawEntriesAsync) => true,
         nameof(IShardRootGrain.GetRawEntriesIncludingTombstonesAsync) => true,
+        nameof(IShardRootGrain.GetVisibleRawEntriesAsync) => true,
         nameof(IShardRootGrain.GetRawVersionsAsync) => true,
         nameof(IShardRootGrain.GetOrSetAsync) => true,
         nameof(IShardRootGrain.SetIfVersionAsync) => true,

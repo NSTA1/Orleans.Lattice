@@ -697,9 +697,13 @@ internal sealed partial class ShardRootGrain(
         => GetRawEntriesCoreAsync(keys, includeTombstones: true);
 
     /// <inheritdoc />
+    public Task<List<LwwEntry?>> GetVisibleRawEntriesAsync(List<string> keys)
+        => GetRawEntriesCoreAsync(keys, includeTombstones: true, resolvePending: true);
+
+    /// <inheritdoc />
     public async Task<List<HybridLogicalClock>> GetRawVersionsAsync(List<string> keys)
     {
-        var raws = await GetRawEntriesCoreAsync(keys, includeTombstones: true);
+        var raws = await GetRawEntriesCoreAsync(keys, includeTombstones: true, resolvePending: true);
         var versions = new List<HybridLogicalClock>(raws.Count);
         foreach (var raw in raws)
         {
@@ -709,8 +713,10 @@ internal sealed partial class ShardRootGrain(
         return versions;
     }
 
-    private async Task<List<LwwEntry?>> GetRawEntriesCoreAsync(List<string> keys, bool includeTombstones)
+    private async Task<List<LwwEntry?>> GetRawEntriesCoreAsync(
+        List<string> keys, bool includeTombstones, bool resolvePending = false)
     {
+        ArgumentNullException.ThrowIfNull(keys);
         EnsureInternalOrigin(LatticeOperation.Read);
         var ready = await PrepareForReadAsync();
         var result = new List<LwwEntry?>(keys.Count);
@@ -804,7 +810,9 @@ internal sealed partial class ShardRootGrain(
             // input order, so it is handed over as-is and the response scatters
             // back by position.
             var soleLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(soleLeafId);
-            var soleResult = await soleLeaf.GetRawEntriesAsync(keys);
+            var soleResult = resolvePending
+                ? await soleLeaf.GetVisibleRawEntriesAsync(keys)
+                : await soleLeaf.GetRawEntriesAsync(keys);
             for (int i = 0; i < keys.Count; i++)
             {
                 var raw = soleResult[i];
@@ -836,7 +844,9 @@ internal sealed partial class ShardRootGrain(
             // The bucket already holds its keys as the List<string> the grain
             // call takes, so it is passed through directly rather than copied
             // out of a (key, index) tuple list into a second list per leaf.
-            var leafResult = await leaf.GetRawEntriesAsync(bucket.Keys);
+            var leafResult = resolvePending
+                ? await leaf.GetVisibleRawEntriesAsync(bucket.Keys)
+                : await leaf.GetRawEntriesAsync(bucket.Keys);
 
             for (int i = 0; i < bucket.Keys.Count; i++)
             {

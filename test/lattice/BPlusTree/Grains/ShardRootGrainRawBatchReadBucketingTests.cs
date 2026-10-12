@@ -181,6 +181,8 @@ public class ShardRootGrainRawBatchReadBucketingTests
                     return Task.FromResult(entries);
                 });
 
+            leaf.GetVisibleRawEntriesAsync(Arg.Any<List<string>>())
+                .Returns(call => leaf.GetRawEntriesAsync(call.Arg<List<string>>()));
             leavesById[leafId] = leaf;
         }
 
@@ -227,6 +229,8 @@ public class ShardRootGrainRawBatchReadBucketingTests
                 return Task.FromResult(entries);
             });
 
+        leaf.GetVisibleRawEntriesAsync(Arg.Any<List<string>>())
+            .Returns(call => leaf.GetRawEntriesAsync(call.Arg<List<string>>()));
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 
         var grain = new ShardRootGrain(
