@@ -6,7 +6,7 @@ internal sealed partial class ViewMaintainerGrain
 {
     private async Task<RoutingInfo> ReadPhysicalSourceRoutingAsync(string sourceTreeId, string physicalTreeId)
     {
-        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = grainFactory.GetLatticeRegistry();
         var logical = await registry.GetEntryAsync(sourceTreeId)
             ?? throw new InvalidOperationException($"Source '{sourceTreeId}' has no routing registry entry.");
         ShardMap map;

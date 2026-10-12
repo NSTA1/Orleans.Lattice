@@ -404,6 +404,7 @@ public class MaterialisedViewCrossTreeVisibilityTests
             ViewName = viewName,
             WaitSet = waitSet,
             ViewTreeId = viewTreeId,
+            RepairProtocolVersion = ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion,
             Upserts = [.. upserts.Select(u => new KeyValuePair<string, byte[]>(u.Key, u.Value))],
         };
 }

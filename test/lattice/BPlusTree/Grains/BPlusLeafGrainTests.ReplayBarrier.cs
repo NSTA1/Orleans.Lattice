@@ -122,7 +122,7 @@ public partial class BPlusLeafGrainTests
     {
         // Point and multi-key reads.
         "GetAsync", "GetWithVersionAsync", "ExistsAsync", "GetManyAsync",
-        "GetRawEntryAsync", "GetRawEntriesAsync",
+        "GetRawEntryAsync", "GetRawEntriesAsync", "GetVisibleRawEntriesAsync",
         // Writes.
         "SetAsync", "GetOrSetAsync", "SetIfVersionAsync", "SetManyAsync",
         "SetManyWherePredicateAsync", "ApplyCrdtDeltaAsync", "ApplyCrdtDeltaManyAsync",

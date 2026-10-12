@@ -193,6 +193,10 @@ public sealed class ViewMaintainerCandidateGcTests
             shadow.KeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
                 .Returns(Keys(null, false));
             factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(call => call.ArgAt<string>(0) == Candidate ? source : shadow);
+            var root = Substitute.For<IShardRootGrain>();
+            root.GetWithVersionAsync(Arg.Any<string>()).Returns(call =>
+                source.GetWithVersionAsync(call.Arg<string>(), CancellationToken.None));
+            factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(root);
             var projection = Substitute.For<ILatticeViewProjection>();
             projection.Project(Arg.Any<LatticeMutation>()).Returns(call =>
                 new[] { ViewWrite.Upsert("k", [1], call.Arg<LatticeMutation>().Timestamp) });
