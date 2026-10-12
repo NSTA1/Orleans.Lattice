@@ -347,19 +347,14 @@ internal sealed partial class ViewMaintainerGrain
         Dictionary<string, HybridLogicalClock>? batchHlcByViewKey,
         CancellationToken cancellationToken)
     {
-        // Liveness is read BEFORE versions. A key live at the first read is
-        // spared outright; a key not live then is deleted only if the later
-        // version read still finds nothing newer than the range. A newer delete
-        // landing between the two reads therefore spares the key (it was live
-        // when this pass looked) rather than removing its row ahead of a batch
-        // whose other writes are not yet visible.
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        var liveEntries = await ReadSourceAsync(
-            walTreeId, page, static (root, keys) => root.GetRawEntriesAsync(keys), cancellationToken);
-        var candidates = new List<string>(page.Count);
+        var entries = await ReadSourceAsync(
+            walTreeId, page, static (root, keys) => root.GetVisibleRawEntriesAsync(keys), cancellationToken);
+        var deletable = new List<string>(page.Count);
         foreach (var key in page)
         {
-            if (liveEntries.GetValueOrDefault(key) is { IsTombstone: false } entry
+            var raw = entries[key];
+            if (raw is { IsTombstone: false } entry
                 && !entry.ToLwwValue().IsExpired(nowTicks))
             {
                 // A row the source holds live was never tombstoned by this range,
@@ -380,19 +375,7 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
-            candidates.Add(key);
-        }
-
-        if (candidates.Count == 0)
-        {
-            return;
-        }
-
-        var versions = await ReadSourceVersionsAsync(walTreeId, candidates, cancellationToken);
-        var deletable = new List<string>(candidates.Count);
-        foreach (var key in candidates)
-        {
-            if (versions.GetValueOrDefault(key) <= rangeTimestamp)
+            if ((raw?.Timestamp ?? HybridLogicalClock.Zero) <= rangeTimestamp)
             {
                 deletable.Add(key);
             }
