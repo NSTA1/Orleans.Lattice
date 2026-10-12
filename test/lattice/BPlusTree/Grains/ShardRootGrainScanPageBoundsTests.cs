@@ -83,6 +83,7 @@ public class ShardRootGrainScanPageBoundsTests
         leaf.GetNextSiblingAsync().Returns(_ =>
             leafWalkBehavior?.Invoke() ?? Task.FromResult<GrainId?>(null));
         leaf.RebuildProjectionFromWalAsync().Returns(Task.CompletedTask);
+        leaf.ComposeChainLink();
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(leaf);
 

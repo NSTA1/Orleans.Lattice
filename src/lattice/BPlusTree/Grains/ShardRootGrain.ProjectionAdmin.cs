@@ -95,9 +95,11 @@ internal sealed partial class ShardRootGrain
             // already have everything we need from the pre-rebuild state to
             // continue the chain walk. The range is read on every leaf rather
             // than only at a yield point, so that a walk the page-fill ceiling
-            // abandons still has a resume position to bank (issue 2807).
-            var next = await leaf.GetNextSiblingAsync();
-            var bounds = await leaf.GetKeyRangeAsync();
+            // abandons still has a resume position to bank (issue 2807). Both
+            // ride in one grain turn.
+            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            var next = link.NextSibling;
+            var bounds = link.KeyRange;
 
             scan.Budget.RecordLeafVisited();
 

@@ -32,6 +32,12 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// tombstone capture: <c>GetDeltaSinceAsync</c> + <c>GetNextSiblingAsync</c> ->
 /// <c>GetDeltaSinceAndNextSiblingAsync</c>, 2 calls per leaf -> 1. (Its
 /// prepared-pending capture is the <see cref="Site.PendingWalk"/> shape.)</item>
+/// <item><see cref="Site.ShardScanWalk"/> - the shard root's bounded count,
+/// emptiness-probe, range-clock, projection-rebuild and range-bounded page-fill
+/// walks, which read a per-leaf payload and then the leaf's key range and
+/// next-sibling pointer: payload + <c>GetKeyRangeAsync</c> +
+/// <c>GetNextSiblingAsync</c> -> payload + <c>GetKeyRangeAndNextSiblingAsync</c>,
+/// 3 calls per leaf -> 2.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -56,7 +62,7 @@ public class LeafChainWalkElisionBenchmarks
     private Guid[] _transactionIds = null!;
 
     /// <summary>The leaf-chain walk being measured; see the class summary.</summary>
-    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk)]
+    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk, Site.ShardScanWalk)]
     public Site Path { get; set; }
 
     /// <summary>The number of leaves in the walked chain.</summary>
@@ -102,6 +108,10 @@ public class LeafChainWalkElisionBenchmarks
                     break;
                 case Site.DeltaWalk:
                     total += (await _chain.GetDeltaSinceAsync(current)).Count;
+                    break;
+                case Site.ShardScanWalk:
+                    total += (await _chain.GetLiveRawEntriesAsync(current)).Count;
+                    total += await _chain.GetKeyRangeAsync(current);
                     break;
                 case Site.KeyRangeWalk:
                 {
@@ -162,6 +172,15 @@ public class LeafChainWalkElisionBenchmarks
                     break;
                 }
 
+                case Site.ShardScanWalk:
+                {
+                    total += (await _chain.GetLiveRawEntriesAsync(current)).Count;
+                    var (range, next) = await _chain.GetKeyRangeAndNextSiblingAsync(current);
+                    total += range;
+                    leaf = next;
+                    break;
+                }
+
                 case Site.KeyRangeWalk:
                 {
                     var (range, next) = await _chain.GetKeyRangeAndNextSiblingAsync(current);
@@ -200,6 +219,9 @@ public class LeafChainWalkElisionBenchmarks
 
         /// <summary>A tombstone delta walk (replication snapshot provider).</summary>
         DeltaWalk,
+
+        /// <summary>The shard root's count, probe, range-clock, projection-rebuild and range-bounded page-fill walks.</summary>
+        ShardScanWalk,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
