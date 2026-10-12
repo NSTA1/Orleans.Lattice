@@ -3135,6 +3135,13 @@ internal sealed partial class BPlusLeafGrain(
     public Task<LeafCompactionResult> CompactTombstonesBelowAsync(TimeSpan gracePeriod, HybridLogicalClock reapCeiling) =>
         CompactTombstonesCoreAsync(gracePeriod, reapCeiling);
 
+    /// <inheritdoc />
+    public async Task<LeafCompactionPage> CompactTombstonesAndNextSiblingAsync(TimeSpan gracePeriod, HybridLogicalClock? reapCeiling)
+    {
+        var result = await CompactTombstonesCoreAsync(gracePeriod, reapCeiling);
+        return new LeafCompactionPage { Result = result, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
+    }
+
     private async Task<LeafCompactionResult> CompactTombstonesCoreAsync(TimeSpan gracePeriod, HybridLogicalClock? reapCeiling)
     {
         // Clock starts here, not at the scan loop. The replay barrier below is
@@ -3580,6 +3587,13 @@ internal sealed partial class BPlusLeafGrain(
             MovedAwaySlots = state.State.MovedAwaySlots is { Length: > 0 } ms2 ? ms2 : null,
             MovedAwayVsc = state.State.MovedAwayVirtualShardCount,
         };
+    }
+
+    /// <inheritdoc />
+    public async Task<LeafDeltaPage> GetDeltaSinceForSlotsAndNextSiblingAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount)
+    {
+        var delta = await GetDeltaSinceForSlotsAsync(sinceVersion, sortedMovedSlots, virtualShardCount);
+        return new LeafDeltaPage { Delta = delta, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
     }
 
     public async Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount)

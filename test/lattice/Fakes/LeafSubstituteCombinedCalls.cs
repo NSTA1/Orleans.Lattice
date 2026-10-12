@@ -24,6 +24,8 @@ internal static class LeafSubstituteCombinedCalls
     /// combined (sibling first; the key range only when there is a successor).
     /// Also composes the payload-plus-link calls
     /// (<see cref="IBPlusLeafGrain.GetDeltaSinceAndNextSiblingAsync"/>,
+    /// <see cref="IBPlusLeafGrain.GetDeltaSinceForSlotsAndNextSiblingAsync"/>,
+    /// <see cref="IBPlusLeafGrain.CompactTombstonesAndNextSiblingAsync"/>,
     /// <see cref="IBPlusLeafGrain.GetLiveRawEntriesAndNextSiblingAsync"/>) from the
     /// payload stub plus that link, and
     /// <see cref="IBPlusLeafGrain.GetKeyRangeAndPrevSiblingAsync"/> from the key-range
@@ -45,6 +47,21 @@ internal static class LeafSubstituteCombinedCalls
             var delta = await leaf.GetDeltaSinceAsync(call.Arg<VersionVector>());
             var link = await leaf.GetKeyRangeAndNextSiblingAsync();
             return new LeafDeltaPage { Delta = delta, NextSibling = link.NextSibling, KeyRange = link.KeyRange };
+        });
+        leaf.GetDeltaSinceForSlotsAndNextSiblingAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>()).Returns(async call =>
+        {
+            var delta = await leaf.GetDeltaSinceForSlotsAsync(call.ArgAt<VersionVector>(0), call.ArgAt<int[]>(1), call.ArgAt<int>(2));
+            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            return new LeafDeltaPage { Delta = delta, NextSibling = link.NextSibling, KeyRange = link.KeyRange };
+        });
+        leaf.CompactTombstonesAndNextSiblingAsync(Arg.Any<TimeSpan>(), Arg.Any<HybridLogicalClock?>()).Returns(async call =>
+        {
+            var gracePeriod = call.ArgAt<TimeSpan>(0);
+            var result = call.ArgAt<HybridLogicalClock?>(1) is { } ceiling
+                ? await leaf.CompactTombstonesBelowAsync(gracePeriod, ceiling)
+                : await leaf.CompactTombstonesAsync(gracePeriod);
+            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            return new LeafCompactionPage { Result = result, NextSibling = link.NextSibling, KeyRange = link.KeyRange };
         });
         leaf.GetLiveRawEntriesAndNextSiblingAsync().Returns(async _ =>
         {

@@ -1107,9 +1107,10 @@ internal sealed class TreeShardConsolidationGrain(
                     // Slot filtering is pushed into the leaf so only
                     // folding-slot entries are serialised onto the response -
                     // the donor's other keys never cross the wire and never
-                    // enter this batch.
-                    var delta = await leaf.GetDeltaSinceForSlotsAsync(sinceVersion, slots, vsc);
-                    foreach (var (key, lww) in delta.Entries)
+                    // enter this batch. The leaf's chain link comes back in
+                    // the same turn, so advancing costs no further call.
+                    var page = await leaf.GetDeltaSinceForSlotsAndNextSiblingAsync(sinceVersion, slots, vsc);
+                    foreach (var (key, lww) in page.Delta.Entries)
                     {
                         batch[key] = lww;
                         if (batch.Count >= batchSize)
@@ -1120,7 +1121,7 @@ internal sealed class TreeShardConsolidationGrain(
                         }
                     }
 
-                    if (!await walk.MoveNextAsync()) break;
+                    if (!walk.MoveNext(page.Link)) break;
                 }
 
                 // Flush before the cursor is persisted, so the recorded

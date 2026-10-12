@@ -152,6 +152,29 @@ public class TreeShardSplitGrainBoundedDrainTests
     }
 
     [Test]
+    public async Task Drain_reads_each_leaf_payload_and_chain_link_in_one_grain_call()
+    {
+        var h = CreateDrainingSplit(leafCount: 3, leavesPerPass: 10);
+
+        Assert.That(await h.Grain.DrainAsync(), Is.True);
+
+        foreach (var id in h.LeafIds)
+        {
+            var calls = h.Factory.GetGrain<IBPlusLeafGrain>(id).ReceivedCalls()
+                .Select(c => c.GetMethodInfo().Name).ToList();
+            Assert.Multiple(() =>
+            {
+                Assert.That(calls.Count(n => n == nameof(IBPlusLeafGrain.GetDeltaSinceForSlotsAndNextSiblingAsync)), Is.EqualTo(1),
+                    "one combined call per leaf visit");
+                // The test composer answers the combined call through exactly one
+                // link read; a second would be the walk's own advance call.
+                Assert.That(calls.Count(n => n == nameof(IBPlusLeafGrain.GetKeyRangeAndNextSiblingAsync)), Is.EqualTo(1),
+                    "the walk must advance from the page's link, not a further leaf call");
+            });
+        }
+    }
+
+    [Test]
     public async Task Drain_visits_at_most_the_configured_leaves_per_pass()
     {
         var h = CreateDrainingSplit(leafCount: 5, leavesPerPass: 2);

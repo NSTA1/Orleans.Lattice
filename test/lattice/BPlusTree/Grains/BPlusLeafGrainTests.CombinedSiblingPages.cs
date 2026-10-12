@@ -202,6 +202,102 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task GetDeltaSinceForSlotsAndNextSiblingAsync_matches_the_separate_calls()
+    {
+        const int virtualShardCount = 4096;
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.LowKeyInclusive = "a";
+        state.State.HighKeyExclusive = "z";
+        var grain = CreateGrain(state);
+        await grain.SetAsync("alpha", [1]);
+        await grain.SetAsync("beta", [2]);
+        await grain.SetNextSiblingAsync(CombinedPageSibling);
+        var slots = new[] { ShardMap.GetVirtualSlot("alpha", virtualShardCount) };
+
+        var page = await grain.GetDeltaSinceForSlotsAndNextSiblingAsync(new VersionVector(), slots, virtualShardCount);
+        var separate = await grain.GetDeltaSinceForSlotsAsync(new VersionVector(), slots, virtualShardCount);
+        var link = await grain.GetKeyRangeAndNextSiblingAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Delta.Entries.Keys, Is.EquivalentTo(separate.Entries.Keys));
+            Assert.That(page.Delta.Entries.Keys, Does.Contain("alpha"));
+            Assert.That(page.Link, Is.EqualTo(link));
+            Assert.That(page.NextSibling, Is.EqualTo(CombinedPageSibling));
+            Assert.That(page.KeyRange.HighKeyExclusive, Is.EqualTo("z"));
+        });
+    }
+
+    [Test]
+    public async Task GetDeltaSinceForSlotsAndNextSiblingAsync_still_carries_the_link_when_no_slot_moves()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("alpha", [1]);
+        await grain.SetNextSiblingAsync(CombinedPageSibling);
+
+        var page = await grain.GetDeltaSinceForSlotsAndNextSiblingAsync(new VersionVector(), [], 4096);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Delta.Entries, Is.Empty);
+            Assert.That(page.NextSibling, Is.EqualTo(CombinedPageSibling));
+        });
+    }
+
+    [Test]
+    public void GetDeltaSinceForSlotsAndNextSiblingAsync_validates_like_the_separate_call()
+    {
+        var grain = CreateGrain();
+
+        Assert.ThrowsAsync<ArgumentNullException>(
+            () => grain.GetDeltaSinceForSlotsAndNextSiblingAsync(new VersionVector(), null!, 4096));
+    }
+
+    [Test]
+    public async Task CompactTombstonesAndNextSiblingAsync_reaps_like_the_separate_call_and_carries_the_link()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.LowKeyInclusive = "a";
+        state.State.HighKeyExclusive = "k";
+        var grain = CreateGrain(state);
+        grain.EntriesForTest["dead"] = LwwValue<byte[]>.Tombstone(new HybridLogicalClock { WallClockTicks = 10, Counter = 0 });
+        state.State.Version.Tick("test");
+        await grain.SetNextSiblingAsync(CombinedPageSibling);
+        var link = await grain.GetKeyRangeAndNextSiblingAsync();
+
+        var page = await grain.CompactTombstonesAndNextSiblingAsync(TimeSpan.FromHours(1), reapCeiling: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Result.EntriesRemoved, Is.EqualTo(1));
+            Assert.That(grain.EntriesForTest.ContainsKey("dead"), Is.False);
+            Assert.That(page.Link, Is.EqualTo(link));
+            Assert.That(page.KeyRange.HighKeyExclusive, Is.EqualTo("k"));
+        });
+    }
+
+    [Test]
+    public async Task CompactTombstonesAndNextSiblingAsync_honours_the_reap_ceiling()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        var stamp = new HybridLogicalClock { WallClockTicks = 20, Counter = 0 };
+        grain.EntriesForTest["kept"] = LwwValue<byte[]>.Tombstone(stamp);
+        grain.EntriesForTest["reaped"] = LwwValue<byte[]>.Tombstone(new HybridLogicalClock { WallClockTicks = 10, Counter = 0 });
+        state.State.Version.Tick("test");
+
+        var page = await grain.CompactTombstonesAndNextSiblingAsync(TimeSpan.FromHours(1), stamp);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Result.EntriesRemoved, Is.EqualTo(1));
+            Assert.That(grain.EntriesForTest.ContainsKey("kept"), Is.True, "a tombstone at the ceiling is kept");
+            Assert.That(grain.EntriesForTest.ContainsKey("reaped"), Is.False);
+            Assert.That(page.NextSibling, Is.Null, "chain tail");
+        });
+    }
+
+    [Test]
     public async Task DiscardPendingTransactionsAndGetNextSiblingAsync_discards_every_saga_and_persists_once()
     {
         var state = new FakePersistentState<LeafNodeState>();

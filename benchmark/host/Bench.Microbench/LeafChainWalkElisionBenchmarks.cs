@@ -38,12 +38,15 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// next-sibling pointer: payload + <c>GetKeyRangeAsync</c> +
 /// <c>GetNextSiblingAsync</c> -> payload + <c>GetKeyRangeAndNextSiblingAsync</c>,
 /// 3 calls per leaf -> 2.</item>
-/// <item><see cref="Site.PayloadDrainWalk"/> - the tree merge drain and the
-/// snapshot copy, which read a per-leaf payload and then advanced the bounded
-/// leaf walk with its own <c>GetKeyRangeAndNextSiblingAsync</c>: payload +
+/// <item><see cref="Site.PayloadDrainWalk"/> - the tree merge drain, the
+/// snapshot copy, the split and consolidation moved-slot drains, and the
+/// tombstone-compaction chain walk, which read (or, for compaction, produce) a
+/// per-leaf payload and then advanced the bounded leaf walk with its own
+/// <c>GetKeyRangeAndNextSiblingAsync</c>: payload +
 /// <c>GetKeyRangeAndNextSiblingAsync</c> -> one combined payload call whose page
 /// also carries the leaf's key range and next sibling
-/// (<c>GetDeltaSinceAndNextSiblingAsync</c> / <c>GetLiveRawEntriesAndNextSiblingAsync</c>),
+/// (<c>GetDeltaSinceAndNextSiblingAsync</c> / <c>GetLiveRawEntriesAndNextSiblingAsync</c> /
+/// <c>GetDeltaSinceForSlotsAndNextSiblingAsync</c> / <c>CompactTombstonesAndNextSiblingAsync</c>),
 /// 2 calls per leaf -> 1.</item>
 /// <item><see cref="Site.ReverseScanWalk"/> - the shard root's reverse
 /// range-bounded page fills, which read a per-leaf payload, then the leaf's key
@@ -267,7 +270,7 @@ public class LeafChainWalkElisionBenchmarks
         /// <summary>The shard root's count, probe, range-clock, projection-rebuild and range-bounded page-fill walks.</summary>
         ShardScanWalk,
 
-        /// <summary>A payload drain whose page carries the walk's link (tree merge drain, snapshot copy).</summary>
+        /// <summary>A payload drain whose page carries the walk's link (tree merge, split and consolidation drains, snapshot copy, compaction chain walk).</summary>
         PayloadDrainWalk,
 
         /// <summary>The shard root's reverse range-bounded page fills.</summary>
