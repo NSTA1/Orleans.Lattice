@@ -551,7 +551,10 @@ internal sealed partial class ViewMaintainerGrain
     /// Records the replay fence for the coming checkpoint write: the read position
     /// reached (never below a still-unpassed armed fence), the batches still
     /// staged (plus armed batches not yet re-read), and their supersession HLCs.
-    /// Clears it once nothing is staged and any armed fence has been passed.
+    /// Clears it once nothing is staged and any armed fence has been passed; an
+    /// unpassed fence is kept (with an empty staged set) even when every batch it
+    /// re-staged has resolved, because the entries between the read position and
+    /// the fence head were already applied by an earlier pass and must stay fenced.
     /// Returns <see langword="true"/> when the persisted fence changed and so must
     /// be written even if the checkpoint did not move.
     /// </summary>
@@ -571,6 +574,7 @@ internal sealed partial class ViewMaintainerGrain
 
         var staged = new HashSet<Guid>(_staging.Keys);
         var supersession = new Dictionary<string, HybridLogicalClock>(_ordinaryHlcOverStagedKey, StringComparer.Ordinal);
+        var armedUnpassed = false;
         if (_replayFenceOffsets is { } armed)
         {
             var passed = true;
@@ -590,6 +594,7 @@ internal sealed partial class ViewMaintainerGrain
             }
             else
             {
+                armedUnpassed = true;
                 foreach (var txId in _replayFenceStaged!)
                 {
                     if (!_resolved.Contains(txId))
@@ -611,7 +616,7 @@ internal sealed partial class ViewMaintainerGrain
             }
         }
 
-        if (staged.Count == 0)
+        if (staged.Count == 0 && !armedUnpassed)
         {
             return ClearReplayFence();
         }
