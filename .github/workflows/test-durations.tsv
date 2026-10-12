@@ -12,6 +12,9 @@
 # AntiEntropy group 3: seven cases in 549 seconds after the rebase.
 # MaterialisedViewTail: all 24 base/variant/mutation cases in 342 seconds,
 # with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
+# Focused view companions (2026-10-12): Fence 11/11 cases in 48.434s and
+# Horizon 18/18 cases in 124.659s, including the no-build command's startup.
+# Both use one JVM slot, two visible CPUs and a 2GiB heap ceiling; no skips.
 
 # Per-work-item duration estimates, in minutes, used only to bin-pack the
 # matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
@@ -111,6 +114,8 @@
 # duration refresh. The smoke model runs separately in seconds.
 lattice	formal-tlc	deterministic	9.1
 lattice	formal-tlc-materialised-views	deterministic	5.7
+lattice	formal-tlc-view-fence	deterministic	0.81
+lattice	formal-tlc-view-horizon	deterministic	2.08
 lattice	formal-tlc-tree-lifecycle	deterministic	1.6
 lattice	formal-tlc-anti-entropy	deterministic	9.0
 lattice	formal-tlc-anti-entropy-2	deterministic	10.0

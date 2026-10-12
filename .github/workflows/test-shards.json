@@ -100,6 +100,20 @@
         "note": "MaterialisedViewTail base, ThreeWrites variant and 22 mutants: all 24 cases measured at 342s on Java 17 with two visible CPUs and one TLC slot. Mutation names occur in control config headers, so distinct mutants do not share cached controls even when their targets match. Staging companions require separate measured groups when enrolled."
       },
       {
+        "shard": "formal-tlc-view-fence",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewFence"],
+        "note": "MaterialisedViewFence base, NewerOrdinary and nine paired mutants: 11/11 cases, zero skips. Final one-JVM/two-CPU/Xmx2g no-build command measured 48.434s; mutation-specific controls are included."
+      },
+      {
+        "shard": "formal-tlc-view-horizon",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewHorizon"],
+        "note": "MaterialisedViewHorizon base, FullScan and sixteen paired mutants: 18/18 cases, zero skips. Final one-JVM/two-CPU/Xmx2g no-build command measured 124.659s over three distinct prepare/terminal partitions."
+      },
+      {
         "shard": "formal-tlc-anti-entropy",
         "tlc": true,
         "tiers": ["deterministic"],

@@ -105,7 +105,7 @@ the raw fence base/variant take about one to two seconds each and the horizon
 base/variant about four to eight seconds each, including JVM startup. Each mutant
 has a paired clean single-property control, and every behavioural action has
 an action-targeted mutation. State counts are in the counts table and manifests;
-CI must retain whole target groups where controls can be shared.
+Actual harness controls contain mutation-specific headers; same-target grouping does not eliminate their paired clean runs.
 
 The actual `TlcModelCheckTests` runs pass 11 fence cases and 18 horizon cases
 (base, variant and every paired mutant), with zero skipped. A final serial run

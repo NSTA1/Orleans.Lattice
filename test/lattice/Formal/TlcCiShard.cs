@@ -81,6 +81,12 @@ internal static class TlcCiShard
     /// <summary>The measured materialised-view tail base, variant and mutation runs.</summary>
     public const string MaterialisedViews = "TlcShardMaterialisedViews";
 
+    /// <summary>The focused physical replay-fence lifetime runs.</summary>
+    public const string MaterialisedViewFence = "TlcShardMaterialisedViewFence";
+
+    /// <summary>The focused three-partition terminal-horizon recovery runs.</summary>
+    public const string MaterialisedViewHorizon = "TlcShardMaterialisedViewHorizon";
+
     /// <summary>The anti-entropy base and first measured mutation group.</summary>
     public const string AntiEntropy = "TlcShardAntiEntropy";
 
@@ -109,7 +115,8 @@ internal static class TlcCiShard
     public static IReadOnlyList<string> All { get; } =
         [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup,
          BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2,
-         MaterialisedViews, AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing];
+         MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
+         AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -251,7 +258,9 @@ internal static class TlcCiShard
         && !string.Equals(name, "Replication", StringComparison.Ordinal);
 
     private static string? LifecycleCategory(string name) =>
-        name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
+        name == "MaterialisedViewFence" ? MaterialisedViewFence
+        : name == "MaterialisedViewHorizon" ? MaterialisedViewHorizon
+        : name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
         : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
         : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle
         : name.StartsWith("Alias", StringComparison.Ordinal) ? Aliasing

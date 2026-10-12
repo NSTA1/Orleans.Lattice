@@ -184,6 +184,10 @@ public sealed class TlcCiShardTests
                 {
                     var expected = module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
+                        : module.Name == "MaterialisedViewFence"
+                        ? TlcCiShard.MaterialisedViewFence
+                        : module.Name == "MaterialisedViewHorizon"
+                        ? TlcCiShard.MaterialisedViewHorizon
                         : module.Name.StartsWith("MaterialisedView", StringComparison.Ordinal)
                         ? TlcCiShard.MaterialisedViews
                         : module.Name.StartsWith("AntiEntropy", StringComparison.Ordinal)
@@ -218,7 +222,6 @@ public sealed class TlcCiShardTests
         });
     }
 
-    [TestCase("materialised-views", TlcCiShard.MaterialisedViews)]
     [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
     [TestCase("aliasing", TlcCiShard.Aliasing)]
     public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)
@@ -236,6 +239,26 @@ public sealed class TlcCiShardTests
             foreach (var variant in module.Manifest.Variants.Keys)
                 Assert.That(TlcCiShard.OfVariant(module, variant), Is.EqualTo(expected));
         }
+    }
+
+    [TestCase("MaterialisedViewTail", TlcCiShard.MaterialisedViews, 24)]
+    [TestCase("MaterialisedViewFence", TlcCiShard.MaterialisedViewFence, 11)]
+    [TestCase("MaterialisedViewHorizon", TlcCiShard.MaterialisedViewHorizon, 18)]
+    public void Measured_view_modules_route_every_case_to_a_nonempty_deterministic_shard(
+        string name, string category, int expectedCases)
+    {
+        var module = Module(name);
+        var cases = new[] { TlcCiShard.OfModule(module) }
+            .Concat(module.Manifest.Variants.Keys.Select(variant => TlcCiShard.OfVariant(module, variant)))
+            .Concat(module.LoadMutations().Select(mutation => TlcCiShard.Of(module, mutation)))
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(cases, Has.Length.EqualTo(expectedCases));
+            Assert.That(cases, Is.All.EqualTo(category));
+            Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(category)).Tiers,
+                Is.EqualTo(new[] { "deterministic" }));
+        });
     }
 
     [Test]
