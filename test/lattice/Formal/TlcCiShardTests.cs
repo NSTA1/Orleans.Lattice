@@ -141,7 +141,7 @@ public sealed class TlcCiShardTests
                 mutations.Where(mutation => mutation.Target is "ParentChildAccounting" or "RecoverablePending" or "SeparatorRanges" or "ReachMaxHeight")
                     .All(mutation => TlcCiShard.Of(module, mutation) == TlcCiShard.BPlusCascadeMutations2),
                 Is.True,
-                "mutations sharing one target property must stay together to reuse the same control run");
+                "the measured target-property groups must retain their shard assignment");
         });
     }
 

@@ -21,17 +21,16 @@ namespace Orleans.Lattice.Tests.Formal;
 /// declared variant is routed automatically and the work remains balanced.
 /// </para>
 /// <para>
-/// SHARE A CONTROL WHERE YOU CAN. <see cref="TlcModelCheckTests"/> runs each
-/// distinct control arm once per test process, so mutants that share a
-/// control (the same module, target property and options) are cheaper in one
-/// shard than split across two. Every group here is therefore whole modules,
-/// or a split along a target property: every Replication EventualConvergence
-/// mutant shares one control and so lives in <see cref="Convergence"/>.
+/// CONTROL COST. <see cref="TlcModelCheckTests"/> caches byte-identical
+/// control inputs per process. Generated configurations include the mutation
+/// name, so distinct mutants currently run separate controls even when their
+/// module, target property and options match. Grouping by module or target
+/// does not eliminate that cost; measured item durations include it.
 /// </para>
 /// </summary>
 internal static class TlcCiShard
 {
-    /// <summary>The Replication EventualConvergence* (temporal) mutants, which share one control arm.</summary>
+    /// <summary>The Replication EventualConvergence* temporal mutants.</summary>
     public const string Convergence = "TlcShardConvergence";
 
     /// <summary>The other Replication mutants, plus the mutants of every Wal* module.</summary>
@@ -50,7 +49,7 @@ internal static class TlcCiShard
     /// <summary>
     /// The mutants of every AtomicCommit* module. Its variant configurations
     /// are split into <see cref="AtomicVariantShards"/>: a variant has no control arm, so
-    /// splitting them off leaves every shared control with its mutants.
+    /// splitting them off separates their measured JVM work from mutation controls.
     /// </summary>
     public const string Atomic = "TlcShardAtomic";
 
