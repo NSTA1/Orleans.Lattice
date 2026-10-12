@@ -46,7 +46,8 @@ internal sealed class ViewCrossTreeCoordinatorState
     /// <summary>
     /// <c>true</c> once a participant timed out waiting for the joint flip and
     /// terminally degraded the operation. Set only when <see cref="Applied"/> is
-    /// still <c>false</c> (no joint flip was issued); once set, the coordinator
+    /// and <see cref="Decided"/> are still <c>false</c> (no joint intent exists);
+    /// once set, the coordinator
     /// never issues the joint flip and every registration returns the degraded
     /// decision so every participant flips its own slice locally instead.
     /// </summary>

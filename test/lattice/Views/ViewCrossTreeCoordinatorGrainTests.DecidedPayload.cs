@@ -55,6 +55,34 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
     }
 
     [Test]
+    public async Task RegisterDegradedAsync_a_decided_publication_cannot_abandon_its_joint_repair_obligation()
+    {
+        var h = CreateGrain();
+        var target = Substitute.For<ILattice>();
+        h.GrainFactory.GetGrain<ILattice>("view-tree-1").Returns(target);
+        var attempts = 0;
+        target.SetManyAtomicAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(),
+                Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ++attempts == 1
+                ? Task.FromException(new TimeoutException("Joint response lost after durable decision."))
+                : Task.CompletedTask);
+        await h.Grain.RegisterReadyAsync(Readiness("v1", "view-tree-1", ["v1", "v2"], Upsert("k", 1)));
+        Assert.ThrowsAsync<TimeoutException>(async () =>
+            await h.Grain.RegisterReadyAsync(Readiness("v2", "empty-peer", ["v1", "v2"])));
+
+        var result = await h.Grain.RegisterDegradedAsync("v1");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.True, "A durable joint intent cannot turn into a per-tree fallback.");
+            Assert.That(h.State.State.Degraded, Is.False);
+            Assert.That(attempts, Is.EqualTo(2), "Resolve the existing frozen joint intent before returning.");
+        });
+        var repair = await h.Grain.RegisterRepairReadyAsync(
+            Readiness("v1", "view-tree-1", ["v1", "v2"], Upsert("k", 2)));
+        Assert.That(repair.Applied, Is.False, "Every original peer still owes its fresh repair readiness.");
+    }
+
+    [Test]
     public async Task RegisterReadyAsync_failed_completion_persistence_cannot_memoize_an_undurable_result()
     {
         var h = CreateGrain();

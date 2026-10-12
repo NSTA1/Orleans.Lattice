@@ -426,6 +426,14 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
             return ViewCrossTreeDecision.Committed;
         }
 
+        if (state.State.Decided)
+        {
+            // The joint write may already have committed despite a lost
+            // response. Never certify per-tree fallback after durable intent.
+            await CompleteOriginalPublicationAsync();
+            return ViewCrossTreeDecision.Committed;
+        }
+
         // Terminally degrade: no joint flip will ever be issued. Persist before
         // returning so a redelivery (or another participant's registration) sees
         // the terminal decision and also flips locally - never jointly.

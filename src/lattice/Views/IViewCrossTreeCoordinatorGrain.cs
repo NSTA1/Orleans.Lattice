@@ -89,8 +89,9 @@ internal interface IViewCrossTreeCoordinatorGrain : IGrainWithStringKey
     /// <summary>
     /// Records that a participant view has timed out waiting for the joint flip
     /// and is degrading to per-tree-slice atomicity. Terminally degrades the
-    /// operation so the coordinator never issues the joint flip, unless the joint
-    /// flip has already durably committed - in which case this returns
+    /// operation so the coordinator never issues the joint flip, unless a joint
+    /// intent has already been decided - in which case it resumes that frozen
+    /// publication and returns
     /// <see cref="ViewCrossTreeDecision.Committed"/> so the late-degrading caller
     /// applies the joint result (its retraction deletes only) instead of
     /// double-writing its slice. Otherwise returns
