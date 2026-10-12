@@ -1179,7 +1179,7 @@ internal sealed partial class ViewMaintainerGrain
             }
         }
 
-        var replayed = new HashSet<Guid>(_staging.Keys);
+        var replayed = boundToThisLog ? new HashSet<Guid>(_staging.Keys) : new HashSet<Guid>();
         foreach (var (txId, floors) in prepareFloors)
         {
             if (terminated.Contains(txId) || _resolved.Contains(txId) || IsAbandoned(txId))
@@ -1362,14 +1362,15 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <summary>
-    /// Detects a committed batch staged without the prepares it can no longer read
+    /// Detects a batch with known prepare cardinality staged without prepares it can no longer read
     /// (they lie below the checkpoint because the backstop forgot or a clamped
     /// rebuild scan missed the batch) and responds by rebuilding. Every prepare is
-    /// appended before any of the batch's terminals, so once the drain has read the
+    /// appended before the complete set of the batch's terminals, so once the drain has read the
     /// whole log below the heads captured after a terminal was staged, a prepare
     /// still missing will never be read. The batch is discarded and remembered as
     /// abandoned, so the rebuild reads it from source and its later entries are not
-    /// re-staged.
+    /// re-staged. A terminal with no observed prepare has no cardinality witness
+    /// and remains staged instead of treating the sampled head as such a witness.
     /// </summary>
     private async Task<bool> OrphanedCommittedBatchAsync(
         string walTreeId,
@@ -1381,9 +1382,13 @@ internal sealed partial class ViewMaintainerGrain
         List<Guid>? orphaned = null;
         foreach (var (txId, tx) in _staging)
         {
-            var missingPrepares = tx.PreparesByIndex.Count == 0
-                || (tx.AtomicBatchSize > 0 && tx.PreparesByIndex.Count < tx.AtomicBatchSize);
-            if (!tx.TerminalSeen || !missingPrepares)
+            // A terminal alone carries no prepare cardinality. A sampled head
+            // cannot turn that unknown batch into an orphan or rule out a late
+            // prepare on the actual tail.
+            var missingPrepares = tx.AtomicBatchSize > 0
+                && tx.PreparesByIndex.Count < tx.AtomicBatchSize;
+            if (!tx.TerminalSeen || !missingPrepares
+                || (tx.ExpectedShardCount > 0 && tx.CommittedShards.Count < tx.ExpectedShardCount))
             {
                 continue;
             }
