@@ -76,7 +76,7 @@ single-property control; no skipped run is counted as evidence.
 | `MaterialisedViewFence` | 194 | 359 (`NewerOrdinary`) | 9 | 11 | Pending |
 | `MaterialisedViewHorizon` | 20,794 | 33,456 (`FullScan`) | 16 | 18 | Pending |
 | `MaterialisedViewAggregation` | 24,072 | 7,176 (`Delete`) | 18 | 20 | Partial |
-| `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 19 | 21 | Partial |
+| `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 20 | 22 | Partial |
 
 The fence companion checks an established two-batch prefix, source-HLC winners
 at different WAL arrival offsets, peer-delayed publication and a persisted fence
@@ -101,7 +101,7 @@ isolation mappings remain partial. See the [aggregation/rebind refinements](../.
 Each companion has a dedicated deterministic-only TLC shard. The fence/horizon
 serial no-build commands took 48.434 and 124.659 seconds with one JVM slot,
 two visible CPUs and a 2 GiB heap cap on a shared host; peak heap was not measured.
-Independent aggregation/rebind commands took 95.417 and 86.815 seconds with
+Independent aggregation/rebind commands took 95.417 and 117.545 seconds with
 one JVM slot, two visible CPUs and an 1800 MB heap cap. These are whole-command
 costs including paired controls, not sums of tests waiting for a shared JVM slot.
 A green finite model is not a production refinement certificate: the acceptance

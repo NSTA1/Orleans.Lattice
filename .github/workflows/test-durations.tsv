@@ -117,7 +117,7 @@ lattice	formal-tlc-materialised-views	deterministic	5.7
 lattice	formal-tlc-view-fence	deterministic	0.81
 lattice	formal-tlc-view-horizon	deterministic	2.08
 lattice	formal-tlc-view-aggregation	deterministic	1.59
-lattice	formal-tlc-view-rebind	deterministic	1.45
+lattice	formal-tlc-view-rebind	deterministic	1.96
 lattice	formal-tlc-tree-lifecycle	deterministic	1.6
 lattice	formal-tlc-anti-entropy	deterministic	9.0
 lattice	formal-tlc-anti-entropy-2	deterministic	10.0

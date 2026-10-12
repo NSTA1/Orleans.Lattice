@@ -249,7 +249,7 @@ public sealed class TlcCiShardTests
     [TestCase("MaterialisedViewFence", TlcCiShard.MaterialisedViewFence, 11)]
     [TestCase("MaterialisedViewHorizon", TlcCiShard.MaterialisedViewHorizon, 18)]
     [TestCase("MaterialisedViewAggregation", TlcCiShard.MaterialisedViewAggregation, 20)]
-    [TestCase("MaterialisedViewRebind", TlcCiShard.MaterialisedViewRebind, 21)]
+    [TestCase("MaterialisedViewRebind", TlcCiShard.MaterialisedViewRebind, 22)]
     public void Measured_view_modules_route_every_case_to_a_nonempty_deterministic_shard(
         string name, string category, int expectedCases)
     {
