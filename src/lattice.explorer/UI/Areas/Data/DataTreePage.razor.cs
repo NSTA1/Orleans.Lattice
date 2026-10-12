@@ -38,7 +38,10 @@ public partial class DataTreePage : IDisposable
             await ResolveAsync(target);
         }
 
-        _workspace = _tree is null ? null : new DataWorkspace(_tree, address, Navigator, Directory);
+        if (!_lifetime.IsLeft && target.Equals(_resolvedFor))
+        {
+            _workspace = _tree is null ? null : new DataWorkspace(_tree, Address, Navigator, Directory);
+        }
     }
 
     /// <inheritdoc />
@@ -50,17 +53,25 @@ public partial class DataTreePage : IDisposable
 
     private async Task ResolveAsync(ExplorerAddress target)
     {
+        var token = _lifetime.Renew();
         _resolvedFor = target;
         _tree = null;
+        _workspace = null;
         _source = null;
         _liveKeys = null;
         _missing = false;
         _error = null;
         try
         {
-            _tree = await Directory.ResolveAsync(target, _lifetime.Token);
+            var tree = await Directory.ResolveAsync(target, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _tree = tree;
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (Exception) when (token.IsCancellationRequested)
         {
             return;
         }

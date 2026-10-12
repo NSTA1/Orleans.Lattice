@@ -18,6 +18,8 @@ internal sealed class AccessTenantGate
 {
     private string? _scope;
     private bool _resolved;
+    private int _generation;
+    private Task<bool>? _resolution;
 
     /// <summary>The standing read for the current scope, or <see langword="null"/> on a cluster-wide page or before it is read.</summary>
     public TenantAccessState? State { get; private set; }
@@ -36,37 +38,57 @@ internal sealed class AccessTenantGate
     /// <param name="scope">The tenant the page's address is rooted at, or <see langword="null"/> on a cluster-wide page.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns><see langword="true"/> when the page shows the tenant's delegated view.</returns>
-    public async Task<bool> ResolveAsync(TenantAccessCatalog catalog, string? scope, CancellationToken cancellationToken = default)
+    public Task<bool> ResolveAsync(TenantAccessCatalog catalog, string? scope, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         if (_resolved && string.Equals(_scope, scope, StringComparison.Ordinal))
         {
-            return DelegatedTenant is not null;
+            return _resolution!.WaitAsync(cancellationToken);
         }
 
         _resolved = true;
         _scope = scope;
         State = null;
+        Resolving = scope is not null;
+        _resolution = ReadAsync(catalog, scope, ++_generation, cancellationToken);
+        return _resolution;
+    }
+
+    private async Task<bool> ReadAsync(TenantAccessCatalog catalog, string? scope, int generation, CancellationToken cancellationToken)
+    {
         if (scope is null)
         {
             return false;
         }
 
-        Resolving = true;
         try
         {
             var state = await catalog.GetStateAsync(scope, cancellationToken).ConfigureAwait(true);
-            if (string.Equals(_scope, scope, StringComparison.Ordinal))
+            cancellationToken.ThrowIfCancellationRequested();
+            if (generation != _generation)
             {
-                State = state;
+                return false;
             }
+
+            State = state;
+            return state.IsDelegated;
+        }
+        catch
+        {
+            if (generation == _generation)
+            {
+                _resolved = false;
+            }
+
+            throw;
         }
         finally
         {
-            Resolving = false;
+            if (generation == _generation)
+            {
+                Resolving = false;
+            }
         }
-
-        return DelegatedTenant is not null;
     }
 
     /// <summary>The <c>data-lt-tenant-access</c> value naming a standing.</summary>

@@ -32,6 +32,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
     private readonly ITenantAccessFacades _facades = facades ?? throw new ArgumentNullException(nameof(facades));
     private readonly ShellCaller _caller = caller ?? new ShellCaller();
     private ShellCallerKey _memoCaller;
+    private int _generation;
     private TenantAccessState? _state;
     private (string Tenant, IReadOnlyList<TenantGroupDescriptor> Groups)? _groups;
     private (string Tenant, IReadOnlyList<TenantRuleView> Rules)? _rules;
@@ -60,6 +61,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
     {
         ArgumentNullException.ThrowIfNull(tenant);
         var key = ForgetIfTheCallerChanged();
+        var generation = _generation;
         if (_state is { } remembered && string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal))
         {
             return remembered;
@@ -68,7 +70,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
         if (_facades.Policy is not { } policy || !Administers(tenant))
         {
             // Nothing to ask, so nothing that could change: remember it.
-            return Remember(key, TenantAccessState.Unavailable(tenant));
+            return Remember(key, generation, TenantAccessState.Unavailable(tenant));
         }
 
         TenantAccessState state;
@@ -97,7 +99,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
             return TenantAccessState.Unavailable(tenant);
         }
 
-        return Remember(key, state);
+        return Remember(key, generation, state);
     }
 
     /// <summary>
@@ -124,6 +126,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
     {
         ArgumentNullException.ThrowIfNull(tenant);
         var key = ForgetIfTheCallerChanged();
+        var generation = _generation;
         if (_groups is { } remembered && string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal))
         {
             return remembered.Groups;
@@ -132,7 +135,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
         var directory = _facades.Directory ?? throw new NotSupportedException("This Explorer does not serve tenant groups.");
         var page = await directory.ListGroupsAsync(tenant, CompletionPage, cancellationToken).ConfigureAwait(true);
         IReadOnlyList<TenantGroupDescriptor> groups = page?.Entries ?? [];
-        if (ForgetIfTheCallerChanged() == key)
+        if (ForgetIfTheCallerChanged() == key && generation == _generation)
         {
             _groups = (tenant, groups);
         }
@@ -149,6 +152,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
     {
         ArgumentNullException.ThrowIfNull(tenant);
         var key = ForgetIfTheCallerChanged();
+        var generation = _generation;
         if (_rules is { } remembered && string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal))
         {
             return remembered.Rules;
@@ -157,7 +161,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
         var policy = _facades.Policy ?? throw new NotSupportedException("This Explorer does not serve tenant rules.");
         var page = await policy.ListRulesAsync(tenant, CompletionPage, cancellationToken).ConfigureAwait(true);
         IReadOnlyList<TenantRuleView> rules = page?.Entries ?? [];
-        if (ForgetIfTheCallerChanged() == key)
+        if (ForgetIfTheCallerChanged() == key && generation == _generation)
         {
             _rules = (tenant, rules);
         }
@@ -168,6 +172,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
     /// <summary>Forgets everything remembered after a write, including the posture whose usage figures it changed.</summary>
     public void Invalidate()
     {
+        _generation++;
         _state = null;
         _groups = null;
         _rules = null;
@@ -183,9 +188,9 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
         && TenantId.TryParse(tenant, out _)
         && !string.Equals(tenant, TenantId.DefaultId, StringComparison.Ordinal);
 
-    private TenantAccessState Remember(ShellCallerKey key, TenantAccessState state)
+    private TenantAccessState Remember(ShellCallerKey key, int generation, TenantAccessState state)
     {
-        if (ForgetIfTheCallerChanged() == key)
+        if (ForgetIfTheCallerChanged() == key && generation == _generation)
         {
             _state = state;
         }
@@ -200,9 +205,7 @@ internal sealed class TenantAccessCatalog(ITenantAccessFacades facades, ShellCal
         if (_memoCaller != key)
         {
             _memoCaller = key;
-            _state = null;
-            _groups = null;
-            _rules = null;
+            Invalidate();
         }
 
         return key;
