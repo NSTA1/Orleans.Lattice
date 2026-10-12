@@ -668,6 +668,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync();
 
     /// <summary>
+    /// Returns what <see cref="GetKeyRangeAsync"/> and
+    /// <see cref="GetPrevSiblingAsync"/> return, read together in one grain turn,
+    /// so a reverse leaf-chain walk that needs both to advance pays one call per
+    /// leaf instead of two. Like both of those, it answers from persisted topology
+    /// state and does not wait for a WAL replay.
+    /// </summary>
+    Task<LeafPrevChainLink> GetKeyRangeAndPrevSiblingAsync();
+
+    /// <summary>
     /// Seeds every birth-time metadata slot on a freshly created split
     /// sibling in a single round-trip: tree id, shard index, ownership
     /// key range, and the next/prev sibling pointers. Replaces the five
