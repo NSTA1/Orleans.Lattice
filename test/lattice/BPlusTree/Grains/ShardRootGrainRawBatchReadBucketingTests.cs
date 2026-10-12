@@ -38,6 +38,71 @@ public class ShardRootGrainRawBatchReadBucketingTests
     private const string TreeId = "raw-batch-tree";
     private const string ShardKey = TreeId + "/0";
 
+    [Test]
+    public async Task GetRawEntriesIncludingTombstones_preserves_tombstones_and_input_alignment_across_leaves()
+    {
+        var (grain, calls) = CreateThreeLeafShard("a1");
+
+        var result = await grain.GetRawEntriesIncludingTombstonesAsync(["c1", "a1", "b1"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Select(row => row?.Key), Is.EqualTo(new[] { "c1", "a1", "b1" }));
+            Assert.That(result[1]?.IsTombstone, Is.True);
+            Assert.That(result[0]?.IsTombstone, Is.False);
+            Assert.That(calls.Values.Sum(leafCalls => leafCalls.Count), Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public async Task GetRawVersions_preserves_tombstone_versions_and_absent_slots_across_leaves()
+    {
+        var (grain, calls) = CreateThreeLeafShard("a1");
+
+        var result = await grain.GetRawVersionsAsync(["c1", "a1", "missing", "b1"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Select(version => version.WallClockTicks), Is.EqualTo(new long[] { 99, 97, 0, 98 }));
+            Assert.That(calls.Values.Sum(leafCalls => leafCalls.Count), Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public async Task Tombstone_inclusive_rows_and_versions_preserve_the_single_leaf_batch()
+    {
+        var (grain, calls) = CreateThreeLeafShard("a1");
+
+        var rows = await grain.GetRawEntriesIncludingTombstonesAsync(["a3", "a1", "a2"]);
+        var versions = await grain.GetRawVersionsAsync(["a3", "a1", "a2"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows.Select(row => row?.Key), Is.EqualTo(new[] { "a3", "a1", "a2" }));
+            Assert.That(rows[1]?.IsTombstone, Is.True);
+            Assert.That(versions, Is.EqualTo(rows.Select(row => row!.Value.Timestamp)));
+            Assert.That(calls["leaf/leaf-a"], Has.Count.EqualTo(2));
+            Assert.That(calls["leaf/leaf-b"], Is.Empty);
+            Assert.That(calls["leaf/leaf-c"], Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task Tombstone_inclusive_empty_batches_read_no_leaf()
+    {
+        var (grain, calls) = CreateThreeLeafShard();
+
+        var rows = await grain.GetRawEntriesIncludingTombstonesAsync([]);
+        var versions = await grain.GetRawVersionsAsync([]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows, Is.Empty);
+            Assert.That(versions, Is.Empty);
+            Assert.That(calls.Values.SelectMany(leafCalls => leafCalls), Is.Empty);
+        });
+    }
+
     /// <summary>
     /// Builds a shard whose root is an INTERNAL node routing by first letter to
     /// three distinct leaves, and returns the per-leaf recorded call arguments so
@@ -100,9 +165,17 @@ public class ShardRootGrainRawBatchReadBucketingTests
                     var entries = new List<LwwEntry?>(requested.Count);
                     foreach (var key in requested)
                     {
-                        entries.Add(tombstones.Contains(key)
-                            ? new LwwEntry { Key = key, Value = null, IsTombstone = true }
-                            : new LwwEntry { Key = key, Value = Encoding.UTF8.GetBytes("v:" + key) });
+                        entries.Add(key == "missing" ? null : tombstones.Contains(key)
+                            ? new LwwEntry
+                            {
+                                Key = key, Value = null, IsTombstone = true,
+                                Timestamp = new HybridLogicalClock { WallClockTicks = key[0] },
+                            }
+                            : new LwwEntry
+                            {
+                                Key = key, Value = Encoding.UTF8.GetBytes("v:" + key),
+                                Timestamp = new HybridLogicalClock { WallClockTicks = key[0] },
+                            });
                     }
 
                     return Task.FromResult(entries);

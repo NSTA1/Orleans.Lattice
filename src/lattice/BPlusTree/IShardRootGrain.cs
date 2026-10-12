@@ -234,6 +234,26 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys);
 
     /// <summary>
+    /// Returns each committed raw row, including tombstones and expiry metadata,
+    /// aligned with <paramref name="keys"/>. An absent row is <c>null</c>.
+    /// Consumers deciding from both liveness and version must use this single
+    /// observation rather than combine separate row and version reads.
+    /// </summary>
+    Task<List<LwwEntry?>> GetRawEntriesIncludingTombstonesAsync(List<string> keys);
+
+    /// <summary>
+    /// The stored last-writer-wins version of every key in
+    /// <paramref name="keys"/>, aligned by index: the committed row's HLC,
+    /// <b>including a tombstone's</b>, or <see cref="HybridLogicalClock.Zero"/>
+    /// when the key holds no row (never written, or its tombstone already
+    /// reclaimed). Uses the same group-by-leaf traversal as
+    /// <see cref="GetRawEntriesAsync(List{string})"/>. A materialised view
+    /// maintainer reads it to tell whether a logged write is still the source's
+    /// last writer (issue #4885).
+    /// </summary>
+    Task<List<HybridLogicalClock>> GetRawVersionsAsync(List<string> keys);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns the existing value when the key is live,
     /// or <c>null</c> when the write was performed.

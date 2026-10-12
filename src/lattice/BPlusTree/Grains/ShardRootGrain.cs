@@ -689,7 +689,27 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
+    public Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
+        => GetRawEntriesCoreAsync(keys, includeTombstones: false);
+
+    /// <inheritdoc />
+    public Task<List<LwwEntry?>> GetRawEntriesIncludingTombstonesAsync(List<string> keys)
+        => GetRawEntriesCoreAsync(keys, includeTombstones: true);
+
+    /// <inheritdoc />
+    public async Task<List<HybridLogicalClock>> GetRawVersionsAsync(List<string> keys)
+    {
+        var raws = await GetRawEntriesCoreAsync(keys, includeTombstones: true);
+        var versions = new List<HybridLogicalClock>(raws.Count);
+        foreach (var raw in raws)
+        {
+            versions.Add(raw?.Timestamp ?? HybridLogicalClock.Zero);
+        }
+
+        return versions;
+    }
+
+    private async Task<List<LwwEntry?>> GetRawEntriesCoreAsync(List<string> keys, bool includeTombstones)
     {
         EnsureInternalOrigin(LatticeOperation.Read);
         var ready = await PrepareForReadAsync();
@@ -789,7 +809,7 @@ internal sealed partial class ShardRootGrain(
             for (int i = 0; i < keys.Count; i++)
             {
                 var raw = soleResult[i];
-                if (raw is null || raw.Value.IsTombstone)
+                if (raw is null || (raw.Value.IsTombstone && !includeTombstones))
                 {
                     continue;
                 }
@@ -826,7 +846,7 @@ internal sealed partial class ShardRootGrain(
                 // GetRawEntryAsync semantics. Already-expired entries are
                 // returned (callers filter via LwwValue.IsExpired) for
                 // parity with the single-key variant.
-                if (raw is null || raw.Value.IsTombstone)
+                if (raw is null || (raw.Value.IsTombstone && !includeTombstones))
                 {
                     // result slot already initialised to null above.
                     continue;
