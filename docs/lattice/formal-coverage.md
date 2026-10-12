@@ -98,8 +98,12 @@ An alias move after validation may publish the coherent captured tuple and heal
 later; it never relabels that scan using a fresh alias. Captured-tuple publication,
 failed-before-commit and committed-lost-response recovery now have accepted
 production detectors, as do simultaneous immutable bound/candidate offset holds
-across rejected/repeated candidates and snapshot-role changes. Candidate-specific
-GC and physical staging isolation remain partial. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
+across rejected/repeated candidates and snapshot-role changes. Actual rebuild/GC
+component tests now verify both unread suffixes at registration, head capture,
+scan and publication, including uncertain responses and candidate-hold-removal
+controls. Their grain transport and registry census are controlled, so they do
+not certify cluster or registry durability. Physical staging isolation remains
+partial. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
 
 Each companion has a dedicated deterministic-only TLC shard. The fence/horizon
 serial no-build commands took 48.434 and 124.659 seconds with one JVM slot,
