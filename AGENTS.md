@@ -94,7 +94,8 @@ mid-ingest, or absent - never sight-unseen. Canonical rules live in
 
 The same surface is this repo's durable **cross-session memory**, and reading it
 is as obligatory as writing it. The master file opens with **four moments** -
-orient from memory at session start, probe before any discovery, use
+orient via semantic memory search at session start (topic scans are fallback),
+probe before any discovery, use
 `repocontext_context` (not a `search` + `view` crawl) before reading source you
 intend to change, and capture at each durable finding - and closes the loop with
 a self-check for the symptoms of under-use. It also fixes the order to use the

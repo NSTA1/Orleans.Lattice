@@ -36,7 +36,7 @@ Run the phases in order. Each phase must complete with evidence before the next 
 
 ### Phase 1 - Enumerate the corpus
 
-0. **Sweep durable memory first.** This is moment 1 of `.github/instructions/repocontext.instructions.md`: `repocontext_list_topics` for the map, then `repocontext_scan` scope `MemoryTopic` over the whole `gotchas` topic (unconditional every session, per that file), then `conventions` and `decisions`, and `repocontext_search` the docs area under audit as a supplement. Prior sweeps record which claims were verified, which drift was deliberate, and which conventions the prose must reflect - re-deriving them from source is the expensive path.
+0. **Search durable memory first.** Follow moment 1 of `.github/instructions/repocontext.instructions.md`: use semantic `repocontext_search` for prior decisions, gotchas and conventions bearing on the docs area under audit. Search includes memories; read the relevant hits and recall known keys directly. Use `list_topics` and selected-topic scans only when retrieval cannot answer the memory question or the audit needs completeness. Prior sweeps record verified claims, deliberate drift and prose conventions; re-deriving them from source is the expensive path.
 1. `git ls-files "*.md"` to get the authoritative file list. Note the count. `.scratch/` is gitignored and absent from this list by construction. This stays a `git ls-files` contract: the corpus must be the tracked working tree, not the index, because you are auditing uncommitted prose too.
 2. If the user gave a narrower scope, filter the list and report the filtered count.
 3. **Do not** glob the filesystem with `Get-ChildItem` - that pulls in `bin/`, `obj/`, `node_modules/`, and stale untracked files. `git ls-files` is the contract.

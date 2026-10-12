@@ -58,6 +58,7 @@ on:
       - '!test/lattice.explorer.uitests/**/*.md'
       - '.github/workflows/ui-tests.yml'
       - '.github/workflows/ui-test-shards.json'
+      - '.github/workflows/install-playwright-browsers.sh'
 
   # Integration-branch lane, mirroring ci.yml's push trigger (#2972). A pull
   # request INTO a bucket was gated; the bucket itself was not, so its combined
@@ -98,6 +99,7 @@ on:
       - '!test/lattice.explorer.uitests/**/*.md'
       - '.github/workflows/ui-tests.yml'
       - '.github/workflows/ui-test-shards.json'
+      - '.github/workflows/install-playwright-browsers.sh'
 
 permissions:
   contents: read
@@ -198,16 +200,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
-    # Five shards, run in parallel, split by the suite's namespaces: accessibility
-    # (the axe sweep in every appearance and the keyboard, landmark, motion and
-    # forced-colour checks), journeys in two halves, apps (the pilot app, the frame
-    # isolation suite and the AppKit boot fixture, each in Chromium, Firefox and
-    # WebKit), and structure (reflow and the hygiene fixtures). Every shard starts
-    # its own in-process test world, so no shard waits on another's head.
+    # Five shards, balanced by fixture durations from successful run 38207912018:
+    # navigation stress moves to journeys-a, reflow to journeys-b, and picker
+    # accessibility to apps. Summed case durations are about 104-119 seconds per
+    # shard, rather than 36-138. Each shard has its own in-process test world.
     #
     # The structure shard and the second journey shard are defined as COMPLEMENTS,
-    # so the five filters cannot leave a case unrun however the fixtures are
-    # renamed or added to.
+    # with explicit moved-fixture exclusions. UiShardPartitionTests verifies
+    # every current fixture/method is selected exactly once.
     strategy:
       fail-fast: false
       matrix:
@@ -242,30 +242,21 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-all-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
-      # Chromium, Firefox and WebKit. Layout, reflow and accessibility run in
-      # Chromium only, but the app frame's isolation is enforced by each engine's
-      # own sandbox and policy implementation, so the apps shard runs the pilot,
-      # the isolation suite and the AppKit boot fixture in all three engines
-      # (epic #3807, issue #3832). Every shard installs all three: the install is
-      # cached, and one install step keeps the shards identical.
+          key: playwright-${{ join(matrix.browsers, '-') }}-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
+      # Only apps needs Firefox and WebKit; the other shards use Chromium.
+      # Separate cache keys prevent a Chromium-only cache hiding missing engines.
       #
-      # --with-deps installs the OS packages the browsers need; it is skipped on
-      # a cache hit because only the browser payload is cached, not apt state, so
-      # we still run the deps-only install in that case.
+      # OS dependencies are installed even on a cache hit: only browser payloads
+      # are cached, not apt state. Both phases use bounded, logged retries.
       - name: Install Playwright browsers
+        timeout-minutes: 15
+        env:
+          BROWSERS: ${{ join(matrix.browsers, ' ') }}
+          CACHE_HIT: ${{ steps.pwcache.outputs.cache-hit }}
         run: |
           set -euo pipefail
-          script="$(find test/lattice.explorer.uitests/bin/Release -name playwright.ps1 -print -quit)"
-          if [ -z "$script" ]; then
-            echo "::error::playwright.ps1 not found under the build output - did the build succeed?"
-            exit 1
-          fi
-          if [ "${{ steps.pwcache.outputs.cache-hit }}" = "true" ]; then
-            pwsh "$script" install-deps chromium firefox webkit
-          else
-            pwsh "$script" install chromium firefox webkit --with-deps
-          fi
+          read -r -a browsers <<< "$BROWSERS"
+          bash .github/workflows/install-playwright-browsers.sh "$CACHE_HIT" "${browsers[@]}"
 
       # tla-toolchain: not-required - every shard filter here selects
       # TestCategory=UI inside test/lattice.explorer.uitests, which contains no

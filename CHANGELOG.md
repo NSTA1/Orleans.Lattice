@@ -77,6 +77,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Docs - Agent memory retrieval.** Repository sessions search task-relevant memories semantically first, with topic scans as fallback or for explicit completeness. Known-key recalls and action-time gotcha checks remain. ([#4894](https://github.com/NSTA1/Orleans.Lattice/pull/4894)) (`repository-wide`)
+
+- **CI - Browser shard reliability.** Browser fixtures are duration-balanced across five shards. Chromium-only shards skip unused engines; UI and coverage provisioning gets three bounded attempts with process kill deadlines and a final step timeout. ([#4894](https://github.com/NSTA1/Orleans.Lattice/pull/4894)) (`repository-wide`)
+
 - **Explorer - Tenant read ownership.** Switching tenants discards late overview, member and sharing replies and faults; leaving the page cancels reads, and an old not-found reply cannot mark the next page missing. ([#4888](https://github.com/NSTA1/Orleans.Lattice/issues/4888)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Access navigation.** Query-only create commands open their dialogs, Explain asks the current address and clears old answers, and superseded rule/group reads cannot publish stale lists, counts or faults. ([#4875](https://github.com/NSTA1/Orleans.Lattice/pull/4875)) (`Orleans.Lattice.Explorer.UI`)

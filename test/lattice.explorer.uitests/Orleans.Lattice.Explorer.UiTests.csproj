@@ -54,6 +54,7 @@
       criterion is dropped or a cited guard is renamed away.
     -->
     <None Update="ConformanceChecklist.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\.github\workflows\ui-test-shards.json" Link="ui-test-shards.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!--

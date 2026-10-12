@@ -31,58 +31,41 @@ obligations. Each has an observable trigger, so you can check whether you
 honoured it.
 
 **1. Session start, once - orient before you act.**
-Before your first edit on any non-trivial task, spend one round:
-`repocontext_health`, then `repocontext_list_repos` to learn the id of the
-repository you are in (**derive it from the listing, never from your current
-directory** - see [The repo id](#the-repo-id), which matters most in a git
-worktree), then `index_status {repoId}` (which also calibrates you -
-see [Health and degraded mode](#health-and-degraded-mode)), then **sweep the
-memory you are about to need** - and, whatever the task, **always read the whole
-`gotchas` topic in full**. Unlike the component-specific topics below, `gotchas`
-is not swept conditionally on what you think you are about to touch: a full
-`repocontext_scan` scope `MemoryTopic` topic `gotchas` is a **fixed orientation
-step every session**, because an unread gotcha is an hour you are about to lose
-to something a past session already paid for, and you cannot know in advance
-which gotcha that is.
+Before your first edit on any non-trivial task, call `repocontext_health`, then
+`repocontext_list_repos` to resolve the repository id from the listing, never
+from your worktree directory. Check per-repository readiness with
+`repocontext_health {repoId}` and ingest progress with `index_status {repoId}`.
+Then **search task-relevant memory semantically before enumerating topics**.
+Semantic `repocontext_search` includes memories as well as code; a topic scan
+is not needed to make memories searchable.
 
-**`list_topics` + `recall` is the primary memory mechanism.** Memory is a small,
-keyed, topic-partitioned store, so the right way into it is to *enumerate* it,
-not to rank it: enumeration is both more precise (it cannot out-rank the entry
-you need) and faster (one small call, no vector search). Semantic search over
-memory exists and is useful, but it is a **supplement for discovery**, not a
-replacement for the mechanism - reach for it when you could not have named what
-you were looking for, never as the way you check whether something was captured.
+The memory retrieval order:
 
-The ladder, in order:
+1. **`repocontext_search {repoId, query, k}` first.** Ask for prior decisions,
+   gotchas and conventions relevant to the task, component and planned
+   operations. Start with a small `k`, read the returned memory bodies and
+   `reasons`, and check `mode` / `retrievalPath`. Reformulate or widen a targeted
+   query if code hits crowd out the memory question.
+2. **`repocontext_recall` for a known key.** If you already know the entry you
+   need, fetch it directly rather than searching to rediscover its key.
+   `neighbors` can follow useful links from a retrieved memory.
+3. **Topic enumeration is the fallback, not routine onboarding.** If semantic
+   retrieval is unavailable, degraded, incomplete, or still does not answer the
+   memory question, use `repocontext_list_topics`, then `repocontext_scan` scope
+   `MemoryTopic` for the relevant topics. Page those selected topics completely
+   when completeness is needed; do not scan the whole memory store or every
+   `gotchas` entry at the start of every session.
 
-1. **`repocontext_list_topics {repoId}`** - the map: every topic with its live
-   entry count. One call, small payload, no ranking. **This is the step everyone
-   skips and the one that makes the rest work**, because every other memory read
-   needs a topic or a key you must already know.
-2. **`repocontext_scan` scope `MemoryTopic`** for `gotchas` **in full, every
-   session and unconditionally** (see moment 1), then for the one or two further
-   topics the listing shows are relevant (the epic, component, or package you are
-   about to touch, plus `decisions` / `conventions`). Targeted and complete.
-3. **`repocontext_recall`** by key when you know it - the cheapest and most
-   precise path of all, and the reason a stable, predictable `id` on capture
-   matters so much.
-4. *Supplementary:* **`repocontext_search`** to turn up an entry you could not
-   have named (it ranks memory alongside code), and **`repocontext_neighbors`**
-   to walk typed links out of an entry you did find.
+You are looking for the decision that already settled this, the gotcha that
+would waste time, and the convention you might violate. Read relevant memory
+before re-deriving it, but do not pay for an unconditional topic sweep.
 
-You are looking for three things: the decision that already settled this, the
-gotcha that will cost you an hour, and the convention you would otherwise
-violate. Reading memory is the entire point of having written it; a session that
-files entries and never reads any is using half the tool.
-
-> **Why enumeration beats ranking here, stated plainly.** A memory question is
-> almost always "has this already been decided / hit / written down?" - a
-> question about *presence*. `search` answers a different question: "what is most
-> similar?" It ranks memory against the whole code corpus, so a genuinely
-> relevant entry can sit below ten plausible files and read as "nothing was
-> captured". `list_topics` plus a topic `scan` enumerates, so it can distinguish
-> "not captured" from "captured but out-ranked". **A `search` miss is never
-> evidence of absence.** Use `search` to discover; use enumeration to decide.
+**A search miss is not proof of absence.** Semantic search ranks memories
+alongside code and is approximate by default. When the task requires a complete
+inventory or a claim that no relevant entry exists, enumerate the selected
+topics instead. Explicit memory audits and a named workstream's coordination
+bus also need complete topic scans; those are completeness operations, not the
+default session-start retrieval path.
 
 **2. Before any discovery - probe, do not guess.**
 Any "where is X / how does Y work / has this been decided" question opens with
@@ -111,13 +94,11 @@ non-obvious, you pinned down an unwritten norm, or you are handing work to
 another session. Capture it then, with `remember`, under the right topic. See
 [Capture](#capture---durable-agent-memory).
 
-**Gotchas are also mandatory at two action-time moments - recall, not
-re-coverage.** Moment 1 gives you *coverage*: you read the whole `gotchas` topic
-once, so you have seen them all. What it cannot give you is *recall at the instant
-one applies* - you read forty gotchas at the start of the session and the one that
-matters has fallen out of working memory by the time you act. So a gotcha check is
-mandatory again at two high-stakes junctures, and both are about re-reading the
-*relevant entry*, not re-reading the topic:
+**Gotchas remain mandatory at two action-time moments.** A task-focused
+session-start search does not replace checking the memory relevant to the
+operation you are about to perform. Recall a known entry directly; otherwise
+search semantically for the operation or failure, using the topic fallback above
+when retrieval cannot answer it.
 
 - **Before an irreversible or high-blast-radius action** - committing to a push,
   opening / merging / force-pushing / rebasing a pull request, deleting a branch,
@@ -131,13 +112,10 @@ mandatory again at two high-stakes junctures, and both are about re-reading the
   where they pay off most. Check for a known cause before you spend time
   diagnosing, and before you conclude the symptom is real.
 
-What is deliberately **not** on this list: a per-package or per-subsystem re-read
-of `gotchas` when the task pivots into new code. That is redundant now that
-moment 1 reads the whole topic in full - the *component-specific* topics
-(`decisions`, a component name) are the ones worth re-scanning on a pivot;
-`gotchas` you have already read end to end. Do not turn this into ceremony: these
-two moments are the ones where the cost of a forgotten gotcha is high and
-irreversible, and no others need a mandatory re-check.
+When the task pivots to another component, run a focused semantic memory
+search for that component rather than re-reading every gotcha. Do not turn
+orientation into ceremony: retrieve what bears on the task, and retain the two
+action-time checks where missing a known pitfall has the highest cost.
 
 **Self-check - symptoms of under-use.** If any of these describes your session so
 far, you are leaving most of the surface unused - fix it on the next step, not
@@ -145,12 +123,12 @@ next session:
 
 - you called `search` early on, then switched to `grep` / `view` for the rest of
   the session;
-- you called `remember` this session but never `recall`, `scan` scope `Memory`,
-  or `neighbors`;
+- you called `remember` this session but never read a memory search hit,
+  recalled a known entry, or used a relevant topic scan / `neighbors`;
 - you have never called `context` on a task that required reading source to
   change it;
-- you re-derived something - a convention, a workaround, a rationale - that a
-  `scan` of `decisions` / `gotchas` / `conventions` would have handed you;
+- you re-derived something - a convention, a workaround, a rationale - that
+  a focused memory `search` or its topic fallback would have handed you;
 - you pushed, merged, force-pushed, rebased, or ran a destructive write tool
   without first re-reading the `gotchas` that bear on that operation - or you
   spent time on an unexpected failure before checking `gotchas` for a known
@@ -185,15 +163,13 @@ The two jobs it is your first move for:
   a `scan` when you want completeness (every file under a path, every memory
   entry). Use it even when you have a rough idea of the filename; it is faster
   than guessing paths.
-- **Durable cross-session memory** - check what past sessions captured
-  (decisions, gotchas, conventions, glossary) before rediscovering it. **The
-  primary mechanism is `list_topics` + `recall`** (with `scan` scope
-  `MemoryTopic` between them): memory is a small, keyed, topic-partitioned store,
-  so enumerating it is both more precise and faster than ranking it. Semantic
-  search over memory is a **supplement for discovery** - use it to surface an
-  entry you could not have named. It does not replace enumeration, and because it
-  ranks memory against the whole code corpus, a `search` miss is never proof an
-  entry was not captured.
+- **Durable cross-session memory** - use semantic `search` first for prior
+  decisions, gotchas and conventions relevant to the task. Search includes memory
+  entries; read their bodies and inspect `reasons`, `mode` and `retrievalPath`.
+  Recall a known key directly. Fall back to `list_topics` and selected-topic
+  scans when semantic retrieval cannot answer the question, or enumerate when
+  the task explicitly requires completeness. Never treat a search miss as proof
+  that a memory was not captured.
 
 **Two loops - pick by what you need, not by habit.**
 
@@ -403,25 +379,17 @@ mid-task.
 ### list_topics - the map of the memory store
 
 - `repocontext_list_topics {repoId}` returns every distinct memory topic with its
-  live entry count. One call, a small payload, and no ranking involved.
-- **With `recall`, this is the primary memory mechanism** - not a preliminary to
-  searching. Memory is small, keyed, and partitioned by topic, so enumerating it
-  is both more precise than ranking (nothing can out-rank the entry you need) and
-  faster (no vector search, no large payload). Semantic search over memory is a
-  supplement for *discovery*; it does not replace this path.
-- **It is the step most often skipped**, and skipping it is what breaks the rest:
-  every other memory read needs a topic or a key you must already know - `scan`
-  scope `MemoryTopic` needs the topic name, `recall` needs the full key. Without
-  the listing you are guessing, and the usual fallback (a blind `scan` scope
-  `Memory` over the entire store, paged, then hand-parsed) is many calls and a
-  large payload to answer what one call answers.
-- Use it to decide *where* to look before looking: the counts tell you which
-  topics are substantial, and the names tell you which per-workstream topics
-  (`epic-1830`, `perf`, a component name) a past session actually used, which you
-  could not have guessed.
-- It is also the only honest way to answer "was this ever captured?". `search`
-  ranks; `list_topics` plus a topic `scan` enumerates. Only the second can
-  distinguish "not captured" from "captured but out-ranked".
+  live entry count. One small call, with no ranking.
+- Use this map **after semantic search needs a fallback**, or when an explicit
+  audit / coordination task requires complete enumeration. It is not a mandatory
+  preliminary to searching: semantic `search` already includes memory entries.
+- Choose the topics bearing on the unanswered question, then page `scan` scope
+  `MemoryTopic` over those topics. This is cheaper and more precise than a blind
+  paged scan of the entire memory store.
+- Counts and topic names reveal component and workstream topics you could not
+  have guessed. Recall known keys directly; do not enumerate to rediscover them.
+- A complete selected-topic scan can establish whether an entry is absent from
+  that topic. A ranked `search` miss cannot make that claim.
 
 ### scan - ordered, complete enumeration
 
