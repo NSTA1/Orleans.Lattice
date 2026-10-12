@@ -1143,6 +1143,7 @@ internal sealed class TombstoneCompactionGrain(
             while (walk.HasLeaf)
             {
                 var leaf = walk.CurrentLeaf;
+                LeafCompactionPage page;
                 try
                 {
                     // A partial result needs no handling here, and that is a
@@ -1153,8 +1154,9 @@ internal sealed class TombstoneCompactionGrain(
                     // LastCompactionVersion, and the next pass over this shard
                     // re-scans it for exactly that reason (issue 4135). The leaf
                     // tags its own visit `outcome=partial`, so the condition is
-                    // still observable from here.
-                    await CompactLeafAsync(leaf, gracePeriod, reapCeiling);
+                    // still observable from here. The leaf's chain link comes
+                    // back in the same turn, so advancing costs no further call.
+                    page = await leaf.CompactTombstonesAndNextSiblingAsync(gracePeriod, reapCeiling);
                 }
                 catch
                 {
@@ -1162,7 +1164,7 @@ internal sealed class TombstoneCompactionGrain(
                     throw;
                 }
 
-                if (!await walk.MoveNextAsync()) break;
+                if (!walk.MoveNext(page.Link)) break;
             }
 
             // Cursor semantics:

@@ -477,6 +477,31 @@ public partial class TreeShardConsolidationGrainTests
     }
 
     [Test]
+    public async Task Drain_reads_each_donor_leaf_payload_and_chain_link_in_one_grain_call()
+    {
+        var h = CreateGrain(
+            existingState: InFlightState(ShardConsolidationPhase.Drain),
+            leafEntries: [Entries("a"), Entries("b"), Entries("c")]);
+
+        Assert.That(await h.Grain.DrainAsync(), Is.True);
+
+        for (var i = 0; i < 3; i++)
+        {
+            var calls = h.Factory.GetGrain<IBPlusLeafGrain>(GrainId.Create("leaf", $"donor-leaf-{i}")).ReceivedCalls()
+                .Select(c => c.GetMethodInfo().Name).ToList();
+            Assert.Multiple(() =>
+            {
+                Assert.That(calls.Count(n => n == nameof(IBPlusLeafGrain.GetDeltaSinceForSlotsAndNextSiblingAsync)), Is.EqualTo(1),
+                    "one combined call per donor leaf visit");
+                // The test composer answers the combined call through exactly one
+                // link read; a second would be the walk's own advance call.
+                Assert.That(calls.Count(n => n == nameof(IBPlusLeafGrain.GetKeyRangeAndNextSiblingAsync)), Is.EqualTo(1),
+                    "the walk must advance from the page's link, not a further leaf call");
+            });
+        }
+    }
+
+    [Test]
     public async Task Drain_completes_immediately_for_a_donor_with_no_leaves()
     {
         var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Drain));

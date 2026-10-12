@@ -131,7 +131,7 @@ public partial class BPlusLeafGrainTests
         "CountAsync", "GetStatsAsync", "GetKeysAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         // Replication and delta seams.
-        "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync",
+        "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
         "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
         "GetOriginalPrepareStampsAsync",
         "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync",
@@ -144,7 +144,7 @@ public partial class BPlusLeafGrainTests
         // replay consults, so it must run against the fully replayed buckets.
         "DiscardPendingTransactionAsync", "DiscardPendingTransactionsAndGetNextSiblingAsync",
         // Maintenance that reads the projection.
-        "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
+        "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "CompactTombstonesAndNextSiblingAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",
         "CompletePendingReclaimAsync",
         "TryBeginOrphanRetirementAsync",

@@ -3,6 +3,7 @@ using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -29,7 +30,7 @@ public partial class TombstoneCompactionGrainTests
         shardRoot.GetDirtyLeavesSinceLastCompactionAsync()
             .Returns(Task.FromResult(new DirtyLeavesSnapshot { DirtyLeaves = [], ObservedAdvance = default }));
         shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
-        var leafMock = Substitute.For<IBPlusLeafGrain>();
+        var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);
         leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>())
             .Throws(new InvalidOperationException("leaf failed"));
@@ -91,7 +92,7 @@ public partial class TombstoneCompactionGrainTests
         shardRoot.GetDirtyLeavesSinceLastCompactionAsync()
             .Returns(Task.FromResult(new DirtyLeavesSnapshot { DirtyLeaves = [], ObservedAdvance = default }));
         shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
-        var leafMock = Substitute.For<IBPlusLeafGrain>();
+        var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);
         leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>())
             .Throws(new InvalidOperationException("leaf failed"));

@@ -1017,9 +1017,10 @@ internal sealed class TreeShardSplitGrain(
                     // moved-slot entries are serialised on the response -
                     // saves bandwidth and coordinator-side allocations on
                     // hot shards where moved slots are a minority of the
-                    // keyspace.
-                    var delta = await leaf.GetDeltaSinceForSlotsAsync(emptyVector, movedSlotsArray, virtualShardCount);
-                    foreach (var (key, lww) in delta.Entries)
+                    // keyspace. The leaf's chain link comes back in the same
+                    // turn, so advancing past the leaf costs no further call.
+                    var page = await leaf.GetDeltaSinceForSlotsAndNextSiblingAsync(emptyVector, movedSlotsArray, virtualShardCount);
+                    foreach (var (key, lww) in page.Delta.Entries)
                     {
                         batch[key] = lww;
                         if (batch.Count >= batchSize)
@@ -1029,7 +1030,7 @@ internal sealed class TreeShardSplitGrain(
                         }
                     }
 
-                    if (!await walk.MoveNextAsync()) break;
+                    if (!walk.MoveNext(page.Link)) break;
                 }
 
                 // Flush before returning, so the cursor this pass persists is

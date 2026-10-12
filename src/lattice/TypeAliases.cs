@@ -350,6 +350,7 @@ internal static class TypeAliases
     internal const string LeafChainLink = "ol.lcl";
     internal const string LeafDeltaPage = "ol.ldn";
     internal const string LeafPrevChainLink = "ol.lpl";
+    internal const string LeafCompactionPage = "ol.lcn";
 
     // Atomic multi-key writes
     internal const string AtomicWriteState = "ol.aws";

@@ -965,6 +965,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount);
 
     /// <summary>
+    /// <see cref="GetDeltaSinceForSlotsAsync"/> followed by the leaf's chain link
+    /// (<see cref="GetKeyRangeAndNextSiblingAsync"/>) in one grain turn, so the
+    /// split and consolidation slot drains pay one call per leaf instead of two.
+    /// The link is read after the replay barrier the delta awaits, so it is
+    /// consistent with the delta it accompanies.
+    /// </summary>
+    Task<LeafDeltaPage> GetDeltaSinceForSlotsAndNextSiblingAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount);
+
+    /// <summary>
     /// Bulk-merges entries (including tombstones) into this leaf using LWW semantics,
     /// preserving original timestamps. Used during splits to transfer entries without
     /// re-stamping them. Idempotent - re-merging the same entries is a no-op.
@@ -1048,6 +1057,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// ceiling keeps is treated as still inside the grace window.
     /// </summary>
     Task<LeafCompactionResult> CompactTombstonesBelowAsync(TimeSpan gracePeriod, HybridLogicalClock reapCeiling);
+
+    /// <summary>
+    /// <see cref="CompactTombstonesAsync"/> (or, when <paramref name="reapCeiling"/>
+    /// is set, <see cref="CompactTombstonesBelowAsync"/>) followed by the leaf's
+    /// chain link in one grain turn, so the compaction coordinator's chain walk
+    /// pays one call per leaf instead of two. Compaction never changes the leaf's
+    /// sibling pointer or bounds; the link is read after it completes.
+    /// </summary>
+    Task<LeafCompactionPage> CompactTombstonesAndNextSiblingAsync(TimeSpan gracePeriod, HybridLogicalClock? reapCeiling);
 
     /// <summary>
     /// Returns all live (non-tombstoned) key-value pairs in this leaf.
