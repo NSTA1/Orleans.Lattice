@@ -104,8 +104,14 @@ across rejected/repeated candidates and snapshot-role changes. Actual rebuild/GC
 component tests now verify both unread suffixes at registration, head capture,
 scan and publication, including uncertain responses and candidate-hold-removal
 controls. Their grain transport and registry census are controlled, so they do
-not certify cluster or registry durability. Physical staging isolation remains
-partial. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
+not certify cluster or registry durability. Actual drain/rebuild detectors now
+establish physical staging isolation and moving-log resume positions, including
+anchored old-staging, old-cursor and persisted-checkpoint controls. The resolved
+transaction-cache defect (#4895) is fixed separately: ownership follows the WAL
+actually tailed, not candidate binding or rebuild invocation. Same-log rebuild
+and both failed-publication responses retain duplicate suppression. The Rebind
+instance still lacks that reused-ID dimension, so its separate focused model
+remains an acceptance prerequisite. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
 
 The ready-closure companion checks three overlapping two-key batches with crossed
 independent clocks, transitive replacement closure, an external eligibility hold
