@@ -87,6 +87,29 @@ closed retaining the obligation. Once a capture is frozen, waiting for a peer
 does not entitle the caller to keep accumulating WAL staging. Resource sizing
 and that polling discipline are caller obligations outside this bounded model.
 
+## Runtime refinement status
+
+The source-owner caller detector set is integrated by #4876 caller commit
+`41fa9e00` and automatic upgrade commit `77c6c127`; the physical topology
+correction is #4905 commit `695d09a0`. The committed source handoff reports
+105/105 core and 25/25 runtime cases green with no skips. Actual-source mutation
+controls fail for ordinary publication bypass (2 cases), acknowledgement before
+checkpoint (2), peer-wait staging growth (1), stale source-version replay (the
+missing-metadata case fails while its readable-metadata control passes), and
+held physical routing (3). The alias-rebuild point control also fails when its
+physical topology resolver is bypassed. See the refinement table for the exact
+detectors and their limits; these results do not promote unexercised source
+closure or arbitrary topology transitions to proven properties.
+
+Automatic upgrade drain admission is tested before coordinator protocol RPCs,
+with automatic resumption and retained current repair debt. A known #4902 gap
+remains: Decommission can call the new acknowledgement RPC directly while the
+gate is closed when a pending acknowledgement exists. Do not treat upgrade
+admission as fully closed until that path has a fix plus negative/restored
+controls. Liveness remains conditional on peer recovery, fair maintenance and
+available staging capacity. Paired-view checks witness stable held publication
+boundaries only; independent opens may straddle a valid joint commit.
+
 ## Bounds and variants
 
 The base has two participants, coherent versions 1 and 2, independently selected
