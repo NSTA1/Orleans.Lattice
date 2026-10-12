@@ -113,6 +113,17 @@ conditional on peer recovery, fair maintenance and
 available staging capacity. Paired-view checks witness stable held publication
 boundaries only; independent opens may straddle a valid joint commit.
 
+Parent composition now passes the complete 92-case caller/physical population
+and 35-case runtime population (23 stale-slice/joint, two Count/Sum and ten
+Horizon cases), with no skipped or inconclusive cases. New fresh-capture
+controls reject one-pass transitive closure, pre-observation/unconsumed heads
+and erased current source HLC witnesses; live rebind checks every retired fence
+component. Omitting actual original joint publication fails both held original
+public-row assertions before repair can heal output. All bounded refinement
+rows now pass the full acceptance/resolver audit. These results retain the
+source/projection, atomic-backend, fairness and capacity relies above, not a
+machine-checked implementation or universal liveness claim.
+
 ## Bounds and variants
 
 The base has two participants, coherent versions 1 and 2, independently selected

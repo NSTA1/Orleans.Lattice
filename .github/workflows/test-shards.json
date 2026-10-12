@@ -139,7 +139,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardMaterialisedViewSourceAdmission"],
-        "note": "SourceAdmission base, CrossTree, History, PendingSource and eighteen paired mutants: 22/22 cases, zero skips. Independent one-JVM/two-CPU/1800MiB no-build command measured 153.253s including distinct controls; coherent row identity, source-apply lag, omission entitlement and expected-participant closure."
+        "note": "SourceAdmission base, CrossTree, History, PendingSource, PendingOverlay and twenty-one paired mutants: 26/26 cases, zero skips. One-JVM/two-CPU/1800MiB no-build command measured 239.838s including distinct controls; logical pending-row/decision identity, source-apply lag, omission entitlement and expected-participant closure. The duration table prices this measured expanded population at 4.00 minutes."
       },
       {
         "shard": "formal-tlc-view-resolved-identity",

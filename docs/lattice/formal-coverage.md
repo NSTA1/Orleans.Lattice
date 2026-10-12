@@ -64,105 +64,104 @@ its four checked modules.
 that assert a production behaviour. **Detector tests** are the distinct tests those
 rows cite.
 
-## Finite companions awaiting production refinement acceptance
+## Focused materialised-view companions
 
-The accepted-area census above does not include the focused materialised-view
-companions. The table states which production refinements are accepted and which
-remain pending. Their actual TLC harness runs include the base, variant and every
-mutant with its paired clean
-single-property control; no skipped run is counted as evidence.
+The tail row in the area census above is one lifecycle model, not a claim that
+it checks every view interaction. Eight focused companions supply separate
+replay, admission, physical identity, projection and joint-repair contracts.
+Together with the tail they have nine modules, 166 mutations, 213 behaviour
+rows and 192 TLC harness cases, derived from their checked manifests.
 
 | Module | Base states | Variant states | Mutants | Harness cases | Production refinement |
 |--------|-------------|----------------|---------|---------------|-----------------------|
-| `MaterialisedViewFence` | 194 | 359 (`NewerOrdinary`) | 9 | 11 | Pending |
-| `MaterialisedViewHorizon` | 20,794 | 33,456 (`FullScan`) | 16 | 18 | Pending |
-| `MaterialisedViewAggregation` | 24,072 | 7,176 (`Delete`) | 18 | 20 | Partial |
-| `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 20 | 22 | Yes |
-| `MaterialisedViewReadyClosure` | 46,846 | 39,651 (`History`); 31,577 (`TwoConsumers`) | 12 | 15 | Pending |
-| `MaterialisedViewSourceAdmission` | 22,720 | 836 (`CrossTree`); 16,412 (`History`); 660 (`PendingSource`); 1,028 (`PendingOverlay`) | 21 | 26 | Pending |
-| `MaterialisedViewResolvedIdentity` | 196 | 52 (`SameLog`); 60 (`FailedCandidate`); 49 (`LostCandidate`) | 16 | 20 | Yes |
+| `MaterialisedViewFence` | 194 | 359 (`NewerOrdinary`) | 9 | 11 | Yes, bounded replay/rebind |
+| `MaterialisedViewHorizon` | 16,792 | 29,932 (`FullScan`) | 23 | 25 | Yes, retained witness/horizon |
+| `MaterialisedViewAggregation` | 24,072 | 7,176 (`Delete`) | 18 | 20 | Yes, bounded numeric/history seams |
+| `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 20 | 22 | Yes, captured physical identity |
+| `MaterialisedViewReadyClosure` | 46,846 | 39,651 (`History`); 31,577 (`TwoConsumers`) | 12 | 15 | Yes, transitive local closure |
+| `MaterialisedViewSourceAdmission` | 22,720 | 836 (`CrossTree`); 16,412 (`History`); 660 (`PendingSource`); 1,028 (`PendingOverlay`) | 21 | 26 | Yes, logical tuple/participant admission |
+| `MaterialisedViewResolvedIdentity` | 196 | 52 (`SameLog`); 60 (`FailedCandidate`); 49 (`LostCandidate`) | 16 | 20 | Yes, actual-log cache ownership |
+| `MaterialisedViewJointRepair` | 11,006 | 144 (`Legacy`); 4,572 (`SingleTarget`); 16,437 (`TwoFaults`) | 25 | 29 | Yes, conditional joint lifecycle |
 
-The fence companion checks an established two-batch prefix, source-HLC winners
-at different WAL arrival offsets, peer-delayed publication and a persisted fence
-that remains necessary after staging empties. It does not prove general initial
-staging, dependency closure, numeric aggregation or joint coordinator safety.
-The horizon companion deliberately separates prepare partitions p0/p2 from
-terminal partitions p0/p1. It checks post-terminal all-partition consumption,
-bounded rebuild planning and abandoned-batch retirement; source installation
-and terminal append are separate steps. It does not promise snapshot-atomic
-rebuild scans. See the [companion scope and refinements](../../spec/materialised-views/README.md#focused-replay-and-horizon-companions).
+**Yes is a bounded seam mapping, not a machine-checked implementation proof.**
+The full refinement acceptance/resolver audit passes without waived Pending or
+Partial rows. Each note identifies exact production detectors, paired negative
+controls and the assumptions that remain outside its finite abstraction.
 
-The aggregation companion checks independently stamped numeric contributions,
-retract/add membership arithmetic and durable per-group publication obligations,
-plus ordinary and committed-batch history revisions after a fixed captured
-rebuild floor. Its omission-visible guard is a contract awaiting production
-acceptance, not a proof of two-batch dependency closure or cross-tree snapshots.
-The physical-rebind companion separates capture, scan, validation and install.
-An alias move after validation may publish the coherent captured tuple and heal
-later; it never relabels that scan using a fresh alias. Captured-tuple publication,
-failed-before-commit and committed-lost-response recovery now have accepted
-production detectors, as do simultaneous immutable bound/candidate offset holds
-across rejected/repeated candidates and snapshot-role changes. Actual rebuild/GC
-component tests now verify both unread suffixes at registration, head capture,
-scan and publication, including uncertain responses and candidate-hold-removal
-controls. Their grain transport and registry census are controlled, so they do
-not certify cluster or registry durability. Actual drain/rebuild detectors now
-establish physical staging isolation and moving-log resume positions, including
-anchored old-staging, old-cursor and persisted-checkpoint controls. The resolved
-transaction-cache defect (#4895) is fixed separately: ownership follows the WAL
-actually tailed, not candidate binding or rebuild invocation. Same-log rebuild
-and both failed-publication responses retain duplicate suppression. The Rebind
-instance still lacks that reused-ID dimension. The separate resolved-identity
-companion checks two physical logs with one reused ID, actual tail/cache ownership,
-same-log rebuilds, and failed-before-commit versus committed-lost responses. Its
-bare-ID mutant fails checkpoint safety, not merely eventual progress. The bounded
-queue checks clearing both cache structures, not capacity eviction. An accepted
-production queue-only control reaches the real capacity and exposes a duplicate
-projection when retired eviction order removes new-log ownership. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
+The fence checks an established two-batch prefix, source-HLC winners at different
+WAL arrival offsets, unread replay after staging empties, fresh activation and
+live retirement of every old fence component when rebinding to an empty source.
+The horizon separates prepare partitions p0/p2 from terminal partitions p0/p1.
+One retained positive batch-size witness suffices for regular orphan recovery,
+but every distinct terminal and the consumed post-terminal horizon are required.
+Terminal-only history cannot invent cardinality; losing every prepare witness
+is outside convergence. Abandoned batches have their own terminal-triggered
+rebuild path. Source decision, row installation and terminal delivery remain
+distinct; the model relaxes the producer's stronger decision-before-any-terminal
+order and does not certify fabricated terminals or whole-tree snapshot scans.
+See the [replay/horizon scope](../../spec/materialised-views/README.md#focused-replay-and-horizon-companions).
 
-The ready-closure companion checks three overlapping two-key batches with crossed
-independent clocks, transitive replacement closure, an external eligibility hold
-distinct from consumed WAL heads, crash replay and atomic local snapshots. Its
-two-consumer variant permits independent lag, not a simultaneous cross-view flip.
-The source-admission companion separates commit decision, source application and
-terminal arrival. It checks coherent timestamp/value/tombstone identity, absent
-or older source lag, actually applied replacement entitlement, history bypass and
-an abstract expected-participant certificate. A separate pending-row/decision
-capture distinguishes an older materialised row from a committed undrained newer
-prepare, even when their bytes match. Raw-only confirmation, premature metadata
-removal and a lost pending decision each have paired discriminators. The logical
-per-row source seam is accepted, but composed maintainer admission remains Pending;
-no transaction-atomic whole-source snapshot is claimed. Neither companion models
-physical transaction-ID reuse after rebind (#4895), which the identity companion
-isolates. See the
-[staging composition contract and limits](../../spec/view-staging/README.md).
+The aggregation checks independent numeric contributions, retract/add arithmetic,
+durable per-group publication obligations and ordinary/committed history revisions
+after a fixed captured floor. Public Count/Sum and omission controls are separate
+from local dependency closure; neither certifies every numeric projection or
+cross-tree snapshot. Rebind separates capture, scan, validation and publication:
+an alias move after validation may publish the coherent captured tuple and heal
+later, never relabel the scan with a fresh alias. Actual rebuild/GC controls hold
+both immutable bound and candidate floors through rejected and uncertain
+publication responses, with controlled registry/transport collaborators rather
+than a cluster-durability proof. The resolved-identity companion separately checks
+two physical logs reusing a transaction ID, actual-tail cache ownership, both
+cache structures, same-log rebuild and failed-before-commit versus committed-lost
+responses. Rebind alone lacks that reuse dimension. See the
+[aggregation/rebind scope](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions)
+and [resolved identity](../../spec/view-resolved-identity/README.md).
 
-Each companion has a dedicated deterministic-only TLC shard. The fence/horizon
-serial no-build commands took 48.434 and 124.659 seconds with one JVM slot,
-two visible CPUs and a 2 GiB heap cap on a shared host; peak heap was not measured.
-Independent aggregation/rebind commands took 95.417 and 117.545 seconds with
-one JVM slot, two visible CPUs and an 1800 MB heap cap. These are whole-command
-costs including paired controls, not sums of tests waiting for a shared JVM slot.
-The combined four-companion harness also passes all 71 cases after the main
-rebase, in 316.566 seconds with one JVM slot, two visible CPUs and an 1800 MB
-heap cap. Independent ready-closure/source-admission commands passed all 41
-cases in 94.200 and 239.838 seconds respectively, with one JVM slot, two visible
-CPUs and an 1800 MiB heap cap; the latter includes the pending-overlay extension
-and all 21 paired mutation controls. Peak heap was not measured. Some structural
-checking overlapped the admission run on the shared host, so these are finite-model
-measurements, not isolated performance comparisons, production acceptance or
-predicted CI costs.
-The resolved-identity independent command passed all 20 cases in 61.385 seconds
-under the same one-JVM/two-CPU/1800 MiB limit, including its sixteen paired controls.
-A final clean committed-tree command checks all seven companions together: 132
-executed and passed, zero failed, skipped or inconclusive, with every base,
-variant and paired mutant included. Its whole-command wall time was 581.246
-seconds, including build and startup, under the same resource bounds on the
-shared host. This aggregate does not replace the independently measured shard
-weights or certify the pending production refinements.
-A green finite model is not a production refinement certificate: the acceptance
-gate intentionally remains red until discriminating production detector evidence
-justifies every pending verdict.
+ReadyClosure checks crossed independent clocks on a replacement-dependency ring,
+whole transitive local publication, external eligibility distinct from consumed
+heads, history and lost-response replay. SourceAdmission distinguishes coherent
+HLC/bytes/tombstone identity from byte equality, source-apply lag, dropped
+ordinary progress from applied replacement, and current-state from accumulative
+history. Its pending overlay resolves the bounded captured decision and newer
+undrained prepare, not just the older materialised row. Actual maintainer caller
+controls independently reject local source-admission and expected-peer bypasses.
+Post-observation head controls change a head inside the real source read, so a
+premature sample cannot pass merely because the head happened not to move.
+Neither model promises source-wide transaction-atomic capture or simultaneous
+independent consumers. See the [staging composition contract](../../spec/view-staging/README.md).
+
+JointRepair preserves original intent after response loss, freezes fresh
+contributions/physical targets, fences ordinary publication until mandatory
+repair completes, and orders durable checkpoint retirement before acknowledgements
+and cleanup. Actual fresh-capture controls require a six-key transitive closure,
+current source HLC witnesses and consumed post-observation heads. Separate real
+paired-view detectors hold publication boundaries, change source after freeze,
+lose completion/ack responses and reactivate maintainers; independent view opens
+can still straddle a valid joint commit. Backend atomicity is a separate rely.
+Legacy original-contract completion expires automatically without fabricated
+fresh certification. Rolling patch onboarding pauses new RPCs/holds until all
+non-dead members advertise capability, then resumes automatically; public
+maintenance observes the same admission fence. No manual migration, unsupported
+old-binary rejoin or downgrade is assumed safe.
+See [joint repair and automatic upgrade](../../spec/view-joint-repair/README.md).
+
+Recovery claims assume finite faults, eventual peer/source recovery, fair
+maintenance and sufficient staging capacity. Permanent unavailability stays
+fail-closed; arbitrary retention gaps, complete projection encodings, join/view
+DAGs and a shared multi-view snapshot cursor are not checked. Composing named
+seams is not an exhaustive Cartesian product of every feature.
+
+Every companion has a dedicated deterministic TLC shard. Existing independent
+one-JVM/two-visible-CPU measurements, including startup and distinct paired
+controls, price Fence at 48.434 seconds, Horizon at 196.4, Aggregation at 95.417,
+Rebind at 117.545, ReadyClosure at 94.200, expanded SourceAdmission at 239.838,
+ResolvedIdentity at 61.385 and JointRepair at 97.221. A later isolated Horizon
+run passed the same 25 cases in 113.521 seconds; the planner retains the earlier
+conservative measured weight rather than claiming a performance improvement.
+Heap ceilings were 2 GiB for Fence/Horizon and 1,800 MiB for the other companions;
+peak live heap was not measured. These are local observations, not predicted CI
+deadlines. Exhaustive TLC is validated in CI's sharded runs; local iteration uses
+the structural and production-detector scopes rather than serially repeating it.
 
 ## What each area covers, and what it does not
 
@@ -288,10 +287,10 @@ protocol, [Verified Atomic Action](verified-atomic-action.md) and
 
 ## Defects the coverage found and fixed
 
-Each defect below was found by building or reviewing an area's specification,
+The runtime defects below were found by building or reviewing an area's specification,
 reproduced against production, and fixed; each fix is pinned by detectors, and
 the mutation that reproduced production stays as a regression check. Each
-area's list is the authoritative one:
+area's list is the authoritative one. The separately listed interrupted-shadow detector correction is a test flaw, not a runtime defect:
 
 | Area | Defects | Full list |
 |------|---------|-----------|
@@ -302,7 +301,10 @@ area's list is the authoritative one:
 | Backup and restore | #4485, #4490, #4589, #4593, #4686 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
 | B+ tree topology | #4795, #4815, #4818 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
 | Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |
-| Materialised-view physical rebuild and resolved identity | #4891, #4895 | [Physical-rebind companion](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) and [resolved identity](../../spec/view-resolved-identity/README.md) |
+| Materialised-view physical rebuild and resolved identity | #4891, #4895, #4905 | [Physical-rebind companion](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) and [resolved identity](../../spec/view-resolved-identity/README.md) |
+| Materialised-view staging, replay and source admission | #4864, #4865, #4866, #4867, #4868, #4869, #4870, #4871, #4872, #4877, #4878, #4879, #4880, #4881, #4882, #4883, #4884, #4885, #4886, #4890, #4900 | [Tail and focused companions](../../spec/materialised-views/README.md), [staging](../../spec/view-staging/README.md) |
+| Materialised-view joint repair and automatic upgrade | #4876, #4897, #4898, #4899, #4902 | [Joint repair](../../spec/view-joint-repair/README.md) |
+| Interrupted-shadow regression detector | #4906 | [Exact physical generation control](../../spec/materialised-views/RefinementHorizon.md) |
 | Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
 | Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |

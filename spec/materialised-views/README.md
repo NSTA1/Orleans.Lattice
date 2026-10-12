@@ -127,9 +127,11 @@ The final serial no-build `TlcModelCheckTests` run executed 25 Horizon cases:
 the base, FullScan variant, and all 23 mutation/control cases. It passed 25/25
 with zero skipped, inconclusive, or not-executed tests in 196.4 seconds (3
 minutes 16.4 seconds), using one TLC JVM slot, two visible CPUs, and a 2 GiB
-maximum heap. The production detector mappings are explicitly pending
-acceptance, not certified refinements; a clean finite model is not that
-acceptance.
+maximum heap. A later isolated run passes the same 25 cases in 113.521 seconds;
+the planner retains the earlier conservative measured weight. Named actual
+caller controls now establish the bounded production mappings, including
+cardinality, distinct terminals, consumed horizons and live rebind retirement.
+These are not machine-checked implementation refinements or whole-tree scans.
 
 ## Scope and companion models
 

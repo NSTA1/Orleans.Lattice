@@ -104,7 +104,7 @@ not a synthetic mutation copied from its sampled metadata.
 one local registration. The external participant is an abstract readiness
 certificate; the model does not implement its drain, the joint-write engine,
 coordinator timeout/degrade or simultaneous reader visibility across views.
-Production evidence for the candidate cross-tree closure is still pending.
+Actual maintainer admission and expected-peer controls now establish these bounded caller seams; the joint-publication lifecycle is a separate companion, not a shared cross-view snapshot.
 
 The consumer's sample/publish turn excludes its own ordinary-write processing
 between confirmation and publication. It does not freeze the source. In this
@@ -150,11 +150,13 @@ ordering, split publication, incomplete transitive closure, equal-byte identity,
 tombstone-kind identity and treating dropped ordinary progress as applied
 replacement each have a separate negative control.
 
-The refinement notes retain explicitly Pending production detector verdicts.
-The source owner supplied candidate regression names and accepted history
-evidence, but local source-confirmation/closure and cross-tree repairs are not
-accepted production contracts yet. A clean finite model is not an unqualified
-production refinement verdict.
+The refinement notes map accepted bounded production seams to exact paired
+controls: deterministic transitive local closure, post-observation head
+consumption, whole-batch logical source admission, expected-participant closure,
+durable holdback and finite lost-response replay. Actual caller mutations fail
+at those boundaries, not merely a collaborator helper or final value. No
+source-wide atomic capture, arbitrary cross-view snapshot or unconditional
+availability guarantee is inferred from a clean finite model.
 
 ## Measured exhaustive instances
 
@@ -195,8 +197,9 @@ predicted CI performance.
 
 The overlay-owned non-TLC structural scope passed 49/49; six separate refinement
 census/declaration checks passed, including the 27-row behaviour denominator.
-Parent-owned root index enrollment remains outside these scoped greens. Three
-production acceptance/resolver checks ran separately and failed explicitly for
-Pending verdicts and references unavailable in this inherited source. The
-extension does not promote those verdicts. Central enrollment, routing and
-production detector acceptance remain prerequisites for shipment.
+Those original extension runs preceded parent integration and did not certify
+root index enrollment or caller acceptance. The composed parent now passes the
+full 384-case refinement acceptance/resolver scope without waived verdicts,
+alongside 92 caller/physical and 35 real runtime cases. Their exact negative
+controls and remaining relies are recorded in the refinement notes. Exhaustive
+TLC runs remain in the dedicated CI shards rather than a repeated local sweep.
