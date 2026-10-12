@@ -217,6 +217,7 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
         public required IWalCursorRegistry Cursors { get; init; }
         public string Alias { get; set; } = Old;
         public Func<string, Task>? OnScan { get; set; }
+        public Action<string>? BeforeTailEntries { get; set; }
         public List<(string Tree, List<KeyValuePair<string, byte[]>> Writes)> AtomicWrites { get; } = [];
         public List<(string Tree, long From)> Reads { get; } = [];
         public List<(string Tree, long Generation, long Offset)> PublishedSnapshots { get; } = [];
@@ -295,6 +296,7 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
                     var from = c.Checkpoints.GetValueOrDefault(0, -1);
                     h.Reads.Add((c.SourceTreeId, from));
                     var entries = h._logs.GetValueOrDefault(c.SourceTreeId, []).Where(x => x.Offset > from).ToArray();
+                    h.BeforeTailEntries?.Invoke(c.SourceTreeId);
                     foreach (var e in entries) handler.OnEntry(new WalSubscriptionEntry(0, e.Offset, e.Mutation));
                     return Task.FromResult(new WalDrainResult
                     {

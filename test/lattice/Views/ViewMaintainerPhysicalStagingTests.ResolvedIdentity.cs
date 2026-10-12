@@ -32,7 +32,13 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
         await h.Grain.DrainAsync();
         if (restoreOldResolved)
         {
-            ((HashSet<Guid>)Field("_resolved").GetValue(h.Grain)!).UnionWith(oldResolved);
+            h.BeforeTailEntries = tree =>
+            {
+                if (tree == New)
+                {
+                    ((HashSet<Guid>)Field("_resolved").GetValue(h.Grain)!).UnionWith(oldResolved);
+                }
+            };
         }
         h.Append(New, 2, Prepare(New, "new-complete", 21));
         h.Append(New, 3, Terminal(New));
