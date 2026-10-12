@@ -99,6 +99,8 @@ public partial class ViewMaintainerReplayFlushTests
         ArmWindowedLog(second, log, 3, 100);
         await second.Grain.DrainAsync();
         Assert.That(view.Rows[OtherKey], Is.EqualTo(new byte[] { 1 }), "t1 resolved through the joint flip");
+        Assert.That(state.State.ReplayFenceOffsets?.GetValueOrDefault(0, -1), Is.EqualTo(4),
+            "resolving every staged batch cannot retire the durable fence before its unread suffix is consumed");
 
         // Later passes re-read the rest of the old pass; the ordinary write at
         // offset 4 was already applied (and superseded) and must stay fenced.

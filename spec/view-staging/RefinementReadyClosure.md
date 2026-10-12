@@ -22,26 +22,26 @@ a finite model or a final-value test passes.
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `Read` | Consume one partition entry and stage prepares/distinct terminals | `ViewMaintainerGrain.HandleStagingEntry`, `ViewMaintainerGrain.IsComplete`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
-| `Capture` | Arm post-source-confirmation head evidence before allowing omission | Candidate source-confirmation path in the maintainer. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
-| `Publish` | Fold exact per-key stamps and emit one closed atomic slice | `ViewMaintainerGrain.FlushCompletedFilterBatchesAsync`; candidate local closure replaces serial batch flips. | Pending: proposed detector `ViewMaintainerReplayFlushTests.Crossed_prepare_clock_dependencies_publish_the_complete_local_closure_atomically`. |
+| `Read` | Consume one partition entry and stage prepares/distinct terminals | `ViewMaintainerGrain.HandleStagingEntry`, `ViewMaintainerGrain.IsComplete`. | Pending: existing regression detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
+| `Capture` | Arm post-source-confirmation head evidence before allowing omission | Candidate source-confirmation path in the maintainer. | Pending: existing regression detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
+| `Publish` | Fold exact per-key stamps and emit one closed atomic slice | `ViewMaintainerGrain.FlushCompletedFilterBatchesAsync`; candidate local closure replaces serial batch flips. | Yes: `ViewMaintainerReplayFlushTests.Crossed_prepare_clock_dependencies_publish_the_complete_local_closure_atomically`, `MaterialisedViewReadyClosureSnapshotTests.Crossed_prepare_clocks_publish_one_complete_winner_cut_in_public_GetMany` and `MaterialisedViewReadyClosureSnapshotTests.Public_snapshot_detector_rejects_split_crossed_clock_closure`. |
 | `HistoryPublish` | Atomically retain both revisions without winner filtering | `HistoryLatticeViewProjection`, `ViewMaintainerGrain.FlushCompletedFilterBatchesAsync`. | Pending: accepted history evidence exists, but this table's complete read/crash refinement is not certified. |
-| `Checkpoint` | Persist only resolved progress or a floor below unresolved entries | `ViewMaintainerGrain.ApplyCheckpointHoldBack`. | Pending: proposed detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
-| `Crash` | Lose volatile staging and replay; retain completed atomic effects | `ViewMaintainerGrain.ArmReplayFence`, `ViewMaintainerGrain.MarkResolved`. | Pending: proposed detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
-| `Observe` | Publicly read one complete local cut, independent of other consumers' lag | `ILattice.GetManyAsync`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.Crossed_prepare_clock_dependencies_publish_the_complete_local_closure_atomically`. |
-| `Release` | Fair external progress makes the held replacement eligible without changing its WAL progress | Candidate source-confirmation/eligibility path; environment progress is separate from local read completeness. | Pending: proposed detector `ViewMaintainerReplayFlushTests.An_omitting_batch_flushes_after_the_overlapping_newer_batch_that_holds_the_replacement`. |
+| `Checkpoint` | Persist only resolved progress or a floor below unresolved entries | `ViewMaintainerGrain.ApplyCheckpointHoldBack`. | Pending: existing regression detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
+| `Crash` | Lose volatile staging and replay; retain completed atomic effects | `ViewMaintainerGrain.ArmReplayFence`, `ViewMaintainerGrain.MarkResolved`. | Pending: existing regression detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
+| `Observe` | Publicly read one complete local cut, independent of other consumers' lag | `ILattice.GetManyAsync`. | Yes: `ViewMaintainerReplayFlushTests.Crossed_prepare_clock_dependencies_publish_the_complete_local_closure_atomically`, `MaterialisedViewReadyClosureSnapshotTests.Crossed_prepare_clocks_publish_one_complete_winner_cut_in_public_GetMany` and `MaterialisedViewReadyClosureSnapshotTests.Public_snapshot_detector_rejects_split_crossed_clock_closure`. |
+| `Release` | Fair external progress makes the held replacement eligible without changing its WAL progress | Candidate source-confirmation/eligibility path; environment progress is separate from local read completeness. | Pending: existing regression detector `ViewMaintainerReplayFlushTests.An_omitting_batch_flushes_after_the_overlapping_newer_batch_that_holds_the_replacement`. |
 | `Stutter` | No protocol step | Not applicable. | Not applicable. |
 
 ## Property mapping
 
 | Spec property | Code-level property | Detector |
 |---------------|---------------------|----------|
-| `CheckpointHeld` | Reading a prepare does not authorize checkpointing past its unresolved identity | Pending: proposed detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
-| `SnapshotExact` | Crossed independent clocks publish one correct winner cut, never a scalar-batch or partial-key cut | Pending: proposed detector `ViewMaintainerReplayFlushTests.Crossed_prepare_clock_dependencies_publish_the_complete_local_closure_atomically`. |
+| `CheckpointHeld` | Reading a prepare does not authorize checkpointing past its unresolved identity | Pending: existing regression detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
+| `SnapshotExact` | Crossed independent clocks publish one correct winner cut, never a scalar-batch or partial-key cut | Yes: `ViewMaintainerReplayFlushTests.Crossed_prepare_clock_dependencies_publish_the_complete_local_closure_atomically`, `MaterialisedViewReadyClosureSnapshotTests.Crossed_prepare_clocks_publish_one_complete_winner_cut_in_public_GetMany` and `MaterialisedViewReadyClosureSnapshotTests.Public_snapshot_detector_rejects_split_crossed_clock_closure`. |
 | `HistoryExact` | Accumulative projections retain every committed revision, including low-clock losers | Pending: accepted independent-clock history regression exists, but complete row-level refinement remains unaccepted. |
-| `HistoryReadAtomic` | One history batch's two revision rows are not split by a public snapshot | Pending: no accepted detector proves this particular read/closure shape. |
-| `PublicationEntitled` | Every omitted key's ready replacement dependency closes transitively with head evidence | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
-| `Converges` | Each fairly scheduled consumer completes independently after finite crashes | Pending: proposed detector `ViewMaintainerReplayFlushTests.An_omitting_batch_flushes_after_the_overlapping_newer_batch_that_holds_the_replacement`. |
+| `HistoryReadAtomic` | One history batch's two revision rows are not split by a public snapshot | Yes: `MaterialisedViewHistoryReadAtomicTests.Committed_history_batch_never_splits_its_revision_pair_in_one_public_GetMany_snapshot` and `MaterialisedViewHistoryReadAtomicTests.History_snapshot_detector_rejects_split_publication_at_the_captured_atomic_call`. |
+| `PublicationEntitled` | Every omitted key's ready replacement dependency closes transitively with head evidence | Pending: existing regression detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
+| `Converges` | Each fairly scheduled consumer completes independently after finite crashes | Pending: existing regression detector `ViewMaintainerReplayFlushTests.An_omitting_batch_flushes_after_the_overlapping_newer_batch_that_holds_the_replacement`. |
 
 ## Excluded properties
 
@@ -50,6 +50,17 @@ a finite model or a final-value test passes.
 | `TypeOK` | Finite domain check, not a production behaviour. |
 
 ## Evidence and limits
+The crossed-clock closure has both actual maintainer call-path and real public
+read controls. Replacing `PublishLocalClosureSliceAsync` atomic publication with
+sequential production point calls makes the unit snapshot detector fail; its
+restored control passes. The integration pair stages two committed batches with
+opposed per-key clocks on distinct source shards, holds the actual outgoing
+atomic publication, and checks one public `GetManyAsync` result against the
+complete winner cut. Its deliberate split publishes one key, holds before the
+second, and must fail that same snapshot assertion. The restored pair and the
+independent history split-publication pair execute four passing cases, including
+two expected-failure controls. HistoryReadAtomic covers indivisible revision-pair
+reads only; captured-floor history convergence retains its separate obligation.
 
 The three-batch ring is a reachable committed/installed source prefix. It is
 not arbitrary transaction creation or a replacement for source admission.

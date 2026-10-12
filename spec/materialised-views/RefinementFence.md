@@ -4,9 +4,9 @@ This is a documented abstraction, not a machine-checked refinement proof.
 The fixed initial prefix is the two-two-key analogue of the production
 reactivation regression: a peer-delayed batch remains staged, another batch
 flushes, and older ordinary HLCs occur at later physical WAL offsets.
-The detector rows are proposed mappings pending the production worker's
-acceptance evidence; they do not certify detector non-vacuity. They deliberately
-fail the unqualified-Yes acceptance gate until that evidence is integrated.
+The unread-suffix rows have a production mutation/control pair described below.
+Other Pending rows retain their distinct acceptance obligations and deliberately
+fail the unqualified-Yes acceptance gate until their evidence is integrated.
 No detector executes this entire finite state machine inside one fixture.
 
 ## Variable mapping
@@ -26,25 +26,25 @@ No detector executes this entire finite state machine inside one fixture.
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `Establish` | Full first pass flushes the newer batch but holds the peer-delayed batch | `ViewMaintainerGrain.DrainAsync`, `ViewMaintainerGrain.UpdateReplayFence`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
-| `Crash` | Reactivation loses staging but retains backing values, checkpoint and fence | `ViewMaintainerGrain.ArmReplayFence`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`. |
-| `PeerReady` | The peer's registration allows the delayed joint flip | `ViewCrossTreeCoordinatorGrain.RegisterReadyAsync`. | Pending: proposed detector `ViewCrossTreeCoordinatorGrainTests.RegisterReadyAsync_two_non_empty_slices_issue_cross_tree_commit`. |
-| `Begin` | Resume below the old head with the persisted replay fence armed | `ViewMaintainerGrain.DrainReadCheckpoints`, `ViewMaintainerGrain.ArmReplayFence`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`. |
-| `Read` | Read a bounded window; skip reflected ordinary writes and resolved batches | `ViewMaintainerGrain.DrainAsync`, `ViewMaintainerGrain.IsReplayFenced`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
-| `Flush` | Source HLC supersession prevents the delayed batch from replacing newer keys | `ViewMaintainerGrain.IsSupersededByOrdinary`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`. |
-| `Persist` | Keep an unpassed fence even after every re-staged batch resolves | `ViewMaintainerGrain.UpdateReplayFence`, `ViewMaintainerGrain.ClearReplayFence`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
-| `Rebind` | Rebuild on another physical copy and invalidate retired-log replay state | `ViewMaintainerGrain.EnsureBoundToCurrentSourceIdentityAsync`. | Pending: proposed detector `MaterialisedViewIdentitySwapHealTests.View_tails_new_identity_after_swap`. |
+| `Establish` | Full first pass flushes the newer batch but holds the peer-delayed batch | `ViewMaintainerGrain.DrainAsync`, `ViewMaintainerGrain.UpdateReplayFence`. | Yes: `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
+| `Crash` | Reactivation loses staging but retains backing values, checkpoint and fence | `ViewMaintainerGrain.ArmReplayFence`. | Pending: existing regression detector `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`. |
+| `PeerReady` | The peer's registration allows the delayed joint flip | `ViewCrossTreeCoordinatorGrain.RegisterReadyAsync`. | Pending: existing regression detector `ViewCrossTreeCoordinatorGrainTests.RegisterReadyAsync_two_non_empty_slices_issue_cross_tree_commit`. |
+| `Begin` | Resume below the old head with the persisted replay fence armed | `ViewMaintainerGrain.DrainReadCheckpoints`, `ViewMaintainerGrain.ArmReplayFence`. | Pending: existing regression detector `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`. |
+| `Read` | Read a bounded window; skip reflected ordinary writes and resolved batches | `ViewMaintainerGrain.DrainAsync`, `ViewMaintainerGrain.IsReplayFenced`. | Yes: `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
+| `Flush` | Source HLC supersession prevents the delayed batch from replacing newer keys | `ViewMaintainerGrain.IsSupersededByOrdinary`. | Pending: existing regression detector `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`. |
+| `Persist` | Keep an unpassed fence even after every re-staged batch resolves | `ViewMaintainerGrain.UpdateReplayFence`, `ViewMaintainerGrain.ClearReplayFence`. | Yes: `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
+| `Rebind` | Rebuild on another physical copy and invalidate retired-log replay state | `ViewMaintainerGrain.EnsureBoundToCurrentSourceIdentityAsync`. | Pending: existing regression detector `MaterialisedViewIdentitySwapHealTests.View_tails_new_identity_after_swap`. |
 | `Stutter` | No protocol step | Not applicable. | Not applicable. |
 
 ## Property mapping
 
 | Spec property | Code-level property | Detector |
 |---------------|---------------------|----------|
-| `QuiescentExact` | A completed replay retains the source LWW winner, not the later-offset older write | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
-| `FenceCoversUnread` | Empty staging does not clear a fence whose recorded head has not been consumed | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
-| `ScopeExact` | A new physical binding never consumes retired-log replay state | Pending: proposed detector `MaterialisedViewIdentitySwapHealTests.View_tails_new_identity_after_swap`. |
-| `NoFencedRegression` | Replayed ordinary entries and delayed prepares cannot overwrite the reflected newer batch | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`. |
-| `Converges` | The peer resolves, replay reaches the old head, and the fence clears | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`, `ViewCrossTreeCoordinatorGrainTests.RegisterReadyAsync_two_non_empty_slices_issue_cross_tree_commit`. |
+| `QuiescentExact` | A completed replay retains the source LWW winner, not the later-offset older write | Yes: `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
+| `FenceCoversUnread` | Empty staging does not clear a fence whose recorded head has not been consumed | Yes: `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`. |
+| `ScopeExact` | A new physical binding never consumes retired-log replay state | Pending: existing regression detector `MaterialisedViewIdentitySwapHealTests.View_tails_new_identity_after_swap`. |
+| `NoFencedRegression` | Replayed ordinary entries and delayed prepares cannot overwrite the reflected newer batch | Pending: existing regression detector `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`. |
+| `Converges` | The peer resolves, replay reaches the old head, and the fence clears | Yes: `ViewMaintainerReplayFlushTests.A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass`, `ViewCrossTreeCoordinatorGrainTests.RegisterReadyAsync_two_non_empty_slices_issue_cross_tree_commit`. |
 
 ## Excluded properties
 
@@ -53,6 +53,15 @@ No detector executes this entire finite state machine inside one fixture.
 | `TypeOK` | Finite model-domain constraint, not a production behaviour. |
 
 ## Evidence and limits
+The bounded unread-suffix detector now asserts the durable fence immediately
+when the delayed peer resolves and staging empties, before the unread suffix
+is consumed. Changing the actual `UpdateReplayFence` retirement predicate from
+`staged.Count == 0 && !armedUnpassed` to `staged.Count == 0` fails that assertion
+(expected head4, observed null). The same detector passes after restoration and
+then verifies replay resumes below the retained head, keeps the newer value,
+advances the checkpoint and finally retires the fence. This is one production
+mutation/control pair, not six independent mutants or proof of the fresh joint
+repair protocol. Other Pending rows retain their separate acceptance obligations.
 
 `Establish` compresses a reachable first-pass prefix, not every interleaving of
 initial transaction creation. Both batches contain both keys. Source HLCs
