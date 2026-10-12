@@ -5,8 +5,8 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task<List<LwwEntry?>> GetVisibleRawEntriesAsync(List<string> keys)
     {
-        ArgumentNullException.ThrowIfNull(keys);
         await AwaitReplayBarrierAsync();
+        ArgumentNullException.ThrowIfNull(keys);
         EnsureInternalOrigin(LatticeOperation.Read);
 
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
