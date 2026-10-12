@@ -163,6 +163,7 @@ internal sealed partial class ViewMaintainerGrain
             // The coordinator flipped this view's upserts AND retraction deletes
             // jointly across every participant view tree inside one mixed atomic
             // op, so nothing is left to apply out-of-band.
+            ScheduleReconcileIfJointFlipMayBeSuperseded(tx);
             return true;
         }
 
@@ -200,11 +201,39 @@ internal sealed partial class ViewMaintainerGrain
             // The joint flip raced in just before our timeout and already carried
             // this view's upserts AND retraction deletes in one mixed atomic op,
             // so nothing is left to apply out-of-band.
+            ScheduleReconcileIfJointFlipMayBeSuperseded(tx);
             return true;
         }
 
         await DegradeLocallyAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
         return true;
+    }
+
+    /// <summary>
+    /// Schedules an end-of-pass reconcile when a joint flip the coordinator already
+    /// committed may have carried a slice this view registered before an ordinary
+    /// write superseded one of the batch's prepared entries. The coordinator
+    /// flips the slice each view last registered; when a peer completes the wait
+    /// set before this view re-registers its post-supersession slice, the flip
+    /// writes the superseded atomic value over the ordinary write this view has
+    /// already applied, and the slice this view now holds omits that key, so the
+    /// resolved-slice reassert cannot repair it. Conservative: it fires whenever
+    /// any prepared entry is superseded, including when the coordinator stored the
+    /// post-supersession slice.
+    /// </summary>
+    private void ScheduleReconcileIfJointFlipMayBeSuperseded(StagedTransaction tx)
+    {
+        foreach (var prepared in tx.PreparesByIndex.Values)
+        {
+            if (IsSupersededByOrdinary(prepared))
+            {
+                _pendingCrossTreeReconcile = true;
+                logger.LogWarning(
+                    "View '{ViewName}' cross-tree operation '{OperationId}' was jointly flipped after an ordinary write superseded one of its prepared entries; scheduling a reconcile.",
+                    ViewName, tx.CrossTreeOperationId);
+                return;
+            }
+        }
     }
 
     /// <summary>
