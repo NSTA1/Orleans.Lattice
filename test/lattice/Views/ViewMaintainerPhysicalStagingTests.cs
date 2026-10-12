@@ -280,7 +280,19 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             {
                 if (trees.TryGetValue(id, out var existing)) return existing;
                 var tree = Substitute.For<ILattice>();
+                var rows = new Dictionary<string, byte[]>(StringComparer.Ordinal);
                 trees.Add(id, tree);
+                tree.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>()).Returns(call =>
+                    Task.FromResult(call.Arg<List<string>>().Where(rows.ContainsKey)
+                        .Distinct(StringComparer.Ordinal).ToDictionary(key => key, key => rows[key].ToArray(),
+                            StringComparer.Ordinal)));
+                tree.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>()).Returns(call =>
+                {
+                    rows[call.Arg<string>()] = call.Arg<byte[]>().ToArray();
+                    return Task.CompletedTask;
+                });
+                tree.DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call =>
+                    Task.FromResult(rows.Remove(call.Arg<string>())));
                 tree.GetRoutingAsync(Arg.Any<CancellationToken>()).Returns(_ =>
                     new ValueTask<RoutingInfo>(new RoutingInfo(id == Logical ? h.Alias : id, ShardMap.CreateDefault(1, 1))));
                 tree.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(_ =>
@@ -296,6 +308,9 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
                     Arg.Any<CancellationToken>()).Returns(call =>
                 {
                     h.AtomicWrites.Add((id, [.. call.Arg<List<KeyValuePair<string, byte[]>>>()]));
+                    foreach (var write in call.Arg<List<KeyValuePair<string, byte[]>>>())
+                        rows[write.Key] = write.Value.ToArray();
+                    foreach (var key in call.Arg<List<string>>()) rows.Remove(key);
                     return Task.FromResult(new AtomicWriteOutcome());
                 });
                 return tree;
@@ -321,7 +336,7 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             var views = Substitute.For<IOptionsMonitor<LatticeViewOptions>>();
             views.Get(Arg.Any<string>()).Returns(new LatticeViewOptions());
             var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-            options.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalPartitions = 1 });
+            options.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalPartitions = 1, WalRetention = TimeSpan.Zero });
             var reader = Substitute.For<ICommitLogReader>();
             reader.GetHeadOffsetAsync(Arg.Any<string>(), 0, Arg.Any<CancellationToken>())
                 .Returns(call => Task.FromResult(h._heads[call.ArgAt<string>(0)]));
@@ -348,7 +363,7 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             var cursors = Substitute.For<IWalCursorRegistry>();
             var grain = new ViewMaintainerGrain(context, factory, null!, NullLogger<ViewMaintainerGrain>.Instance,
                 catalog, reader, subscriber, cursors,
-                TestOptionsResolver.ForFactory(factory, new LatticeOptions { WalPartitions = 1 }),
+                TestOptionsResolver.ForFactory(factory, new LatticeOptions { WalPartitions = 1, WalRetention = TimeSpan.Zero }),
                 views, options, Substitute.For<ILatticeReplicationContext>(), null, null!, state);
             h = new Harness { Grain = grain, State = state, Cursors = cursors };
             state.OnWriteState = s => h.PublishedSnapshots.Add((s.BoundPhysicalTreeId, s.ActiveGeneration,
