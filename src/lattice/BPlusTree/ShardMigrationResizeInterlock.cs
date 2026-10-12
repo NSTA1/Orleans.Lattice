@@ -89,9 +89,12 @@ internal static class ShardMigrationResizeInterlock
     /// the exception is already a refusal or a faulted step - the reshard
     /// coordinator, whose faulted tick runs its own recovery (abandonment on a
     /// purged tree) - and which must not mistake a fault for a hold.
+    /// When <paramref name="entry"/> is supplied, its <see cref="State.TreeRegistryEntry.DerivedFrom"/>
+    /// link is reused to avoid a redundant registry read.
     /// </summary>
-    internal static Task<bool> ReadResizeHoldAsync(IGrainFactory grainFactory, string treeId) =>
-        ReadHoldAsync(grainFactory, treeId, static resize => resize.HoldsShardMigrationsAsync());
+    internal static Task<bool> ReadResizeHoldAsync(
+        IGrainFactory grainFactory, string treeId, State.TreeRegistryEntry? entry = null) =>
+        ReadHoldAsync(grainFactory, treeId, static resize => resize.HoldsShardMigrationsAsync(), entry);
 
     /// <summary>
     /// Whether a resize of <paramref name="treeId"/>, or of the tree it was
@@ -116,7 +119,7 @@ internal static class ShardMigrationResizeInterlock
     }
 
     private static async Task<bool> ReadHoldAsync(
-        IGrainFactory grainFactory, string treeId, Func<ITreeResizeGrain, Task<bool>> holds)
+        IGrainFactory grainFactory, string treeId, Func<ITreeResizeGrain, Task<bool>> holds, State.TreeRegistryEntry? preloadedEntry = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(treeId);
@@ -126,7 +129,7 @@ internal static class ShardMigrationResizeInterlock
             return true;
         }
 
-        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(treeId);
+        var entry = preloadedEntry ?? await grainFactory.GetLatticeRegistry().GetEntryAsync(treeId);
         return entry?.DerivedFrom is { } owner
             && !string.Equals(owner, treeId, StringComparison.Ordinal)
             && await holds(grainFactory.GetGrain<ITreeResizeGrain>(owner));

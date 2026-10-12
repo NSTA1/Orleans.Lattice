@@ -84,10 +84,13 @@ public partial class LatticeSchemaRemediationGrainTests
             PhysicalTreeId = "orders-physical-42",
         });
 
-        var report = await h.Grain.StartAsync(LatticeValueTransform.Passthrough(), JsonPolicy());
+        h.Registry.ClearReceivedCalls();
 
-        Assert.That(report.Succeeded, Is.True);
+        var report = await h.Grain.AcceptAsync(LatticeValueTransform.Passthrough(), JsonPolicy(), "op-1");
+
+        Assert.That(report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.DryRun));
         // Verify source physical ID was derived directly from GetEntryAsync without calling ResolveAsync
         await h.Registry.DidNotReceive().ResolveAsync(TreeId);
+        await h.Registry.Received(1).GetEntryAsync(TreeId);
     }
 }

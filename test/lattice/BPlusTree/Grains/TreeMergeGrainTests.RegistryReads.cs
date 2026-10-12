@@ -48,6 +48,9 @@ public partial class TreeMergeGrainTests
         state.State.InProgress = true;
         state.State.SourceTreeId = SourceTreeId;
         state.State.SourceShardCount = ShardCount;
+        state.State.SourcePhysicalTreeId = SourceTreeId;
+        state.State.TargetPhysicalTreeId = TargetTreeId;
+        state.State.SourcePhysicalShards = [0];
         state.State.NextShardIndex = 0;
 
         registry.ClearReceivedCalls();

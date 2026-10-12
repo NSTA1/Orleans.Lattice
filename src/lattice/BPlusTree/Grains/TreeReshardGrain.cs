@@ -210,7 +210,7 @@ internal sealed class TreeReshardGrain(
         // of for as long as it can be undone and the previous copy mirrors into
         // the resized one, shard for shard (issue #4452): refuse now, with the
         // remedy, rather than start a reshard whose every migration is refused.
-        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId))
+        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId, entry))
         {
             LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "resize_undoable"), tenantTag);
             throw new InvalidOperationException(ResizeHoldsMigrationsMessage);
@@ -399,11 +399,19 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     internal async Task MigrateAsync()
     {
+        var registry = grainFactory.GetLatticeRegistry();
+
+        // The map, the physical tree whose shards are probed below, and the
+        // options pins are all projections of one registry entry: read it once
+        // rather than paying GetShardMapAsync, ResolveAsync, and an options
+        // resolve as separate serial round trips on every tick.
+        var entry = await registry.GetEntryAsync(TreeId);
+
         // A reshard is refused up front while a resize holds shard migrations,
         // and a resize cannot start while a reshard runs, so this should never
         // fire; if it does, pause loudly rather than dispatch splits or folds
         // that will each be refused and logged only at debug (issue #4452).
-        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId))
+        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId, entry))
         {
             Logger.LogWarning(
                 "Reshard of tree {TreeId} is paused (reason {Reason}): {Message}",
@@ -413,17 +421,10 @@ internal sealed class TreeReshardGrain(
 
         if (state.State.Shrinking)
         {
-            await ConsolidateAsync();
+            await ConsolidateAsync(entry);
             return;
         }
 
-        var registry = grainFactory.GetLatticeRegistry();
-
-        // The map, the physical tree whose shards are probed below, and the
-        // options pins are all projections of one registry entry: read it once
-        // rather than paying GetShardMapAsync, ResolveAsync, and an options
-        // resolve as separate serial round trips on every tick.
-        var entry = await registry.GetEntryAsync(TreeId);
         var resolved = optionsResolver.Resolve(TreeId, entry);
         var currentMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
@@ -540,7 +541,7 @@ internal sealed class TreeReshardGrain(
     /// tracked set can over-count but never under-count.
     /// </para>
     /// </summary>
-    internal async Task ConsolidateAsync()
+    internal async Task ConsolidateAsync(TreeRegistryEntry? preloadedEntry = null)
     {
         var registry = grainFactory.GetLatticeRegistry();
 
@@ -592,10 +593,13 @@ internal sealed class TreeReshardGrain(
 
         // The map, the physical tree the healing-fold check below addresses,
         // and the options pins are all projections of one registry entry, read
-        // once here - after the progress reads above, so the map is as fresh as
-        // it was when it had its own GetShardMapAsync round trip, and options
-        // are resolved without a redundant registry call.
-        var entry = await registry.GetEntryAsync(TreeId);
+        // once here (or reused if preloaded and no tracked folds changed) - after
+        // the progress reads above, so the map is as fresh as it was when it had
+        // its own GetShardMapAsync round trip, and options are resolved without a
+        // redundant registry call.
+        var entry = (!trackedChanged && preloadedEntry is not null)
+            ? preloadedEntry
+            : await registry.GetEntryAsync(TreeId);
         var resolved = optionsResolver.Resolve(TreeId, entry);
         var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
         var map = entry?.ShardMap
