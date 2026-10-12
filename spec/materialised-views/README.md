@@ -93,7 +93,12 @@ it does not replace the general staging model. See
 over THREE physical WAL partitions. Prepares are on p0/p2 and terminals on
 p0/p1, so reading both terminals does not imply consuming the prepare on p2.
 All prepares precede all terminals, but source installation and each shard's
-terminal append are separate actions. A regular orphan can recover cardinality
+terminal append are separate actions. `installed` means the corresponding
+prepared source row is installed, not that a WAL terminal was appended. For the
+visibility seam, the model allows the first shard terminal before source-decision
+confirmation but gates the final distinct terminal on confirmation; it does not
+validate the production producer's stronger decision-before-any-terminal order.
+A regular orphan can recover cardinality
 from one actual retained prepare carrying a positive batch-size witness even if
 the other prepare payload is trimmed; it still needs every distinct terminal
 partition and consumption through the post-terminal horizon. The bounded

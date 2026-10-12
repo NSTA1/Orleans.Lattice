@@ -71,6 +71,14 @@ they deliberately fail the unqualified-Yes acceptance gate until integrated.
 
 ## Evidence and limits
 
+The model's `installed` set denotes prepared source-row installation; it is
+independent of WAL terminal append. `AppendCommit` permits the first distinct
+terminal before source-decision confirmation but requires confirmation before
+the final distinct terminal. This is a deliberately relaxed ordering for the
+two-key visibility abstraction, not evidence that production permits a
+pre-decision terminal: the producer's stronger decision-before-any-terminal
+ordering is outside the model's validated guarantee.
+
 The fixed topology has two source keys, two source shards and three physical
 WAL partitions. Prepares land on p0/p2; terminals land on p0/p1. The head and
 checkpoint representation is consumed-prefix length, consistently translated
