@@ -142,6 +142,13 @@
         "note": "SourceAdmission base, CrossTree, History, PendingSource and eighteen paired mutants: 22/22 cases, zero skips. Independent one-JVM/two-CPU/1800MiB no-build command measured 153.253s including distinct controls; coherent row identity, source-apply lag, omission entitlement and expected-participant closure."
       },
       {
+        "shard": "formal-tlc-view-resolved-identity",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewResolvedIdentity"],
+        "note": "ResolvedIdentity base, SameLog, FailedCandidate, LostCandidate and sixteen paired mutants: 20/20 cases, zero skips. Independent one-JVM/two-CPU/1800MiB no-build command measured 61.385s; actual-tail cache ownership, reused transaction IDs, same-log rebuild and uncertain publication responses."
+      },
+      {
         "shard": "formal-tlc-anti-entropy",
         "tlc": true,
         "tiers": ["deterministic"],

@@ -64,10 +64,14 @@ checks clearing both cache structures at a physical transition, not the complete
 8192-entry eviction algorithm. All liveness claims require fair progress of the
 finite source delivery, tail entry, retry and maintenance steps.
 
-The refinement remains Pending until the production owner accepts the physical
-reuse and same-log failure controls. The single-transaction Rebind model does not
-represent a resolved cache; this companion must not be described as an already
-proved property of that model.
+Production refinement now has accepted actual drain/rebuild detectors for
+physical reuse, same-log failure controls and the resolved eviction queue. The
+queue-only negative control reaches the actual 8192-entry capacity and exposes
+a duplicate projection only when the old queue incorrectly evicts new-log
+ownership. Parent physical/identity/GC regression scope passes 38/38, zero skipped.
+This is not a full proof of capacity eviction, crash replay or cluster durability.
+The single-transaction Rebind model still has no resolved cache; this companion
+must not be described as an already proved property of that model.
 
 ## Measured evidence
 

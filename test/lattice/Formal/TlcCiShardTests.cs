@@ -196,6 +196,8 @@ public sealed class TlcCiShardTests
                         ? TlcCiShard.MaterialisedViewReadyClosure
                         : module.Name == "MaterialisedViewSourceAdmission"
                         ? TlcCiShard.MaterialisedViewSourceAdmission
+                        : module.Name == "MaterialisedViewResolvedIdentity"
+                        ? TlcCiShard.MaterialisedViewResolvedIdentity
                         : module.Name.StartsWith("MaterialisedView", StringComparison.Ordinal)
                         ? TlcCiShard.MaterialisedViews
                         : module.Name.StartsWith("AntiEntropy", StringComparison.Ordinal)
@@ -256,6 +258,7 @@ public sealed class TlcCiShardTests
     [TestCase("MaterialisedViewRebind", TlcCiShard.MaterialisedViewRebind, 22)]
     [TestCase("MaterialisedViewReadyClosure", TlcCiShard.MaterialisedViewReadyClosure, 15)]
     [TestCase("MaterialisedViewSourceAdmission", TlcCiShard.MaterialisedViewSourceAdmission, 22)]
+    [TestCase("MaterialisedViewResolvedIdentity", TlcCiShard.MaterialisedViewResolvedIdentity, 20)]
     public void Measured_view_modules_route_every_case_to_a_nonempty_deterministic_shard(
         string name, string category, int expectedCases)
     {

@@ -67,8 +67,9 @@ rows cite.
 ## Finite companions awaiting production refinement acceptance
 
 The accepted-area census above does not include the focused materialised-view
-companions whose production detector verdicts are still pending. Their actual
-TLC harness runs include the base, variant and every mutant with its paired clean
+companions. The table states which production refinements are accepted and which
+remain pending. Their actual TLC harness runs include the base, variant and every
+mutant with its paired clean
 single-property control; no skipped run is counted as evidence.
 
 | Module | Base states | Variant states | Mutants | Harness cases | Production refinement |
@@ -76,9 +77,10 @@ single-property control; no skipped run is counted as evidence.
 | `MaterialisedViewFence` | 194 | 359 (`NewerOrdinary`) | 9 | 11 | Pending |
 | `MaterialisedViewHorizon` | 20,794 | 33,456 (`FullScan`) | 16 | 18 | Pending |
 | `MaterialisedViewAggregation` | 24,072 | 7,176 (`Delete`) | 18 | 20 | Partial |
-| `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 20 | 22 | Partial |
+| `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 20 | 22 | Yes |
 | `MaterialisedViewReadyClosure` | 46,846 | 39,651 (`History`); 31,577 (`TwoConsumers`) | 12 | 15 | Pending |
 | `MaterialisedViewSourceAdmission` | 20,184 | 836 (`CrossTree`); 14,904 (`History`); 660 (`PendingSource`) | 18 | 22 | Pending |
+| `MaterialisedViewResolvedIdentity` | 196 | 52 (`SameLog`); 60 (`FailedCandidate`); 49 (`LostCandidate`) | 16 | 20 | Yes |
 
 The fence companion checks an established two-batch prefix, source-HLC winners
 at different WAL arrival offsets, peer-delayed publication and a persisted fence
@@ -110,8 +112,13 @@ anchored old-staging, old-cursor and persisted-checkpoint controls. The resolved
 transaction-cache defect (#4895) is fixed separately: ownership follows the WAL
 actually tailed, not candidate binding or rebuild invocation. Same-log rebuild
 and both failed-publication responses retain duplicate suppression. The Rebind
-instance still lacks that reused-ID dimension, so its separate focused model
-remains an acceptance prerequisite. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
+instance still lacks that reused-ID dimension. The separate resolved-identity
+companion checks two physical logs with one reused ID, actual tail/cache ownership,
+same-log rebuilds, and failed-before-commit versus committed-lost responses. Its
+bare-ID mutant fails checkpoint safety, not merely eventual progress. The bounded
+queue checks clearing both cache structures, not capacity eviction. An accepted
+production queue-only control reaches the real capacity and exposes a duplicate
+projection when retired eviction order removes new-log ownership. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
 
 The ready-closure companion checks three overlapping two-key batches with crossed
 independent clocks, transitive replacement closure, an external eligibility hold
@@ -121,7 +128,8 @@ The source-admission companion separates commit decision, source application and
 terminal arrival. It checks coherent timestamp/value/tombstone identity, absent
 or older source lag, actually applied replacement entitlement, history bypass and
 an abstract expected-participant certificate. Neither companion models physical
-transaction-ID reuse after rebind (#4895), and neither certifies logical committed
+transaction-ID reuse after rebind (#4895), which the identity companion isolates,
+and neither certifies logical committed
 source visibility before leaf terminal application. See the
 [staging composition contract and limits](../../spec/view-staging/README.md).
 
@@ -137,6 +145,8 @@ heap cap. Independent ready-closure/source-admission commands passed all 37
 cases in 94.200 and 153.253 seconds respectively, with one JVM slot, two visible
 CPUs and an 1800 MiB heap cap; peak heap was not measured. These are finite-model
 measurements, not production acceptance or predicted CI costs.
+The resolved-identity independent command passed all 20 cases in 61.385 seconds
+under the same one-JVM/two-CPU/1800 MiB limit, including its sixteen paired controls.
 A green finite model is not a production refinement certificate: the acceptance
 gate intentionally remains red until discriminating production detector evidence
 justifies every pending verdict.

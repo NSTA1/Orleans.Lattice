@@ -119,6 +119,7 @@ that cache-ownership failure. The accepted source correction scopes the resolved
 set and eviction queue to the physical WAL actually tailed, retaining same-log
 duplicates through rebuild and failed candidate responses. The discriminating
 `ViewMaintainerPhysicalStagingTests.Drain_rebind_does_not_reuse_old_log_resolved_transaction_ids`
-and its old-cache control establish production regression evidence; the focused
-two-log identity model is still pending. No resolved-cache safety claim follows
-from this model's census.
+and its old-cache control establish production regression evidence. The separate
+[two-log identity companion](../view-resolved-identity/README.md) checks that
+cache-ownership obligation, while this model continues to exclude it. No
+resolved-cache safety claim follows from this model's census.

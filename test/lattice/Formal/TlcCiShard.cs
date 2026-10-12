@@ -99,6 +99,9 @@ internal static class TlcCiShard
     /// <summary>The coherent revision and expected-participant admission runs.</summary>
     public const string MaterialisedViewSourceAdmission = "TlcShardMaterialisedViewSourceAdmission";
 
+    /// <summary>The physical-tail resolved cache ownership runs.</summary>
+    public const string MaterialisedViewResolvedIdentity = "TlcShardMaterialisedViewResolvedIdentity";
+
     /// <summary>The anti-entropy base and first measured mutation group.</summary>
     public const string AntiEntropy = "TlcShardAntiEntropy";
 
@@ -130,6 +133,7 @@ internal static class TlcCiShard
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
+         MaterialisedViewResolvedIdentity,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
@@ -278,6 +282,7 @@ internal static class TlcCiShard
         : name == "MaterialisedViewRebind" ? MaterialisedViewRebind
         : name == "MaterialisedViewReadyClosure" ? MaterialisedViewReadyClosure
         : name == "MaterialisedViewSourceAdmission" ? MaterialisedViewSourceAdmission
+        : name == "MaterialisedViewResolvedIdentity" ? MaterialisedViewResolvedIdentity
         : name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
         : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
         : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle
