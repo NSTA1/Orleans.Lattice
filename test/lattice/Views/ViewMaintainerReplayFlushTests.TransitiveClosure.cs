@@ -1,3 +1,5 @@
+using NSubstitute;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Lattice.Views;
 
@@ -5,6 +7,76 @@ namespace Orleans.Lattice.Tests.Views;
 
 public partial class ViewMaintainerReplayFlushTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Source_confirmation_consumes_the_captured_replacement_horizon_before_omitting_a_key(
+        bool advanceHeadDuringSourceRead)
+    {
+        var view = new FakeViewTree();
+        var state = new FakePersistentState<ViewCheckpointState>();
+        var h = Create(view, state);
+        var transaction = Guid.NewGuid();
+        List<LatticeMutation> log =
+        [
+            Prepared(transaction, Key, 2, ticks: 20, size: 2, index: 0),
+            Prepared(transaction, OtherKey, 2, ticks: 20, size: 2, index: 1),
+            Commit(transaction, ticks: 21),
+        ];
+        ArmLog(h, log);
+        h.SourceRows[Key] = [3];
+        h.SourceVersions[Key] = Clock(30);
+        h.HeadOffset.Value = log.Count + (advanceHeadDuringSourceRead ? 0 : 1);
+        var sourceObserved = false;
+        if (advanceHeadDuringSourceRead)
+        {
+            h.SourceRoot.GetVisibleRawEntriesAsync(Arg.Any<List<string>>()).Returns(call =>
+            {
+                var rows = call.ArgAt<List<string>>(0)
+                    .Select(key => (LwwEntry?)new LwwEntry
+                    {
+                        Key = key,
+                        Value = h.SourceRows[key],
+                        Timestamp = h.SourceVersions[key],
+                    })
+                    .ToList();
+                if (!sourceObserved)
+                {
+                    h.HeadOffset.Value = log.Count + 1;
+                    sourceObserved = true;
+                }
+
+                return Task.FromResult(rows);
+            });
+        }
+
+        await h.Grain.DrainAsync();
+        await h.Grain.DrainAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Snapshots, Is.Empty,
+                "The logical replacement is visible at source, but its WAL event is beyond consumed progress.");
+            Assert.That(state.State.AppliedOffsets.GetValueOrDefault(0, -1), Is.EqualTo(-1));
+            Assert.That(sourceObserved, Is.EqualTo(advanceHeadDuringSourceRead));
+        });
+
+        log.Add(OrdinaryAt(Key, 3, ticks: 30));
+        ArmLog(h, log);
+        await h.Grain.DrainAsync();
+        await h.Grain.DrainAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Snapshots.Where(snapshot => snapshot.ContainsKey(OtherKey))
+                .Select(snapshot => snapshot.GetValueOrDefault(Key)?.FirstOrDefault()),
+                Is.All.EqualTo((byte)3),
+                "The omitted key's actual replacement must precede publication of the remaining batch.");
+            Assert.That(view.Rows[Key], Is.EqualTo(new byte[] { 3 }));
+            Assert.That(view.Rows[OtherKey], Is.EqualTo(new byte[] { 2 }));
+            Assert.That(state.State.AppliedOffsets[0], Is.EqualTo(log.Count - 1));
+        });
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task A_transitive_ready_closure_revisits_earlier_candidates_and_replays_one_complete_effect(
