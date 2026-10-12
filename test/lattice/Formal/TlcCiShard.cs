@@ -101,6 +101,7 @@ internal static class TlcCiShard
 
     /// <summary>The physical-tail resolved cache ownership runs.</summary>
     public const string MaterialisedViewResolvedIdentity = "TlcShardMaterialisedViewResolvedIdentity";
+
     /// <summary>The bounded fresh joint-repair, retry and acknowledgement-closure runs.</summary>
     public const string MaterialisedViewJointRepair = "TlcShardMaterialisedViewJointRepair";
 
@@ -286,7 +287,6 @@ internal static class TlcCiShard
         : name == "MaterialisedViewSourceAdmission" ? MaterialisedViewSourceAdmission
         : name == "MaterialisedViewResolvedIdentity" ? MaterialisedViewResolvedIdentity
         : string.Equals(name, "MaterialisedViewJointRepair", StringComparison.Ordinal) ? MaterialisedViewJointRepair
-
         : name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
         : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
         : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle

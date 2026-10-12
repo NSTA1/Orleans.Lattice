@@ -13,7 +13,7 @@
 # MaterialisedViewTail: all 24 base/variant/mutation cases in 342 seconds,
 # with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
 # Focused view companions (2026-10-12): Fence 11/11 cases in 48.434s and
-# Horizon 18/18 cases in 124.659s, including the no-build command's startup.
+# Horizon 25/25 cases in 196.4s, including the no-build command's startup.
 # Both use one JVM slot, two visible CPUs and a 2GiB heap ceiling; no skips.
 # Aggregation 20/20 cases in 95.417s; strengthened Rebind 22/22 cases in
 # 117.545s, including distinct mutation-specific controls and command startup.

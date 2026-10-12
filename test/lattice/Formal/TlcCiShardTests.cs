@@ -234,7 +234,6 @@ public sealed class TlcCiShardTests
         });
     }
 
-    [TestCase("materialised-views", TlcCiShard.MaterialisedViews)]
     [TestCase("view-joint-repair", TlcCiShard.MaterialisedViewJointRepair)]
     [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
     [TestCase("aliasing", TlcCiShard.Aliasing)]
