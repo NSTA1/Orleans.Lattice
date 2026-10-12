@@ -76,8 +76,19 @@ public writes succeed. Failed retirement preserves the intent; a lost committed
 delete response is safe because publication already finished. Intent retirement
 itself is a stutter here once all group writes finish. The protocol does not
 retroactively reconstruct identities already forgotten before this correction.
-Source admission must still deliver a same-source apply/retract or retry the
-interrupted record; this engine detector cannot certify pre-applier suppression.
+Maintainer composition is now independently covered: a bounded pass-local
+source-key set invokes `CompletePendingNumericSourceAsync` before checkpoint
+retirement even when coherent source admission suppresses an interrupted event
+and its newer source event projects no contribution. The Count/Sum
+`MaterialisedViewNumericIntentCompositionTests` runtime cases lose the response
+only after the real membership/intent atomic flip commits. Their single public
+`GetManyAsync` observes repaired old/new groups and the absent intent, and a
+follow-up drain checks no duplicate effect. Both were red before the caller
+correction and green afterward; parent composition at `6dc13090c` passed
+196 core and 45 real runtime cases with zero skipped/inconclusive. The direct
+applier evidence alone did not certify this wiring. These cases establish
+same-source repair before checkpoint retirement, not ordinary group snapshot
+atomicity or cross-tree joint repair.
 
 Ordinary group materialisation is separate from the numeric internal flip. The
 model does not claim the public group row and all internal rows are one atomic
