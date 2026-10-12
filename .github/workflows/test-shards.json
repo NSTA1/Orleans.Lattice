@@ -132,7 +132,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardTreeLifecycle"],
-        "note": "Resize/undo, grow/shrink reshard and shadow-cutover composition base, repeated-crash variant and mutants, retaining shared controls."
+        "note": "Resize/undo, grow/shrink reshard and shadow-cutover composition base, repeated-crash variant and mutants: 50 cases measured at 99.2s with Java 17, two visible CPUs and one TLC slot. Mutation-specific config headers prevent distinct mutants from sharing cached controls."
       },
       {
         "shard": "formal-tlc-rebootstrap",
