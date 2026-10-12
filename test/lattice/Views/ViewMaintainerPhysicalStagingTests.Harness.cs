@@ -15,7 +15,8 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
 {
     private sealed class Harness
     {
-        public required ViewMaintainerGrain Grain { get; init; }
+        public required ViewMaintainerGrain Grain { get; set; }
+        public required Func<ViewMaintainerGrain> NewActivation { get; init; }
         public required FakePersistentState<ViewCheckpointState> State { get; init; }
         public required IWalCursorRegistry Cursors { get; init; }
         public string Alias { get; set; } = Old;
@@ -77,7 +78,7 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             _heads[tree] = Math.Max(_heads[tree], offset + 1);
         }
 
-        public static async Task<Harness> CreateAsync(int prepareScanLimit = 0, int partitions = 1)
+        public static async Task<Harness> CreateAsync(int prepareScanLimit = 0, int partitions = 1, int maxStagedTransactions = 0)
         {
             Harness h = null!;
             var factory = Substitute.For<IGrainFactory>();
@@ -159,7 +160,10 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             for (var partition = 1; partition < partitions; partition++) state.State.AppliedOffsets[partition] = 6;
             state.State.ProjectionVersion = registration.ProjectionVersion;
             var views = Substitute.For<IOptionsMonitor<LatticeViewOptions>>();
-            views.Get(Arg.Any<string>()).Returns(new LatticeViewOptions { RebuildPrepareScanLimit = prepareScanLimit });
+            views.Get(Arg.Any<string>()).Returns(new LatticeViewOptions
+            {
+                RebuildPrepareScanLimit = prepareScanLimit, MaxStagedTransactions = maxStagedTransactions,
+            });
             var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();
             options.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalPartitions = partitions, WalRetention = TimeSpan.Zero });
             var reader = Substitute.For<ICommitLogReader>();
@@ -213,11 +217,12 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
                     });
                 });
             var cursors = Substitute.For<IWalCursorRegistry>();
-            var grain = new ViewMaintainerGrain(context, factory, null!, NullLogger<ViewMaintainerGrain>.Instance,
+            ViewMaintainerGrain NewActivation() => new(context, factory, null!, NullLogger<ViewMaintainerGrain>.Instance,
                 catalog, reader, subscriber, cursors,
                 TestOptionsResolver.ForFactory(factory, new LatticeOptions { WalPartitions = partitions, WalRetention = TimeSpan.Zero }),
                 views, options, Substitute.For<ILatticeReplicationContext>(), null, null!, state);
-            h = new Harness { Grain = grain, State = state, Cursors = cursors };
+            var grain = NewActivation();
+            h = new Harness { Grain = grain, NewActivation = NewActivation, State = state, Cursors = cursors };
             state.OnWriteState = s => h.PublishedSnapshots.Add((s.BoundPhysicalTreeId, s.ActiveGeneration,
                 s.AppliedOffsets.GetValueOrDefault(0, -1)));
             await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
