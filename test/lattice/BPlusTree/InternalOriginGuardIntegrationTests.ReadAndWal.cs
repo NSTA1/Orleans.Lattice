@@ -106,6 +106,15 @@ public sealed partial class InternalOriginGuardIntegrationTests
     }
 
     [Test]
+    public void Shard_GetVisibleRawEntriesAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("origin-guard-read-visible-rows/0");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await shard.GetVisibleRawEntriesAsync(["k"]));
+    }
+
+    [Test]
     public void Shard_ExistsAsync_direct_external_call_without_internal_origin_is_refused()
     {
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("origin-guard-read-exists/0");
@@ -201,6 +210,15 @@ public sealed partial class InternalOriginGuardIntegrationTests
 
         Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
             async () => await leaf.GetRawEntryAsync("k"));
+    }
+
+    [Test]
+    public void Leaf_GetVisibleRawEntriesAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await leaf.GetVisibleRawEntriesAsync(["k"]));
     }
 
     [Test]
