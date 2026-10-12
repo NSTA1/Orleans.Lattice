@@ -49,6 +49,12 @@ public sealed class AggregationApplierNumericReplayTests
             CancellationToken cancellationToken = default)
         {
             AtomicCalls++;
+            if (Fault == 3)
+            {
+                Fault = 0;
+                throw new TimeoutException("numeric flip failed before submission");
+            }
+
             var keys = entries.Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
             if (_operations.TryGetValue(operationId, out var original))
             {
@@ -79,9 +85,11 @@ public sealed class AggregationApplierNumericReplayTests
     [TestCase(AggregationKind.Count, 0)]
     [TestCase(AggregationKind.Count, 1)]
     [TestCase(AggregationKind.Count, 2)]
+    [TestCase(AggregationKind.Count, 3)]
     [TestCase(AggregationKind.Sum, 0)]
     [TestCase(AggregationKind.Sum, 1)]
     [TestCase(AggregationKind.Sum, 2)]
+    [TestCase(AggregationKind.Sum, 3)]
     public async Task ApplyAsync_regrouped_ordinary_replay_completes_intent_without_changing_the_atomic_key_set(
         AggregationKind kind, int fault)
     {
@@ -97,7 +105,8 @@ public sealed class AggregationApplierNumericReplayTests
         else
         {
             Assert.ThrowsAsync<TimeoutException>(() => applier.ApplyAsync(replacement));
-            Assert.That(await store.GetAsync(AggregationRowCodec.NumericMaterialisationKey("source")), Is.Not.Null);
+            Assert.That(await store.GetAsync(AggregationRowCodec.NumericMaterialisationKey("source")),
+                fault == 3 ? Is.Null : Is.Not.Null);
         }
 
         applier = Create(store, kind);
@@ -107,7 +116,8 @@ public sealed class AggregationApplierNumericReplayTests
         var pending = await store.GetAsync(AggregationRowCodec.NumericMaterialisationKey("source"));
         Assert.Multiple(() =>
         {
-            Assert.That(store.AtomicCalls, Is.EqualTo(2), "already-installed membership must not rebind the operation");
+            Assert.That(store.AtomicCalls, Is.EqualTo(fault == 3 ? 3 : 2),
+                "an uncommitted attempt retries; already-installed membership must not rebind the operation");
             Assert.That(red, Is.Null);
             Assert.That(pending, Is.Null);
         });
@@ -117,7 +127,7 @@ public sealed class AggregationApplierNumericReplayTests
         await applier.ApplyAsync(Contribution(kind, "green", 13, 400));
         Assert.That(await store.GetAsync("blue"), Is.Null);
         AssertValue(kind, (await store.GetAsync("green"))!, 13);
-        Assert.That(store.AtomicCalls, Is.EqualTo(kind == AggregationKind.Count ? 3 : 4),
+        Assert.That(store.AtomicCalls, Is.EqualTo((kind == AggregationKind.Count ? 3 : 4) + (fault == 3 ? 1 : 0)),
             "different memberships must still publish; an unchanged Count membership is already installed");
     }
 
