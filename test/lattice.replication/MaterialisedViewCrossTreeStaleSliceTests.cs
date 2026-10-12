@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class MaterialisedViewCrossTreeStaleSliceTests
+public partial class MaterialisedViewCrossTreeStaleSliceTests
 {
     private MaterialisedViewClusterFixture _fixture = null!;
 
@@ -354,8 +354,9 @@ public class MaterialisedViewCrossTreeStaleSliceTests
             Is.EqualTo(CrossTreeAtomicWriteOutcome.Committed));
         await maintainerA.DrainAsync();
 
-        // The joint flip lands view A's pre-supersession slice {ka = a1} over the
-        // ordinary write a2, so the pass schedules a reconcile - which fails once.
+        // The stale joint registration resolves before the ordinary successor
+        // becomes public. Conservative reconcile still retries durably, but its
+        // failure must not roll that public successor back.
         await _fixture.Cluster.Client.GetGrain<ILattice>(treeA).SetAsync("ka", Person(50, "a2"));
         CrossTreeRegisterReadyHookFilter.BeforeNextRegistration(
             viewA,
@@ -380,8 +381,8 @@ public class MaterialisedViewCrossTreeStaleSliceTests
         {
             await maintainerA.DrainAsync();
             Assert.That(failures, Is.EqualTo(1), "The superseded joint flip scheduled a reconcile, which failed.");
-            Assert.That(await (await _fixture.ActiveViewTreeAsync(viewA)).GetAsync("ka"), Is.EqualTo(Person(30, "a1")),
-                "Precondition: the failed reconcile left the stale flipped slice in place.");
+            Assert.That(await (await _fixture.ActiveViewTreeAsync(viewA)).GetAsync("ka"), Is.EqualTo(Person(50, "a2")),
+                "The failed reconcile cannot undo the ordinary survivor published after the joint rendezvous.");
 
             // Further passes advance the durable checkpoint past every entry while
             // the reconcile keeps failing, so no replay can repair ka afterwards.

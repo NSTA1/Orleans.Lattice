@@ -145,11 +145,19 @@ internal sealed partial class ViewMaintainerGrain
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
         var applier = CreateAggregationApplier(viewTree);
+        if (!registration.Accumulative)
+        {
+            await ConfirmCompletedBatchesAgainstSourceAsync(
+                completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
+            GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
+        }
+        var jointApplied = await FlushCompletedAggregationBatchesAsync(
+            viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: true);
 
         // Apply in ascending source-HLC order so each source key's read-before-write
         // retraction folds in source-commit order (a source key lives on one
         // partition, so this is exact for that key).
-        var applied = 0;
+        var applied = jointApplied;
         contributions.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
         foreach (var contribution in contributions)
         {
@@ -170,15 +178,10 @@ internal sealed partial class ViewMaintainerGrain
         // Fold every atomic batch that completed this pass into the group
         // accumulators through the SAME aggregation applier (its per-group
         // atomic membership+accumulator flip), after the ordinary contributions.
-        // Confirm completed batches against the source before folding them, deferring
-        // any whose superseded key may not yet have its replacement folded in.
-        if (!registration.Accumulative)
-        {
-            await ConfirmCompletedBatchesAgainstSourceAsync(
-                completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
-            GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
-        }
-        applied += await FlushCompletedAggregationBatchesAsync(viewTree, registration, completedTransactions, cancellationToken);
+        // Joint batches rendezvous before ordinary public groups change, so a
+        // stale registered membership cannot roll back a published regrouping.
+        applied += await FlushCompletedAggregationBatchesAsync(
+            viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: false);
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
@@ -248,12 +251,14 @@ internal sealed partial class ViewMaintainerGrain
         ILattice viewTree,
         ViewRegistration registration,
         List<Guid> completed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool crossTreeOnly)
     {
         var applied = 0;
         foreach (var txId in completed)
         {
-            if (!_staging.TryGetValue(txId, out var tx))
+            if (!_staging.TryGetValue(txId, out var tx)
+                || (tx.CrossTreeOperationId is not null) != crossTreeOnly)
             {
                 continue;
             }

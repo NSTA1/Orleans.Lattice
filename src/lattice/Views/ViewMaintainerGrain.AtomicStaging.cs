@@ -1542,12 +1542,14 @@ internal sealed partial class ViewMaintainerGrain
         ILattice viewTree,
         ViewRegistration registration,
         List<Guid> completed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool crossTreeOnly)
     {
         var applied = 0;
         foreach (var txId in completed)
         {
-            if (!_staging.TryGetValue(txId, out var tx))
+            if (!_staging.TryGetValue(txId, out var tx)
+                || (tx.CrossTreeOperationId is not null) != crossTreeOnly)
             {
                 continue;
             }

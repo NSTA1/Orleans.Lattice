@@ -684,6 +684,11 @@ internal sealed partial class ViewMaintainerGrain(
         var batchHlcByViewKey = registration.Accumulative
             ? null
             : CompletedBatchHlcByViewKey(registration, completedTransactions);
+        // A peer can complete a previously registered joint slice during this
+        // rendezvous. Publish ordinary successors only after that decision so
+        // the stale registration cannot roll back an already-public survivor.
+        var jointApplied = await FlushCompletedFilterBatchesAsync(
+            viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: true);
         int appliedCount;
         if (hasRangeDelete)
         {
@@ -718,7 +723,8 @@ internal sealed partial class ViewMaintainerGrain(
         // batch wins a same-pass non-atomic write to the same key. Each batch is
         // projected through the SAME filter / re-key projection as ordinary
         // writes - staging only defers WHEN they are applied, not HOW.
-        appliedCount += await FlushCompletedFilterBatchesAsync(viewTree, registration, completedTransactions, cancellationToken);
+        appliedCount += jointApplied + await FlushCompletedFilterBatchesAsync(
+            viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: false);
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
