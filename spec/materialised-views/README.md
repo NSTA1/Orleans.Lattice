@@ -15,7 +15,7 @@ source identity swap followed by the view's rebind onto the new physical log.
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `MaterialisedViewTail` | 7 | 5 | 17 | 22 | 27 | 121,488 |
 | `MaterialisedViewFence` | 4 | 2 | 9 | 9 | 13 | 194 |
-| `MaterialisedViewHorizon` | 4 | 5 | 15 | 16 | 22 | 20,794 |
+| `MaterialisedViewHorizon` | 4 | 7 | 17 | 21 | 26 | 28,357 |
 | `MaterialisedViewAggregation` | 9 | 2 | 12 | 18 | 21 | 24,072 |
 | `MaterialisedViewRebind` | 8 | 4 | 17 | 20 | 27 | 21,086 |
 
@@ -94,29 +94,34 @@ over THREE physical WAL partitions. Prepares are on p0/p2 and terminals on
 p0/p1, so reading both terminals does not imply consuming the prepare on p2.
 All prepares precede all terminals, but source installation and each shard's
 terminal append are separate actions. A rebuild's bounded planning scan may
-miss a prepare; a post-terminal all-partition horizon distinguishes genuinely
-missing prepares from a partition not yet read. Backstop abandonment persists
-across crashes and rebuilds and is retired only after every distinct shard
-terminal lies below the captured heads, never after just one commit. The
+miss a prepare; after a terminal, bounded resumable reads of retained history
+below the same physical WAL's durable checkpoints recover both the prepare
+cardinality witness and every distinct terminal partition before a horizon can
+be captured. The per-pass examination budget resets without rewinding the
+cursor, including when an earlier terminal was already below the checkpoint.
+A fresh terminal-only observation cannot infer its own prepare cardinality.
+Backstop abandonment persists across crashes and rebuilds and is retired only
+after every distinct shard terminal lies below the captured heads, never after
+just one commit. The
 `FullScan` variant visits every partition while allowing two crashes; it
-reaches 33,456 distinct states. See [RefinementHorizon.md](RefinementHorizon.md).
+reaches 46,743 distinct states. The base reaches 28,357. See
+[RefinementHorizon.md](RefinementHorizon.md).
 
 These are exhaustive finite checks, not simulations and not an exhaustive
 Cartesian product of every feature. On the bounded two-CPU Java 17 toolchain,
-the raw fence base/variant take about one to two seconds each and the horizon
-base/variant about four to eight seconds each, including JVM startup. Each mutant
+direct Horizon TLC runs took 6.972 seconds for the base and 9.541 seconds for
+the FullScan variant, including JVM startup. Each mutant
 has a paired clean single-property control, and every behavioural action has
 an action-targeted mutation. State counts are in the counts table and manifests.
 Actual harness controls contain mutation-specific headers; same-target grouping
 does not eliminate their paired clean runs.
 
-The actual `TlcModelCheckTests` runs pass 11 fence cases and 18 horizon cases
-(base, variant and every paired mutant), with zero skipped. A final serial run
-with one JVM slot and two visible CPUs takes 41.083/114.483 seconds from first
-case start to last case end, and 48.434/124.659 seconds for the corresponding
-no-build commands on a shared host. Heap is capped at 2 GiB; peak usage was not
-measured. The production detector mappings are explicitly pending acceptance,
-not certified refinements; a clean finite model is not that acceptance.
+The actual `TlcModelCheckTests` run includes 23 Horizon cases: the base,
+FullScan variant, and all 21 mutation/control cases. The serial no-build run
+passed 23/23 with zero skipped in 2 minutes 32 seconds, using one TLC JVM
+slot, two visible CPUs, and a 2 GiB maximum heap. The production detector
+mappings are explicitly pending acceptance, not certified refinements; a clean
+finite model is not that acceptance.
 
 ## Scope and companion models
 

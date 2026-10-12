@@ -1,0 +1,11 @@
+MODULE: OneTerminalHistoryCloses
+TARGET: HorizonRequiresHistoryEntitlement
+CLASS: Action
+SUMMARY: one current or recovered shard terminal stands in for the complete distinct terminal set
+PERTURBS: CaptureHorizon
+
+--- FIND
+    /\ PrepareCardinalityKnown /\ CompleteTerminalSet
+--- REPLACE
+    /\ PrepareCardinalityKnown /\ KnownTerminals # {}
+--- END

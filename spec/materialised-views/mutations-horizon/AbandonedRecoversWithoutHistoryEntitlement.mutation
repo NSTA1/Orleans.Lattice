@@ -1,0 +1,19 @@
+MODULE: AbandonedRecoversWithoutHistoryEntitlement
+TARGET: RecoveryEntitled
+CLASS: Action
+SUMMARY: abandoned identity bypasses retained prepare cardinality and complete terminal membership
+PERTURBS: CaptureHorizon, Recover
+
+--- FIND
+    /\ PrepareCardinalityKnown /\ CompleteTerminalSet
+    /\ horizonWal = "none"
+--- REPLACE
+    /\ KnownTerminals # {}
+    /\ horizonWal = "none"
+--- END
+
+--- FIND
+    /\ HistoryEntitled /\ horizonWal = wal /\ AtHorizon
+--- REPLACE
+    /\ horizonWal = wal /\ AtHorizon
+--- END

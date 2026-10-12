@@ -4,13 +4,13 @@
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
     "invariants": 4,
-    "properties": 5,
-    "actions": 15,
-    "mutations": 16,
-    "behaviourRows": 22,
-    "distinctStates": 20794
+    "properties": 7,
+    "actions": 17,
+    "mutations": 21,
+    "behaviourRows": 26,
+    "distinctStates": 28357
   },
   "variants": {
-    "FullScan": { "distinctStates": 33456 }
+    "FullScan": { "distinctStates": 46743 }
   }
 }

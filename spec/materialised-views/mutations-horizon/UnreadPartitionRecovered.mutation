@@ -5,7 +5,7 @@ SUMMARY: missing prepares trigger recovery before all partitions have consumed t
 PERTURBS: Recover
 
 --- FIND
-    /\ (abandoned \/ (staged /\ Missing /\ horizonWal = wal /\ AtHorizon))
+    /\ HistoryEntitled /\ horizonWal = wal /\ AtHorizon
 --- REPLACE
-    /\ (abandoned \/ (staged /\ Missing /\ horizonWal = wal))
+    /\ HistoryEntitled /\ horizonWal = wal
 --- END

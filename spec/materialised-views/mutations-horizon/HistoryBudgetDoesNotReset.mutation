@@ -1,0 +1,11 @@
+MODULE: HistoryBudgetDoesNotReset
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: an exhausted per-drain history budget cannot resume on the next pass
+PERTURBS: ResetHistoryBudget
+
+--- FIND
+    /\ historyBudgetUsed' = 0
+--- REPLACE
+    /\ historyBudgetUsed' = historyBudgetUsed
+--- END
