@@ -29,7 +29,11 @@ internal static class LeafSubstituteCombinedCalls
     /// <see cref="IBPlusLeafGrain.GetLiveRawEntriesAndNextSiblingAsync"/>) from the
     /// payload stub plus that link, and
     /// <see cref="IBPlusLeafGrain.GetKeyRangeAndPrevSiblingAsync"/> from the key-range
-    /// and previous-sibling stubs.
+    /// and previous-sibling stubs. Finally composes
+    /// <see cref="IBPlusLeafGrain.DeleteRangeAndNextSiblingAsync"/>,
+    /// <see cref="IBPlusLeafGrain.GetClockAndNextSiblingAsync"/> and
+    /// <see cref="IBPlusLeafGrain.FreezeProjectionAndNextSiblingAsync"/> from their
+    /// payload stubs plus the separately stubbed bounds and sibling pointer.
     /// </summary>
     public static IBPlusLeafGrain ComposeChainLink(this IBPlusLeafGrain leaf)
     {
@@ -73,6 +77,31 @@ internal static class LeafSubstituteCombinedCalls
         {
             KeyRange = await leaf.GetKeyRangeAsync(),
             PrevSibling = await leaf.GetPrevSiblingAsync(),
+        });
+        leaf.DeleteRangeAndNextSiblingAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LatticePredicateNode?>()).Returns(async call =>
+        {
+            var result = await leaf.DeleteRangeAsync(call.ArgAt<string>(0), call.ArgAt<string>(1), call.ArgAt<LatticePredicateNode?>(2));
+            return new LeafRangeDeletePage
+            {
+                Result = result,
+                KeyRange = await leaf.GetKeyRangeAsync(),
+                NextSibling = await leaf.GetNextSiblingAsync(),
+            };
+        });
+        leaf.GetClockAndNextSiblingAsync().Returns(async _ =>
+        {
+            var clock = await leaf.GetClockAsync();
+            return new LeafClockPage
+            {
+                Clock = clock,
+                KeyRange = await leaf.GetKeyRangeAsync(),
+                NextSibling = await leaf.GetNextSiblingAsync(),
+            };
+        });
+        leaf.FreezeProjectionAndNextSiblingAsync(Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var freeze = await leaf.FreezeProjectionAsync(call.Arg<CancellationToken>());
+            return new LeafBaselineFreezePage { Freeze = freeze, NextSibling = await leaf.GetNextSiblingAsync() };
         });
         return leaf;
     }

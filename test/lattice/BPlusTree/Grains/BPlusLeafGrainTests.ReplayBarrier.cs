@@ -126,7 +126,7 @@ public partial class BPlusLeafGrainTests
         // Writes.
         "SetAsync", "GetOrSetAsync", "SetIfVersionAsync", "SetManyAsync",
         "SetManyWherePredicateAsync", "ApplyCrdtDeltaAsync", "ApplyCrdtDeltaManyAsync",
-        "DeleteAsync", "DeleteTrackedAsync", "DeleteRangeAsync",
+        "DeleteAsync", "DeleteTrackedAsync", "DeleteRangeAsync", "DeleteRangeAndNextSiblingAsync",
         // Range and enumeration reads.
         "CountAsync", "GetStatsAsync", "GetKeysAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
@@ -134,7 +134,7 @@ public partial class BPlusLeafGrainTests
         "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
         "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
         "GetOriginalPrepareStampsAsync",
-        "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync",
+        "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
         // Digests and topology views computed FROM the projection.
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",
         "GetChildDigestSnapshotAsync", "GetTopologyNodeAsync",
@@ -144,7 +144,7 @@ public partial class BPlusLeafGrainTests
         // replay consults, so it must run against the fully replayed buckets.
         "DiscardPendingTransactionAsync", "DiscardPendingTransactionsAndGetNextSiblingAsync",
         // Maintenance that reads the projection.
-        "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "CompactTombstonesAndNextSiblingAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
+        "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "CompactTombstonesAndNextSiblingAsync", "FreezeProjectionAsync", "FreezeProjectionAndNextSiblingAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",
         "CompletePendingReclaimAsync",
         "TryBeginOrphanRetirementAsync",

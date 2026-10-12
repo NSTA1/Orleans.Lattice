@@ -34,6 +34,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class BPlusLeafGrain
 {
     /// <inheritdoc />
+    /// <inheritdoc />
+    public async Task<LeafBaselineFreezePage> FreezeProjectionAndNextSiblingAsync(CancellationToken cancellationToken)
+    {
+        var freeze = await FreezeProjectionAsync(cancellationToken);
+        return new LeafBaselineFreezePage { Freeze = freeze, NextSibling = state.State.NextSibling };
+    }
+
     public async Task<LeafBaselineFreeze> FreezeProjectionAsync(CancellationToken cancellationToken)
     {
         await AwaitReplayBarrierAsync();

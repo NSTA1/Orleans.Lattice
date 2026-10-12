@@ -2082,7 +2082,12 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, leafId);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive, predicate);
+            // Result, sibling pointer and bounds in one turn: the walk needs the
+            // pointer on every leaf it does not stop at and the bounds on every
+            // hop where the budget asks it to yield, all plain state reads taken
+            // after the delete (and any split it caused) completed.
+            var page = await leafGrain.DeleteRangeAndNextSiblingAsync(startInclusive, endExclusive, predicate);
+            var result = page.Result;
             totalDeleted += result.Deleted;
             scan.Budget.RecordLeafVisited();
             if (result.Deleted > 0)
@@ -2109,7 +2114,7 @@ internal sealed partial class ShardRootGrain(
             // rule the read-path bound follows.
             if (scan.Budget.ShouldYield())
             {
-                var bounds = await leafGrain.GetKeyRangeAsync();
+                var bounds = page.KeyRange;
                 if (bounds.HighKeyExclusive is { } high
                     && string.CompareOrdinal(high, startInclusive) > 0
                     && string.CompareOrdinal(high, endExclusive) < 0)
@@ -2119,7 +2124,7 @@ internal sealed partial class ShardRootGrain(
                 }
             }
 
-            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            var nextSibling = page.NextSibling;
             if (nextSibling is null)
                 break;
 
@@ -2182,13 +2187,14 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, leafId);
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var clock = await leafGrain.GetClockAsync();
+            // Clock, bounds and sibling pointer in one turn: the walk needs all
+            // three on every leaf it does not stop at, and all are plain state
+            // reads.
+            var link = await leafGrain.GetClockAndNextSiblingAsync();
+            var clock = link.Clock;
             if (clock > max) max = clock;
             scan.Budget.RecordLeafVisited();
 
-            // Bounds and sibling pointer in one turn: the walk needs both on
-            // every leaf it does not stop at, and both are plain state reads.
-            var link = await leafGrain.GetKeyRangeAndNextSiblingAsync();
             var bounds = link.KeyRange;
             if (bounds.HighKeyExclusive is { } high)
             {

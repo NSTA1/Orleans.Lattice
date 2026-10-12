@@ -252,6 +252,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
+    /// <summary>
+    /// <see cref="DeleteRangeAsync"/> followed by the leaf's right-sibling pointer
+    /// and bounds in one grain turn, so the shard root's bounded range-delete walk
+    /// pays one call per leaf instead of two (three on a hop where its work budget
+    /// asks it to yield). The link is read after the delete - including any split
+    /// it caused - has completed.
+    /// </summary>
+    Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
+
     /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
     Task<int> CountAsync();
 
@@ -1340,6 +1349,13 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<HybridLogicalClock> GetClockAsync();
 
     /// <summary>
+    /// <see cref="GetClockAsync"/> followed by the leaf's right-sibling pointer and
+    /// bounds in one grain turn, so the shard root's bounded range-clock probe pays
+    /// one call per leaf instead of two. Read-only, like <see cref="GetClockAsync"/>.
+    /// </summary>
+    Task<LeafClockPage> GetClockAndNextSiblingAsync();
+
+    /// <summary>
     /// Installs a per-saga shadow marker on this destination leaf
     /// claiming that the source-side saga <paramref name="transactionId"/>
     /// affected each key in <paramref name="keys"/>. The marker is
@@ -1421,6 +1437,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     /// <param name="cancellationToken">Cancellation token observed during the freeze.</param>
     Task<LeafBaselineFreeze> FreezeProjectionAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="FreezeProjectionAsync"/> followed by the leaf's right-sibling
+    /// pointer in one grain turn, so the snapshot-baseline freeze pass pays one
+    /// call per leaf instead of two. The freeze is read-only, so the pointer is
+    /// the one the separate call would have read.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token observed during the freeze.</param>
+    Task<LeafBaselineFreezePage> FreezeProjectionAndNextSiblingAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Second pass of the per-shard snapshot-baseline capture: re-seeds a
