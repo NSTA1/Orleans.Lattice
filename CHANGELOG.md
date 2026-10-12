@@ -73,7 +73,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **Explorer - Access navigation.** Query-only create commands open their dialogs, Explain asks the current address and clears old answers, and superseded rule/group reads cannot publish stale lists, counts or faults. (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Access navigation.** Query-only create commands open their dialogs, Explain asks the current address and clears old answers, and superseded rule/group reads cannot publish stale lists, counts or faults. ([#4875](https://github.com/NSTA1/Orleans.Lattice/pull/4875)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Replication refresh races.** Tree navigation discards old enrolment replies, estate refreshes retain only the newest result or fault, and queued polling stops when the page is hidden or disposed. ([#4873](https://github.com/NSTA1/Orleans.Lattice/pull/4873)) (`Orleans.Lattice.Explorer.UI`)
 
