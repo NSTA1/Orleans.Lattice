@@ -205,9 +205,19 @@ property checks each intermediate cutover, not merely eventual self-heal.
 `NoCrash` isolates the same interactions without activation failure and reaches
 8,143 distinct states. See [RefinementRebind.md](RefinementRebind.md).
 
-Both companions are bounded intended protocols. Their refinement notes expose
-unaccepted production remediation rather than turning a clean model into a
-claim that the current implementation is proven correct.
+Both companions are bounded intended protocols. Aggregation production refinement
+remains pending. Rebind now has accepted captured-tuple, restart, actual GC,
+physical staging and moving-log resume detectors, with anchored negative controls;
+controlled grain transport does not establish cluster or registry durability.
+Neither companion contains a resolved transaction cache. The separate
+[resolved-identity companion](../view-resolved-identity/README.md) checks #4895
+through two logs reusing one ID, actual tail ownership, same-log rebuild and
+uncertain publication responses. Its queue-only production discriminator reaches
+the real cache capacity, without claiming a full eviction-algorithm proof.
+[ReadyClosure and SourceAdmission](../view-staging/README.md) separately check
+independent-clock replacement closure and coherent source admission; their
+production refinement remains pending. A clean finite model never substitutes
+for discriminating production evidence.
 
 ### Measured independent shard weights
 
