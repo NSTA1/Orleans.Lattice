@@ -245,6 +245,10 @@ internal sealed partial class ViewMaintainerGrain
     /// range delete. Such a key's newer write survived the range delete at the
     /// source by last-writer-wins, and is either already in the view or still to be
     /// applied from the log, so removing its view row would lose it (issue #4885).
+    /// A key an atomic batch completing this pass writes at a newer version than the
+    /// range is spared too, whatever the source read reports: on a replay its flip
+    /// re-attaches and writes nothing, so deleting it would remove part of the
+    /// batch's slice non-atomically (issue #4869).
     /// <para>
     /// Only keys this pass listed and confirmed are deleted, each by an exact point
     /// delete. The view tree has writers other than this drain (the cross-tree
@@ -267,6 +271,7 @@ internal sealed partial class ViewMaintainerGrain
         ILattice viewTree,
         ViewWrite rangeDelete,
         string walTreeId,
+        Dictionary<string, HybridLogicalClock>? batchHlcByViewKey,
         CancellationToken cancellationToken)
     {
         var page = new List<string>(SourceVersionReadPageSize);
@@ -289,7 +294,7 @@ internal sealed partial class ViewMaintainerGrain
                 return;
             }
 
-            await DeleteListedPageAsync(viewTree, page, rangeDelete.Timestamp, walTreeId, cancellationToken);
+            await DeleteListedPageAsync(viewTree, page, rangeDelete.Timestamp, walTreeId, batchHlcByViewKey, cancellationToken);
             if (page.Count < SourceVersionReadPageSize)
             {
                 return;
@@ -305,13 +310,17 @@ internal sealed partial class ViewMaintainerGrain
         List<string> page,
         HybridLogicalClock rangeTimestamp,
         string walTreeId,
+        Dictionary<string, HybridLogicalClock>? batchHlcByViewKey,
         CancellationToken cancellationToken)
     {
         var versions = await ReadSourceVersionsAsync(walTreeId, page, cancellationToken);
         var deletable = new List<string>(page.Count);
         foreach (var key in page)
         {
-            if (versions.GetValueOrDefault(key) <= rangeTimestamp)
+            if (versions.GetValueOrDefault(key) <= rangeTimestamp
+                && !(batchHlcByViewKey is not null
+                    && batchHlcByViewKey.TryGetValue(key, out var batchHlc)
+                    && batchHlc > rangeTimestamp))
             {
                 deletable.Add(key);
             }

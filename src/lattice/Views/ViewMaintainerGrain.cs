@@ -675,14 +675,24 @@ internal sealed partial class ViewMaintainerGrain(
             completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
+
+        // An accumulative view records every revision, so it never drops one.
+        var batchHlcByViewKey = registration.Accumulative
+            ? null
+            : CompletedBatchHlcByViewKey(registration, completedTransactions);
         int appliedCount;
         if (hasRangeDelete)
         {
             // Range path: the batch cannot be coalesced by view key, so collision
             // detection runs on its own over the whole batch.
             ReportCollisions(ViewKeyCollisionDetector.Detect(collected));
+            var ordered = DropSurvivorsOverwrittenByCompletedBatches(collected, batchHlcByViewKey);
             appliedCount = await ApplyInSourceOrderAsync(
-                viewTree, collected, registration.Accumulative ? null : walTreeId, cancellationToken);
+                viewTree,
+                ordered as List<ViewWrite> ?? [.. ordered],
+                registration.Accumulative ? null : walTreeId,
+                batchHlcByViewKey,
+                cancellationToken);
         }
         else
         {
@@ -695,7 +705,7 @@ internal sealed partial class ViewMaintainerGrain(
             ReportCollisions(fold.Collisions);
             var survivors = registration.Accumulative
                 ? fold.Survivors
-                : DropSurvivorsOverwrittenByCompletedBatches(registration, fold.Survivors, completedTransactions);
+                : DropSurvivorsOverwrittenByCompletedBatches(fold.Survivors, batchHlcByViewKey);
             appliedCount = await ApplySurvivorsAsync(viewTree, survivors, cancellationToken);
         }
 
@@ -1425,6 +1435,7 @@ internal sealed partial class ViewMaintainerGrain(
         ILattice viewTree,
         List<ViewWrite> collected,
         string? rangeConfirmationSource,
+        Dictionary<string, HybridLogicalClock>? batchHlcByViewKey,
         CancellationToken cancellationToken)
     {
         // Range path: a range delete cannot be globally coalesced by view key
@@ -1439,10 +1450,13 @@ internal sealed partial class ViewMaintainerGrain(
         foreach (var write in collected)
         {
             // A range delete on a non-accumulative view spares every key the
-            // source holds at a newer version than the range (issue #4885).
+            // source holds at a newer version than the range (issue #4885), and
+            // every key a batch completing this pass writes at a newer version
+            // (issue #4869).
             if (write.Kind == ViewWriteKind.RangeDelete && rangeConfirmationSource is not null)
             {
-                await ApplyRangeDeleteAgainstSourceAsync(viewTree, write, rangeConfirmationSource, cancellationToken);
+                await ApplyRangeDeleteAgainstSourceAsync(
+                    viewTree, write, rangeConfirmationSource, batchHlcByViewKey, cancellationToken);
             }
             else
             {
