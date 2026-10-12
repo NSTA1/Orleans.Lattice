@@ -883,18 +883,113 @@ internal sealed partial class ViewMaintainerGrain
     private static string ViewSagaOperationId(Guid txId) => $"mv-tx-{txId:N}";
 
     /// <summary>
-    /// Re-asserts a resolved batch's view slice after its atomic flip. The flip
-    /// is keyed by the deterministic <see cref="ViewSagaOperationId(Guid)"/>, so
-    /// when a pass is replayed (a lost flush response retried on the same
-    /// activation, or a reactivation resuming below an already-flushed batch)
-    /// the flip re-attaches to the completed view saga and writes nothing. The
-    /// same replay has already re-applied every older ordinary write to the
-    /// batch's keys with a blind point write, so without this step the view
-    /// would keep that older value permanently. The maintainer is the view
-    /// tree's sole writer and every ordinary write that supersedes the batch
-    /// was dropped from <paramref name="upserts"/> and <paramref name="deletes"/>,
-    /// so restoring the slice reproduces the source last-writer-wins outcome.
-    /// A fresh flip already matches, so this reads and writes nothing further.
+    /// Point-path replay guard: drops every ordinary survivor whose view key a
+    /// filter-path atomic batch completing in this same pass will overwrite with
+    /// a higher source HLC. Such a survivor can never be the view's final value -
+    /// the batch flush lands after it - so applying it is only ever a transient.
+    /// It is not a harmless one on a replay: when the pass is replayed (a lost
+    /// flush response retried on the same activation, or a reactivation resuming
+    /// below an already-flushed batch) the flush re-attaches to its completed
+    /// <see cref="ViewSagaOperationId(Guid)"/> view saga and writes nothing, so a
+    /// re-applied older survivor would otherwise overwrite the batch's slice
+    /// non-atomically. Cross-tree batches are excluded: their joint decision may
+    /// still be pending this pass, and a dropped survivor would then be lost
+    /// because the in-activation read cursor has already advanced past it.
+    /// Prepares an ordinary write superseded are excluded exactly as the flush
+    /// excludes them, so a survivor that is the source last-writer is never
+    /// dropped. Returns <paramref name="survivors"/> unchanged when nothing is
+    /// dropped.
+    /// </summary>
+    private IReadOnlyList<ViewWrite> DropSurvivorsOverwrittenByCompletedBatches(
+        ViewRegistration registration,
+        IReadOnlyList<ViewWrite> survivors,
+        List<Guid> completed)
+    {
+        if (survivors.Count == 0 || completed.Count == 0)
+        {
+            return survivors;
+        }
+
+        Dictionary<string, HybridLogicalClock>? batchHlcByViewKey = null;
+        foreach (var txId in completed)
+        {
+            if (!_staging.TryGetValue(txId, out var tx) || tx.CrossTreeOperationId is not null)
+            {
+                continue;
+            }
+
+            foreach (var prepared in tx.PreparesByIndex.Values)
+            {
+                if (IsSupersededByOrdinary(prepared))
+                {
+                    continue;
+                }
+
+                foreach (var write in registration.Projection!.Project(prepared))
+                {
+                    if (write.Kind is not (ViewWriteKind.Upsert or ViewWriteKind.Delete))
+                    {
+                        continue;
+                    }
+
+                    batchHlcByViewKey ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+                    if (!batchHlcByViewKey.TryGetValue(write.Key, out var existing) || write.Timestamp.CompareTo(existing) > 0)
+                    {
+                        batchHlcByViewKey[write.Key] = write.Timestamp;
+                    }
+                }
+            }
+        }
+
+        if (batchHlcByViewKey is null)
+        {
+            return survivors;
+        }
+
+        List<ViewWrite>? kept = null;
+        for (var i = 0; i < survivors.Count; i++)
+        {
+            var survivor = survivors[i];
+            var overwritten = batchHlcByViewKey.TryGetValue(survivor.Key, out var batchHlc)
+                && survivor.Timestamp.CompareTo(batchHlc) < 0;
+            if (overwritten && kept is null)
+            {
+                kept = new List<ViewWrite>(survivors.Count - 1);
+                for (var j = 0; j < i; j++)
+                {
+                    kept.Add(survivors[j]);
+                }
+            }
+            else if (!overwritten)
+            {
+                kept?.Add(survivor);
+            }
+        }
+
+        return kept ?? survivors;
+    }
+
+    /// <summary>
+    /// Re-asserts a resolved batch's view slice after its flip, as a backstop for
+    /// the replays <see cref="DropSurvivorsOverwrittenByCompletedBatches"/> cannot
+    /// prevent: the range path (which applies every write in source order and
+    /// cannot drop one) and a resolved cross-tree slice. The flip is keyed by the
+    /// deterministic <see cref="ViewSagaOperationId(Guid)"/>, so a replayed pass
+    /// re-attaches to the completed view saga and writes nothing while the same
+    /// replay re-applied an older ordinary write to the slice. This always reads
+    /// the slice back with one <c>GetManyAsync</c>; when any key
+    /// differs from the resolved slice it restores the WHOLE slice through one
+    /// atomic op, so a reader never observes a partly repaired slice. The repair
+    /// op id is fresh on every attempt and never reuses the completed batch's
+    /// saga id (that id would re-attach as a no-op). A lost repair response is
+    /// therefore safe to retry with a new id: the maintainer is the view tree's
+    /// sole writer, so re-applying the same slice is state-idempotent. Every
+    /// ordinary write that supersedes the batch was dropped from
+    /// <paramref name="upserts"/> and <paramref name="deletes"/>, so the restored
+    /// slice is the source last-writer-wins outcome. The replayed older write was
+    /// visible between its re-application and this repair; that transient is the
+    /// documented residual of the range path and of a cross-tree slice, and this
+    /// local repair is not a joint cross-tree flip.
     /// </summary>
     private static async Task ReassertResolvedSliceAsync(
         ILattice viewTree,
@@ -915,22 +1010,40 @@ internal sealed partial class ViewMaintainerGrain
 
         keys.AddRange(deletes);
         var current = await viewTree.GetManyAsync(keys, cancellationToken);
+        var matches = true;
         foreach (var upsert in upserts)
         {
             if (!current.TryGetValue(upsert.Key, out var value) || !value.AsSpan().SequenceEqual(upsert.Value))
             {
-                await viewTree.SetAsync(upsert.Key, upsert.Value, cancellationToken);
+                matches = false;
+                break;
             }
         }
 
-        foreach (var key in deletes)
+        if (matches)
         {
-            if (current.ContainsKey(key))
+            foreach (var key in deletes)
             {
-                await viewTree.DeleteAsync(key, cancellationToken);
+                if (current.ContainsKey(key))
+                {
+                    matches = false;
+                    break;
+                }
             }
         }
+
+        if (!matches)
+        {
+            await viewTree.SetManyAtomicAsync(upserts, deletes, ViewReassertOperationId(), cancellationToken);
+        }
     }
+
+    /// <summary>
+    /// A fresh view-tree saga operation id for one slice repair attempt. Never
+    /// derived from the batch's transaction id: that id names the completed flip
+    /// saga, and re-submitting it re-attaches as a no-op.
+    /// </summary>
+    private static string ViewReassertOperationId() => $"mv-reassert-{Guid.NewGuid():N}";
 
     /// <summary>
     /// One in-flight atomic-write transaction's staged state. Reassembled from

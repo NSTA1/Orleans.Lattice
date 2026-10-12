@@ -668,7 +668,10 @@ internal sealed partial class ViewMaintainerGrain(
             // applied, exactly as when the two ran back to back.
             var fold = ViewBatchFold.Fold(collected);
             ReportCollisions(fold.Collisions);
-            appliedCount = await ApplySurvivorsAsync(viewTree, fold.Survivors, cancellationToken);
+            var survivors = registration.Accumulative
+                ? fold.Survivors
+                : DropSurvivorsOverwrittenByCompletedBatches(registration, fold.Survivors, completedTransactions);
+            appliedCount = await ApplySurvivorsAsync(viewTree, survivors, cancellationToken);
         }
 
         // Flush every atomic batch that completed this pass through the view
