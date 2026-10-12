@@ -1,4 +1,4 @@
-MODULE: TypeDomain
+MODULE: FenceTypeDomain
 TARGET: TypeOK
 CLASS: Invariant
 SUMMARY: prefix setup stores an out-of-domain replay offset

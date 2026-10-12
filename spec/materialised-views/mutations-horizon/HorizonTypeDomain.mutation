@@ -1,4 +1,4 @@
-MODULE: TypeDomain
+MODULE: HorizonTypeDomain
 TARGET: TypeOK
 CLASS: Invariant
 SUMMARY: a prepare append installs an out-of-domain partition head
