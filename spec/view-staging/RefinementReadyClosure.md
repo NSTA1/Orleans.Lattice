@@ -29,7 +29,7 @@ a finite model or a final-value test passes.
 | `Checkpoint` | Persist only resolved progress or a floor below unresolved entries | `ViewMaintainerGrain.ApplyCheckpointHoldBack`. | Pending: existing regression detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
 | `Crash` | Lose volatile staging and replay; retain completed atomic effects | `ViewMaintainerGrain.ArmReplayFence`, `ViewMaintainerGrain.MarkResolved`. | Pending: existing regression detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
 | `Observe` | Publicly read one complete local cut, independent of other consumers' lag | `ILattice.GetManyAsync`. | Yes: `ViewMaintainerReplayFlushTests.Crossed_prepare_clock_dependencies_publish_the_complete_local_closure_atomically`, `MaterialisedViewReadyClosureSnapshotTests.Crossed_prepare_clocks_publish_one_complete_winner_cut_in_public_GetMany` and `MaterialisedViewReadyClosureSnapshotTests.Public_snapshot_detector_rejects_split_crossed_clock_closure`. |
-| `Release` | Fair external progress makes the held replacement eligible without changing its WAL progress | Candidate source-confirmation/eligibility path; environment progress is separate from local read completeness. | Pending: existing regression detector `ViewMaintainerReplayFlushTests.An_omitting_batch_flushes_after_the_overlapping_newer_batch_that_holds_the_replacement`. |
+| `Release` | Fair external progress makes the held replacement eligible without changing its WAL progress | `ViewMaintainerGrain.GateBatchesOnUnappliedReplacements` keeps external eligibility separate from consumed local heads. | Yes: `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_waits_for_an_unconfirmed_replacement_after_all_heads_are_consumed` consumes both batches completely but holds the replacement while one source row is absent; installing that row without advancing any WAL head releases the complete closure. Disabling the actual non-flushing staged replacement gate publishes j alone and advances its checkpoint; restoration passes. |
 | `Stutter` | No protocol step | Not applicable. | Not applicable. |
 
 ## Property mapping
@@ -61,6 +61,20 @@ second, and must fail that same snapshot assertion. The restored pair and the
 independent history split-publication pair execute four passing cases, including
 two expected-failure controls. HistoryReadAtomic covers indivisible revision-pair
 reads only; captured-floor history convergence retains its separate obligation.
+
+The staged-replacement eligibility control distinguishes consumed heads from
+source readiness. Both batches and their terminal horizon are already consumed;
+the replacement's second source row remains absent. Three drains publish
+nothing and retain checkpoint -1. Installing that row alone releases all three
+view keys and the final checkpoint. Appending `&& false` to the actual
+`WaitsOnNonFlushingBatch` call in `GateBatchesOnUnappliedReplacements` makes
+this detector fail on a j-only snapshot and checkpoint 2 (one executed failure,
+`parent-staged-replacement-discriminator-red.trx`). Restoring production and
+rebuilding passes the new and existing deferred-replacement cases (2/2,
+`parent-staged-replacement-discriminator-restored.trx`). The earlier detector
+alone stayed green under this mutation because its unread source head supplied
+a second gate. This accepts the bounded external eligibility/release seam, not
+by itself the entire three-batch transitive closure or crash-convergence claim.
 
 The three-batch ring is a reachable committed/installed source prefix. It is
 not arbitrary transaction creation or a replacement for source admission.
