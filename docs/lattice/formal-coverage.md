@@ -17,26 +17,31 @@ checking found, and, just as prominently, what each area does **not** cover.
 Each area follows the pattern the
 [atomic-commit specification](verified-atomic-commit.md) set:
 
-- **TLA+ modules checked by TLC on every pull request.** They live under
-  [`spec/`](../../spec/README.md), one directory per area.
+- **TLA+ modules checked by TLC in CI.** They live under
+  [`spec/`](../../spec/README.md), one directory per area. Routine pull requests
+  retain a base smoke check; exhaustive bases, variants and mutants run when the
+  diff touches a TLC input, and on integration/release pushes and nightly runs.
 - **A mutation for every property and every action.** Each is a deliberate
   defect that must make TLC report a violation, so no property holds
   vacuously and no protocol step goes unchecked.
 - **A refinement note per module.** It maps every variable, action and property
   to the production code that plays its role, and to detector tests that were
   shown to go red when that code is perturbed.
-- **Pure cores and Coyote models.** The decisions the specifications check run
-  in production through pure cores, and Coyote models drive those cores under
-  systematic interleaving, each with a guard test that must find a violation.
+- **Production detectors, with pure-core and Coyote tiers where applicable.**
+  The established concurrency cores also run under systematic Coyote
+  interleaving with negative controls. The view, anti-entropy and lifecycle
+  additions check bounded TLA+ protocol abstractions mapped to production grain
+  and integration tests; they do not claim a new pure-core or Coyote proof.
 
-The Formal test gates discover every module from disk and check all of this on
-every build. The acceptance census (#4442) adds two more gates:
+The structural Formal gates discover every module from disk and check its
+manifest, mutation coverage and refinement mappings independently of whether
+CI selects exhaustive TLC. The acceptance census (#4442) adds two more gates:
 
 - every behaviour-asserting row of every refinement note must read `Yes`, with no
   `Partial`, `None`, gap or assumption-only verdict;
 - no note may cite an open issue as the place a gap is tracked.
 
-## The six areas
+## Areas
 
 Figures are derived from module manifests and refinement notes. Each area's spec
 `README.md` holds the figures the build checks; the B+ tree topology row reflects
@@ -50,6 +55,10 @@ its four checked modules.
 | Replication convergence | 4 | 82 | 64 | 190 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
 | B+ tree topology | 4 | 47 | 73 | 45 | [B+ tree topology](../../spec/bplustree/README.md) |
+| Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
+| Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
+| Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
+| Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
@@ -113,6 +122,60 @@ gaps, states its full scope.
     backup set's members during the alias swap, and a replication batch delayed
     across a whole restore cutover.
 
+- **Materialised-view tail and lifecycle** ([`spec/materialised-views/`](../../spec/materialised-views/README.md)).
+  - **Covers:** physical WAL binding, checkpoint and published read-position
+    entitlement, cursor and retention trims, fall-off and lag rebuild, finite
+    crash replay, shadow-generation publication, reclaim and decommission,
+    and source identity cutover followed by rebind.
+  - **Does not cover:** atomic/cross-tree staging, aggregation membership,
+    history shaping, per-partition terminal recovery, or reader-handle reclaim
+    grace. Source swaps are environment steps; lifecycle internals are checked
+    by the lifecycle and alias companions. Replay can transiently regress a
+    value: this model checks prefix convergence, not monotonic reads across a
+    replay. Its seven invariants and five temporal properties are not a claim
+    of read-atomic safety for the separate staging protocol.
+
+- **Tree lifecycle composition** ([`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md)).
+  - **Covers:** sparse resize copy/fence/swap/undo; grow and shrink reshard;
+    local shadow restore/revert overtaking a physically bound migration; alias
+    reservations, deletion exclusion and completion-before-release recovery;
+    publish-before-read resize versus split/fold or legacy bootstrap admission;
+    once-per-operation undo clearance when replication becomes enabled; and
+    refusal of old undo after a later restore or administrative alias cutover.
+  - **Does not cover:** arbitrary-await crash safety, a cutover racing every
+    compensation await of a still-undoable resize, snapshot transport, or the
+    data-plane rows and saga internals already modelled by the ownership, WAL
+    and backup companions.
+    An undo request can overtake already-admitted work; its admission interlock
+    prevents new work, not retroactive cancellation.
+
+- **Anti-entropy remediation** ([`spec/anti-entropy/`](../../spec/anti-entropy/README.md)).
+  - **Covers:** digest comparison and Merkle localisation; opt-in, traffic-window
+    and breaker gates; retained-WAL targeted replay and snapshot fallback;
+    origin suppression, receiver dedup and LWW joins; dropped Sets and Deletes, foreign-origin
+    rows, trim/cursor blind spots, finite transport faults and activation restart.
+    Topology changes invalidate localisation through a physical generation.
+  - **Does not cover:** full topology data movement, bounded-cache eviction,
+    unbounded clocks or transport faults, or repairing lost deletes after their
+    tombstones have been reaped. Retained snapshot tombstones repair trimmed-WAL
+    and below-cursor lost deletes; reaping is outside the model. The Alias variant
+    covers one physical swap, not rollback restores. See the refinement note.
+
+- **Shared alias routing and revert** ([`spec/aliasing/`](../../spec/aliasing/README.md)).
+  - **Covers:** two logical aliases sharing physical copies; intent-before-fence
+    and fence-before-publication ordering; atomic alias/map publication;
+    logical-alias-specific fence ownership; finite crash/retry and stale durable
+    administrative recovery after ABA; restore revert's early refusal and
+    expected-physical fence; deletion admission; and split/fold physical binding
+    across repeated alias publications.
+  - **Does not cover:** unbounded redirect chains, physical purge of shared
+    copies, authorization, or an epoch-fenced restore revert. A revert admission
+    read is not a lock: a superseding move after it can leave lineage/reservation
+    changed on later refusal, and a return to the same shadow passes the physical
+    check. No completion guarantee is claimed for permanently superseded work.
+    Physical WAL consumers, atomic visibility and data movement retain the
+    view, ownership, anti-entropy and lifecycle companion models' guarantees.
+
 Across every area, the instances are bounded: each module checks a small number
 of copies, shards, keys and faults exhaustively, and says which. A clean run is
 a statement about the design over that instance. The integration and
@@ -138,6 +201,22 @@ area's list is the authoritative one:
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
 | Backup and restore | #4485, #4490, #4589, #4593, #4686 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
 | B+ tree topology | #4795, #4815, #4818 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
+| Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |
+| Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
+| Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
+| Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
+
+## CI partition and non-vacuity
+
+The new view, anti-entropy and lifecycle JVM cases use dedicated
+deterministic-only TLC shards with measured durations in the matrix planner.
+Bases and variants leave the catch-all. Anti-entropy is split into three
+measured groups; its generated mutation-specific config headers prevent
+same-target controls from sharing the current byte-keyed cache. Structural
+discovery and refinement cases remain
+outside the TLC shards and run even when policy skips exhaustive model checking.
+The #4852 regression prevents a shard category from silently moving those
+structural checks into skipped work.
 
 ## Related
 
