@@ -459,8 +459,9 @@ reduce declared with `LatticeFoldProjection` (see
 Numeric `Count` and `Sum` flips atomically persist membership, accumulator slots,
 and a bounded one/two-group rematerialisation intent. Ordinary public group
 publication remains separate, not snapshot-atomic. The intent survives a lost
-flip or group-write response; a subsequent numeric apply or retract for that
-source key completes every affected group write before retiring it. Losing the
+flip or group-write response; a subsequent numeric apply or retract (including
+a rejected regroup) for that source key completes every affected group write
+before retiring it. Losing the
 intent-delete response is safe because deletion follows those writes. This
 repairs future interruptions, not group identities already lost before the
 intent format existed.
