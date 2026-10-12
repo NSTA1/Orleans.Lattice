@@ -26,6 +26,7 @@ public sealed class ViewMaintainerRebuildIdentityTests
         ILattice Source,
         ICommitLogReader Reader,
         IWalOffsetConsumerRegistryGrain OffsetRegistry,
+        ILatticeRegistry Registry,
         Func<FakePersistentState<ViewCheckpointState>, ViewMaintainerGrain> Reactivate);
 
     [TestCase(false)]
@@ -59,6 +60,7 @@ public sealed class ViewMaintainerRebuildIdentityTests
     {
         var h = Create(moveSource: false, bound: Retired);
         h.State.State.AppliedOffsets[0] = 7;
+        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
         var durable = new ViewCheckpointState
         {
             BoundPhysicalTreeId = Retired,
@@ -87,6 +89,8 @@ public sealed class ViewMaintainerRebuildIdentityTests
 
         Assert.ThrowsAsync<TimeoutException>(async () => await h.Grain.RebuildAsync());
         await h.Cursors.DidNotReceive().UnregisterAsync(Retired, Arg.Any<string>(), Arg.Any<CancellationToken>());
+        Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }),
+            "a failed checkpoint response cannot retire the old log's cross-silo offset entitlement");
         var restartedState = new FakePersistentState<ViewCheckpointState> { State = durable };
         var restarted = h.Reactivate(restartedState);
         await ((IGrainBase)restarted).OnActivateAsync(CancellationToken.None);
@@ -135,6 +139,7 @@ public sealed class ViewMaintainerRebuildIdentityTests
             registered = true;
             Assert.That(await h.Grain.GetDurableReadPositionsAsync(First), Is.Empty,
                 "registration may become observable before its response; the new log must already be held in full");
+            Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
         });
         h.Reader.GetHeadOffsetAsync(First, 0, Arg.Any<CancellationToken>()).Returns(async _ =>
         {
@@ -142,6 +147,7 @@ public sealed class ViewMaintainerRebuildIdentityTests
             Assert.That(registered, Is.True);
             Assert.That(await h.Grain.GetDurableReadPositionsAsync(First), Is.Empty,
                 "old-log offsets cannot authorize reclamation while new-log heads are captured");
+            Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
             return 2L;
         });
         h.Source.GetWithVersionAsync("k", Arg.Any<CancellationToken>()).Returns(async _ =>
@@ -152,6 +158,7 @@ public sealed class ViewMaintainerRebuildIdentityTests
             Assert.That(h.State.State.ActiveGeneration, Is.Zero);
             Assert.That(await h.Grain.GetDurableReadPositionsAsync(First), Is.EqualTo(new long[] { 2 }),
                 "the candidate's captured floor must hold every entry appended during its scan");
+            Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
             return new VersionedValue { Value = [1], Version = new HybridLogicalClock { WallClockTicks = 10 } };
         });
 
@@ -160,6 +167,60 @@ public sealed class ViewMaintainerRebuildIdentityTests
         Assert.That(registered && captured && scanned, Is.True);
         Assert.That(h.State.State.BoundPhysicalTreeId, Is.EqualTo(First));
         Assert.That(await h.Grain.GetDurableReadPositionsAsync(First), Is.EqualTo(new long[] { 2 }));
+        Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.Null,
+            "only a successful durable publication retires the old log entitlement");
+    }
+
+    [Test]
+    public async Task Rebuild_rejected_candidates_never_replace_the_persisted_bound_log_entitlement()
+    {
+        var h = Create(moveSource: false, bound: Retired);
+        h.State.State.AppliedOffsets[0] = 7;
+        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        var alias = First;
+        h.Registry.GetEntryAsync(Logical).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { PhysicalTreeId = alias, ShardCount = 1, MaxLeafKeys = 128, MaxInternalChildren = 128 }));
+        foreach (var candidate in new[] { First, Second, "orders-third" })
+        {
+            alias = candidate;
+            h.Reader.GetHeadOffsetAsync(candidate, 0, Arg.Any<CancellationToken>()).Returns(async _ =>
+            {
+                Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }),
+                    "the hold belongs to the durable bound identity, never to the last rejected candidate");
+                alias = candidate + "-moved";
+                return 2L;
+            });
+            Assert.ThrowsAsync<StaleTreeRoutingException>(async () => await h.Grain.RebuildAsync());
+            Assert.That(h.State.State.BoundPhysicalTreeId, Is.EqualTo(Retired));
+            Assert.That(h.State.State.ActiveGeneration, Is.Zero);
+            Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
+            Assert.That(await h.Grain.GetDurableReadPositionsAsync(candidate), Is.EqualTo(new long[] { 2 }));
+        }
+    }
+
+    [Test]
+    public async Task Rebuild_failed_publication_then_another_candidate_preserves_the_original_bound_entitlement()
+    {
+        var h = Create(moveSource: false, bound: Retired);
+        h.State.State.AppliedOffsets[0] = 7;
+        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        h.State.ThrowOnWrite = new TimeoutException("checkpoint not committed");
+        Assert.ThrowsAsync<TimeoutException>(async () => await h.Grain.RebuildAsync());
+        Assert.That(h.State.State.BoundPhysicalTreeId, Is.EqualTo(First),
+            "the failed write mutated the in-memory tuple, not the durable binding");
+        h.Registry.GetEntryAsync(Logical).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { PhysicalTreeId = Second, ShardCount = 1, MaxLeafKeys = 128, MaxInternalChildren = 128 }));
+        h.Reader.GetHeadOffsetAsync(Second, 0, Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
+            return 2L;
+        });
+
+        h.State.ThrowOnWrite = new TimeoutException("second checkpoint not committed");
+        Assert.ThrowsAsync<TimeoutException>(async () => await h.Grain.RebuildAsync());
+
+        Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
+        Assert.That(await h.Grain.GetDurableReadPositionsAsync(Second), Is.EqualTo(new long[] { 2 }));
     }
 
     private static Harness Create(bool afterValidation = false, bool moveSource = true, string bound = First)
@@ -220,7 +281,7 @@ public sealed class ViewMaintainerRebuildIdentityTests
             TestOptionsResolver.ForFactory(factory, new LatticeOptions { WalPartitions = 1 }),
             options, null!, Substitute.For<ILatticeReplicationContext>(),
             null, null!, checkpoint);
-        return new Harness(Construct(state), state, cursors, tree, reader, offsetRegistry, Construct);
+        return new Harness(Construct(state), state, cursors, tree, reader, offsetRegistry, registry, Construct);
     }
 
     private static async IAsyncEnumerable<string> Keys(string? start)

@@ -439,7 +439,7 @@ internal sealed partial class ViewMaintainerGrain
         state.State.HighestAppliedTimestamp = highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
         await state.WriteStateAsync();
-        PublishReadPositions(walTreeId, capturedOffsets);
+        PublishReadPositions(walTreeId, capturedOffsets, retirePrevious: true);
 
         if (highest > HybridLogicalClock.Zero)
         {
@@ -649,7 +649,7 @@ internal sealed partial class ViewMaintainerGrain
         // Single durable commit: readers resolving the active generation flip from
         // the old fully-built tree to the new fully-built tree with no empty window.
         await state.WriteStateAsync();
-        PublishReadPositions(built.WalTreeId, built.Offsets);
+        PublishReadPositions(built.WalTreeId, built.Offsets, retirePrevious: true);
 
         if (built.Highest > HybridLogicalClock.Zero)
         {
