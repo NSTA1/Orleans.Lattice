@@ -843,6 +843,7 @@ internal sealed partial class ViewMaintainerGrain
                 var resolved = await HandleCrossTreeBatchAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
                 if (resolved)
                 {
+                    await ReassertResolvedSliceAsync(viewTree, upserts, deletes, cancellationToken);
                     applied += upserts.Count + deletes.Count;
                     RecordFlushedPreparesOverStagedKeys(tx);
                     ReleaseStagedKeys(tx);
@@ -861,6 +862,7 @@ internal sealed partial class ViewMaintainerGrain
             if (upserts.Count > 0 || deletes.Count > 0)
             {
                 await viewTree.SetManyAtomicAsync(upserts, deletes, ViewSagaOperationId(txId), cancellationToken);
+                await ReassertResolvedSliceAsync(viewTree, upserts, deletes, cancellationToken);
                 applied += upserts.Count + deletes.Count;
             }
 
@@ -879,6 +881,56 @@ internal sealed partial class ViewMaintainerGrain
     /// (idempotent) rather than minting a fresh one.
     /// </summary>
     private static string ViewSagaOperationId(Guid txId) => $"mv-tx-{txId:N}";
+
+    /// <summary>
+    /// Re-asserts a resolved batch's view slice after its atomic flip. The flip
+    /// is keyed by the deterministic <see cref="ViewSagaOperationId(Guid)"/>, so
+    /// when a pass is replayed (a lost flush response retried on the same
+    /// activation, or a reactivation resuming below an already-flushed batch)
+    /// the flip re-attaches to the completed view saga and writes nothing. The
+    /// same replay has already re-applied every older ordinary write to the
+    /// batch's keys with a blind point write, so without this step the view
+    /// would keep that older value permanently. The maintainer is the view
+    /// tree's sole writer and every ordinary write that supersedes the batch
+    /// was dropped from <paramref name="upserts"/> and <paramref name="deletes"/>,
+    /// so restoring the slice reproduces the source last-writer-wins outcome.
+    /// A fresh flip already matches, so this reads and writes nothing further.
+    /// </summary>
+    private static async Task ReassertResolvedSliceAsync(
+        ILattice viewTree,
+        List<KeyValuePair<string, byte[]>> upserts,
+        List<string> deletes,
+        CancellationToken cancellationToken)
+    {
+        if (upserts.Count == 0 && deletes.Count == 0)
+        {
+            return;
+        }
+
+        var keys = new List<string>(upserts.Count + deletes.Count);
+        foreach (var upsert in upserts)
+        {
+            keys.Add(upsert.Key);
+        }
+
+        keys.AddRange(deletes);
+        var current = await viewTree.GetManyAsync(keys, cancellationToken);
+        foreach (var upsert in upserts)
+        {
+            if (!current.TryGetValue(upsert.Key, out var value) || !value.AsSpan().SequenceEqual(upsert.Value))
+            {
+                await viewTree.SetAsync(upsert.Key, upsert.Value, cancellationToken);
+            }
+        }
+
+        foreach (var key in deletes)
+        {
+            if (current.ContainsKey(key))
+            {
+                await viewTree.DeleteAsync(key, cancellationToken);
+            }
+        }
+    }
 
     /// <summary>
     /// One in-flight atomic-write transaction's staged state. Reassembled from
