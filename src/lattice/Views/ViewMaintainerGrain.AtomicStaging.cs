@@ -969,6 +969,7 @@ internal sealed partial class ViewMaintainerGrain
         var prepareFloors = new Dictionary<Guid, Dictionary<int, long>>();
         var tallies = new Dictionary<Guid, TerminalTally>();
         var crossTreeOperations = new Dictionary<Guid, string>();
+        var preparedKeys = new Dictionary<Guid, Dictionary<string, HybridLogicalClock>>();
         var boundToThisLog = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal);
         var scanLimit = Options.RebuildPrepareScanLimit > 0
             ? Options.RebuildPrepareScanLimit
@@ -1035,6 +1036,21 @@ internal sealed partial class ViewMaintainerGrain
                     }
                 }
 
+                else if (mutation.IsPrepared)
+                {
+                    if (!preparedKeys.TryGetValue(txId, out var keys))
+                    {
+                        keys = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+                        preparedKeys[txId] = keys;
+                    }
+
+                    ref var hlc = ref CollectionsMarshal.GetValueRefOrAddDefault(keys, mutation.Key, out var seen);
+                    if (!seen || mutation.Timestamp.CompareTo(hlc) > 0)
+                    {
+                        hlc = mutation.Timestamp;
+                    }
+                }
+
                 // A terminal's offset is a floor too: a batch still committing shard by
                 // shard re-reads the terminals already in the log alongside its prepares.
                 if (!prepareFloors.TryGetValue(txId, out var floors))
@@ -1091,8 +1107,59 @@ internal sealed partial class ViewMaintainerGrain
 
         if (lowered)
         {
-            _pendingRebuildFence = new RebuildReplayFence(walTreeId, fence, [.. replayed]);
+            _pendingRebuildFence = new RebuildReplayFence(
+                walTreeId, fence, [.. replayed], ReflectedSupersession(tallies, preparedKeys, replayed));
         }
+    }
+
+    /// <summary>
+    /// The supersession HLCs a replay fence must carry for the batches a rebuild
+    /// reflects from source rather than replays. The resumed tail re-reads those
+    /// batches' fenced prepares as already resolved, so they never pass through
+    /// <see cref="RecordFlushedPreparesOverStagedKeys"/>; yet the source installed
+    /// each committed one by last-writer-wins on its prepare HLC, so a replayed
+    /// batch that prepared the same key earlier and commits later must not
+    /// overwrite it. Only committed batches count (an aborted prepare never
+    /// reached the source), and only keys a replayed batch also prepared.
+    /// </summary>
+    private static Dictionary<string, HybridLogicalClock>? ReflectedSupersession(
+        Dictionary<Guid, TerminalTally> tallies,
+        Dictionary<Guid, Dictionary<string, HybridLogicalClock>> preparedKeys,
+        HashSet<Guid> replayed)
+    {
+        var replayedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var txId in replayed)
+        {
+            if (preparedKeys.TryGetValue(txId, out var keys))
+            {
+                replayedKeys.UnionWith(keys.Keys);
+            }
+        }
+
+        Dictionary<string, HybridLogicalClock>? supersession = null;
+        foreach (var (txId, keys) in preparedKeys)
+        {
+            if (replayed.Contains(txId) || !tallies.TryGetValue(txId, out var tally) || !tally.Committed)
+            {
+                continue;
+            }
+
+            foreach (var (key, hlc) in keys)
+            {
+                if (!replayedKeys.Contains(key))
+                {
+                    continue;
+                }
+
+                supersession ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+                if (!supersession.TryGetValue(key, out var prev) || hlc.CompareTo(prev) > 0)
+                {
+                    supersession[key] = hlc;
+                }
+            }
+        }
+
+        return supersession;
     }
 
     /// <summary>
@@ -1114,7 +1181,7 @@ internal sealed partial class ViewMaintainerGrain
         state.State.ReplayFenceWalTreeId = planned.WalTreeId;
         state.State.ReplayFenceOffsets = planned.Offsets;
         state.State.ReplayFenceStagedTransactions = planned.Staged;
-        state.State.ReplayFenceSupersession = null;
+        state.State.ReplayFenceSupersession = planned.Supersession;
     }
 
     /// <summary>
@@ -1150,6 +1217,9 @@ internal sealed partial class ViewMaintainerGrain
         private readonly HashSet<int> _committedShards = [];
         private bool _aborted;
         private int _expectedShards;
+
+        /// <summary><see langword="true"/> when every expected shard committed and none aborted.</summary>
+        public bool Committed => !_aborted && Decided;
 
         /// <summary><see langword="true"/> when the batch aborted or every expected shard committed.</summary>
         public bool Decided => _aborted
@@ -1241,7 +1311,11 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <summary>A replay fence planned by a rebuild's resume-floor capture.</summary>
-    private sealed record RebuildReplayFence(string WalTreeId, Dictionary<int, long> Offsets, List<Guid> Staged);
+    private sealed record RebuildReplayFence(
+        string WalTreeId,
+        Dictionary<int, long> Offsets,
+        List<Guid> Staged,
+        Dictionary<string, HybridLogicalClock>? Supersession);
 
     /// <summary>
     /// The source tree's configured WAL retention ceiling, used by the staging
