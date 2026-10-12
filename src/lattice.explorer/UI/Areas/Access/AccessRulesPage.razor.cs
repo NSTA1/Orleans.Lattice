@@ -4,6 +4,7 @@ using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
@@ -14,7 +15,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// address whose access administration is delegated to the caller, the rules
 /// governing that tenant in both layers instead.
 /// </summary>
-public partial class AccessRulesPage
+public partial class AccessRulesPage : IDisposable
 {
     private const int PageSize = 200;
     private const string AllFilter = "all";
@@ -36,6 +37,8 @@ public partial class AccessRulesPage
     private bool _loadingMore;
     private bool _loaded;
     private string? _loadedScope;
+    private ExplorerAddress? _loadedAddress;
+    private readonly ComponentLifetime _load = new();
     private (int Count, bool More)? _clusterWide;
     private readonly AccessTenantGate _gate = new();
 
@@ -136,16 +139,32 @@ public partial class AccessRulesPage
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
+        if (Equals(_loadedAddress, Address))
+        {
+            return;
+        }
+
+        _loadedAddress = Address;
         // The page is reused when only the tenant root changes (/access to
         // /t/{tenant}/access), so the listing follows the address, not the instance.
         if (_loaded && string.Equals(_loadedScope, Scope, StringComparison.Ordinal))
         {
+            _editorOpen = _gate.DelegatedTenant is null && string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
             return;
         }
 
         _loaded = true;
         _loadedScope = Scope;
-        if (await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true))
+        var load = _load.Renew();
+        _loadingMore = false;
+        _editorOpen = false;
+        var delegated = await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true);
+        if (load.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (delegated)
         {
             // The rules governing the tenant, both layers: its view reads them.
             _editorOpen = false;
@@ -153,21 +172,31 @@ public partial class AccessRulesPage
         }
 
         _editorOpen = string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
-        _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
-        await LoadFirstPageAsync().ConfigureAwait(true);
+        var model = _model ?? await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
+        if (!load.IsCancellationRequested)
+        {
+            _model = model;
+            await LoadFirstPageAsync(load).ConfigureAwait(true);
+        }
     }
 
-    private async Task LoadFirstPageAsync()
+    /// <inheritdoc />
+    public void Dispose() => _load.Leave();
+
+    private Task LoadFirstPageAsync() => LoadFirstPageAsync(_load.Renew());
+
+    private async Task LoadFirstPageAsync(CancellationToken load)
     {
         var scope = Scope;
         _failure = null;
         _rules = null;
         _next = null;
         _clusterWide = null;
+        _loadingMore = false;
         try
         {
-            var page = await Catalog.ListRulesAsync(scope, new AuthPageRequest { PageSize = PageSize }).ConfigureAwait(true);
-            if (!string.Equals(scope, Scope, StringComparison.Ordinal))
+            var page = await Catalog.ListRulesAsync(scope, new AuthPageRequest { PageSize = PageSize }, load).ConfigureAwait(true);
+            if (load.IsCancellationRequested)
             {
                 return;
             }
@@ -178,8 +207,15 @@ public partial class AccessRulesPage
             _next = page.NextPageToken;
             if (scope is not null)
             {
-                _clusterWide = await Catalog.CountClusterWideRulesAsync().ConfigureAwait(true);
+                var clusterWide = await Catalog.CountClusterWideRulesAsync(load).ConfigureAwait(true);
+                if (!load.IsCancellationRequested)
+                {
+                    _clusterWide = clusterWide;
+                }
             }
+        }
+        catch (Exception) when (load.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
@@ -189,22 +225,26 @@ public partial class AccessRulesPage
 
     private async Task LoadMoreAsync()
     {
-        if (_next is null || _rules is null)
+        if (_next is null || _rules is null || _loadingMore)
         {
             return;
         }
 
         var scope = Scope;
+        var load = _load.Token;
         _loadingMore = true;
         try
         {
-            var page = await Catalog.ListRulesAsync(scope, new AuthPageRequest { PageSize = PageSize, PageToken = _next }).ConfigureAwait(true);
-            if (string.Equals(scope, Scope, StringComparison.Ordinal))
+            var page = await Catalog.ListRulesAsync(scope, new AuthPageRequest { PageSize = PageSize, PageToken = _next }, load).ConfigureAwait(true);
+            if (!load.IsCancellationRequested)
             {
                 _rules = [.. _rules, .. page.Entries];
                 RememberTenantRules(page);
                 _next = page.NextPageToken;
             }
+        }
+        catch (Exception) when (load.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
@@ -212,7 +252,10 @@ public partial class AccessRulesPage
         }
         finally
         {
-            _loadingMore = false;
+            if (!load.IsCancellationRequested)
+            {
+                _loadingMore = false;
+            }
         }
     }
 

@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
@@ -12,7 +13,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// and a "New group" form that validates the id against the identity directory
 /// before it writes anything, and refuses an id that already names a group.
 /// </summary>
-public partial class AccessGroupsPage
+public partial class AccessGroupsPage : IDisposable
 {
     private const int PageSize = 200;
 
@@ -33,6 +34,8 @@ public partial class AccessGroupsPage
     private string? _formError;
     private bool _loaded;
     private string? _loadedScope;
+    private ExplorerAddress? _loadedAddress;
+    private readonly ComponentLifetime _load = new();
     private LtNameInput? _idBox;
     private AccessGroupNameSource? _existingGroups;
     private readonly AccessTenantGate _gate = new();
@@ -141,27 +144,49 @@ public partial class AccessGroupsPage
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
+        if (Equals(_loadedAddress, Address))
+        {
+            return;
+        }
+
+        _loadedAddress = Address;
         // The page is reused when only the tenant root changes, so what it shows
         // follows the address, not the instance.
         if (_loaded && string.Equals(_loadedScope, Scope, StringComparison.Ordinal))
         {
+            _createOpen = _gate.DelegatedTenant is null && Scope is null && MembershipEditable && CreateRequested;
             return;
         }
 
         _loaded = true;
         _loadedScope = Scope;
-        if (await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true))
+        var load = _load.Renew();
+        _loadingMore = false;
+        _createOpen = false;
+        var delegated = await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true);
+        if (load.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (delegated)
         {
             // The tenant's own groups: its view reads them.
             _createOpen = false;
             return;
         }
 
-        _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
-        _createOpen = Scope is null && MembershipEditable && string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
+        var model = _model ?? await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
+        if (load.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _model = model;
+        _createOpen = Scope is null && MembershipEditable && CreateRequested;
         if (Scope is null)
         {
-            await LoadFirstPageAsync().ConfigureAwait(true);
+            await LoadFirstPageAsync(load).ConfigureAwait(true);
         }
         else
         {
@@ -171,16 +196,30 @@ public partial class AccessGroupsPage
         }
     }
 
-    private async Task LoadFirstPageAsync()
+    /// <inheritdoc />
+    public void Dispose() => _load.Leave();
+
+    private Task LoadFirstPageAsync() => LoadFirstPageAsync(_load.Renew());
+
+    private async Task LoadFirstPageAsync(CancellationToken load)
     {
         _failure = null;
         _groups = null;
         _next = null;
+        _loadingMore = false;
         try
         {
-            var page = await Catalog.Admin.ListGroupsAsync(new AuthPageRequest { PageSize = PageSize }).ConfigureAwait(true);
+            var page = await Catalog.Admin.ListGroupsAsync(new AuthPageRequest { PageSize = PageSize }, load).ConfigureAwait(true);
+            if (load.IsCancellationRequested)
+            {
+                return;
+            }
+
             _groups = [.. page.Entries];
             _next = page.NextPageToken;
+        }
+        catch (Exception) when (load.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
@@ -190,17 +229,26 @@ public partial class AccessGroupsPage
 
     private async Task LoadMoreAsync()
     {
-        if (_next is null || _groups is null)
+        if (_next is null || _groups is null || _loadingMore)
         {
             return;
         }
 
+        var load = _load.Token;
         _loadingMore = true;
         try
         {
-            var page = await Catalog.Admin.ListGroupsAsync(new AuthPageRequest { PageSize = PageSize, PageToken = _next }).ConfigureAwait(true);
+            var page = await Catalog.Admin.ListGroupsAsync(new AuthPageRequest { PageSize = PageSize, PageToken = _next }, load).ConfigureAwait(true);
+            if (load.IsCancellationRequested)
+            {
+                return;
+            }
+
             _groups = [.. _groups, .. page.Entries];
             _next = page.NextPageToken;
+        }
+        catch (Exception) when (load.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
@@ -208,7 +256,10 @@ public partial class AccessGroupsPage
         }
         finally
         {
-            _loadingMore = false;
+            if (!load.IsCancellationRequested)
+            {
+                _loadingMore = false;
+            }
         }
     }
 
