@@ -70,13 +70,21 @@ IShardRootGrain.GetRawEntriesIncludingTombstonesAsync returns aligned raw
 timestamp/kind/value tuples and GetRawVersionsAsync retains tombstone versions.
 This establishes single-row materialised coherence only. Sequential multi-leaf
 traversal is not transaction-atomic sampling, participant closure or admission
-acceptance. The pending logical-row API is a distinct seam: one bounded leaf
+acceptance. The logical-row API is a distinct seam: one bounded leaf
 metadata capture carries pending keys and decision outcomes together; the
 resolved committed prepare may be newer than the coherent materialised row.
 The logical-row API implementation reference is source child
 466494d1da5fbd3a3c965322982eba1a03c55b29 (parent 92008013b). The parent accepted
 its narrow logical/raw/bootstrap scope, not completed U/T or held-terminal
 composition. That prerequisite is not an unqualified admission verdict.
+
+The source producer's decision-before-terminal rely-guarantee is separately
+accepted. The normal saga and cross-tree finalizer are each held at the actual
+registry decision response; neither may broadcast a terminal or finish while
+that response is unresolved. Removing the decision await at either call site
+independently fails its held-response case while the other case passes, and
+the restored two cases plus three established ordering controls pass. This
+does not establish maintainer validation of fabricated terminal records.
 
 The base includes current/history registrations, source application lag and an
 undrained committed/in-flight B prepare. Original A is committed and installed
