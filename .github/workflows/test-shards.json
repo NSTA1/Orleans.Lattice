@@ -97,7 +97,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardMaterialisedViews"],
-        "note": "Materialised-view base, variant and mutation runs. Whole modules preserve process-local single-property control reuse."
+        "note": "MaterialisedViewTail base, ThreeWrites variant and 22 mutants: all 24 cases measured at 342s on Java 17 with two visible CPUs and one TLC slot. Mutation names occur in control config headers, so distinct mutants do not share cached controls even when their targets match. Staging companions require separate measured groups when enrolled."
       },
       {
         "shard": "formal-tlc-anti-entropy",

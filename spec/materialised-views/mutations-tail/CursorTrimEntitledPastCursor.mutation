@@ -1,0 +1,11 @@
+MODULE: CursorTrimEntitledPastCursor
+TARGET: CursorTrimEntitled
+CLASS: Action
+SUMMARY: the cursor arm trims to the log head instead of the reported cursor and read position
+PERTURBS: CursorTrim
+
+--- FIND
+    /\ \E t \in (trim[p] + 1)..CursorBound(p) :
+--- REPLACE
+    /\ \E t \in (trim[p] + 1)..Len(logs[p]) :
+--- END

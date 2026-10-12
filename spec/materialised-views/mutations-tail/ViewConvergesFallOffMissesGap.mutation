@@ -1,0 +1,13 @@
+MODULE: ViewConvergesFallOffMissesGap
+TARGET: ViewConverges
+CLASS: Temporal
+SUMMARY: fall-off is detected only when the trim runs two entries past the applied offset, so a one-entry gap wedges the drain
+PERTURBS: FallOff
+
+--- FIND
+    /\ trim[bound] > applied
+    /\ StartRebuild(bound)
+--- REPLACE
+    /\ trim[bound] > applied + 1
+    /\ StartRebuild(bound)
+--- END

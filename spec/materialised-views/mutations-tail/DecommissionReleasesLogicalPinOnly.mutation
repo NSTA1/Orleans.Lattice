@@ -1,0 +1,11 @@
+MODULE: DecommissionReleasesLogicalPinOnly
+TARGET: DecommissionReleases
+CLASS: Invariant
+SUMMARY: decommission releases the cursor pin only under the logical id, leaking the physical pin after a swap (the pre-fix defect)
+PERTURBS: Delete
+
+--- FIND
+    /\ pinned' = pinned \ {Logical, bound}
+--- REPLACE
+    /\ pinned' = pinned \ {Logical}
+--- END

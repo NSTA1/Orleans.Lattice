@@ -79,7 +79,7 @@ internal static class TlcCiShard
     /// <summary>The mutants of every Backup* module.</summary>
     public const string Backup = "TlcShardBackup";
 
-    /// <summary>The materialised-view base, variant and mutation runs, retaining shared controls.</summary>
+    /// <summary>The measured materialised-view tail base, variant and mutation runs.</summary>
     public const string MaterialisedViews = "TlcShardMaterialisedViews";
 
     /// <summary>The anti-entropy base and first measured mutation group.</summary>

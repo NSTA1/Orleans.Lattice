@@ -1,0 +1,13 @@
+MODULE: PinOnlyOnBindingCheckpointLogicalId
+TARGET: PinOnlyOnBinding
+CLASS: Invariant
+SUMMARY: the checkpoint reports the GC cursor under the logical source id instead of the bound physical copy (the pre-fix defect)
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ pinned' = pinned \cup {bound}
+    /\ pin' = [pin EXCEPT ![bound] = applied]
+--- REPLACE
+    /\ pinned' = pinned \cup {Logical}
+    /\ pin' = [pin EXCEPT ![Logical] = applied]
+--- END

@@ -1,0 +1,17 @@
+MODULE: ServedMonotoneLagEvictInPlace
+TARGET: ServedMonotone
+CLASS: Action
+SUMMARY: a lag eviction clears the served view in place instead of rebuilding into a shadow generation
+PERTURBS: LagEvict
+BOUNDS: MaxWrites = 3
+
+--- FIND
+    /\ Len(logs[bound]) - applied > LagBudget
+    /\ StartRebuild(bound)
+    /\ UNCHANGED <<SourceVars, EnvVars, bound, vval, applied, hw, ckpt, pinned,
+--- REPLACE
+    /\ Len(logs[bound]) - applied > LagBudget
+    /\ vval' = Zero
+    /\ StartRebuild(bound)
+    /\ UNCHANGED <<SourceVars, EnvVars, bound, applied, hw, ckpt, pinned,
+--- END

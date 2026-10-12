@@ -1,0 +1,11 @@
+MODULE: DecommissionReleasesReclaimActive
+TARGET: DecommissionReleases
+CLASS: Invariant
+SUMMARY: reclamation may delete the active generation
+PERTURBS: Reclaim
+
+--- FIND
+    /\ \E g \in gens \ {active} : gens' = gens \ {g}
+--- REPLACE
+    /\ \E g \in gens : gens' = gens \ {g}
+--- END

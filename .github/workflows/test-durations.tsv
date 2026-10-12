@@ -10,6 +10,8 @@
 # AntiEntropy group 1: 18 cases in 539 seconds; group 2: nine cases in 598 seconds,
 # measured with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
 # AntiEntropy group 3: seven cases in 549 seconds after the rebase.
+# MaterialisedViewTail: all 24 base/variant/mutation cases in 342 seconds,
+# with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
 
 # Per-work-item duration estimates, in minutes, used only to bin-pack the
 # matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
@@ -108,6 +110,7 @@
 # observed wall time; replace them with measured shard medians at the next
 # duration refresh. The smoke model runs separately in seconds.
 lattice	formal-tlc	deterministic	9.1
+lattice	formal-tlc-materialised-views	deterministic	5.7
 lattice	formal-tlc-tree-lifecycle	deterministic	1.6
 lattice	formal-tlc-anti-entropy	deterministic	9.0
 lattice	formal-tlc-anti-entropy-2	deterministic	10.0

@@ -1,0 +1,13 @@
+MODULE: PinConvergesCheckpointOnce
+TARGET: PinConverges
+CLASS: Temporal
+SUMMARY: the maintainer checkpoints only its first batch, so the cursor pin never follows the head
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ ~deleted /\ rb = "idle" /\ applied > ckpt
+    /\ ckpt' = applied
+--- REPLACE
+    /\ ~deleted /\ rb = "idle" /\ applied > ckpt /\ ckpt = 0
+    /\ ckpt' = applied
+--- END
