@@ -130,6 +130,10 @@ public partial class ViewMaintainerReplayFlushTests
             Assert.That(captured.GetValueOrDefault("q"), Is.EqualTo(new byte[] { 3 }));
             Assert.That(state.State.AppliedOffsets.GetValueOrDefault(0, -1), Is.EqualTo(-1));
             Assert.That(state.State.CrossTreeRepairHolds, Has.Count.EqualTo(1));
+            var versions = state.State.CrossTreeRepairHolds[CrossTreeOperationId].RepairSourceVersions;
+            Assert.That(versions.Keys, Is.EquivalentTo(new[] { Key, OtherKey, "m", "n", "p", "q" }));
+            Assert.That(versions.Values, Is.All.EqualTo(Clock(30)),
+                "Fresh source HLC witnesses must match the captured rows rather than the older prepares.");
             Assert.That(state.State.PendingCrossTreeRepairAcknowledgements, Is.Empty);
         });
     }
