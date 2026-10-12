@@ -7,9 +7,13 @@ internal sealed class HistoryPublicationHoldFilter(IGrainFactory grainFactory) :
 {
     private static readonly ConcurrentDictionary<string, Gate> Gates = new(StringComparer.Ordinal);
 
-    public static Gate Arm(string treeId, IReadOnlyList<string> keys, bool splitPublication)
+    public static Gate Arm(
+        string treeId,
+        IReadOnlyList<string> keys,
+        bool splitPublication,
+        bool loseResponse = false)
     {
-        var gate = new Gate(keys, splitPublication);
+        var gate = new Gate(keys, splitPublication, loseResponse);
         if (!Gates.TryAdd(treeId, gate))
         {
             throw new InvalidOperationException($"History publication for '{treeId}' is already held.");
@@ -52,16 +56,27 @@ internal sealed class HistoryPublicationHoldFilter(IGrainFactory grainFactory) :
                 return;
             }
 
+            if (gate.LoseResponse)
+            {
+                await context.Invoke();
+                gate.Committed = true;
+                gate.Entered.TrySetResult();
+                await gate.Released.Task;
+                throw new TimeoutException("Lost history publication response after commit.");
+            }
+
             gate.Entered.TrySetResult();
             await gate.Released.Task;
         }
         await context.Invoke();
     }
 
-    internal sealed class Gate(IReadOnlyList<string> keys, bool splitPublication)
+    internal sealed class Gate(IReadOnlyList<string> keys, bool splitPublication, bool loseResponse)
     {
         public IReadOnlyList<string> Keys { get; } = keys;
         public bool SplitPublication { get; } = splitPublication;
+        public bool LoseResponse { get; } = loseResponse;
+        public bool Committed { get; set; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Release() => Released.TrySetResult();
