@@ -296,6 +296,7 @@ area's list is the authoritative one:
 | Backup and restore | #4485, #4490, #4589, #4593, #4686 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
 | B+ tree topology | #4795, #4815, #4818 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
 | Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |
+| Materialised-view physical rebuild and resolved identity | #4891, #4895 | [Physical-rebind companion](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) and [resolved identity](../../spec/view-resolved-identity/README.md) |
 | Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
 | Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
