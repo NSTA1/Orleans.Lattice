@@ -68,10 +68,14 @@ internal sealed partial class ViewMaintainerGrain
         // re-walking the whole buffer with a separate .Exists pass after the drain.
         var hasRangeReconcile = false;
         var ordinarySpans = new List<OrdinaryWriteSpan>();
+        var numericSourceKeys = registration.AggregationProjection!.Aggregation is AggregationKind.Count or AggregationKind.Sum
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : null;
         var handler = new ViewDrainHandler(
             this,
             mutation =>
             {
+                numericSourceKeys?.Add(mutation.Key);
                 var spanStart = contributions.Count;
                 foreach (var contribution in registration.AggregationProjection!.Project(mutation))
                 {
@@ -151,6 +155,16 @@ internal sealed partial class ViewMaintainerGrain
         {
             await applier.ApplyAsync(contribution, cancellationToken);
             applied++;
+        }
+
+        if (numericSourceKeys is not null)
+        {
+            // Source admission can suppress an interrupted event, and its
+            // successor can project nothing. Repair still precedes checkpoint retirement.
+            foreach (var sourceKey in numericSourceKeys)
+            {
+                await applier.CompletePendingNumericSourceAsync(sourceKey, cancellationToken);
+            }
         }
 
         // Fold every atomic batch that completed this pass into the group

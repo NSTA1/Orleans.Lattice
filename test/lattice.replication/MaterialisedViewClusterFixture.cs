@@ -90,6 +90,7 @@ internal sealed class MaterialisedViewClusterFixture
             siloBuilder.AddIncomingGrainCallFilter<LeafTerminalFaultFilter>();
             siloBuilder.AddOutgoingGrainCallFilter<CrossTreeRegisterReadyHookFilter>();
             siloBuilder.AddOutgoingGrainCallFilter<HistoryPublicationHoldFilter>();
+            siloBuilder.AddOutgoingGrainCallFilter<NumericPublicationResponseFaultFilter>();
 
             // Pin a long coalesce window for every view so the maintainer's
             // background drain timer stays dormant during the test and
