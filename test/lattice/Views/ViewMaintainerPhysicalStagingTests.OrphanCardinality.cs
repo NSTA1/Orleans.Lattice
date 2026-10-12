@@ -84,4 +84,116 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
         Assert.That(h.State.State.ActiveGeneration, Is.Zero);
         Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(6));
     }
+
+    [Test]
+    public async Task Drain_one_retained_size_witness_recovers_a_batch_with_another_prepare_trimmed()
+    {
+        var h = await Harness.CreateAsync(prepareScanLimit: 2);
+        h.Append(Old, 0, Prepare(Old, "retained", 11) with { AtomicBatchSize = 2 });
+        h.Append(Old, 7, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 0 });
+        h.Append(Old, 8, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 1 });
+
+        await h.Grain.DrainAsync();
+
+        Assert.That(h.HistoryEntries.Where(entry => entry.Offset <= 6).Select(entry => entry.Offset),
+            Is.EqualTo(new long[] { 0 }),
+            "one actual prepare supplies size two; the missing second payload is not historical evidence");
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1),
+            "the complete distinct terminal set and a size witness permit rebuilding from committed source");
+        Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(8));
+    }
+
+    [Test]
+    public async Task Drain_terminal_only_history_without_a_prepare_witness_keeps_waiting()
+    {
+        var h = await Harness.CreateAsync(prepareScanLimit: 2);
+        h.Append(Old, 7, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 0 });
+        h.Append(Old, 8, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 1 });
+
+        await h.Grain.DrainAsync();
+        await h.Grain.DrainAsync();
+
+        Assert.That(h.State.State.ActiveGeneration, Is.Zero,
+            "complete terminals and heads cannot infer a missing prepare's declared batch size");
+        Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(6));
+        Assert.That(h.HistoryEntries, Is.Empty);
+
+        h.Append(Old, 9, Prepare(Old, "late-own-prepare", 11) with { AtomicBatchSize = 2 });
+        await h.Grain.DrainAsync();
+
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1),
+            "the same log's late actual prepare supplies the missing cardinality witness");
+        Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(9));
+    }
+
+    [Test]
+    public async Task Drain_duplicate_terminals_do_not_replace_a_distinct_shard_witness()
+    {
+        var h = await Harness.CreateAsync(prepareScanLimit: 2);
+        h.Append(Old, 0, Prepare(Old, "retained", 11) with { AtomicBatchSize = 2 });
+        h.Append(Old, 7, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 0 });
+        h.Append(Old, 8, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 0 });
+
+        await h.Grain.DrainAsync();
+        await h.Grain.DrainAsync();
+
+        Assert.That(h.State.State.ActiveGeneration, Is.Zero,
+            "two observations of shard zero do not entitle a two-shard recovery");
+        Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(6));
+
+        h.Append(Old, 9, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 1 });
+        await h.Grain.DrainAsync();
+
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1));
+        Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(9));
+    }
+
+    [Test]
+    public async Task Drain_orphan_recovery_waits_for_the_nonterminal_partition_horizon()
+    {
+        var h = await Harness.CreateAsync(prepareScanLimit: 2, partitions: 3);
+        h.Append(Old, 0, Prepare(Old, "retained", 11) with { AtomicBatchSize = 2 });
+        h.Append(Old, 7, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 0 });
+        h.Append(Old, 7, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 1 }, partition: 1);
+        h.Append(Old, 7, new LatticeMutation
+        {
+            TreeId = Old, Kind = MutationKind.Set, Category = MutationCategory.User,
+            Key = "third-partition", Value = [3], Timestamp = Clock(5),
+        }, partition: 2);
+        h.TailLimits[2] = 6;
+
+        await h.Grain.DrainAsync();
+
+        Assert.That(h.State.State.ActiveGeneration, Is.Zero,
+            "all distinct terminals do not imply that the third physical partition was consumed");
+        Assert.That(h.State.State.AppliedOffsets[2], Is.EqualTo(6));
+        Assert.That(h.HistoryRequests.First(), Is.EqualTo((Old, 0, -1L, 6L, 2)),
+            "the actual lookback is bounded at the durable checkpoint with the remaining shared budget");
+
+        h.TailLimits.Remove(2);
+        await h.Grain.DrainAsync();
+
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1),
+            "the recovery is released only after the nonterminal partition passes its captured head");
+        Assert.That(h.State.State.AppliedOffsets.Values, Is.All.EqualTo(7));
+    }
+
+    [Test]
+    public async Task Drain_historical_terminal_on_another_partition_completes_the_distinct_set()
+    {
+        var h = await Harness.CreateAsync(prepareScanLimit: 1, partitions: 3);
+        h.Append(Old, 0, Prepare(Old, "retained", 11) with { AtomicBatchSize = 2 });
+        h.Append(Old, 0, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 0 }, partition: 1);
+        h.Append(Old, 7, Terminal(Old) with { AtomicShardCount = 2, ShardIndex = 1 }, partition: 2);
+
+        await h.Grain.DrainAsync();
+        Assert.That(h.State.State.ActiveGeneration, Is.Zero,
+            "the first pass's positive size witness cannot replace an unread historical terminal");
+
+        await h.Grain.DrainAsync();
+
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1));
+        Assert.That(h.HistoryRequests.Take(3).Select(request => (request.Partition, request.Through, request.Limit)),
+            Is.EqualTo(new[] { (0, 6L, 1), (0, 6L, 1), (1, 6L, 1) }));
+    }
 }
