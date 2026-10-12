@@ -64,6 +64,35 @@ its four checked modules.
 that assert a production behaviour. **Detector tests** are the distinct tests those
 rows cite.
 
+## Finite companions awaiting production refinement acceptance
+
+The accepted-area census above does not include the two focused materialised-view
+companions whose production detector verdicts are still pending. Their actual
+TLC harness runs include the base, variant and every mutant with its paired clean
+single-property control; no skipped run is counted as evidence.
+
+| Module | Base states | Variant states | Mutants | Harness cases | Production refinement |
+|--------|-------------|----------------|---------|---------------|-----------------------|
+| `MaterialisedViewFence` | 194 | 359 (`NewerOrdinary`) | 9 | 11 | Pending |
+| `MaterialisedViewHorizon` | 20,794 | 33,456 (`FullScan`) | 16 | 18 | Pending |
+
+The fence companion checks an established two-batch prefix, source-HLC winners
+at different WAL arrival offsets, peer-delayed publication and a persisted fence
+that remains necessary after staging empties. It does not prove general initial
+staging, dependency closure, numeric aggregation or joint coordinator safety.
+The horizon companion deliberately separates prepare partitions p0/p2 from
+terminal partitions p0/p1. It checks post-terminal all-partition consumption,
+bounded rebuild planning and abandoned-batch retirement; source installation
+and terminal append are separate steps. It does not promise snapshot-atomic
+rebuild scans. See the [companion scope and refinements](../../spec/materialised-views/README.md#focused-replay-and-horizon-companions).
+
+Each companion has a dedicated deterministic-only TLC shard. Their measured
+serial no-build commands took 48.434 and 124.659 seconds with one JVM slot,
+two visible CPUs and a 2 GiB heap cap on a shared host; peak heap was not measured.
+A green finite model is not a production refinement certificate: the acceptance
+gate intentionally remains red until discriminating production detector evidence
+justifies every pending verdict.
+
 ## What each area covers, and what it does not
 
 Coverage of one area must not be read as coverage of another. Each area's page,
