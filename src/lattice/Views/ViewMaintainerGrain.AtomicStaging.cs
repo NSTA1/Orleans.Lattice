@@ -1478,6 +1478,13 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
+            var closure = registration.Accumulative ? null : LocalPublicationClosure(txId, completed);
+            if (closure is { Count: > 1 })
+            {
+                applied += await PublishLocalFilterClosureAsync(viewTree, registration, closure, cancellationToken);
+                continue;
+            }
+
             var writes = new List<ViewWrite>();
             foreach (var prepared in tx.PreparesByIndex.Values)
             {
@@ -1486,8 +1493,7 @@ internal sealed partial class ViewMaintainerGrain
                 // source last-writer; dropping the prepared entry reproduces the
                 // source LWW outcome (otherwise apply-order alone would resurrect
                 // the lower-HLC atomic value as a permanent lost write).
-                if (!registration.Accumulative
-                    && (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared)))
+                if (!registration.Accumulative && (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared)))
                 {
                     continue;
                 }

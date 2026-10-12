@@ -241,6 +241,13 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
+            var closure = registration.Accumulative ? null : LocalPublicationClosure(txId, completed);
+            if (closure is { Count: > 1 })
+            {
+                applied += await PublishLocalAggregationClosureAsync(viewTree, registration, closure, cancellationToken);
+                continue;
+            }
+
             var contributions = new List<AggregationContribution>();
             foreach (var prepared in tx.PreparesByIndex.Values)
             {
