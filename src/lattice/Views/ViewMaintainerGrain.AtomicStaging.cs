@@ -99,6 +99,13 @@ internal sealed partial class ViewMaintainerGrain
     // batch still references the key, so overlapping batches resolve by prepare
     // HLC rather than by the order in which they complete.
     private readonly Dictionary<string, int> _stagedSourceKeyRefCount = new(StringComparer.Ordinal);
+
+    // The supersession HLCs the armed replay fence restored. They outlive the
+    // refcount of the live map: a replayed batch released (aborted or flushed)
+    // before a still-replayed batch re-stages the same key would otherwise drop
+    // the reflected ordinary write's HLC, and the second batch could flush its
+    // older prepare before the fenced ordinary write is re-read and re-recorded.
+    private Dictionary<string, HybridLogicalClock>? _replayFenceSupersession;
     private readonly Dictionary<string, HybridLogicalClock> _ordinaryHlcOverStagedKey = new(StringComparer.Ordinal);
 
     /// <summary>How a source mutation is dispositioned by the drain loop.</summary>
@@ -400,8 +407,11 @@ internal sealed partial class ViewMaintainerGrain
     /// the prepared entry must be skipped at flush time (a lost-write otherwise).
     /// </summary>
     private bool IsSupersededByOrdinary(in LatticeMutation prepared)
-        => _ordinaryHlcOverStagedKey.TryGetValue(prepared.Key, out var oh)
-            && oh.CompareTo(prepared.Timestamp) > 0;
+        => (_ordinaryHlcOverStagedKey.TryGetValue(prepared.Key, out var oh)
+                && oh.CompareTo(prepared.Timestamp) > 0)
+            || (_replayFenceSupersession is { } fenced
+                && fenced.TryGetValue(prepared.Key, out var fh)
+                && fh.CompareTo(prepared.Timestamp) > 0);
 
     /// <summary>
     /// Lowest offset, across every still-staged transaction, of any entry that
@@ -512,6 +522,7 @@ internal sealed partial class ViewMaintainerGrain
         {
             _replayFenceOffsets = null;
             _replayFenceStaged = null;
+            _replayFenceSupersession = null;
             return;
         }
 
@@ -523,8 +534,10 @@ internal sealed partial class ViewMaintainerGrain
 
         _replayFenceOffsets = new Dictionary<int, long>(offsets);
         _replayFenceStaged = new HashSet<Guid>(state.State.ReplayFenceStagedTransactions ?? []);
-        if (state.State.ReplayFenceSupersession is { } supersession)
+        _replayFenceSupersession = null;
+        if (state.State.ReplayFenceSupersession is { Count: > 0 } supersession)
         {
+            _replayFenceSupersession = new Dictionary<string, HybridLogicalClock>(supersession, StringComparer.Ordinal);
             foreach (var (key, hlc) in supersession)
             {
                 _ordinaryHlcOverStagedKey[key] = hlc;
@@ -591,6 +604,7 @@ internal sealed partial class ViewMaintainerGrain
             {
                 _replayFenceOffsets = null;
                 _replayFenceStaged = null;
+                _replayFenceSupersession = null;
             }
             else
             {
@@ -648,6 +662,7 @@ internal sealed partial class ViewMaintainerGrain
     {
         _replayFenceOffsets = null;
         _replayFenceStaged = null;
+        _replayFenceSupersession = null;
         if (state.State.ReplayFenceOffsets is null && state.State.ReplayFenceWalTreeId is null
             && state.State.ReplayFenceStagedTransactions is null && state.State.ReplayFenceSupersession is null)
         {
@@ -1250,6 +1265,7 @@ internal sealed partial class ViewMaintainerGrain
         _pendingRebuildFence = null;
         _replayFenceOffsets = null;
         _replayFenceStaged = null;
+        _replayFenceSupersession = null;
         state.State.ReplayFenceWalTreeId = planned.WalTreeId;
         state.State.ReplayFenceOffsets = planned.Offsets;
         state.State.ReplayFenceStagedTransactions = planned.Staged;
