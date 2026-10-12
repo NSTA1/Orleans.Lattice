@@ -253,7 +253,7 @@ public sealed class TlcCiShardTests
 
     [TestCase("MaterialisedViewTail", TlcCiShard.MaterialisedViews, 24)]
     [TestCase("MaterialisedViewFence", TlcCiShard.MaterialisedViewFence, 11)]
-    [TestCase("MaterialisedViewHorizon", TlcCiShard.MaterialisedViewHorizon, 18)]
+    [TestCase("MaterialisedViewHorizon", TlcCiShard.MaterialisedViewHorizon, 25)]
     [TestCase("MaterialisedViewAggregation", TlcCiShard.MaterialisedViewAggregation, 20)]
     [TestCase("MaterialisedViewRebind", TlcCiShard.MaterialisedViewRebind, 22)]
     [TestCase("MaterialisedViewReadyClosure", TlcCiShard.MaterialisedViewReadyClosure, 15)]
