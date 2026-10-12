@@ -42,7 +42,9 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
         Assert.That(failure!.Message, Does.Contain(mutation switch
         {
             1 => "old log's staged payload",
-            2 => "new-only",
+            // A read-position backstop can expose the stale physical cursor
+            // before the late prepare reaches the payload assertion.
+            2 => "unmatched new terminal remains replayable",
             _ => "candidate head of 2",
         }), "each control must fail at its intended public-output or physical-checkpoint assertion");
     }
