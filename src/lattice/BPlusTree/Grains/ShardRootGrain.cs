@@ -724,8 +724,7 @@ internal sealed partial class ShardRootGrain(
 
         // Group keys by their target leaf. Mirrors TraverseForBatchReadAsync
         // but addresses the raw leaf grain directly (bypassing LeafCacheGrain)
-        // so tombstones and TTL metadata survive - matching single-key
-        // GetRawEntryAsync semantics.
+        // so TTL metadata and, when requested, tombstones survive.
         //
         // The overwhelmingly common shape here is single-leaf: this is the
         // saga capture path, whose affected keys were resolved from one leaf
@@ -842,7 +841,7 @@ internal sealed partial class ShardRootGrain(
             for (int i = 0; i < bucket.Keys.Count; i++)
             {
                 var raw = leafResult[i];
-                // Tombstones are surfaced as null to match the single-key
+                // The live-only variant surfaces tombstones as null to match
                 // GetRawEntryAsync semantics. Already-expired entries are
                 // returned (callers filter via LwwValue.IsExpired) for
                 // parity with the single-key variant.
