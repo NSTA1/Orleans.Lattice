@@ -180,11 +180,13 @@ public sealed class ViewMaintainerRebuildIdentityTests
         var alias = First;
         h.Registry.GetEntryAsync(Logical).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry { PhysicalTreeId = alias, ShardCount = 1, MaxLeafKeys = 128, MaxInternalChildren = 128 }));
-        foreach (var candidate in new[] { First, Second, "orders-third" })
+        foreach (var candidate in new[] { First, Second, "orders-third", First })
         {
             alias = candidate;
             h.Reader.GetHeadOffsetAsync(candidate, 0, Arg.Any<CancellationToken>()).Returns(async _ =>
             {
+                Assert.That(await h.Grain.GetDurableReadPositionsAsync(candidate), Is.Empty,
+                    "an already registered candidate must regain its full hold before head capture");
                 Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }),
                     "the hold belongs to the durable bound identity, never to the last rejected candidate");
                 alias = candidate + "-moved";

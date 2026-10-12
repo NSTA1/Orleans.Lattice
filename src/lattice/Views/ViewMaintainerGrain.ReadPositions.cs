@@ -87,20 +87,15 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
     /// </summary>
     private async Task EnsureReadRegisteredAsync(string walTreeId)
     {
-        if (_registeredReadLogs.Contains(walTreeId))
-        {
-            return;
-        }
-
         // Registration can become visible before its response. Publish the hold
         // first; an old physical log's offsets cannot bound the candidate log.
-        var positions = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal)
+        var previous = _readPositions;
+        var persistedLog = previous?.RetainedWalTreeId ?? state.State.BoundPhysicalTreeId;
+        var positions = string.Equals(persistedLog, walTreeId, StringComparison.Ordinal)
             ? ToPositions(state.State.AppliedOffsets)
             : [];
         string? retainedLog = null;
         long[]? retainedPositions = null;
-        var previous = _readPositions;
-        var persistedLog = previous?.RetainedWalTreeId ?? state.State.BoundPhysicalTreeId;
         if (persistedLog is { Length: > 0 }
             && !string.Equals(persistedLog, walTreeId, StringComparison.Ordinal))
         {
@@ -113,6 +108,11 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
         }
 
         _readPositions = new ViewReadPositions(walTreeId, positions, retainedLog, retainedPositions);
+        if (_registeredReadLogs.Contains(walTreeId))
+        {
+            return;
+        }
+
         await grainFactory.GetGrain<IWalOffsetConsumerRegistryGrain>(walTreeId).RegisterAsync(context.GrainId);
         _registeredReadLogs.Add(walTreeId);
     }
