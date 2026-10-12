@@ -778,7 +778,7 @@ internal sealed partial class ViewMaintainerGrain
                 // source last-writer; dropping the prepared entry reproduces the
                 // source LWW outcome (otherwise apply-order alone would resurrect
                 // the lower-HLC atomic value as a permanent lost write).
-                if (IsSupersededByOrdinary(prepared))
+                if (!registration.Accumulative && IsSupersededByOrdinary(prepared))
                 {
                     continue;
                 }
