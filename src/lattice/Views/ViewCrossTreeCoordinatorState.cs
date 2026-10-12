@@ -18,7 +18,11 @@ internal sealed class ViewCrossTreeCoordinatorState
     /// </summary>
     [Id(0)] public List<string> WaitSet { get; set; } = [];
 
-    /// <summary>The per-view recorded ready slices, keyed by view name.</summary>
+    /// <summary>
+    /// The per-view recorded ready slices, keyed by view name. Once
+    /// <see cref="Decided"/> is persisted, their payloads and physical targets
+    /// are frozen for every retry of the same joint operation.
+    /// </summary>
     [Id(1)] public Dictionary<string, ViewCrossTreeSlice> Slices { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>

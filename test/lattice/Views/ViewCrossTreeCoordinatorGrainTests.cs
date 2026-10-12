@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Tests.Views;
 /// commit) are all asserted deterministically without an Orleans TestCluster.
 /// </summary>
 [TestFixture]
-public sealed class ViewCrossTreeCoordinatorGrainTests
+public sealed partial class ViewCrossTreeCoordinatorGrainTests
 {
     private const string OperationId = "op-xt-1";
 

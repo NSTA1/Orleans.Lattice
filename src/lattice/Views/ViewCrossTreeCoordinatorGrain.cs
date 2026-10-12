@@ -108,14 +108,18 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
                 $"'{readiness.ViewName}' that is absent from the frozen wait set.");
         }
 
-        // Record (or idempotently overwrite) this view's ready slice.
-        state.State.Slices[readiness.ViewName] = new ViewCrossTreeSlice
+        // The persisted decision fixes the payload and physical targets of the
+        // idempotent write. A retry must not replace them with later readiness.
+        if (!state.State.Decided)
         {
-            ViewName = readiness.ViewName,
-            ViewTreeId = readiness.ViewTreeId,
-            Upserts = readiness.Upserts,
-            Deletes = readiness.Deletes ?? [],
-        };
+            state.State.Slices[readiness.ViewName] = new ViewCrossTreeSlice
+            {
+                ViewName = readiness.ViewName,
+                ViewTreeId = readiness.ViewTreeId,
+                Upserts = readiness.Upserts,
+                Deletes = readiness.Deletes ?? [],
+            };
+        }
 
         // The wait set completes when every participant view has registered.
         var complete = true;
