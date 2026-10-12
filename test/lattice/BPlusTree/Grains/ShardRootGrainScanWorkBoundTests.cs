@@ -66,7 +66,7 @@ public class ShardRootGrainScanWorkBoundTests
 
         for (var i = 0; i < leafCount; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             var entries = new List<KeyValuePair<string, byte[]>>();
             for (var j = 0; j < entriesPerLeaf; j++)
             {
@@ -199,7 +199,7 @@ public class ShardRootGrainScanWorkBoundTests
         var factory = Substitute.For<IGrainFactory>();
         for (var i = 0; i < leafCount; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             // Only the final leaf yields anything; every earlier leaf is a
             // sterile visit (the shape a tombstoned or moved-away run creates).
             var entries = i == leafCount - 1

@@ -191,7 +191,7 @@ public class ShardRootGrainScanPagePartialBankingTests
                     $"k{((index * rowsPerLeaf) + r):D4}", [(byte)index]));
             }
 
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
 
             leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())

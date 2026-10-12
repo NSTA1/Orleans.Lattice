@@ -77,7 +77,7 @@ internal sealed class ScanPagePrimingHarness
         state.State.RootIsLeaf = true;
 
         var factory = Substitute.For<IGrainFactory>();
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                 Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
             .Returns(_ => harness._park_enabled

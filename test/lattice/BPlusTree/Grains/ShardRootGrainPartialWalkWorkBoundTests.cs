@@ -122,7 +122,7 @@ public class ShardRootGrainPartialWalkWorkBoundTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
 
             leaf.GetStatsAsync().Returns(_ =>
             {

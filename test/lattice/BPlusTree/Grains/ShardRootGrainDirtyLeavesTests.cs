@@ -29,7 +29,7 @@ public class ShardRootGrainDirtyLeavesTests
         state.State.RootIsLeaf = true;
 
         var factory = Substitute.For<IGrainFactory>();
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
         leaf.DeleteTrackedAsync(Arg.Any<string>()).Returns(Task.FromResult(new LeafDeleteResult { Deleted = true }));
         leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>())

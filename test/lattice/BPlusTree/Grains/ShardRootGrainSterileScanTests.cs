@@ -93,7 +93,7 @@ public class ShardRootGrainSterileScanTests
 
         for (var i = 0; i < leafCount; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             var keys = new List<string>();
             for (var j = 0; j < keysPerLeaf; j++)
                 keys.Add(KeyIn(i, j));

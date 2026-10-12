@@ -23,6 +23,15 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// discard: one <c>DiscardPendingTransactionAsync</c> per transaction id plus
 /// <c>GetNextSiblingAsync</c> -> <c>DiscardPendingTransactionsAndGetNextSiblingAsync</c>,
 /// k + 1 calls per leaf -> 1 (and one state write per leaf instead of up to k).</item>
+/// <item><see cref="Site.KeyRangeWalk"/> - the bounded leaf walk every
+/// maintenance drain advances through (compaction, merge, split and
+/// consolidation drains, snapshot copy, bounded diagnostics):
+/// <c>GetNextSiblingAsync</c> + <c>GetKeyRangeAsync</c> on every non-tail leaf ->
+/// <c>GetKeyRangeAndNextSiblingAsync</c>, 2 calls per leaf -> 1.</item>
+/// <item><see cref="Site.DeltaWalk"/> - the replication snapshot provider's
+/// tombstone capture: <c>GetDeltaSinceAsync</c> + <c>GetNextSiblingAsync</c> ->
+/// <c>GetDeltaSinceAndNextSiblingAsync</c>, 2 calls per leaf -> 1. (Its
+/// prepared-pending capture is the <see cref="Site.PendingWalk"/> shape.)</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -47,7 +56,7 @@ public class LeafChainWalkElisionBenchmarks
     private Guid[] _transactionIds = null!;
 
     /// <summary>The leaf-chain walk being measured; see the class summary.</summary>
-    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk)]
+    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk)]
     public Site Path { get; set; }
 
     /// <summary>The number of leaves in the walked chain.</summary>
@@ -91,6 +100,20 @@ public class LeafChainWalkElisionBenchmarks
                 case Site.PendingWalk:
                     total += (await _chain.GetPendingMutationsAsync(current)).Count;
                     break;
+                case Site.DeltaWalk:
+                    total += (await _chain.GetDeltaSinceAsync(current)).Count;
+                    break;
+                case Site.KeyRangeWalk:
+                {
+                    leaf = await _chain.GetNextSiblingAsync(current);
+                    if (leaf is not null)
+                    {
+                        total += await _chain.GetKeyRangeAsync(current);
+                    }
+
+                    continue;
+                }
+
                 default:
                     foreach (var id in _transactionIds)
                     {
@@ -131,6 +154,22 @@ public class LeafChainWalkElisionBenchmarks
                     break;
                 }
 
+                case Site.DeltaWalk:
+                {
+                    var (delta, next) = await _chain.GetDeltaSinceAndNextSiblingAsync(current);
+                    total += delta.Count;
+                    leaf = next;
+                    break;
+                }
+
+                case Site.KeyRangeWalk:
+                {
+                    var (range, next) = await _chain.GetKeyRangeAndNextSiblingAsync(current);
+                    total += next is null ? 0 : range;
+                    leaf = next;
+                    break;
+                }
+
                 default:
                 {
                     var (discarded, next) = await _chain.DiscardManyAndGetNextSiblingAsync(current, _transactionIds);
@@ -155,6 +194,12 @@ public class LeafChainWalkElisionBenchmarks
 
         /// <summary>A multi-transaction pending discard walk (abandoned-copy and poisoned-saga cleanup).</summary>
         DiscardWalk,
+
+        /// <summary>The bounded leaf walk's key-range + next-sibling advance (maintenance drains).</summary>
+        KeyRangeWalk,
+
+        /// <summary>A tombstone delta walk (replication snapshot provider).</summary>
+        DeltaWalk,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
@@ -192,6 +237,30 @@ public class LeafChainWalkElisionBenchmarks
         {
             await HopAsync();
             return true;
+        }
+
+        public async Task<List<int>> GetDeltaSinceAsync(int leaf)
+        {
+            await HopAsync();
+            return _payload;
+        }
+
+        public async Task<int> GetKeyRangeAsync(int leaf)
+        {
+            await HopAsync();
+            return leaf;
+        }
+
+        public async Task<(List<int> Delta, int? Next)> GetDeltaSinceAndNextSiblingAsync(int leaf)
+        {
+            await HopAsync();
+            return (_payload, Next(leaf));
+        }
+
+        public async Task<(int KeyRange, int? Next)> GetKeyRangeAndNextSiblingAsync(int leaf)
+        {
+            await HopAsync();
+            return (leaf, Next(leaf));
         }
 
         public async Task<int?> GetNextSiblingAsync(int leaf)

@@ -175,7 +175,7 @@ public partial class ShardRootGrainScanPageLeafReadCoalescingTests
         var factory = Substitute.For<IGrainFactory>();
         ParkableLeaf? chain = null;
 
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                 Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
             .Returns(call => chain!.Read(call.ArgAt<string?>(0), call.ArgAt<string?>(2)));

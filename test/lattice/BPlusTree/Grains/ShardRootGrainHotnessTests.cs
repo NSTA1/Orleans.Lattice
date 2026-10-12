@@ -27,7 +27,7 @@ public class ShardRootGrainHotnessTests
         var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: grainFactory);
 
         // Stub leaf grain for read/write paths.
-        var leafGrain = Substitute.For<IBPlusLeafGrain>();
+        var leafGrain = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leafGrain.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
         leafGrain.ExistsAsync(Arg.Any<string>()).Returns(Task.FromResult(false));
         leafGrain.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));

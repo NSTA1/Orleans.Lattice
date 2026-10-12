@@ -168,7 +168,7 @@ public partial class TreeMergeGrainTests
         // Leaf 1 splits; the right half is grafted in ahead of leaf 2 and holds
         // an entry no earlier pass could have seen.
         var rightHalf = GrainId.Create("leaf", "merge-src-leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>();
+        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
         rightHalfLeaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(new StateDelta
         {

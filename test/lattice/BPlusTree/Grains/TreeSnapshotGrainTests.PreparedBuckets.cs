@@ -4,6 +4,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -85,7 +86,7 @@ public partial class TreeSnapshotGrainTests
         state.State.LogicalTreeId = PreparedLogicalTreeId;
 
         var leafId = GrainId.Create("leaf", "prepared-source-leaf");
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>()).Returns(ci =>
         {
             order.Add("sweep");

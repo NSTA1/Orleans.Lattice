@@ -94,7 +94,7 @@ public partial class TreeSnapshotGrainTests
 
         for (int i = 0; i < leafIds.Length; i++)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>();
+            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
 
             // snapshot TTL preservation: snapshot now drains raw LwwValue

@@ -211,10 +211,11 @@ internal sealed class BoundedLeafWalk
         // The successor pointer and this leaf's bounds. The pass needs the
         // first on every leaf; since issue 2807 it reads the second on every
         // leaf as well, so that a walk abandoned by the shard-root page-fill
-        // ceiling still has a resume position to bank. The read used to be
-        // deferred to the yield point to save a round trip per leaf, which is
-        // exactly what left an abandoned walk with nothing.
-        var next = await leaf.GetNextSiblingAsync();
+        // ceiling still has a resume position to bank. Both are persisted
+        // topology read in one leaf turn, so a leaf costs one round trip to
+        // advance past rather than two.
+        var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+        var next = link.NextSibling;
         if (next is null)
         {
             _leafId = null;
@@ -225,7 +226,7 @@ internal sealed class BoundedLeafWalk
             return false;
         }
 
-        var bounds = await leaf.GetKeyRangeAsync();
+        var bounds = link.KeyRange;
 
         // The visited leaf's exclusive high bound is exactly where the next
         // leaf begins, so re-descending onto it lands on the leaf that owns

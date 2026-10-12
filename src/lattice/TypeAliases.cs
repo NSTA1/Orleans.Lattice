@@ -347,6 +347,8 @@ internal static class TypeAliases
     // read in one grain call instead of two.
     internal const string LeafLiveRawEntriesPage = "ol.lln";
     internal const string LeafPendingMutationsPage = "ol.lpn";
+    internal const string LeafChainLink = "ol.lcl";
+    internal const string LeafDeltaPage = "ol.ldn";
 
     // Atomic multi-key writes
     internal const string AtomicWriteState = "ol.aws";

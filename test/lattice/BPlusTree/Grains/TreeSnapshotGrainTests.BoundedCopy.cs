@@ -187,7 +187,7 @@ public partial class TreeSnapshotGrainTests
         var leaf2 = (await h.SourceShard.GetLeafIdForKeyAsync(SnapshotLeafResumeKey(2)))!.Value;
 
         var rightHalf = GrainId.Create("leaf", "snap-src-leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>();
+        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         h.Factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
         rightHalfLeaf.GetLiveRawEntriesAsync().Returns(Task.FromResult(new List<LwwEntry>
         {

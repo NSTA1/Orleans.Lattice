@@ -2,6 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -63,7 +64,7 @@ public partial class TombstoneCompactionGrainTests
         var leaves = new IBPlusLeafGrain[dirtyLeaves.Length];
         for (var i = 0; i < dirtyLeaves.Length; i++)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>();
+            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             grainFactory.GetGrain<IBPlusLeafGrain>(dirtyLeaves[i]).Returns(leafMock);
             leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(
                 Task.FromResult(partialAtIndex(i)

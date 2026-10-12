@@ -95,7 +95,7 @@ public sealed class ShardRootGrainDeleteSplitLinkTests
 
     private static IBPlusLeafGrain CreateLeaf(string? lowInclusive, string? highExclusive, GrainId? next)
     {
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.DeleteTrackedAsync(Arg.Any<string>())
             .Returns(Task.FromResult(new LeafDeleteResult { Deleted = true }));
         leaf.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(true));

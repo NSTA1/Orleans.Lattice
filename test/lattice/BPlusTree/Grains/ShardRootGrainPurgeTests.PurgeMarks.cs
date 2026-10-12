@@ -2,6 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -17,7 +18,7 @@ public sealed partial class ShardRootGrainPurgeTests
     {
         var key = Guid.NewGuid();
         var id = GrainId.Create("bplusleaf", key.ToString("N"));
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         harness.Factory.GetGrain<IBPlusLeafGrain>(id).Returns(leaf);
         var record = Substitute.For<ILeafRowRecordGrain>();

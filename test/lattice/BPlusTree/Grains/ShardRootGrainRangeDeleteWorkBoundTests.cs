@@ -64,7 +64,7 @@ public class ShardRootGrainRangeDeleteWorkBoundTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
 
             leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(call =>
