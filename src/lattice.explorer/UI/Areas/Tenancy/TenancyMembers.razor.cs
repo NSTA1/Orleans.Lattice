@@ -91,26 +91,33 @@ public partial class TenancyMembers : IDisposable
         _subjects = null;
         _entries = null;
         _removeError = null;
-        var token = _lifetime.Token;
+        var token = _lifetime.Renew();
+        var tenantId = TenantId;
         try
         {
             var access = Catalog.Access ?? throw new NotSupportedException();
-            var report = await access.ListAdminSubjectsAsync(TenantId, token).ConfigureAwait(true);
+            var report = await access.ListAdminSubjectsAsync(tenantId, token).ConfigureAwait(true);
+            token.ThrowIfCancellationRequested();
             IReadOnlyList<string> subjects = [.. report.Subjects.Order(StringComparer.Ordinal)];
 
             // Groups are offered only where the posture probe says the tenant's access administration is delegated to the caller.
-            var state = await TenantAccess.GetStateAsync(TenantId, token).ConfigureAwait(true);
-            _delegated = state.IsDelegated;
-            if (_delegated)
+            var state = await TenantAccess.GetStateAsync(tenantId, token).ConfigureAwait(true);
+            token.ThrowIfCancellationRequested();
+            IReadOnlyList<TenancyAdminEntry>? entries = null;
+            if (state.IsDelegated)
             {
                 var auth = Services.GetShellFacade<ILatticeAuthAdmin>();
                 await ReadDirectoryAsync(auth, token).ConfigureAwait(true);
-                _entries = await TenancyAdminEntries.ClassifyAsync(auth, TenantId, subjects, token).ConfigureAwait(true);
+                token.ThrowIfCancellationRequested();
+                entries = await TenancyAdminEntries.ClassifyAsync(auth, tenantId, subjects, token).ConfigureAwait(true);
+                token.ThrowIfCancellationRequested();
             }
 
+            _delegated = state.IsDelegated;
+            _entries = entries;
             _subjects = subjects;
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (Exception) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
@@ -132,8 +139,12 @@ public partial class TenancyMembers : IDisposable
         try
         {
             var model = await auth.GetAccessModelAsync(cancellationToken).ConfigureAwait(true);
+            cancellationToken.ThrowIfCancellationRequested();
             _directoryAvailable = model?.DirectoryAvailable == true;
             _directoryExplanation = model?.DirectoryExplanation;
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (LatticeAuthorizationDeniedException)
         {

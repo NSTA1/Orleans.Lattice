@@ -20,13 +20,15 @@ internal static class TenancyAdministrationGate
     /// <param name="navigator">The navigator.</param>
     /// <param name="workspace">The tenant the administration page is about.</param>
     /// <param name="section">The my-tenant section equivalent to the page, or <see langword="null"/> for the overview.</param>
+    /// <param name="cancellationToken">Cancels a superseded page's admission and redirect.</param>
     /// <exception cref="Exception">The standing could not be proven; classify it with <see cref="TenancyFailure.From"/>.</exception>
-    public static async Task<bool> AdmitAsync(TenancyCatalog catalog, ExplorerNavigator navigator, string workspace, string? section)
+    public static async Task<bool> AdmitAsync(TenancyCatalog catalog, ExplorerNavigator navigator, string workspace, string? section, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(navigator);
 
-        var standing = await catalog.GetStandingAsync(CancellationToken.None).ConfigureAwait(true);
+        var standing = await catalog.GetStandingAsync(cancellationToken).ConfigureAwait(true);
+        cancellationToken.ThrowIfCancellationRequested();
         if (standing.IsOperator)
         {
             return true;
