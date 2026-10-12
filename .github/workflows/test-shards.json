@@ -90,7 +90,7 @@
         "shard": "formal-tlc-convergence",
         "tlc": true,
         "includeCategories": ["TlcShardConvergence"],
-        "note": "The TLC mutation gates are CPU-bound JVM runs, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). Sizes are test-minutes summed over the cases of CI run 37322771720, which the harness runs about four at a time, so wall-clock is about a quarter. This shard holds every Replication EventualConvergence (temporal) mutant: they share one control arm, which the harness runs once per process, about 54 test-minutes (15 minutes wall-clock in that run)."
+        "note": "The TLC mutation gates are CPU-bound JVM runs, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). Sizes are test-minutes summed over the cases of CI run 37322771720, which the harness runs about four at a time, so wall-clock is about a quarter. This shard holds every Replication EventualConvergence (temporal) mutant, about 54 test-minutes (15 minutes wall-clock in that run). Mutation-specific generated config headers mean distinct mutants currently run separate cached controls."
       },
       {
         "shard": "formal-tlc-materialised-views",
@@ -138,7 +138,7 @@
         "shard": "formal-tlc-rebootstrap",
         "tlc": true,
         "includeCategories": ["TlcShardReBootstrap"],
-        "note": "The mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations, about 66 test-minutes, 60 of them ReplicationReBootstrap's. Each module's mutants share their controls, so every companion module stays whole in this shard."
+        "note": "The mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations, about 66 test-minutes, 60 of them ReplicationReBootstrap's. Companion modules stay whole in this measured group; mutation-specific headers prevent distinct mutants from sharing cached controls."
       },
       {
         "shard": "formal-tlc-replication-wal",
@@ -156,7 +156,7 @@
         "shard": "formal-tlc-atomic",
         "tlc": true,
         "includeCategories": ["TlcShardAtomic"],
-        "note": "The mutants of every AtomicCommit* module, kept whole because mutants of one module share their control arms. Variant configurations are balanced across six formal-tlc-atomic-variants-* shards because they have no shared control arms."
+        "note": "The mutants of every AtomicCommit* module, retained as a measured mutation group. Variant configurations are balanced across six formal-tlc-atomic-variants-* shards; mutation controls remain separate because generated config headers include mutation names."
       },
       {
         "shard": "formal-tlc-atomic-variants-1",
@@ -210,13 +210,13 @@
         "shard": "formal-tlc-bplus-cascade-mutations-1",
         "tlc": true,
         "includeCategories": ["TlcShardBPlusCascadeMutations1"],
-        "note": "Seven BPlusCascade mutations. The remaining six are grouped by target property in the companion shard, keeping each shared control run in one job."
+        "note": "Seven BPlusCascade mutations. The remaining six are grouped by target property in the companion shard. Distinct mutations run separate controls under the current byte-keyed cache."
       },
       {
         "shard": "formal-tlc-bplus-cascade-mutations-2",
         "tlc": true,
         "includeCategories": ["TlcShardBPlusCascadeMutations2"],
-        "note": "Six BPlusCascade parent-accounting, recovery, separator-range, and maximum-height mutations, grouped by target property to reuse each control run."
+        "note": "Six BPlusCascade parent-accounting, recovery, separator-range, and maximum-height mutations in the companion target-property group; measured costs include each mutation control."
       },
       {
         "shard": "formal-tlc-smoke",
