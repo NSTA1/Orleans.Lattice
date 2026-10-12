@@ -67,6 +67,27 @@ internal sealed partial class ViewMaintainerGrain
     private readonly Queue<Guid> _resolvedOrder = new();
     private string? _resolvedWalTreeId;
 
+    // Set when a commit terminal arrives for a batch the staging backstop
+    // abandoned (ViewCheckpointState.AbandonedTransactions): the drain answers
+    // it with a rebuild, which reads the now-committed batch from source.
+    private bool _abandonedBatchCommitted;
+
+    // Activation-thread snapshot of ViewCheckpointState.AbandonedTransactions for
+    // the drain handler (which must not touch grain state), and the ids it retired
+    // that the activation thread folds back into the persisted list.
+    private HashSet<Guid> _abandoned = [];
+    private readonly List<Guid> _abandonedRetirements = [];
+
+    // Replay fence planned by the resume-floor capture of an in-progress rebuild,
+    // persisted by the rebuild's checkpoint write (see PlanRebuildReplayAsync).
+    private RebuildReplayFence? _pendingRebuildFence;
+
+    /// <summary>
+    /// Most WAL entries per partition the rebuild resume-floor capture examines
+    /// below the head for in-flight atomic prepares it must not skip.
+    /// </summary>
+    private const int RebuildPrepareScanLimit = 1 << 16;
+
     // Per still-staged SOURCE key: how many staged transactions reference it, and
     // the highest HLC of any ordinary (non-prepared) source write seen for that
     // key while it is staged. At flush time a staged prepare whose source key has
@@ -147,6 +168,31 @@ internal sealed partial class ViewMaintainerGrain
         var txId = mutation.TransactionId;
         if (_resolved.Contains(txId))
         {
+            return;
+        }
+
+        if (IsAbandoned(txId))
+        {
+            // The backstop discarded this batch before its decision was known and
+            // the rebuild that followed could not see it, so it is never re-staged
+            // (its earlier entries are not re-read). An abort retires it; a commit
+            // means the committed batch now lives only in source state, which the
+            // drain re-reads by rebuilding.
+            if (terminalAbort)
+            {
+                _abandoned.Remove(txId);
+                _abandonedRetirements.Add(txId);
+            }
+            else if (terminalCommit)
+            {
+                _abandonedBatchCommitted = true;
+            }
+
+            if (terminalAbort || terminalCommit)
+            {
+                MarkResolved(txId);
+            }
+
             return;
         }
 
@@ -395,6 +441,7 @@ internal sealed partial class ViewMaintainerGrain
             _resolvedWalTreeId = walTreeId;
         }
 
+        SyncAbandoned();
         if (_staging.Count == 0 || _stagingReadOffsets.Count == 0
             || !string.Equals(_stagingReadWalTreeId, walTreeId, StringComparison.Ordinal))
         {
@@ -743,11 +790,230 @@ internal sealed partial class ViewMaintainerGrain
     private bool TripBackstop()
     {
         ViewAtomicStagingBackstop.Add(1, ViewTag, ViewTenantTag);
+
+        // A batch whose commit has not yet been read is undecided as far as the
+        // view knows, so the rebuild below omits it and its entries are not
+        // re-read. Remember it so a later commit terminal is answered with a
+        // rebuild rather than staged without its prepares (and held forever).
+        foreach (var (txId, tx) in _staging)
+        {
+            if (!IsComplete(tx))
+            {
+                RecordAbandoned(txId);
+            }
+        }
+
         _staging.Clear();
         _stagedSourceKeyRefCount.Clear();
         _ordinaryHlcOverStagedKey.Clear();
         return true;
     }
+
+    private bool IsAbandoned(Guid txId) => _abandoned.Contains(txId);
+
+    /// <summary>
+    /// Folds the drain handler's retirements into the persisted abandoned list and
+    /// refreshes the handler's snapshot of it. Activation thread only.
+    /// </summary>
+    private void SyncAbandoned()
+    {
+        foreach (var txId in _abandonedRetirements)
+        {
+            RetireAbandoned(txId);
+        }
+
+        _abandonedRetirements.Clear();
+        _abandoned = state.State.AbandonedTransactions is { Count: > 0 } persisted ? [.. persisted] : [];
+    }
+
+    private void RecordAbandoned(Guid txId)
+    {
+        var abandoned = state.State.AbandonedTransactions ??= [];
+        if (!abandoned.Contains(txId))
+        {
+            abandoned.Add(txId);
+            if (abandoned.Count > ResolvedCapacity)
+            {
+                abandoned.RemoveRange(0, abandoned.Count - ResolvedCapacity);
+            }
+        }
+
+        _abandoned = [.. abandoned];
+    }
+
+    private void RetireAbandoned(Guid txId)
+    {
+        _abandoned.Remove(txId);
+        if (state.State.AbandonedTransactions is { } abandoned && abandoned.Remove(txId) && abandoned.Count == 0)
+        {
+            state.State.AbandonedTransactions = null;
+        }
+    }
+
+    /// <summary>
+    /// <see langword="true"/> (once) when this pass read a commit terminal for a
+    /// batch the staging backstop abandoned; the caller rebuilds so the committed
+    /// batch is read from source state.
+    /// </summary>
+    private bool AbandonedBatchCommitted()
+    {
+        SyncAbandoned();
+        if (!_abandonedBatchCommitted)
+        {
+            return false;
+        }
+
+        _abandonedBatchCommitted = false;
+        logger.LogWarning(
+            "View '{ViewName}' read the commit of an atomic batch the staging backstop had abandoned; rebuilding to read it from source.",
+            ViewName);
+        return true;
+    }
+
+    /// <summary>
+    /// Plans how the tail resumes after a rebuild whose source scan starts at the
+    /// captured heads. The scan reflects every ordinary write and every batch
+    /// decided before it, but not a batch still in flight: such a batch's later
+    /// commit terminal lands above the head, while its prepares may sit at or
+    /// below it - unread by an earlier pass, or read and staged. Skipping them
+    /// would leave the terminal staged without its prepares, holding the
+    /// checkpoint forever and never exposing the committed batch.
+    /// <para>
+    /// The capture therefore examines each partition below its head, from the
+    /// persisted checkpoint (bounded by <see cref="RebuildPrepareScanLimit"/>), for
+    /// prepares of a batch whose terminal is not in that window, and lowers the
+    /// partition's resume floor below the earliest. It also records a replay
+    /// fence at the heads naming those batches and the still-staged ones, so the
+    /// resumed tail re-stages only them and does not re-apply any other entry
+    /// the scan already reflects. Batches the backstop abandoned are excluded.
+    /// </para>
+    /// </summary>
+    private async Task PlanRebuildReplayAsync(
+        string walTreeId,
+        IReadOnlyList<long> heads,
+        Dictionary<int, long> capturedOffsets,
+        CancellationToken cancellationToken)
+    {
+        _abandonedBatchCommitted = false;
+        _pendingRebuildFence = null;
+        SyncAbandoned();
+
+        var prepareFloors = new Dictionary<Guid, Dictionary<int, long>>();
+        var terminated = new HashSet<Guid>();
+        var boundToThisLog = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal);
+        for (var partition = 0; partition < heads.Count; partition++)
+        {
+            var last = heads[partition] - 1;
+            if (last < 0)
+            {
+                continue;
+            }
+
+            var start = Math.Max(-1, last - RebuildPrepareScanLimit);
+            if (boundToThisLog
+                && state.State.AppliedOffsets.TryGetValue(partition, out var applied)
+                && applied > start)
+            {
+                start = applied;
+            }
+
+            if (start >= last)
+            {
+                continue;
+            }
+
+            await foreach (var (offset, mutation) in commitLogReader.ReadAsync(walTreeId, partition, start, cancellationToken))
+            {
+                if (offset > last)
+                {
+                    break;
+                }
+
+                if (Classify(mutation, out var commit, out var abort) != StagingDisposition.Stage)
+                {
+                    continue;
+                }
+
+                var txId = mutation.TransactionId;
+                if (commit || abort)
+                {
+                    terminated.Add(txId);
+                    continue;
+                }
+
+                if (!prepareFloors.TryGetValue(txId, out var floors))
+                {
+                    floors = [];
+                    prepareFloors[txId] = floors;
+                }
+
+                floors.TryAdd(partition, offset);
+            }
+        }
+
+        // A batch the backstop abandoned whose terminal lies below the heads is
+        // decided before the scan, which therefore reflects it.
+        foreach (var txId in terminated)
+        {
+            RetireAbandoned(txId);
+        }
+
+        var replayed = new HashSet<Guid>(_staging.Keys);
+        foreach (var (txId, floors) in prepareFloors)
+        {
+            if (terminated.Contains(txId) || _resolved.Contains(txId) || IsAbandoned(txId))
+            {
+                continue;
+            }
+
+            replayed.Add(txId);
+            foreach (var (partition, offset) in floors)
+            {
+                if (offset - 1 < capturedOffsets[partition])
+                {
+                    capturedOffsets[partition] = offset - 1;
+                }
+            }
+        }
+
+        var fence = new Dictionary<int, long>(heads.Count);
+        var lowered = false;
+        for (var partition = 0; partition < heads.Count; partition++)
+        {
+            fence[partition] = heads[partition] - 1;
+            lowered |= capturedOffsets[partition] < heads[partition] - 1;
+        }
+
+        if (lowered)
+        {
+            _pendingRebuildFence = new RebuildReplayFence(walTreeId, fence, [.. replayed]);
+        }
+    }
+
+    /// <summary>
+    /// Persists (on the rebuild's checkpoint write) the replay fence planned by
+    /// <see cref="PlanRebuildReplayAsync"/>, or clears the fence when the resumed
+    /// tail starts at the heads and so re-reads nothing.
+    /// </summary>
+    private void ApplyRebuildReplayFence()
+    {
+        if (_pendingRebuildFence is not { } planned)
+        {
+            ClearReplayFence();
+            return;
+        }
+
+        _pendingRebuildFence = null;
+        _replayFenceOffsets = null;
+        _replayFenceStaged = null;
+        state.State.ReplayFenceWalTreeId = planned.WalTreeId;
+        state.State.ReplayFenceOffsets = planned.Offsets;
+        state.State.ReplayFenceStagedTransactions = planned.Staged;
+        state.State.ReplayFenceSupersession = null;
+    }
+
+    /// <summary>A replay fence planned by a rebuild's resume-floor capture.</summary>
+    private sealed record RebuildReplayFence(string WalTreeId, Dictionary<int, long> Offsets, List<Guid> Staged);
 
     /// <summary>
     /// The source tree's configured WAL retention ceiling, used by the staging

@@ -609,8 +609,10 @@ internal sealed partial class ViewMaintainerGrain(
         // bound or an un-terminated batch can no longer be held under the WAL
         // retention ceiling, abandon incremental staging and rebuild from
         // current committed source state (which excludes the uncommitted
-        // prepares). The rebuild owns the checkpoint and cursor for this pass.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)))
+        // prepares). Likewise when a batch the backstop abandoned has since
+        // committed: only a rebuild can read it. The rebuild owns the checkpoint
+        // and cursor for this pass.
+        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)) || AbandonedBatchCommitted())
         {
             await RebuildAsync(cancellationToken);
             return 0;

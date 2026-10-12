@@ -436,6 +436,7 @@ internal sealed partial class ViewMaintainerGrain
         state.State.ActiveGeneration = 0;
         state.State.BoundPhysicalTreeId = walTreeId;
         state.State.AppliedOffsets = capturedOffsets;
+        ApplyRebuildReplayFence();
         state.State.HighestAppliedTimestamp = highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
         await state.WriteStateAsync();
@@ -640,6 +641,7 @@ internal sealed partial class ViewMaintainerGrain
         state.State.ActiveGeneration = newGeneration;
         state.State.BoundPhysicalTreeId = built.WalTreeId;
         state.State.AppliedOffsets = built.Offsets;
+        ApplyRebuildReplayFence();
         state.State.HighestAppliedTimestamp = built.Highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
         state.State.HasPendingReclaim = true;
@@ -830,30 +832,28 @@ internal sealed partial class ViewMaintainerGrain
         var capturedOffsets = new Dictionary<int, long>(Math.Max(0, partitions));
         if (partitions <= 0)
         {
+            _pendingRebuildFence = null;
+            _abandonedBatchCommitted = false;
             return capturedOffsets;
         }
 
         // One partition has nothing to overlap: keep the direct await.
-        if (partitions == 1)
-        {
-            capturedOffsets[0] = ResumeFloor(
-                await commitLogReader.GetHeadOffsetAsync(walTreeId, 0, cancellationToken),
-                0);
-            PublishReadPositions(walTreeId, capturedOffsets);
-            return capturedOffsets;
-        }
-
-        var heads = await BoundedFanOut.RunAsync(
-            partitions,
-            BoundedFanOut.DefaultWidth,
-            partition => commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken),
-            cancellationToken);
+        var heads = partitions == 1
+            ? [await commitLogReader.GetHeadOffsetAsync(walTreeId, 0, cancellationToken)]
+            : await BoundedFanOut.RunAsync(
+                partitions,
+                BoundedFanOut.DefaultWidth,
+                partition => commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken),
+                cancellationToken);
 
         for (var partition = 0; partition < heads.Length; partition++)
         {
             capturedOffsets[partition] = ResumeFloor(heads[partition], partition);
         }
 
+        // Lower the floors below any in-flight batch's unread prepares too, and
+        // plan the replay fence the rebuild's checkpoint write persists.
+        await PlanRebuildReplayAsync(walTreeId, heads, capturedOffsets, cancellationToken);
         PublishReadPositions(walTreeId, capturedOffsets);
         return capturedOffsets;
 

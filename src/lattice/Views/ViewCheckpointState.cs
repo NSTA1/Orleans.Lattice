@@ -186,4 +186,17 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(13)]
     public Dictionary<string, HybridLogicalClock>? ReplayFenceSupersession { get; set; }
+
+    /// <summary>
+    /// Atomic transactions whose staged batch the staging backstop discarded
+    /// before their decision was known, or <see langword="null"/> when none are
+    /// outstanding. The rebuild that follows the backstop reconverges from
+    /// committed source state, which omits a batch still in flight, so a later
+    /// commit terminal for one of these ids forces another rebuild (which then
+    /// reads the committed batch from source) instead of staging a terminal
+    /// whose prepares will never be re-read. An abort terminal simply retires
+    /// the id. Bounded; the oldest ids are evicted first.
+    /// </summary>
+    [Id(14)]
+    public List<Guid>? AbandonedTransactions { get; set; }
 }
