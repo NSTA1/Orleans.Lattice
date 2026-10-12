@@ -147,14 +147,26 @@ internal sealed partial class ViewMaintainerGrain
     /// <summary>
     /// The stored last-writer-wins version of every key in <paramref name="keys"/> on
     /// the source tree <paramref name="walTreeId"/> (tombstones included;
-    /// <see cref="HybridLogicalClock.Zero"/> for a key holding no row), read with one
-    /// bounded batch per owning shard root per page. Stale routing (a split, reshard
-    /// or alias swap mid-read) refreshes the map and re-reads; any other failure
-    /// propagates and aborts the pass before anything is applied.
+    /// <see cref="HybridLogicalClock.Zero"/> for a key holding no row). See
+    /// <see cref="ReadSourceAsync{T}"/> for the batching and failure semantics.
     /// </summary>
-    private async Task<Dictionary<string, HybridLogicalClock>> ReadSourceVersionsAsync(
+    private Task<Dictionary<string, HybridLogicalClock>> ReadSourceVersionsAsync(
         string walTreeId,
         List<string> keys,
+        CancellationToken cancellationToken)
+        => ReadSourceAsync(walTreeId, keys, static (root, page) => root.GetRawVersionsAsync(page), cancellationToken);
+
+    /// <summary>
+    /// Reads <paramref name="keys"/> from the source tree <paramref name="walTreeId"/>
+    /// with <paramref name="read"/>, a positional batched shard-root read, issuing one
+    /// bounded call per owning shard root per page. Stale routing (a split, reshard or
+    /// alias swap mid-read) refreshes the map and re-reads; any other failure
+    /// propagates and aborts the pass before anything is applied.
+    /// </summary>
+    private async Task<Dictionary<string, T>> ReadSourceAsync<T>(
+        string walTreeId,
+        List<string> keys,
+        Func<IShardRootGrain, List<string>, Task<List<T>>> read,
         CancellationToken cancellationToken)
     {
         var lattice = grainFactory.GetGrain<ILattice>(walTreeId);
@@ -164,7 +176,7 @@ internal sealed partial class ViewMaintainerGrain
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                return await ReadSourceVersionsOnceAsync(routing, keys, cancellationToken);
+                return await ReadSourceOnceAsync(routing, keys, read, cancellationToken);
             }
             catch (Exception ex) when (ex is StaleShardRoutingException or StaleTreeRoutingException
                 && attempt < SourceVersionRoutingAttempts)
@@ -175,15 +187,16 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <summary>
-    /// One routing attempt of <see cref="ReadSourceVersionsAsync"/>. The per-shard
-    /// pages are dispatched through <see cref="BoundedFanOut"/>, so at most
-    /// <see cref="BoundedFanOut.DefaultWidth"/> version reads are in flight however
-    /// many keys the drain touched, and a page not yet dispatched is never sent once
+    /// One routing attempt of <see cref="ReadSourceAsync{T}"/>. The per-shard pages
+    /// are dispatched through <see cref="BoundedFanOut"/>, so at most
+    /// <see cref="BoundedFanOut.DefaultWidth"/> reads are in flight however many keys
+    /// the drain touched, and a page not yet dispatched is never sent once
     /// <paramref name="cancellationToken"/> is cancelled.
     /// </summary>
-    private async Task<Dictionary<string, HybridLogicalClock>> ReadSourceVersionsOnceAsync(
+    private async Task<Dictionary<string, T>> ReadSourceOnceAsync<T>(
         RoutingInfo routing,
         List<string> keys,
+        Func<IShardRootGrain, List<string>, Task<List<T>>> read,
         CancellationToken cancellationToken)
     {
         var byShard = new Dictionary<int, List<string>>();
@@ -210,12 +223,12 @@ internal sealed partial class ViewMaintainerGrain
         var results = await BoundedFanOut.RunAsync(
             pages.Count,
             BoundedFanOut.DefaultWidth,
-            slot => grainFactory
-                .GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{pages[slot].Shard}")
-                .GetRawVersionsAsync(pages[slot].Keys),
+            slot => read(
+                grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{pages[slot].Shard}"),
+                pages[slot].Keys),
             cancellationToken);
 
-        var versions = new Dictionary<string, HybridLogicalClock>(keys.Count, StringComparer.Ordinal);
+        var values = new Dictionary<string, T>(keys.Count, StringComparer.Ordinal);
         for (var slot = 0; slot < pages.Count; slot++)
         {
             var (shard, page) = pages[slot];
@@ -226,16 +239,16 @@ internal sealed partial class ViewMaintainerGrain
                 // attributed to keys, and guessing could drop a write the source
                 // still needs.
                 throw new InvalidOperationException(
-                    $"Shard root '{routing.PhysicalTreeId}/{shard}' returned {result?.Count ?? 0} version(s) for {page.Count} key(s).");
+                    $"Shard root '{routing.PhysicalTreeId}/{shard}' returned {result?.Count ?? 0} result(s) for {page.Count} key(s).");
             }
 
             for (var i = 0; i < page.Count; i++)
             {
-                versions[page[i]] = result[i];
+                values[page[i]] = result[i];
             }
         }
 
-        return versions;
+        return values;
     }
 
     /// <summary>
@@ -245,6 +258,13 @@ internal sealed partial class ViewMaintainerGrain
     /// range delete. Such a key's newer write survived the range delete at the
     /// source by last-writer-wins, and is either already in the view or still to be
     /// applied from the log, so removing its view row would lose it (issue #4885).
+    /// A key the source holds <b>live</b> is spared whatever its version: the range
+    /// delete tombstoned every row live in its span at its own HLC, which
+    /// last-writer-wins keeps over any write at or below it, so a live row at or below
+    /// the range is an older write that reached the source after the range ran there
+    /// (a replicated or clock-skewed arrival). The log orders it after the range, but
+    /// this pass applies writes in HLC order, so deleting the key would drop the row
+    /// for good on a single pass and roll it back on a replay (issue #WWWW).
     /// A key an atomic batch completing this pass writes at a newer version than the
     /// range is spared too, whatever the source read reports: on a replay its flip
     /// re-attaches and writes nothing, so deleting it would remove part of the
@@ -313,14 +333,52 @@ internal sealed partial class ViewMaintainerGrain
         Dictionary<string, HybridLogicalClock>? batchHlcByViewKey,
         CancellationToken cancellationToken)
     {
-        var versions = await ReadSourceVersionsAsync(walTreeId, page, cancellationToken);
-        var deletable = new List<string>(page.Count);
+        // Liveness is read BEFORE versions. A key live at the first read is
+        // spared outright; a key not live then is deleted only if the later
+        // version read still finds nothing newer than the range. A newer delete
+        // landing between the two reads therefore spares the key (it was live
+        // when this pass looked) rather than removing its row ahead of a batch
+        // whose other writes are not yet visible.
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
+        var liveEntries = await ReadSourceAsync(
+            walTreeId, page, static (root, keys) => root.GetRawEntriesAsync(keys), cancellationToken);
+        var candidates = new List<string>(page.Count);
         foreach (var key in page)
         {
-            if (versions.GetValueOrDefault(key) <= rangeTimestamp
-                && !(batchHlcByViewKey is not null
-                    && batchHlcByViewKey.TryGetValue(key, out var batchHlc)
-                    && batchHlc > rangeTimestamp))
+            if (liveEntries.GetValueOrDefault(key) is { IsTombstone: false } entry
+                && !entry.ToLwwValue().IsExpired(nowTicks))
+            {
+                // A row the source holds live was never tombstoned by this range,
+                // whatever its version: an unconstrained range delete tombstones
+                // every key live in its span at its own HLC, which last-writer-wins
+                // keeps over any write at or below it. A live version at or below
+                // the range therefore reached the source after the range was
+                // applied there (an older write arriving late), and removing its
+                // view row on a replay would roll the view back to before that
+                // write until the log re-applies it.
+                continue;
+            }
+
+            if (batchHlcByViewKey is not null
+                && batchHlcByViewKey.TryGetValue(key, out var batchHlc)
+                && batchHlc > rangeTimestamp)
+            {
+                continue;
+            }
+
+            candidates.Add(key);
+        }
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var versions = await ReadSourceVersionsAsync(walTreeId, candidates, cancellationToken);
+        var deletable = new List<string>(candidates.Count);
+        foreach (var key in candidates)
+        {
+            if (versions.GetValueOrDefault(key) <= rangeTimestamp)
             {
                 deletable.Add(key);
             }
