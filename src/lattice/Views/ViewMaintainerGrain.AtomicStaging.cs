@@ -1022,6 +1022,17 @@ internal sealed partial class ViewMaintainerGrain
                 clamped = false;
             }
 
+            // The clamp bounds only the search for unknown in-flight batches. A still
+            // staged batch is replayed whatever the window, so the scan reaches its
+            // held floor: the batches and ordinary writes between it and the window
+            // that the rebuild reflects must supersede its keys (ReflectedSupersession),
+            // or its older values overwrite them when it later completes.
+            var stagedFloor = HeldFloorForPartition(partition);
+            if (clamped && stagedFloor != long.MaxValue && stagedFloor - 1 < start)
+            {
+                start = stagedFloor - 1;
+            }
+
             if (start >= last)
             {
                 continue;
