@@ -102,11 +102,14 @@ detectors and their limits; these results do not promote unexercised source
 closure or arbitrary topology transitions to proven properties.
 
 Automatic upgrade drain admission is tested before coordinator protocol RPCs,
-with automatic resumption and retained current repair debt. A known #4902 gap
-remains: Decommission can call the new acknowledgement RPC directly while the
-gate is closed when a pending acknowledgement exists. Do not treat upgrade
-admission as fully closed until that path has a fix plus negative/restored
-controls. Liveness remains conditional on peer recovery, fair maintenance and
+with automatic resumption and retained current repair debt. Separate #4902
+correction `1c67d925` also gates public decommission, rebuild and reconcile with
+pending joint ownership/acknowledgement before RPC or state/generation effects.
+Its three pre-fix failures are restored green; the parent composed upgrade/ack
+scope passes 8/8 and adjacent replay/decommission passes 65/65. Reopened
+Decommission delivers the retained acknowledgement before an injected response
+fault, not a claimed complete rebuild/reconcile-on-reopen. Liveness remains
+conditional on peer recovery, fair maintenance and
 available staging capacity. Paired-view checks witness stable held publication
 boundaries only; independent opens may straddle a valid joint commit.
 

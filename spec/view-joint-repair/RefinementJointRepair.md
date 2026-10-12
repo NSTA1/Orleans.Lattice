@@ -93,11 +93,17 @@ original publication. These join the coordinator public-entry and manifest-cache
 controls above. No host-overridable version selector or unsupported old-binary
 downgrade is assumed safe.
 
-One upgrade caller path remains open: the source-owner identified Decommission's
-direct acknowledgement RPC as bypassing the drain admission pause when a pending
-ack exists. That #4902 follow-up has no accepted detector/fix in this mapping; do
-not treat the upgrade boundary as closed until the direct-ack path is gated and
-its negative/restored control passes.
+The public maintenance boundary is separately covered by
+`ViewMaintainerReplayFlushTests.Closed_upgrade_gate_blocks_public_maintenance_with_pending_acknowledgement_without_effects`
+for decommission, rebuild and reconcile. With pending acknowledgement and closed
+admission, each entry rejects before coordinator/tree calls or checkpoint and
+generation writes. The original three cases failed before the shared admission
+guard; the corrected eight-case upgrade/ack union and the parent's composed
+65-case replay/decommission neighbours pass. Reopening public decommission
+reaches the retained acknowledgement before an injected response fault stops
+teardown. This does not certify complete rebuild/reconcile after reopening or
+arbitrary binary downgrade. Maintenance may retry once admission reopens; it
+need not wait until every acknowledgement has already completed.
 
 ## Runtime acceptance boundary
 
