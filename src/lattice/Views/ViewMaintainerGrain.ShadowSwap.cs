@@ -214,6 +214,12 @@ internal sealed partial class ViewMaintainerGrain
     public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
     {
         using var viewWriteScope = ViewWriteContext.BeginScope();
+        await ReleaseUncommittedJointOwnershipAsync();
+        if (HasJointOwnership)
+        {
+            throw new InvalidOperationException($"View '{ViewName}' cannot reconcile before its submitted joint repair checkpoint retires.");
+        }
+
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {

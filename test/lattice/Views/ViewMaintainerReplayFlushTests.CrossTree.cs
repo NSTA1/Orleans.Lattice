@@ -49,9 +49,15 @@ public partial class ViewMaintainerReplayFlushTests
 
         public PeerGatedCoordinator Arm()
         {
+            var applied = false;
+            ArmMemoizedRepair(Grain, view);
             Grain.RegisterReadyAsync(Arg.Any<ViewCrossTreeReadiness>()).Returns(call =>
             {
                 Registrations++;
+                if (applied)
+                {
+                    return Task.FromResult(ViewCrossTreeDecision.Committed);
+                }
                 if (!PeerRegistered)
                 {
                     return Task.FromResult(ViewCrossTreeDecision.NotReady);
@@ -68,10 +74,36 @@ public partial class ViewMaintainerReplayFlushTests
                     view.Rows.Remove(key);
                 }
 
+                applied = true;
                 return Task.FromResult(ViewCrossTreeDecision.Committed);
             });
             return this;
         }
+    }
+
+    private static void ArmMemoizedRepair(IViewCrossTreeCoordinatorGrain coordinator, FakeViewTree view)
+    {
+        ViewCrossTreeReadiness? captured = null;
+        coordinator.GetRepairReadinessAsync(Arg.Any<string>()).Returns(_ => Task.FromResult(captured));
+        coordinator.RegisterRepairReadyAsync(Arg.Any<ViewCrossTreeReadiness>()).Returns(call =>
+        {
+            if (captured is null)
+            {
+                captured = call.ArgAt<ViewCrossTreeReadiness>(0);
+                foreach (var (key, value) in captured.Upserts)
+                {
+                    view.Rows[key] = value;
+                }
+
+                foreach (var key in captured.Deletes)
+                {
+                    view.Rows.Remove(key);
+                }
+            }
+
+            return Task.FromResult(ViewCrossTreeDecision.Committed);
+        });
+        coordinator.AcknowledgeRepairAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
     }
 
     [Test]

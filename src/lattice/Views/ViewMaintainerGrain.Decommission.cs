@@ -17,6 +17,13 @@ internal sealed partial class ViewMaintainerGrain
     /// <inheritdoc />
     public async Task DecommissionAsync(CancellationToken cancellationToken = default)
     {
+        await AcknowledgeRetiredJointRepairsAsync();
+        await ReleaseUncommittedJointOwnershipAsync();
+        if (HasJointOwnership)
+        {
+            throw new InvalidOperationException($"View '{ViewName}' cannot be decommissioned while a submitted joint repair owns its generation.");
+        }
+
         // Deleting a view tree is a maintainer-authorised view write (the public
         // ILattice surface rejects direct writes to view-* trees), so the whole
         // teardown runs under a view-write scope that flows on RequestContext.

@@ -101,6 +101,11 @@ public partial class MaterialisedViewCrossTreeStaleSliceTests
             "A public ordinary successor must not roll back to the stale ready tuple, even temporarily.");
         Assert.That(await (await _fixture.ActiveViewTreeAsync(viewA)).GetAsync("ka"), Is.EqualTo(successor));
         Assert.That(await (await _fixture.ActiveViewTreeAsync(viewB)).GetAsync("kb"), Is.EqualTo(Person(40, "peer-batch")));
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await maintainerB.DrainAsync();
+            await maintainerA.DrainAsync();
+        }
         Assert.That(await maintainerA.GetLagAsync(), Is.EqualTo(0));
     }
 }

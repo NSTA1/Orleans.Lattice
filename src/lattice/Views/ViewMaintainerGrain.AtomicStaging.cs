@@ -1624,7 +1624,6 @@ internal sealed partial class ViewMaintainerGrain
                 var resolved = await HandleCrossTreeBatchAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
                 if (resolved)
                 {
-                    await ReassertResolvedSliceAsync(viewTree, upserts, deletes, cancellationToken);
                     applied += upserts.Count + deletes.Count;
                     RecordFlushedPreparesOverStagedKeys(tx);
                     ReleaseStagedKeys(tx);
@@ -1787,7 +1786,7 @@ internal sealed partial class ViewMaintainerGrain
     /// repair writes the slice's source last-writer-wins outcome - every ordinary
     /// write that supersedes the batch was dropped from <paramref name="upserts"/>
     /// and <paramref name="deletes"/> - so re-applying it converges to the same
-    /// state. On a cross-tree slice the repair is per-tree, not a joint flip.
+    /// state. This path is local-only; cross-tree slices use mandatory joint repair.
     /// </summary>
     private static async Task ReassertResolvedSliceAsync(
         ILattice viewTree,

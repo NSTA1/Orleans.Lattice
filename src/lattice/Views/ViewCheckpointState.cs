@@ -221,4 +221,19 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(16)]
     public bool PendingCrossTreeReconcile { get; set; }
+
+    /// <summary>
+    /// Submitted joint operations that still own this source log and view
+    /// generation. Retirement waits for the mandatory repair and for the durable
+    /// checkpoint to cover every ordinary mutation deferred behind it.
+    /// </summary>
+    [Id(17)]
+    public Dictionary<string, ViewCrossTreeRepairHold> CrossTreeRepairHolds { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Joint repair acknowledgements owed after their checkpoints were durably
+    /// retired. A lost acknowledgement response leaves the id here for retry.
+    /// </summary>
+    [Id(18)]
+    public List<string> PendingCrossTreeRepairAcknowledgements { get; set; } = [];
 }

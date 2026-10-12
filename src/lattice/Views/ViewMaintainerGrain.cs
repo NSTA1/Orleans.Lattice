@@ -366,12 +366,15 @@ internal sealed partial class ViewMaintainerGrain(
 
         _shipViewSuppressed = false;
 
+        await AcknowledgeRetiredJointRepairsAsync();
+
         // A projection-version change means the view's logic is no longer the one
         // that built the persisted state; rebuild from current source state. An
         // accumulative (history) view is the exception: its tree is an append-only
         // log, so a version change adopts the new version forward and keeps the
         // existing rows rather than wiping and rebuilding (only an explicit
         // operator RebuildAsync clears it).
+        GuardJointProjectionVersion(registration);
         if (!string.IsNullOrEmpty(state.State.ProjectionVersion)
             && !string.Equals(state.State.ProjectionVersion, registration.ProjectionVersion, StringComparison.Ordinal))
         {
@@ -495,6 +498,15 @@ internal sealed partial class ViewMaintainerGrain(
 
         _shipViewSuppressed = false;
 
+        await AcknowledgeRetiredJointRepairsAsync();
+        GuardJointProjectionVersion(registration);
+        if (await ResumeCapturedJointRepairsAsync(cancellationToken))
+        {
+            return 0;
+        }
+
+        GuardJointStagingBudget(topologyOptions);
+
         // Heal a source physical-identity swap (restore / revert / resize / undo / remediation / set-alias) before
         // any drain work: if the alias now resolves to a different physical tree, the
         // view resets, rebuilds from the new source, and rebinds its WAL cursor. A
@@ -514,7 +526,7 @@ internal sealed partial class ViewMaintainerGrain(
         // maintainer reactivated on a keepalive tick - unpins the source WAL and
         // re-onboards via rebuild so it can no longer pin WAL retention. Disabled
         // (zero overhead) when the budget is 0 (the default).
-        if (await TryEvictForLagBudgetAsync(registration, cancellationToken))
+        if (!HasJointOwnership && await TryEvictForLagBudgetAsync(registration, cancellationToken))
         {
             return 0;
         }
@@ -546,6 +558,7 @@ internal sealed partial class ViewMaintainerGrain(
         // Hold every entry of this log the view has not durably consumed against
         // the WAL GC on every silo, before reading it (issue #4584).
         await EnsureReadRegisteredAsync(walTreeId);
+        RestoreRepairedTransactions(walTreeId);
 
         // Tail the source WAL through the shared subscriber: the cursored read,
         // fall-off-log detection, dynamic shard onboarding and back-pressure all
@@ -616,10 +629,10 @@ internal sealed partial class ViewMaintainerGrain(
         // prepares). Likewise when a batch the backstop abandoned has since
         // committed: only a rebuild can read it. The rebuild owns the checkpoint
         // and cursor for this pass.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId))
+        if (!HasCommittedJointOwnership && (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId))
             || AbandonedBatchCommitted()
             || BackstopDegradePending()
-            || await OrphanedCommittedBatchAsync(walTreeId, partitions, readFrom, advancedOffsets, cancellationToken))
+            || await OrphanedCommittedBatchAsync(walTreeId, partitions, readFrom, advancedOffsets, cancellationToken)))
         {
             await RebuildAsync(cancellationToken);
             return 0;
@@ -679,6 +692,7 @@ internal sealed partial class ViewMaintainerGrain(
         }
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
+        SetJointReadHorizon(readFrom, advancedOffsets, completedTransactions);
 
         // An accumulative view records every revision, so it never drops one.
         var batchHlcByViewKey = registration.Accumulative
@@ -689,6 +703,10 @@ internal sealed partial class ViewMaintainerGrain(
         // the stale registration cannot roll back an already-public survivor.
         var jointApplied = await FlushCompletedFilterBatchesAsync(
             viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: true);
+        if (DeferPublicationForJointRepair(walTreeId, readFrom, advancedOffsets))
+        {
+            return jointApplied;
+        }
         int appliedCount;
         if (hasRangeDelete)
         {
@@ -747,11 +765,13 @@ internal sealed partial class ViewMaintainerGrain(
         state.State.ProjectionVersion = registration.ProjectionVersion;
 
         var reconcileScheduled = PersistPendingCrossTreeReconcile();
-        if (offsetsAdvanced || appliedCount > 0 || replayFenceChanged || reconcileScheduled)
+        var repairRetired = RetireJointRepairHolds(advancedOffsets);
+        if (offsetsAdvanced || appliedCount > 0 || replayFenceChanged || reconcileScheduled || repairRetired)
         {
             LowerReadPositions(walTreeId, state.State.AppliedOffsets);
-            await state.WriteStateAsync();
+            await PersistJointStateAsync();
             PublishReadPositions(walTreeId, state.State.AppliedOffsets);
+            await AcknowledgeRetiredJointRepairsAsync();
         }
 
         var blockedAtHlc = ComputeBlockedAtHlc();
@@ -790,7 +810,9 @@ internal sealed partial class ViewMaintainerGrain(
         }
 
         await ThrowIfShipViewConsumerAsync(registration, cancellationToken);
-        var walTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
+        var walTreeId = HasJointOwnership
+            ? state.State.BoundPhysicalTreeId
+            : await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
         return await ComputeLagAsync(walTreeId, partitions, cancellationToken);
     }
@@ -937,6 +959,11 @@ internal sealed partial class ViewMaintainerGrain(
     public async Task RebuildAsync(CancellationToken cancellationToken = default)
     {
         using var viewWriteScope = ViewWriteContext.BeginScope();
+        await ReleaseUncommittedJointOwnershipAsync();
+        if (HasJointOwnership)
+        {
+            throw new InvalidOperationException($"View '{ViewName}' cannot rebuild before its submitted joint repair checkpoint retires.");
+        }
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {
@@ -1051,6 +1078,11 @@ internal sealed partial class ViewMaintainerGrain(
         ViewRegistration registration,
         CancellationToken cancellationToken)
     {
+        if (HasJointOwnership)
+        {
+            throw new InvalidOperationException($"View '{ViewName}' cannot withdraw its WAL ownership while a submitted joint round is outstanding.");
+        }
+
         if (!_shipViewSuppressed)
         {
             var currentPhysicalTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
@@ -1278,6 +1310,11 @@ internal sealed partial class ViewMaintainerGrain(
         ViewRegistration registration,
         CancellationToken cancellationToken)
     {
+        if (HasJointOwnership)
+        {
+            return false;
+        }
+
         var logical = registration.SourceTreeId;
 
         // Steady-state gate: skip the registry resolve entirely once the binding

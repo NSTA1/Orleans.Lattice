@@ -27,6 +27,7 @@ public partial class ViewMaintainerReplayFlushTests
 
         public MemoizingCoordinator Arm()
         {
+            ArmMemoizedRepair(Grain, view);
             Grain.RegisterReadyAsync(Arg.Any<ViewCrossTreeReadiness>()).Returns(call =>
             {
                 if (!Applied)
@@ -141,12 +142,21 @@ public partial class ViewMaintainerReplayFlushTests
 
         // First activation: the joint flip lands the slice, then the activation
         // crashes before its checkpoint persists.
+        var checkpoint = new FakePersistentState<ViewCheckpointState>();
+        ViewCheckpointState durable = new();
+        checkpoint.OnWriteState = written => durable = CloneCheckpoint(written);
+        checkpoint.BeforeWrite = () =>
+        {
+            if (coordinator.Applied)
+            {
+                throw new InvalidOperationException("simulated crash after the joint flip before completion persists");
+            }
+
+            return Task.CompletedTask;
+        };
         var first = Create(
             view,
-            new FakePersistentState<ViewCheckpointState>
-            {
-                ThrowOnWrite = new InvalidOperationException("simulated crash before the checkpoint persists"),
-            },
+            checkpoint,
             peer,
             coordinator.Grain);
         ArmLog(first, log);
@@ -162,13 +172,18 @@ public partial class ViewMaintainerReplayFlushTests
 
         // A fresh activation replays the whole pass; the coordinator answers the
         // redelivered registration with its memoized decision and writes nothing.
-        var second = Create(view, new FakePersistentState<ViewCheckpointState>(), peer, coordinator.Grain);
+        var second = Create(view, new FakePersistentState<ViewCheckpointState> { State = CloneCheckpoint(durable) }, peer, coordinator.Grain);
         ArmLog(second, log);
         if (!sourceVersionsReadable)
         {
             ReportNoStandaloneSourceVersions(second);
         }
 
+        await second.Grain.DrainAsync();
+
+        Assert.That(second.State.State.CrossTreeRepairHolds, Has.Count.EqualTo(1),
+            "The completed repair still owns replay until the ordinary checkpoint retires.");
+        Assert.That(second.State.State.CrossTreeRepairHolds[CrossTreeOperationId].RepairApplied, Is.True);
         await second.Grain.DrainAsync();
 
         Assert.Multiple(() =>

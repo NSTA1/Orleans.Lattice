@@ -60,11 +60,9 @@ public partial class ViewMaintainerReplayFlushTests
     public async Task A_replay_fence_left_unpassed_when_staging_empties_still_fences_the_rest_of_the_old_pass()
     {
         var view = new FakeViewTree();
-        var coordinator = new PeerGatedCoordinator(view).Arm();
         var state = new FakePersistentState<ViewCheckpointState>();
-        var peer = new ViewRegistration(PeerViewName, PeerSourceTreeId, new IdentityProjection());
 
-        // A cross-tree batch t1 (waiting on its peer), then a flushed batch t2 on k,
+        // A completed local batch t1 awaiting coherent source admission, then a flushed batch t2 on k,
         // then an older ordinary write to k the WAL logged after it. The source
         // last-writer of k is t2 (HLC 20 over 10).
         var t1 = Guid.NewGuid();
@@ -72,7 +70,7 @@ public partial class ViewMaintainerReplayFlushTests
         List<LatticeMutation> log =
         [
             Prepared(t1, OtherKey, 1, ticks: 5, size: 1, index: 0),
-            CrossTreeCommit(t1, ticks: 6),
+            Commit(t1, ticks: 6),
             Prepared(t2, 3, ticks: 20),
             Commit(t2, ticks: 21),
             Ordinary(2, ticks: 10),
@@ -81,8 +79,10 @@ public partial class ViewMaintainerReplayFlushTests
         // First activation reads the whole log: t2 flushes (k = 3, the older
         // ordinary is dropped beneath it), t1 stays staged, so the checkpoint is
         // held below t1 and the replay fence records the read head with t1 staged.
-        var first = Create(view, state, peer, coordinator.Grain);
+        var first = Create(view, state);
         ArmLog(first, log);
+        first.SourceRows.Remove(OtherKey);
+        first.SourceVersions.Remove(OtherKey);
         await first.Grain.DrainAsync();
         Assert.Multiple(() =>
         {
@@ -90,15 +90,14 @@ public partial class ViewMaintainerReplayFlushTests
             Assert.That(state.State.ReplayFenceOffsets?.GetValueOrDefault(0, -1), Is.EqualTo(4));
         });
 
-        // The peer registers and the view reactivates. Its first pass reads only
+        // The source install completes and the view reactivates. Its first pass reads only
         // up to t2's fenced prepare: t1 re-stages and resolves through the joint
-        // flip, t2 is marked resolved from its fenced prepare, and the pass stops
+        // local flip, t2 is marked resolved from its fenced prepare, and the pass stops
         // below the fence head with nothing staged.
-        coordinator.PeerRegistered = true;
-        var second = Create(view, state, peer, coordinator.Grain);
+        var second = Create(view, state);
         ArmWindowedLog(second, log, 3, 100);
         await second.Grain.DrainAsync();
-        Assert.That(view.Rows[OtherKey], Is.EqualTo(new byte[] { 1 }), "t1 resolved through the joint flip");
+        Assert.That(view.Rows[OtherKey], Is.EqualTo(new byte[] { 1 }), "t1 resolved after coherent source admission");
         Assert.That(state.State.ReplayFenceOffsets?.GetValueOrDefault(0, -1), Is.EqualTo(4),
             "resolving every staged batch cannot retire the durable fence before its unread suffix is consumed");
 

@@ -113,6 +113,22 @@ internal sealed partial class ViewMaintainerGrain
         }
 
         var versions = await ReadSourceVersionsAsync(walTreeId, [.. keys], cancellationToken);
+        foreach (var hold in state.State.CrossTreeRepairHolds.Values)
+        {
+            if (!hold.RepairApplied || !string.Equals(hold.WalTreeId, walTreeId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var (key, version) in hold.RepairSourceVersions)
+            {
+                if (keys.Contains(key) && version > versions.GetValueOrDefault(key))
+                {
+                    versions[key] = version;
+                }
+            }
+        }
+
         bool[]? drop = null;
         Dictionary<string, HybridLogicalClock>? droppedOverStaged = null;
         foreach (var span in spans)
@@ -183,6 +199,13 @@ internal sealed partial class ViewMaintainerGrain
         Func<IShardRootGrain, List<string>, Task<List<T>>> read,
         CancellationToken cancellationToken)
     {
+        var held = state.State.CrossTreeRepairHolds.Values.FirstOrDefault(
+            hold => string.Equals(hold.WalTreeId, walTreeId, StringComparison.Ordinal));
+        if (held is not null)
+        {
+            return await ReadJointSourceAsync(held, keys, read, cancellationToken);
+        }
+
         var lattice = grainFactory.GetGrain<ILattice>(walTreeId);
         var routing = await lattice.GetRoutingAsync(cancellationToken);
         for (var attempt = 1; ; attempt++)
@@ -192,7 +215,7 @@ internal sealed partial class ViewMaintainerGrain
             {
                 return await ReadSourceOnceAsync(routing, keys, read, cancellationToken);
             }
-            catch (Exception ex) when (ex is StaleShardRoutingException or StaleTreeRoutingException
+            catch (Exception ex) when ((ex is StaleShardRoutingException or StaleTreeRoutingException)
                 && attempt < SourceVersionRoutingAttempts)
             {
                 routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);

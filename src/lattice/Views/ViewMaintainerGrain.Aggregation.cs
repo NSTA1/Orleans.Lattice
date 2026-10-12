@@ -48,13 +48,14 @@ internal sealed partial class ViewMaintainerGrain
         var options = Options;
         var batchSize = options.BatchSize > 0 ? options.BatchSize : LatticeViewOptions.DefaultBatchSize;
         var sourceTreeId = registration.SourceTreeId;
-        var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
+        var walTreeId = state.State.BoundPhysicalTreeId;
         batchSize = ApplyBackpressureBatchScaling(walTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Hold every entry of this log the view has not durably consumed against
         // the WAL GC on every silo, before reading it (issue #4584).
         await EnsureReadRegisteredAsync(walTreeId);
+        RestoreRepairedTransactions(walTreeId);
 
         // Tail the source WAL through the shared subscriber (identical mechanics
         // to the filter path); the handler folds each applicable entry into the
@@ -114,10 +115,10 @@ internal sealed partial class ViewMaintainerGrain
         var backlogRead = drain.EntriesRead;
 
         // Bounded-buffer / retention backstop, identical to the filter path.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId))
+        if (!HasCommittedJointOwnership && (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId))
             || AbandonedBatchCommitted()
             || BackstopDegradePending()
-            || await OrphanedCommittedBatchAsync(walTreeId, partitions, readFrom, advancedOffsets, cancellationToken))
+            || await OrphanedCommittedBatchAsync(walTreeId, partitions, readFrom, advancedOffsets, cancellationToken)))
         {
             await RebuildAsync(cancellationToken);
             return 0;
@@ -151,8 +152,13 @@ internal sealed partial class ViewMaintainerGrain
                 completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
             GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
         }
+        SetJointReadHorizon(readFrom, advancedOffsets, completedTransactions);
         var jointApplied = await FlushCompletedAggregationBatchesAsync(
             viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: true);
+        if (DeferPublicationForJointRepair(walTreeId, readFrom, advancedOffsets))
+        {
+            return jointApplied;
+        }
 
         // Apply in ascending source-HLC order so each source key's read-before-write
         // retraction folds in source-commit order (a source key lives on one
@@ -204,11 +210,13 @@ internal sealed partial class ViewMaintainerGrain
         state.State.ProjectionVersion = registration.ProjectionVersion;
 
         var reconcileScheduled = PersistPendingCrossTreeReconcile();
-        if (offsetsAdvanced || applied > 0 || replayFenceChanged || reconcileScheduled)
+        var repairRetired = RetireJointRepairHolds(advancedOffsets);
+        if (offsetsAdvanced || applied > 0 || replayFenceChanged || reconcileScheduled || repairRetired)
         {
             LowerReadPositions(walTreeId, state.State.AppliedOffsets);
-            await state.WriteStateAsync();
+            await PersistJointStateAsync();
             PublishReadPositions(walTreeId, state.State.AppliedOffsets);
+            await AcknowledgeRetiredJointRepairsAsync();
         }
 
         var blockedAtHlc = ComputeBlockedAtHlc();
