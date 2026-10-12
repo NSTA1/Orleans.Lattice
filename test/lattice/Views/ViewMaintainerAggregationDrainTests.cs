@@ -86,7 +86,9 @@ public class ViewMaintainerAggregationDrainTests
         ArmableViewCatalog Catalog,
         FakePersistentState<ViewCheckpointState> State,
         IWalSubscriber Subscriber,
-        IWalCursorRegistry CursorRegistry);
+        IWalCursorRegistry CursorRegistry,
+        Dictionary<string, byte[]> SourceRows,
+        Dictionary<string, HybridLogicalClock> SourceVersions);
 
     private static HybridLogicalClock Clock(long ticks) => new() { WallClockTicks = ticks, Counter = 0 };
 
@@ -190,7 +192,13 @@ public class ViewMaintainerAggregationDrainTests
         // Dictionary-returning member, which the batched shard reads then
         // dereference. An empty dictionary is what a real tree returns when none
         // of the requested keys are present.
+        //
+        // The source tree answers its batched reads from SourceRows - the source's
+        // committed state - because the maintainer confirms a completed atomic
+        // batch against the source before flushing it (source-confirmation pre-pass).
         var trees = new Dictionary<string, ILattice>(StringComparer.Ordinal);
+        var sourceRows = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var sourceVersions = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
         factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(call =>
         {
             var treeId = call.ArgAt<string>(0);
@@ -199,12 +207,41 @@ public class ViewMaintainerAggregationDrainTests
                 tree = Substitute.For<ILattice>();
                 tree.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                     .Returns(Task.FromResult<byte[]?>(null));
+                var isSource = string.Equals(treeId, SourceTreeId, StringComparison.Ordinal);
                 tree.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
-                    .Returns(_ => Task.FromResult(new Dictionary<string, byte[]>(StringComparer.Ordinal)));
+                    .Returns(read => Task.FromResult(isSource
+                        ? read.ArgAt<List<string>>(0)
+                            .Where(sourceRows.ContainsKey)
+                            .ToDictionary(k => k, k => sourceRows[k], StringComparer.Ordinal)
+                        : new Dictionary<string, byte[]>(StringComparer.Ordinal)));
                 trees[treeId] = tree;
             }
             return tree;
         });
+
+        // The maintainer reads the source's stored last-writer versions to drop an
+        // ordinary write the source already superseded (#4885), or coherently
+        // confirms a completed batch's revision before publication (#4886).
+        var routing = new RoutingInfo(SourceTreeId, ShardMap.CreateDefault(1, 1));
+        var source = factory.GetGrain<ILattice>(SourceTreeId);
+        source.GetRoutingAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<RoutingInfo>(routing));
+        source.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(new ValueTask<RoutingInfo>(routing));
+        var sourceRoot = Substitute.For<IShardRootGrain>();
+        sourceRoot.GetRawVersionsAsync(Arg.Any<List<string>>())
+            .Returns(call => Task.FromResult(call.ArgAt<List<string>>(0)
+                .Select(key => sourceVersions.GetValueOrDefault(key)).ToList()));
+        sourceRoot.GetVisibleRawEntriesAsync(Arg.Any<List<string>>())
+            .Returns(call => Task.FromResult(call.ArgAt<List<string>>(0).Select(key =>
+                sourceVersions.TryGetValue(key, out var timestamp)
+                    ? (LwwEntry?)new LwwEntry
+                    {
+                        Key = key, Timestamp = timestamp,
+                        Value = sourceRows.GetValueOrDefault(key), IsTombstone = !sourceRows.ContainsKey(key),
+                    }
+                    : null).ToList()));
+        sourceRoot.GetRawEntriesAsync(Arg.Any<List<string>>())
+            .Returns(call => Task.FromResult(call.ArgAt<List<string>>(0).Select(_ => (LwwEntry?)null).ToList()));
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(sourceRoot);
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("viewmaintainer", ViewName));
@@ -243,7 +280,7 @@ public class ViewMaintainerAggregationDrainTests
             historyRowCodec: null!,
             state);
 
-        return new Harness(grain, catalog, state, subscriber, cursorRegistry);
+        return new Harness(grain, catalog, state, subscriber, cursorRegistry, sourceRows, sourceVersions);
     }
 
     /// <summary>
@@ -439,6 +476,9 @@ public class ViewMaintainerAggregationDrainTests
             },
         ]);
         var txId = Guid.NewGuid();
+        // The committed batch is the source's latest write to its key.
+        h.SourceRows["a"] = [1];
+        h.SourceVersions["a"] = Clock(5);
         ArmDrain(
             h,
             new WalDrainResult { EntriesRead = 2, HighestTimestamp = Clock(6) },
