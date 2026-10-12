@@ -133,7 +133,7 @@ public partial class TombstoneCompactionGrainTests
 
         for (int i = 0; i < leafIds.Length; i++)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>();
+            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
             leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(LeafCompactionResult.Complete(0)));
             leafMock.GetTreeIdAsync().Returns(Task.FromResult<string?>(TreeId));

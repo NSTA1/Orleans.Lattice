@@ -243,7 +243,7 @@ public partial class TreeShardConsolidationGrainTests
         for (var i = 0; i < leafEntries.Count; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
                 .Returns(_ =>
                 {

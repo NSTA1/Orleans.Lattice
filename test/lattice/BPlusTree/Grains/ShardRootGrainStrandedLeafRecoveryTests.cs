@@ -159,7 +159,7 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             var rows = new List<KeyValuePair<string, byte[]>>
             {
                 new($"k{index:D4}", new byte[] { (byte)index }),

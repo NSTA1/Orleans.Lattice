@@ -907,8 +907,11 @@ internal sealed class LatticeSnapshotProvider(
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                var delta = await leaf.GetDeltaSinceAsync(everything).ConfigureAwait(false);
-                foreach (var (key, lww) in delta.Entries)
+                // The delta and the successor pointer come back in one leaf
+                // turn. A split that lands while the consumer drains this
+                // leaf's rows only moves entries this read already captured.
+                var page = await leaf.GetDeltaSinceAndNextSiblingAsync(everything).ConfigureAwait(false);
+                foreach (var (key, lww) in page.Delta.Entries)
                 {
                     if (!lww.IsTombstone)
                     {
@@ -929,7 +932,7 @@ internal sealed class LatticeSnapshotProvider(
                     };
                 }
 
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
+                leafId = page.NextSibling;
             }
         }
     }
@@ -1015,11 +1018,13 @@ internal sealed class LatticeSnapshotProvider(
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                var pending = await leaf
-                    .GetPendingMutationsForSlotsAsync(allSlots, virtualShardCount)
+                // The pending mutations and the successor pointer come back in
+                // one leaf turn, so a leaf costs one round trip rather than two.
+                var page = await leaf
+                    .GetPendingMutationsForSlotsAndNextSiblingAsync(allSlots, virtualShardCount)
                     .ConfigureAwait(false);
 
-                foreach (var m in pending)
+                foreach (var m in page.Mutations)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
@@ -1158,7 +1163,7 @@ internal sealed class LatticeSnapshotProvider(
                     };
                 }
 
-                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
+                leafId = page.NextSibling;
             }
         }
     }

@@ -659,6 +659,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafKeyRange> GetKeyRangeAsync();
 
     /// <summary>
+    /// Returns what <see cref="GetKeyRangeAsync"/> and
+    /// <see cref="GetNextSiblingAsync"/> return, read together in one grain turn,
+    /// so a bounded leaf-chain walk that needs both to advance pays one call per
+    /// leaf instead of two. Like both of those, it answers from persisted topology
+    /// state and does not wait for a WAL replay.
+    /// </summary>
+    Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync();
+
+    /// <summary>
     /// Seeds every birth-time metadata slot on a freshly created split
     /// sibling in a single round-trip: tree id, shard index, ownership
     /// key range, and the next/prev sibling pointers. Replaces the five
@@ -800,6 +809,14 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Returns an empty delta if the caller is already up to date.
     /// </summary>
     Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion);
+
+    /// <summary>
+    /// Returns what <see cref="GetDeltaSinceAsync"/> returns together with what
+    /// <see cref="GetNextSiblingAsync"/> returns, read in one grain turn after the
+    /// delta, so a leaf-chain walk that needs both pays one call per leaf instead
+    /// of two.
+    /// </summary>
+    Task<LeafDeltaPage> GetDeltaSinceAndNextSiblingAsync(VersionVector sinceVersion);
 
     /// <summary>
     /// Returns a <see cref="StateDelta"/> containing every entry the

@@ -2,6 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -73,7 +74,7 @@ public partial class TombstoneCompactionGrainTests
         // The identity a previous batch would have persisted as an id cursor is
         // now an empty virtual activation: no tree id, no sibling. The key
         // cursor never consults it, which is the whole point.
-        var dead = Substitute.For<IBPlusLeafGrain>();
+        var dead = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         grainFactory.GetGrain<IBPlusLeafGrain>(reclaimed).Returns(dead);
         dead.GetTreeIdAsync().Returns(Task.FromResult<string?>(null));
         dead.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));

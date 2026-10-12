@@ -632,7 +632,7 @@ public partial class TreeShardSplitGrainTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leaf);
             leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
                 .Returns(_ => Task.FromResult(new StateDelta

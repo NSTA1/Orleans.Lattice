@@ -78,7 +78,7 @@ public class ShardRootGrainScanPageStallTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             var entries = sterileLeaves
                 ? new List<KeyValuePair<string, byte[]>>()
                 : new List<KeyValuePair<string, byte[]>>
@@ -185,7 +185,7 @@ public class ShardRootGrainScanPageStallTests
         state.State.RootIsLeaf = true;
 
         var factory = Substitute.For<IGrainFactory>();
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         var entries = new List<KeyValuePair<string, byte[]>>();
 
         leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
@@ -521,7 +521,7 @@ public class ShardRootGrainScanPageStallTests
             Task.FromResult<(GrainId ChildId, bool ChildrenAreLeaves)>((leafId, true)));
         factory.GetGrain<IBPlusInternalGrain>(rootId.GetGuidKey()).Returns(root);
 
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.CountAsync().Returns(_ => new TaskCompletionSource<int>(
             TaskCreationOptions.RunContinuationsAsynchronously).Task);
         leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange

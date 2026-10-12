@@ -74,7 +74,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
             shardCount: 2,
             factory: factory);
 
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         // Leaf raw-entry stub - return a non-tombstone live value so

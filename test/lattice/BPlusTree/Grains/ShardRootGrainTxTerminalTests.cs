@@ -113,7 +113,7 @@ public class ShardRootGrainTxTerminalTests
         {
             for (var i = 0; i < leafClocks.Count; i++)
             {
-                var leaf = Substitute.For<IBPlusLeafGrain>();
+                var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
                 leaf.GetClockAsync().Returns(Task.FromResult(leafClocks[i]));
                 leaf.ApplyTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>()).Returns(Task.CompletedTask);
                 var nextId = i + 1 < leafClocks.Count
@@ -135,7 +135,7 @@ public class ShardRootGrainTxTerminalTests
             // so the chain walk completes in one step. Its
             // GetClockAsync returns Zero, so the terminal HLC ticks
             // to a non-Zero value (the existing assertion).
-            var sentinelLeaf = Substitute.For<IBPlusLeafGrain>();
+            var sentinelLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             sentinelLeaf.GetClockAsync().Returns(Task.FromResult(HybridLogicalClock.Zero));
             sentinelLeaf.ApplyTxTerminalAsync(
                 Arg.Any<Guid>(),

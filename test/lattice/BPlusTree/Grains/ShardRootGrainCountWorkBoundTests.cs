@@ -81,7 +81,7 @@ public class ShardRootGrainCountWorkBoundTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             var keys = new List<string>();
             for (var j = 0; j < keysPerLeaf; j++)
                 keys.Add($"k{index:D3}-{j:D3}");

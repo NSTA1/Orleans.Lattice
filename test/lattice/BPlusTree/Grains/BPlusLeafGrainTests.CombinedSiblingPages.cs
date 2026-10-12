@@ -1,6 +1,7 @@
 using System.Text;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -81,6 +82,68 @@ public partial class BPlusLeafGrainTests
 
         Assert.ThrowsAsync<ArgumentNullException>(
             () => grain.GetPendingMutationsForSlotsAndNextSiblingAsync(null!, 4096));
+    }
+
+    [Test]
+    public async Task GetKeyRangeAndNextSiblingAsync_matches_the_separate_calls()
+    {
+        var grain = CreateGrain();
+        await grain.SetNextSiblingAsync(CombinedPageSibling);
+
+        var link = await grain.GetKeyRangeAndNextSiblingAsync();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(link.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(link.NextSibling, Is.EqualTo(await grain.GetNextSiblingAsync()));
+            Assert.That(link.NextSibling, Is.EqualTo(CombinedPageSibling));
+        });
+    }
+
+    [Test]
+    public async Task GetKeyRangeAndNextSiblingAsync_reports_null_at_the_chain_tail()
+    {
+        var grain = CreateGrain();
+
+        var link = await grain.GetKeyRangeAndNextSiblingAsync();
+
+        Assert.That(link.NextSibling, Is.Null);
+    }
+
+    [Test]
+    public async Task GetDeltaSinceAndNextSiblingAsync_matches_the_separate_calls()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", [1]);
+        await grain.SetAsync("b", [2]);
+        await grain.DeleteAsync("b");
+        await grain.SetNextSiblingAsync(CombinedPageSibling);
+
+        var page = await grain.GetDeltaSinceAndNextSiblingAsync(new VersionVector());
+        var separate = await grain.GetDeltaSinceAsync(new VersionVector());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Delta.Entries.Keys, Is.EquivalentTo(separate.Entries.Keys));
+            Assert.That(page.Delta.Entries.Keys, Is.EquivalentTo(new[] { "a", "b" }));
+            Assert.That(page.Delta.Entries["b"].IsTombstone, Is.True);
+            Assert.That(page.NextSibling, Is.EqualTo(CombinedPageSibling));
+        });
+    }
+
+    [Test]
+    public async Task GetDeltaSinceAndNextSiblingAsync_reports_null_at_the_chain_tail()
+    {
+        var grain = CreateGrain();
+        await grain.SetAsync("a", [1]);
+
+        var page = await grain.GetDeltaSinceAndNextSiblingAsync(new VersionVector());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Delta.Entries.Keys, Is.EquivalentTo(new[] { "a" }));
+            Assert.That(page.NextSibling, Is.Null);
+        });
     }
 
     [Test]

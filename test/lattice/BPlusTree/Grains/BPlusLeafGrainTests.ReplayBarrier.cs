@@ -56,6 +56,9 @@ public partial class BPlusLeafGrainTests
                 "Topology, not projection. The key range lives in persisted grain state, which is "
                 + "loaded before activation and is not what the WAL replay rebuilds.",
             ["GetNextSiblingAsync"] = "Topology: persisted sibling pointer, untouched by replay.",
+            ["GetKeyRangeAndNextSiblingAsync"] =
+                "Topology: persisted key range + sibling pointer, untouched by replay. The combined "
+                + "form of GetKeyRangeAsync and GetNextSiblingAsync, neither of which waits.",
             ["GetPrevSiblingAsync"] = "Topology: persisted sibling pointer, untouched by replay.",
             ["SetNextSiblingAsync"] =
                 "Topology write. Gating it would put the chain-relink path behind a replay, which is "
@@ -125,7 +128,7 @@ public partial class BPlusLeafGrainTests
         "CountAsync", "GetStatsAsync", "GetKeysAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         // Replication and delta seams.
-        "GetDeltaSinceAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync",
+        "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync",
         "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
         "GetOriginalPrepareStampsAsync",
         "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync",

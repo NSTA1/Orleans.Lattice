@@ -159,7 +159,7 @@ internal sealed class ScanChainRegressionHarness
         string lowKeyInclusive,
         GrainId? nextSibling)
     {
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
 
         // A fresh list per call: the scan path is entitled to own what a leaf
         // hands it, and sharing one instance across page fills would let an

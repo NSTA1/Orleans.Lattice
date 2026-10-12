@@ -2879,6 +2879,18 @@ internal sealed partial class BPlusLeafGrain(
             HighKeyExclusive = state.State.HighKeyExclusive,
         });
 
+    /// <inheritdoc />
+    public Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync() =>
+        Task.FromResult(new LeafChainLink
+        {
+            KeyRange = new LeafKeyRange
+            {
+                LowKeyInclusive = state.State.LowKeyInclusive,
+                HighKeyExclusive = state.State.HighKeyExclusive,
+            },
+            NextSibling = state.State.NextSibling,
+        });
+
     public async Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition)
     {
         await AwaitReplayBarrierAsync();
@@ -3478,6 +3490,13 @@ internal sealed partial class BPlusLeafGrain(
         return truncated
             ? LeafCompactionResult.Truncated(entriesRemoved)
             : LeafCompactionResult.Complete(entriesRemoved);
+    }
+
+    /// <inheritdoc />
+    public async Task<LeafDeltaPage> GetDeltaSinceAndNextSiblingAsync(VersionVector sinceVersion)
+    {
+        var delta = await GetDeltaSinceAsync(sinceVersion);
+        return new LeafDeltaPage { Delta = delta, NextSibling = state.State.NextSibling };
     }
 
     public async Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)

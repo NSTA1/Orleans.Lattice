@@ -64,7 +64,7 @@ public class ShardRootGrainSealFanOutTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
 
             leaf.MarkSlotsMovedAwayAsync(Arg.Any<int[]>(), Arg.Any<int>())
                 .Returns(async _ =>

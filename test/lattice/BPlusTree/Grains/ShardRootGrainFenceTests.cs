@@ -37,7 +37,7 @@ public class ShardRootGrainFenceTests
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: new LatticeOptions(), shardCount: 2, factory: factory);
 
-        var leaf = Substitute.For<IBPlusLeafGrain>();
+        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 

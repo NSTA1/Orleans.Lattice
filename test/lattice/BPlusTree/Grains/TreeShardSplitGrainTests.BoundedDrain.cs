@@ -105,7 +105,7 @@ public class TreeShardSplitGrainBoundedDrainTests
             for (var i = 0; i < leafCount; i++)
             {
                 var index = i;
-                var leaf = Substitute.For<IBPlusLeafGrain>();
+                var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
                 grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leaf);
                 leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
                     .Returns(_ => Task.FromResult(new StateDelta
@@ -365,7 +365,7 @@ public class TreeShardSplitGrainBoundedDrainTests
         // Leaf 1 splits: its right half is grafted in ahead of leaf 2 and holds
         // an entry the first pass never saw.
         var rightHalf = GrainId.Create("leaf", "src-leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>();
+        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
 
         h.Factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
         rightHalfLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())

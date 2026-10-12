@@ -193,7 +193,7 @@ public class ShardRootGrainScanPageAggregateBankingTests
         {
             var index = i;
             var key = Key(index);
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
 
             // The leaf honours the walk's lower bound, so a resumed attempt
             // sees only new ground and a double count shows up as a total

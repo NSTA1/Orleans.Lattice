@@ -110,7 +110,7 @@ public partial class TreeMergeGrainTests
 
         for (int i = 0; i < leafIds.Length; i++)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>();
+            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
 
             // TreeMergeGrain uses GetDeltaSinceAsync with an empty VersionVector

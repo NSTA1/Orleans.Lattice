@@ -3,6 +3,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Runtime;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -49,7 +50,7 @@ public class BoundedLeafWalkTests
 
         for (var i = 0; i < leafCount; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             factory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leaf);
             leaf.GetNextSiblingAsync().Returns(Task.FromResult(
                 i + 1 < leafCount ? (GrainId?)leafIds[i + 1] : null));
@@ -261,13 +262,13 @@ public class BoundedLeafWalkTests
 
         // Leaf 2 is reclaimed: its identity is now an empty virtual activation.
         // The key cursor never names it, so the walk never sees it.
-        var reclaimed = Substitute.For<IBPlusLeafGrain>();
+        var reclaimed = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         reclaimed.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         reclaimed.GetKeyRangeAsync().Returns(Task.FromResult(default(LeafKeyRange)));
         factory.GetGrain<IBPlusLeafGrain>(leafIds[2]).Returns(reclaimed);
 
         var replacement = GrainId.Create("leaf", "leaf-2-replacement");
-        var replacementLeaf = Substitute.For<IBPlusLeafGrain>();
+        var replacementLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         factory.GetGrain<IBPlusLeafGrain>(replacement).Returns(replacementLeaf);
         replacementLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(leafIds[3]));
         replacementLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
@@ -305,7 +306,7 @@ public class BoundedLeafWalkTests
         // Leaf 1, which owned [k0001, k0002), splits into [k0001, k0001m) and
         // [k0001m, k0002). The right half is grafted in before the old leaf 2.
         var rightHalf = GrainId.Create("leaf", "leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>();
+        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
         factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
         rightHalfLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(leafIds[2]));
         rightHalfLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange

@@ -77,7 +77,7 @@ public class ShardRootGrainScanChainRegressionTests
         for (var i = 0; i < n; i++)
         {
             var spec = specs[i];
-            var leaf = Substitute.For<IBPlusLeafGrain>();
+            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
             var keys = spec.Keys.ToList();
             var entries = spec.Keys
                 .Select(k => new KeyValuePair<string, byte[]>(k, ValueFor(k)))
