@@ -136,7 +136,7 @@ internal sealed partial class ViewMaintainerGrain
         if (!registration.Accumulative)
         {
             await DropWritesSupersededAtSourceAsync(
-                contributions, ordinarySpans, static c => c.SourceKey, walTreeId, cancellationToken);
+                contributions, ordinarySpans, static c => c.SourceKey, walTreeId, partitions, cancellationToken);
         }
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
@@ -160,6 +160,7 @@ internal sealed partial class ViewMaintainerGrain
         // any whose superseded key may not yet have its replacement folded in.
         await ConfirmCompletedBatchesAgainstSourceAsync(
             completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
+        GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
         applied += await FlushCompletedAggregationBatchesAsync(viewTree, registration, completedTransactions, cancellationToken);
 
         // Hold the persisted resume offset back below the lowest still-staged

@@ -883,6 +883,7 @@ internal sealed partial class ViewMaintainerGrain
         _staging.Clear();
         _stagedSourceKeyRefCount.Clear();
         _ordinaryHlcOverStagedKey.Clear();
+        _droppedSuperseders.Clear();
         return true;
     }
 

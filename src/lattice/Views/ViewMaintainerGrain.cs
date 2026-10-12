@@ -655,7 +655,7 @@ internal sealed partial class ViewMaintainerGrain(
         if (!registration.Accumulative)
         {
             await DropWritesSupersededAtSourceAsync(
-                collected, ordinarySpans, static w => w.SourceKey, walTreeId, cancellationToken);
+                collected, ordinarySpans, static w => w.SourceKey, walTreeId, partitions, cancellationToken);
         }
 
         // On an accumulative view the retention mode (read once from the source
@@ -673,6 +673,7 @@ internal sealed partial class ViewMaintainerGrain(
         // flush nor suppress an ordinary survivor this pass.
         await ConfirmCompletedBatchesAgainstSourceAsync(
             completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
+        GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
 

@@ -325,6 +325,7 @@ internal sealed partial class ViewMaintainerGrain
         _staging.Clear();
         _stagedSourceKeyRefCount.Clear();
         _ordinaryHlcOverStagedKey.Clear();
+        _droppedSuperseders.Clear();
 
         // Freshen the aggregation idempotency keys (see BuildShadowAsync) so the
         // re-accumulation mints fresh sagas rather than re-attaching to the retained
@@ -507,6 +508,7 @@ internal sealed partial class ViewMaintainerGrain
         _staging.Clear();
         _stagedSourceKeyRefCount.Clear();
         _ordinaryHlcOverStagedKey.Clear();
+        _droppedSuperseders.Clear();
 
         // Bump and durably persist the rebuild generation BEFORE re-applying so the
         // aggregation flip's idempotency keys are freshened: re-using the prior

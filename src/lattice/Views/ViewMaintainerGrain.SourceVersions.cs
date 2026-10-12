@@ -81,6 +81,7 @@ internal sealed partial class ViewMaintainerGrain
         List<OrdinaryWriteSpan> spans,
         Func<T, string?> sourceKeyOf,
         string walTreeId,
+        int partitions,
         CancellationToken cancellationToken)
     {
         if (spans.Count == 0)
@@ -113,6 +114,7 @@ internal sealed partial class ViewMaintainerGrain
 
         var versions = await ReadSourceVersionsAsync(walTreeId, [.. keys], cancellationToken);
         bool[]? drop = null;
+        Dictionary<string, HybridLogicalClock>? droppedOverStaged = null;
         foreach (var span in spans)
         {
             for (var i = span.Start; i < span.End; i++)
@@ -123,6 +125,14 @@ internal sealed partial class ViewMaintainerGrain
                     && version > span.Timestamp)
                 {
                     (drop ??= new bool[writes.Count])[i] = true;
+                    if (_stagedSourceKeyRefCount.ContainsKey(key))
+                    {
+                        droppedOverStaged ??= new(StringComparer.Ordinal);
+                        if (!droppedOverStaged.TryGetValue(key, out var seen) || span.Timestamp.CompareTo(seen) > 0)
+                        {
+                            droppedOverStaged[key] = span.Timestamp;
+                        }
+                    }
                 }
             }
         }
@@ -131,6 +141,10 @@ internal sealed partial class ViewMaintainerGrain
         {
             return;
         }
+
+        // A dropped write may be the very write a staged batch omits its key for;
+        // record it so that batch waits until the source's replacement is applied.
+        await RecordDroppedSupersedersAsync(droppedOverStaged, walTreeId, partitions, cancellationToken);
 
         var kept = 0;
         for (var i = 0; i < writes.Count; i++)
