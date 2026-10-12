@@ -74,4 +74,20 @@ public partial class LatticeSchemaRemediationGrainTests
                 && e.PublishEvents == true
                 && e.DerivedFrom == TreeId));
     }
+
+    [Test]
+    public async Task InitiateCoreAsync_reads_entry_directly_for_source_physical_tree_id()
+    {
+        var h = CreateGrain([("key", "{\"a\":1}")]);
+        h.Registry.GetEntryAsync(TreeId).Returns(new TreeRegistryEntry
+        {
+            PhysicalTreeId = "orders-physical-42",
+        });
+
+        var report = await h.Grain.StartAsync(LatticeValueTransform.Passthrough(), JsonPolicy());
+
+        Assert.That(report.Succeeded, Is.True);
+        // Verify source physical ID was derived directly from GetEntryAsync without calling ResolveAsync
+        await h.Registry.DidNotReceive().ResolveAsync(TreeId);
+    }
 }

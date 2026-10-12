@@ -908,6 +908,18 @@ internal sealed class LatticeOptionsResolver(
     }
 
     /// <summary>
+    /// Resolves the effective options for <paramref name="treeId"/> using an
+    /// already-read <paramref name="entry"/> without issuing another registry
+    /// grain call. System trees never consult the registry entry and always resolve.
+    /// </summary>
+    internal ResolvedLatticeOptions Resolve(string treeId, State.TreeRegistryEntry? entry)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        CacheMetricTreeId(treeId, entry);
+        return BuildResolved(treeId, entry);
+    }
+
+    /// <summary>
     /// Resolves the effective options for <paramref name="treeId"/>, seeding a
     /// registry row for a user tree that has none. The seed is refused, with an
     /// <see cref="InvalidOperationException"/> and no registration, for an id

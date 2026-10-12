@@ -135,6 +135,7 @@ public partial class LatticeSchemaRemediationGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         // A never-aliased source tree resolves its physical id to its own name.
         registry.ResolveAsync(TreeId).Returns(TreeId);
+        registry.GetEntryAsync(TreeId).Returns(new TreeRegistryEntry { PhysicalTreeId = TreeId });
 
         var shard = Substitute.For<IShardRootGrain>();
 

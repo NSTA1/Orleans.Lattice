@@ -31,7 +31,7 @@ public partial class TreeReshardGrainTests
 
         await registry.DidNotReceive().GetShardMapAsync(Arg.Any<string>());
         await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
-        await registry.Received().GetEntryAsync(TreeId);
+        await registry.Received(1).GetEntryAsync(TreeId);
     }
 
     [Test]
@@ -45,6 +45,20 @@ public partial class TreeReshardGrainTests
         await h.Folds[1].Received(1).StartAsync(0);
         await registry.DidNotReceive().GetShardMapAsync(Arg.Any<string>());
         await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
-        await registry.Received().GetEntryAsync(TreeId);
+        await registry.Received(1).GetEntryAsync(TreeId);
+    }
+
+    [Test]
+    public async Task ReshardAsync_reads_entry_once_for_validation_and_options()
+    {
+        var (grain, _, _, registry) = CreateGrain(
+            virtualShardCount: 16, physicalShardCount: 2,
+            existingMap: ShardMap.CreateDefault(16, 2));
+
+        await grain.ReshardAsync(4);
+
+        await registry.DidNotReceive().GetShardMapAsync(Arg.Any<string>());
+        await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
+        await registry.Received(1).GetEntryAsync(TreeId);
     }
 }

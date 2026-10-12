@@ -129,18 +129,18 @@ internal sealed class TreeReshardGrain(
                 "Target shard count must be at least 2.");
         }
 
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-
         // The ceiling is the tree's own virtual slot space, not the 4096 default:
         // an installed app can pin a smaller one, and a split needs a source that
         // owns at least two slots, so a target above the slot count can never be
         // reached and would leave the coordinator in progress indefinitely. The
         // 4096 cap still applies to a tree whose map declares more slots.
-        // One registry entry carries both the map and the physical tree the
-        // empty-tree probe and fast path address, so neither pays a separate
-        // GetShardMapAsync or ResolveAsync round trip.
+        // One registry entry carries the map, the physical tree the empty-tree
+        // probe and fast path address, and the pins for options resolution, so
+        // neither pays a separate GetShardMapAsync, ResolveAsync, or extra
+        // options registry round trip.
         var registry = grainFactory.GetLatticeRegistry();
         var entry = await registry.GetEntryAsync(TreeId);
+        var resolved = optionsResolver.Resolve(TreeId, entry);
         var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
         var currentMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
@@ -417,14 +417,14 @@ internal sealed class TreeReshardGrain(
             return;
         }
 
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
         var registry = grainFactory.GetLatticeRegistry();
 
-        // The map and the physical tree whose shards are probed below are both
-        // projections of one registry entry: read it once rather than paying
-        // GetShardMapAsync and ResolveAsync as two more serial round trips on
-        // every tick.
+        // The map, the physical tree whose shards are probed below, and the
+        // options pins are all projections of one registry entry: read it once
+        // rather than paying GetShardMapAsync, ResolveAsync, and an options
+        // resolve as separate serial round trips on every tick.
         var entry = await registry.GetEntryAsync(TreeId);
+        var resolved = optionsResolver.Resolve(TreeId, entry);
         var currentMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
 
@@ -542,7 +542,6 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     internal async Task ConsolidateAsync()
     {
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
         var registry = grainFactory.GetLatticeRegistry();
 
         // Reconcile: drop folds that finished or were abandoned, and learn the
@@ -591,11 +590,13 @@ internal sealed class TreeReshardGrain(
         // driving them inline would hold this coordinator's turn, and with it
         // every IsReshardCompleteAsync poll, for as long as they take.
 
-        // The map and the physical tree the healing-fold check below addresses
-        // are both projections of one registry entry, read once here - after
-        // the progress reads above, so the map is as fresh as it was when it
-        // had its own GetShardMapAsync round trip.
+        // The map, the physical tree the healing-fold check below addresses,
+        // and the options pins are all projections of one registry entry, read
+        // once here - after the progress reads above, so the map is as fresh as
+        // it was when it had its own GetShardMapAsync round trip, and options
+        // are resolved without a redundant registry call.
         var entry = await registry.GetEntryAsync(TreeId);
+        var resolved = optionsResolver.Resolve(TreeId, entry);
         var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
         var map = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
