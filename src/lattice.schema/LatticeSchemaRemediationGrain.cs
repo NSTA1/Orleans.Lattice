@@ -434,13 +434,15 @@ internal sealed class LatticeSchemaRemediationGrain(
 
         // Resolve the source tree's physical id BEFORE any alias swap, so cutover
         // can arm the correct (source) shards even on a resume after a partial
-        // cutover. Registry reads run under a system-origin scope.
+        // cutover. Registry reads run under a system-origin scope. Derive the
+        // physical id from the entry directly to avoid an extra RPC.
         string sourcePhysical;
         var registry = grainFactory.GetLatticeRegistry();
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             await ReserveAliasAsync();
-            sourcePhysical = await registry.ResolveAsync(TreeId);
+            var entry = await registry.GetEntryAsync(TreeId);
+            sourcePhysical = entry?.PhysicalTreeId ?? TreeId;
         }
 
         // Snapshot every field this method writes so a transient WriteStateAsync

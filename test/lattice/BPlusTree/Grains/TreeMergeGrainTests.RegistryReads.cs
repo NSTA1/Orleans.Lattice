@@ -34,4 +34,41 @@ public partial class TreeMergeGrainTests
             Assert.That(registry.ReceivedCalls().Count(), Is.EqualTo(2));
         });
     }
+
+    [Test]
+    public async Task MergeShardAsync_reads_target_entry_once_for_options_and_shard_map()
+    {
+        var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
+        SetupKeepalive(reminderRegistry);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        SetupSourceShardWithEntries(grainFactory, SourceTreeId, 0);
+        SetupTargetShardMocks(grainFactory, TargetTreeId, ShardCount);
+
+        state.State.InProgress = true;
+        state.State.SourceTreeId = SourceTreeId;
+        state.State.SourceShardCount = ShardCount;
+        state.State.SourcePhysicalTreeId = SourceTreeId;
+        state.State.TargetPhysicalTreeId = TargetTreeId;
+        state.State.SourcePhysicalShards = [0];
+        state.State.NextShardIndex = 0;
+
+        registry.ClearReceivedCalls();
+
+        await grain.RunMergePassAsync();
+
+        // Shard drain reads target registry entry once for options + shard map,
+        // without calling GetShardMapAsync or ResolveAsync.
+        Assert.Multiple(() =>
+        {
+            Assert.That(registry.ReceivedCalls().Count(c =>
+                c.GetMethodInfo().Name == nameof(ILatticeRegistry.GetShardMapAsync)), Is.Zero);
+            Assert.That(registry.ReceivedCalls().Count(c =>
+                c.GetMethodInfo().Name == nameof(ILatticeRegistry.ResolveAsync)
+                && (string)c.GetArguments()[0]! == TargetTreeId), Is.Zero);
+            Assert.That(registry.ReceivedCalls().Count(c =>
+                c.GetMethodInfo().Name == nameof(ILatticeRegistry.GetEntryAsync)
+                && (string)c.GetArguments()[0]! == TargetTreeId), Is.GreaterThanOrEqualTo(1));
+        });
+    }
 }

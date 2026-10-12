@@ -552,9 +552,12 @@ internal sealed class TreeMergeGrain(
 
         // Resolve the target tree's shard map (falling back to the default
         // identity map when the tree has no custom map persisted).
+        // Read the target registry entry once to derive both target options
+        // and its shard map, saving a redundant registry call.
         var registry = grainFactory.GetLatticeRegistry();
-        var targetResolvedOpts = await optionsResolver.ResolveAsync(TargetTreeId);
-        var targetShardMap = await registry.GetShardMapAsync(TargetTreeId)
+        var targetEntry = await registry.GetEntryAsync(TargetTreeId);
+        var targetResolvedOpts = optionsResolver.Resolve(TargetTreeId, targetEntry);
+        var targetShardMap = targetEntry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, targetResolvedOpts.ShardCount);
 
         // Walk the source leaf chain, flushing each leaf's delta through the

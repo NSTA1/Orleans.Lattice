@@ -129,18 +129,18 @@ internal sealed class TreeReshardGrain(
                 "Target shard count must be at least 2.");
         }
 
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-
         // The ceiling is the tree's own virtual slot space, not the 4096 default:
         // an installed app can pin a smaller one, and a split needs a source that
         // owns at least two slots, so a target above the slot count can never be
         // reached and would leave the coordinator in progress indefinitely. The
         // 4096 cap still applies to a tree whose map declares more slots.
-        // One registry entry carries both the map and the physical tree the
-        // empty-tree probe and fast path address, so neither pays a separate
-        // GetShardMapAsync or ResolveAsync round trip.
+        // One registry entry carries the map, the physical tree the empty-tree
+        // probe and fast path address, and the pins for options resolution, so
+        // neither pays a separate GetShardMapAsync, ResolveAsync, or extra
+        // options registry round trip.
         var registry = grainFactory.GetLatticeRegistry();
         var entry = await registry.GetEntryAsync(TreeId);
+        var resolved = optionsResolver.Resolve(TreeId, entry);
         var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
         var currentMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
@@ -210,7 +210,7 @@ internal sealed class TreeReshardGrain(
         // of for as long as it can be undone and the previous copy mirrors into
         // the resized one, shard for shard (issue #4452): refuse now, with the
         // remedy, rather than start a reshard whose every migration is refused.
-        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId))
+        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId, entry))
         {
             LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "resize_undoable"), tenantTag);
             throw new InvalidOperationException(ResizeHoldsMigrationsMessage);
@@ -399,11 +399,19 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     internal async Task MigrateAsync()
     {
+        var registry = grainFactory.GetLatticeRegistry();
+
+        // The map, the physical tree whose shards are probed below, and the
+        // options pins are all projections of one registry entry: read it once
+        // rather than paying GetShardMapAsync, ResolveAsync, and an options
+        // resolve as separate serial round trips on every tick.
+        var entry = await registry.GetEntryAsync(TreeId);
+
         // A reshard is refused up front while a resize holds shard migrations,
         // and a resize cannot start while a reshard runs, so this should never
         // fire; if it does, pause loudly rather than dispatch splits or folds
         // that will each be refused and logged only at debug (issue #4452).
-        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId))
+        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId, entry))
         {
             Logger.LogWarning(
                 "Reshard of tree {TreeId} is paused (reason {Reason}): {Message}",
@@ -413,18 +421,11 @@ internal sealed class TreeReshardGrain(
 
         if (state.State.Shrinking)
         {
-            await ConsolidateAsync();
+            await ConsolidateAsync(entry);
             return;
         }
 
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var registry = grainFactory.GetLatticeRegistry();
-
-        // The map and the physical tree whose shards are probed below are both
-        // projections of one registry entry: read it once rather than paying
-        // GetShardMapAsync and ResolveAsync as two more serial round trips on
-        // every tick.
-        var entry = await registry.GetEntryAsync(TreeId);
+        var resolved = optionsResolver.Resolve(TreeId, entry);
         var currentMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
 
@@ -540,9 +541,8 @@ internal sealed class TreeReshardGrain(
     /// tracked set can over-count but never under-count.
     /// </para>
     /// </summary>
-    internal async Task ConsolidateAsync()
+    internal async Task ConsolidateAsync(TreeRegistryEntry? preloadedEntry = null)
     {
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
         var registry = grainFactory.GetLatticeRegistry();
 
         // Reconcile: drop folds that finished or were abandoned, and learn the
@@ -591,11 +591,16 @@ internal sealed class TreeReshardGrain(
         // driving them inline would hold this coordinator's turn, and with it
         // every IsReshardCompleteAsync poll, for as long as they take.
 
-        // The map and the physical tree the healing-fold check below addresses
-        // are both projections of one registry entry, read once here - after
-        // the progress reads above, so the map is as fresh as it was when it
-        // had its own GetShardMapAsync round trip.
-        var entry = await registry.GetEntryAsync(TreeId);
+        // The map, the physical tree the healing-fold check below addresses,
+        // and the options pins are all projections of one registry entry, read
+        // once here (or reused if preloaded and no tracked folds changed) - after
+        // the progress reads above, so the map is as fresh as it was when it had
+        // its own GetShardMapAsync round trip, and options are resolved without a
+        // redundant registry call.
+        var entry = (!trackedChanged && preloadedEntry is not null)
+            ? preloadedEntry
+            : await registry.GetEntryAsync(TreeId);
+        var resolved = optionsResolver.Resolve(TreeId, entry);
         var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
         var map = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
