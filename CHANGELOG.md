@@ -79,6 +79,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Tree read ownership.** Navigating between trees discards superseded catalogue replies and not-found answers; query-only tab changes during a pending read keep the latest workspace address. ([#4903](https://github.com/NSTA1/Orleans.Lattice/issues/4903)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Tenant Access read ownership.** Concurrent same-scope posture reads wait for the answer, superseded reads cannot end current loading, and cancellation permits retry. Invalidated posture, groups and rules replies cannot overwrite fresh memoized answers. ([#4903](https://github.com/NSTA1/Orleans.Lattice/issues/4903)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Docs - Agent memory retrieval.** Repository sessions search task-relevant memories semantically first, with topic scans as fallback or for explicit completeness. Known-key recalls and action-time gotcha checks remain. ([#4894](https://github.com/NSTA1/Orleans.Lattice/pull/4894)) (`repository-wide`)
 
 - **CI - Browser shard reliability.** Browser fixtures are duration-balanced across five shards. Chromium-only shards skip unused engines; UI and coverage provisioning gets three bounded attempts with process kill deadlines and a final step timeout. ([#4894](https://github.com/NSTA1/Orleans.Lattice/pull/4894)) (`repository-wide`)

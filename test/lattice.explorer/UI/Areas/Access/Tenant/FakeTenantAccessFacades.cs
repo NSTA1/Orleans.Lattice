@@ -35,11 +35,17 @@ internal sealed class FakeTenantAccessFacades : ITenantAccessFacades
     /// <summary>Whether the policy facade is served. Defaults to <see langword="true"/>.</summary>
     public bool ServesPolicy { get; set; } = true;
 
-    /// <inheritdoc />
-    public ILatticeTenantDirectoryAdmin? Directory => ServesDirectory ? DirectoryFake : null;
+    /// <summary>A scripted directory, or the contract fake when absent.</summary>
+    public ILatticeTenantDirectoryAdmin? DirectoryOverride { get; set; }
+
+    /// <summary>A scripted policy, or the contract fake when absent.</summary>
+    public ILatticeTenantPolicyAdmin? PolicyOverride { get; set; }
 
     /// <inheritdoc />
-    public ILatticeTenantPolicyAdmin? Policy => ServesPolicy ? PolicyFake : null;
+    public ILatticeTenantDirectoryAdmin? Directory => ServesDirectory ? DirectoryOverride ?? DirectoryFake : null;
+
+    /// <inheritdoc />
+    public ILatticeTenantPolicyAdmin? Policy => ServesPolicy ? PolicyOverride ?? PolicyFake : null;
 
     /// <summary>The caller administers the tenant, and delegated administration is on.</summary>
     /// <returns>The same fakes, for chaining.</returns>
