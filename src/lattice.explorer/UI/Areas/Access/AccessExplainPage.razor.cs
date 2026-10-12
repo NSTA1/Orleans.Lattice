@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// tenant-rooted address whose access administration is delegated to the caller,
 /// the tenant's layer-aware explain instead.
 /// </summary>
-public partial class AccessExplainPage
+public partial class AccessExplainPage : IDisposable
 {
     private LatticeSubjectSelectorKind _kind = LatticeSubjectSelectorKind.User;
     private string _subject = string.Empty;
@@ -39,7 +39,8 @@ public partial class AccessExplainPage
     private AccessModelDescriptor? _model;
     private LtComboBox? _treeBox;
     private AccessSubjectPicker? _subjectPicker;
-    private bool _asked;
+    private ExplorerAddress? _loaded;
+    private readonly ComponentLifetime _load = new();
     private readonly AccessTenantGate _gate = new();
 
     [Inject]
@@ -65,33 +66,58 @@ public partial class AccessExplainPage
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
-        if (await _gate.ResolveAsync(TenantAccess, Address.Tenant).ConfigureAwait(true) || _asked)
+        var address = Address;
+        if (Equals(_loaded, address))
         {
-            // The tenant's layer-aware explain reads for itself; the question here is asked once.
             return;
         }
 
-        _asked = true;
-        _model = await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
-        ReadQuestion(Address);
+        _loaded = address;
+        var load = _load.Renew();
+        ClearAnswer();
+        _running = false;
+        ReadQuestion(address);
+        var delegated = await _gate.ResolveAsync(TenantAccess, address.Tenant).ConfigureAwait(true);
+        if (load.IsCancellationRequested || delegated)
+        {
+            return;
+        }
+
+        var model = await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
+        if (load.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _model = model;
 
         if (_subject.Length == 0)
         {
             return;
         }
 
-        if (string.Equals(Address.GetQuery(AccessRoutes.ViewQuery), AccessRoutes.PermissionsView, StringComparison.Ordinal))
+        if (string.Equals(address.GetQuery(AccessRoutes.ViewQuery), AccessRoutes.PermissionsView, StringComparison.Ordinal))
         {
-            await RunPermissionsAsync(updateAddress: false).ConfigureAwait(true);
+            await RunPermissionsAsync(updateAddress: false, load).ConfigureAwait(true);
         }
-        else if (Address.GetQuery(AccessRoutes.OperationQuery) is not null)
+        else if (address.GetQuery(AccessRoutes.OperationQuery) is not null)
         {
-            await RunExplainAsync(updateAddress: false).ConfigureAwait(true);
+            await RunExplainAsync(updateAddress: false, load).ConfigureAwait(true);
         }
     }
 
+    /// <inheritdoc />
+    public void Dispose() => _load.Leave();
+
     private void ReadQuestion(ExplorerAddress address)
     {
+        _operation = LatticeOperation.Read.ToString().ToLowerInvariant();
+        _scopeKind = AccessRuleDraft.TreeScope;
+        _tree = string.Empty;
+        _keyOrPrefix = string.Empty;
+        _subjectError = null;
+        _treeError = null;
+        _keyError = null;
         _subject = address.GetQuery(AccessRoutes.SubjectQuery) ?? string.Empty;
         _kind = string.Equals(address.GetQuery(AccessRoutes.KindQuery), "group", StringComparison.Ordinal)
             ? LatticeSubjectSelectorKind.Group
@@ -145,9 +171,19 @@ public partial class AccessExplainPage
 
     private Task EffectivePermissionsAsync() => RunPermissionsAsync(updateAddress: true);
 
-    private async Task RunExplainAsync(bool updateAddress)
+    private async Task RunExplainAsync(bool updateAddress, CancellationToken load = default)
     {
+        if (updateAddress)
+        {
+            load = _load.Renew();
+        }
+
         if (!TryReadScope(out var scope) | !ValidateSubject() || (updateAddress && !await ConfirmPickersAsync(checkTree: _scopeKind != AccessRuleDraft.ClusterScope).ConfigureAwait(true)))
+        {
+            return;
+        }
+
+        if (load.IsCancellationRequested)
         {
             return;
         }
@@ -155,38 +191,58 @@ public partial class AccessExplainPage
         var operation = AccessRuleFormat.Operations.First(option => option.Value == _operation).Flag;
         await RunAsync(async () =>
         {
-            var explanation = await Catalog.Admin.ExplainAsync(_subject.Trim(), operation, scope!, _kind).ConfigureAwait(true);
+            var explanation = await Catalog.Admin.ExplainAsync(_subject.Trim(), operation, scope!, _kind, load).ConfigureAwait(true);
+            if (load.IsCancellationRequested)
+            {
+                return;
+            }
+
             _explanation = explanation;
             _matched = AccessRuleFormat.InPrecedenceOrder(explanation.MatchedRules);
-        }).ConfigureAwait(true);
+        }, load).ConfigureAwait(true);
 
-        if (updateAddress)
+        if (updateAddress && !load.IsCancellationRequested)
         {
             UpdateAddress(permissions: false);
         }
     }
 
-    private async Task RunPermissionsAsync(bool updateAddress)
+    private async Task RunPermissionsAsync(bool updateAddress, CancellationToken load = default)
     {
+        if (updateAddress)
+        {
+            load = _load.Renew();
+        }
+
         if (!ValidateSubject() || (updateAddress && !await ConfirmPickersAsync(checkTree: false).ConfigureAwait(true)))
         {
             return;
         }
 
+        if (load.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var scope = Address.Tenant;
         await RunAsync(async () =>
         {
-            var permissions = await Catalog.Admin.EffectivePermissionsAsync(_subject.Trim(), _kind).ConfigureAwait(true);
+            var permissions = await Catalog.Admin.EffectivePermissionsAsync(_subject.Trim(), _kind, load).ConfigureAwait(true);
+            if (load.IsCancellationRequested)
+            {
+                return;
+            }
+
             _permissions = permissions;
 
             // At a tenant-rooted address only the tenant's own rules are listed; the
             // cluster-wide ones that also apply are counted, and every other
             // tenant's are left out.
-            var scope = Address.Tenant;
             _matched = AccessRuleFormat.InPrecedenceOrder([.. permissions.Rules.Where(rule => AccessCatalog.Lists(scope, rule.Scope.TreeId))]);
             _outOfScope = scope is null ? 0 : permissions.Rules.Count(rule => AccessRuleFormat.IsClusterWide(rule.Scope));
-        }).ConfigureAwait(true);
+        }, load).ConfigureAwait(true);
 
-        if (updateAddress)
+        if (updateAddress && !load.IsCancellationRequested)
         {
             UpdateAddress(permissions: true);
         }
@@ -199,17 +255,25 @@ public partial class AccessExplainPage
         return tree && subject;
     }
 
-    private async Task RunAsync(Func<Task> ask)
+    private void ClearAnswer()
     {
-        _running = true;
         _failure = null;
         _explanation = null;
         _permissions = null;
         _matched = [];
         _outOfScope = 0;
+    }
+
+    private async Task RunAsync(Func<Task> ask, CancellationToken load)
+    {
+        _running = true;
+        ClearAnswer();
         try
         {
             await ask().ConfigureAwait(true);
+        }
+        catch (Exception) when (load.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
@@ -217,7 +281,10 @@ public partial class AccessExplainPage
         }
         finally
         {
-            _running = false;
+            if (!load.IsCancellationRequested)
+            {
+                _running = false;
+            }
         }
     }
 
@@ -286,7 +353,9 @@ public partial class AccessExplainPage
             }
         }
 
-        Navigator.NavigateTo(Navigator.Canonicalize(address.WithTenant(Address.Tenant)), replace: true);
+        var target = Navigator.Canonicalize(address.WithTenant(Address.Tenant));
+        _loaded = target;
+        Navigator.NavigateTo(target, replace: true);
     }
 
     private string OutOfScopeText => _outOfScope == 1 ? "1 cluster-wide rule also applies." : $"{_outOfScope} cluster-wide rules also apply.";
