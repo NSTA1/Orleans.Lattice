@@ -121,9 +121,10 @@ lattice	formal-tlc-view-fence	deterministic	0.81
 lattice	formal-tlc-view-horizon	deterministic	2.08
 lattice	formal-tlc-view-aggregation	deterministic	1.59
 lattice	formal-tlc-view-rebind	deterministic	1.96
-# ReadyClosure whole no-build command 94.2000658s; SourceAdmission 153.2529778s; Java17, 1 JVM, 2 CPU, Xmx1800MiB, all paired controls included.
+# ReadyClosure whole no-build command 94.2000658s; SourceAdmission overlay extension 239.8378192s (26 cases, including paired controls).
+# Java17, 1 JVM, 2 CPU, Xmx1800MiB; shared-host measurements, not isolated performance comparisons.
 lattice	formal-tlc-view-ready-closure	deterministic	1.57
-lattice	formal-tlc-view-source-admission	deterministic	2.55
+lattice	formal-tlc-view-source-admission	deterministic	4.00
 # ResolvedIdentity whole no-build command 61.3854248s; Java17, 1 JVM, 2 CPU, Xmx1800MiB, all sixteen paired controls included.
 lattice	formal-tlc-view-resolved-identity	deterministic	1.03
 lattice	formal-tlc-tree-lifecycle	deterministic	1.6

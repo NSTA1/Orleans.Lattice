@@ -79,7 +79,7 @@ single-property control; no skipped run is counted as evidence.
 | `MaterialisedViewAggregation` | 24,072 | 7,176 (`Delete`) | 18 | 20 | Partial |
 | `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 20 | 22 | Yes |
 | `MaterialisedViewReadyClosure` | 46,846 | 39,651 (`History`); 31,577 (`TwoConsumers`) | 12 | 15 | Pending |
-| `MaterialisedViewSourceAdmission` | 20,184 | 836 (`CrossTree`); 14,904 (`History`); 660 (`PendingSource`) | 18 | 22 | Pending |
+| `MaterialisedViewSourceAdmission` | 22,720 | 836 (`CrossTree`); 16,412 (`History`); 660 (`PendingSource`); 1,028 (`PendingOverlay`) | 21 | 26 | Pending |
 | `MaterialisedViewResolvedIdentity` | 196 | 52 (`SameLog`); 60 (`FailedCandidate`); 49 (`LostCandidate`) | 16 | 20 | Yes |
 
 The fence companion checks an established two-batch prefix, source-HLC winners
@@ -127,10 +127,14 @@ two-consumer variant permits independent lag, not a simultaneous cross-view flip
 The source-admission companion separates commit decision, source application and
 terminal arrival. It checks coherent timestamp/value/tombstone identity, absent
 or older source lag, actually applied replacement entitlement, history bypass and
-an abstract expected-participant certificate. Neither companion models physical
-transaction-ID reuse after rebind (#4895), which the identity companion isolates,
-and neither certifies logical committed
-source visibility before leaf terminal application. See the
+an abstract expected-participant certificate. A separate pending-row/decision
+capture distinguishes an older materialised row from a committed undrained newer
+prepare, even when their bytes match. Raw-only confirmation, premature metadata
+removal and a lost pending decision each have paired discriminators. The logical
+per-row source seam is accepted, but composed maintainer admission remains Pending;
+no transaction-atomic whole-source snapshot is claimed. Neither companion models
+physical transaction-ID reuse after rebind (#4895), which the identity companion
+isolates. See the
 [staging composition contract and limits](../../spec/view-staging/README.md).
 
 Each companion has a dedicated deterministic-only TLC shard. The fence/horizon
@@ -141,10 +145,13 @@ one JVM slot, two visible CPUs and an 1800 MB heap cap. These are whole-command
 costs including paired controls, not sums of tests waiting for a shared JVM slot.
 The combined four-companion harness also passes all 71 cases after the main
 rebase, in 316.566 seconds with one JVM slot, two visible CPUs and an 1800 MB
-heap cap. Independent ready-closure/source-admission commands passed all 37
-cases in 94.200 and 153.253 seconds respectively, with one JVM slot, two visible
-CPUs and an 1800 MiB heap cap; peak heap was not measured. These are finite-model
-measurements, not production acceptance or predicted CI costs.
+heap cap. Independent ready-closure/source-admission commands passed all 41
+cases in 94.200 and 239.838 seconds respectively, with one JVM slot, two visible
+CPUs and an 1800 MiB heap cap; the latter includes the pending-overlay extension
+and all 21 paired mutation controls. Peak heap was not measured. Some structural
+checking overlapped the admission run on the shared host, so these are finite-model
+measurements, not isolated performance comparisons, production acceptance or
+predicted CI costs.
 The resolved-identity independent command passed all 20 cases in 61.385 seconds
 under the same one-JVM/two-CPU/1800 MiB limit, including its sixteen paired controls.
 A green finite model is not a production refinement certificate: the acceptance
