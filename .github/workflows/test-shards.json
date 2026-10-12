@@ -125,7 +125,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardMaterialisedViewRebind"],
-        "note": "MaterialisedViewRebind base, NoCrash and nineteen paired mutants: 21/21 cases, zero skips. Independent one-JVM/two-CPU/1800MB no-build command measured 86.815s including distinct mutation-specific controls; captured source/floor publication and late alias movement."
+        "note": "MaterialisedViewRebind base, NoCrash and twenty paired mutants: 22/22 cases, zero skips. Independent one-JVM/two-CPU/1800MB no-build command measured 117.545s including distinct mutation-specific controls; captured source/floor publication, late alias movement and simultaneous bound/candidate floor protection."
       },
       {
         "shard": "formal-tlc-anti-entropy",
