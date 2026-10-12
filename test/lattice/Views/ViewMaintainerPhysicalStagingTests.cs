@@ -352,6 +352,10 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
                 .Returns(call => Task.FromResult(h._heads[call.ArgAt<string>(0)]));
             reader.ReadAsync(Arg.Any<string>(), 0, Arg.Any<long>(), Arg.Any<CancellationToken>())
                 .Returns(call => h.ReadHistoryAsync(call.ArgAt<string>(0), call.ArgAt<long>(2)));
+            reader.ReadFilteredAsync(Arg.Any<string>(), Arg.Is(0), Arg.Any<long>(), Arg.Any<long>(),
+                    Arg.Any<int>(), Arg.Any<WalKeyFilter>(), Arg.Any<CancellationToken>())
+                .Returns(call => h.ReadHistoryAsync(call.ArgAt<string>(0), call.ArgAt<long>(2),
+                    call.ArgAt<long>(3), call.ArgAt<int>(4)));
             var subscriber = Substitute.For<IWalSubscriber>();
             subscriber.DrainAsync(Arg.Any<WalSubscriptionContext>(), Arg.Any<IWalSubscriptionHandler>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
@@ -384,11 +388,13 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             return h;
         }
 
-        private async IAsyncEnumerable<(long Offset, LatticeMutation Mutation)> ReadHistoryAsync(string tree, long from)
+        private async IAsyncEnumerable<(long Offset, LatticeMutation Mutation)> ReadHistoryAsync(
+            string tree, long from, long through = long.MaxValue, int maxExamined = int.MaxValue)
         {
             HistoryReads.Add((tree, from));
             await Task.Yield();
-            foreach (var entry in _logs.GetValueOrDefault(tree, []).Where(x => x.Offset > from).OrderBy(x => x.Offset))
+            foreach (var entry in _logs.GetValueOrDefault(tree, [])
+                .Where(x => x.Offset > from && x.Offset <= through).OrderBy(x => x.Offset).Take(maxExamined))
             {
                 HistoryEntries.Add((tree, entry.Offset));
                 yield return entry;

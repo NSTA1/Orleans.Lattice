@@ -1481,14 +1481,9 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
-            await foreach (var (offset, mutation) in commitLogReader.ReadAsync(
-                walTreeId, partition, from, cancellationToken))
+            await foreach (var (offset, mutation) in commitLogReader.ReadFilteredAsync(
+                walTreeId, partition, from, checkpoint, budget - examined, default, cancellationToken))
             {
-                if (offset > checkpoint)
-                {
-                    break;
-                }
-
                 examined++;
                 tx.OrphanPrepareSearchOffsets[partition] = offset;
                 if (mutation.IsPrepared && mutation.TransactionId == txId && mutation.AtomicBatchSize > 0)
