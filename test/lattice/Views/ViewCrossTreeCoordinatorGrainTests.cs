@@ -28,6 +28,7 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
         public required IGrainFactory GrainFactory { get; init; }
         public required FakePersistentState<ViewCrossTreeCoordinatorState> State { get; init; }
         public required IReminderRegistry Reminders { get; init; }
+        public required IViewJointRepairAdmissionGate AdmissionGate { get; init; }
     }
 
     private static Harness CreateGrain(
@@ -41,6 +42,8 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(new LatticeOptions());
+        var admissionGate = Substitute.For<IViewJointRepairAdmissionGate>();
+        admissionGate.IsOpenAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
 
         state ??= new FakePersistentState<ViewCrossTreeCoordinatorState>
         {
@@ -52,10 +55,15 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
             grainFactory,
             reminderRegistry,
             optionsMonitor,
+            admissionGate,
             NullLogger<ViewCrossTreeCoordinatorGrain>.Instance,
             state);
 
-        return new Harness { Grain = grain, GrainFactory = grainFactory, State = state, Reminders = reminderRegistry };
+        return new Harness
+        {
+            Grain = grain, GrainFactory = grainFactory, State = state,
+            Reminders = reminderRegistry, AdmissionGate = admissionGate,
+        };
     }
 
     private static ViewCrossTreeReadiness Readiness(

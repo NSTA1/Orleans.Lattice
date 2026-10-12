@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Lattice.Tests.Views.LegacySerialization;
 using Orleans.Lattice.Views;
@@ -138,5 +139,45 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
         Assert.That(oldPeer.Degraded, Is.True);
         Assert.That(oldPeer.RequiresRepair, Is.False);
         Assert.That(h.State.State.Slices.ContainsKey("b"), Is.False);
+    }
+
+    [Test]
+    public async Task RegisterReadyAsync_closed_cluster_gate_does_not_mint_an_operation_or_block_legacy_cleanup()
+    {
+        var state = new FakePersistentState<ViewCrossTreeCoordinatorState> { RecordExistsValue = false };
+        var h = CreateGrain(state);
+        h.AdmissionGate.IsOpenAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(false));
+        var waiting = await h.Grain.RegisterReadyAsync(Readiness("a", "new-a", ["a", "b"]));
+        Assert.Multiple(() =>
+        {
+            Assert.That(waiting.Applied, Is.False);
+            Assert.That(waiting.Degraded, Is.False);
+            Assert.That(state.WriteCount, Is.Zero);
+            Assert.That(state.State.RepairProtocolVersion, Is.Zero);
+            Assert.That(state.State.Slices, Is.Empty);
+            Assert.That(state.State.WaitSet, Is.Empty);
+        });
+        Assert.That(await h.Grain.GetRepairProtocolVersionAsync(), Is.Null);
+        h.AdmissionGate.IsOpenAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
+        await h.Grain.RegisterReadyAsync(Readiness("a", "new-a", ["a", "b"]));
+        Assert.That(await h.Grain.GetRepairProtocolVersionAsync(), Is.EqualTo(1));
+
+        var legacy = CreateGrain(new FakePersistentState<ViewCrossTreeCoordinatorState>
+        {
+            State = ReadReleasedAppliedState(),
+        });
+        legacy.AdmissionGate.IsOpenAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(false));
+        var completed = await legacy.Grain.RegisterReadyAsync(Readiness("a", "old-a", ["a", "b"]));
+        Assert.That(completed.RequiresRepair, Is.False);
+        Assert.That(completed.Applied, Is.True);
+        await legacy.Grain.ReceiveReminder("view-cross-tree-retention", default);
+        Assert.That(legacy.State.RecordExists, Is.False);
+        await legacy.AdmissionGate.DidNotReceive().IsOpenAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void Coordinator_advertises_the_capability_its_actual_admission_path_enforces()
+    {
+        Assert.That(typeof(IViewJointRepairCapable).IsAssignableFrom(typeof(ViewCrossTreeCoordinatorGrain)), Is.True);
     }
 }

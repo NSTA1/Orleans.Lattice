@@ -39,10 +39,12 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    IViewJointRepairAdmissionGate admissionGate,
     ILogger<ViewCrossTreeCoordinatorGrain> logger,
     [PersistentState("view-cross-tree", LatticeOptions.StorageProviderName)]
     IPersistentState<ViewCrossTreeCoordinatorState> state)
-    : TtlGrain<ViewCrossTreeCoordinatorGrain>(context, reminderRegistry, logger), IViewCrossTreeCoordinatorGrain
+    : TtlGrain<ViewCrossTreeCoordinatorGrain>(context, reminderRegistry, logger),
+        IViewCrossTreeCoordinatorGrain, IViewJointRepairCapable
 {
     private const string RetentionReminderName = "view-cross-tree-retention";
     private bool _protocolObserved;
@@ -149,6 +151,13 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         }
         if (_durableProtocolVersion is null)
         {
+            if (!await admissionGate.IsOpenAsync())
+            {
+                Logger.LogDebug(
+                    "View cross-tree coordinator {Key}: new repair admission awaits compatible cluster membership.",
+                    GrainContext.GrainId.Key);
+                return ViewCrossTreeDecision.NotReady;
+            }
             state.State.RepairProtocolVersion = ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion;
         }
 
