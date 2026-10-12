@@ -80,10 +80,13 @@ internal sealed partial class ViewMaintainerGrain
     /// <see langword="true"/> when <paramref name="tx"/> may flush now, with any key
     /// the source no longer holds at its prepared value recorded in
     /// <see cref="StagedTransaction.SourceSupersededKeys"/>; <see langword="false"/>
-    /// to defer the whole batch to a later pass. Only last-writer-wins prepares on
-    /// keys no other staged batch references are checked: a CRDT delta or merge is
-    /// folded rather than replaced, and overlapping staged batches are ordered by
-    /// <see cref="RecordFlushedPreparesOverStagedKeys"/>.
+    /// to defer the whole batch to a later pass. Only last-writer-wins prepares are
+    /// checked: a CRDT delta or merge is folded rather than replaced. A key another
+    /// staged batch also prepares is checked too:
+    /// <see cref="RecordFlushedPreparesOverStagedKeys"/> orders overlapping batches
+    /// against each other, but neither batch records an ordinary write logged before
+    /// both prepares, and with independently ordered HLCs that write can be newer
+    /// than both.
     /// </summary>
     private async Task<bool> ConfirmStagedBatchAgainstSourceAsync(
         string walTreeId,
@@ -99,8 +102,7 @@ internal sealed partial class ViewMaintainerGrain
             if (prepared.Delta is not null
                 || prepared.IsMerge
                 || IsSupersededByOrdinary(prepared)
-                || tx.SourceSupersededKeys?.Contains(prepared.Key) == true
-                || _stagedSourceKeyRefCount.GetValueOrDefault(prepared.Key) > 1)
+                || tx.SourceSupersededKeys?.Contains(prepared.Key) == true)
             {
                 continue;
             }
