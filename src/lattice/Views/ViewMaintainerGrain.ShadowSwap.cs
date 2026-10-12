@@ -383,7 +383,9 @@ internal sealed partial class ViewMaintainerGrain
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
             sourceKeys,
             RebuildFanOutWidth,
-            k => sourceTree.GetWithVersionAsync(k, cancellationToken),
+            k => string.Equals(sourceTreeId, walTreeId, StringComparison.Ordinal)
+                ? sourceTree.GetWithVersionAsync(k, cancellationToken)
+                : ReadPhysicalSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
             cancellationToken))
         {
             var key = sourceKeys[index++];
@@ -572,7 +574,9 @@ internal sealed partial class ViewMaintainerGrain
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
             sourceKeys,
             RebuildFanOutWidth,
-            k => sourceTree.GetWithVersionAsync(k, cancellationToken),
+            k => string.Equals(sourceTreeId, walTreeId, StringComparison.Ordinal)
+                ? sourceTree.GetWithVersionAsync(k, cancellationToken)
+                : ReadPhysicalSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
             cancellationToken))
         {
             var key = sourceKeys[index++];
