@@ -65,6 +65,7 @@ internal sealed partial class ViewMaintainerGrain
     // abort terminal) is dropped rather than re-staged into a phantom batch.
     private readonly HashSet<Guid> _resolved = new();
     private readonly Queue<Guid> _resolvedOrder = new();
+    private string? _resolvedWalTreeId;
 
     // Per still-staged SOURCE key: how many staged transactions reference it, and
     // the highest HLC of any ordinary (non-prepared) source write seen for that
@@ -385,6 +386,15 @@ internal sealed partial class ViewMaintainerGrain
     /// </summary>
     private IReadOnlyDictionary<int, long> DrainReadCheckpoints(string walTreeId, Dictionary<int, long> persisted)
     {
+        if (!string.Equals(_resolvedWalTreeId, walTreeId, StringComparison.Ordinal))
+        {
+            // Scope deduplication to the log actually tailed, not a candidate
+            // binding that a failed rebuild may have left in mutable state.
+            _resolved.Clear();
+            _resolvedOrder.Clear();
+            _resolvedWalTreeId = walTreeId;
+        }
+
         if (_staging.Count == 0 || _stagingReadOffsets.Count == 0
             || !string.Equals(_stagingReadWalTreeId, walTreeId, StringComparison.Ordinal))
         {
