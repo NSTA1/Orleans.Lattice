@@ -35,6 +35,12 @@ be quiet about one.
 | [`backup/`](backup/README.md) | `BackupProvenance` | What a backup chain records: per-origin provenance, the empty-origin rule and the chain's HLC frontier. |
 | [`backup/`](backup/README.md) | `BackupRestore` | A coordinated restore across regions, its per-record admission, and the replication that resumes after it. |
 | [`backup/`](backup/README.md) | `BackupCutover` | A local shadow-cutover restore and its revert: alias and map moved together, stale-routing redirects, the alias reservation. |
+| [`tree-lifecycle/`](tree-lifecycle/README.md) | `TreeLifecycle` | Sparse resize and undo, grow/shrink reshard physical bindings, shadow restore/revert, lifecycle reservations and phase-boundary recovery. |
+| [`tree-lifecycle/`](tree-lifecycle/README.md) | `TreeLifecycleAdmission` | Publish-before-read resize/migration/bootstrap interlocks and durable replication clearance for resize undo. |
+| [`materialised-views/`](materialised-views/README.md) | `MaterialisedViewTail` | View drain/checkpoint, physical WAL pins, trim/fall-off/rebuild, source identity changes and generation reclamation. |
+| [`anti-entropy/`](anti-entropy/README.md) | `AntiEntropy` | Digest-driven detection/localisation, gated repair, replay/fallback and recovery across source identity changes. |
+| [`aliasing/`](aliasing/README.md) | `AliasRouting` | Durable shared alias moves, atomic routing rows, owned per-alias fences, stale recovery and ABA revision checks. |
+| [`aliasing/`](aliasing/README.md) | `AliasRevert` | Superseded/racing restore revert, physical expected-state fences, deletion admission and physically bound split/fold publication. |
 | [`wal/`](wal/README.md) | `WalDurability` | The leaf WAL durability lifecycle under crash-anywhere recovery: append, out-of-order flush, per-leaf read checkpoints whose persist can fail, snapshots, durable pins and the GC trim they bound. |
 | [`wal/`](wal/README.md) | `WalMove` | A WAL partition moving between storage providers: fence, quiesced copy, placement switch and shard crash. |
 | [`bplustree/`](bplustree/README.md) | `SplitLink` | A leaf split completing on the donor, the shard root recording and applying the child link, and a root crash between them. |
@@ -268,6 +274,20 @@ exhaustive checks. Release-line pull requests and pushes, integration-branch
 pushes, and nightly coverage run the exhaustive shards. `Publish` verifies that
 the exact tag SHA has a successful release-line `build-and-test` run before it
 can publish, so its per-package test matrix can skip repeating TLC.
+
+Only the dedicated `SpecModuleCases.TlcModules`, `TlcMutations` and
+`TlcVariants` sources attach TLC shard categories. The generic module sources
+remain untagged: structural discovery, mutation and refinement gates must run
+even when policy skips exhaustive JVM work. The regression for #4852 pins both
+the source boundary and equal case populations.
+
+The materialised-view tail, anti-entropy, tree-lifecycle and alias bases,
+variants and mutants have dedicated deterministic-only shards rather than
+entering the TLC catch-all. Measured item durations feed the existing matrix
+bin-packer; adding a JVM shard must not add empty Coyote or Chaos work items.
+The control cache hashes the complete generated configuration, including its
+mutation-specific header, so distinct mutants currently run separate controls
+even when they target the same property.
 
 Every lane that runs .NET tests has to do the same, because the `Tlc` category
 is selected by any ordinary filter rather than opted into by name, and the
