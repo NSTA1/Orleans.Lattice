@@ -29,10 +29,10 @@ namespace Orleans.Lattice.Views;
 /// accumulator slot(s) are therefore flipped to their final byte-state together
 /// in one all-or-nothing <see cref="IAggregationViewStore.SetManyAtomicAsync"/>,
 /// keyed by a deterministic operation id derived from the contribution identity:
-/// a replay either dedups the saga outright or recomputes a net-zero delta from
-/// the already-advanced membership pointer, so the numeric accumulator can never
-/// double-count. That same flip persists the affected group identities until
-/// their public values are rematerialised, so losing the flip response cannot
+/// a replay completes the durable publication intent and skips an exact
+/// already-installed membership, rather than submitting the changed regrouping
+/// key set under the original saga identity. That same flip persists the affected
+/// group identities until their public values are rematerialised, so losing the flip response cannot
 /// strand a prior group or a retracted group's public value.
 /// <c>min</c> / <c>max</c> / <c>set-union</c> mutate their inverse
 /// map by <c>map[sourceKey]=entry</c> / <c>map.Remove(sourceKey)</c>, which is
@@ -149,9 +149,8 @@ internal sealed class AggregationApplier(
     // source HLC). Because
     // the flip moves membership and accumulators as a unit, a mid-drain crash
     // plus a full-batch WAL replay is self-correcting:
-    //   * if the flip committed, membership shows the NEW contribution, so a
-    //     replay computes retract(new) + add(new) = a net-zero accumulator delta
-    //     (and the deterministic operationId dedups the saga outright); and
+    //   * if the flip committed, its intent completes and exact NEW membership
+    //     skips the replay, preserving the original operation's key set; and
     //   * if it did not commit, membership shows OLD and the first-time
     //     computation is reproduced exactly.
     // The non-atomic legacy path (increment, then write membership separately)
@@ -164,8 +163,18 @@ internal sealed class AggregationApplier(
         var sourceKey = contribution.SourceKey;
         await CompletePendingNumericMaterialisationAsync(sourceKey, cancellationToken);
         var membershipKey = MembershipKey(sourceKey);
-        var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
         var newGroup = contribution.GroupKey;
+        var membership = EncodeMembership(new MembershipRow(newGroup, contribution.Numeric, contribution.Member));
+        var priorBytes = await store.GetAsync(membershipKey, cancellationToken);
+        if (priorBytes is not null && priorBytes.AsSpan().SequenceEqual(membership))
+        {
+            // A committed regroup changed which slots a retry would submit under
+            // the same operation id. Its intent is complete and its exact desired
+            // membership is installed, so there is no numeric effect to reissue.
+            return;
+        }
+
+        MembershipHead? prior = priorBytes is null || IsEmpty(priorBytes) ? null : DecodeMembershipHead(priorBytes);
 
         // Accumulate every touched slot's final row in memory. A contribution
         // touches at most two accumulator keys - the retracted old-group slot and
@@ -219,7 +228,7 @@ internal sealed class AggregationApplier(
         entries.Add(new KeyValuePair<string, byte[]>(newKey, SlotValue(newRow)));
         entries.Add(new KeyValuePair<string, byte[]>(
             membershipKey,
-            EncodeMembership(new MembershipRow(newGroup, contribution.Numeric, contribution.Member))));
+            membership));
         entries.Add(new KeyValuePair<string, byte[]>(
             NumericMaterialisationKey(sourceKey),
             EncodeNumericMaterialisation(newGroup, oldGroup is not null && oldGroup != newGroup ? oldGroup : null)));
