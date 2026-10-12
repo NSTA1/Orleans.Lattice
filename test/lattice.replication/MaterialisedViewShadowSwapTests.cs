@@ -302,7 +302,8 @@ public class MaterialisedViewShadowSwapTests
         // next generation's tree without ever swapping. The active generation is
         // unchanged, so reads keep serving the old fully-built tree. The maintainer
         // capability scope authorises this otherwise-forbidden direct view write.
-        var shadowId = $"{activeId}#g1";
+        Assert.That(activeId, Is.EqualTo(LatticeViewTrees.ComposeTreeId(view)));
+        var shadowId = LatticeViewTrees.ComposeTreeId(view, 1);
         using (ViewWriteContext.BeginScope())
         {
             await ViewGrain(shadowId).SetAsync("orphan", Person(99, "orphan"));
@@ -320,6 +321,8 @@ public class MaterialisedViewShadowSwapTests
 
         await Assert.MultipleAsync(async () =>
         {
+            Assert.That(await maintainer.GetActiveTreeIdAsync(), Is.EqualTo(shadowId),
+                "the retry must reuse the exact interrupted generation");
             Assert.That(await latticeView.GetAsync("a"), Is.EqualTo(Person(30, "a")));
             Assert.That(await latticeView.GetAsync("b"), Is.EqualTo(Person(40, "b")));
             Assert.That(await latticeView.GetAsync("orphan"), Is.Null, "The orphaned key must not survive the rebuild.");
