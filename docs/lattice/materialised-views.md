@@ -373,6 +373,15 @@ the new source never had, so a rebuild is required for correctness. A view
 that first activates over a source whose alias already resolves to a different
 physical tree likewise builds from that tree's current state rather than
 replaying its log.
+A rebuild captures one physical source with its resume floor, scans that source,
+and publishes the generation, physical binding and offsets together. If a source
+move is observed before publication validation, the rebuild rejects its stale
+candidate. Validation is not a registry lock: a later alias move may still allow
+the coherent captured generation to publish, after which a subsequent rebind
+heals it. The maintainer never labels the captured scan with a newly resolved
+physical identity. A failed checkpoint leaves recovery governed by the persisted
+tuple; a committed checkpoint whose response is lost resumes that committed
+physical tuple after reactivation.
 
 The retained cursor, consumer registration and lag report follow that same
 physical WAL binding, for both filter and aggregation views. A position from
