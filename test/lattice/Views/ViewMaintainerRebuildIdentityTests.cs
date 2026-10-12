@@ -225,6 +225,30 @@ public sealed class ViewMaintainerRebuildIdentityTests
         Assert.That(await h.Grain.GetDurableReadPositionsAsync(Second), Is.EqualTo(new long[] { 2 }));
     }
 
+    [Test]
+    public async Task Rebuild_revisiting_original_bound_log_after_failed_publication_keeps_its_durable_read_floor()
+    {
+        var h = Create(moveSource: false, bound: Retired);
+        h.State.State.AppliedOffsets[0] = 7;
+        await ((IGrainBase)h.Grain).OnActivateAsync(CancellationToken.None);
+        h.Reader.GetHeadOffsetAsync(First, 0, Arg.Any<CancellationToken>()).Returns(Task.FromResult(20L));
+        h.State.ThrowOnWrite = new TimeoutException("new-log checkpoint not committed");
+        Assert.ThrowsAsync<TimeoutException>(async () => await h.Grain.RebuildAsync());
+        Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(19));
+        h.Registry.GetEntryAsync(Logical).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { PhysicalTreeId = Retired, ShardCount = 1, MaxLeafKeys = 128, MaxInternalChildren = 128 }));
+        h.Reader.GetHeadOffsetAsync(Retired, 0, Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }),
+                "new-log offsets from a failed write cannot advance the old log's durable floor");
+            return await Task.FromException<long>(new OperationCanceledException("stop at the observed head-capture boundary"));
+        });
+
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await h.Grain.RebuildAsync());
+
+        Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
+    }
+
     private static Harness Create(bool afterValidation = false, bool moveSource = true, string bound = First)
     {
         var physical = First;

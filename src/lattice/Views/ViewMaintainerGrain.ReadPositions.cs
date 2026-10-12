@@ -92,7 +92,10 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
         var previous = _readPositions;
         var persistedLog = previous?.RetainedWalTreeId ?? state.State.BoundPhysicalTreeId;
         var positions = string.Equals(persistedLog, walTreeId, StringComparison.Ordinal)
-            ? ToPositions(state.State.AppliedOffsets)
+            ? (string.Equals(previous?.RetainedWalTreeId, walTreeId, StringComparison.Ordinal)
+                ? previous!.RetainedPositions
+                : string.Equals(previous?.WalTreeId, walTreeId, StringComparison.Ordinal) ? previous!.Positions : null)
+                ?? ToPositions(state.State.AppliedOffsets)
             : [];
         string? retainedLog = null;
         long[]? retainedPositions = null;
