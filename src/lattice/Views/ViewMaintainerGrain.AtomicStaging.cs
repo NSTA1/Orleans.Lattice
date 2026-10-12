@@ -82,6 +82,10 @@ internal sealed partial class ViewMaintainerGrain
     // persisted by the rebuild's checkpoint write (see PlanRebuildReplayAsync).
     private RebuildReplayFence? _pendingRebuildFence;
 
+    // Cross-tree operations whose registered slice the staging backstop discarded,
+    // degraded at their coordinator before the backstop rebuild runs.
+    private readonly List<string> _backstopDiscardedCrossTree = [];
+
     /// <summary>
     /// Most WAL entries per partition the rebuild resume-floor capture examines
     /// below the head for in-flight atomic prepares it must not skip.
@@ -657,7 +661,6 @@ internal sealed partial class ViewMaintainerGrain
         state.State.ReplayFenceSupersession = null;
         return true;
     }
-
     private static bool SameEntries<TKey, TValue>(Dictionary<TKey, TValue>? persisted, Dictionary<TKey, TValue> live)
         where TKey : notnull
     {
@@ -795,11 +798,20 @@ internal sealed partial class ViewMaintainerGrain
         // view knows, so the rebuild below omits it and its entries are not
         // re-read. Remember it so a later commit terminal is answered with a
         // rebuild rather than staged without its prepares (and held forever).
+        // A complete cross-tree batch may already have registered its slice with
+        // the joint coordinator. The rebuild reads current source state, so a later
+        // joint flip of that registered slice would land older values over it:
+        // remember the operation so the caller degrades it before rebuilding.
         foreach (var (txId, tx) in _staging)
         {
             if (!IsComplete(tx))
             {
                 RecordAbandoned(txId);
+            }
+            else if (tx.CrossTreeOperationId is { } operationId
+                && ComputeViewWaitSet(tx.CrossTreeParticipants ?? []).Count > 1)
+            {
+                _backstopDiscardedCrossTree.Add(operationId);
             }
         }
 
@@ -807,6 +819,35 @@ internal sealed partial class ViewMaintainerGrain
         _stagedSourceKeyRefCount.Clear();
         _ordinaryHlcOverStagedKey.Clear();
         return true;
+    }
+
+    /// <summary>
+    /// Terminally degrades, at the joint coordinator, every cross-tree operation
+    /// whose registered slice the staging backstop just discarded, so no later
+    /// joint flip lands that stale slice over the rebuild that follows. When the
+    /// joint flip has already been applied it landed before the rebuild, which
+    /// then supersedes it, so nothing further is needed. An operation is retired
+    /// only once the coordinator has answered, so a failed call is retried by the
+    /// next backstop rebuild.
+    /// </summary>
+    private async Task DegradeBackstopDiscardedCrossTreeAsync()
+    {
+        while (_backstopDiscardedCrossTree.Count > 0)
+        {
+            var operationId = _backstopDiscardedCrossTree[^1];
+            var decision = await grainFactory
+                .GetGrain<IViewCrossTreeCoordinatorGrain>(operationId)
+                .RegisterDegradedAsync(ViewName);
+            if (!decision.Applied)
+            {
+                ViewCrossTreeJointViolation.Add(1, ViewTag, ViewTenantTag);
+                logger.LogWarning(
+                    "View '{ViewName}' degraded cross-tree operation '{OperationId}' to per-tree-slice atomicity because the staging backstop discarded its registered slice.",
+                    ViewName, operationId);
+            }
+
+            _backstopDiscardedCrossTree.RemoveAt(_backstopDiscardedCrossTree.Count - 1);
+        }
     }
 
     private bool IsAbandoned(Guid txId) => _abandoned.Contains(txId);

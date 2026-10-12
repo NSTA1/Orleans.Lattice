@@ -108,6 +108,7 @@ internal sealed partial class ViewMaintainerGrain
         // Bounded-buffer / retention backstop, identical to the filter path.
         if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)) || AbandonedBatchCommitted())
         {
+            await DegradeBackstopDiscardedCrossTreeAsync();
             await RebuildAsync(cancellationToken);
             return 0;
         }

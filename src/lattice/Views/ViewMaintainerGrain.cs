@@ -614,6 +614,7 @@ internal sealed partial class ViewMaintainerGrain(
         // and cursor for this pass.
         if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)) || AbandonedBatchCommitted())
         {
+            await DegradeBackstopDiscardedCrossTreeAsync();
             await RebuildAsync(cancellationToken);
             return 0;
         }
