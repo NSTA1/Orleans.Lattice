@@ -115,9 +115,10 @@ cross-tree decision routing, or the complete distributed transaction protocol.
 
 `Plan` abstracts a clamped WAL scan by a deterministic partition cut. It checks
 both discovered undecided entries and omitted prepares, not every byte-budget
-distribution or every retention gap. The retained-history tape has no retention
-gap and no physical-log rebind; if an entry has expired before this same-log
-bounded read, the model makes no recovery claim. `Scan` abstracts a completed
+distribution or every retention gap. The fixed retained-history mask exercises
+one missing prepare and a complete cardinality-witness gap, but not arbitrary
+retention changes during the bounded read or physical-log rebind. Recovery is
+not claimed when every positive cardinality witness is gone. `Scan` abstracts a completed
 source scan as one action; generation visibility and trim/rebind are the tail
 model's. There is one transaction, no abort, no ordinary competing write, no
 aggregation fold, and no cross-tree coordinator. Those interactions belong to

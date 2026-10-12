@@ -118,7 +118,7 @@
 lattice	formal-tlc	deterministic	9.1
 lattice	formal-tlc-materialised-views	deterministic	5.7
 lattice	formal-tlc-view-fence	deterministic	0.81
-lattice	formal-tlc-view-horizon	deterministic	2.08
+lattice	formal-tlc-view-horizon	deterministic	3.27
 lattice	formal-tlc-view-aggregation	deterministic	1.59
 lattice	formal-tlc-view-rebind	deterministic	1.96
 # ReadyClosure whole no-build command 94.2000658s; SourceAdmission overlay extension 239.8378192s (26 cases, including paired controls).

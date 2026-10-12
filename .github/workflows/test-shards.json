@@ -111,7 +111,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardMaterialisedViewHorizon"],
-        "note": "MaterialisedViewHorizon base, FullScan and sixteen paired mutants: 18/18 cases, zero skips. Final one-JVM/two-CPU/Xmx2g no-build command measured 124.659s over three distinct prepare/terminal partitions."
+        "note": "MaterialisedViewHorizon base, FullScan and twenty-three paired mutants: 25/25 cases, zero skipped, inconclusive or not-executed. Final one-JVM/two-CPU/Xmx2g no-build command measured 196.4s over three distinct prepare/terminal partitions, retained-cardinality witnesses and abandoned recovery."
       },
       {
         "shard": "formal-tlc-view-aggregation",
