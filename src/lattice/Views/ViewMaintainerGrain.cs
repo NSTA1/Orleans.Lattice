@@ -612,7 +612,9 @@ internal sealed partial class ViewMaintainerGrain(
         // prepares). Likewise when a batch the backstop abandoned has since
         // committed: only a rebuild can read it. The rebuild owns the checkpoint
         // and cursor for this pass.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)) || AbandonedBatchCommitted())
+        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId))
+            || AbandonedBatchCommitted()
+            || await OrphanedCommittedBatchAsync(walTreeId, partitions, readFrom, advancedOffsets, cancellationToken))
         {
             await DegradeBackstopDiscardedCrossTreeAsync();
             await RebuildAsync(cancellationToken);

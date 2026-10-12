@@ -181,20 +181,18 @@ internal sealed partial class ViewMaintainerGrain
             // the rebuild that followed could not see it, so it is never re-staged
             // (its earlier entries are not re-read). An abort retires it; a commit
             // means the committed batch now lives only in source state, which the
-            // drain re-reads by rebuilding.
+            // drain re-reads by rebuilding. A commit does not resolve the batch: a
+            // multi-shard batch's terminals land one partition at a time, so a later
+            // shard's commit must trigger its own rebuild rather than be dropped.
             if (terminalAbort)
             {
                 _abandoned.Remove(txId);
                 _abandonedRetirements.Add(txId);
+                MarkResolved(txId);
             }
             else if (terminalCommit)
             {
                 _abandonedBatchCommitted = true;
-            }
-
-            if (terminalAbort || terminalCommit)
-            {
-                MarkResolved(txId);
             }
 
             return;
@@ -873,9 +871,17 @@ internal sealed partial class ViewMaintainerGrain
         if (!abandoned.Contains(txId))
         {
             abandoned.Add(txId);
-            if (abandoned.Count > ResolvedCapacity)
+            var capacity = Options.AbandonedTransactionCapacity > 0
+                ? Options.AbandonedTransactionCapacity
+                : ResolvedCapacity;
+            if (abandoned.Count > capacity)
             {
-                abandoned.RemoveRange(0, abandoned.Count - ResolvedCapacity);
+                // A forgotten batch's later commit stages without its unread
+                // prepares; OrphanedCommittedBatchAsync detects that and rebuilds.
+                logger.LogWarning(
+                    "View '{ViewName}' abandoned-batch memory exceeded its capacity ({Capacity}); forgetting the {Count} oldest.",
+                    ViewName, capacity, abandoned.Count - capacity);
+                abandoned.RemoveRange(0, abandoned.Count - capacity);
             }
         }
 
@@ -940,8 +946,11 @@ internal sealed partial class ViewMaintainerGrain
         SyncAbandoned();
 
         var prepareFloors = new Dictionary<Guid, Dictionary<int, long>>();
-        var terminated = new HashSet<Guid>();
+        var tallies = new Dictionary<Guid, TerminalTally>();
         var boundToThisLog = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal);
+        var scanLimit = Options.RebuildPrepareScanLimit > 0
+            ? Options.RebuildPrepareScanLimit
+            : RebuildPrepareScanLimit;
         for (var partition = 0; partition < heads.Count; partition++)
         {
             var last = heads[partition] - 1;
@@ -950,17 +959,28 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
-            var start = Math.Max(-1, last - RebuildPrepareScanLimit);
+            var start = Math.Max(-1, last - scanLimit);
+            var clamped = start > -1;
             if (boundToThisLog
                 && state.State.AppliedOffsets.TryGetValue(partition, out var applied)
                 && applied > start)
             {
                 start = applied;
+                clamped = false;
             }
 
             if (start >= last)
             {
                 continue;
+            }
+
+            if (clamped)
+            {
+                // Prepares below the window are not found here; a batch they belong to
+                // that commits later is caught by OrphanedCommittedBatchAsync instead.
+                logger.LogWarning(
+                    "View '{ViewName}' rebuild prepare scan of partition {Partition} was clamped to its last {Limit} entries.",
+                    ViewName, partition, scanLimit);
             }
 
             await foreach (var (offset, mutation) in commitLogReader.ReadAsync(walTreeId, partition, start, cancellationToken))
@@ -978,10 +998,17 @@ internal sealed partial class ViewMaintainerGrain
                 var txId = mutation.TransactionId;
                 if (commit || abort)
                 {
-                    terminated.Add(txId);
-                    continue;
+                    if (!tallies.TryGetValue(txId, out var tally))
+                    {
+                        tally = new TerminalTally();
+                        tallies[txId] = tally;
+                    }
+
+                    tally.Note(commit, abort, mutation.ShardIndex, mutation.AtomicShardCount);
                 }
 
+                // A terminal's offset is a floor too: a batch still committing shard by
+                // shard re-reads the terminals already in the log alongside its prepares.
                 if (!prepareFloors.TryGetValue(txId, out var floors))
                 {
                     floors = [];
@@ -992,11 +1019,19 @@ internal sealed partial class ViewMaintainerGrain
             }
         }
 
-        // A batch the backstop abandoned whose terminal lies below the heads is
-        // decided before the scan, which therefore reflects it.
-        foreach (var txId in terminated)
+        // A batch is decided before the scan only once it aborted or every shard's
+        // commit lies below the heads: the multi-shard saga appends one terminal per
+        // shard on that shard's partition, so one commit alone does not make the
+        // source reflect the batch. A decided batch the backstop abandoned is
+        // reflected by the scan and retired.
+        var terminated = new HashSet<Guid>();
+        foreach (var (txId, tally) in tallies)
         {
-            RetireAbandoned(txId);
+            if (tally.Decided)
+            {
+                terminated.Add(txId);
+                RetireAbandoned(txId);
+            }
         }
 
         var replayed = new HashSet<Guid>(_staging.Keys);
@@ -1051,6 +1086,102 @@ internal sealed partial class ViewMaintainerGrain
         state.State.ReplayFenceOffsets = planned.Offsets;
         state.State.ReplayFenceStagedTransactions = planned.Staged;
         state.State.ReplayFenceSupersession = null;
+    }
+
+    /// <summary>The terminals of one batch a rebuild's resume-floor capture read.</summary>
+    private sealed class TerminalTally
+    {
+        private readonly HashSet<int> _committedShards = [];
+        private bool _aborted;
+        private int _expectedShards;
+
+        /// <summary><see langword="true"/> when the batch aborted or every expected shard committed.</summary>
+        public bool Decided => _aborted
+            || (_committedShards.Count > 0 && (_expectedShards == 0 || _committedShards.Count >= _expectedShards));
+
+        public void Note(bool commit, bool abort, int shardIndex, int atomicShardCount)
+        {
+            _aborted |= abort;
+            if (commit)
+            {
+                _committedShards.Add(shardIndex);
+                _expectedShards = Math.Max(_expectedShards, atomicShardCount);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Detects a committed batch staged without the prepares it can no longer read
+    /// (they lie below the checkpoint because the backstop forgot or a clamped
+    /// rebuild scan missed the batch) and responds by rebuilding. Every prepare is
+    /// appended before any of the batch's terminals, so once the drain has read the
+    /// whole log below the heads captured after a terminal was staged, a prepare
+    /// still missing will never be read. The batch is discarded and remembered as
+    /// abandoned, so the rebuild reads it from source and its later entries are not
+    /// re-staged.
+    /// </summary>
+    private async Task<bool> OrphanedCommittedBatchAsync(
+        string walTreeId,
+        int partitions,
+        IReadOnlyDictionary<int, long> readFrom,
+        Dictionary<int, long> advancedOffsets,
+        CancellationToken cancellationToken)
+    {
+        List<Guid>? orphaned = null;
+        foreach (var (txId, tx) in _staging)
+        {
+            var missingPrepares = tx.PreparesByIndex.Count == 0
+                || (tx.AtomicBatchSize > 0 && tx.PreparesByIndex.Count < tx.AtomicBatchSize);
+            if (!tx.TerminalSeen || !missingPrepares)
+            {
+                continue;
+            }
+
+            if (tx.PrepareHorizon is null)
+            {
+                var heads = await Orleans.Lattice.BPlusTree.BoundedFanOut.RunAsync(
+                    partitions,
+                    Orleans.Lattice.BPlusTree.BoundedFanOut.DefaultWidth,
+                    partition => commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken),
+                    cancellationToken);
+                tx.PrepareHorizon = heads;
+            }
+
+            var readPastHorizon = true;
+            for (var partition = 0; partition < tx.PrepareHorizon.Length; partition++)
+            {
+                var read = Math.Max(
+                    readFrom.TryGetValue(partition, out var from) ? from : -1,
+                    advancedOffsets.TryGetValue(partition, out var advanced) ? advanced : -1);
+                if (read < tx.PrepareHorizon[partition] - 1)
+                {
+                    readPastHorizon = false;
+                    break;
+                }
+            }
+
+            if (readPastHorizon)
+            {
+                (orphaned ??= []).Add(txId);
+            }
+        }
+
+        if (orphaned is null)
+        {
+            return false;
+        }
+
+        foreach (var txId in orphaned)
+        {
+            ReleaseStagedKeys(_staging[txId]);
+            _staging.Remove(txId);
+            RecordAbandoned(txId);
+        }
+
+        logger.LogWarning(
+            "View '{ViewName}' staged {Count} committed atomic batch(es) whose prepares lie below its checkpoint; rebuilding to read them from source.",
+            ViewName, orphaned.Count);
+        return true;
     }
 
     /// <summary>A replay fence planned by a rebuild's resume-floor capture.</summary>
@@ -1408,6 +1539,12 @@ internal sealed partial class ViewMaintainerGrain
         /// per-tree-slice atomicity; <c>0</c> until the first wait.
         /// </summary>
         public long CrossTreeFirstSeenTicks { get; set; }
+
+        /// <summary>
+        /// Source WAL heads captured once a commit terminal is staged while prepares
+        /// are missing; every prepare lies below them. <see langword="null"/> until then.
+        /// </summary>
+        public long[]? PrepareHorizon { get; set; }
 
         public void NoteOffset(int partition, long offset)
         {

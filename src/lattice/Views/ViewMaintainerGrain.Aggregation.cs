@@ -106,7 +106,9 @@ internal sealed partial class ViewMaintainerGrain
         var backlogRead = drain.EntriesRead;
 
         // Bounded-buffer / retention backstop, identical to the filter path.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)) || AbandonedBatchCommitted())
+        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId))
+            || AbandonedBatchCommitted()
+            || await OrphanedCommittedBatchAsync(walTreeId, partitions, readFrom, advancedOffsets, cancellationToken))
         {
             await DegradeBackstopDiscardedCrossTreeAsync();
             await RebuildAsync(cancellationToken);
