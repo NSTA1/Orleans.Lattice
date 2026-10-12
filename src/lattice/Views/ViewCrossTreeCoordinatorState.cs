@@ -12,6 +12,8 @@ namespace Orleans.Lattice.Views;
 [Alias(TypeAliases.ViewCrossTreeCoordinatorState)]
 internal sealed class ViewCrossTreeCoordinatorState
 {
+    internal const int CurrentRepairProtocolVersion = 1;
+
     /// <summary>
     /// The frozen view wait set (canonicalised: ordinal-sorted, de-duplicated),
     /// empty until the first registration freezes it.
@@ -74,4 +76,11 @@ internal sealed class ViewCrossTreeCoordinatorState
     /// their checkpoint. Cleanup waits for all original participants.
     /// </summary>
     [Id(9)] public List<string> RepairAcknowledged { get; set; } = [];
+
+    /// <summary>
+    /// The admitted repair protocol. Missing in released states (zero): those
+    /// operations finish and expire under their original contract, without
+    /// certifying fresh repair. New admissions persist the current version.
+    /// </summary>
+    [Id(10)] public int RepairProtocolVersion { get; set; }
 }

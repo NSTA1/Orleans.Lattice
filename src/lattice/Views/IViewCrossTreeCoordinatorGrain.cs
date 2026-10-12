@@ -9,9 +9,11 @@ namespace Orleans.Lattice.Views;
 /// <para>
 /// <b>Why this exists.</b> When a source-side cross-tree atomic write commits
 /// across multiple source trees, the materialised views derived from those
-/// source trees must flip jointly, all-or-nothing: a reader must never observe
-/// one participating view's slice of the cross-tree batch committed while
-/// another participating view's slice is still pre-commit. Each participating
+/// source trees must publish jointly, all-or-nothing, at the joint-write
+/// boundary. This does not provide a shared multi-view snapshot cursor:
+/// snapshot cursors are single-tree, and independent reads or opens can straddle
+/// a valid joint commit. It adds no multi-source join-view or view-DAG contract.
+/// Each participating
 /// view is an ordinary <see cref="ILattice"/> tree maintained by its own
 /// (distinct) maintainer grain, so no bespoke barrier is needed - this
 /// coordinator rendezvouses the per-view slices and reuses the existing
@@ -40,41 +42,68 @@ namespace Orleans.Lattice.Views;
 internal interface IViewCrossTreeCoordinatorGrain : IGrainWithStringKey
 {
     /// <summary>
+    /// Returns the durably admitted protocol without registration or mutation:
+    /// null before admission or after cleanup, zero for a populated released
+    /// operation, and the current version for a current operation. A failed
+    /// first admission write does not report an in-memory marker as durable.
+    /// Call before minting a new hold so legacy progress does not depend on the
+    /// cluster's new-protocol admission gate. Unsupported versions are rejected.
+    /// </summary>
+    Task<int?> GetRepairProtocolVersionAsync();
+
+    /// <summary>
     /// Records one participating view's ready slice. The first call freezes the
     /// wait set; later calls must carry an identical wait set. Idempotent and
     /// durable: the coordinator persists its state before returning, and once the
     /// wait set completes it issues the joint cross-tree flip (idempotently keyed
     /// so a redelivery re-attaches rather than double-applying) and persists the
-    /// decision. Returns a <see cref="ViewCrossTreeDecision"/> whose
+    /// decision. The caller must persist its original readiness and source/view
+    /// physical-identity hold before submission and explicitly identify the
+    /// current protocol in <see cref="ViewCrossTreeReadiness.RepairProtocolVersion"/>.
+    /// Returns a <see cref="ViewCrossTreeDecision"/> whose
     /// <see cref="ViewCrossTreeDecision.Applied"/> is <c>true</c> once the joint
-    /// flip has durably committed (the caller then applies its own retraction
-    /// deletes and clears its staged batch), or <c>false</c> while the wait set is
-    /// still incomplete (the caller keeps its batch staged and re-registers on a
-    /// later drain, or degrades once its readiness timeout elapses).
+    /// flip has durably committed. When
+    /// <see cref="ViewCrossTreeDecision.RequiresRepair"/> is true, the caller
+    /// retains its staged batch and checkpoint/physical-identity holds through
+    /// mandatory fresh repair and durable retirement. Persisted released
+    /// operations instead complete under their original contract: they return
+    /// Applied without RequiresRepair, retire normally and expire automatically,
+    /// never certifying a fresh repair that their original callers did not owe.
+    /// Returns <c>false</c> while the wait set is incomplete: the caller keeps its
+    /// batch staged and re-registers on a later drain. A readiness timeout may
+    /// degrade only before a durable joint intent has been decided. A current
+    /// operation also waits for explicit current-protocol readiness from every
+    /// participant; an older caller cannot supply a durable repair hold.
     /// </summary>
     Task<ViewCrossTreeDecision> RegisterReadyAsync(ViewCrossTreeReadiness readiness);
 
     /// <summary>
-    /// Registers a freshly recomputed slice for the mandatory joint repair round
+    /// Registers a freshly recomputed slice for the current mandatory joint repair round
     /// following the original committed publication. Never reuses the original
     /// decision's payload or operation id. Every original participant must join,
     /// including empty slices, before retiring its staged source batch. A caller
-    /// must retain its source checkpoint and fence ordinary publication and
-    /// physical rebind affecting its submitted slice until this round commits.
+    /// must retain its source checkpoint and fence all ordinary/local publication
+    /// until this round commits. Physical rebind, rebuild and eviction remain
+    /// fenced until durable checkpoint retirement.
     /// The slice must include admitted newer source replacements, not just the
     /// original prepares or an unverified copy of current view rows.
     /// A committed retry only confirms the durable result and never republishes
     /// a frozen slice over a subsequently advanced peer.
     /// Unlike the original readiness timeout, a repair cannot degrade to
     /// per-tree publication: it retains checkpoint holds while a peer is
-    /// unavailable. Eventual repair requires peer recovery and fair maintenance.
+    /// unavailable. Eventual repair requires compatible peer recovery and fair
+    /// maintenance. Legacy operations cannot enter or certify this round.
     /// </summary>
     Task<ViewCrossTreeDecision> RegisterRepairReadyAsync(ViewCrossTreeReadiness readiness);
 
     /// <summary>
-    /// Returns this participant's durable repair contribution, or <c>null</c>
-    /// before its first submission. Reactivation must resume this exact physical
-    /// target and payload, retaining its publication/rebind fence until committed.
+    /// Returns this participant's frozen repair contribution, or <c>null</c>
+    /// before its first submission. Resubmit any returned contribution through
+    /// <see cref="RegisterRepairReadyAsync"/>: a failed persistence attempt may
+    /// leave frozen in-memory intent that registration must durably rewrite.
+    /// Reactivation must resume the exact physical target and payload. Publication
+    /// remains fenced until repair commits; physical identity remains pinned until
+    /// durable checkpoint retirement.
     /// </summary>
     Task<ViewCrossTreeReadiness?> GetRepairReadinessAsync(string viewName);
 
@@ -92,9 +121,10 @@ internal interface IViewCrossTreeCoordinatorGrain : IGrainWithStringKey
     /// operation so the coordinator never issues the joint flip, unless a joint
     /// intent has already been decided - in which case it resumes that frozen
     /// publication and returns
-    /// <see cref="ViewCrossTreeDecision.Committed"/> so the late-degrading caller
-    /// applies the joint result (its retraction deletes only) instead of
-    /// double-writing its slice. Otherwise returns
+    /// an applied decision. Current-protocol callers retain their staged batch
+    /// and enter fresh repair when RequiresRepair is true; legacy operations
+    /// finish under their original contract. Neither issues a per-tree fallback
+    /// after durable joint intent. Otherwise returns
     /// <see cref="ViewCrossTreeDecision.Degraded"/>. Idempotent and durable.
     /// </summary>
     Task<ViewCrossTreeDecision> RegisterDegradedAsync(string viewName);

@@ -42,7 +42,10 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(new LatticeOptions());
 
-        state ??= new FakePersistentState<ViewCrossTreeCoordinatorState>();
+        state ??= new FakePersistentState<ViewCrossTreeCoordinatorState>
+        {
+            State = new() { RepairProtocolVersion = ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion },
+        };
 
         var grain = new ViewCrossTreeCoordinatorGrain(
             context,
@@ -68,6 +71,7 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
             WaitSet = waitSet,
             Upserts = upserts ?? [],
             Deletes = deletes ?? [],
+            RepairProtocolVersion = ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion,
         };
 
     private static List<KeyValuePair<string, byte[]>> Upsert(string key, params byte[] value) =>

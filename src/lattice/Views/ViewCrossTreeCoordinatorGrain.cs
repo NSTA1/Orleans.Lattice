@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Views;
 /// Default <see cref="IViewCrossTreeCoordinatorGrain"/>. One activation per
 /// cross-tree <c>operationId</c> rendezvouses every participating view's ready
 /// slice and, once the wait set completes, flips them all jointly through a
-/// single cross-tree atomic write so view readers observe them flip together.
+/// single cross-tree atomic write. Independent consumer reads may straddle the
+/// publication; there is no shared cross-view snapshot acquisition contract.
 /// See <see cref="IViewCrossTreeCoordinatorGrain"/> for the contract and the
 /// deadlock-freedom / wait-set rationale.
 /// <para>
@@ -44,6 +45,8 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     : TtlGrain<ViewCrossTreeCoordinatorGrain>(context, reminderRegistry, logger), IViewCrossTreeCoordinatorGrain
 {
     private const string RetentionReminderName = "view-cross-tree-retention";
+    private bool _protocolObserved;
+    private int? _durableProtocolVersion;
 
     /// <inheritdoc />
     protected override string TtlReminderName => RetentionReminderName;
@@ -54,7 +57,9 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     /// <inheritdoc />
     protected override async Task OnTtlExpiredAsync()
     {
-        if (state.State.Applied && !RepairClosed)
+        ValidateProtocolVersion();
+        if (state.State.RepairProtocolVersion == ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion
+            && state.State.Decided && !RepairClosed)
         {
             Logger.LogWarning(
                 "View cross-tree coordinator {Key}: retaining publication while participant repair checkpoints remain open.",
@@ -66,6 +71,8 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
             "View cross-tree coordinator {Key}: retention window expired; clearing state.",
             GrainContext.GrainId.Key);
         await state.ClearStateAsync();
+        _durableProtocolVersion = null;
+        _protocolObserved = true;
     }
 
     /// <summary>
@@ -80,6 +87,53 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     private bool RepairClosed => state.State.RepairApplied
         && state.State.WaitSet.All(view => state.State.RepairAcknowledged.Contains(view));
 
+    private ViewCrossTreeDecision OriginalCommittedDecision =>
+        state.State.RepairProtocolVersion == ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion
+            ? ViewCrossTreeDecision.Committed
+            : ViewCrossTreeDecision.LegacyCommitted;
+
+    private void ValidateProtocolVersion()
+    {
+        if (state.State.RepairProtocolVersion is not (0 or ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported view cross-tree repair protocol {state.State.RepairProtocolVersion}; use a compatible host.");
+        }
+        if (!_protocolObserved)
+        {
+            _durableProtocolVersion = state.RecordExists
+                && (state.State.RepairProtocolVersion != 0 || state.State.WaitSet.Count != 0
+                    || state.State.Slices.Count != 0 || state.State.Decided
+                    || state.State.Applied || state.State.Degraded || state.State.StartedAtTicks != 0)
+                ? state.State.RepairProtocolVersion
+                : null;
+            _protocolObserved = true;
+        }
+    }
+
+    private async Task PersistStateAsync()
+    {
+        await state.WriteStateAsync();
+        _durableProtocolVersion = state.State.RepairProtocolVersion;
+    }
+
+    /// <inheritdoc />
+    public Task<int?> GetRepairProtocolVersionAsync()
+    {
+        ValidateProtocolVersion();
+        return Task.FromResult(_durableProtocolVersion);
+    }
+
+    private void RequireCurrentRepairProtocol()
+    {
+        ValidateProtocolVersion();
+        if (state.State.RepairProtocolVersion != ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion)
+        {
+            throw new InvalidOperationException(
+                "Legacy cross-tree operations finish under their original contract and cannot certify fresh repair.");
+        }
+    }
+
     /// <inheritdoc />
     public async Task<ViewCrossTreeDecision> RegisterReadyAsync(ViewCrossTreeReadiness readiness)
     {
@@ -88,19 +142,42 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         ArgumentException.ThrowIfNullOrEmpty(readiness.ViewTreeId);
         ArgumentNullException.ThrowIfNull(readiness.WaitSet);
         ArgumentNullException.ThrowIfNull(readiness.Upserts);
+        ValidateProtocolVersion();
+        if (readiness.RepairProtocolVersion is not (0 or ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion))
+        {
+            throw new InvalidOperationException("Unsupported participant repair protocol; use a compatible host.");
+        }
+        if (_durableProtocolVersion is null)
+        {
+            state.State.RepairProtocolVersion = ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion;
+        }
+
+        if (state.State.Degraded)
+        {
+            return ViewCrossTreeDecision.DegradedResult;
+        }
+
+        if (state.State.RepairProtocolVersion == ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion
+            && readiness.RepairProtocolVersion != ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion)
+        {
+            if (state.State.WaitSet.Count == 0)
+            {
+                state.State.WaitSet = CanonicalStringSet.SortedDistinct(readiness.WaitSet);
+                state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
+            }
+            if (!WaitSetMatches(readiness.WaitSet) || !state.State.WaitSet.Contains(readiness.ViewName))
+            {
+                throw new InvalidOperationException("An incompatible caller must still name the frozen participant set.");
+            }
+            await PersistStateAsync();
+            return ViewCrossTreeDecision.NotReady;
+        }
 
         // Already applied and durable: a redelivered registration re-confirms the
         // joint flip is committed. Return the memoized decision without re-issuing.
         if (state.State.Applied)
         {
-            return ViewCrossTreeDecision.Committed;
-        }
-
-        // Terminally degraded by an earlier participant timeout: no joint flip
-        // will ever be issued, so this registrant flips its own slice locally.
-        if (state.State.Degraded)
-        {
-            return ViewCrossTreeDecision.DegradedResult;
+            return OriginalCommittedDecision;
         }
 
         if (state.State.WaitSet.Count == 0)
@@ -154,7 +231,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         {
             // Persist the recorded slice so the rendezvous survives a crash, then
             // tell the caller to keep waiting.
-            await state.WriteStateAsync();
+            await PersistStateAsync();
             return ViewCrossTreeDecision.NotReady;
         }
 
@@ -168,22 +245,26 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         }
 
         await CompleteOriginalPublicationAsync();
+        if (state.State.RepairProtocolVersion == 0)
+        {
+            await SlideTtlAsync();
+        }
 
-        // Original publication is not registration closure: participants still
-        // owe a repair contribution and a durable checkpoint acknowledgement.
-        return ViewCrossTreeDecision.Committed;
+        // Current-protocol publication is not registration closure: participants
+        // still owe fresh repair and durable checkpoint acknowledgement.
+        return OriginalCommittedDecision;
     }
 
     private async Task CompleteOriginalPublicationAsync()
     {
-        await state.WriteStateAsync();
+        await PersistStateAsync();
         await IssueJointFlipAsync(state.State.Slices, JointOperationId);
 
         var persisted = false;
         state.State.Applied = true;
         try
         {
-            await state.WriteStateAsync();
+            await PersistStateAsync();
             persisted = true;
         }
         finally
@@ -254,6 +335,11 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         ArgumentNullException.ThrowIfNull(readiness.WaitSet);
         ArgumentNullException.ThrowIfNull(readiness.Upserts);
         ArgumentNullException.ThrowIfNull(readiness.Deletes);
+        RequireCurrentRepairProtocol();
+        if (readiness.RepairProtocolVersion != ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion)
+        {
+            throw new InvalidOperationException("Joint repair requires current-protocol durable participant holds.");
+        }
         if (!StringComparer.Ordinal.Equals(readiness.OperationId, GrainContext.GrainId.Key.ToString())
             || !WaitSetMatches(readiness.WaitSet)
             || !state.State.WaitSet.Contains(readiness.ViewName))
@@ -288,7 +374,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         {
             if (state.State.WaitSet.Any(view => !state.State.RepairSlices.ContainsKey(view)))
             {
-                await state.WriteStateAsync();
+                await PersistStateAsync();
                 return ViewCrossTreeDecision.NotReady;
             }
             state.State.RepairDecided = true;
@@ -296,13 +382,13 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
 
         // Persist again on a decided retry: a failed intent write can leave the
         // in-memory flag set even though no durable intent exists.
-        await state.WriteStateAsync();
+        await PersistStateAsync();
         await IssueJointFlipAsync(state.State.RepairSlices, $"mv-repair-xt-{GrainContext.GrainId.Key}");
         var persisted = false;
         state.State.RepairApplied = true;
         try
         {
-            await state.WriteStateAsync();
+            await PersistStateAsync();
             persisted = true;
         }
         finally
@@ -333,6 +419,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
             Upserts = slice.Upserts.Select(entry =>
                 new KeyValuePair<string, byte[]>(entry.Key, (byte[])entry.Value.Clone())).ToList(),
             Deletes = slice.Deletes.ToArray(),
+            RepairProtocolVersion = ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion,
         });
     }
 
@@ -340,6 +427,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     public async Task AcknowledgeRepairAsync(string viewName)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ValidateProtocolVersion();
         if (state.State.WaitSet.Count == 0 && !state.State.Decided && !state.State.Degraded)
         {
             Logger.LogDebug(
@@ -360,7 +448,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
             var persisted = false;
             try
             {
-                await state.WriteStateAsync();
+                await PersistStateAsync();
                 persisted = true;
             }
             finally
@@ -381,6 +469,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     private void ValidateRepairParticipant(string viewName)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
+        RequireCurrentRepairProtocol();
         if (!state.State.Applied || !state.State.WaitSet.Contains(viewName))
         {
             throw new InvalidOperationException("Repair requires an original committed participant.");
@@ -417,13 +506,14 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     public async Task<ViewCrossTreeDecision> RegisterDegradedAsync(string viewName)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ValidateProtocolVersion();
 
         // The joint flip already committed (a late degrade lost the race): tell the
         // caller it is committed so it applies the joint result rather than
         // double-writing its slice locally.
         if (state.State.Applied)
         {
-            return ViewCrossTreeDecision.Committed;
+            return OriginalCommittedDecision;
         }
 
         if (state.State.Decided)
@@ -431,7 +521,11 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
             // The joint write may already have committed despite a lost
             // response. Never certify per-tree fallback after durable intent.
             await CompleteOriginalPublicationAsync();
-            return ViewCrossTreeDecision.Committed;
+            if (state.State.RepairProtocolVersion == 0)
+            {
+                await SlideTtlAsync();
+            }
+            return OriginalCommittedDecision;
         }
 
         // Terminally degrade: no joint flip will ever be issued. Persist before
@@ -440,7 +534,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         if (!state.State.Degraded)
         {
             state.State.Degraded = true;
-            await state.WriteStateAsync();
+            await PersistStateAsync();
             await SlideTtlAsync();
         }
 
