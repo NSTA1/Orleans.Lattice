@@ -199,4 +199,15 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(14)]
     public List<Guid>? AbandonedTransactions { get; set; }
+
+    /// <summary>
+    /// Cross-tree operation ids whose complete, possibly registered, slice the
+    /// staging backstop discarded and which have not yet been terminally degraded
+    /// at their joint coordinator. Persisted before the coordinator is called and
+    /// retired only once it answers, so a failed degrade (or a reactivation before
+    /// it) is retried by the next drain or rebuild before anything is published
+    /// over the discarded slice.
+    /// </summary>
+    [Id(15)]
+    public List<string>? BackstopDiscardedCrossTreeOperations { get; set; }
 }

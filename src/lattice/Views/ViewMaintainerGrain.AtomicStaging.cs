@@ -82,10 +82,6 @@ internal sealed partial class ViewMaintainerGrain
     // persisted by the rebuild's checkpoint write (see PlanRebuildReplayAsync).
     private RebuildReplayFence? _pendingRebuildFence;
 
-    // Cross-tree operations whose registered slice the staging backstop discarded,
-    // degraded at their coordinator before the backstop rebuild runs.
-    private readonly List<string> _backstopDiscardedCrossTree = [];
-
     /// <summary>
     /// Most WAL entries per partition the rebuild resume-floor capture examines
     /// below the head for in-flight atomic prepares it must not skip.
@@ -809,7 +805,11 @@ internal sealed partial class ViewMaintainerGrain
             else if (tx.CrossTreeOperationId is { } operationId
                 && ComputeViewWaitSet(tx.CrossTreeParticipants ?? []).Count > 1)
             {
-                _backstopDiscardedCrossTree.Add(operationId);
+                var pending = state.State.BackstopDiscardedCrossTreeOperations ??= [];
+                if (!pending.Contains(operationId))
+                {
+                    pending.Add(operationId);
+                }
             }
         }
 
@@ -825,14 +825,24 @@ internal sealed partial class ViewMaintainerGrain
     /// joint flip lands that stale slice over the rebuild that follows. When the
     /// joint flip has already been applied it landed before the rebuild, which
     /// then supersedes it, so nothing further is needed. An operation is retired
-    /// only once the coordinator has answered, so a failed call is retried by the
-    /// next backstop rebuild.
+    /// only once the coordinator has answered. The pending ids are persisted before
+    /// the first coordinator call, so a failed call - or a reactivation before it -
+    /// leaves them durable: the next drain is admitted to the backstop path by
+    /// <see cref="BackstopDegradePending"/>, and every rebuild (backstop, operator,
+    /// fall-off-log or reconcile) degrades them before it clears or publishes.
     /// </summary>
     private async Task DegradeBackstopDiscardedCrossTreeAsync()
     {
-        while (_backstopDiscardedCrossTree.Count > 0)
+        var pending = state.State.BackstopDiscardedCrossTreeOperations;
+        if (pending is not { Count: > 0 })
         {
-            var operationId = _backstopDiscardedCrossTree[^1];
+            return;
+        }
+
+        await state.WriteStateAsync();
+        while (pending.Count > 0)
+        {
+            var operationId = pending[^1];
             var decision = await grainFactory
                 .GetGrain<IViewCrossTreeCoordinatorGrain>(operationId)
                 .RegisterDegradedAsync(ViewName);
@@ -844,9 +854,20 @@ internal sealed partial class ViewMaintainerGrain
                     ViewName, operationId);
             }
 
-            _backstopDiscardedCrossTree.RemoveAt(_backstopDiscardedCrossTree.Count - 1);
+            pending.RemoveAt(pending.Count - 1);
         }
+
+        // The emptied list is persisted by the rebuild's checkpoint write; until
+        // then a stale entry only causes a redundant, idempotent degrade.
+        state.State.BackstopDiscardedCrossTreeOperations = null;
     }
+
+    /// <summary>
+    /// <c>true</c> while a cross-tree operation discarded by the staging backstop
+    /// still awaits terminal degradation at its joint coordinator.
+    /// </summary>
+    private bool BackstopDegradePending()
+        => state.State.BackstopDiscardedCrossTreeOperations is { Count: > 0 };
 
     private bool IsAbandoned(Guid txId) => _abandoned.Contains(txId);
 

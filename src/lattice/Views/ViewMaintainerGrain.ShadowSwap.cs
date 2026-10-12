@@ -295,6 +295,11 @@ internal sealed partial class ViewMaintainerGrain
     /// </summary>
     private async Task InPlaceRebuildAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
+        // Terminally degrade any cross-tree slice a staging backstop discarded
+        // before the live tree is cleared and re-derived, so a later joint flip
+        // can never land that stale slice over the rebuilt view.
+        await DegradeBackstopDiscardedCrossTreeAsync();
+
         var sourceTreeId = registration.SourceTreeId;
         var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
@@ -467,6 +472,10 @@ internal sealed partial class ViewMaintainerGrain
     /// </summary>
     private async Task<ShadowBuildResult> BuildShadowAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
+        // As for the in-place rebuild: no shadow built from current source state
+        // may be swapped in while a discarded cross-tree slice can still flip.
+        await DegradeBackstopDiscardedCrossTreeAsync();
+
         var sourceTreeId = registration.SourceTreeId;
         var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
