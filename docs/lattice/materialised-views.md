@@ -373,6 +373,7 @@ the new source never had, so a rebuild is required for correctness. A view
 that first activates over a source whose alias already resolves to a different
 physical tree likewise builds from that tree's current state rather than
 replaying its log.
+
 A rebuild captures one physical source with its resume floor, scans that source,
 and publishes the generation, physical binding and offsets together. If a source
 move is observed before publication validation, the rebuild rejects its stale
