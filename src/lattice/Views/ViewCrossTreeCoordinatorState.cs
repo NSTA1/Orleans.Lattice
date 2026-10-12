@@ -51,4 +51,26 @@ internal sealed class ViewCrossTreeCoordinatorState
     /// decision so every participant flips its own slice locally instead.
     /// </summary>
     [Id(5)] public bool Degraded { get; set; }
+
+    /// <summary>
+    /// Fresh participant contributions for the post-publication joint repair.
+    /// Independent of <see cref="Slices"/>; frozen when <see cref="RepairDecided"/>
+    /// is persisted. All original participants must contribute before publication.
+    /// </summary>
+    [Id(6)] public Dictionary<string, ViewCrossTreeSlice> RepairSlices { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>The durable intent to publish the complete joint repair set.</summary>
+    [Id(7)] public bool RepairDecided { get; set; }
+
+    /// <summary>
+    /// The repair publication committed. Retried registrations return its
+    /// memoized result without writing either the original or repair payload.
+    /// </summary>
+    [Id(8)] public bool RepairApplied { get; set; }
+
+    /// <summary>
+    /// Participants whose repaired source batch has been durably retired from
+    /// their checkpoint. Cleanup waits for all original participants.
+    /// </summary>
+    [Id(9)] public List<string> RepairAcknowledged { get; set; } = [];
 }

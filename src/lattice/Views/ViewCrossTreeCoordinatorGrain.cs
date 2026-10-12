@@ -25,6 +25,13 @@ namespace Orleans.Lattice.Views;
 /// which re-drives the idempotent write before returning the applied decision -
 /// so a crash mid-apply never exposes a partial set of views.
 /// </para>
+/// <para>
+/// A second, mandatory ready set repairs the publication using freshly admitted
+/// source outcomes, never by replaying the original frozen slices. Repair
+/// contributions remain immutable while callers hold their publication/rebind
+/// fences. Retention begins only after all participants acknowledge durable
+/// checkpoint retirement, so a lost response cannot release registration closure.
+/// </para>
 /// </summary>
 internal sealed class ViewCrossTreeCoordinatorGrain(
     IGrainContext context,
@@ -47,6 +54,14 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     /// <inheritdoc />
     protected override async Task OnTtlExpiredAsync()
     {
+        if (state.State.Applied && !RepairClosed)
+        {
+            Logger.LogWarning(
+                "View cross-tree coordinator {Key}: retaining publication while participant repair checkpoints remain open.",
+                GrainContext.GrainId.Key);
+            return;
+        }
+
         Logger.LogInformation(
             "View cross-tree coordinator {Key}: retention window expired; clearing state.",
             GrainContext.GrainId.Key);
@@ -61,6 +76,9 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
     /// write), so the derived id is a valid cross-tree operation id.
     /// </summary>
     private string JointOperationId => $"mv-xt-{GrainContext.GrainId.Key}";
+
+    private bool RepairClosed => state.State.RepairApplied
+        && state.State.WaitSet.All(view => state.State.RepairAcknowledged.Contains(view));
 
     /// <inheritdoc />
     public async Task<ViewCrossTreeDecision> RegisterReadyAsync(ViewCrossTreeReadiness readiness)
@@ -150,33 +168,35 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
             await state.WriteStateAsync();
         }
 
-        await IssueJointFlipAsync();
+        await IssueJointFlipAsync(state.State.Slices, JointOperationId);
 
         state.State.Applied = true;
         await state.WriteStateAsync();
 
-        // Arm one-shot retention cleanup now that the decision is terminal.
-        await SlideTtlAsync();
+        // Original publication is not registration closure: participants still
+        // owe a repair contribution and a durable checkpoint acknowledgement.
         return ViewCrossTreeDecision.Committed;
     }
 
     /// <summary>
     /// Issues the joint cross-tree flip across every participant view tree whose
-    /// slice has at least one upsert or delete, idempotently keyed by
-    /// <see cref="JointOperationId"/>. Empty slices contribute nothing to flip,
+    /// slice has at least one upsert or delete, idempotently keyed by the supplied
+    /// <paramref name="operationId"/>. Empty slices contribute nothing to flip,
     /// so they are excluded; a single non-empty slice falls back to the
     /// single-tree atomic write (the cross-tree primitive requires two or more
     /// trees). Each slice's retraction deletes ride inside the joint flip
     /// alongside its upserts, so a re-key projection's old-key delete and
     /// new-key upsert flip atomically.
     /// </summary>
-    private async Task IssueJointFlipAsync()
+    private async Task IssueJointFlipAsync(
+        Dictionary<string, ViewCrossTreeSlice> slices,
+        string operationId)
     {
         // Authorise the joint flip's writes to participant view trees (propagates
         // through the cross-tree atomic-write saga via RequestContext).
         using var viewWriteScope = ViewWriteContext.BeginScope();
-        var batches = new List<LatticeTreeBatch>(state.State.Slices.Count);
-        foreach (var slice in state.State.Slices.Values)
+        var batches = new List<LatticeTreeBatch>(slices.Count);
+        foreach (var slice in slices.Values)
         {
             if (slice.Upserts.Count == 0 && slice.Deletes.Count == 0)
             {
@@ -196,15 +216,157 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
                 // One non-empty slice: a cross-tree write needs two or more trees,
                 // so flip the single tree atomically (still all-or-nothing for it),
                 // carrying its upserts and retraction deletes in one mixed op.
-                var only = state.State.Slices.Values.First(
+                var only = slices.Values.First(
                     s => s.Upserts.Count > 0 || s.Deletes.Count > 0);
                 await grainFactory
                     .GetGrain<ILattice>(only.ViewTreeId)
-                    .SetManyAtomicAsync(only.Upserts, only.Deletes, JointOperationId);
+                    .SetManyAtomicAsync(only.Upserts, only.Deletes, operationId);
                 return;
             default:
-                await grainFactory.SetManyAtomicAsync(batches, JointOperationId);
+                await grainFactory.SetManyAtomicAsync(batches, operationId);
                 return;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<ViewCrossTreeDecision> RegisterRepairReadyAsync(ViewCrossTreeReadiness readiness)
+    {
+        ArgumentNullException.ThrowIfNull(readiness);
+        ArgumentException.ThrowIfNullOrEmpty(readiness.ViewName);
+        ArgumentException.ThrowIfNullOrEmpty(readiness.ViewTreeId);
+        ArgumentNullException.ThrowIfNull(readiness.WaitSet);
+        ArgumentNullException.ThrowIfNull(readiness.Upserts);
+        ArgumentNullException.ThrowIfNull(readiness.Deletes);
+        if (!StringComparer.Ordinal.Equals(readiness.OperationId, GrainContext.GrainId.Key.ToString())
+            || !WaitSetMatches(readiness.WaitSet)
+            || !state.State.WaitSet.Contains(readiness.ViewName))
+        {
+            throw new InvalidOperationException(
+                "Joint repair readiness must name the original operation and its frozen participant set.");
+        }
+
+        if (!state.State.Applied || state.State.Degraded)
+        {
+            throw new InvalidOperationException("Joint repair requires a durably committed original publication.");
+        }
+
+        if (state.State.RepairApplied)
+        {
+            return ViewCrossTreeDecision.Committed;
+        }
+
+        if (!state.State.RepairDecided && !state.State.RepairSlices.ContainsKey(readiness.ViewName))
+        {
+            state.State.RepairSlices[readiness.ViewName] = new ViewCrossTreeSlice
+            {
+                ViewName = readiness.ViewName,
+                ViewTreeId = readiness.ViewTreeId,
+                Upserts = readiness.Upserts.Select(entry =>
+                    new KeyValuePair<string, byte[]>(entry.Key, (byte[])entry.Value.Clone())).ToList(),
+                Deletes = readiness.Deletes.ToArray(),
+            };
+        }
+
+        if (!state.State.RepairDecided)
+        {
+            if (state.State.WaitSet.Any(view => !state.State.RepairSlices.ContainsKey(view)))
+            {
+                await state.WriteStateAsync();
+                return ViewCrossTreeDecision.NotReady;
+            }
+            state.State.RepairDecided = true;
+        }
+
+        // Persist again on a decided retry: a failed intent write can leave the
+        // in-memory flag set even though no durable intent exists.
+        await state.WriteStateAsync();
+        await IssueJointFlipAsync(state.State.RepairSlices, $"mv-repair-xt-{GrainContext.GrainId.Key}");
+        var persisted = false;
+        state.State.RepairApplied = true;
+        try
+        {
+            await state.WriteStateAsync();
+            persisted = true;
+        }
+        finally
+        {
+            if (!persisted)
+            {
+                state.State.RepairApplied = false;
+            }
+        }
+        return ViewCrossTreeDecision.Committed;
+    }
+
+    /// <inheritdoc />
+    public Task<ViewCrossTreeReadiness?> GetRepairReadinessAsync(string viewName)
+    {
+        ValidateRepairParticipant(viewName);
+        if (!state.State.RepairSlices.TryGetValue(viewName, out var slice))
+        {
+            return Task.FromResult<ViewCrossTreeReadiness?>(null);
+        }
+
+        return Task.FromResult<ViewCrossTreeReadiness?>(new ViewCrossTreeReadiness
+        {
+            OperationId = GrainContext.GrainId.Key.ToString(),
+            ViewName = slice.ViewName,
+            ViewTreeId = slice.ViewTreeId,
+            WaitSet = state.State.WaitSet.ToArray(),
+            Upserts = slice.Upserts.Select(entry =>
+                new KeyValuePair<string, byte[]>(entry.Key, (byte[])entry.Value.Clone())).ToList(),
+            Deletes = slice.Deletes.ToArray(),
+        });
+    }
+
+    /// <inheritdoc />
+    public async Task AcknowledgeRepairAsync(string viewName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        if (state.State.WaitSet.Count == 0 && !state.State.Decided && !state.State.Degraded)
+        {
+            Logger.LogDebug(
+                "View cross-tree coordinator {Key}: checkpoint acknowledgement for {ViewName} after retention cleanup.",
+                GrainContext.GrainId.Key, viewName);
+            return;
+        }
+
+        ValidateRepairParticipant(viewName);
+        if (!state.State.RepairApplied)
+        {
+            throw new InvalidOperationException("Cannot retire a participant before joint repair commits.");
+        }
+
+        if (!state.State.RepairAcknowledged.Contains(viewName))
+        {
+            state.State.RepairAcknowledged.Add(viewName);
+            var persisted = false;
+            try
+            {
+                await state.WriteStateAsync();
+                persisted = true;
+            }
+            finally
+            {
+                if (!persisted)
+                {
+                    state.State.RepairAcknowledged.Remove(viewName);
+                }
+            }
+        }
+
+        if (RepairClosed)
+        {
+            await SlideTtlAsync();
+        }
+    }
+
+    private void ValidateRepairParticipant(string viewName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        if (!state.State.Applied || !state.State.WaitSet.Contains(viewName))
+        {
+            throw new InvalidOperationException("Repair requires an original committed participant.");
         }
     }
 

@@ -27,19 +27,22 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
         public required ViewCrossTreeCoordinatorGrain Grain { get; init; }
         public required IGrainFactory GrainFactory { get; init; }
         public required FakePersistentState<ViewCrossTreeCoordinatorState> State { get; init; }
+        public required IReminderRegistry Reminders { get; init; }
     }
 
-    private static Harness CreateGrain()
+    private static Harness CreateGrain(
+        FakePersistentState<ViewCrossTreeCoordinatorState>? state = null,
+        IGrainFactory? grainFactory = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("view-cross-tree-coord", OperationId));
 
-        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory ??= Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(new LatticeOptions());
 
-        var state = new FakePersistentState<ViewCrossTreeCoordinatorState>();
+        state ??= new FakePersistentState<ViewCrossTreeCoordinatorState>();
 
         var grain = new ViewCrossTreeCoordinatorGrain(
             context,
@@ -49,7 +52,7 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
             NullLogger<ViewCrossTreeCoordinatorGrain>.Instance,
             state);
 
-        return new Harness { Grain = grain, GrainFactory = grainFactory, State = state };
+        return new Harness { Grain = grain, GrainFactory = grainFactory, State = state, Reminders = reminderRegistry };
     }
 
     private static ViewCrossTreeReadiness Readiness(

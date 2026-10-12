@@ -55,6 +55,38 @@ internal interface IViewCrossTreeCoordinatorGrain : IGrainWithStringKey
     Task<ViewCrossTreeDecision> RegisterReadyAsync(ViewCrossTreeReadiness readiness);
 
     /// <summary>
+    /// Registers a freshly recomputed slice for the mandatory joint repair round
+    /// following the original committed publication. Never reuses the original
+    /// decision's payload or operation id. Every original participant must join,
+    /// including empty slices, before retiring its staged source batch. A caller
+    /// must retain its source checkpoint and fence ordinary publication and
+    /// physical rebind affecting its submitted slice until this round commits.
+    /// The slice must include admitted newer source replacements, not just the
+    /// original prepares or an unverified copy of current view rows.
+    /// A committed retry only confirms the durable result and never republishes
+    /// a frozen slice over a subsequently advanced peer.
+    /// Unlike the original readiness timeout, a repair cannot degrade to
+    /// per-tree publication: it retains checkpoint holds while a peer is
+    /// unavailable. Eventual repair requires peer recovery and fair maintenance.
+    /// </summary>
+    Task<ViewCrossTreeDecision> RegisterRepairReadyAsync(ViewCrossTreeReadiness readiness);
+
+    /// <summary>
+    /// Returns this participant's durable repair contribution, or <c>null</c>
+    /// before its first submission. Reactivation must resume this exact physical
+    /// target and payload, retaining its publication/rebind fence until committed.
+    /// </summary>
+    Task<ViewCrossTreeReadiness?> GetRepairReadinessAsync(string viewName);
+
+    /// <summary>
+    /// Records that a participant has durably retired the repaired source batch
+    /// from its checkpoint. Call only after checkpoint persistence, retaining a
+    /// durable pending acknowledgement until this call succeeds. Retention
+    /// cleanup is permitted only after every original participant acknowledges.
+    /// </summary>
+    Task AcknowledgeRepairAsync(string viewName);
+
+    /// <summary>
     /// Records that a participant view has timed out waiting for the joint flip
     /// and is degrading to per-tree-slice atomicity. Terminally degrades the
     /// operation so the coordinator never issues the joint flip, unless the joint
