@@ -353,10 +353,29 @@ internal sealed partial class ViewMaintainerGrain
     /// read after the prepare is staged necessarily carries a higher HLC and so
     /// correctly supersedes it; one read before the prepare is not yet refcounted
     /// (and carries a lower HLC), so the prepare correctly wins.
+    /// A predicate-filtered range delete records exactly the keys it tombstoned
+    /// (<see cref="LatticeMutation.MatchedKeys"/>), never its start key, which need
+    /// not have been live; an unconstrained range delete carries only its bounds
+    /// (issue #4882).
     /// </summary>
     private void RecordOrdinaryOverStagedKey(in LatticeMutation mutation)
     {
-        if (!_stagedSourceKeyRefCount.ContainsKey(mutation.Key))
+        if (mutation.Kind == MutationKind.DeleteRange && mutation.MatchedKeys is { } matched)
+        {
+            foreach (var key in matched)
+            {
+                RecordOrdinaryOverStagedKey(key, mutation.Timestamp);
+            }
+
+            return;
+        }
+
+        RecordOrdinaryOverStagedKey(mutation.Key, mutation.Timestamp);
+    }
+
+    private void RecordOrdinaryOverStagedKey(string key, HybridLogicalClock timestamp)
+    {
+        if (!_stagedSourceKeyRefCount.ContainsKey(key))
         {
             return;
         }
@@ -365,10 +384,10 @@ internal sealed partial class ViewMaintainerGrain
         // hashed the source key twice for every ordinary write landing on a
         // still-staged key.
         ref var prev = ref CollectionsMarshal.GetValueRefOrAddDefault(
-            _ordinaryHlcOverStagedKey, mutation.Key, out var existed);
-        if (!existed || mutation.Timestamp.CompareTo(prev) > 0)
+            _ordinaryHlcOverStagedKey, key, out var existed);
+        if (!existed || timestamp.CompareTo(prev) > 0)
         {
-            prev = mutation.Timestamp;
+            prev = timestamp;
         }
     }
 
@@ -1072,7 +1091,20 @@ internal sealed partial class ViewMaintainerGrain
                 var disposition = Classify(mutation, out var commit, out var abort);
                 if (disposition == StagingDisposition.Apply)
                 {
-                    NoteHighest(ordinaryKeys, mutation.Key, mutation.Timestamp);
+                    // A matched range delete supersedes only the keys it tombstoned;
+                    // see RecordOrdinaryOverStagedKey.
+                    if (mutation.Kind == MutationKind.DeleteRange && mutation.MatchedKeys is { } matched)
+                    {
+                        foreach (var key in matched)
+                        {
+                            NoteHighest(ordinaryKeys, key, mutation.Timestamp);
+                        }
+                    }
+                    else
+                    {
+                        NoteHighest(ordinaryKeys, mutation.Key, mutation.Timestamp);
+                    }
+
                     continue;
                 }
 
