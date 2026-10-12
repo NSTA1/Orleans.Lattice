@@ -655,6 +655,12 @@ internal sealed partial class ViewMaintainerGrain(
             await ShapeHistoryWritesAsync(collected, sourceTreeId);
         }
 
+        // Confirm completed batches against the source before the survivor guard
+        // and the flush both read the completed list: a deferred batch must neither
+        // flush nor suppress an ordinary survivor this pass.
+        await ConfirmCompletedBatchesAgainstSourceAsync(
+            completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
+
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
         int appliedCount;
         if (hasRangeDelete)

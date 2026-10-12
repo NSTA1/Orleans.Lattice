@@ -348,23 +348,27 @@ internal sealed partial class ViewMaintainerGrain
     /// <summary>
     /// Records an ordinary (non-prepared, applicable) source write as a candidate
     /// to supersede a still-staged prepare for the same source key, keeping the
-    /// highest such HLC. A source key lives on one WAL partition, so a prepare and
-    /// any ordinary write to it are read in offset (HLC) order: an ordinary write
-    /// read after the prepare is staged necessarily carries a higher HLC and so
-    /// correctly supersedes it; one read before the prepare is not yet refcounted
-    /// (and carries a lower HLC), so the prepare correctly wins.
-    /// A predicate-filtered range delete records exactly the keys it tombstoned
-    /// (<see cref="LatticeMutation.MatchedKeys"/>), never its start key, which need
-    /// not have been live; an unconstrained range delete carries only its bounds
-    /// (issue #4882).
+    /// highest such HLC. Only writes read <i>after</i> the prepare is staged are
+    /// seen here, and offset order is NOT HLC order: a replicated, shadow-forwarded
+    /// or clock-skewed ordinary write can carry a lower HLC than a prepare it
+    /// follows (the HLC comparison at flush keeps the prepare then), and one with a
+    /// higher HLC can be logged before the prepare (it is not refcounted yet, so is
+    /// missed here and caught by source confirmation at flush instead; issue #4882).
+    /// A range delete records only the keys it actually tombstoned
+    /// (<see cref="LatticeMutation.MatchedKeys"/>), never its start key: the start
+    /// key need not have been live, and an unconstrained range is likewise left to
+    /// source confirmation.
     /// </summary>
     private void RecordOrdinaryOverStagedKey(in LatticeMutation mutation)
     {
-        if (mutation.Kind == MutationKind.DeleteRange && mutation.MatchedKeys is { } matched)
+        if (mutation.Kind == MutationKind.DeleteRange)
         {
-            foreach (var key in matched)
+            if (mutation.MatchedKeys is { } matched)
             {
-                RecordOrdinaryOverStagedKey(key, mutation.Timestamp);
+                foreach (var key in matched)
+                {
+                    RecordOrdinaryOverStagedKey(key, mutation.Timestamp);
+                }
             }
 
             return;
@@ -1091,18 +1095,18 @@ internal sealed partial class ViewMaintainerGrain
                 var disposition = Classify(mutation, out var commit, out var abort);
                 if (disposition == StagingDisposition.Apply)
                 {
-                    // A matched range delete supersedes only the keys it tombstoned;
-                    // see RecordOrdinaryOverStagedKey.
-                    if (mutation.Kind == MutationKind.DeleteRange && mutation.MatchedKeys is { } matched)
+                    // A range delete supersedes only the keys it tombstoned; see
+                    // RecordOrdinaryOverStagedKey.
+                    if (mutation.Kind != MutationKind.DeleteRange)
+                    {
+                        NoteHighest(ordinaryKeys, mutation.Key, mutation.Timestamp);
+                    }
+                    else if (mutation.MatchedKeys is { } matched)
                     {
                         foreach (var key in matched)
                         {
                             NoteHighest(ordinaryKeys, key, mutation.Timestamp);
                         }
-                    }
-                    else
-                    {
-                        NoteHighest(ordinaryKeys, mutation.Key, mutation.Timestamp);
                     }
 
                     continue;
@@ -1476,7 +1480,8 @@ internal sealed partial class ViewMaintainerGrain
                 // source last-writer; dropping the prepared entry reproduces the
                 // source LWW outcome (otherwise apply-order alone would resurrect
                 // the lower-HLC atomic value as a permanent lost write).
-                if (!registration.Accumulative && IsSupersededByOrdinary(prepared))
+                if (!registration.Accumulative
+                    && (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared)))
                 {
                     continue;
                 }
@@ -1608,7 +1613,7 @@ internal sealed partial class ViewMaintainerGrain
 
             foreach (var prepared in tx.PreparesByIndex.Values)
             {
-                if (IsSupersededByOrdinary(prepared))
+                if (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared))
                 {
                     continue;
                 }
@@ -1770,6 +1775,25 @@ internal sealed partial class ViewMaintainerGrain
         /// <summary><see langword="true"/> once at least one prepared entry is staged.</summary>
         public bool HasOldestPreparedHlc { get; private set; }
 
+        /// <summary>
+        /// Source keys whose prepared entry the source no longer holds once the batch
+        /// committed (a newer write or tombstone the view has already consumed won
+        /// last-writer-wins), established by <see cref="ConfirmStagedBatchAgainstSourceAsync"/>.
+        /// The flush skips these exactly as it skips <see cref="IsSupersededByOrdinary"/>.
+        /// </summary>
+        public HashSet<string>? SourceSupersededKeys { get; set; }
+
+        /// <summary>
+        /// Keys observed not to hold their prepared value at the source on an earlier
+        /// pass, awaiting the drain's consumption of <see cref="PendingSourceHeads"/>.
+        /// </summary>
+        public HashSet<string>? PendingSourceKeys { get; set; }
+
+        /// <summary>
+        /// Per-partition WAL head offsets sampled after the source read that produced
+        /// <see cref="PendingSourceKeys"/>; every write that read observed is below them.
+        /// </summary>
+        public long[]? PendingSourceHeads { get; set; }
         /// <summary>
         /// The cross-tree atomic-write coordinator key carried by the batch's
         /// terminals, or <see langword="null"/> for an ordinary single-tree batch.

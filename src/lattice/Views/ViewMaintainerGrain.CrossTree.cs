@@ -232,7 +232,7 @@ internal sealed partial class ViewMaintainerGrain
     {
         foreach (var prepared in tx.PreparesByIndex.Values)
         {
-            if (IsSupersededByOrdinary(prepared))
+            if (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared))
             {
                 _pendingCrossTreeReconcile = true;
                 logger.LogWarning(

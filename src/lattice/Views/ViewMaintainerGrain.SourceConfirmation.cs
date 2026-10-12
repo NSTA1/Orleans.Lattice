@@ -1,0 +1,202 @@
+using Orleans.Lattice.Primitives;
+
+namespace Orleans.Lattice.Views;
+
+/// <summary>
+/// Source confirmation of a completed atomic batch before it is flushed. The
+/// staged-key supersession record only sees an ordinary write read <i>after</i> the
+/// prepare was staged, and a range delete only through its recorded matched keys.
+/// Neither ordering is guaranteed: replication appends entries in arrival order,
+/// not HLC order, so a newer ordinary write can be logged (and applied to the view)
+/// before an older prepare for the same key; and an unconstrained range delete
+/// records only its bounds, not which keys it tombstoned. In both cases the source
+/// keeps the newer value by last-writer-wins when the batch commits, but the view
+/// would install the older prepare over it.
+/// <para>
+/// Before flushing, the maintainer therefore reads the batch's last-writer-wins
+/// prepared keys back from the source. A key that still holds its prepared value
+/// flushes normally. A key that does not is superseded at the source, but the
+/// superseding write may not yet have reached the view: the batch is deferred,
+/// whole, until the drain has consumed every WAL offset below the per-partition
+/// heads sampled after that read (so every write the read observed has been
+/// applied), and only then is the key dropped from the flush. A batch is never
+/// flushed with a key missing whose replacement the view has not yet applied, so
+/// no reader observes a partial batch or a value the source never held.
+/// </para>
+/// </summary>
+internal sealed partial class ViewMaintainerGrain
+{
+    /// <summary>
+    /// Confirms every completed batch in <paramref name="completed"/> against the
+    /// source and removes the ones that must wait, so neither the survivor guard nor
+    /// the flush acts on them this pass. A deferred batch stays staged (holding the
+    /// checkpoint back) and, still being complete, is re-seeded on the next pass.
+    /// </summary>
+    private async Task ConfirmCompletedBatchesAgainstSourceAsync(
+        List<Guid> completed,
+        string walTreeId,
+        int partitions,
+        IReadOnlyDictionary<int, long> consumed,
+        CancellationToken cancellationToken)
+    {
+        for (var i = completed.Count - 1; i >= 0; i--)
+        {
+            if (_staging.TryGetValue(completed[i], out var tx)
+                && !await ConfirmStagedBatchAgainstSourceAsync(walTreeId, partitions, tx, consumed, cancellationToken))
+            {
+                completed.RemoveAt(i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when source confirmation established that
+    /// <paramref name="prepared"/>'s key no longer holds its prepared value.
+    /// </summary>
+    private static bool IsSourceSuperseded(StagedTransaction tx, in LatticeMutation prepared)
+        => tx.SourceSupersededKeys?.Contains(prepared.Key) == true;
+
+    /// <summary>
+    /// Merges the pass's starting read checkpoints with the offsets it advanced to:
+    /// the highest WAL offset, per partition, the maintainer has consumed.
+    /// </summary>
+    private static Dictionary<int, long> ConsumedThrough(
+        IReadOnlyDictionary<int, long> readFrom,
+        IReadOnlyDictionary<int, long> advanced)
+    {
+        var consumed = new Dictionary<int, long>(readFrom);
+        foreach (var (partition, offset) in advanced)
+        {
+            if (offset > consumed.GetValueOrDefault(partition, -1))
+            {
+                consumed[partition] = offset;
+            }
+        }
+
+        return consumed;
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when <paramref name="tx"/> may flush now, with any key
+    /// the source no longer holds at its prepared value recorded in
+    /// <see cref="StagedTransaction.SourceSupersededKeys"/>; <see langword="false"/>
+    /// to defer the whole batch to a later pass. Only last-writer-wins prepares on
+    /// keys no other staged batch references are checked: a CRDT delta or merge is
+    /// folded rather than replaced, and overlapping staged batches are ordered by
+    /// <see cref="RecordFlushedPreparesOverStagedKeys"/>.
+    /// </summary>
+    private async Task<bool> ConfirmStagedBatchAgainstSourceAsync(
+        string walTreeId,
+        int partitions,
+        StagedTransaction tx,
+        IReadOnlyDictionary<int, long> consumed,
+        CancellationToken cancellationToken)
+    {
+        List<string>? keys = null;
+        Dictionary<string, byte[]?>? expected = null;
+        foreach (var prepared in tx.PreparesByIndex.Values)
+        {
+            if (prepared.Delta is not null
+                || prepared.IsMerge
+                || IsSupersededByOrdinary(prepared)
+                || tx.SourceSupersededKeys?.Contains(prepared.Key) == true
+                || _stagedSourceKeyRefCount.GetValueOrDefault(prepared.Key) > 1)
+            {
+                continue;
+            }
+
+            expected ??= new Dictionary<string, byte[]?>(StringComparer.Ordinal);
+            keys ??= [];
+            if (expected.TryAdd(prepared.Key, IsDeletion(prepared) ? null : prepared.Value))
+            {
+                keys.Add(prepared.Key);
+            }
+        }
+
+        if (keys is null)
+        {
+            ClearPendingSourceCheck(tx);
+            return true;
+        }
+
+        var source = await grainFactory.GetGrain<ILattice>(walTreeId).GetManyAsync(keys, cancellationToken);
+        HashSet<string>? mismatched = null;
+        foreach (var key in keys)
+        {
+            var held = source.GetValueOrDefault(key);
+            var wanted = expected![key];
+            var matches = wanted is null
+                ? held is null
+                : held is not null && held.AsSpan().SequenceEqual(wanted);
+            if (!matches)
+            {
+                (mismatched ??= new HashSet<string>(StringComparer.Ordinal)).Add(key);
+            }
+        }
+
+        if (mismatched is null)
+        {
+            ClearPendingSourceCheck(tx);
+            return true;
+        }
+
+        // Every key still mismatched was already mismatched when the pending heads
+        // were sampled, and the drain has consumed every offset below them, so each
+        // superseding write that read observed is already in the view.
+        if (tx.PendingSourceKeys is { } pendingKeys
+            && tx.PendingSourceHeads is { } heads
+            && mismatched.IsSubsetOf(pendingKeys))
+        {
+            if (Covers(consumed, heads))
+            {
+                tx.SourceSupersededKeys ??= new HashSet<string>(StringComparer.Ordinal);
+                tx.SourceSupersededKeys.UnionWith(mismatched);
+                ClearPendingSourceCheck(tx);
+                return true;
+            }
+
+            // Keep the earlier heads: re-sampling under sustained writes would push
+            // them forward every pass and never let the drain catch up.
+            tx.PendingSourceKeys = mismatched;
+            return false;
+        }
+
+        tx.PendingSourceKeys = mismatched;
+        tx.PendingSourceHeads = await SampleHeadOffsetsAsync(walTreeId, partitions, cancellationToken);
+        return false;
+    }
+
+    private static bool IsDeletion(in LatticeMutation prepared)
+        => prepared.IsTombstone || prepared.Kind is MutationKind.Delete or MutationKind.Tombstone;
+
+    private static void ClearPendingSourceCheck(StagedTransaction tx)
+    {
+        tx.PendingSourceKeys = null;
+        tx.PendingSourceHeads = null;
+    }
+
+    private static bool Covers(IReadOnlyDictionary<int, long> consumed, long[] heads)
+    {
+        for (var partition = 0; partition < heads.Length; partition++)
+        {
+            if (consumed.GetValueOrDefault(partition, -1) < heads[partition] - 1)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private async Task<long[]> SampleHeadOffsetsAsync(string walTreeId, int partitions, CancellationToken cancellationToken)
+    {
+        var count = partitions > 0 ? partitions : 1;
+        var heads = new long[count];
+        for (var partition = 0; partition < count; partition++)
+        {
+            heads[partition] = await commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken);
+        }
+
+        return heads;
+    }
+}
