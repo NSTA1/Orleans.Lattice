@@ -1,0 +1,11 @@
+MODULE: ResolvedIdentityDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: Move a physical read position outside its bounded log domain
+PERTURBS: Read
+
+--- FIND
+       IN /\ read' = [read EXCEPT ![tail] = i]
+--- REPLACE
+       IN /\ read' = [read EXCEPT ![tail] = 5]
+--- END

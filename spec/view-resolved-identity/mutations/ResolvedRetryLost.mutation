@@ -1,0 +1,11 @@
+MODULE: ResolvedRetryLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: An uncommitted candidate write never becomes durable despite retries
+PERTURBS: RetryCheckpoint
+
+--- FIND
+    /\ durableBinding' = candidate
+--- REPLACE
+    /\ durableBinding' = durableBinding
+--- END

@@ -1,0 +1,11 @@
+MODULE: ResolvedStartLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: Never start the rebuild despite completion of the original transaction
+PERTURBS: StartRebuild
+
+--- FIND
+    /\ candidate' \in Targets /\ phase' = "capturing"
+--- REPLACE
+    /\ candidate' \in Targets /\ phase' = phase
+--- END

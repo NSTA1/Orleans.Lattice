@@ -1,0 +1,11 @@
+MODULE: ResolvedStagingWrongLog
+TARGET: StageOwned
+CLASS: Invariant
+SUMMARY: A subscriber stages a physical log other than the one it is tailing
+PERTURBS: Read
+
+--- FIND
+          /\ stagedOwner' = IF ~resolved THEN tail ELSE stagedOwner
+--- REPLACE
+          /\ stagedOwner' = IF ~resolved THEN 3-tail ELSE stagedOwner
+--- END

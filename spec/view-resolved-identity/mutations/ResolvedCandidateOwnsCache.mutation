@@ -1,0 +1,14 @@
+MODULE: ResolvedCandidateOwnsCache
+TARGET: CacheOwned
+CLASS: Invariant
+SUMMARY: Candidate capture adopts a new owner before the actual tail changes
+PERTURBS: Capture
+
+--- FIND
+    /\ UNCHANGED <<tail,owner,resolved,order,prepared,terminal,stagedOwner,
+        read,heads,offsets,projections,liveBinding,durableBinding,candidate,outcome>>
+--- REPLACE
+    /\ owner' = candidate
+    /\ UNCHANGED <<tail,resolved,order,prepared,terminal,stagedOwner,
+        read,heads,offsets,projections,liveBinding,durableBinding,candidate,outcome>>
+--- END

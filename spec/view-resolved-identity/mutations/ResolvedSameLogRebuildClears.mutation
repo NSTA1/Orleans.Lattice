@@ -1,0 +1,15 @@
+MODULE: ResolvedSameLogRebuildClears
+TARGET: ResolvedRetained
+CLASS: Action
+SUMMARY: Same-log candidate capture clears suppression even though the actual physical tail is unchanged
+PERTURBS: Capture
+
+--- FIND
+    /\ UNCHANGED <<tail,owner,resolved,order,prepared,terminal,stagedOwner,
+        read,heads,offsets,projections,liveBinding,durableBinding,candidate,outcome>>
+--- REPLACE
+    /\ resolved' = IF candidate = tail THEN FALSE ELSE resolved
+    /\ order' = IF candidate = tail THEN <<>> ELSE order
+    /\ UNCHANGED <<tail,owner,prepared,terminal,stagedOwner,
+        read,heads,offsets,projections,liveBinding,durableBinding,candidate,outcome>>
+--- END

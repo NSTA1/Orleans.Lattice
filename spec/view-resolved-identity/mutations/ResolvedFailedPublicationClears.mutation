@@ -1,0 +1,15 @@
+MODULE: ResolvedFailedPublicationClears
+TARGET: ProjectionOnce
+CLASS: Invariant
+SUMMARY: Failed candidate publication clears original-tail suppression and its retry projects late duplicates again
+PERTURBS: PublishCheckpoint
+
+--- FIND
+    /\ UNCHANGED <<tail,owner,resolved,order,prepared,terminal,stagedOwner,
+        read,heads,projections,candidate,capturedHead>>
+--- REPLACE
+    /\ resolved' = IF outcome' # "success" THEN FALSE ELSE resolved
+    /\ order' = IF outcome' # "success" THEN <<>> ELSE order
+    /\ UNCHANGED <<tail,owner,prepared,terminal,stagedOwner,
+        read,heads,projections,candidate,capturedHead>>
+--- END

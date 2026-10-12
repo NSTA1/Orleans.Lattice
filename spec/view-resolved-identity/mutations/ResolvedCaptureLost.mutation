@@ -1,0 +1,11 @@
+MODULE: ResolvedCaptureLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: Capture does not advance to candidate publication
+PERTURBS: Capture
+
+--- FIND
+    /\ phase' = "captured"
+--- REPLACE
+    /\ phase' = phase
+--- END

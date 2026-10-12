@@ -1,0 +1,11 @@
+MODULE: ResolvedFlushLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: Resolve staging without actually projecting its revision
+PERTURBS: Flush
+
+--- FIND
+    /\ projections' = [projections EXCEPT ![tail] = @+1]
+--- REPLACE
+    /\ projections' = projections
+--- END

@@ -1,0 +1,18 @@
+{
+  "mutations": "mutations",
+  "refinement": "RefinementResolvedIdentity.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 6,
+    "properties": 2,
+    "actions": 10,
+    "mutations": 16,
+    "behaviourRows": 16,
+    "distinctStates": 196
+  },
+  "variants": {
+    "SameLog": { "distinctStates": 52 },
+    "FailedCandidate": { "distinctStates": 60 },
+    "LostCandidate": { "distinctStates": 49 }
+  }
+}
