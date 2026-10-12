@@ -384,6 +384,16 @@ physical identity. A failed checkpoint leaves recovery governed by the persisted
 tuple; a committed checkpoint whose response is lost resumes that committed
 physical tuple after reactivation.
 
+During a rebuild, the maintainer publishes separate offset read holds for the
+persisted bound WAL and the candidate WAL. The candidate is held before its
+consumer registration becomes visible and at its captured floor before scanning.
+Rejected candidates, failed checkpoint responses and retries of an already
+registered physical source do not replace the original durable-bound hold.
+Only successful durable publication retires that old hold. These offset holds
+are visible to WAL GC on other silos; the process-local HLC cursor alone is not
+that protection. Retention-TTL trimming may still overtake a view, which then
+detects the missing suffix and rebuilds from source state.
+
 The retained cursor, consumer registration and lag report follow that same
 physical WAL binding, for both filter and aggregation views. A position from
 the replacement WAL must not advance a pin on the former copy. Deleting the
