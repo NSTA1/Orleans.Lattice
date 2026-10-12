@@ -165,17 +165,34 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         if (!state.State.Decided)
         {
             state.State.Decided = true;
-            await state.WriteStateAsync();
         }
 
-        await IssueJointFlipAsync(state.State.Slices, JointOperationId);
-
-        state.State.Applied = true;
-        await state.WriteStateAsync();
+        await CompleteOriginalPublicationAsync();
 
         // Original publication is not registration closure: participants still
         // owe a repair contribution and a durable checkpoint acknowledgement.
         return ViewCrossTreeDecision.Committed;
+    }
+
+    private async Task CompleteOriginalPublicationAsync()
+    {
+        await state.WriteStateAsync();
+        await IssueJointFlipAsync(state.State.Slices, JointOperationId);
+
+        var persisted = false;
+        state.State.Applied = true;
+        try
+        {
+            await state.WriteStateAsync();
+            persisted = true;
+        }
+        finally
+        {
+            if (!persisted)
+            {
+                state.State.Applied = false;
+            }
+        }
     }
 
     /// <summary>

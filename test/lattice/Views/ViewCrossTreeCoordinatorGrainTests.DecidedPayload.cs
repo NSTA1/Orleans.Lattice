@@ -53,4 +53,30 @@ public sealed partial class ViewCrossTreeCoordinatorGrainTests
             Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<IReadOnlyList<string>>(),
             Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task RegisterReadyAsync_failed_completion_persistence_cannot_memoize_an_undurable_result()
+    {
+        var h = CreateGrain();
+        var target = Substitute.For<ILattice>();
+        h.GrainFactory.GetGrain<ILattice>("view-tree-1").Returns(target);
+        var attempts = 0;
+        target.SetManyAtomicAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(),
+                Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                if (++attempts == 1)
+                {
+                    h.State.ThrowOnWrite = new TimeoutException("Original completion persistence failed.");
+                }
+                return Task.CompletedTask;
+            });
+        await h.Grain.RegisterReadyAsync(Readiness("v1", "view-tree-1", ["v1", "v2"], Upsert("k", 1)));
+        Assert.ThrowsAsync<TimeoutException>(async () =>
+            await h.Grain.RegisterReadyAsync(Readiness("v2", "empty-peer", ["v1", "v2"])));
+        Assert.That(h.State.State.Applied, Is.False, "Failed durability is not a memoized committed response.");
+        await h.Grain.RegisterReadyAsync(Readiness("v1", "view-tree-1", ["v1", "v2"], Upsert("k", 9)));
+        Assert.That(attempts, Is.EqualTo(2), "Retry the frozen identity rather than certifying an undurable flag.");
+        Assert.That(h.State.State.Slices["v1"].Upserts[0].Value, Is.EqualTo(new byte[] { 1 }));
+    }
 }
