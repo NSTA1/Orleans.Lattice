@@ -687,6 +687,13 @@ internal sealed partial class BPlusLeafGrain(
         return state.State.Clock;
     }
 
+    /// <inheritdoc />
+    public async Task<LeafClockPage> GetClockAndNextSiblingAsync()
+    {
+        await AwaitReplayBarrierAsync();
+        return new LeafClockPage { Clock = state.State.Clock, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
+    }
+
     public async Task<byte[]?> GetAsync(string key)
     {
         await AwaitReplayBarrierAsync();
@@ -2292,6 +2299,13 @@ internal sealed partial class BPlusLeafGrain(
         EvaluateCompactionTrigger();
 
         return new LeafDeleteResult { Deleted = true, Split = SplitResult.Combine(recovered, relocatedSplit) };
+    }
+
+    /// <inheritdoc />
+    public async Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
+    {
+        var result = await DeleteRangeAsync(startInclusive, endExclusive, predicate);
+        return new LeafRangeDeletePage { Result = result, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
     }
 
     public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)

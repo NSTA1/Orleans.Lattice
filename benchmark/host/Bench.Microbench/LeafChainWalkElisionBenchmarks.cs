@@ -53,6 +53,17 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// range, then its previous-sibling pointer: payload + <c>GetKeyRangeAsync</c> +
 /// <c>GetPrevSiblingAsync</c> -> payload + <c>GetKeyRangeAndPrevSiblingAsync</c>,
 /// 3 calls per leaf -> 2.</item>
+/// <item><see cref="Site.RangeDeleteWalk"/> - the shard root's bounded range
+/// delete: <c>DeleteRangeAsync</c> + <c>GetNextSiblingAsync</c> (+
+/// <c>GetKeyRangeAsync</c> on the hop where the page budget yields) ->
+/// <c>DeleteRangeAndNextSiblingAsync</c>, whose page also carries the bounds,
+/// 2 calls per leaf -> 1.</item>
+/// <item><see cref="Site.RangeClockWalk"/> - the shard root's bounded
+/// range-clock probe: <c>GetClockAsync</c> + <c>GetKeyRangeAndNextSiblingAsync</c>
+/// -> <c>GetClockAndNextSiblingAsync</c>, 2 calls per leaf -> 1.</item>
+/// <item><see cref="Site.FreezeWalk"/> - the snapshot-baseline capture's freeze
+/// pass: <c>FreezeProjectionAsync</c> + <c>GetNextSiblingAsync</c> ->
+/// <c>FreezeProjectionAndNextSiblingAsync</c>, 2 calls per leaf -> 1.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -77,7 +88,7 @@ public class LeafChainWalkElisionBenchmarks
     private Guid[] _transactionIds = null!;
 
     /// <summary>The leaf-chain walk being measured; see the class summary.</summary>
-    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk, Site.ShardScanWalk, Site.PayloadDrainWalk, Site.ReverseScanWalk)]
+    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk, Site.ShardScanWalk, Site.PayloadDrainWalk, Site.ReverseScanWalk, Site.RangeDeleteWalk, Site.RangeClockWalk, Site.FreezeWalk)]
     public Site Path { get; set; }
 
     /// <summary>The number of leaves in the walked chain.</summary>
@@ -139,6 +150,19 @@ public class LeafChainWalkElisionBenchmarks
                     var (drainRange, drainNext) = await _chain.GetKeyRangeAndNextSiblingAsync(current);
                     total += drainNext is null ? 0 : drainRange;
                     leaf = drainNext;
+                    continue;
+                }
+
+                case Site.RangeDeleteWalk:
+                case Site.FreezeWalk:
+                    total += (await _chain.GetDeltaSinceAsync(current)).Count;
+                    break;
+                case Site.RangeClockWalk:
+                {
+                    total += (await _chain.GetDeltaSinceAsync(current)).Count;
+                    var (clockRange, clockNext) = await _chain.GetKeyRangeAndNextSiblingAsync(current);
+                    total += clockNext is null ? 0 : clockRange;
+                    leaf = clockNext;
                     continue;
                 }
 
@@ -220,10 +244,20 @@ public class LeafChainWalkElisionBenchmarks
                 }
 
                 case Site.PayloadDrainWalk:
+                case Site.RangeClockWalk:
                 {
                     var (delta, range, next) = await _chain.GetDeltaSinceWithLinkAsync(current);
                     total += delta.Count;
                     total += next is null ? 0 : range;
+                    leaf = next;
+                    break;
+                }
+
+                case Site.RangeDeleteWalk:
+                case Site.FreezeWalk:
+                {
+                    var (delta, _, next) = await _chain.GetDeltaSinceWithLinkAsync(current);
+                    total += delta.Count;
                     leaf = next;
                     break;
                 }
@@ -275,6 +309,15 @@ public class LeafChainWalkElisionBenchmarks
 
         /// <summary>The shard root's reverse range-bounded page fills.</summary>
         ReverseScanWalk,
+
+        /// <summary>The shard root's bounded range delete.</summary>
+        RangeDeleteWalk,
+
+        /// <summary>The shard root's bounded range-clock probe.</summary>
+        RangeClockWalk,
+
+        /// <summary>The snapshot-baseline capture's freeze pass.</summary>
+        FreezeWalk,
     }
 
     /// <summary>How a simulated grain call completes.</summary>

@@ -445,12 +445,14 @@ internal sealed partial class ShardRootGrain
                 StandDownIfCeilingFired(scan, leafId);
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
-                var freeze = await leaf.FreezeProjectionAsync(cancellationToken);
-                frozen.Add((leaf, freeze));
+                // Freeze and sibling pointer in one turn; the freeze is read-only,
+                // so the pointer is the one a separate call would have read.
+                var page = await leaf.FreezeProjectionAndNextSiblingAsync(cancellationToken);
+                frozen.Add((leaf, page.Freeze));
                 walk.RecordLeafVisited();
                 scan.Budget.RecordLeafVisited();
 
-                var next = await leaf.GetNextSiblingAsync();
+                var next = page.NextSibling;
                 if (next is null)
                     break;
                 leafId = next.Value;
