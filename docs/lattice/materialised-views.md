@@ -843,6 +843,49 @@ global barrier. Rebuild, reconcile, physical-source rebind and decommission
 respect these holds. Legacy operations keep their released completion contract,
 as described below.
 
+### Automatic upgrades of joint-view coordinators
+
+Existing deployments require no migration command, approval, explicit reconcile,
+or operator-issued completion certificate. The durable coordinator protocol
+version separates already admitted legacy work from the new joint-repair
+contract; absence of the version field in a released record means legacy
+protocol 0, not successful repair under protocol 1.
+
+A legacy committed decision resumes its shipped completion path and normal
+retention cleanup, even when participants have already retired their original
+source context. An interrupted legacy decision replays its frozen projected
+slices against the original physical view targets with the original idempotency
+key. It does not rebuild history from current source winners or invent missing
+source keys. Legacy completion never sets the new repair-completion or
+participant-acknowledgement fields. Previously degraded legacy work remains
+per-tree work; upgrading does not retroactively certify joint publication.
+
+Once a protocol-1 joint publication is decided, its retirement requires every
+participant's durable repair ownership, joint repair publication and checkpoint
+acknowledgement. A legacy readiness message cannot stand in for a protocol-1
+participant. A retention timeout cannot discharge a decided protocol-1
+publication or an open repair obligation; the pre-decision readiness timeout
+remains a separate, explicitly degraded outcome.
+
+New repair admission is paused automatically while any remaining cluster member
+has an unavailable manifest or does not advertise joint-repair capability.
+Joining and draining members count until they are dead, and an empty active
+membership is not a successful upgrade. Manifest or membership changes cause
+the admission decision to be re-evaluated; there is no hardcoded override or
+persisted "migration finished" flag. New-protocol status and repair calls must
+also wait for that capability boundary so they are not dispatched to an older
+coordinator that lacks those methods. Pending view work remains staged and
+resumes automatically when the cluster finishes upgrading.
+
+The supported deployment paths are an automated homogeneous cluster restart
+or a monotonic rolling replacement of old silos with the new build. The host's
+deployment controller must not reintroduce old binaries after protocol-1 work
+has been admitted; arbitrary binary downgrade or old-silo rejoin is not
+supported. The admission gate reads Orleans membership and manifest snapshots,
+not a consensus-locked deployment inventory, and cannot make old code enforce
+new persistent-state obligations. An already admitted protocol-1 obligation is
+never downgraded if admission subsequently closes.
+
 ## Replication modes
 
 A view declares, through `LatticeViewOptions.ReplicationMode`, how its tree is
