@@ -34,6 +34,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Split, consolidation and compaction walks read each leaf once.** Split and consolidation drains and the compaction chain walk read each leaf's payload, then its key range and next sibling, as two grain calls. One call returns both: 2 leaf calls per leaf drop to 1, 2.3x faster. ([#4896](https://github.com/NSTA1/Orleans.Lattice/pull/4896)) (`Orleans.Lattice`)
 - **Performance - Tree merge drains read each leaf once.** The merge drain read each leaf's tombstone delta, then its key range and next sibling, as two grain calls. The delta page now carries both: 8 leaf calls drop to 4 over a 4-leaf chain, 2.1x faster, 45% less allocated. ([#4893](https://github.com/NSTA1/Orleans.Lattice/pull/4893)) (`Orleans.Lattice`)
 - **Performance - Snapshot copies read each leaf once.** The snapshot copy read each leaf's live entries, then its key range and next sibling, as two grain calls. The entries page now carries both: 2 leaf calls per leaf drop to 1, 2.1x faster. ([#4893](https://github.com/NSTA1/Orleans.Lattice/pull/4893)) (`Orleans.Lattice`)
 - **Performance - Reverse range scans read leaf bounds in one call.** Reverse bounded page fills read each leaf's key range and previous sibling as two grain calls. One call now returns both: 12 leaf calls drop to 8 over a 4-leaf chain, 1.5x faster. ([#4893](https://github.com/NSTA1/Orleans.Lattice/pull/4893)) (`Orleans.Lattice`)
