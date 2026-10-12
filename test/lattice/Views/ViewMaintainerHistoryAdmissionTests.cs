@@ -41,6 +41,9 @@ public sealed class ViewMaintainerHistoryAdmissionTests
         var rows = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var completed = new HashSet<string>(StringComparer.Ordinal);
         var tree = Substitute.For<ILattice>();
+        tree.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(call.ArgAt<List<string>>(0).Where(rows.ContainsKey)
+                .ToDictionary(key => key, key => rows[key], StringComparer.Ordinal)));
         tree.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {

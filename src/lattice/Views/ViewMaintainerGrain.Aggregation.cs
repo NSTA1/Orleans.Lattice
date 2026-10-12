@@ -158,9 +158,12 @@ internal sealed partial class ViewMaintainerGrain
         // atomic membership+accumulator flip), after the ordinary contributions.
         // Confirm completed batches against the source before folding them, deferring
         // any whose superseded key may not yet have its replacement folded in.
-        await ConfirmCompletedBatchesAgainstSourceAsync(
-            completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
-        GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
+        if (!registration.Accumulative)
+        {
+            await ConfirmCompletedBatchesAgainstSourceAsync(
+                completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
+            GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
+        }
         applied += await FlushCompletedAggregationBatchesAsync(viewTree, registration, completedTransactions, cancellationToken);
 
         // Hold the persisted resume offset back below the lowest still-staged
@@ -256,7 +259,7 @@ internal sealed partial class ViewMaintainerGrain
                 // batch was staged, is the source last-writer; dropping the
                 // prepared entry keeps the group accumulator convergent with the
                 // source instead of folding in a superseded atomic contribution.
-                if (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared))
+                if (!registration.Accumulative && (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared)))
                 {
                     continue;
                 }

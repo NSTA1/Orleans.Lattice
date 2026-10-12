@@ -671,9 +671,12 @@ internal sealed partial class ViewMaintainerGrain(
         // Confirm completed batches against the source before the survivor guard
         // and the flush both read the completed list: a deferred batch must neither
         // flush nor suppress an ordinary survivor this pass.
-        await ConfirmCompletedBatchesAgainstSourceAsync(
-            completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
-        GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
+        if (!registration.Accumulative)
+        {
+            await ConfirmCompletedBatchesAgainstSourceAsync(
+                completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
+            GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
+        }
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
 
@@ -1260,10 +1263,9 @@ internal sealed partial class ViewMaintainerGrain(
     /// the first bind it records the identity with no rebuild (unless the source is
     /// already aliased, in which case it reprojects from the physical tree). When the
     /// bound identity no longer matches, the source was swapped underneath the alias
-    /// (restore / revert / resize / undo / remediation / set-alias): the old WAL cursor pin is released, the durable
-    /// per-partition offsets are reset (they are absolute against the retired WAL and
-    /// must never resume against a different physical log), the view is rebuilt from
-    /// the new physical source, and the new identity is recorded. Returns whether a
+    /// (restore / revert / resize / undo / remediation / set-alias): the view is rebuilt
+    /// from a captured physical source, publishing its identity, generation and
+    /// source-specific offsets together before releasing the old WAL pin. Returns whether a
     /// heal ran this drain so the caller can short-circuit the rest of the pass.
     /// </summary>
     private async Task<bool> EnsureBoundToCurrentSourceIdentityAsync(
