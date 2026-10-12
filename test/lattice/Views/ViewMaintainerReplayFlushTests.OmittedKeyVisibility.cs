@@ -146,6 +146,54 @@ public partial class ViewMaintainerReplayFlushTests
     }
 
     [Test]
+    public async Task A_batch_omitting_a_key_waits_for_an_unconfirmed_replacement_after_all_heads_are_consumed()
+    {
+        var view = new FakeViewTree();
+        var h = Create(view, new FakePersistentState<ViewCheckpointState>());
+        var first = Guid.NewGuid();
+        var replacement = Guid.NewGuid();
+        List<LatticeMutation> log =
+        [
+            Prepared(first, Key, 2, ticks: 20, size: 2, index: 0),
+            Prepared(first, OtherKey, 2, ticks: 20, size: 2, index: 1),
+            Commit(first, ticks: 21),
+            Prepared(replacement, Key, 3, ticks: 30, size: 2, index: 0),
+            Prepared(replacement, "m", 3, ticks: 30, size: 2, index: 1),
+            Commit(replacement, ticks: 31),
+        ];
+        ArmLog(h, log);
+        h.HeadOffset.Value = log.Count;
+        h.SourceRows.Remove("m");
+        h.SourceVersions.Remove("m");
+
+        await h.Grain.DrainAsync();
+        await h.Grain.DrainAsync();
+        await h.Grain.DrainAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PartialBatchSnapshots(view), Is.Empty,
+                "consumed heads do not release a replacement batch whose source row is still unconfirmed");
+            Assert.That(view.Snapshots, Is.Empty);
+            Assert.That(h.State.State.AppliedOffsets.GetValueOrDefault(0, -1), Is.EqualTo(-1));
+        });
+
+        h.SourceRows["m"] = [3];
+        h.SourceVersions["m"] = Clock(30);
+        await h.Grain.DrainAsync();
+        await h.Grain.DrainAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PartialBatchSnapshots(view), Is.Empty);
+            Assert.That(view.Rows[Key], Is.EqualTo(new byte[] { 3 }));
+            Assert.That(view.Rows[OtherKey], Is.EqualTo(new byte[] { 2 }));
+            Assert.That(view.Rows["m"], Is.EqualTo(new byte[] { 3 }));
+            Assert.That(h.State.State.AppliedOffsets[0], Is.EqualTo(log.Count - 1));
+        });
+    }
+
+    [Test]
     public async Task A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it()
     {
         var view = new FakeViewTree();
