@@ -59,10 +59,12 @@ whole ring must close before publication. Durable `done` stands for the
 backing store's keyed, idempotent effect and history identity, not persistence
 of the maintainer's volatile resolved set. One physical identity is fixed; a
 reused transaction ID on a different physical log must not inherit this `done`
-state. That scoping guarantee is a pending separate obligation (#4895), absent
-from the existing single-transaction Rebind abstraction. Crash after publication but before
-checkpoint includes a lost response/replay boundary without modelling every
-await.
+state. The separate [ResolvedIdentity companion](../view-resolved-identity/README.md)
+discharges that bounded scoping obligation (#4895) through actual-tail ownership,
+same-log retention and set/eviction-queue discrimination. It does not enlarge
+this model or the existing single-transaction Rebind abstraction. Crash after
+publication but before checkpoint includes a lost response/replay boundary
+without modelling every await.
 
 See the module README's explicit SourceAdmission rely-guarantee contract.
 History bypass is a separate registration branch; it does not erase the
