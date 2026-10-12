@@ -705,7 +705,8 @@ internal sealed partial class ViewMaintainerGrain(
         state.State.HighestAppliedTimestamp = highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
 
-        if (offsetsAdvanced || appliedCount > 0 || replayFenceChanged)
+        var reconcileScheduled = PersistPendingCrossTreeReconcile();
+        if (offsetsAdvanced || appliedCount > 0 || replayFenceChanged || reconcileScheduled)
         {
             LowerReadPositions(walTreeId, state.State.AppliedOffsets);
             await state.WriteStateAsync();

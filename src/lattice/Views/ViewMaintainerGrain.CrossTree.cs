@@ -61,6 +61,13 @@ internal sealed partial class ViewMaintainerGrain
     private bool _pendingCrossTreeReconcile;
 
     /// <summary>
+    /// Test-only fault seam invoked with the view name immediately before the
+    /// deferred cross-tree reconcile runs; a test throws from it to stand in for
+    /// a failed reconcile. Always <see langword="null"/> in production.
+    /// </summary>
+    internal static Func<string, Task>? BeforeCrossTreeReconcileForTest;
+
+    /// <summary>
     /// The configured bounded interval a cross-tree batch waits for every other
     /// participant view to become ready before degrading to per-tree-slice
     /// atomicity, falling back to the default when unset.
@@ -280,20 +287,44 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <summary>
-    /// Runs the deferred reconcile scheduled by a cross-tree degrade this pass, if
-    /// any. Called at the end of a drain pass (after the checkpoint is persisted)
-    /// so the rebuild does not clear the staging buffer under the flush loop.
+    /// Records a reconcile scheduled this pass in the durable checkpoint state, so
+    /// the drain's checkpoint write that advances past the flip also persists the
+    /// obligation to repair it. Returns whether the state changed (the caller then
+    /// forces the write).
+    /// </summary>
+    private bool PersistPendingCrossTreeReconcile()
+    {
+        if (!_pendingCrossTreeReconcile || state.State.PendingCrossTreeReconcile)
+        {
+            return false;
+        }
+
+        state.State.PendingCrossTreeReconcile = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Runs the deferred reconcile scheduled by a cross-tree degrade or a
+    /// possibly-superseded joint flip, if one is outstanding in memory or in the
+    /// persisted state. Called at the end of a drain pass (after the checkpoint is
+    /// persisted) so the rebuild does not clear the staging buffer under the flush
+    /// loop. The obligation is retired only after the reconcile succeeds; a
+    /// failure leaves it set so a later pass retries it.
     /// </summary>
     private async Task RunPendingCrossTreeReconcileAsync(CancellationToken cancellationToken)
     {
-        if (!_pendingCrossTreeReconcile)
+        if (!_pendingCrossTreeReconcile && !state.State.PendingCrossTreeReconcile)
         {
             return;
         }
 
-        _pendingCrossTreeReconcile = false;
         try
         {
+            if (BeforeCrossTreeReconcileForTest is { } hook)
+            {
+                await hook(ViewName);
+            }
+
             await ReconcileAsync(cancellationToken);
         }
         catch (Exception ex)
@@ -301,6 +332,14 @@ internal sealed partial class ViewMaintainerGrain
             logger.LogWarning(ex,
                 "View '{ViewName}' reconcile after a cross-tree degrade failed; will retry on a later pass.",
                 ViewName);
+            return;
+        }
+
+        _pendingCrossTreeReconcile = false;
+        if (state.State.PendingCrossTreeReconcile)
+        {
+            state.State.PendingCrossTreeReconcile = false;
+            await state.WriteStateAsync();
         }
     }
 }

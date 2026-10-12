@@ -210,4 +210,15 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(15)]
     public List<string>? BackstopDiscardedCrossTreeOperations { get; set; }
+
+    /// <summary>
+    /// Whether a reconcile scheduled after a cross-tree degrade, or after a joint
+    /// flip that may have landed a superseded slice, is still outstanding. Set in
+    /// the same state write that advances the checkpoint past the flip, and
+    /// cleared only after the reconcile succeeds, so a failed reconcile or a
+    /// deactivation before it is retried by a later drain rather than leaving the
+    /// stale slice in the view with no entry left to replay.
+    /// </summary>
+    [Id(16)]
+    public bool PendingCrossTreeReconcile { get; set; }
 }
