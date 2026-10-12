@@ -931,7 +931,7 @@ internal sealed partial class ViewMaintainerGrain(
         // observe a half-built view.
         var built = await BuildShadowAsync(registration, cancellationToken);
         await ReportMaintenanceProgressAsync(Operations.LatticeMaintenanceProgress.Swapping);
-        await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
+        await SwapToShadowAsync(registration, built, cancellationToken);
     }
 
     /// <summary>
@@ -1274,10 +1274,7 @@ internal sealed partial class ViewMaintainerGrain(
             // an unbuilt view behind a satisfied equality check.
             if (!string.Equals(physical, logical, StringComparison.Ordinal))
             {
-                state.State.AppliedOffsets.Clear();
                 await RebuildAsync(cancellationToken);
-                state.State.BoundPhysicalTreeId = physical;
-                await state.WriteStateAsync();
                 MarkConverged();
                 return true;
             }
@@ -1297,15 +1294,11 @@ internal sealed partial class ViewMaintainerGrain(
             return false;
         }
 
-        // The source's physical identity was swapped underneath the alias. Release
-        // the pin on the retired WAL so the garbage collector is no longer blocked by
-        // this view, reset the offsets (they are meaningless against a new log),
-        // rebuild from the new physical source, and only then rebind.
+        // Retain the old binding and pin until the captured new generation and
+        // its source-specific offsets are durably published.
         logger.LogWarning(
-            "View '{ViewName}' source '{Source}' physical identity changed from '{OldPhysical}' to '{NewPhysical}'; unpinning the retired WAL and rebuilding from the new source.",
+            "View '{ViewName}' source '{Source}' physical identity changed from '{OldPhysical}' to '{NewPhysical}'; rebuilding before retiring the old WAL pin.",
             ViewName, logical, bound, physical);
-
-        await cursorRegistry.UnregisterAsync(bound, ConsumerId, cancellationToken);
 
         // Rebuild from the new physical source BEFORE persisting the advanced
         // binding. The rebuild is the step that can fail (a transient source-scan
@@ -1315,15 +1308,9 @@ internal sealed partial class ViewMaintainerGrain(
         // check above would then short-circuit every subsequent drain so the view
         // would never re-heal. Rebuilding first and rebinding only on success leaves
         // a failed rebuild's old binding intact so the next drain retries the heal.
-        state.State.AppliedOffsets.Clear();
         await RebuildAsync(cancellationToken);
 
-        state.State.BoundPhysicalTreeId = physical;
-        await state.WriteStateAsync();
-
-        // The rebuild registered this view with the new log before reading it, so
-        // the retired log can be released now without a window holding neither.
-        await WithdrawReadRegistrationAsync(bound);
+        // The rebuild owns both tuple publication and old-log retirement.
         MarkConverged();
         return true;
     }

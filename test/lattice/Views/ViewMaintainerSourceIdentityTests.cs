@@ -6,6 +6,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Lattice.Views;
+using Orleans.Lattice.Wal;
 using Orleans.Runtime;
 using Orleans.Storage;
 
@@ -42,7 +43,8 @@ public class ViewMaintainerSourceIdentityTests
         new("orders-view", Source, Substitute.For<ILatticeViewProjection>());
 
     private static (ViewMaintainerGrain Grain, ILatticeRegistry Registry, FakePersistentState<ViewCheckpointState> State)
-        Create(TimeSpan backstop, string boundPhysical, string resolvesTo, IWalCursorRegistry? cursorRegistry = null)
+        Create(TimeSpan backstop, string boundPhysical, string resolvesTo, IWalCursorRegistry? cursorRegistry = null,
+            ICommitLogReader? commitLogReader = null)
     {
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(Arg.Any<string>()).Returns(resolvesTo);
@@ -61,6 +63,10 @@ public class ViewMaintainerSourceIdentityTests
             }));
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        factory.GetGrain<IWalOffsetConsumerRegistryGrain>(Arg.Any<string>())
+            .Returns(Substitute.For<IWalOffsetConsumerRegistryGrain>());
+        var catalog = Substitute.For<IViewCatalog>();
+        catalog.TryGet("orders-view").Returns(Reg());
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("viewmaintainer", "orders-view"));
@@ -77,14 +83,14 @@ public class ViewMaintainerSourceIdentityTests
             factory,
             reminderRegistry: null!,
             NullLogger<ViewMaintainerGrain>.Instance,
-            catalog: null!,
-            commitLogReader: null!,
+            catalog,
+            commitLogReader: commitLogReader!,
             subscriber: null!,
             cursorRegistry: cursorRegistry!,
             optionsResolver: Fakes.TestOptionsResolver.ForFactory(factory),
             viewOptions,
             latticeOptions: null!,
-            replicationContext: null!,
+            replicationContext: Substitute.For<ILatticeReplicationContext>(),
             saturationSignal: null,
             historyRowCodec: null!,
             state);
@@ -168,16 +174,17 @@ public class ViewMaintainerSourceIdentityTests
     [Test]
     public async Task Failed_heal_does_not_suppress_the_retry_re_resolve_within_the_backstop()
     {
-        // A swapped source whose heal throws (the unpin step faults here) must NOT
+        // A swapped source whose heal throws (the source head probe faults) must NOT
         // stamp the steady-state gate: the very next drain, still well inside the
         // backstop window, has to re-resolve and retry the heal rather than latch
         // the view on its retired binding until the coarse backstop elapses. This
         // is the unit-level guard for the regression the replication package's
         // MaterialisedViewIdentitySwapHealTests caught end-to-end.
-        var cursorRegistry = Substitute.For<IWalCursorRegistry>();
-        cursorRegistry.UnregisterAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException(new InvalidOperationException("unpin faulted")));
-        var (grain, registry, _) = Create(TimeSpan.FromSeconds(30), "orders-old", "orders-new", cursorRegistry);
+        var reader = Substitute.For<ICommitLogReader>();
+        reader.GetHeadOffsetAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<long>(new InvalidOperationException("source head probe faulted")));
+        var (grain, registry, _) = Create(TimeSpan.FromSeconds(30), "orders-old", "orders-new",
+            Substitute.For<IWalCursorRegistry>(), reader);
         var clock = new AdvanceableClock(DateTimeOffset.UnixEpoch);
         grain.SetSourceIdentityClockForTesting(clock);
         var reg = Reg();
@@ -192,8 +199,8 @@ public class ViewMaintainerSourceIdentityTests
             () => grain.EnsureBoundForTestingAsync(reg),
             Throws.InstanceOf<InvalidOperationException>());
 
-        // Two resolves prove the failed heal did not gate the retry inside the window.
-        await registry.Received(2).GetEntryAsync(Source);
+        // Both attempts must reach the failing source probe, rather than gate the retry.
+        await reader.Received(2).GetHeadOffsetAsync("orders-new", 0, Arg.Any<CancellationToken>());
     }
 
     [TestCase("")]

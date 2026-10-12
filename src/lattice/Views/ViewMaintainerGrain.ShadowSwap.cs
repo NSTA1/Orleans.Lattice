@@ -52,8 +52,8 @@ namespace Orleans.Lattice.Views;
 /// </summary>
 internal sealed partial class ViewMaintainerGrain
 {
-    /// <summary>The captured per-partition resume floor and highest HLC of a completed shadow build.</summary>
-    private readonly record struct ShadowBuildResult(Dictionary<int, long> Offsets, HybridLogicalClock Highest);
+    /// <summary>The physical source, resume floor and highest HLC of one shadow build.</summary>
+    private readonly record struct ShadowBuildResult(string WalTreeId, Dictionary<int, long> Offsets, HybridLogicalClock Highest);
 
     /// <inheritdoc />
     public async Task RebuildTrackedAsync(LatticeOperationTicket ticket, CancellationToken cancellationToken = default)
@@ -278,7 +278,7 @@ internal sealed partial class ViewMaintainerGrain
 
         // DeriveLocally drift: the freshly-built shadow is the repaired view.
         await ReportMaintenanceProgressAsync(LatticeMaintenanceProgress.Swapping);
-        await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
+        await SwapToShadowAsync(registration, built, cancellationToken);
         return true;
     }
 
@@ -425,15 +425,32 @@ internal sealed partial class ViewMaintainerGrain
 
         // Keep the active generation at 0 (stable tree id) and advance the resume
         // checkpoint to the captured source heads in one durable write.
+        var currentPhysical = await ResolveSourcePhysicalAsync(sourceTreeId);
+        if (!string.Equals(currentPhysical, walTreeId, StringComparison.Ordinal))
+        {
+            _sourceIdentityRebindRequested = true;
+            throw new StaleTreeRoutingException(sourceTreeId, walTreeId, currentPhysical);
+        }
+
+        var retiredPhysical = state.State.BoundPhysicalTreeId;
         state.State.ActiveGeneration = 0;
+        state.State.BoundPhysicalTreeId = walTreeId;
         state.State.AppliedOffsets = capturedOffsets;
         state.State.HighestAppliedTimestamp = highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
         await state.WriteStateAsync();
+        PublishReadPositions(walTreeId, capturedOffsets);
 
         if (highest > HybridLogicalClock.Zero)
         {
             await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, cancellationToken);
+        }
+
+        if (!string.IsNullOrEmpty(retiredPhysical)
+            && !string.Equals(retiredPhysical, walTreeId, StringComparison.Ordinal))
+        {
+            await cursorRegistry.UnregisterAsync(retiredPhysical, ConsumerId, cancellationToken);
+            await WithdrawReadRegistrationAsync(retiredPhysical);
         }
     }
 
@@ -588,7 +605,7 @@ internal sealed partial class ViewMaintainerGrain
             }
         }
 
-        return new ShadowBuildResult(capturedOffsets, highest);
+        return new ShadowBuildResult(walTreeId, capturedOffsets, highest);
     }
 
     /// <summary>
@@ -598,8 +615,7 @@ internal sealed partial class ViewMaintainerGrain
     /// </summary>
     private async Task SwapToShadowAsync(
         ViewRegistration registration,
-        Dictionary<int, long> capturedOffsets,
-        HybridLogicalClock highest,
+        ShadowBuildResult built,
         CancellationToken cancellationToken)
     {
         var oldGeneration = state.State.ActiveGeneration;
@@ -610,9 +626,21 @@ internal sealed partial class ViewMaintainerGrain
         // already beyond the single post-swap staleness window).
         await TryReclaimPendingGenerationAsync(cancellationToken, force: true);
 
+        var currentPhysical = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
+        if (!string.Equals(currentPhysical, built.WalTreeId, StringComparison.Ordinal))
+        {
+            _sourceIdentityRebindRequested = true;
+            logger.LogWarning(
+                "View '{ViewName}' rejected a shadow scanned from '{CapturedPhysical}' after its source moved to '{CurrentPhysical}'.",
+                ViewName, built.WalTreeId, currentPhysical);
+            throw new StaleTreeRoutingException(registration.SourceTreeId, built.WalTreeId, currentPhysical);
+        }
+
+        var retiredPhysical = state.State.BoundPhysicalTreeId;
         state.State.ActiveGeneration = newGeneration;
-        state.State.AppliedOffsets = capturedOffsets;
-        state.State.HighestAppliedTimestamp = highest;
+        state.State.BoundPhysicalTreeId = built.WalTreeId;
+        state.State.AppliedOffsets = built.Offsets;
+        state.State.HighestAppliedTimestamp = built.Highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
         state.State.HasPendingReclaim = true;
         state.State.PendingReclaimGeneration = oldGeneration;
@@ -621,11 +649,18 @@ internal sealed partial class ViewMaintainerGrain
         // Single durable commit: readers resolving the active generation flip from
         // the old fully-built tree to the new fully-built tree with no empty window.
         await state.WriteStateAsync();
+        PublishReadPositions(built.WalTreeId, built.Offsets);
 
-        if (highest > HybridLogicalClock.Zero)
+        if (built.Highest > HybridLogicalClock.Zero)
         {
-            var walTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
-            await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, cancellationToken);
+            await cursorRegistry.ReportCursorAsync(built.WalTreeId, ConsumerId, built.Highest, cancellationToken);
+        }
+
+        if (!string.IsNullOrEmpty(retiredPhysical)
+            && !string.Equals(retiredPhysical, built.WalTreeId, StringComparison.Ordinal))
+        {
+            await cursorRegistry.UnregisterAsync(retiredPhysical, ConsumerId, cancellationToken);
+            await WithdrawReadRegistrationAsync(retiredPhysical);
         }
     }
 
@@ -825,7 +860,9 @@ internal sealed partial class ViewMaintainerGrain
         long ResumeFloor(long head, int partition)
         {
             var floor = head - 1;
-            var stagedFloor = HeldFloorForPartition(partition);
+            var stagedFloor = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal)
+                ? HeldFloorForPartition(partition)
+                : long.MaxValue;
             if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
             {
                 floor = stagedFloor - 1;

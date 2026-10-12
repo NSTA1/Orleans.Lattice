@@ -85,12 +85,14 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
             return;
         }
 
+        // Registration can become visible before its response. Publish the hold
+        // first; an old physical log's offsets cannot bound the candidate log.
+        var positions = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal)
+            ? ToPositions(state.State.AppliedOffsets)
+            : [];
+        _readPositions = new ViewReadPositions(walTreeId, positions);
         await grainFactory.GetGrain<IWalOffsetConsumerRegistryGrain>(walTreeId).RegisterAsync(context.GrainId);
         _registeredReadLogs.Add(walTreeId);
-
-        // Answer for this log from the resume point as it stands, which is never
-        // ahead of what is persisted at the moment a read is about to start.
-        _readPositions = new ViewReadPositions(walTreeId, ToPositions(state.State.AppliedOffsets));
     }
 
     /// <summary>
