@@ -36,8 +36,8 @@ internal sealed class HistoryPublicationHoldFilter(IGrainFactory grainFactory) :
             && context.InterfaceMethod.Name == nameof(ILattice.SetManyAtomicAsync)
             && Gates.TryGetValue(treeId, out var gate)
             && context.Request.GetArgument(0) is List<KeyValuePair<string, byte[]>> writes
-            && writes.Count == gate.Keys.Count
-            && writes.All(write => gate.Keys.Contains(write.Key, StringComparer.Ordinal))
+            // The publication slice may include unrelated groups beside the snapshot under test.
+            && gate.Keys.All(key => writes.Any(write => StringComparer.Ordinal.Equals(write.Key, key)))
             && Gates.TryRemove(treeId, out _))
         {
             if (gate.SplitPublication)
@@ -45,12 +45,17 @@ internal sealed class HistoryPublicationHoldFilter(IGrainFactory grainFactory) :
                 // Replace only this captured batch with point publications; the
                 // reader is held between them, not between two separate reads.
                 var tree = grainFactory.GetGrain<ILattice>(treeId);
-                await tree.SetAsync(writes[0].Key, writes[0].Value);
+                var splitKey = gate.Keys[0];
+                var splitWrite = writes.Single(write => StringComparer.Ordinal.Equals(write.Key, splitKey));
+                await tree.SetAsync(splitWrite.Key, splitWrite.Value);
                 gate.Entered.TrySetResult();
                 await gate.Released.Task;
-                for (var index = 1; index < writes.Count; index++)
+                foreach (var write in writes)
                 {
-                    await tree.SetAsync(writes[index].Key, writes[index].Value);
+                    if (!StringComparer.Ordinal.Equals(write.Key, splitKey))
+                    {
+                        await tree.SetAsync(write.Key, write.Value);
+                    }
                 }
                 context.Result = null;
                 return;
