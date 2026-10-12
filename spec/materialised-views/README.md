@@ -15,7 +15,7 @@ source identity swap followed by the view's rebind onto the new physical log.
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `MaterialisedViewTail` | 7 | 5 | 17 | 22 | 27 | 121,488 |
 | `MaterialisedViewFence` | 4 | 2 | 9 | 9 | 13 | 194 |
-| `MaterialisedViewHorizon` | 4 | 7 | 17 | 21 | 26 | 28,357 |
+| `MaterialisedViewHorizon` | 5 | 8 | 19 | 23 | 30 | 16,792 |
 | `MaterialisedViewAggregation` | 9 | 2 | 12 | 18 | 21 | 24,072 |
 | `MaterialisedViewRebind` | 8 | 4 | 17 | 20 | 27 | 21,086 |
 
@@ -93,35 +93,38 @@ it does not replace the general staging model. See
 over THREE physical WAL partitions. Prepares are on p0/p2 and terminals on
 p0/p1, so reading both terminals does not imply consuming the prepare on p2.
 All prepares precede all terminals, but source installation and each shard's
-terminal append are separate actions. A rebuild's bounded planning scan may
-miss a prepare; after a terminal, bounded resumable reads of retained history
-below the same physical WAL's durable checkpoints recover both the prepare
-cardinality witness and every distinct terminal partition before a horizon can
-be captured. The per-pass examination budget resets without rewinding the
-cursor, including when an earlier terminal was already below the checkpoint.
-A fresh terminal-only observation cannot infer its own prepare cardinality.
-Backstop abandonment persists across crashes and rebuilds and is retired only
-after every distinct shard terminal lies below the captured heads, never after
-just one commit. The
-`FullScan` variant visits every partition while allowing two crashes; it
-reaches 46,743 distinct states. The base reaches 28,357. See
+terminal append are separate actions. A regular orphan can recover cardinality
+from one actual retained prepare carrying a positive batch-size witness even if
+the other prepare payload is trimmed; it still needs every distinct terminal
+partition and consumption through the post-terminal horizon. The bounded
+retained-history cursor resumes across per-drain examination budgets, including
+when terminal evidence is already below a checkpoint. Fresh terminal-only
+history cannot infer cardinality, and a retention gap that removes every
+prepare witness is explicitly outside the convergence claim. Abandoned batches
+follow a separate commit-terminal-triggered rebuild path without the regular
+orphan history entitlement. Rebuild visibility is gated by the transaction
+decision, not by individual row installation or shard-terminal arrival; this is
+a two-key visibility seam, not a whole-tree snapshot guarantee. The `FullScan`
+variant visits every partition while allowing two crashes; it reaches 29,932
+distinct states. The base reaches 16,792. See
 [RefinementHorizon.md](RefinementHorizon.md).
 
 These are exhaustive finite checks, not simulations and not an exhaustive
 Cartesian product of every feature. On the bounded two-CPU Java 17 toolchain,
-direct Horizon TLC runs took 6.972 seconds for the base and 9.541 seconds for
-the FullScan variant, including JVM startup. Each mutant
-has a paired clean single-property control, and every behavioural action has
-an action-targeted mutation. State counts are in the counts table and manifests.
-Actual harness controls contain mutation-specific headers; same-target grouping
-does not eliminate their paired clean runs.
+standalone Horizon TLC runs took 7.180 seconds for the base and 8.645 seconds
+for the FullScan variant, including JVM startup, using one worker and a 2 GiB
+maximum heap. Each mutant has a paired clean single-property control, and every
+behavioural action has an action-targeted mutation. State counts are in the
+counts table and manifests. Actual harness controls contain mutation-specific
+headers; same-target grouping does not eliminate their paired clean runs.
 
-The actual `TlcModelCheckTests` run includes 23 Horizon cases: the base,
-FullScan variant, and all 21 mutation/control cases. The serial no-build run
-passed 23/23 with zero skipped in 2 minutes 32 seconds, using one TLC JVM
-slot, two visible CPUs, and a 2 GiB maximum heap. The production detector
-mappings are explicitly pending acceptance, not certified refinements; a clean
-finite model is not that acceptance.
+The final serial no-build `TlcModelCheckTests` run executed 25 Horizon cases:
+the base, FullScan variant, and all 23 mutation/control cases. It passed 25/25
+with zero skipped, inconclusive, or not-executed tests in 196.4 seconds (3
+minutes 16.4 seconds), using one TLC JVM slot, two visible CPUs, and a 2 GiB
+maximum heap. The production detector mappings are explicitly pending
+acceptance, not certified refinements; a clean finite model is not that
+acceptance.
 
 ## Scope and companion models
 

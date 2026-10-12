@@ -3,14 +3,14 @@
   "refinement": "RefinementHorizon.md",
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
-    "invariants": 4,
-    "properties": 7,
-    "actions": 17,
-    "mutations": 21,
-    "behaviourRows": 26,
-    "distinctStates": 28357
+    "invariants": 5,
+    "properties": 8,
+    "actions": 19,
+    "mutations": 23,
+    "behaviourRows": 30,
+    "distinctStates": 16792
   },
   "variants": {
-    "FullScan": { "distinctStates": 46743 }
+    "FullScan": { "distinctStates": 29932 }
   }
 }

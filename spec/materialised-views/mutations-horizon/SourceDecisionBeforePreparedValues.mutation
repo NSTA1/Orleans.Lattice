@@ -1,0 +1,12 @@
+MODULE: SourceDecisionBeforePreparedValues
+TARGET: SourceDecisionPrerequisite
+CLASS: Action
+SUMMARY: source decision confirmation precedes all prepare rows and their source installation
+PERTURBS: ConfirmSourceDecision
+
+--- FIND
+    /\ \A q \in Keys : length[q] >= 1
+    /\ installed = TerminalPartitions
+--- REPLACE
+    /\ installed # {}
+--- END

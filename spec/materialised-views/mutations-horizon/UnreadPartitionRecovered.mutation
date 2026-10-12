@@ -5,7 +5,9 @@ SUMMARY: missing prepares trigger recovery before all partitions have consumed t
 PERTURBS: Recover
 
 --- FIND
-    /\ HistoryEntitled /\ horizonWal = wal /\ AtHorizon
+    /\ staged /\ Missing /\ HistoryEntitled /\ sourceDecisionCommitted
+    /\ horizonWal = wal /\ AtHorizon
 --- REPLACE
-    /\ HistoryEntitled /\ horizonWal = wal
+    /\ staged /\ Missing /\ HistoryEntitled /\ sourceDecisionCommitted
+    /\ horizonWal = wal
 --- END

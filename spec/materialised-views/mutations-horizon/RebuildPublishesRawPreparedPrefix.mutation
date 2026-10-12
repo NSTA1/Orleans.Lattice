@@ -1,0 +1,11 @@
+MODULE: RebuildPublishesRawPreparedPrefix
+TARGET: PublishedBatchAtomic
+CLASS: Invariant
+SUMMARY: shadow rebuild reads individually installed rows without transaction-decision visibility
+PERTURBS: Scan
+
+--- FIND
+    /\ shadow' = Source /\ phase' = "scanned"
+--- REPLACE
+    /\ shadow' = RawSource /\ phase' = "scanned"
+--- END

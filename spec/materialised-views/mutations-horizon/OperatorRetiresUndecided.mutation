@@ -7,11 +7,9 @@ PERTURBS: RequestRebuild
 --- FIND
     /\ requested' = TRUE /\ rebuilds' = rebuilds+1
     /\ UNCHANGED <<length, installed, value, read, ckpt, prepares, terminals, staged,
-                   abandoned, historyPrepares, historyTerminals, historyCursor,
-                   historyBudgetUsed, horizon, horizonWal, wal, phase, heads, floor,
+                   abandoned, cardinalityKnown, historyRetained, sourceDecisionCommitted,
 --- REPLACE
     /\ requested' = TRUE /\ rebuilds' = rebuilds+1 /\ abandoned' = FALSE
     /\ UNCHANGED <<length, installed, value, read, ckpt, prepares, terminals, staged,
-                   historyPrepares, historyTerminals, historyCursor, historyBudgetUsed,
-                   horizon, horizonWal, wal, phase, heads, floor,
+                   cardinalityKnown, historyRetained, sourceDecisionCommitted,
 --- END

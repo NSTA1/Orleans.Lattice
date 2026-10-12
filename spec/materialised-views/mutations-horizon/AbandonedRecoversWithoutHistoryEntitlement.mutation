@@ -1,19 +1,12 @@
-MODULE: AbandonedRecoversWithoutHistoryEntitlement
-TARGET: RecoveryEntitled
-CLASS: Action
-SUMMARY: abandoned identity bypasses retained prepare cardinality and complete terminal membership
-PERTURBS: CaptureHorizon, Recover
+MODULE: AbandonedRecoveryRequiresHistory
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: an abandoned commit-triggered rebuild is incorrectly gated on retained history
+PERTURBS: RecoverAbandoned
 
 --- FIND
-    /\ PrepareCardinalityKnown /\ CompleteTerminalSet
-    /\ horizonWal = "none"
+    /\ phase = "idle" /\ ~requested /\ abandoned /\ KnownTerminals # {}
 --- REPLACE
-    /\ KnownTerminals # {}
-    /\ horizonWal = "none"
---- END
-
---- FIND
-    /\ HistoryEntitled /\ horizonWal = wal /\ AtHorizon
---- REPLACE
-    /\ horizonWal = wal /\ AtHorizon
+    /\ phase = "idle" /\ ~requested /\ abandoned /\ KnownTerminals # {}
+    /\ HistoryEntitled
 --- END
