@@ -67,10 +67,12 @@ internal sealed partial class ViewMaintainerGrain
         // contribution, so record whether any is a RangeReconcile here instead of
         // re-walking the whole buffer with a separate .Exists pass after the drain.
         var hasRangeReconcile = false;
+        var ordinarySpans = new List<OrdinaryWriteSpan>();
         var handler = new ViewDrainHandler(
             this,
             mutation =>
             {
+                var spanStart = contributions.Count;
                 foreach (var contribution in registration.AggregationProjection!.Project(mutation))
                 {
                     contributions.Add(contribution);
@@ -79,6 +81,8 @@ internal sealed partial class ViewMaintainerGrain
                         hasRangeReconcile = true;
                     }
                 }
+
+                RecordOrdinaryWriteSpan(ordinarySpans, mutation, spanStart, contributions.Count);
             },
             completedTransactions);
 
@@ -124,6 +128,15 @@ internal sealed partial class ViewMaintainerGrain
                 ViewName);
             await RebuildAsync(cancellationToken);
             return 0;
+        }
+
+        // A contribution of an ordinary write the source already superseded by
+        // last-writer-wins (an older write logged after a newer one, issue #4885)
+        // would retract the newer membership and re-add the stale one.
+        if (!registration.Accumulative)
+        {
+            await DropWritesSupersededAtSourceAsync(
+                contributions, ordinarySpans, static c => c.SourceKey, walTreeId, cancellationToken);
         }
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);

@@ -563,10 +563,12 @@ internal sealed partial class ViewMaintainerGrain(
         // (one for RangeReconcile below, one for RangeDelete in ApplySurvivorsAsync).
         var hasRangeReconcile = false;
         var hasRangeDelete = false;
+        var ordinarySpans = new List<OrdinaryWriteSpan>();
         var handler = new ViewDrainHandler(
             this,
             mutation =>
             {
+                var spanStart = collected.Count;
                 foreach (var write in registration.Projection!.Project(mutation))
                 {
                     collected.Add(write);
@@ -579,6 +581,8 @@ internal sealed partial class ViewMaintainerGrain(
                         hasRangeDelete = true;
                     }
                 }
+
+                RecordOrdinaryWriteSpan(ordinarySpans, mutation, spanStart, collected.Count);
             },
             completedTransactions);
 
@@ -645,6 +649,15 @@ internal sealed partial class ViewMaintainerGrain(
             }
         }
 
+        // An ordinary write the source already superseded by last-writer-wins (an
+        // older write logged after a newer one, issue #4885) must not reach the view.
+        // An accumulative view records every revision, so it keeps them all.
+        if (!registration.Accumulative)
+        {
+            await DropWritesSupersededAtSourceAsync(
+                collected, ordinarySpans, static w => w.SourceKey, walTreeId, cancellationToken);
+        }
+
         // On an accumulative view the retention mode (read once from the source
         // tree's live registry override) shapes each revision row before it is
         // applied: it stamps the age-bound expiry and strips LWW value bytes to
@@ -668,7 +681,8 @@ internal sealed partial class ViewMaintainerGrain(
             // Range path: the batch cannot be coalesced by view key, so collision
             // detection runs on its own over the whole batch.
             ReportCollisions(ViewKeyCollisionDetector.Detect(collected));
-            appliedCount = await ApplyInSourceOrderAsync(viewTree, collected, cancellationToken);
+            appliedCount = await ApplyInSourceOrderAsync(
+                viewTree, collected, registration.Accumulative ? null : walTreeId, cancellationToken);
         }
         else
         {
@@ -1407,7 +1421,11 @@ internal sealed partial class ViewMaintainerGrain(
         return survivors.Count;
     }
 
-    private async Task<int> ApplyInSourceOrderAsync(ILattice viewTree, List<ViewWrite> collected, CancellationToken cancellationToken)
+    private async Task<int> ApplyInSourceOrderAsync(
+        ILattice viewTree,
+        List<ViewWrite> collected,
+        string? rangeConfirmationSource,
+        CancellationToken cancellationToken)
     {
         // Range path: a range delete cannot be globally coalesced by view key
         // against point writes, and its outcome interleaves with point writes by
@@ -1420,7 +1438,17 @@ internal sealed partial class ViewMaintainerGrain(
         collected.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
         foreach (var write in collected)
         {
-            await ApplyAsync(viewTree, write, cancellationToken);
+            // A range delete on a non-accumulative view spares every key the
+            // source holds at a newer version than the range (issue #4885).
+            if (write.Kind == ViewWriteKind.RangeDelete && rangeConfirmationSource is not null)
+            {
+                await ApplyRangeDeleteAgainstSourceAsync(viewTree, write, rangeConfirmationSource, cancellationToken);
+            }
+            else
+            {
+                await ApplyAsync(viewTree, write, cancellationToken);
+            }
+
             appliedOrdered++;
         }
 
