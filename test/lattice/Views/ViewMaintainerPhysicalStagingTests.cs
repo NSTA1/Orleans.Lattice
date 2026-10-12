@@ -224,6 +224,33 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
         private readonly Dictionary<string, List<(long Offset, LatticeMutation Mutation)>> _logs = new();
         private readonly Dictionary<string, long> _heads = new() { [Old] = 7, [New] = 2, [Third] = 5 };
 
+        public List<LwwEntry?> VisibleRows(string physical, List<string> keys)
+        {
+            var entries = _logs.GetValueOrDefault(physical, []);
+            var committed = entries.Where(x => x.Mutation.Kind == MutationKind.TxCommit)
+                .Select(x => x.Mutation.TransactionId).ToHashSet();
+            return keys.Select(key =>
+            {
+                LatticeMutation? winner = null;
+                foreach (var (_, mutation) in entries)
+                {
+                    if (mutation.Key != key || mutation.Kind is not (MutationKind.Set or MutationKind.Delete)
+                        || (mutation.IsPrepared && !committed.Contains(mutation.TransactionId))) continue;
+                    if (winner is null || mutation.Timestamp > winner.Value.Timestamp) winner = mutation;
+                }
+                return winner is { } row
+                    ? (LwwEntry?)new LwwEntry
+                    {
+                        Key = key, Value = row.Value, Timestamp = row.Timestamp,
+                        IsTombstone = row.IsTombstone || row.Kind == MutationKind.Delete,
+                        ExpiresAtTicks = row.ExpiresAtTicks,
+                        OriginClusterId = row.OriginClusterId,
+                        VectorClock = row.VectorClock?.Clone(),
+                    }
+                    : null;
+            }).ToList();
+        }
+
         public void Append(string tree, long offset, LatticeMutation mutation)
         {
             if (!_logs.TryGetValue(tree, out var entries)) _logs[tree] = entries = [];
@@ -241,12 +268,21 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
             factory.GetGrain<IWalOffsetConsumerRegistryGrain>(Arg.Any<string>())
                 .Returns(Substitute.For<IWalOffsetConsumerRegistryGrain>());
+            foreach (var physical in new[] { Old, New, Third })
+            {
+                var root = Substitute.For<IShardRootGrain>();
+                factory.GetGrain<IShardRootGrain>($"{physical}/0").Returns(root);
+            }
             var trees = new Dictionary<string, ILattice>();
             ILattice Tree(string id)
             {
                 if (trees.TryGetValue(id, out var existing)) return existing;
                 var tree = Substitute.For<ILattice>();
                 trees.Add(id, tree);
+                tree.GetRoutingAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+                    new ValueTask<RoutingInfo>(new RoutingInfo(id == Logical ? h.Alias : id, ShardMap.CreateDefault(1, 1))));
+                tree.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(_ =>
+                    new ValueTask<RoutingInfo>(new RoutingInfo(id == Logical ? h.Alias : id, ShardMap.CreateDefault(1, 1))));
                 tree.KeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
                     .Returns(call => Keys(call.ArgAt<string?>(0), id == Old || id == New || id == Third));
                 tree.GetWithVersionAsync("snapshot", Arg.Any<CancellationToken>()).Returns(async _ =>
