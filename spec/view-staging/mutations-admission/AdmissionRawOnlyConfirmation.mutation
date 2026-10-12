@@ -1,0 +1,18 @@
+MODULE: AdmissionRawOnlyConfirmation
+TARGET: DecisionEntitled
+CLASS: Action
+SUMMARY: A coherent older materialised row hides a committed undrained higher-version pending prepare
+PERTURBS: Confirm
+
+--- FIND
+    /\ sampled' = VisibleSource
+--- REPLACE
+    /\ sampled' = source
+--- END
+--- FIND
+    /\ classes' = [k \in Keys |-> Classify(VisibleSource[k],k)]
+    /\ horizon' = [k \in Keys |-> IF VisibleSource[k] = Newer[k] THEN 3 ELSE 2]
+--- REPLACE
+    /\ classes' = [k \in Keys |-> Classify(source[k],k)]
+    /\ horizon' = [k \in Keys |-> IF source[k] = Newer[k] THEN 3 ELSE 2]
+--- END

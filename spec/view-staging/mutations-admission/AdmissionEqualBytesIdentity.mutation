@@ -5,7 +5,7 @@ SUMMARY: T mistakes equal bytes at a different HLC or tombstone kind for the pre
 PERTURBS: Confirm
 
 --- FIND
-    /\ classes' = [k \in Keys |-> Classify(source[k],k)]
+    /\ classes' = [k \in Keys |-> Classify(VisibleSource[k],k)]
 --- REPLACE
-    /\ classes' = [k \in Keys |-> IF source[k].bytes = Prepared[k].bytes THEN "prepared" ELSE Classify(source[k],k)]
+    /\ classes' = [k \in Keys |-> IF VisibleSource[k].bytes = Prepared[k].bytes THEN "prepared" ELSE Classify(VisibleSource[k],k)]
 --- END

@@ -5,7 +5,7 @@ SUMMARY: Ignore tombstone kind when payload and timestamp match an older live pr
 PERTURBS: Confirm
 
 --- FIND
-    /\ classes' = [k \in Keys |-> Classify(source[k],k)]
+    /\ classes' = [k \in Keys |-> Classify(VisibleSource[k],k)]
 --- REPLACE
-    /\ classes' = [k \in Keys |-> IF source[k].stamp = Prepared[k].stamp /\ source[k].bytes = Prepared[k].bytes THEN "prepared" ELSE Classify(source[k],k)]
+    /\ classes' = [k \in Keys |-> IF VisibleSource[k].stamp = Prepared[k].stamp /\ VisibleSource[k].bytes = Prepared[k].bytes THEN "prepared" ELSE Classify(VisibleSource[k],k)]
 --- END

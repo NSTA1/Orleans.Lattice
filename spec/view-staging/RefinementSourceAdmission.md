@@ -10,8 +10,9 @@ them. All detector verdicts remain explicitly Pending.
 |---------------|---------------|------------------|
 | `decision`, `installed`, `appended` | Durable decision, readable source installation and independently arriving terminals | `ViewMaintainerGrain.HandleStagingEntry`; the source protocol steps are an explicit environment, not the same event. |
 | `read`, `prepares`, `terminals`, `ckpt` | Subscription completeness and held durable progress | `ViewMaintainerGrain.IsComplete`, `ViewMaintainerGrain.ApplyCheckpointHoldBack`, `ViewCheckpointState.AppliedOffsets`. |
-| `source`, `sampled`, `classes`, `horizon` | Whole raw row identity, admission classification and post-observation head | Candidate coherent source-confirmation path; timestamp/kind/value come from one observed row, not independent reads. |
+| `source`, `sampled`, `classes`, `horizon` | Materialised versus observed logical row identity, admission classification and post-observation head | Candidate `GetVisibleRawEntriesAsync`; timestamp/kind/value come from one observed row, not independent reads. |
 | `applied`, `dropped`, `value` | Actual replacement eligibility, skipped upstream event and projected row | `ViewMaintainerGrain.IsSupersededByOrdinary`, `ViewMaintainerGrain.FlushCompletedFilterBatchesAsync`; candidate dropped-superseder gate still pending. |
+| `pending`, `pendingCommitted`, `samplePending`, `sampleDecision` | Undrained B prepare, commit decision and captured observation witness | Candidate `SnapshotPendingForReadAsync` / `TxDecisionView` followed by per-row visibility resolution; not a source-wide snapshot. |
 | `registered` | Complete expected-participant readiness evidence | `ViewCrossTreeCoordinatorGrain.RegisterReadyAsync`; peer-drain/certificate internals are abstracted. |
 | `done`, `history` | Durable idempotent effect or committed history revisions | `ViewMaintainerGrain.MarkResolved`, `HistoryLatticeViewProjection`. |
 | `phase`, `accumulative`, `crashes` | Maintainer turn, registration branch and finite failures | `ViewRegistration.Accumulative`; turn and fault counters are modelling devices. |
@@ -25,13 +26,15 @@ them. All detector verdicts remain explicitly Pending.
 | `Install` | Source becomes readable independently of terminal delivery | Candidate source-confirmation path. | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_distinguishes_equal_bytes_at_different_versions_in_every_reader_snapshot`. |
 | `AppendTerminal` | Deliver each distinct shard terminal separately | `ViewMaintainerGrain.HandleStagingEntry`. | Pending: proposed detector `MaterialisedViewRebuildSplitSagaTests.A_rebuild_between_two_shard_commits_does_not_strand_the_later_shard`. |
 | `Read` | Stage each partition; dropped ordinary progress is not an applied replacement | `ViewMaintainerGrain.HandleStagingEntry`, `ViewMaintainerGrain.IsSupersededByOrdinary`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_whose_omitted_key_relies_on_a_dropped_ordinary_write_waits_for_the_newer_source_write`. |
-| `Confirm` | Compare one coherent timestamp/kind/value tuple against the prepare | Candidate coherent raw-row source read; no synthetic projection mutation. | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_distinguishes_equal_bytes_at_different_versions_in_every_reader_snapshot`. |
+| `Confirm` | Compare one coherent logical tuple and captured pending-decision witness against the prepare | Candidate `GetVisibleRawEntriesAsync`; committed undrained metadata can supersede an older coherent materialised row, without a synthetic projection mutation. | Pending: proposed detectors `BPlusLeafGrainTests.GetVisibleRawEntries_committed_pending_value_and_version_come_from_one_row` and `MaterialisedViewDecisionBeforeTerminalTests.Committed_batch_logged_before_its_leaves_drain_confirms_against_the_decision`. |
 | `Retry` | Defer the whole batch and continue reading/rechecking | `ViewMaintainerGrain.FlushCompletedFilterBatchesAsync`; candidate gates retain whole batch identity. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
 | `Repair` | Publish the real replacement before using it to discharge omission | Candidate dropped-superseder admission, not projecting an unseen source sample. | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_whose_omitted_key_relies_on_a_dropped_ordinary_write_waits_for_the_newer_source_write`. |
 | `Register` | Register only an eligible local slice or a ready expected peer | `ViewCrossTreeCoordinatorGrain.RegisterReadyAsync`. | Pending: existing coordinator tests are not accepted proof of the pending joint-visibility repair. |
 | `Publish` | Whole-batch admission, all expected participants, one atomic local effect | `ViewMaintainerGrain.FlushCompletedFilterBatchesAsync`, `ViewCrossTreeCoordinatorGrain.RegisterReadyAsync`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_distinguishes_equal_bytes_at_different_versions_in_every_reader_snapshot`; cross-tree visibility evidence remains unresolved. |
 | `Checkpoint` | No durable advancement over a deferred batch | `ViewMaintainerGrain.ApplyCheckpointHoldBack`. | Pending: proposed detector `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
 | `Crash` | Retain backing effects/history while discarding volatile admission | `ViewMaintainerGrain.ArmReplayFence`, `HistoryLatticeViewProjection`. | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_distinguishes_equal_bytes_at_different_versions_in_every_reader_snapshot`. |
+| `CommitPending` | B becomes logically committed while its materialised row can still lag | Captured pending metadata plus resolved `TxDecisionView`; source environment decision, not terminal observation. | Pending: proposed detector `BPlusLeafGrainTests.GetVisibleRawEntries_pending_decision_controls_the_entire_row`. |
+| `MaterialisePending` | Install committed B before retiring its pending metadata | Source pending-prepare materialisation; logical visibility must survive retirement. | Pending: proposed integration detector `MaterialisedViewDecisionBeforeTerminalTests.Committed_batch_logged_before_its_leaves_drain_confirms_against_the_decision`; no accepted metadata-retirement-without-installation control. |
 | `Stutter` | No protocol step | Not applicable. | Not applicable. |
 
 ## Property mapping
@@ -43,12 +46,14 @@ them. All detector verdicts remain explicitly Pending.
 | `HistoryRetained` | Accumulative registrations retain every revision, bypassing current-state U/T filtering | Pending: accepted history bypass evidence exists, but this compound admission/history mapping remains unaccepted. |
 | `VersionIdentity` | Identity compares clock, bytes and tombstone kind, not byte equality | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_distinguishes_equal_bytes_at_different_versions_in_every_reader_snapshot`; same-clock tombstone-kind control is formal-only. |
 | `RegistrationSound` | An expected participant cannot register before its local eligibility evidence | Pending: cross-tree candidate source admission remains unresolved. |
-| `SampleCoherent` | The payload and version belong to the same observed raw row | Pending: coherent-row prerequisite has isolated evidence, not accepted completed-admission refinement. |
+| `SampleCoherent` | Logical payload/version and pending metadata/decision witness come from the same bounded capture | Pending: proposed detectors `BPlusLeafGrainTests.GetVisibleRawEntries_committed_pending_value_and_version_come_from_one_row` and `BPlusLeafGrainTests.GetVisibleRawEntries_root_preserves_pending_row_alignment_and_logical_versions`; the accepted raw-row prerequisite alone is insufficient. |
 | `ReplacementEntitled` | Consumed/dropped ordinary progress never falsely proves an applied omission replacement | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_whose_omitted_key_relies_on_a_dropped_ordinary_write_waits_for_the_newer_source_write`. |
 | `AdmissionComplete` | Absent, older or same-version nonmatching rows defer the entire batch even after terminal heads are consumed | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_waits_for_absent_or_older_rows_even_after_the_terminal_horizon_is_consumed`. |
 | `ParticipantsClosed` | Local completion never substitutes for all expected participant registrations | Pending: coordinator memoization and per-view replay are not proof of joint visibility. |
 | `ProjectionMonotone` | Timestamp-sensitive projection cannot regress to an equal-byte older prepared version | Pending: proposed detector `ViewMaintainerReplayFlushTests.Source_confirmation_distinguishes_equal_bytes_at_different_versions_in_every_reader_snapshot`. |
-| `Converges` | Fair repair/source correction and rechecking complete after finitely many crashes | Pending: proposed detector `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
+| `DecisionEntitled` | A captured committed pending winner cannot be ignored in favour of an older coherent materialised prepare | Pending: proposed detector `MaterialisedViewDecisionBeforeTerminalTests.Committed_batch_logged_before_its_leaves_drain_confirms_against_the_decision`; raw-only confirmation fails this property. |
+| `LogicalVisibilityMonotone` | Retiring committed pending metadata cannot reveal an older materialised revision | Pending: no accepted detector for metadata retirement without installation; the formal negative control is not production evidence. |
+| `Converges` | Fair pending commit/materialisation, real replacement repair and rechecking complete after finitely many crashes | Pending: proposed detectors `MaterialisedViewDecisionBeforeTerminalTests.Committed_batch_logged_before_its_leaves_drain_confirms_against_the_decision` and `ViewMaintainerReplayFlushTests.A_batch_omitting_a_key_that_a_deferred_newer_batch_replaces_waits_for_it`. |
 
 ## Excluded properties
 
@@ -61,30 +66,50 @@ them. All detector verdicts remain explicitly Pending.
 The accepted coherent-row prerequisite is source child 82b6e8f (parent 4aee14196):
 IShardRootGrain.GetRawEntriesIncludingTombstonesAsync returns aligned raw
 timestamp/kind/value tuples and GetRawVersionsAsync retains tombstone versions.
-This establishes single-row coherence only. Sequential multi-leaf traversal is
-not transaction-atomic sampling, participant closure, or admission acceptance.
-`SampleCoherent` remains Pending because its finite vector observation is stronger
-than the accepted seam alone; completing its refinement requires the constrained
-source evolution and admission detectors, not merely the raw-row tests.
+This establishes single-row materialised coherence only. Sequential multi-leaf
+traversal is not transaction-atomic sampling, participant closure or admission
+acceptance. The pending logical-row API is a distinct seam: one bounded leaf
+metadata capture carries pending keys and decision outcomes together; the
+resolved committed prepare may be newer than the coherent materialised row.
+The logical-row API implementation reference is source child
+466494d1da5fbd3a3c965322982eba1a03c55b29 (parent 92008013b). The parent accepted
+its narrow logical/raw/bootstrap scope, not completed U/T or held-terminal
+composition. That prerequisite is not an unqualified admission verdict.
 
-The model includes current/history registration branches at base bounds.
-The coherent row domain distinguishes equal bytes at stamps20/50 and an empty
-live revision from a tombstone. A same-clock contradictory kind is a deliberately
-adversarial read result; it must not be mistaken for the prepare and must later
-be corrected for convergence. No claim is made that legitimate writes reuse
-the same full version identity.
+The base includes current/history registrations, source application lag and an
+undrained committed/in-flight B prepare. Original A is committed and installed
+in that latter prefix, but its WAL terminals still arrive independently. B's
+commit decision and materialisation are separate actions; only a captured
+committed witness requires B's newer logical row at that observation. B can
+commit after an earlier in-flight sample: no freshness or source-wide snapshot
+promise is inferred. The only contended overlay row is key1; key2 is stable.
+The materialised alternatives distinguish equal bytes at stamps20/50 and an
+empty live revision from a tombstone. A same-clock contradictory kind is an
+adversarial read result, not a claim that legitimate writes reuse identity.
 
-Source installation is not derived from terminal observation. A sample that
-proves a newer source revision authorizes whole-batch deferral, not inventing
-that revision's projection. Omission requires an actual durable replacement,
-all captured heads consumed, and the expected participant set closed. The
-external peer is a readiness certificate; the joint backend write and every
-view's concurrent public read are not expanded, so simultaneous cross-view
-visibility is outside the model's claim.
+The overlay abstracts only in-flight and committed decisions. Aborted,
+indeterminate, unavailable-resolution, expiry and already-terminal/orphan
+visibility rules are not expanded. In particular, the production contract must
+hide indeterminate rows, propagate unavailable resolution failures and retain
+committed tombstone/expired metadata; those are not certified by this model.
+The named tombstone/expiry unit detector is supplementary source-seam evidence,
+not a modeled overlay branch. History checks original A's revision retention
+despite B supersession, not the complete processing of B's history revisions.
 
-The maintainer read/repair excludes interleaving with its own sampled publication
-turn; source installation/correction can still progress. Strong fairness on
-read/repair rules out starvation by infinitely retried confirmation turns.
-History bypass is intentional and does not weaken the current-state branch.
-ReadyClosure supplies connected per-key folding and single-slice publication;
-Rebind/Fence/Horizon supply separate physical-identity and recovery obligations.
+Source installation is not derived from terminal observation. A newer logical
+row authorizes whole-A deferral, never substitution or invented projection.
+Omission requires an actual durable replacement, all captured heads consumed
+and the expected participant set closed. `Read`/`Repair` abstract delivery and
+actual publication of a known replacement event, not copying `VisibleSource`:
+when B is atomic, its own decision, participant readiness and local publication
+closure are supplied by ReadyClosure's rely-guarantee contract. Dropped progress
+alone cannot establish that effect. The external peer is a readiness certificate;
+its joint backend write and every view's concurrent public read are not expanded,
+so simultaneous cross-view visibility is outside the claim.
+
+The maintainer excludes interleaving with its own sampled publication turn;
+source installation/correction and B's decision/materialisation can still
+progress. Strong fairness on read/repair rules out starvation by repeated
+confirmation turns. History bypass is intentional. ReadyClosure supplies
+connected per-key folding and single-slice publication; Rebind, Fence, Horizon
+and ResolvedIdentity supply separate physical-identity and recovery obligations.

@@ -4,15 +4,16 @@
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
     "invariants": 6,
-    "properties": 6,
-    "actions": 13,
-    "mutations": 18,
-    "behaviourRows": 23,
-    "distinctStates": 20184
+    "properties": 8,
+    "actions": 15,
+    "mutations": 21,
+    "behaviourRows": 27,
+    "distinctStates": 22720
   },
   "variants": {
     "CrossTree": { "distinctStates": 836 },
-    "History": { "distinctStates": 14904 },
+    "History": { "distinctStates": 16412 },
+    "PendingOverlay": { "distinctStates": 1028 },
     "PendingSource": { "distinctStates": 660 }
   }
 }

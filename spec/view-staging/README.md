@@ -10,7 +10,7 @@ features has been checked.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `MaterialisedViewReadyClosure` | 5 | 2 | 9 | 12 | 14 | 46,846 |
-| `MaterialisedViewSourceAdmission` | 6 | 6 | 13 | 18 | 23 | 20,184 |
+| `MaterialisedViewSourceAdmission` | 6 | 8 | 15 | 21 | 27 | 22,720 |
 
 ## Independent-clock ready closure
 
@@ -74,6 +74,30 @@ and its lagging-row mutant discriminate retiring such a pending batch. Both the
 base and `PendingSource` include absent and older rows, so the paired control
 exercises lagging installation rather than assuming it away.
 
+`PendingOverlay` isolates an undrained B prepare over an already committed and
+materialised A prefix. B is independently in flight or committed, with a newer
+HLC 50 and the same bytes as A's HLC 20 row. A coherent materialised row is not
+necessarily the logically visible row: one bounded leaf capture includes pending
+metadata and its resolved decision witness. Confirmation uses the committed
+pending tuple, while in-flight metadata falls through to the materialised row.
+B can commit or materialise independently of A's terminal delivery. Retiring B's
+pending metadata must first install its tuple, preserving logical visibility.
+The base includes this overlay branch as well as the earlier lag/kind branches.
+Clocks remain independent of WAL offsets 1..3.
+
+`DecisionEntitled` and the raw-only confirmation mutant discriminate publishing
+older A after observing B's committed metadata. `LogicalVisibilityMonotone`
+and its metadata-drop mutant discriminate revealing old materialised state on
+retirement. A separate lost-decision mutant violates eventual convergence.
+These controls preserve the existing tuple, horizon and replacement gates.
+Captured in-flight evidence does not promise freshness against a later B commit.
+Only key1 is contended by this overlay; no source-wide atomic snapshot is assumed.
+Abort, indeterminate/unavailable resolution, expiry and terminal-orphan handling
+remain source-seam obligations outside this two-decision-state abstraction.
+History retains original A's revisions; complete B-history processing is not
+expanded. B's actual replacement publication is a ReadyClosure rely-guarantee,
+not a synthetic mutation copied from its sampled metadata.
+
 `PendingSource` isolates decision/terminal-before-source-installation.
 `History` isolates committed revision retention despite newer current state.
 `CrossTree` requires readiness from both expected participants rather than
@@ -105,8 +129,10 @@ multi-partition orphan rebuild are checked separately by Tail, Rebind, Fence
 and Horizon. However, these models keep one physical log identity fixed. Durable
 completion/idempotency must be scoped to that identity: the resolved-Guid reuse
 flaw #4895 is not represented by these models or by the current single-transaction
-Rebind model. A separate two-log/reused-ID companion is still required; no reset
-of a cache absent from a model can prove that property.
+Rebind model. The separate ResolvedIdentity companion now checks two physical
+logs reusing one finite transaction ID, actual-tail cache ownership and eviction
+queue scope. It does not multiply those dimensions into admission/ready closure;
+no reset of a cache absent from a model can prove that property.
 
 Aggregation membership/numeric-intent composition is the
 Aggregation model's; these models do not equate revision history with a
@@ -137,22 +163,24 @@ production refinement verdict.
 | ReadyClosure base | 46,846 | 10.803 |
 | ReadyClosure History | 39,651 | 8.713 |
 | ReadyClosure TwoConsumers | 31,577 | 10.780 |
-| SourceAdmission base | 20,184 | 6.622 |
-| SourceAdmission CrossTree | 836 | 1.651 |
-| SourceAdmission History | 14,904 | 5.646 |
-| SourceAdmission PendingSource | 660 | 1.671 |
+| SourceAdmission base | 22,720 | 8.380 |
+| SourceAdmission CrossTree | 836 | 3.032 |
+| SourceAdmission History | 16,412 | 8.415 |
+| SourceAdmission PendingSource | 660 | 1.767 |
+| SourceAdmission PendingOverlay | 1,028 | 1.931 |
 
 Actual repository TlcModelCheckTests measurements, not a proxy runner:
 
 | Module | Passed / executed | Item span seconds | Whole command seconds |
 |--------|-------------------|-------------------|-----------------------|
 | MaterialisedViewReadyClosure | 15 / 15 | 87.575177 | 94.200066 |
-| MaterialisedViewSourceAdmission | 22 / 22 | 127.085807 | 153.252978 |
+| MaterialisedViewSourceAdmission | 26 / 26 | 220.225517 | 239.837819 |
 
 Each module includes its base, every variant and every paired mutation case.
-All 37 cases passed with zero skipped, inconclusive or failed cases. The final
-raw exhaustive census separately has 67 JVM runs: seven base/variant runs and
-30 distinct control/mutant pairs. Single-property experiments retain TypeOK;
+The recorded scopes total 41 passed cases with zero skipped, inconclusive or
+failed cases. The combined raw exhaustive census has 74 JVM runs: eight
+base/variant runs and 33 distinct control/mutant pairs. Single-property experiments
+retain TypeOK;
 mutants must violate the intended property, not a parser or domain failure.
 Mutation-specific generated headers keep same-target controls distinct; no
 shared-control speedup is claimed.
@@ -161,11 +189,14 @@ Measurements used Java 17 / TLC 2.19, one JVM slot, two visible CPUs, two TLC
 workers, ParallelGC and a maximum heap of 1,800 MiB (TLC reported 1,600 MB usable
 heap). Peak live heap was not measured. Whole command includes no-build test
 startup/discovery overhead; item span is earliest case start to latest case end.
-The timings are local observations, not predicted CI performance.
+The admission harness overlapped the non-TLC structural scope on the shared host;
+these timings are local observations, not isolated performance comparisons or
+predicted CI performance.
 
-The owned non-TLC structural scope passed 83/83. Parent-owned root index entries
-and production refinement acceptance are outside that scoped green. Separately,
-refinement detector gates executed 18 cases: 12 passed and six failed explicitly
-for Pending verdicts and missing/unaccepted detector references in this inherited
-source. These failures are recorded, not certified away. Central enrollment,
-routing and production detector acceptance remain prerequisites for shipment.
+The overlay-owned non-TLC structural scope passed 49/49; six separate refinement
+census/declaration checks passed, including the 27-row behaviour denominator.
+Parent-owned root index enrollment remains outside these scoped greens. Three
+production acceptance/resolver checks ran separately and failed explicitly for
+Pending verdicts and references unavailable in this inherited source. The
+extension does not promote those verdicts. Central enrollment, routing and
+production detector acceptance remain prerequisites for shipment.

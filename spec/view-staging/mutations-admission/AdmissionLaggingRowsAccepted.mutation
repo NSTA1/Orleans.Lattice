@@ -6,7 +6,7 @@ PERTURBS: Confirm
 BOUNDS: InitiallyNewer = FALSE
 
 --- FIND
-    /\ classes' = [k \in Keys |-> Classify(source[k],k)]
+    /\ classes' = [k \in Keys |-> Classify(VisibleSource[k],k)]
 --- REPLACE
-    /\ classes' = [k \in Keys |-> IF Classify(source[k],k) = "pending" THEN "prepared" ELSE Classify(source[k],k)]
+    /\ classes' = [k \in Keys |-> IF Classify(VisibleSource[k],k) = "pending" THEN "prepared" ELSE Classify(VisibleSource[k],k)]
 --- END
