@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cache_hit="${1:?Expected the browser cache-hit flag}"
+# actions/cache emits an empty string on a miss.
+cache_hit="${1?Expected the browser cache-hit flag}"
 shift
 if [ "$#" -eq 0 ]; then
   echo "::error::No Playwright browsers requested."

@@ -157,7 +157,7 @@ class BrowserInstallTests(unittest.TestCase):
             tool.chmod(0o755)
         self.env = dict(os.environ, SCENARIO="pass")
 
-    def run_install(self, cache: bool, *browsers: str) -> subprocess.CompletedProcess:
+    def run_install(self, cache: bool | str, *browsers: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [os.environ.get("BASH", "bash"), "-c",
              'export PATH="$PWD/bin:$PATH"; bash install.sh "$@"', "install",
@@ -179,6 +179,14 @@ class BrowserInstallTests(unittest.TestCase):
         self.assertEqual(2, len(calls))
         self.assertTrue(calls[0].endswith("install-deps chromium firefox webkit"))
         self.assertTrue(calls[1].endswith("install chromium firefox webkit"))
+
+    def test_empty_cache_output_is_a_miss_and_downloads_selected_engines(self):
+        result = self.run_install("", "chromium")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        calls = (self.root / "arguments").read_text().splitlines()
+        self.assertEqual(2, len(calls))
+        self.assertTrue(calls[0].endswith("install-deps chromium"))
+        self.assertTrue(calls[1].endswith("install chromium"))
 
     def test_dependency_and_download_failures_retry_independently(self):
         for scenario, cache, calls in (("retry-deps", True, 2), ("retry-download", False, 3)):
