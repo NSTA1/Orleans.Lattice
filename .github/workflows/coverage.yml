@@ -218,24 +218,17 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-all-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
+          key: playwright-chromium-firefox-webkit-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
 
       # Chromium, Firefox and WebKit: the suite's apps shard runs the frame isolation
       # tests in all three engines, as ui-tests.yml does.
       - name: Install Playwright browsers
         if: matrix.leg.ui
+        timeout-minutes: 15
+        env:
+          CACHE_HIT: ${{ steps.pwcache.outputs.cache-hit }}
         run: |
-          set -euo pipefail
-          script="$(find test/lattice.explorer.uitests/bin/Release -name playwright.ps1 -print -quit 2>/dev/null || true)"
-          if [ -z "$script" ]; then
-            echo "::error::playwright.ps1 not found - the UI test project did not build, so its coverage would be silently missing."
-            exit 1
-          fi
-          if [ "${{ steps.pwcache.outputs.cache-hit }}" = "true" ]; then
-            pwsh "$script" install-deps chromium firefox webkit
-          else
-            pwsh "$script" install chromium firefox webkit --with-deps
-          fi
+          bash .github/workflows/install-playwright-browsers.sh "$CACHE_HIT" chromium firefox webkit
 
       - name: Wait for Azurite
         run: |

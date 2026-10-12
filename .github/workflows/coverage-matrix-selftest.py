@@ -119,6 +119,126 @@ class CoverageMatrixTests(unittest.TestCase):
                 coverage.plan(Path(directory))
 
 
+class BrowserInstallTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        shutil.copyfile(WORKFLOWS / "install-playwright-browsers.sh", self.root / "install.sh")
+        script = self.root / "test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1"
+        script.parent.mkdir(parents=True)
+        script.touch()
+        tools = self.root / "bin"
+        tools.mkdir()
+        (tools / "pwsh").write_text(textwrap.dedent("""\
+            #!/bin/bash
+            count=0
+            [ ! -f calls ] || count=$(cat calls)
+            count=$((count + 1))
+            echo "$count" > calls
+            echo "$*" >> arguments
+            case "$SCENARIO" in
+              fail) exit 7 ;;
+              retry-deps) [ "$count" -ne 1 ] || exit 8 ;;
+              retry-download) [ "$count" -ne 2 ] || exit 9 ;;
+              hang) trap '' TERM; /usr/bin/sleep 30 ;;
+            esac
+            exit 0
+        """), encoding="utf-8", newline="\n")
+        # Run the real GNU timeout, shortening only its clock in the test.
+        (tools / "timeout").write_text(textwrap.dedent("""\
+            #!/bin/bash
+            [ "$1" = --kill-after=10s ] && [ "$2" = 120s ] || exit 97
+            shift 2
+            exec /usr/bin/timeout --kill-after=1s 1s "$@"
+        """), encoding="utf-8", newline="\n")
+        (tools / "sleep").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8", newline="\n")
+        for tool in tools.iterdir():
+            tool.chmod(0o755)
+        self.env = dict(os.environ, SCENARIO="pass")
+
+    def run_install(self, cache: bool | str, *browsers: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [os.environ.get("BASH", "bash"), "-c",
+             'export PATH="$PWD/bin:$PATH"; bash install.sh "$@"', "install",
+             str(cache).lower(), *browsers],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=20,
+        )
+
+    def test_cache_hit_still_installs_os_dependencies_for_selected_engines(self):
+        result = self.run_install(True, "chromium")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("1", (self.root / "calls").read_text().strip())
+        self.assertIn("install-deps chromium", (self.root / "arguments").read_text())
+        self.assertNotIn("firefox", (self.root / "arguments").read_text())
+
+    def test_cache_miss_installs_dependencies_then_all_requested_engines(self):
+        result = self.run_install(False, "chromium", "firefox", "webkit")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        calls = (self.root / "arguments").read_text().splitlines()
+        self.assertEqual(2, len(calls))
+        self.assertTrue(calls[0].endswith("install-deps chromium firefox webkit"))
+        self.assertTrue(calls[1].endswith("install chromium firefox webkit"))
+
+    def test_empty_cache_output_is_a_miss_and_downloads_selected_engines(self):
+        result = self.run_install("", "chromium")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        calls = (self.root / "arguments").read_text().splitlines()
+        self.assertEqual(2, len(calls))
+        self.assertTrue(calls[0].endswith("install-deps chromium"))
+        self.assertTrue(calls[1].endswith("install chromium"))
+
+    def test_dependency_and_download_failures_retry_independently(self):
+        for scenario, cache, calls in (("retry-deps", True, 2), ("retry-download", False, 3)):
+            with self.subTest(scenario=scenario):
+                for path in ("calls", "arguments"):
+                    (self.root / path).unlink(missing_ok=True)
+                self.env["SCENARIO"] = scenario
+                result = self.run_install(cache, "chromium")
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(str(calls), (self.root / "calls").read_text().strip())
+                self.assertIn("::warning::", result.stdout)
+
+    def test_permanent_failure_is_loud_and_never_downloads_browsers(self):
+        self.env["SCENARIO"] = "fail"
+        result = self.run_install(False, "chromium")
+        self.assertEqual(7, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("3", (self.root / "calls").read_text().strip())
+        self.assertIn("::error::", result.stdout)
+        self.assertNotIn("install chromium", (self.root / "arguments").read_text())
+
+    def test_hung_installer_ignoring_term_is_killed_and_exhausts_three_attempts(self):
+        self.env["SCENARIO"] = "hang"
+        result = self.run_install(True, "chromium")
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("3", (self.root / "calls").read_text().strip())
+        self.assertIn("failed after three bounded attempts", result.stdout)
+
+    def test_missing_build_output_or_empty_browser_selection_fails_before_install(self):
+        (self.root / "test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1").unlink()
+        for browsers in ((), ("chromium",), ("unknown",)):
+            result = self.run_install(True, *browsers)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("::error::", result.stdout)
+            self.assertFalse((self.root / "calls").exists())
+
+    def test_ui_and_coverage_steps_use_the_bounded_installer(self):
+        for name in ("ui-tests.yml", "coverage.yml"):
+            yaml = (WORKFLOWS / name).read_text(encoding="utf-8")
+            block = re.search(
+                r"      - name: Install Playwright browsers\n(.*?)(?=      - name:|\Z)",
+                yaml, re.DOTALL,
+            )[1]
+            self.assertIn("timeout-minutes: 15", block)
+            self.assertIn("bash .github/workflows/install-playwright-browsers.sh", block)
+            self.assertNotIn('pwsh "$script"', block)
+        yaml = (WORKFLOWS / "ui-tests.yml").read_text(encoding="utf-8")
+        self.assertEqual(2, yaml.count("- '.github/workflows/install-playwright-browsers.sh'"))
+        self.assertIn("join(matrix.browsers, '-')", yaml)
+        self.assertIn("join(matrix.browsers, ' ')", yaml)
+        self.assertIn("key: playwright-chromium-firefox-webkit-", YAML)
+
+
 class CoverageShellTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

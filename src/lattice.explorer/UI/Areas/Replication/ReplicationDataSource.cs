@@ -41,6 +41,8 @@ internal sealed class ReplicationDataSource : IDisposable
     private (ReplicationRead<ReplicationEstate> Read, DateTimeOffset At)? _estate;
     private (ReplicationRead<ReplicationConfigReport> Read, DateTimeOffset At)? _config;
     private long _generation;
+    private long _estateRead;
+    private long _configRead;
 
     /// <summary>Creates the data source over the circuit's services.</summary>
     /// <param name="services">The circuit's service provider, which the facades are resolved from.</param>
@@ -107,6 +109,7 @@ internal sealed class ReplicationDataSource : IDisposable
     public async Task<ReplicationRead<ReplicationEstate>> GetEstateAsync(bool refresh, CancellationToken cancellationToken)
     {
         long generation;
+        long request;
         lock (_gate)
         {
             ForgetIfTheCallerChanged();
@@ -116,13 +119,14 @@ internal sealed class ReplicationDataSource : IDisposable
             }
 
             generation = _generation;
+            request = ++_estateRead;
         }
 
         var read = await ReadLinksAsync(treeId: null, cancellationToken).ConfigureAwait(false);
         lock (_gate)
         {
             ForgetIfTheCallerChanged();
-            if (generation == _generation)
+            if (generation == _generation && request == _estateRead && !cancellationToken.IsCancellationRequested)
             {
                 _estate = (read, _time.GetUtcNow());
             }
@@ -149,6 +153,7 @@ internal sealed class ReplicationDataSource : IDisposable
     public async Task<ReplicationRead<ReplicationConfigReport>> GetConfigAsync(bool refresh, CancellationToken cancellationToken)
     {
         long generation;
+        long request;
         lock (_gate)
         {
             ForgetIfTheCallerChanged();
@@ -158,6 +163,7 @@ internal sealed class ReplicationDataSource : IDisposable
             }
 
             generation = _generation;
+            request = ++_configRead;
         }
 
         ReplicationRead<ReplicationConfigReport> read;
@@ -182,7 +188,7 @@ internal sealed class ReplicationDataSource : IDisposable
         lock (_gate)
         {
             ForgetIfTheCallerChanged();
-            if (generation == _generation)
+            if (generation == _generation && request == _configRead && !cancellationToken.IsCancellationRequested)
             {
                 _config = (read, _time.GetUtcNow());
             }

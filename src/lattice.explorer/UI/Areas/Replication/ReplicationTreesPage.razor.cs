@@ -28,6 +28,7 @@ public partial class ReplicationTreesPage
     private bool _loaded;
     private bool _busy;
     private readonly ComponentLifetime _cancellation = new();
+    private readonly ComponentLifetime _reads = new();
 
     private bool _enableOpen;
     private bool _enableTreeFixed;
@@ -91,6 +92,7 @@ public partial class ReplicationTreesPage
     /// <inheritdoc />
     public void Dispose()
     {
+        _reads.Leave();
         _cancellation.Leave();
     }
 
@@ -113,10 +115,21 @@ public partial class ReplicationTreesPage
 
     private async Task LoadAsync(bool refresh)
     {
+        var token = _reads.Renew();
         try
         {
-            var config = await Data.GetConfigAsync(refresh, _cancellation.Token);
-            var status = await Data.GetEstateAsync(refresh, _cancellation.Token);
+            var config = await Data.GetConfigAsync(refresh, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var status = await Data.GetEstateAsync(refresh, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             _fault = config.Fault;
             _statusFault = status.Fault;
             var links = status.Value?.Links ?? [];
@@ -124,9 +137,9 @@ public partial class ReplicationTreesPage
             _regions = status.Value?.PeerRegions ?? [];
             Apply();
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            // The page went away.
+            // The read was replaced, or the page went away.
         }
     }
 

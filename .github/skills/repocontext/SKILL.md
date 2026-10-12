@@ -78,18 +78,18 @@ open it for the full rules before you rely on any of this. If these ever
 disagree with the master file, the master file wins.
 
 - **The four moments (the master file's opening section - the part that changes
-  behaviour).** (1) **Session start, once**: `health`, `list_repos` (to resolve
-  the repo id), and `index_status`, then sweep the memory you are about to need:
-  `list_topics` for the map, the whole `gotchas` topic (`scan` scope
-  `MemoryTopic`) every session, then the topics bearing on the task - `search`
-  over memory is a supplement for discovery, not the mechanism. (2) **Before any discovery**: probe
-  with `search` / `scan`, never a guessed path or a cold `grep` - and note that
-  "why is it like this / has this bitten us before" are *memory* questions.
-  (3) **Before reading source in order to change it**: `context` with a stable
-  `session` id, not a `search` + `view` crawl. (4) **At every durable finding**:
+  behaviour).** (1) **Session start, once**: resolve the repo id and readiness,
+  then search task-relevant memory semantically first. Search includes memories.
+  Recall known keys directly; use `list_topics` and selected-topic scans only as
+  fallback or for explicit completeness work, never an unconditional full
+  `gotchas` sweep. (2) **Before any discovery**: probe with `search` / `scan`,
+  never a guessed path or a cold `grep`; rationale and prior-pitfall questions
+  are memory questions. (3) **Before reading source in order to change it**:
+  `context` with a stable `session` id. (4) **At every durable finding**:
   `remember` it then, not at end of session.
-- **Read what you write.** A session that calls `remember` but never `recall` /
-  `scan` scope `Memory` / `neighbors` is using half the tool; so is one that never
+- **Read what you write.** A session that calls `remember` but never reads a
+  memory search hit, recalls an entry, or uses a relevant scan / `neighbors` is
+  using half the tool; so is one that never
   calls `context` on a task that required reading source. The master file carries
   the full under-use self-check.
 - **Coordinating with other sessions?** Memory is the bus: one topic per epic or

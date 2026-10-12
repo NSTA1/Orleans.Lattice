@@ -1,22 +1,27 @@
 [
   {
     "shard": "structure",
-    "filter": "TestCategory=UI&FullyQualifiedName!~UiTests.Accessibility.&FullyQualifiedName!~UiTests.Journeys.&FullyQualifiedName!~UiTests.Apps."
+    "filter": "TestCategory=UI&FullyQualifiedName!~UiTests.Accessibility.&FullyQualifiedName!~UiTests.Journeys.&FullyQualifiedName!~UiTests.Apps.&FullyQualifiedName!~UiTests.Reflow.",
+    "browsers": ["chromium"]
   },
   {
     "shard": "accessibility",
-    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Accessibility."
+    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Accessibility.&FullyQualifiedName!~Accessibility.ComboBoxAccessibilityTests.&FullyQualifiedName!~Accessibility.TenantSwitcherAccessibilityTests.",
+    "browsers": ["chromium"]
   },
   {
     "shard": "journeys-a",
-    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Journeys.&(FullyQualifiedName~FirstRun|FullyQualifiedName~SignIn|FullyQualifiedName~Reauthentication|FullyQualifiedName~DeepLink)"
+    "filter": "TestCategory=UI&((FullyQualifiedName~UiTests.Journeys.&(FullyQualifiedName~FirstRun|FullyQualifiedName~SignIn|FullyQualifiedName~Reauthentication|FullyQualifiedName~DeepLink|FullyQualifiedName~AreaNavigationStressTests.))|FullyQualifiedName~Apps.AppsNavigationStressTests.)",
+    "browsers": ["chromium"]
   },
   {
     "shard": "journeys-b",
-    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Journeys.&FullyQualifiedName!~FirstRun&FullyQualifiedName!~SignIn&FullyQualifiedName!~Reauthentication&FullyQualifiedName!~DeepLink"
+    "filter": "TestCategory=UI&((FullyQualifiedName~UiTests.Journeys.&FullyQualifiedName!~FirstRun&FullyQualifiedName!~SignIn&FullyQualifiedName!~Reauthentication&FullyQualifiedName!~DeepLink&FullyQualifiedName!~AreaNavigationStressTests.)|FullyQualifiedName~UiTests.Reflow.)",
+    "browsers": ["chromium"]
   },
   {
     "shard": "apps",
-    "filter": "TestCategory=UI&FullyQualifiedName~UiTests.Apps."
+    "filter": "TestCategory=UI&((FullyQualifiedName~UiTests.Apps.&FullyQualifiedName!~Apps.AppsNavigationStressTests.)|FullyQualifiedName~Accessibility.ComboBoxAccessibilityTests.|FullyQualifiedName~Accessibility.TenantSwitcherAccessibilityTests.)",
+    "browsers": ["chromium", "firefox", "webkit"]
   }
 ]

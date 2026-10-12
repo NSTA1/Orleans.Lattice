@@ -77,11 +77,15 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Docs - Agent memory retrieval.** Repository sessions search task-relevant memories semantically first, with topic scans as fallback or for explicit completeness. Known-key recalls and action-time gotcha checks remain. ([#4894](https://github.com/NSTA1/Orleans.Lattice/pull/4894)) (`repository-wide`)
+
+- **CI - Browser shard reliability.** Browser fixtures are duration-balanced across five shards. Chromium-only shards skip unused engines; UI and coverage provisioning gets three bounded attempts with process kill deadlines and a final step timeout. ([#4894](https://github.com/NSTA1/Orleans.Lattice/pull/4894)) (`repository-wide`)
+
 - **Explorer - Tenant read ownership.** Switching tenants discards late overview, member and sharing replies and faults; leaving the page cancels reads, and an old not-found reply cannot mark the next page missing. ([#4888](https://github.com/NSTA1/Orleans.Lattice/issues/4888)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Access navigation.** Query-only create commands open their dialogs, Explain asks the current address and clears old answers, and superseded rule/group reads cannot publish stale lists, counts or faults. ([#4875](https://github.com/NSTA1/Orleans.Lattice/pull/4875)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Replication refresh races.** Tree navigation discards old enrolment replies, estate refreshes retain only the newest result or fault, and queued polling stops when the page is hidden or disposed. ([#4873](https://github.com/NSTA1/Orleans.Lattice/pull/4873)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Replication refresh races.** Tree navigation and enrolment retries discard old replies. Estate and enrolment caches and initial/polled tree reads keep the newest result or fault; polling stops when hidden or disposed. ([#4873](https://github.com/NSTA1/Orleans.Lattice/pull/4873), [#4894](https://github.com/NSTA1/Orleans.Lattice/pull/4894)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Progress and tab consistency.** Large progress totals retain exact percentages without overflow; renaming or disabling a tab refreshes its header and active panel together. ([#4850](https://github.com/NSTA1/Orleans.Lattice/issues/4850)) (`Orleans.Lattice.Explorer.UI`)
 - **Explorer - Automatic telemetry budgets.** Long windows and small point budgets use coarser automatic steps beyond the preset ladder without bypassing maximum-step limits. ([#4850](https://github.com/NSTA1/Orleans.Lattice/issues/4850)) (`Orleans.Lattice.Explorer.UI`)

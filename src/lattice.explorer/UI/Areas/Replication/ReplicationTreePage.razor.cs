@@ -19,6 +19,7 @@ public partial class ReplicationTreePage
     private ReplicationTreeConfigEntry? _entry;
     private string? _appSlug;
     private DateTimeOffset _readAt;
+    private long _readVersion;
 
     [Inject]
     internal ReplicationDataSource Data { get; set; } = default!;
@@ -129,10 +130,12 @@ public partial class ReplicationTreePage
             return;
         }
 
+        var version = ++_readVersion;
         try
         {
             var read = await Data.GetTreeLinksAsync(tree, cancellationToken);
-            if (cancellationToken.IsCancellationRequested || !string.Equals(tree, TreeId, StringComparison.Ordinal))
+            if (cancellationToken.IsCancellationRequested || version != _readVersion
+                || !string.Equals(tree, TreeId, StringComparison.Ordinal))
             {
                 return;
             }

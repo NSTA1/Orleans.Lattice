@@ -24,8 +24,9 @@ reading its `mode` / `status`. Full rules live in the **repocontext** skill
 
 The same tools are also this repo's **durable cross-session memory**. At the
 start of non-trivial work, recall what earlier sessions already learned before
-rediscovering it, using the memory retrieval order the master file sets out; and
-when you reach a decision, hit a
+rediscovering it. Start with semantic search, which includes memories; use topic
+scans as fallback or for explicit completeness work, following the master's
+retrieval order. When you reach a decision, hit a
 non-obvious gotcha, or pin down a convention worth keeping, capture it with
 `repocontext_remember` (topics such as `decisions`, `gotchas`, `conventions`,
 `glossary`) so the next session inherits it instead of relearning it.
