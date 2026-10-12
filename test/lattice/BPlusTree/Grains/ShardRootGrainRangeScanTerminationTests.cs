@@ -180,8 +180,11 @@ public class ShardRootGrainRangeScanTerminationTests
         // independent of how many follow the last in-range leaf.
         for (var i = 1; i < h.Leaves.Count; i++)
             await AssertReadCountAsync(h.Leaves[i], 0);
-        // We must not even fetch the next-sibling pointer once range-exhausted.
-        await h.Leaves[0].DidNotReceive().GetNextSiblingAsync();
+        // We must not walk on once range-exhausted: the leaf costs exactly one
+        // metadata call (bounds and sibling pointer read together in one turn),
+        // and the pointer it returned is never followed.
+        await h.Leaves[0].Received(1).GetKeyRangeAndNextSiblingAsync();
+        await h.Leaves[1].DidNotReceive().GetKeyRangeAndNextSiblingAsync();
     }
 
     [Test]

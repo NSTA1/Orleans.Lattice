@@ -2186,7 +2186,10 @@ internal sealed partial class ShardRootGrain(
             if (clock > max) max = clock;
             scan.Budget.RecordLeafVisited();
 
-            var bounds = await leafGrain.GetKeyRangeAsync();
+            // Bounds and sibling pointer in one turn: the walk needs both on
+            // every leaf it does not stop at, and both are plain state reads.
+            var link = await leafGrain.GetKeyRangeAndNextSiblingAsync();
+            var bounds = link.KeyRange;
             if (bounds.HighKeyExclusive is { } high)
             {
                 if (string.CompareOrdinal(high, endExclusive) >= 0)
@@ -2198,7 +2201,7 @@ internal sealed partial class ShardRootGrain(
                 }
             }
 
-            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            var nextSibling = link.NextSibling;
             if (nextSibling is null)
                 break;
 
@@ -2316,7 +2319,10 @@ internal sealed partial class ShardRootGrain(
             // checkpoint - and each used to pay its own round trip, so making
             // the read unconditional costs nothing on a sterile or yielding
             // leaf and one Task.FromResult-backed call on a productive one.
-            var bounds = await leaf.GetKeyRangeAsync();
+            // The sibling pointer the walk needs next rides in the same turn,
+            // so a leaf costs one metadata call rather than two.
+            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            var bounds = link.KeyRange;
 
             // Past-range early exit (issue 1971). Without this a narrow range
             // still costs a walk to the end of the shard's chain.
@@ -2343,7 +2349,7 @@ internal sealed partial class ShardRootGrain(
             // has already counted, which - unlike a range delete, where a
             // repeated tombstone is idempotent - would double-count and never
             // terminate.
-            var next = await leaf.GetNextSiblingAsync();
+            var next = link.NextSibling;
             if (next is null) break;
 
             var boundary = ResumeKeyFrom(bounds, startInclusive, endExclusive);
@@ -2453,8 +2459,9 @@ internal sealed partial class ShardRootGrain(
                 return new ShardAnyPage { Found = true };
             scan.Budget.RecordLeafVisited();
 
-            var bounds = await leaf.GetKeyRangeAsync();
-            var next = await leaf.GetNextSiblingAsync();
+            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            var bounds = link.KeyRange;
+            var next = link.NextSibling;
             if (next is null) return new ShardAnyPage { Found = false };
 
             // resultsCollected is 1 because the meaningful unit of progress
@@ -2574,8 +2581,9 @@ internal sealed partial class ShardRootGrain(
             }
             scan.Budget.RecordLeafVisited();
 
-            var bounds = await leaf.GetKeyRangeAsync();
-            var next = await leaf.GetNextSiblingAsync();
+            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            var bounds = link.KeyRange;
+            var next = link.NextSibling;
             if (next is null) break;
 
             var boundary = ResumeKeyFrom(bounds, resumeFromInclusive, null);
@@ -2690,8 +2698,10 @@ internal sealed partial class ShardRootGrain(
             // Read unconditionally, for the reason set out on
             // CountBoundedCoreAsync: the past-range probe, the yield point and
             // the bankable checkpoint (issue 2807) all want this leaf's bounds,
-            // and each used to pay its own round trip.
-            var bounds = await leaf.GetKeyRangeAsync();
+            // and each used to pay its own round trip. The sibling pointer rides
+            // in the same turn.
+            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            var bounds = link.KeyRange;
 
             // Past-range early exit (issue 1971): a bounded range must not cost
             // a walk to the end of the chain.
@@ -2703,7 +2713,7 @@ internal sealed partial class ShardRootGrain(
                 break;
             }
 
-            var next = await leaf.GetNextSiblingAsync();
+            var next = link.NextSibling;
             if (next is null) break;
 
             var boundary = ResumeKeyFrom(bounds, startInclusive, endExclusive);
@@ -3696,9 +3706,12 @@ internal sealed partial class ShardRootGrain(
             // bounds, so read them once per leaf, and only when one of them
             // can actually use them.
             var spent = scan.Budget.ShouldYield();
-            var bounds = endExclusive is not null || spent
-                ? await leafGrain.GetKeyRangeAsync()
-                : (LeafKeyRange?)null;
+            // The sibling pointer rides in the same turn as the bounds, so a leaf
+            // whose bounds are needed pays one metadata call rather than two.
+            LeafChainLink? link = endExclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAndNextSiblingAsync()
+                : null;
+            var bounds = link?.KeyRange;
 
             // A leaf shown not to be descent-reachable - by its rows regressing
             // the chain, or by its own declared range claiming keyspace the
@@ -3747,7 +3760,7 @@ internal sealed partial class ShardRootGrain(
                     break;
             }
 
-            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            var nextSibling = link is { } read ? read.NextSibling : await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
                 return new KeysPage
                 {
@@ -4020,9 +4033,12 @@ internal sealed partial class ShardRootGrain(
             // bounds, so read them once per leaf, and only when one of them
             // can actually use them.
             var spent = scan.Budget.ShouldYield();
-            var bounds = endExclusive is not null || spent
-                ? await leafGrain.GetKeyRangeAsync()
-                : (LeafKeyRange?)null;
+            // The sibling pointer rides in the same turn as the bounds, so a leaf
+            // whose bounds are needed pays one metadata call rather than two.
+            LeafChainLink? link = endExclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAndNextSiblingAsync()
+                : null;
+            var bounds = link?.KeyRange;
 
             // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
             // must not steer termination or resume (issue 3271).
@@ -4061,7 +4077,7 @@ internal sealed partial class ShardRootGrain(
                     break;
             }
 
-            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            var nextSibling = link is { } read ? read.NextSibling : await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
                 return new EntriesPage
                 {
@@ -4327,9 +4343,12 @@ internal sealed partial class ShardRootGrain(
             if (keys.Count >= pageSize) break;
 
             var spent = scan.Budget.ShouldYield();
-            var bounds = endExclusive is not null || spent
-                ? await leafGrain.GetKeyRangeAsync()
-                : (LeafKeyRange?)null;
+            // The sibling pointer rides in the same turn as the bounds, so a leaf
+            // whose bounds are needed pays one metadata call rather than two.
+            LeafChainLink? link = endExclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAndNextSiblingAsync()
+                : null;
+            var bounds = link?.KeyRange;
 
             // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
             // must not steer termination or resume (issue 3271).
@@ -4359,7 +4378,7 @@ internal sealed partial class ShardRootGrain(
                     break;
             }
 
-            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            var nextSibling = link is { } read ? read.NextSibling : await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
                 return new KeysPage { Keys = keys, HasMore = false };
 
@@ -4462,9 +4481,12 @@ internal sealed partial class ShardRootGrain(
             if (entries.Count >= pageSize) break;
 
             var spent = scan.Budget.ShouldYield();
-            var bounds = endExclusive is not null || spent
-                ? await leafGrain.GetKeyRangeAsync()
-                : (LeafKeyRange?)null;
+            // The sibling pointer rides in the same turn as the bounds, so a leaf
+            // whose bounds are needed pays one metadata call rather than two.
+            LeafChainLink? link = endExclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAndNextSiblingAsync()
+                : null;
+            var bounds = link?.KeyRange;
 
             // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
             // must not steer termination or resume (issue 3271).
@@ -4492,7 +4514,7 @@ internal sealed partial class ShardRootGrain(
                     break;
             }
 
-            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            var nextSibling = link is { } read ? read.NextSibling : await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
                 return new EntriesPage { Entries = entries, HasMore = false };
 
