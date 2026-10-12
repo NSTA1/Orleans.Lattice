@@ -456,6 +456,15 @@ built-in reduces are exposed through `AggregationKind`:
 reduce declared with `LatticeFoldProjection` (see
 [Folded (custom-reducer) views](#folded-custom-reducer-views) below).
 
+Numeric `Count` and `Sum` flips atomically persist membership, accumulator slots,
+and a bounded one/two-group rematerialisation intent. Ordinary public group
+publication remains separate, not snapshot-atomic. The intent survives a lost
+flip or group-write response; a subsequent numeric apply or retract for that
+source key completes every affected group write before retiring it. Losing the
+intent-delete response is safe because deletion follows those writes. This
+repairs future interruptions, not group identities already lost before the
+intent format existed.
+
 Group keys share the view tree with the maintainer's internal rows, which live
 under a reserved NUL (`\u0000`) prefix. A group-key selector that returns an
 empty key or one beginning with `\u0000` therefore has its contribution
@@ -732,6 +741,14 @@ tree sets `LatticeOptions.WalRetention` and the oldest prepared entry of a
 still-unterminated batch is older than that window, because the batch could no
 longer complete before the log trims under it. Each backstop trip increments
 `orleans.lattice.view.atomic_staging_backstop`.
+
+The read cursor advances independently of the applied checkpoint while a batch
+is staged: the maintainer must continue reading to discover its terminal, while
+the durable checkpoint and WAL pin remain behind the unresolved prepare. A
+physical-WAL-bound replay fence preserves the drained window and newer ordinary
+write clocks across reactivation. It suppresses ordinary survivors already
+projected in that window while reconstructing the still-pending atomic staging;
+a fence from a different physical source is never reused.
 
 When a completed batch flushes to the view tree, the maintainer carries the
 projection's upserts **and** its retraction deletes inside a single mixed atomic
@@ -1062,7 +1079,9 @@ cost. See [Durable per-key history views](history-views.md).
   resolve by source HLC.** Within a drain pass a committed atomic batch is applied
   after the ordinary survivors, but a staged entry whose source key took a
   higher-HLC ordinary write while its batch was staged is skipped when the batch
-  flushes, so the view keeps the source's last-writer-wins outcome.
+  flushes, so the view keeps the source's last-writer-wins outcome. A skipped
+  older filter entry must not retract the newer projected key, and an older
+  aggregation entry must not remove the source key from its newer group.
 - **Approximate set-union cardinality is a bounded sample, not HyperLogLog.**
   `AggregationMaxGroupEntries` bounds `SetUnion` with a distinct sample; a true
   HyperLogLog estimator is a later phase.
