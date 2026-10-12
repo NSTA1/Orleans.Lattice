@@ -81,7 +81,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Access navigation.** Query-only create commands open their dialogs, Explain asks the current address and clears old answers, and superseded rule/group reads cannot publish stale lists, counts or faults. ([#4875](https://github.com/NSTA1/Orleans.Lattice/pull/4875)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Replication refresh races.** Tree navigation discards old enrolment replies, estate refreshes retain only the newest result or fault, and queued polling stops when the page is hidden or disposed. ([#4873](https://github.com/NSTA1/Orleans.Lattice/pull/4873)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Replication refresh races.** Tree navigation and enrolment retries discard old replies. Estate and enrolment caches and initial/polled tree reads keep the newest result or fault; polling stops when hidden or disposed. ([#4873](https://github.com/NSTA1/Orleans.Lattice/pull/4873)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Progress and tab consistency.** Large progress totals retain exact percentages without overflow; renaming or disabling a tab refreshes its header and active panel together. ([#4850](https://github.com/NSTA1/Orleans.Lattice/issues/4850)) (`Orleans.Lattice.Explorer.UI`)
 - **Explorer - Automatic telemetry budgets.** Long windows and small point budgets use coarser automatic steps beyond the preset ladder without bypassing maximum-step limits. ([#4850](https://github.com/NSTA1/Orleans.Lattice/issues/4850)) (`Orleans.Lattice.Explorer.UI`)
