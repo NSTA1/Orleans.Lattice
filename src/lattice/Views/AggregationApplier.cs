@@ -82,6 +82,15 @@ internal sealed class AggregationApplier(
 
     private bool IsFold => kind == AggregationKind.Fold;
 
+    /// <summary>
+    /// Completes a numeric source member's durable publication obligation even
+    /// when projection emits no contribution.
+    /// </summary>
+    internal Task CompletePendingNumericSourceAsync(string sourceKey, CancellationToken cancellationToken = default) =>
+        IsNumeric
+            ? CompletePendingNumericMaterialisationAsync(sourceKey, cancellationToken)
+            : Task.CompletedTask;
+
     /// <summary>Applies a single contribution and re-materialises every group it touches.</summary>
     public async Task ApplyAsync(AggregationContribution contribution, CancellationToken cancellationToken = default)
     {
@@ -112,7 +121,9 @@ internal sealed class AggregationApplier(
         if (IsReservedGroupKey(contribution.GroupKey))
         {
             Rejected.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagView, _viewName), _tenantTag);
-            return Task.CompletedTask;
+            return IsNumeric
+                ? CompletePendingNumericMaterialisationAsync(contribution.SourceKey, cancellationToken)
+                : Task.CompletedTask;
         }
 
         return IsNumeric

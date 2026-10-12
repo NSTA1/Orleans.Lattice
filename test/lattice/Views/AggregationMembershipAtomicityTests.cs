@@ -20,6 +20,8 @@ public sealed class AggregationMembershipAtomicityTests
 
         public bool FailNextIntentRetirement { get; set; }
 
+        public bool LoseNextIntentRetirementResponse { get; set; }
+
         public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
         {
             Observe();
@@ -51,6 +53,12 @@ public sealed class AggregationMembershipAtomicityTests
             _rows.Remove(key);
             Observe();
             LoseGroupResponse(key);
+            if (LoseNextIntentRetirementResponse && key.StartsWith("\u0000p", StringComparison.Ordinal))
+            {
+                LoseNextIntentRetirementResponse = false;
+                throw new InvalidOperationException("intent deletion committed but response was lost");
+            }
+
             return Task.CompletedTask;
         }
 
@@ -172,9 +180,10 @@ public sealed class AggregationMembershipAtomicityTests
             "the detector must have observed intermediate store boundaries, not just final materialisation");
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task ApplyAsync_failed_group_write_or_intent_retirement_replays_before_the_next_contribution(bool failRetirement)
+    [TestCase("group")]
+    [TestCase("retire-before")]
+    [TestCase("retire-after")]
+    public async Task ApplyAsync_failed_group_write_or_intent_retirement_replays_before_the_next_contribution(string failure)
     {
         var store = new ObservedStore(1, true);
         AggregationApplier Create() => new(store, AggregationKind.Sum, 1, 0, "epoch");
@@ -182,17 +191,57 @@ public sealed class AggregationMembershipAtomicityTests
         await Create().ApplyAsync(AggregationContribution.OfNumeric("red", "a", 3, Clock(1)));
         await Create().ApplyAsync(AggregationContribution.OfNumeric("red", "b", 5, Clock(2)));
 
-        store.LoseNextGroupResponse = !failRetirement;
-        store.FailNextIntentRetirement = failRetirement;
+        store.LoseNextGroupResponse = failure == "group";
+        store.FailNextIntentRetirement = failure == "retire-before";
+        store.LoseNextIntentRetirementResponse = failure == "retire-after";
         Assert.That(
             () => Create().ApplyAsync(AggregationContribution.OfNumeric("blue", "a", 7, Clock(3))),
             Throws.TypeOf<InvalidOperationException>());
-        Assert.That(await store.GetAsync(NumericMaterialisationKey("a")), Is.Not.Null,
-            "a partially published group pair or failed retirement must retain its durable obligation");
+        Assert.That(
+            await store.GetAsync(NumericMaterialisationKey("a")),
+            failure == "retire-after" ? Is.Null : Is.Not.Null,
+            "only a committed retirement may erase an obligation; losing its response is safe");
 
         await Create().ApplyAsync(AggregationContribution.Retract("a", Clock(4)));
         Assert.That(await store.GetAsync("blue"), Is.Null);
         Assert.That(LatticeAggregationValue.DecodeDouble((await store.GetAsync("red"))!), Is.EqualTo(5));
+        Assert.That(await store.GetAsync(NumericMaterialisationKey("a")), Is.Null);
+    }
+
+    [Test]
+    public async Task ApplyAsync_absent_member_retry_completes_a_failed_retraction_materialisation()
+    {
+        var store = new ObservedStore(1, true);
+        AggregationApplier Create() => new(store, AggregationKind.Sum, 1, 0, "epoch");
+        await Create().ApplyAsync(AggregationContribution.OfNumeric("red", "a", 3, new() { WallClockTicks = 1 }));
+        var retract = AggregationContribution.Retract("a", new() { WallClockTicks = 2 });
+        store.LoseNextGroupResponse = true;
+        Assert.That(() => Create().ApplyAsync(retract), Throws.TypeOf<InvalidOperationException>());
+        Assert.That(IsEmpty((await store.GetAsync(MembershipKey("a")))!), Is.True);
+        Assert.That(await store.GetAsync(NumericMaterialisationKey("a")), Is.Not.Null);
+
+        await Create().ApplyAsync(retract);
+        Assert.That(await store.GetAsync("red"), Is.Null);
+        Assert.That(await store.GetAsync(NumericMaterialisationKey("a")), Is.Null);
+    }
+
+    [TestCase("")]
+    [TestCase("\0reserved")]
+    public async Task ApplyAsync_rejected_numeric_regroup_completes_the_previous_durable_intent(string reserved)
+    {
+        var store = new ObservedStore(1, true);
+        AggregationApplier Create() => new(store, AggregationKind.Sum, 1, 0, "epoch");
+        await Create().ApplyAsync(AggregationContribution.OfNumeric("red", "a", 3, new() { WallClockTicks = 1 }));
+        await Create().ApplyAsync(AggregationContribution.OfNumeric("red", "b", 5, new() { WallClockTicks = 2 }));
+        store.LoseNextAtomicResponse = true;
+        Assert.That(
+            () => Create().ApplyAsync(AggregationContribution.OfNumeric("blue", "a", 7, new() { WallClockTicks = 3 })),
+            Throws.TypeOf<InvalidOperationException>());
+
+        await Create().ApplyAsync(AggregationContribution.OfNumeric(reserved, "a", 9, new() { WallClockTicks = 4 }));
+        Assert.That(LatticeAggregationValue.DecodeDouble((await store.GetAsync("red"))!), Is.EqualTo(5));
+        Assert.That(LatticeAggregationValue.DecodeDouble((await store.GetAsync("blue"))!), Is.EqualTo(7));
+        Assert.That(DecodeMembership((await store.GetAsync(MembershipKey("a")))!).GroupKey, Is.EqualTo("blue"));
         Assert.That(await store.GetAsync(NumericMaterialisationKey("a")), Is.Null);
     }
 
@@ -206,5 +255,30 @@ public sealed class AggregationMembershipAtomicityTests
         Assert.That(
             () => DecodeNumericMaterialisation(encoded[..^1]),
             Throws.TypeOf<InvalidDataException>());
+    }
+
+    [TestCase(AggregationKind.Count)]
+    [TestCase(AggregationKind.Sum)]
+    public async Task CompletePendingNumericSourceAsync_repairs_a_source_even_when_projection_emits_nothing(AggregationKind kind)
+    {
+        var store = new ObservedStore(1, true);
+        AggregationApplier Create() => new(store, kind, 1, 0, "epoch");
+        await Create().ApplyAsync(AggregationContribution.OfNumeric("red", "a", 3, new() { WallClockTicks = 1 }));
+        store.LoseNextAtomicResponse = true;
+        Assert.That(
+            () => Create().ApplyAsync(AggregationContribution.OfNumeric("blue", "a", 7, new() { WallClockTicks = 2 })),
+            Throws.TypeOf<InvalidOperationException>());
+        Assert.That(await store.GetAsync(NumericMaterialisationKey("a")), Is.Not.Null);
+        await Create().CompletePendingNumericSourceAsync("a");
+
+        Assert.That(await store.GetAsync("red"), Is.Null);
+        var blue = (await store.GetAsync("blue"))!;
+        Assert.That(
+            kind == AggregationKind.Count
+                ? LatticeAggregationValue.DecodeInt64(blue)
+                : LatticeAggregationValue.DecodeDouble(blue),
+            Is.EqualTo(kind == AggregationKind.Count ? 1 : 7));
+        Assert.That(await store.GetAsync(NumericMaterialisationKey("a")), Is.Null);
+        await Create().CompletePendingNumericSourceAsync("a");
     }
 }

@@ -10,12 +10,14 @@ namespace Orleans.Lattice.Views;
 /// Reserved-key layout and binary (de)serialisation for an aggregation view's
 /// internal rows, which live in the <c>view-{name}</c> tree under a reserved NUL
 /// (<c>\u0000</c>) prefix that can never collide with a materialised group key
-/// (group keys are forbidden from beginning with NUL). Three row families share
+/// (group keys are forbidden from beginning with NUL). Five row families share
 /// the tree alongside the bare-keyed materialised group values:
 /// <list type="bullet">
 /// <item><b>Membership</b> (<c>\u0000m{sourceKey}</c>) - the group and value a source key last contributed; the "read before write" retraction pointer.</item>
 /// <item><b>Accumulator</b> (<c>\u0000a{groupKey}\u0000{slot}</c>) - the running count and sum of a group shard (count / sum kinds).</item>
 /// <item><b>Inverse</b> (<c>\u0000i{groupKey}\u0000{slot}</c>) - the per-source-key contributions of a group shard (min / max / set-union kinds).</item>
+/// <item><b>Fold inverse</b> (<c>\u0000f{groupKey}\u0000{slot}</c>) - timestamped per-source-key values for a custom fold.</item>
+/// <item><b>Numeric materialisation intent</b> (<c>\u0000p{sourceKey}</c>) - the one or two affected groups a committed numeric flip must publish before its repair obligation retires.</item>
 /// </list>
 /// The payloads are opaque bytes in the view tree and use a compact manual
 /// encoding rather than an Orleans serializer. They are <b>not</b> purely local:
