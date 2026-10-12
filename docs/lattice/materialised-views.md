@@ -791,16 +791,39 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 
 A source-side **cross-tree** atomic write (`IGrainFactory.SetManyAtomicAsync` /
 `BeginAtomicWrite`, see [atomic writes](atomic-writes.md)) commits across several
-source trees all-or-nothing. The views derived from those trees preserve that
-coupling: when the cross-tree batch commits, the participating views flip
-**jointly** - a reader never observes one participating view committed while
-another is still pre-commit.
+source trees all-or-nothing. The coordinator freezes the expected participating
+views and their admitted local slices, then publishes those slices **jointly**
+through one idempotent cross-tree atomic write. Each view still has one source;
+this is not a multi-source join or an arbitrary dependency-graph contract.
 
-If a participant view is permanently unavailable, the present views **degrade to
-per-tree atomicity** after a bounded wait (`CrossTreeReadinessTimeout`, default
-5 s): each flips its own slice, increments
-`orleans.lattice.view.cross_tree_joint_violation`, and schedules a reconcile that
-heals any divergence - choosing liveness over an indefinite stall.
+Joint publication does not provide a shared snapshot across separately read
+views. Independent reads or independently opened snapshot cursors can straddle
+the joint commit. The atomic read guarantee concerns one snapshot read within
+one view tree, not simultaneous observation by every consumer of every view.
+
+Before a durable joint decision, a bounded wait (`CrossTreeReadinessTimeout`,
+default 5 s) may explicitly **degrade to per-tree atomicity**: each participant
+flips its own slice, increments
+`orleans.lattice.view.cross_tree_joint_violation`, and schedules reconciliation.
+That outcome does not certify joint publication.
+
+Once a current-protocol joint decision is durable, timeout cannot replace it
+with per-view completion. Each participant retains durable source/physical-view
+ownership while it captures a fresh repair contribution. All expected repair
+contributions publish jointly; only then can participants retire their held
+checkpoints and acknowledge completion. Coordinator retention waits for every
+acknowledgement. A lost publication response or failed checkpoint write retains
+the obligation for idempotent retry rather than substituting a winner-only
+rebuild or independently repairing one slice. Current-state and numeric views
+use fresh source outcomes; accumulative history retains the original committed
+revisions rather than reconstructing them from current winners.
+
+Activation failures normally recover through durable state and reminders. A
+participant that remains unavailable can delay the affected maintenance until
+it recovers; ordinary unrelated database work is not a shared global barrier.
+Rebuild, reconcile, physical-source rebind and decommission must respect these
+holds instead of silently discarding decided work. Legacy operations keep their
+released completion contract, as described below.
 
 ## Replication modes
 
