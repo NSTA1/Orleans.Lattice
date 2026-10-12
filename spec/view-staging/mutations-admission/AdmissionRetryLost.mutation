@@ -1,0 +1,11 @@
+MODULE: AdmissionRetryLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: A deferred confirmation never resumes the read and repair path
+PERTURBS: Retry
+
+--- FIND
+    /\ phase = "sampled" /\ ~Admitted
+--- REPLACE
+    /\ FALSE /\ phase = "sampled" /\ ~Admitted
+--- END

@@ -1,0 +1,11 @@
+MODULE: AdmissionCheckpointBeforePublication
+TARGET: CheckpointHeld
+CLASS: Invariant
+SUMMARY: Checkpoint passes the prepares before any admissible publication
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ done /\ ckpt # read
+--- REPLACE
+    /\ ckpt # read
+--- END

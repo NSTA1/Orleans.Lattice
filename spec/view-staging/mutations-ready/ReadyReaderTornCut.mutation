@@ -1,0 +1,11 @@
+MODULE: ReadyReaderTornCut
+TARGET: SnapshotExact
+CLASS: Invariant
+SUMMARY: The public current-state reader combines new and old keys from one closure
+PERTURBS: Observe
+
+--- FIND
+    /\ snapshots' = [snapshots EXCEPT ![c] = value[c]]
+--- REPLACE
+    /\ snapshots' = [snapshots EXCEPT ![c] = [k \in Keys |-> IF k = 1 THEN value[c][k] ELSE 0]]
+--- END

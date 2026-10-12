@@ -1,0 +1,11 @@
+MODULE: AdmissionTombstoneKindIdentity
+TARGET: VersionIdentity
+CLASS: Invariant
+SUMMARY: Ignore tombstone kind when payload and timestamp match an older live prepare
+PERTURBS: Confirm
+
+--- FIND
+    /\ classes' = [k \in Keys |-> Classify(source[k],k)]
+--- REPLACE
+    /\ classes' = [k \in Keys |-> IF source[k].stamp = Prepared[k].stamp /\ source[k].bytes = Prepared[k].bytes THEN "prepared" ELSE Classify(source[k],k)]
+--- END

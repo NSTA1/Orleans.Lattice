@@ -1,0 +1,11 @@
+MODULE: AdmissionPrematureRegistration
+TARGET: RegistrationSound
+CLASS: Invariant
+SUMMARY: Register a local slice or external peer without its source and readiness evidence
+PERTURBS: Register
+
+--- FIND
+    /\ IF p = 1 THEN phase = "sampled" /\ Ready /\ Admitted ELSE installed = Keys
+--- REPLACE
+    /\ TRUE
+--- END

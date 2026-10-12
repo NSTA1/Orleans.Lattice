@@ -1,0 +1,11 @@
+MODULE: ReadyCheckpointSkips
+TARGET: CheckpointHeld
+CLASS: Invariant
+SUMMARY: Persist consumed offsets above an unresolved prepare instead of holding its floor
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ ckpt' = [ckpt EXCEPT ![c] = [p \in Keys |-> Floor(c,p)]]
+--- REPLACE
+    /\ ckpt' = [ckpt EXCEPT ![c] = read[c]]
+--- END

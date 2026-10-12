@@ -1,0 +1,171 @@
+# Materialised view staging and source admission
+
+These two focused companions check independent-clock local publication closure
+and source revision admission. They compose through the explicit contract below,
+not by claiming the full Cartesian product of all source, topology and view
+features has been checked.
+
+## Counts
+
+| Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
+|--------|------------|------------|---------|-----------|----------------|-----------------|
+| `MaterialisedViewReadyClosure` | 5 | 2 | 9 | 12 | 14 | 46,846 |
+| `MaterialisedViewSourceAdmission` | 6 | 6 | 13 | 18 | 23 | 20,184 |
+
+## Independent-clock ready closure
+
+The base instance has three two-key batches over a three-key ring. Batch t
+writes its own key at HLC 30 and its neighbour at HLC 10. Every batch has the
+same maximum HLC, but no serial ordering of the batches produces the source's
+per-key winners without an observable intermediate wrong cut. Omitting a
+batch's low-clock key relies on its neighbour's high-clock replacement; the
+dependency closes transitively around the ring. Batch 2 additionally has an
+external eligibility hold, separate from its fully consumed prepare/terminal
+log. Even after every captured head is consumed, the other batches must wait
+wholly while that replacement is outside the eligible flush set. Fair `Release`
+removes the hold; only then can the ring publish. The closure-only negative
+control preserves the horizon gate, proving these are distinct obligations.
+
+The fixed reachable prefix has all source decisions committed and installed,
+but no consumer has read any prepare or terminal. Each source-key partition has
+two prepares followed by two distinct shard terminals. A subscription read
+consumes one entry, staging independently by partition. A complete local batch
+captures the confirmation head, then waits for both head consumption and its
+whole replacement closure before one atomic publication of the per-key maxima.
+Checkpoint writes cannot pass unresolved entries. Crashes discard read progress,
+staging and the volatile confirmation horizon; the durable publication and its
+idempotent completion survive even if no checkpoint followed it.
+
+The base chooses either a current-state or an accumulative registration at
+initialisation, so history gates are not vacuous controls on a current-only
+base. History publishes every complete two-key batch's revision identities
+atomically, not only its current winners. The `History` variant isolates that
+branch. The `TwoConsumers` variant uses a two-batch/two-key cycle and two
+independently progressing current-state consumers. Each can observe a different
+lag and finish at a different time; no same-time cross-view flip is asserted.
+Public snapshot actions cannot mix keys across a local closure or split a
+history batch's revision pair.
+
+## Coherent source admission
+
+The source-admission base likewise covers current-state and history
+registrations. Its two prepared rows have HLCs 20/40. A newer live row at HLC 50
+has identical bytes to the first prepare; the second key has an empty live
+prepare and an empty-byte tombstone. An adversarial source alternative holds
+the tombstone at the prepare's HLC until a fair newer source revision arrives.
+That alternative discriminates ignoring kind even when bytes and clock match;
+it is not a claim that well-formed source writes reuse a revision identity.
+
+Commit decision, source installation, terminal append and per-partition terminal
+consumption are separate steps. A terminal can arrive before installation is
+readable. A confirmation samples whole row tuples: timestamp, bytes and
+tombstone kind. Matching bytes are not revision identity, and a source sample
+does not create a synthetic projection mutation. A mismatching newer source
+row arms a post-observation head. Consuming that head is necessary but not
+sufficient: an ordinary entry can have been dropped by the upstream admission
+gate. The batch stays wholly deferred until an actually applied replacement
+supports every omission. A later repair publishes the real replacement before
+the batch can finish and advance its checkpoint.
+
+Absent and older source rows remain pending even after the terminal horizon is
+fully consumed. A same-version nonmatching row also stays pending; only exact
+identity or a strictly newer revision can discharge admission. `AdmissionComplete`
+and its lagging-row mutant discriminate retiring such a pending batch. Both the
+base and `PendingSource` include absent and older rows, so the paired control
+exercises lagging installation rather than assuming it away.
+
+`PendingSource` isolates decision/terminal-before-source-installation.
+`History` isolates committed revision retention despite newer current state.
+`CrossTree` requires readiness from both expected participants rather than
+one local registration. The external participant is an abstract readiness
+certificate; the model does not implement its drain, the joint-write engine,
+coordinator timeout/degrade or simultaneous reader visibility across views.
+Production evidence for the candidate cross-tree closure is still pending.
+
+The consumer's sample/publish turn excludes its own ordinary-write processing
+between confirmation and publication. It does not freeze the source. In this
+bounded source, sampling a vector is equivalent to sampling each row coherently:
+one conflicting tuple can progress while the other is stable, or installation
+only advances the two missing rows. No source-wide snapshot isolation claim
+is inferred from this representation.
+
+## Composition and limits
+
+ReadyClosure relies on SourceAdmission's guarantee that an omitted revision
+has a *known eligible replacement*, a coherent source identity, and sufficient
+terminal/head evidence. Its fixed installed source prefix is that guarantee's
+instantiated precondition, not proof that local completion establishes it.
+SourceAdmission relies on the local closure's single atomic slice and per-key
+clock fold when ready overlapping replacements form a dependency cycle.
+Neither same bytes, a scalar maximum batch clock, nor one shard/participant
+terminal discharges either side of this rely-guarantee contract.
+
+Physical WAL rebinding, dual candidate holds, GC, retained replay fences and
+multi-partition orphan rebuild are checked separately by Tail, Rebind, Fence
+and Horizon. However, these models keep one physical log identity fixed. Durable
+completion/idempotency must be scoped to that identity: the resolved-Guid reuse
+flaw #4895 is not represented by these models or by the current single-transaction
+Rebind model. A separate two-log/reused-ID companion is still required; no reset
+of a cache absent from a model can prove that property.
+
+Aggregation membership/numeric-intent composition is the
+Aggregation model's; these models do not equate revision history with a
+current-state numeric fold. Fair source completion/correction and maintenance
+follow finitely many crashes. The admission read/repair uses strong fairness
+because its eligibility recurs between deferred confirmation turns; no
+convergence is promised under permanent starvation, infinite faults or an
+uncorrected contradictory source tuple.
+
+## Evidence and acceptance
+
+Checks are exhaustive, not simulations. Every checked property has a targeted
+mutant and every behavioural action has an anchored perturbation. Serial-batch
+ordering, split publication, incomplete transitive closure, equal-byte identity,
+tombstone-kind identity and treating dropped ordinary progress as applied
+replacement each have a separate negative control.
+
+The refinement notes retain explicitly Pending production detector verdicts.
+The source owner supplied candidate regression names and accepted history
+evidence, but local source-confirmation/closure and cross-tree repairs are not
+accepted production contracts yet. A clean finite model is not an unqualified
+production refinement verdict.
+
+## Measured exhaustive instances
+
+| Instance | Distinct states | Raw seconds |
+|----------|-----------------|-------------|
+| ReadyClosure base | 46,846 | 10.803 |
+| ReadyClosure History | 39,651 | 8.713 |
+| ReadyClosure TwoConsumers | 31,577 | 10.780 |
+| SourceAdmission base | 20,184 | 6.622 |
+| SourceAdmission CrossTree | 836 | 1.651 |
+| SourceAdmission History | 14,904 | 5.646 |
+| SourceAdmission PendingSource | 660 | 1.671 |
+
+Actual repository TlcModelCheckTests measurements, not a proxy runner:
+
+| Module | Passed / executed | Item span seconds | Whole command seconds |
+|--------|-------------------|-------------------|-----------------------|
+| MaterialisedViewReadyClosure | 15 / 15 | 87.575177 | 94.200066 |
+| MaterialisedViewSourceAdmission | 22 / 22 | 127.085807 | 153.252978 |
+
+Each module includes its base, every variant and every paired mutation case.
+All 37 cases passed with zero skipped, inconclusive or failed cases. The final
+raw exhaustive census separately has 67 JVM runs: seven base/variant runs and
+30 distinct control/mutant pairs. Single-property experiments retain TypeOK;
+mutants must violate the intended property, not a parser or domain failure.
+Mutation-specific generated headers keep same-target controls distinct; no
+shared-control speedup is claimed.
+
+Measurements used Java 17 / TLC 2.19, one JVM slot, two visible CPUs, two TLC
+workers, ParallelGC and a maximum heap of 1,800 MiB (TLC reported 1,600 MB usable
+heap). Peak live heap was not measured. Whole command includes no-build test
+startup/discovery overhead; item span is earliest case start to latest case end.
+The timings are local observations, not predicted CI performance.
+
+The owned non-TLC structural scope passed 83/83. Parent-owned root index entries
+and production refinement acceptance are outside that scoped green. Separately,
+refinement detector gates executed 18 cases: 12 passed and six failed explicitly
+for Pending verdicts and missing/unaccepted detector references in this inherited
+source. These failures are recorded, not certified away. Central enrollment,
+routing and production detector acceptance remain prerequisites for shipment.

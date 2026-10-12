@@ -1,0 +1,11 @@
+MODULE: ReadyDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: Crash restores an offset outside the physical replay domain
+PERTURBS: Crash
+
+--- FIND
+    /\ read' = [read EXCEPT ![c] = ckpt[c]]
+--- REPLACE
+    /\ read' = [read EXCEPT ![c] = [p \in Keys |-> Head+1]]
+--- END

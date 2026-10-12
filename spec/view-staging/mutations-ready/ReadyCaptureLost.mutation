@@ -1,0 +1,11 @@
+MODULE: ReadyCaptureLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: The source confirmation horizon is never armed
+PERTURBS: Capture
+
+--- FIND
+    /\ horizon' = [horizon EXCEPT ![c] = Head]
+--- REPLACE
+    /\ horizon' = [horizon EXCEPT ![c] = 0]
+--- END

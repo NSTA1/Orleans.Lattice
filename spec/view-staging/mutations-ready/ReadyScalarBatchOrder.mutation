@@ -1,0 +1,11 @@
+MODULE: ReadyScalarBatchOrder
+TARGET: SnapshotExact
+CLASS: Invariant
+SUMMARY: Scalar batch ordering publishes one crossed-clock batch instead of the per-key closure
+PERTURBS: Publish
+
+--- FIND
+    /\ value' = [value EXCEPT ![c] = Fold(Complete(c) \cup done[c])]
+--- REPLACE
+    /\ value' = [value EXCEPT ![c] = [k \in Keys |-> IF k \in TxKeys(1) THEN Stamp(1,k) ELSE 0]]
+--- END

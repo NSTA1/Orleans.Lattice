@@ -1,0 +1,11 @@
+MODULE: ReadyHistoryWinnersOnly
+TARGET: HistoryExact
+CLASS: Invariant
+SUMMARY: History applies current-winner selection and silently loses low-clock committed revisions
+PERTURBS: HistoryPublish
+
+--- FIND
+    /\ history' = [history EXCEPT ![c] = @ \cup {<<t,k>> : k \in TxKeys(t)}]
+--- REPLACE
+    /\ history' = [history EXCEPT ![c] = @ \cup {<<t,t>>}]
+--- END

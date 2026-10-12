@@ -1,0 +1,11 @@
+MODULE: AdmissionPrepareLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: Read progress loses a prepared entry and can never admit the complete batch
+PERTURBS: Read
+
+--- FIND
+    /\ prepares' = IF read[k] = 0 /\ ~done THEN prepares \cup {k} ELSE prepares
+--- REPLACE
+    /\ prepares' = prepares
+--- END

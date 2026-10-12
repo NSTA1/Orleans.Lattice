@@ -1,0 +1,12 @@
+MODULE: AdmissionOneParticipant
+TARGET: ParticipantsClosed
+CLASS: Action
+SUMMARY: Local completion publishes while an expected cross-tree participant is absent
+PERTURBS: Publish
+BOUNDS: CrossTree = TRUE, InitiallyNewer = FALSE
+
+--- FIND
+    /\ registered = Participants
+--- REPLACE
+    /\ registered # {}
+--- END

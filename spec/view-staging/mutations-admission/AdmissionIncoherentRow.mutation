@@ -1,0 +1,11 @@
+MODULE: AdmissionIncoherentRow
+TARGET: SampleCoherent
+CLASS: Action
+SUMMARY: Read the old version with the byte-equal newer payload instead of one coherent raw row
+PERTURBS: Confirm
+
+--- FIND
+    /\ sampled' = source
+--- REPLACE
+    /\ sampled' = [source EXCEPT ![1] = IF @ = Newer[1] THEN Row(Prepared[1].stamp,@.bytes,@.deleted) ELSE @]
+--- END

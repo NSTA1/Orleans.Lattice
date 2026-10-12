@@ -1,0 +1,12 @@
+MODULE: AdmissionInstallLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: Terminals arrive but the committed source values never become readable
+PERTURBS: Install
+BOUNDS: InitiallyNewer = FALSE
+
+--- FIND
+    /\ source' = [source EXCEPT ![k] = IF @.stamp < Prepared[k].stamp THEN Prepared[k] ELSE @]
+--- REPLACE
+    /\ source' = source
+--- END

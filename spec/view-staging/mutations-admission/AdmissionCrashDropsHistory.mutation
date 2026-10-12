@@ -1,0 +1,12 @@
+MODULE: AdmissionCrashDropsHistory
+TARGET: HistoryRetained
+CLASS: Invariant
+SUMMARY: Reactivation loses a durable committed history slice
+PERTURBS: Crash
+
+--- FIND
+    /\ UNCHANGED <<decision,source,installed,appended,applied,dropped,done,value,history,ckpt>>
+--- REPLACE
+    /\ history' = {}
+    /\ UNCHANGED <<decision,source,installed,appended,applied,dropped,done,value,ckpt>>
+--- END

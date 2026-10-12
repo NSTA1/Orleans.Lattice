@@ -1,0 +1,11 @@
+MODULE: AdmissionTerminalBeforeDecision
+TARGET: TerminalSound
+CLASS: Invariant
+SUMMARY: A WAL terminal appears without a committed source decision
+PERTURBS: AppendTerminal
+
+--- FIND
+    /\ decision /\ k \notin appended
+--- REPLACE
+    /\ k \notin appended
+--- END

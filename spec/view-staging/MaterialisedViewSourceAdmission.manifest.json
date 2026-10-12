@@ -1,0 +1,18 @@
+{
+  "mutations": "mutations-admission",
+  "refinement": "RefinementSourceAdmission.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 6,
+    "properties": 6,
+    "actions": 13,
+    "mutations": 18,
+    "behaviourRows": 23,
+    "distinctStates": 20184
+  },
+  "variants": {
+    "CrossTree": { "distinctStates": 836 },
+    "History": { "distinctStates": 14904 },
+    "PendingSource": { "distinctStates": 660 }
+  }
+}
