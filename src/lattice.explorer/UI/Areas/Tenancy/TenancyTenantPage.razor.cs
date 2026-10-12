@@ -16,8 +16,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// not list for the caller - one with no admin subject the caller holds - is
 /// still administered through its region and quota facades.
 /// </summary>
-public partial class TenancyTenantPage
+public partial class TenancyTenantPage : IDisposable
 {
+    private readonly ComponentLifetime _lifetime = new();
     private ExplorerAddress? _loaded;
     private TenancyTenantView? _view;
     private TenancyFailure? _failure;
@@ -51,6 +52,13 @@ public partial class TenancyTenantPage
 
     private LtDialogPlacement DialogPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
+    /// <summary>Cancels the reads started for this page.</summary>
+    public void Dispose()
+    {
+        _lifetime.Leave();
+        GC.SuppressFinalize(this);
+    }
+
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
@@ -65,8 +73,10 @@ public partial class TenancyTenantPage
 
     private async Task LoadAsync()
     {
+        var token = _lifetime.Renew();
         _failure = null;
         _view = null;
+        _apps = null;
         var tenantId = TenantId;
         if (!global::Orleans.Lattice.TenantId.TryParse(tenantId, out _))
         {
@@ -76,12 +86,26 @@ public partial class TenancyTenantPage
 
         try
         {
-            if (!await TenancyAdministrationGate.AdmitAsync(Catalog, Navigator, tenantId, null).ConfigureAwait(true))
+            if (!await TenancyAdministrationGate.AdmitAsync(Catalog, Navigator, tenantId, null, token).ConfigureAwait(true))
             {
                 return;
             }
 
-            _view = await ReadAsync(tenantId).ConfigureAwait(true);
+            var view = await ReadAsync(tenantId, token).ConfigureAwait(true);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _view = view;
+            var apps = await Catalog.GetInstalledAppCountAsync(tenantId, token).ConfigureAwait(true);
+            if (!token.IsCancellationRequested)
+            {
+                _apps = apps;
+            }
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
@@ -94,24 +118,23 @@ public partial class TenancyTenantPage
             _failure = failure;
             return;
         }
-
-        _apps = await Catalog.GetInstalledAppCountAsync(tenantId, CancellationToken.None).ConfigureAwait(true);
     }
 
-    private async Task<TenancyTenantView> ReadAsync(string tenantId)
+    private async Task<TenancyTenantView> ReadAsync(string tenantId, CancellationToken token)
     {
         var selfService = Catalog.SelfService ?? throw new NotSupportedException();
         try
         {
-            var status = await selfService.GetTenantAsync(tenantId).ConfigureAwait(true);
+            var status = await selfService.GetTenantAsync(tenantId, token).ConfigureAwait(true);
             return new TenancyTenantView(status.Status, status.IsDefault, status.Regions);
         }
         catch (TenantNotFoundException) when (Catalog.Regions is { } regions)
         {
+            token.ThrowIfCancellationRequested();
             // Self-service lists only tenants whose admin subjects include the
             // caller; an operator still administers the rest, whose existence the
             // region facade establishes (and refuses, not-found, when there is none).
-            var report = await regions.GetTenantRegionStatusAsync(tenantId).ConfigureAwait(true);
+            var report = await regions.GetTenantRegionStatusAsync(tenantId, token).ConfigureAwait(true);
             return new TenancyTenantView(null, string.Equals(tenantId, global::Orleans.Lattice.TenantId.DefaultId, StringComparison.Ordinal), report.Regions);
         }
     }

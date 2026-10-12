@@ -15,8 +15,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// validated "Offer a grant" form - the visible control of the palette's offer
 /// command.
 /// </summary>
-public partial class TenancyGrants
+public partial class TenancyGrants : IDisposable
 {
+    private readonly ComponentLifetime _lifetime = new();
     private LtComboBox? _granteeBox;
     private static readonly IReadOnlyList<LtSelectOption> AccessOptions =
     [
@@ -76,6 +77,13 @@ public partial class TenancyGrants
         : string.Equals(grant.GranterTenantId, TenantId, StringComparison.Ordinal) ? grant.GranteeTenantId
         : grant.GranterTenantId;
 
+    /// <summary>Cancels the reads started for this tenant's grants.</summary>
+    public void Dispose()
+    {
+        _lifetime.Leave();
+        GC.SuppressFinalize(this);
+    }
+
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
@@ -85,8 +93,14 @@ public partial class TenancyGrants
         }
 
         _loadedFor = TenantId;
+        var token = _lifetime.Renew();
         _offerRequested = OpenOfferOnLoad;
-        await LoadAsync().ConfigureAwait(true);
+        await LoadAsync(token).ConfigureAwait(true);
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
         if (_offerRequested && _report is not null && !IsDefault)
         {
             OpenOffer();
@@ -95,19 +109,29 @@ public partial class TenancyGrants
         _offerRequested = false;
     }
 
-    private async Task LoadAsync()
+    private Task LoadAsync() => LoadAsync(_lifetime.Renew());
+
+    private async Task LoadAsync(CancellationToken token)
     {
         _failure = null;
         _report = null;
         try
         {
             var grants = Catalog.Grants ?? throw new NotSupportedException();
-            var report = await grants.ListGrantsAsync(TenantId).ConfigureAwait(true);
+            var report = await grants.ListGrantsAsync(TenantId, token).ConfigureAwait(true);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             _report = report with
             {
                 Received = [.. report.Received.OrderBy(StateOrder).ThenBy(grant => grant.GranterTenantId, StringComparer.Ordinal)],
                 Issued = [.. report.Issued.OrderBy(StateOrder).ThenBy(grant => grant.GranteeTenantId, StringComparer.Ordinal)],
             };
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
