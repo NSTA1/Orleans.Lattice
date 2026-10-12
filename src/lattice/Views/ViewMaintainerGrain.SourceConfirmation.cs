@@ -14,14 +14,16 @@ namespace Orleans.Lattice.Views;
 /// would install the older prepare over it.
 /// <para>
 /// Before flushing, the maintainer therefore reads the batch's last-writer-wins
-/// prepared keys back from the source. A key that still holds its prepared value
-/// flushes normally. A key that does not is superseded at the source, but the
+/// prepared keys back from the source. A key that still holds its prepared revision
+/// flushes normally. A strictly newer stored revision proves supersession, but the
 /// superseding write may not yet have reached the view: the batch is deferred,
 /// whole, until the drain has consumed every WAL offset below the per-partition
 /// heads sampled after that read (so every write the read observed has been
 /// applied), and only then is the key dropped from the flush. A batch is never
 /// flushed with a key missing whose replacement the view has not yet applied, so
 /// no reader observes a partial batch or a value the source never held.
+/// An absent, older, or same-version nonmatching row provides no such proof and
+/// keeps the batch staged, even after its terminal WAL horizon is consumed.
 /// </para>
 /// </summary>
 internal sealed partial class ViewMaintainerGrain
@@ -51,7 +53,7 @@ internal sealed partial class ViewMaintainerGrain
 
     /// <summary>
     /// <see langword="true"/> when source confirmation established that
-    /// <paramref name="prepared"/>'s key no longer holds its prepared value.
+    /// <paramref name="prepared"/>'s key holds a strictly newer source revision.
     /// </summary>
     private static bool IsSourceSuperseded(StagedTransaction tx, in LatticeMutation prepared)
         => tx.SourceSupersededKeys?.Contains(prepared.Key) == true;
@@ -78,7 +80,7 @@ internal sealed partial class ViewMaintainerGrain
 
     /// <summary>
     /// <see langword="true"/> when <paramref name="tx"/> may flush now, with any key
-    /// the source no longer holds at its prepared value recorded in
+    /// the source provably superseded at a newer revision recorded in
     /// <see cref="StagedTransaction.SourceSupersededKeys"/>; <see langword="false"/>
     /// to defer the whole batch to a later pass. Only last-writer-wins prepares are
     /// checked: a CRDT delta or merge is folded rather than replaced. A key another
@@ -96,7 +98,7 @@ internal sealed partial class ViewMaintainerGrain
         CancellationToken cancellationToken)
     {
         List<string>? keys = null;
-        Dictionary<string, byte[]?>? expected = null;
+        Dictionary<string, (HybridLogicalClock Timestamp, bool IsDeletion, byte[]? Value)>? expected = null;
         foreach (var prepared in tx.PreparesByIndex.Values)
         {
             if (prepared.Delta is not null
@@ -107,9 +109,9 @@ internal sealed partial class ViewMaintainerGrain
                 continue;
             }
 
-            expected ??= new Dictionary<string, byte[]?>(StringComparer.Ordinal);
+            expected ??= new(StringComparer.Ordinal);
             keys ??= [];
-            if (expected.TryAdd(prepared.Key, IsDeletion(prepared) ? null : prepared.Value))
+            if (expected.TryAdd(prepared.Key, (prepared.Timestamp, IsDeletion(prepared), prepared.Value)))
             {
                 keys.Add(prepared.Key);
             }
@@ -121,19 +123,39 @@ internal sealed partial class ViewMaintainerGrain
             return true;
         }
 
-        var source = await grainFactory.GetGrain<ILattice>(walTreeId).GetManyAsync(keys, cancellationToken);
+        var source = await ReadSourceAsync(walTreeId, keys,
+            static (root, page) => root.GetVisibleRawEntriesAsync(page), cancellationToken);
+        var nowTicks = DateTimeOffset.UtcNow.Ticks;
         HashSet<string>? mismatched = null;
+        var unconfirmed = false;
         foreach (var key in keys)
         {
             var held = source.GetValueOrDefault(key);
             var wanted = expected![key];
-            var matches = wanted is null
-                ? held is null
-                : held is not null && held.AsSpan().SequenceEqual(wanted);
+            var matches = held is { } entry
+                && entry.Timestamp.CompareTo(wanted.Timestamp) == 0
+                && (wanted.IsDeletion
+                    ? entry.IsTombstone
+                    : !entry.IsTombstone && !entry.ToLwwValue().IsExpired(nowTicks)
+                        && entry.Value.AsSpan().SequenceEqual(wanted.Value));
             if (!matches)
             {
+                if (held is not { } observed || observed.Timestamp.CompareTo(wanted.Timestamp) <= 0)
+                {
+                    unconfirmed = true;
+                    continue;
+                }
+
                 (mismatched ??= new HashSet<string>(StringComparer.Ordinal)).Add(key);
             }
+        }
+
+        if (unconfirmed)
+        {
+            // A consumed WAL horizon cannot prove a missing or older row replaced
+            // the prepare: source application may still be behind the decision.
+            ClearPendingSourceCheck(tx);
+            return false;
         }
 
         if (mismatched is null)
