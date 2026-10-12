@@ -1,0 +1,11 @@
+MODULE: PrefixLost
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: the completed second two-key batch is absent from the persisted prefix
+PERTURBS: Establish
+
+--- FIND
+    /\ established' = TRUE /\ value' = Expected
+--- REPLACE
+    /\ established' = TRUE /\ value' = Zero
+--- END

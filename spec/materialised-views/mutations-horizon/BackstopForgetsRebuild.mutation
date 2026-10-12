@@ -1,0 +1,11 @@
+MODULE: BackstopForgetsRebuild
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the backstop discards the batch after reading its terminals but never rebuilds
+PERTURBS: Backstop
+
+--- FIND
+    /\ backstops' = backstops+1 /\ requested' = TRUE
+--- REPLACE
+    /\ backstops' = backstops+1 /\ requested' = FALSE
+--- END

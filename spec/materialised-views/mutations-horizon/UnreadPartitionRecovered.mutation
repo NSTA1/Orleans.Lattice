@@ -1,0 +1,11 @@
+MODULE: UnreadPartitionRecovered
+TARGET: RecoveryEntitled
+CLASS: Action
+SUMMARY: missing prepares trigger recovery before all partitions have consumed the captured horizon
+PERTURBS: Recover
+
+--- FIND
+    /\ (abandoned \/ (staged /\ Missing /\ horizonWal = wal /\ AtHorizon))
+--- REPLACE
+    /\ (abandoned \/ (staged /\ Missing /\ horizonWal = wal))
+--- END

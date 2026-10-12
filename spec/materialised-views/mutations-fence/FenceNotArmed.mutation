@@ -1,0 +1,11 @@
+MODULE: FenceNotArmed
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: a resumed pass re-applies low-HLC ordinary writes because it never arms the fence
+PERTURBS: Begin
+
+--- FIND
+    /\ armed' = IF staged = {} /\ fenceWal = wal THEN fence ELSE armed
+--- REPLACE
+    /\ armed' = 0
+--- END

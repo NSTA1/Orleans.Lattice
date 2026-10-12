@@ -1,0 +1,11 @@
+MODULE: FencedOrdinaryApplied
+TARGET: NoFencedRegression
+CLASS: Action
+SUMMARY: an already-reflected ordinary write overwrites the flushed batch during replay
+PERTURBS: Read
+
+--- FIND
+                            Log[i].op = "ordinary" /\ Log[i].k = k /\ i > armed
+--- REPLACE
+                            Log[i].op = "ordinary" /\ Log[i].k = k
+--- END

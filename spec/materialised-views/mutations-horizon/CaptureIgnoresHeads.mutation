@@ -1,0 +1,11 @@
+MODULE: CaptureIgnoresHeads
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: every recovery captures empty heads and can never retire an abandoned committed batch
+PERTURBS: Capture
+
+--- FIND
+    /\ heads' = length /\ floor' = length /\ planned' = FALSE
+--- REPLACE
+    /\ heads' = Zero /\ floor' = Zero /\ planned' = FALSE
+--- END

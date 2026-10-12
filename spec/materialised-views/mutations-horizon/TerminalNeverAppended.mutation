@@ -1,0 +1,11 @@
+MODULE: TerminalNeverAppended
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: a committed source never emits its per-shard terminal
+PERTURBS: AppendCommit
+
+--- FIND
+    /\ length' = [length EXCEPT ![p] = LastOffset(p)]
+--- REPLACE
+    /\ length' = length
+--- END

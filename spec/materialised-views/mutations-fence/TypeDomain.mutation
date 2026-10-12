@@ -1,0 +1,11 @@
+MODULE: TypeDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: prefix setup stores an out-of-domain replay offset
+PERTURBS: Establish
+
+--- FIND
+    /\ pos' = WalHead /\ livePos' = WalHead /\ ckpt' = 0
+--- REPLACE
+    /\ pos' = WalHead+1 /\ livePos' = WalHead /\ ckpt' = 0
+--- END

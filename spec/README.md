@@ -52,6 +52,9 @@ be quiet about one.
 | [`tenant-quotas/`](tenant-quotas/README.md) | `TenantQuotaEvaluation` | Footprint dimension evaluation and burst ceilings over bounded usage and quota configurations. |
 | [`tenant-rate-budget/`](tenant-rate-budget/README.md) | `TenantRateBudget` | Demand-aware silo budget leases, membership changes, delayed deliveries, cancellation and coordinator restart. |
 | [`tenant-isolation/`](tenant-isolation/README.md) | `TenantIsolation` | Tenant policy epoch, lease and snapshot freshness, publication failures, membership recovery and epoch restart. |
+| [`materialised-views/`](materialised-views/README.md) | `MaterialisedViewTail` | View tailing, checkpoint and GC pin, physical source rebind, crash replay and shadow generations. |
+| [`materialised-views/`](materialised-views/README.md#focused-replay-and-horizon-companions) | `MaterialisedViewFence` | Two overlapping two-key batches, source-HLC supersession and an unpassed replay fence after staging empties. |
+| [`materialised-views/`](materialised-views/README.md#focused-replay-and-horizon-companions) | `MaterialisedViewHorizon` | Non-aligned prepare and shard-terminal partitions, post-terminal all-partition horizons, rebuild planning, backstop abandonment and crash recovery. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

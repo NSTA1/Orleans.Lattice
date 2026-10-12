@@ -14,6 +14,8 @@ source identity swap followed by the view's rebind onto the new physical log.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `MaterialisedViewTail` | 7 | 5 | 17 | 22 | 27 | 121,488 |
+| `MaterialisedViewFence` | 4 | 2 | 9 | 9 | 13 | 194 |
+| `MaterialisedViewHorizon` | 4 | 5 | 15 | 16 | 22 | 20,794 |
 
 The `ThreeWrites` variant (`MaterialisedViewTail.ThreeWrites.cfg`) raises the
 source write budget to three, which lets a trim, a swap and a rebuild each fall
@@ -70,14 +72,58 @@ Environment steps (writes, the swap, both trims, drift, the crash, and
 decommission) are not fair, and their budgets are finite. Weak fairness
 applies to every maintainer step.
 
+## Focused replay and horizon companions
+
+`MaterialisedViewFence` checks the lifetime of an already-persisted fence through
+bounded replay, peer readiness, supersession, repeated activation and physical
+rebind. Its fixed adversarial prefix has TWO two-key batches: the first waits
+on a peer and the second flushes, then ordinary writes with LOWER HLCs occur
+at HIGHER WAL offsets. Resolving the first batch can empty staging before the
+old head is consumed. `UnpassedFenceCleared` restores the #4881 defect and must
+violate `QuiescentExact`, not just a fence bookkeeping assertion. Its
+`NewerOrdinary` variant changes the ordinary HLC from 10 to 30, raises the
+crash budget from one to two and narrows the window from three to two; it
+reaches 359 distinct states. The prefix compresses the first complete pass;
+it does not replace the general staging model. See
+[RefinementFence.md](RefinementFence.md) for the mapping and honest limits.
+
+`MaterialisedViewHorizon` checks two source keys and two source shards spread
+over THREE physical WAL partitions. Prepares are on p0/p2 and terminals on
+p0/p1, so reading both terminals does not imply consuming the prepare on p2.
+All prepares precede all terminals, but source installation and each shard's
+terminal append are separate actions. A rebuild's bounded planning scan may
+miss a prepare; a post-terminal all-partition horizon distinguishes genuinely
+missing prepares from a partition not yet read. Backstop abandonment persists
+across crashes and rebuilds and is retired only after every distinct shard
+terminal lies below the captured heads, never after just one commit. The
+`FullScan` variant visits every partition while allowing two crashes; it
+reaches 33,456 distinct states. See [RefinementHorizon.md](RefinementHorizon.md).
+
+These are exhaustive finite checks, not simulations and not an exhaustive
+Cartesian product of every feature. On the bounded two-CPU Java 17 toolchain,
+the raw fence base/variant take about one to two seconds each and the horizon
+base/variant about four to eight seconds each, including JVM startup. Each mutant
+has a paired clean single-property control, and every behavioural action has
+an action-targeted mutation. State counts are in the counts table and manifests;
+CI must retain whole target groups where controls can be shared.
+
+The actual `TlcModelCheckTests` runs pass 11 fence cases and 18 horizon cases
+(base, variant and every paired mutant), with zero skipped. A final serial run
+with one JVM slot and two visible CPUs takes 41.083/114.483 seconds from first
+case start to last case end, and 48.434/124.659 seconds for the corresponding
+no-build commands on a shared host. Heap is capped at 2 GiB; peak usage was not
+measured. The production detector mappings are explicitly pending acceptance,
+not certified refinements; a clean finite model is not that acceptance.
+
 ## Scope and companion models
 
 This is the view's **tail and lifecycle** composition. The following are
 deliberately outside it, and no guarantee about them is claimed here:
 
-- Atomic and cross-tree staging (the hold-back checkpoint, supersession and the
-  staging backstop). Their detectors (`MaterialisedViewAtomicVisibilityTests`
-  and the cross-tree fixtures) remain the evidence for that path.
+- General atomic and cross-tree staging. The focused fence companion covers
+  the persisted replay/supersession lifetime and the horizon companion covers
+  multi-partition hold-back, rebuild and abandonment; neither claims the full
+  coordinator, aggregation or projection interaction space.
 - Replication: shipping views between regions, the in-place rebuild a
   replicated view performs, and anti-entropy, which is the anti-entropy area's
   scope.

@@ -1,0 +1,11 @@
+MODULE: TerminalsNotStaged
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the consumer reads but never tallies either distinct shard terminal
+PERTURBS: Consume
+
+--- FIND
+          /\ terminals' = IF IsTerminal(p,offset) THEN terminals \cup {p} ELSE terminals
+--- REPLACE
+          /\ terminals' = terminals
+--- END

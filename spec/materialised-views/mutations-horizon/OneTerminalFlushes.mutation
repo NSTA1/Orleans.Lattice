@@ -1,0 +1,11 @@
+MODULE: OneTerminalFlushes
+TARGET: NoPrematureFlush
+CLASS: Action
+SUMMARY: a two-shard batch flushes on only one commit terminal
+PERTURBS: Flush
+
+--- FIND
+    /\ prepares = Keys /\ terminals = TerminalPartitions
+--- REPLACE
+    /\ prepares = Keys /\ terminals # {}
+--- END

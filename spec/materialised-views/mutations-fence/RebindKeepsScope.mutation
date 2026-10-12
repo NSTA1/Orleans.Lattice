@@ -1,0 +1,13 @@
+MODULE: RebindKeepsScope
+TARGET: ScopeExact
+CLASS: Invariant
+SUMMARY: rebinding to another physical log keeps supersession from the retired log
+PERTURBS: Rebind
+
+--- FIND
+    /\ resolved' = {} /\ supersession' = Zero
+    /\ UNCHANGED <<established, phase, peer, crashes>>
+--- REPLACE
+    /\ resolved' = {} /\ supersession' = supersession
+    /\ UNCHANGED <<established, phase, peer, crashes>>
+--- END

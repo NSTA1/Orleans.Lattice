@@ -1,0 +1,11 @@
+MODULE: TypeDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a prepare append installs an out-of-domain partition head
+PERTURBS: AppendPrepare
+
+--- FIND
+    /\ length' = [length EXCEPT ![p] = 1]
+--- REPLACE
+    /\ length' = [length EXCEPT ![p] = 3]
+--- END

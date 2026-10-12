@@ -1,0 +1,15 @@
+MODULE: OperatorRetiresUndecided
+TARGET: NoPrematureRetirement
+CLASS: Action
+SUMMARY: operator rebuild drops abandoned identity before every shard terminal has been captured
+PERTURBS: RequestRebuild
+
+--- FIND
+    /\ requested' = TRUE /\ rebuilds' = rebuilds+1
+    /\ UNCHANGED <<length, installed, value, read, ckpt, prepares, terminals, staged,
+                   abandoned, horizon, horizonWal, wal, phase, heads, floor,
+--- REPLACE
+    /\ requested' = TRUE /\ rebuilds' = rebuilds+1 /\ abandoned' = FALSE
+    /\ UNCHANGED <<length, installed, value, read, ckpt, prepares, terminals, staged,
+                   horizon, horizonWal, wal, phase, heads, floor,
+--- END
