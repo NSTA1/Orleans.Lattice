@@ -114,6 +114,20 @@
         "note": "MaterialisedViewHorizon base, FullScan and sixteen paired mutants: 18/18 cases, zero skips. Final one-JVM/two-CPU/Xmx2g no-build command measured 124.659s over three distinct prepare/terminal partitions."
       },
       {
+        "shard": "formal-tlc-view-aggregation",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewAggregation"],
+        "note": "MaterialisedViewAggregation base, Delete and eighteen paired mutants: 20/20 cases, zero skips. Independent one-JVM/two-CPU/1800MB no-build command measured 95.417s including distinct mutation-specific controls; numeric membership, partial public repair and history revisions."
+      },
+      {
+        "shard": "formal-tlc-view-rebind",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewRebind"],
+        "note": "MaterialisedViewRebind base, NoCrash and nineteen paired mutants: 21/21 cases, zero skips. Independent one-JVM/two-CPU/1800MB no-build command measured 86.815s including distinct mutation-specific controls; captured source/floor publication and late alias movement."
+      },
+      {
         "shard": "formal-tlc-anti-entropy",
         "tlc": true,
         "tiers": ["deterministic"],

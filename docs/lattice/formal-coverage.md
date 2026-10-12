@@ -66,7 +66,7 @@ rows cite.
 
 ## Finite companions awaiting production refinement acceptance
 
-The accepted-area census above does not include the two focused materialised-view
+The accepted-area census above does not include the focused materialised-view
 companions whose production detector verdicts are still pending. Their actual
 TLC harness runs include the base, variant and every mutant with its paired clean
 single-property control; no skipped run is counted as evidence.
@@ -75,6 +75,8 @@ single-property control; no skipped run is counted as evidence.
 |--------|-------------|----------------|---------|---------------|-----------------------|
 | `MaterialisedViewFence` | 194 | 359 (`NewerOrdinary`) | 9 | 11 | Pending |
 | `MaterialisedViewHorizon` | 20,794 | 33,456 (`FullScan`) | 16 | 18 | Pending |
+| `MaterialisedViewAggregation` | 24,072 | 7,176 (`Delete`) | 18 | 20 | Partial |
+| `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 19 | 21 | Partial |
 
 The fence companion checks an established two-batch prefix, source-HLC winners
 at different WAL arrival offsets, peer-delayed publication and a persisted fence
@@ -86,9 +88,22 @@ bounded rebuild planning and abandoned-batch retirement; source installation
 and terminal append are separate steps. It does not promise snapshot-atomic
 rebuild scans. See the [companion scope and refinements](../../spec/materialised-views/README.md#focused-replay-and-horizon-companions).
 
-Each companion has a dedicated deterministic-only TLC shard. Their measured
+The aggregation companion checks independently stamped numeric contributions,
+retract/add membership arithmetic and durable per-group publication obligations,
+plus ordinary and committed-batch history revisions after a fixed captured
+rebuild floor. Its omission-visible guard is a contract awaiting production
+acceptance, not a proof of two-batch dependency closure or cross-tree snapshots.
+The physical-rebind companion separates capture, scan, validation and install.
+An alias move after validation may publish the coherent captured tuple and heal
+later; it never relabels that scan using a fresh alias. Failure/restart and staging
+isolation mappings remain partial. See the [aggregation/rebind refinements](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions).
+
+Each companion has a dedicated deterministic-only TLC shard. The fence/horizon
 serial no-build commands took 48.434 and 124.659 seconds with one JVM slot,
 two visible CPUs and a 2 GiB heap cap on a shared host; peak heap was not measured.
+Independent aggregation/rebind commands took 95.417 and 86.815 seconds with
+one JVM slot, two visible CPUs and an 1800 MB heap cap. These are whole-command
+costs including paired controls, not sums of tests waiting for a shared JVM slot.
 A green finite model is not a production refinement certificate: the acceptance
 gate intentionally remains red until discriminating production detector evidence
 justifies every pending verdict.
