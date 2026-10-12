@@ -675,6 +675,30 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <summary>
+    /// Raises <paramref name="advancedOffsets"/> to the position this pass resumed
+    /// reading from on every partition. The drain reports only partitions that
+    /// read something, so without this a pass that resolves a staged batch while
+    /// reading nothing new (a joint cross-tree flip observed on re-registration,
+    /// or an abandonment) would leave the persisted checkpoint held back below
+    /// entries earlier passes already applied, after the emptied staging buffer
+    /// has cleared the replay fence; the next pass would then re-read from the
+    /// stale hold-back, skip the resolved batch, and re-apply an older ordinary
+    /// write over its value. Every entry below the resume position was applied,
+    /// is resolved, or is still staged; <see cref="ApplyCheckpointHoldBack"/>
+    /// then clamps any partition a still-staged batch occupies.
+    /// </summary>
+    private static void CoverReadPosition(Dictionary<int, long> advancedOffsets, IReadOnlyDictionary<int, long> readFrom)
+    {
+        foreach (var (partition, offset) in readFrom)
+        {
+            if (offset > advancedOffsets.GetValueOrDefault(partition, -1))
+            {
+                advancedOffsets[partition] = offset;
+            }
+        }
+    }
+
+    /// <summary>
     /// Applies the per-partition checkpoint hold-back to
     /// <paramref name="advancedOffsets"/>: each partition's persisted offset is
     /// clamped to one below the lowest still-staged offset on that partition.

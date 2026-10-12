@@ -149,6 +149,7 @@ internal sealed partial class ViewMaintainerGrain
         // entry so a restart re-reads and re-stages an incomplete batch.
         RecordDrainReadOffsets(walTreeId, readFrom, advancedOffsets);
         var replayFenceChanged = UpdateReplayFence(walTreeId, readFrom, advancedOffsets);
+        CoverReadPosition(advancedOffsets, readFrom);
         ApplyCheckpointHoldBack(advancedOffsets, partitions);
 
         var offsetsAdvanced = false;
