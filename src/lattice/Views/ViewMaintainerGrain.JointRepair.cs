@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+
 namespace Orleans.Lattice.Views;
 
 internal sealed partial class ViewMaintainerGrain
@@ -6,12 +8,28 @@ internal sealed partial class ViewMaintainerGrain
     private HashSet<Guid> _jointEligible = [];
     private bool _jointRepairRestartRead;
     private bool _jointStateWritePending;
+    private bool _jointAdmissionWaiting;
+    private IViewJointRepairAdmissionGate JointRepairAdmissionGate =>
+        context.ActivationServices.GetRequiredService<IViewJointRepairAdmissionGate>();
     private readonly HashSet<string> _jointRepairsWaitingOnPeers = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (ViewCrossTreeReadiness Slice, long[] Heads, HashSet<string> Keys, Dictionary<string, HybridLogicalClock> Versions)> _repairCaptures = new(StringComparer.Ordinal);
 
     private bool HasJointOwnership => state.State.CrossTreeRepairHolds.Count != 0;
     private bool HasCommittedJointOwnership => state.State.CrossTreeRepairHolds.Values.Any(static hold => hold.OriginalApplied);
     private bool HasPendingJointRepair => state.State.CrossTreeRepairHolds.Values.Any(static hold => !hold.RepairApplied);
+
+    private async Task<bool> PauseJointProtocolForUpgradeAsync(CancellationToken cancellationToken)
+    {
+        if ((_jointAdmissionWaiting || HasJointOwnership
+            || state.State.PendingCrossTreeRepairAcknowledgements.Count != 0)
+            && !await JointRepairAdmissionGate.IsOpenAsync(cancellationToken))
+        {
+            return true;
+        }
+
+        _jointAdmissionWaiting = false;
+        return false;
+    }
 
     private async Task<bool> ResumeCapturedJointRepairsAsync(CancellationToken cancellationToken)
     {
@@ -94,7 +112,7 @@ internal sealed partial class ViewMaintainerGrain
             return true;
         }
 
-        if (!HasPendingJointRepair)
+        if (!HasPendingJointRepair && !_jointAdmissionWaiting)
         {
             return false;
         }
@@ -118,6 +136,12 @@ internal sealed partial class ViewMaintainerGrain
         {
             hold.OriginalApplied = true;
             await PersistJointStateAsync();
+        }
+
+        if (!await JointRepairAdmissionGate.IsOpenAsync(cancellationToken))
+        {
+            _jointAdmissionWaiting = true;
+            return false;
         }
 
         var stored = await coordinator.GetRepairReadinessAsync(ViewName);

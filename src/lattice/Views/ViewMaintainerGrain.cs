@@ -48,7 +48,7 @@ internal sealed partial class ViewMaintainerGrain(
     HistoryRowCodec historyRowCodec,
     [PersistentState("view-checkpoint", LatticeOptions.StorageProviderName)]
     IPersistentState<ViewCheckpointState> state)
-    : IGrainBase, IRemindable, IViewMaintainerGrain
+    : IGrainBase, IRemindable, IViewMaintainerGrain, IViewJointRepairCapable
 {
     private const string KeepaliveReminderName = "view-maintainer-keepalive";
 
@@ -366,6 +366,11 @@ internal sealed partial class ViewMaintainerGrain(
 
         _shipViewSuppressed = false;
 
+        if (await PauseJointProtocolForUpgradeAsync(cancellationToken))
+        {
+            return;
+        }
+
         await AcknowledgeRetiredJointRepairsAsync();
 
         // A projection-version change means the view's logic is no longer the one
@@ -497,6 +502,11 @@ internal sealed partial class ViewMaintainerGrain(
         }
 
         _shipViewSuppressed = false;
+
+        if (await PauseJointProtocolForUpgradeAsync(cancellationToken))
+        {
+            return 0;
+        }
 
         await AcknowledgeRetiredJointRepairsAsync();
         GuardJointProjectionVersion(registration);

@@ -154,8 +154,15 @@ internal sealed partial class ViewMaintainerGrain
             return true;
         }
 
+        if (!await JointRepairAdmissionGate.IsOpenAsync(cancellationToken))
+        {
+            _jointAdmissionWaiting = true;
+            return false;
+        }
+
         var coordinator = grainFactory.GetGrain<IViewCrossTreeCoordinatorGrain>(tx.CrossTreeOperationId!);
         var operationId = tx.CrossTreeOperationId!;
+        var protocol = await coordinator.GetRepairProtocolVersionAsync();
         if (!state.State.CrossTreeRepairHolds.TryGetValue(operationId, out var hold))
         {
             hold = new ViewCrossTreeRepairHold
@@ -172,17 +179,31 @@ internal sealed partial class ViewMaintainerGrain
                     ViewTreeId = ViewTreeId,
                     Upserts = upserts,
                     Deletes = deletes,
-                    RepairProtocolVersion = 1,
+                    RepairProtocolVersion = protocol == 0 ? 0 : 1,
                 },
             };
-            state.State.CrossTreeRepairHolds.Add(operationId, hold);
-            await PersistJointStateAsync();
+            if (protocol != 0)
+            {
+                state.State.CrossTreeRepairHolds.Add(operationId, hold);
+                await PersistJointStateAsync();
+            }
         }
 
         var decision = await coordinator.RegisterReadyAsync(hold.Original);
 
         if (decision.Applied)
         {
+            if (!decision.RequiresRepair)
+            {
+                if (state.State.CrossTreeRepairHolds.Remove(operationId))
+                {
+                    await PersistJointStateAsync();
+                }
+
+                ScheduleReconcileIfJointFlipMayBeSuperseded(tx);
+                return true;
+            }
+
             // The coordinator flipped this view's upserts AND retraction deletes
             // jointly across every participant view tree inside one mixed atomic
             // op, so nothing is left to apply out-of-band.
@@ -221,6 +242,17 @@ internal sealed partial class ViewMaintainerGrain
         var degradeDecision = await coordinator.RegisterDegradedAsync(ViewName);
         if (degradeDecision.Applied)
         {
+            if (!degradeDecision.RequiresRepair)
+            {
+                if (state.State.CrossTreeRepairHolds.Remove(operationId))
+                {
+                    await PersistJointStateAsync();
+                }
+
+                ScheduleReconcileIfJointFlipMayBeSuperseded(tx);
+                return true;
+            }
+
             // The joint flip raced in just before our timeout and already carried
             // this view's upserts AND retraction deletes in one mixed atomic op,
             // so nothing is left to apply out-of-band.

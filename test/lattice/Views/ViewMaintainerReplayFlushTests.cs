@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -91,7 +92,8 @@ public partial class ViewMaintainerReplayFlushTests
         ViewRegistration? peer = null,
         IViewCrossTreeCoordinatorGrain? coordinator = null,
         ViewRegistration? registration = null,
-        HistoryRowCodec? historyCodec = null)
+        HistoryRowCodec? historyCodec = null,
+        IViewJointRepairAdmissionGate? admissionGate = null)
     {
         var catalog = new StaticCatalog(registration ?? new ViewRegistration(ViewName, SourceTreeId, new IdentityProjection()), peer);
 
@@ -150,6 +152,14 @@ public partial class ViewMaintainerReplayFlushTests
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("viewmaintainer", ViewName));
+        if (admissionGate is null)
+        {
+            admissionGate = Substitute.For<IViewJointRepairAdmissionGate>();
+            admissionGate.IsOpenAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
+        }
+
+        context.ActivationServices.Returns(new ServiceCollection()
+            .AddSingleton(admissionGate).BuildServiceProvider());
 
         var viewOptions = Substitute.For<IOptionsMonitor<LatticeViewOptions>>();
         viewOptions.Get(Arg.Any<string>()).Returns(new LatticeViewOptions());
