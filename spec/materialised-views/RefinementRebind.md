@@ -108,3 +108,11 @@ at the retained prefix and scans current source state; per-partition fences,
 terminal horizons, source confirmation and multi-key atomic visibility belong
 to their focused companions. A scalar source revision is used here to isolate
 physical identity, not to replace those companions' visibility obligations.
+
+The transaction bound is also deliberate: this instance has one global prepare
+and no resolved-transaction cache. It cannot exercise reuse of a transaction
+identifier in a second physical log. Issue #4895 identified that production
+resolved identifiers can survive cutover and suppress the new log's transaction
+while its checkpoint advances. Existing staging-reset mutants do not detect
+that cache-ownership failure; focused identity coverage and the source correction
+remain pending. No resolved-cache safety claim follows from this model's census.
