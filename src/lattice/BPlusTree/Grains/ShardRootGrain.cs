@@ -3877,9 +3877,13 @@ internal sealed partial class ShardRootGrain(
                 break;
 
             var spent = scan.Budget.ShouldYield();
-            var bounds = startInclusive is not null || spent
-                ? await leafGrain.GetKeyRangeAsync()
-                : (LeafKeyRange?)null;
+            // A bounded or spent walk reads the leaf's bounds and its left-sibling
+            // pointer together in one leaf turn, so continuing past this leaf
+            // costs no further call.
+            var prevLink = startInclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAndPrevSiblingAsync()
+                : (LeafPrevChainLink?)null;
+            var bounds = prevLink is { } readLink ? readLink.KeyRange : (LeafKeyRange?)null;
 
             // See the forward variant: a chain-regressed leaf's bounds must not
             // steer termination or resume (issue 3271).
@@ -3916,7 +3920,9 @@ internal sealed partial class ShardRootGrain(
                     break;
             }
 
-            var prevSibling = await leafGrain.GetPrevSiblingAsync();
+            var prevSibling = prevLink is { } heldLink
+                ? heldLink.PrevSibling
+                : await leafGrain.GetPrevSiblingAsync();
             if (prevSibling is null)
                 return new KeysPage
                 {
@@ -4188,9 +4194,13 @@ internal sealed partial class ShardRootGrain(
                 break;
 
             var spent = scan.Budget.ShouldYield();
-            var bounds = startInclusive is not null || spent
-                ? await leafGrain.GetKeyRangeAsync()
-                : (LeafKeyRange?)null;
+            // A bounded or spent walk reads the leaf's bounds and its left-sibling
+            // pointer together in one leaf turn, so continuing past this leaf
+            // costs no further call.
+            var prevLink = startInclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAndPrevSiblingAsync()
+                : (LeafPrevChainLink?)null;
+            var bounds = prevLink is { } readLink ? readLink.KeyRange : (LeafKeyRange?)null;
 
             // See GetSortedKeysBatchCoreAsync: a chain-regressed leaf's bounds
             // must not steer termination or resume (issue 3271).
@@ -4227,7 +4237,9 @@ internal sealed partial class ShardRootGrain(
                     break;
             }
 
-            var prevSibling = await leafGrain.GetPrevSiblingAsync();
+            var prevSibling = prevLink is { } heldLink
+                ? heldLink.PrevSibling
+                : await leafGrain.GetPrevSiblingAsync();
             if (prevSibling is null)
                 return new EntriesPage
                 {

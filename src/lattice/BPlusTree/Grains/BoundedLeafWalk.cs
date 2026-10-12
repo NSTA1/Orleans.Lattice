@@ -203,18 +203,44 @@ internal sealed class BoundedLeafWalk
     {
         if (_leafId is null) return false;
 
-        // Reuse the resolved reference when the caller already read CurrentLeaf,
-        // which every call site does, so a leaf costs one resolution per visit.
-        var leaf = CurrentLeaf;
-        _budget.RecordLeafVisited();
-
         // The successor pointer and this leaf's bounds. The pass needs the
         // first on every leaf; since issue 2807 it reads the second on every
         // leaf as well, so that a walk abandoned by the shard-root page-fill
         // ceiling still has a resume position to bank. Both are persisted
         // topology read in one leaf turn, so a leaf costs one round trip to
-        // advance past rather than two.
-        var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+        // advance past rather than two. Reuse the resolved reference when the
+        // caller already read CurrentLeaf, which every call site does, so a
+        // leaf costs one resolution per visit.
+        var link = await CurrentLeaf.GetKeyRangeAndNextSiblingAsync();
+        return Advance(link);
+    }
+
+    /// <summary>
+    /// <see cref="MoveNextAsync"/> for a caller that already holds the current
+    /// leaf's <paramref name="link"/>, read in the same leaf turn as the payload
+    /// it processed (for example
+    /// <see cref="IBPlusLeafGrain.GetDeltaSinceAndNextSiblingAsync"/> or
+    /// <see cref="IBPlusLeafGrain.GetLiveRawEntriesAndNextSiblingAsync"/>), so
+    /// advancing past the leaf costs no further grain call.
+    /// <para>
+    /// The link is read after the payload in the same turn, so it describes the
+    /// leaf the payload came from: a split that lands afterwards moves keys the
+    /// payload already contains into a sibling this link's old successor pointer
+    /// and old high bound skip, which is the pre-split view the payload was taken
+    /// against. A leaf that predates the combined page's key range returns a
+    /// <see langword="default"/> range, which this treats as a leaf with no
+    /// usable high bound - the walk keeps going rather than yield there.
+    /// </para>
+    /// </summary>
+    internal bool MoveNext(LeafChainLink link)
+    {
+        if (_leafId is null) return false;
+        return Advance(link);
+    }
+
+    private bool Advance(LeafChainLink link)
+    {
+        _budget.RecordLeafVisited();
         var next = link.NextSibling;
         if (next is null)
         {

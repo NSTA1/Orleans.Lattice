@@ -460,6 +460,77 @@ public class BoundedLeafWalkTests
     }
 
     /// <summary>
+    /// A caller that already read the leaf's chain link with its payload
+    /// advances through <see cref="BoundedLeafWalk.MoveNext"/> to exactly the
+    /// same positions as <see cref="BoundedLeafWalk.MoveNextAsync"/>, without a
+    /// further call to the leaf.
+    /// </summary>
+    [Test]
+    public async Task MoveNext_with_a_held_link_matches_MoveNextAsync_without_calling_the_leaf()
+    {
+        var (factory, shard, leafIds) = Chain(5);
+        var walk = await BoundedLeafWalk.StartAsync(factory, shard, null, new LeafWalkBudget(2, null));
+        var visited = new List<GrainId>();
+        while (walk.HasLeaf)
+        {
+            var leaf = walk.CurrentLeaf;
+            visited.Add(walk.CurrentLeafId!.Value);
+            var link = new LeafChainLink
+            {
+                KeyRange = await leaf.GetKeyRangeAsync(),
+                NextSibling = await leaf.GetNextSiblingAsync(),
+            };
+            if (!walk.MoveNext(link)) break;
+        }
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(visited, Is.EqualTo(new[] { leafIds[0], leafIds[1] }));
+            Assert.That(walk.Completed, Is.False);
+            Assert.That(walk.ResumeFromInclusive, Is.EqualTo(Key(2)));
+            Assert.That(walk.LeavesVisited, Is.EqualTo(2));
+            foreach (var id in leafIds)
+                await factory.GetGrain<IBPlusLeafGrain>(id).DidNotReceive().GetKeyRangeAndNextSiblingAsync();
+        });
+    }
+
+    /// <summary>
+    /// A leaf that predates the key range on a combined payload page answers a
+    /// default range. The walk must treat that as a leaf with no resume bound
+    /// and keep going, never yield without a resume position.
+    /// </summary>
+    [Test]
+    public async Task MoveNext_with_a_default_key_range_does_not_yield()
+    {
+        var (factory, shard, leafIds) = Chain(3);
+        var walk = await BoundedLeafWalk.StartAsync(factory, shard, null, new LeafWalkBudget(1, null));
+
+        var advanced = walk.MoveNext(new LeafChainLink { NextSibling = leafIds[1] });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(advanced, Is.True);
+            Assert.That(walk.CurrentLeafId, Is.EqualTo(leafIds[1]));
+            Assert.That(walk.BankableResumeKey, Is.Null);
+            Assert.That(walk.ResumeFromInclusive, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task MoveNext_on_a_leafless_walk_returns_false()
+    {
+        var (factory, shard, _) = Chain(0);
+        var walk = await BoundedLeafWalk.StartAsync(factory, shard, null, new LeafWalkBudget(1, null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(walk.MoveNext(default), Is.False);
+            Assert.That(walk.Completed, Is.True);
+            Assert.That(walk.LeavesVisited, Is.Zero);
+        });
+    }
+
+    /// <summary>
     /// A shard whose root has no leaves resolves a null start leaf. The walk
     /// must report an immediately complete, leafless pass rather than fault.
     /// </summary>

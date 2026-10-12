@@ -147,6 +147,61 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task GetKeyRangeAndPrevSiblingAsync_matches_the_separate_calls()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.LowKeyInclusive = "f";
+        state.State.HighKeyExclusive = "m";
+        var grain = CreateGrain(state);
+        await grain.SetPrevSiblingAsync(CombinedPageSibling);
+
+        var link = await grain.GetKeyRangeAndPrevSiblingAsync();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(link.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(link.KeyRange.LowKeyInclusive, Is.EqualTo("f"));
+            Assert.That(link.KeyRange.HighKeyExclusive, Is.EqualTo("m"));
+            Assert.That(link.PrevSibling, Is.EqualTo(await grain.GetPrevSiblingAsync()));
+            Assert.That(link.PrevSibling, Is.EqualTo(CombinedPageSibling));
+        });
+    }
+
+    [Test]
+    public async Task GetKeyRangeAndPrevSiblingAsync_reports_null_at_the_chain_head()
+    {
+        var grain = CreateGrain();
+
+        var link = await grain.GetKeyRangeAndPrevSiblingAsync();
+
+        Assert.That(link.PrevSibling, Is.Null);
+    }
+
+    [Test]
+    public async Task Payload_pages_carry_the_leaf_key_range_and_expose_it_as_a_chain_link()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.LowKeyInclusive = "a";
+        state.State.HighKeyExclusive = "k";
+        var grain = CreateGrain(state);
+        await grain.SetAsync("b", [1]);
+        await grain.SetNextSiblingAsync(CombinedPageSibling);
+        var expected = await grain.GetKeyRangeAndNextSiblingAsync();
+
+        var delta = await grain.GetDeltaSinceAndNextSiblingAsync(new VersionVector());
+        var live = await grain.GetLiveRawEntriesAndNextSiblingAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(delta.KeyRange, Is.EqualTo(expected.KeyRange));
+            Assert.That(delta.Link, Is.EqualTo(expected));
+            Assert.That(live.KeyRange, Is.EqualTo(expected.KeyRange));
+            Assert.That(live.Link, Is.EqualTo(expected));
+            Assert.That(live.Link.KeyRange.HighKeyExclusive, Is.EqualTo("k"));
+        });
+    }
+
+    [Test]
     public async Task DiscardPendingTransactionsAndGetNextSiblingAsync_discards_every_saga_and_persists_once()
     {
         var state = new FakePersistentState<LeafNodeState>();

@@ -2883,13 +2883,23 @@ internal sealed partial class BPlusLeafGrain(
     public Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync() =>
         Task.FromResult(new LeafChainLink
         {
-            KeyRange = new LeafKeyRange
-            {
-                LowKeyInclusive = state.State.LowKeyInclusive,
-                HighKeyExclusive = state.State.HighKeyExclusive,
-            },
+            KeyRange = CurrentKeyRange(),
             NextSibling = state.State.NextSibling,
         });
+
+    /// <inheritdoc />
+    public Task<LeafPrevChainLink> GetKeyRangeAndPrevSiblingAsync() =>
+        Task.FromResult(new LeafPrevChainLink
+        {
+            KeyRange = CurrentKeyRange(),
+            PrevSibling = state.State.PrevSibling,
+        });
+
+    private LeafKeyRange CurrentKeyRange() => new()
+    {
+        LowKeyInclusive = state.State.LowKeyInclusive,
+        HighKeyExclusive = state.State.HighKeyExclusive,
+    };
 
     public async Task SetCheckpointOffsetHintsAsync(long[] offsetsByPartition)
     {
@@ -3496,7 +3506,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<LeafDeltaPage> GetDeltaSinceAndNextSiblingAsync(VersionVector sinceVersion)
     {
         var delta = await GetDeltaSinceAsync(sinceVersion);
-        return new LeafDeltaPage { Delta = delta, NextSibling = state.State.NextSibling };
+        return new LeafDeltaPage { Delta = delta, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
     }
 
     public async Task<StateDelta> GetDeltaSinceAsync(VersionVector sinceVersion)
@@ -4196,7 +4206,7 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<LeafLiveRawEntriesPage> GetLiveRawEntriesAndNextSiblingAsync()
     {
         var entries = await GetLiveRawEntriesAsync();
-        return new LeafLiveRawEntriesPage { Entries = entries, NextSibling = state.State.NextSibling };
+        return new LeafLiveRawEntriesPage { Entries = entries, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
     }
 
     /// <summary>

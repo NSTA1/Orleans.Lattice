@@ -60,6 +60,9 @@ public partial class BPlusLeafGrainTests
                 "Topology: persisted key range + sibling pointer, untouched by replay. The combined "
                 + "form of GetKeyRangeAsync and GetNextSiblingAsync, neither of which waits.",
             ["GetPrevSiblingAsync"] = "Topology: persisted sibling pointer, untouched by replay.",
+            ["GetKeyRangeAndPrevSiblingAsync"] =
+                "Topology: persisted key range + sibling pointer, untouched by replay. The combined "
+                + "form of GetKeyRangeAsync and GetPrevSiblingAsync, neither of which waits.",
             ["SetNextSiblingAsync"] =
                 "Topology write. Gating it would put the chain-relink path behind a replay, which is "
                 + "how a split or merge would deadlock against the leaf it is relinking.",

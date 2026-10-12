@@ -285,6 +285,8 @@ public class ShardRootGrainRangeScanTerminationTests
         await AssertReadCountAsync(h.Leaves[n - 1], 1);
         for (var i = 0; i < n - 1; i++)
             await AssertReadCountAsync(h.Leaves[i], 0);
-        await h.Leaves[n - 1].DidNotReceive().GetPrevSiblingAsync();
+        // The bounds and the left-sibling pointer arrive in one leaf call; the walk
+        // stops on the bounds, so no earlier leaf is read (asserted above).
+        await h.Leaves[n - 1].Received(1).GetKeyRangeAndPrevSiblingAsync();
     }
 }

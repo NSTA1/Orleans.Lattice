@@ -762,7 +762,10 @@ internal sealed class TreeSnapshotGrain(
         var entries = new List<LwwEntry>();
         while (walk.HasLeaf)
         {
-            var liveRaw = await walk.CurrentLeaf.GetLiveRawEntriesAsync();
+            // The entries and the leaf's chain link come back from one leaf
+            // turn, so advancing past the leaf costs no further grain call.
+            var page = await walk.CurrentLeaf.GetLiveRawEntriesAndNextSiblingAsync();
+            var liveRaw = page.Entries;
             if (sourceMap is null)
             {
                 entries.AddRange(liveRaw);
@@ -774,7 +777,7 @@ internal sealed class TreeSnapshotGrain(
                     if (sourceMap.Resolve(entry.Key) == shardIndex) entries.Add(entry);
                 }
             }
-            if (!await walk.MoveNextAsync()) break;
+            if (!walk.MoveNext(page.Link)) break;
         }
 
         if (offline)

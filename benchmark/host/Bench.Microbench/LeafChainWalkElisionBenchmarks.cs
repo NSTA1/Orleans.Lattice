@@ -38,6 +38,18 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// next-sibling pointer: payload + <c>GetKeyRangeAsync</c> +
 /// <c>GetNextSiblingAsync</c> -> payload + <c>GetKeyRangeAndNextSiblingAsync</c>,
 /// 3 calls per leaf -> 2.</item>
+/// <item><see cref="Site.PayloadDrainWalk"/> - the tree merge drain and the
+/// snapshot copy, which read a per-leaf payload and then advanced the bounded
+/// leaf walk with its own <c>GetKeyRangeAndNextSiblingAsync</c>: payload +
+/// <c>GetKeyRangeAndNextSiblingAsync</c> -> one combined payload call whose page
+/// also carries the leaf's key range and next sibling
+/// (<c>GetDeltaSinceAndNextSiblingAsync</c> / <c>GetLiveRawEntriesAndNextSiblingAsync</c>),
+/// 2 calls per leaf -> 1.</item>
+/// <item><see cref="Site.ReverseScanWalk"/> - the shard root's reverse
+/// range-bounded page fills, which read a per-leaf payload, then the leaf's key
+/// range, then its previous-sibling pointer: payload + <c>GetKeyRangeAsync</c> +
+/// <c>GetPrevSiblingAsync</c> -> payload + <c>GetKeyRangeAndPrevSiblingAsync</c>,
+/// 3 calls per leaf -> 2.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -62,7 +74,7 @@ public class LeafChainWalkElisionBenchmarks
     private Guid[] _transactionIds = null!;
 
     /// <summary>The leaf-chain walk being measured; see the class summary.</summary>
-    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk, Site.ShardScanWalk)]
+    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk, Site.ShardScanWalk, Site.PayloadDrainWalk, Site.ReverseScanWalk)]
     public Site Path { get; set; }
 
     /// <summary>The number of leaves in the walked chain.</summary>
@@ -113,6 +125,20 @@ public class LeafChainWalkElisionBenchmarks
                     total += (await _chain.GetLiveRawEntriesAsync(current)).Count;
                     total += await _chain.GetKeyRangeAsync(current);
                     break;
+                case Site.ReverseScanWalk:
+                    total += (await _chain.GetLiveRawEntriesAsync(current)).Count;
+                    total += await _chain.GetKeyRangeAsync(current);
+                    leaf = await _chain.GetPrevSiblingAsync(current);
+                    continue;
+                case Site.PayloadDrainWalk:
+                {
+                    total += (await _chain.GetDeltaSinceAsync(current)).Count;
+                    var (drainRange, drainNext) = await _chain.GetKeyRangeAndNextSiblingAsync(current);
+                    total += drainNext is null ? 0 : drainRange;
+                    leaf = drainNext;
+                    continue;
+                }
+
                 case Site.KeyRangeWalk:
                 {
                     leaf = await _chain.GetNextSiblingAsync(current);
@@ -181,6 +207,24 @@ public class LeafChainWalkElisionBenchmarks
                     break;
                 }
 
+                case Site.ReverseScanWalk:
+                {
+                    total += (await _chain.GetLiveRawEntriesAsync(current)).Count;
+                    var (range, prev) = await _chain.GetKeyRangeAndPrevSiblingAsync(current);
+                    total += range;
+                    leaf = prev;
+                    break;
+                }
+
+                case Site.PayloadDrainWalk:
+                {
+                    var (delta, range, next) = await _chain.GetDeltaSinceWithLinkAsync(current);
+                    total += delta.Count;
+                    total += next is null ? 0 : range;
+                    leaf = next;
+                    break;
+                }
+
                 case Site.KeyRangeWalk:
                 {
                     var (range, next) = await _chain.GetKeyRangeAndNextSiblingAsync(current);
@@ -222,6 +266,12 @@ public class LeafChainWalkElisionBenchmarks
 
         /// <summary>The shard root's count, probe, range-clock, projection-rebuild and range-bounded page-fill walks.</summary>
         ShardScanWalk,
+
+        /// <summary>A payload drain whose page carries the walk's link (tree merge drain, snapshot copy).</summary>
+        PayloadDrainWalk,
+
+        /// <summary>The shard root's reverse range-bounded page fills.</summary>
+        ReverseScanWalk,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
@@ -283,6 +333,24 @@ public class LeafChainWalkElisionBenchmarks
         {
             await HopAsync();
             return (leaf, Next(leaf));
+        }
+
+        public async Task<(List<int> Delta, int KeyRange, int? Next)> GetDeltaSinceWithLinkAsync(int leaf)
+        {
+            await HopAsync();
+            return (_payload, leaf, Next(leaf));
+        }
+
+        public async Task<(int KeyRange, int? Prev)> GetKeyRangeAndPrevSiblingAsync(int leaf)
+        {
+            await HopAsync();
+            return (leaf, Next(leaf));
+        }
+
+        public async Task<int?> GetPrevSiblingAsync(int leaf)
+        {
+            await HopAsync();
+            return Next(leaf);
         }
 
         public async Task<int?> GetNextSiblingAsync(int leaf)

@@ -569,8 +569,10 @@ internal sealed class TreeMergeGrain(
 
         while (walk.HasLeaf)
         {
-            var leaf = walk.CurrentLeaf;
-            var delta = await leaf.GetDeltaSinceAsync(emptyVector);
+            // The delta and the leaf's chain link come back from one leaf turn,
+            // so advancing past the leaf costs no further grain call.
+            var page = await walk.CurrentLeaf.GetDeltaSinceAndNextSiblingAsync(emptyVector);
+            var delta = page.Delta;
 
             if (delta.Entries.Count > 0)
             {
@@ -607,7 +609,7 @@ internal sealed class TreeMergeGrain(
                 await Task.WhenAll(tasks);
             }
 
-            if (!await walk.MoveNextAsync()) break;
+            if (!walk.MoveNext(page.Link)) break;
         }
 
         return (walk.Completed, walk.ResumeFromInclusive);
