@@ -226,6 +226,8 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
         public Action<string>? BeforeTailEntries { get; set; }
         public List<(string Tree, List<KeyValuePair<string, byte[]>> Writes)> AtomicWrites { get; } = [];
         public List<(string Tree, long From)> Reads { get; } = [];
+        public List<(string Tree, long From)> HistoryReads { get; } = [];
+        public List<(string Tree, long Offset)> HistoryEntries { get; } = [];
         public List<(string Tree, long Generation, long Offset)> PublishedSnapshots { get; } = [];
         public Dictionary<(string Tree, string Key), LwwEntry> SourceRows { get; } = [];
         private readonly Dictionary<string, List<(long Offset, LatticeMutation Mutation)>> _logs = new();
@@ -266,7 +268,7 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             _heads[tree] = Math.Max(_heads[tree], offset + 1);
         }
 
-        public static async Task<Harness> CreateAsync()
+        public static async Task<Harness> CreateAsync(int prepareScanLimit = 0)
         {
             Harness h = null!;
             var factory = Substitute.For<IGrainFactory>();
@@ -342,12 +344,14 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
             state.State.AppliedOffsets[0] = 6;
             state.State.ProjectionVersion = registration.ProjectionVersion;
             var views = Substitute.For<IOptionsMonitor<LatticeViewOptions>>();
-            views.Get(Arg.Any<string>()).Returns(new LatticeViewOptions());
+            views.Get(Arg.Any<string>()).Returns(new LatticeViewOptions { RebuildPrepareScanLimit = prepareScanLimit });
             var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();
             options.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalPartitions = 1, WalRetention = TimeSpan.Zero });
             var reader = Substitute.For<ICommitLogReader>();
             reader.GetHeadOffsetAsync(Arg.Any<string>(), 0, Arg.Any<CancellationToken>())
                 .Returns(call => Task.FromResult(h._heads[call.ArgAt<string>(0)]));
+            reader.ReadAsync(Arg.Any<string>(), 0, Arg.Any<long>(), Arg.Any<CancellationToken>())
+                .Returns(call => h.ReadHistoryAsync(call.ArgAt<string>(0), call.ArgAt<long>(2)));
             var subscriber = Substitute.For<IWalSubscriber>();
             subscriber.DrainAsync(Arg.Any<WalSubscriptionContext>(), Arg.Any<IWalSubscriptionHandler>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
@@ -378,6 +382,17 @@ public sealed partial class ViewMaintainerPhysicalStagingTests
                 s.AppliedOffsets.GetValueOrDefault(0, -1)));
             await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
             return h;
+        }
+
+        private async IAsyncEnumerable<(long Offset, LatticeMutation Mutation)> ReadHistoryAsync(string tree, long from)
+        {
+            HistoryReads.Add((tree, from));
+            await Task.Yield();
+            foreach (var entry in _logs.GetValueOrDefault(tree, []).Where(x => x.Offset > from).OrderBy(x => x.Offset))
+            {
+                HistoryEntries.Add((tree, entry.Offset));
+                yield return entry;
+            }
         }
 
         private static async IAsyncEnumerable<string> Keys(string? start, bool source)

@@ -1369,8 +1369,9 @@ internal sealed partial class ViewMaintainerGrain
     /// whole log below the heads captured after a terminal was staged, a prepare
     /// still missing will never be read. The batch is discarded and remembered as
     /// abandoned, so the rebuild reads it from source and its later entries are not
-    /// re-staged. A terminal with no observed prepare has no cardinality witness
-    /// and remains staged instead of treating the sampled head as such a witness.
+    /// re-staged. A terminal with no observed prepare remains staged unless a
+    /// bounded search finds its cardinality in the same physical log below the
+    /// checkpoint; a sampled head alone is never such a witness.
     /// </summary>
     private async Task<bool> OrphanedCommittedBatchAsync(
         string walTreeId,
@@ -1380,14 +1381,25 @@ internal sealed partial class ViewMaintainerGrain
         CancellationToken cancellationToken)
     {
         List<Guid>? orphaned = null;
+        var orphanSearchBudget = Options.RebuildPrepareScanLimit > 0
+            ? Options.RebuildPrepareScanLimit
+            : RebuildPrepareScanLimit;
         foreach (var (txId, tx) in _staging)
         {
-            // A terminal alone carries no prepare cardinality. A sampled head
-            // cannot turn that unknown batch into an orphan or rule out a late
-            // prepare on the actual tail.
-            var missingPrepares = tx.AtomicBatchSize > 0
-                && tx.PreparesByIndex.Count < tx.AtomicBatchSize;
-            if (!tx.TerminalSeen || !missingPrepares
+            if (!tx.TerminalSeen)
+            {
+                continue;
+            }
+
+            if ((tx.AtomicBatchSize == 0
+                    || (tx.ExpectedShardCount > 0 && tx.CommittedShards.Count < tx.ExpectedShardCount))
+                && orphanSearchBudget > 0)
+            {
+                orphanSearchBudget -= await RecoverOrphanPrepareCardinalityAsync(
+                    walTreeId, partitions, txId, tx, orphanSearchBudget, cancellationToken);
+            }
+
+            if (tx.AtomicBatchSize == 0 || tx.PreparesByIndex.Count >= tx.AtomicBatchSize
                 || (tx.ExpectedShardCount > 0 && tx.CommittedShards.Count < tx.ExpectedShardCount))
             {
                 continue;
@@ -1438,6 +1450,73 @@ internal sealed partial class ViewMaintainerGrain
             "View '{ViewName}' staged {Count} committed atomic batch(es) whose prepares lie below its checkpoint; rebuilding to read them from source.",
             ViewName, orphaned.Count);
         return true;
+    }
+
+    /// <summary>
+    /// Recovers an omitted prepare's cardinality and consumed shard terminals
+    /// from retained entries below this physical checkpoint. Search cursors are
+    /// volatile staging state: a reactivation retries them, and a rebind drops
+    /// them with the batch. All batches share one examined-entry budget per drain.
+    /// </summary>
+    private async Task<int> RecoverOrphanPrepareCardinalityAsync(
+        string walTreeId,
+        int partitions,
+        Guid txId,
+        StagedTransaction tx,
+        int budget,
+        CancellationToken cancellationToken)
+    {
+        var examined = 0;
+        tx.OrphanPrepareSearchOffsets ??= [];
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            if (!state.State.AppliedOffsets.TryGetValue(partition, out var checkpoint))
+            {
+                continue;
+            }
+
+            var from = tx.OrphanPrepareSearchOffsets.GetValueOrDefault(partition, -1);
+            if (from >= checkpoint)
+            {
+                continue;
+            }
+
+            await foreach (var (offset, mutation) in commitLogReader.ReadAsync(
+                walTreeId, partition, from, cancellationToken))
+            {
+                if (offset > checkpoint)
+                {
+                    break;
+                }
+
+                examined++;
+                tx.OrphanPrepareSearchOffsets[partition] = offset;
+                if (mutation.IsPrepared && mutation.TransactionId == txId && mutation.AtomicBatchSize > 0)
+                {
+                    tx.NotePrepareCardinality(mutation.AtomicBatchSize);
+                }
+                else if (mutation.Kind == MutationKind.TxCommit && mutation.TransactionId == txId)
+                {
+                    tx.CommittedShards.Add(mutation.ShardIndex);
+                    tx.ExpectedShardCount = Math.Max(tx.ExpectedShardCount, mutation.AtomicShardCount);
+                }
+
+                if (tx.AtomicBatchSize > 0
+                    && (tx.ExpectedShardCount == 0 || tx.CommittedShards.Count >= tx.ExpectedShardCount))
+                {
+                    return examined;
+                }
+
+                if (examined >= budget)
+                {
+                    return examined;
+                }
+            }
+
+            tx.OrphanPrepareSearchOffsets[partition] = checkpoint;
+        }
+
+        return examined;
     }
 
     /// <summary>A replay fence planned by a rebuild's resume-floor capture.</summary>
@@ -1848,6 +1927,13 @@ internal sealed partial class ViewMaintainerGrain
         /// are missing; every prepare lies below them. <see langword="null"/> until then.
         /// </summary>
         public long[]? PrepareHorizon { get; set; }
+
+        /// <summary>Resumable positions of the bounded historical cardinality search on this staged physical log.</summary>
+        public Dictionary<int, long>? OrphanPrepareSearchOffsets { get; set; }
+
+        /// <summary>Records the cardinality carried by an actual prepared entry, without re-staging its payload.</summary>
+        public void NotePrepareCardinality(int cardinality) =>
+            AtomicBatchSize = Math.Max(AtomicBatchSize, cardinality);
 
         public void NoteOffset(int partition, long offset)
         {
