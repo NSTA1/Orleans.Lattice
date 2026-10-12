@@ -154,6 +154,12 @@ measurements, not isolated performance comparisons, production acceptance or
 predicted CI costs.
 The resolved-identity independent command passed all 20 cases in 61.385 seconds
 under the same one-JVM/two-CPU/1800 MiB limit, including its sixteen paired controls.
+A final clean committed-tree command checks all seven companions together: 132
+executed and passed, zero failed, skipped or inconclusive, with every base,
+variant and paired mutant included. Its whole-command wall time was 581.246
+seconds, including build and startup, under the same resource bounds on the
+shared host. This aggregate does not replace the independently measured shard
+weights or certify the pending production refinements.
 A green finite model is not a production refinement certificate: the acceptance
 gate intentionally remains red until discriminating production detector evidence
 justifies every pending verdict.
