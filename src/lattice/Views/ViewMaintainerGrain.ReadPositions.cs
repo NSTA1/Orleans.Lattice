@@ -41,11 +41,14 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
     /// <summary>The source logs this activation has registered with.</summary>
     private readonly HashSet<string> _registeredReadLogs = new(StringComparer.Ordinal);
 
+    // The durable identity survives primary/retained role changes and failed
+    // writes that have already mutated the checkpoint's in-memory binding.
     private sealed record ViewReadPositions(
         string? WalTreeId,
         long[]? Positions,
         string? RetainedWalTreeId = null,
-        long[]? RetainedPositions = null);
+        long[]? RetainedPositions = null,
+        string? DurableBoundWalTreeId = null);
 
     /// <inheritdoc />
     public Task<long[]?> GetDurableReadPositionsAsync(string walTreeId)
@@ -78,7 +81,7 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
         var bound = state.State.BoundPhysicalTreeId;
         _readPositions = string.IsNullOrEmpty(bound)
             ? new ViewReadPositions(null, null)
-            : new ViewReadPositions(bound, ToPositions(state.State.AppliedOffsets));
+            : new ViewReadPositions(bound, ToPositions(state.State.AppliedOffsets), DurableBoundWalTreeId: bound);
     }
 
     /// <summary>
@@ -90,7 +93,7 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
         // Registration can become visible before its response. Publish the hold
         // first; an old physical log's offsets cannot bound the candidate log.
         var previous = _readPositions;
-        var persistedLog = previous?.RetainedWalTreeId ?? state.State.BoundPhysicalTreeId;
+        var persistedLog = previous?.DurableBoundWalTreeId ?? state.State.BoundPhysicalTreeId;
         var positions = string.Equals(persistedLog, walTreeId, StringComparison.Ordinal)
             ? (string.Equals(previous?.RetainedWalTreeId, walTreeId, StringComparison.Ordinal)
                 ? previous!.RetainedPositions
@@ -110,7 +113,7 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
                     : ToPositions(state.State.AppliedOffsets);
         }
 
-        _readPositions = new ViewReadPositions(walTreeId, positions, retainedLog, retainedPositions);
+        _readPositions = new ViewReadPositions(walTreeId, positions, retainedLog, retainedPositions, persistedLog);
         if (_registeredReadLogs.Contains(walTreeId))
         {
             return;
@@ -137,7 +140,8 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
 
         _readPositions = new ViewReadPositions(walTreeId, ToPositions(offsets),
             retirePrevious ? null : previous?.RetainedWalTreeId,
-            retirePrevious ? null : previous?.RetainedPositions);
+            retirePrevious ? null : previous?.RetainedPositions,
+            retirePrevious ? walTreeId : previous?.DurableBoundWalTreeId ?? state.State.BoundPhysicalTreeId);
     }
 
     /// <summary>

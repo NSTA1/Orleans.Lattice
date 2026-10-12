@@ -247,6 +247,16 @@ public sealed class ViewMaintainerRebuildIdentityTests
         Assert.ThrowsAsync<OperationCanceledException>(async () => await h.Grain.RebuildAsync());
 
         Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
+        h.Registry.GetEntryAsync(Logical).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { PhysicalTreeId = Second, ShardCount = 1, MaxLeafKeys = 128, MaxInternalChildren = 128 }));
+        h.Reader.GetHeadOffsetAsync(Second, 0, Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }),
+                "changing the original bound log's snapshot role must not change its durable identity");
+            return await Task.FromException<long>(new OperationCanceledException("stop the next candidate's capture"));
+        });
+        Assert.ThrowsAsync<OperationCanceledException>(async () => await h.Grain.RebuildAsync());
+        Assert.That(await h.Grain.GetDurableReadPositionsAsync(Retired), Is.EqualTo(new long[] { 8 }));
     }
 
     private static Harness Create(bool afterValidation = false, bool moveSource = true, string bound = First)
