@@ -314,6 +314,10 @@ internal sealed partial class ViewMaintainerGrain
         // until a later reconcile.
         var capturedOffsets = await CaptureResumeFloorsAsync(walTreeId, partitions, cancellationToken);
 
+        // The capture queues every decided cross-tree batch it retires without
+        // replay; degrade those too before anything is cleared or published.
+        await DegradeBackstopDiscardedCrossTreeAsync();
+
         // A rebuild reconverges from current committed source state, so abandon any
         // partially-staged atomic batch (its uncommitted prepares are not part of
         // committed source state); an in-flight batch held back above is re-staged
@@ -490,6 +494,10 @@ internal sealed partial class ViewMaintainerGrain
         // terminal had not yet arrived at scan time would be permanently lost until
         // a later reconcile.
         var capturedOffsets = await CaptureResumeFloorsAsync(walTreeId, partitions, cancellationToken);
+
+        // The capture queues every decided cross-tree batch it retires without
+        // replay; degrade those too before anything is cleared or published.
+        await DegradeBackstopDiscardedCrossTreeAsync();
 
         // A rebuild reconverges the view from current committed source state, so
         // any partially-staged atomic batch is abandoned: its uncommitted prepares

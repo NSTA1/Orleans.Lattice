@@ -968,6 +968,7 @@ internal sealed partial class ViewMaintainerGrain
 
         var prepareFloors = new Dictionary<Guid, Dictionary<int, long>>();
         var tallies = new Dictionary<Guid, TerminalTally>();
+        var crossTreeOperations = new Dictionary<Guid, string>();
         var boundToThisLog = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal);
         var scanLimit = Options.RebuildPrepareScanLimit > 0
             ? Options.RebuildPrepareScanLimit
@@ -1026,6 +1027,12 @@ internal sealed partial class ViewMaintainerGrain
                     }
 
                     tally.Note(commit, abort, mutation.ShardIndex, mutation.AtomicShardCount);
+                    if (commit
+                        && mutation.CrossTreeOperationId is { } operationId
+                        && ComputeViewWaitSet(mutation.CrossTreeParticipants ?? []).Count > 1)
+                    {
+                        crossTreeOperations[txId] = operationId;
+                    }
                 }
 
                 // A terminal's offset is a floor too: a batch still committing shard by
@@ -1052,6 +1059,7 @@ internal sealed partial class ViewMaintainerGrain
             {
                 terminated.Add(txId);
                 RetireAbandoned(txId);
+                RecordRetiredCrossTreeOperation(txId, crossTreeOperations);
             }
         }
 
@@ -1107,6 +1115,33 @@ internal sealed partial class ViewMaintainerGrain
         state.State.ReplayFenceOffsets = planned.Offsets;
         state.State.ReplayFenceStagedTransactions = planned.Staged;
         state.State.ReplayFenceSupersession = null;
+    }
+
+    /// <summary>
+    /// Queues for terminal degradation a decided cross-tree batch the rebuild
+    /// reflects from source and does not replay. Its slice may have been
+    /// registered at the joint coordinator by this view - in this activation or a
+    /// previous one whose staging was lost - and the view never re-registers a
+    /// batch it does not replay, so a peer completing the wait set later would
+    /// flip that stale slice over the rebuilt (and since overwritten) values. A
+    /// batch still staged is resolved by its own drain, and one this activation
+    /// already resolved needs nothing; degrading an operation the coordinator has
+    /// already flipped is answered as applied and is a no-op.
+    /// </summary>
+    private void RecordRetiredCrossTreeOperation(Guid txId, Dictionary<Guid, string> crossTreeOperations)
+    {
+        if (!crossTreeOperations.TryGetValue(txId, out var operationId)
+            || _staging.ContainsKey(txId)
+            || _resolved.Contains(txId))
+        {
+            return;
+        }
+
+        var pending = state.State.BackstopDiscardedCrossTreeOperations ??= [];
+        if (!pending.Contains(operationId))
+        {
+            pending.Add(operationId);
+        }
     }
 
     /// <summary>The terminals of one batch a rebuild's resume-floor capture read.</summary>
