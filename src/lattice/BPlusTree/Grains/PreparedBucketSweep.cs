@@ -89,8 +89,8 @@ internal static class PreparedBucketSweep
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
             progress.LeavesVisited++;
-            var snapshots = await leaf.GetPendingMutationsForSlotsAsync(sortedSlots, virtualShardCount);
-            foreach (var snapshot in snapshots)
+            var pendingPage = await leaf.GetPendingMutationsForSlotsAndNextSiblingAsync(sortedSlots, virtualShardCount);
+            foreach (var snapshot in pendingPage.Mutations)
             {
                 // Per-snapshot pre-check: if the saga has already
                 // terminalized at sweep-time, the saga's own
@@ -189,7 +189,7 @@ internal static class PreparedBucketSweep
                 }
                 list.Add(snapshot);
             }
-            leafId = await leaf.GetNextSiblingAsync();
+            leafId = pendingPage.NextSibling;
         }
 
         // Post-sweep cleanup: close the orphan window for sagas
