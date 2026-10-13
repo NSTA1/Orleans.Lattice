@@ -1,0 +1,17 @@
+# Pairs with NoConcurrentLeafWrites. A gate released before the write lands lets the next writer overlap it.
+MODULE: FlushKeepsWrite
+TARGET: NoConcurrentLeafWrites
+CLASS: Invariant
+SUMMARY: the flush releases the gate without retiring its write
+PERTURBS: FinishFlush
+
+--- FIND
+    /\ flush = "writing"
+    /\ gate' = "free"
+    /\ writes' = writes - 1
+--- REPLACE
+    /\ flush = "writing"
+    /\ gate' = "free"
+    \* MUTATION: the write is still in flight
+    /\ writes' = writes
+--- END

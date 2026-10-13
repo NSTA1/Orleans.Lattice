@@ -1,0 +1,13 @@
+# Pairs with NoTurnWaitCycle. This is the #4914 deadlock: the reparent callback is not [AlwaysInterleave].
+MODULE: SetParentQueuedBehindCapture
+TARGET: NoTurnWaitCycle
+CLASS: Invariant
+SUMMARY: SetParentAsync queues behind the capture turn that is waiting on it (#4914)
+PERTURBS: AdmitSetParent
+
+--- FIND
+    /\ seed' = IF SetParentInterleaves \/ leafTurn # "capture" THEN "admitted" ELSE "blocked"
+--- REPLACE
+    \* MUTATION: SetParentAsync is not [AlwaysInterleave]
+    /\ seed' = IF leafTurn # "capture" THEN "admitted" ELSE "blocked"
+--- END

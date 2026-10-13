@@ -45,7 +45,7 @@ CI selects exhaustive TLC. The acceptance census (#4442) adds two more gates:
 
 Figures are derived from module manifests and refinement notes. Each area's spec
 `README.md` holds the figures the build checks; the B+ tree topology row reflects
-its four checked modules.
+its five checked modules.
 
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
@@ -54,7 +54,7 @@ its four checked modules.
 | Cross-cluster atomic visibility | 1 | 59 | 39 | 116 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 82 | 64 | 190 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
-| B+ tree topology | 4 | 47 | 73 | 45 | [B+ tree topology](../../spec/bplustree/README.md) |
+| B+ tree topology | 5 | 62 | 94 | 50 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
@@ -189,7 +189,10 @@ gaps, states its full scope.
     parent splits from three to six levels in the checked instance; interleaved
     writes through a bounded leaf split and fold; sibling-chain and parent-route
     publication; and durable retirement, route removal, successor back-link
-    repair, clearing, and recovery for a reclaimed leaf. Range ownership during
+    repair, clearing, and recovery for a reclaimed leaf; and the grain-turn
+    wait-for graph of a split linked from inside the donor's capture turn,
+    including a parent overflow whose seeding calls back into that donor, the
+    leaf's persist-write gate, and its clear latch. Range ownership during
     adaptive shard split, online reshard and resize is already covered by the
     `ShardOwnership` models above.
   - **Does not cover:** an unbounded-height proof (the level-indexed model is
@@ -299,7 +302,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
 | Backup and restore | #4485, #4490, #4589, #4593, #4686 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
-| B+ tree topology | #4795, #4815, #4818 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
+| B+ tree topology | #4795, #4815, #4818, #4914 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
 | Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |
 | Materialised-view physical rebuild and resolved identity | #4891, #4895, #4905 | [Physical-rebind companion](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) and [resolved identity](../../spec/view-resolved-identity/README.md) |
 | Materialised-view staging, replay and source admission | #4864, #4865, #4866, #4867, #4868, #4869, #4870, #4871, #4872, #4877, #4878, #4879, #4880, #4881, #4882, #4883, #4884, #4885, #4886, #4890, #4900 | [Tail and focused companions](../../spec/materialised-views/README.md), [staging](../../spec/view-staging/README.md) |

@@ -1,0 +1,16 @@
+# Pairs with NoResurrectionAfterClear. The gate alone only orders the write after the clear; the latch is what refuses it.
+MODULE: FlushSkipsClearRecheck
+TARGET: NoResurrectionAfterClear
+CLASS: Invariant
+SUMMARY: a flush that waited on the gate does not re-check the clear latch
+PERTURBS: BeginFlush
+
+--- FIND
+    /\ gate = "free"
+    /\ ~cleared
+    /\ gate' = "flush"
+--- REPLACE
+    /\ gate = "free"
+    \* MUTATION: the clear latch is not re-checked
+    /\ gate' = "flush"
+--- END

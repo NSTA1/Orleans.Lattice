@@ -1,0 +1,15 @@
+# Pairs with LinkedOnlyAfterSeed. A link reported while the donor's digest is still being read publishes a half-seeded sibling.
+MODULE: DigestReturnsBeforeSeedDone
+TARGET: LinkedOnlyAfterSeed
+CLASS: Invariant
+SUMMARY: the link returns before the sibling's seeding has finished
+PERTURBS: ServeDigest
+
+--- FIND
+    /\ seed = "digest"
+    /\ seed' = "done"
+--- REPLACE
+    /\ seed = "digest"
+    \* MUTATION: the seeding is not marked complete
+    /\ seed' = "digest"
+--- END

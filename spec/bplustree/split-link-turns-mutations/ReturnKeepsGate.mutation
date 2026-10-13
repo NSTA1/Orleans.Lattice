@@ -1,0 +1,15 @@
+# Pairs with LinkGateMatchesLinking. A gate held past its link wedges every later capture link.
+MODULE: ReturnKeepsGate
+TARGET: LinkGateMatchesLinking
+CLASS: Invariant
+SUMMARY: the link returns without releasing the root's link gate
+PERTURBS: ReturnLink
+
+--- FIND
+    /\ linked' = TRUE
+    /\ linkGate' = FALSE
+--- REPLACE
+    /\ linked' = TRUE
+    \* MUTATION: the link gate is kept
+    /\ linkGate' = linkGate
+--- END

@@ -1,0 +1,14 @@
+# Pairs with NoConcurrentLeafWrites. An interleaved reparent holds no split gate, so the persist-write gate is its only serialiser.
+MODULE: SetParentIgnoresGate
+TARGET: NoConcurrentLeafWrites
+CLASS: Invariant
+SUMMARY: the reparent write does not wait for the persist-write gate
+PERTURBS: BeginSetParent
+
+--- FIND
+    /\ seed = "admitted"
+    /\ gate = "free"
+--- REPLACE
+    /\ seed = "admitted"
+    \* MUTATION: the persist-write gate is not awaited
+--- END
