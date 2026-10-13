@@ -62,6 +62,7 @@ Set-StrictMode -Version Latest
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $here '../../..')
 $infraDir = Join-Path (Split-Path -Parent $here) 'infra'
+. (Join-Path $here '_vm-access.ps1')
 
 if (-not $ParametersFile) {
 	$local = Join-Path $here 'parameters.local.ps1'
@@ -72,7 +73,6 @@ $p = & $ParametersFile
 if ($NamePrefix) { $p.NamePrefix = $NamePrefix; $p.ResourceGroup = "rg-$NamePrefix" }
 
 $vmName = "$($p.NamePrefix)-vm"
-$pipName = "$($p.NamePrefix)-pip"
 $rg = $p.ResourceGroup
 $adminUser = $p.AdminUsername
 
@@ -87,12 +87,14 @@ function Invoke-AzQuery {
 }
 
 Write-Host "Looking up VM coordinates..." -ForegroundColor Cyan
-$fqdn = Invoke-AzQuery -AzArgs @('network','public-ip','show','-g',$rg,'-n',$pipName,'--query','dnsSettings.fqdn','-o','tsv')
-$publicIp = Invoke-AzQuery -AzArgs @('network','public-ip','show','-g',$rg,'-n',$pipName,'--query','ipAddress','-o','tsv')
 $powerState = Invoke-AzQuery -AzArgs @('vm','get-instance-view','-g',$rg,'-n',$vmName,'--query',"instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]",'-o','tsv')
 if ($powerState -ne 'PowerState/running') {
 	throw "VM is '$powerState'. Run ./vm.ps1 start first."
 }
+# Public mode: the VM's FQDN. Private-network mode: the local end of a Bastion
+# tunnel (started here if not already running). See _vm-access.ps1.
+$vmAccess = Resolve-BenchVmSsh -ResourceGroup $rg -NamePrefix $p.NamePrefix -AdminUsername $adminUser -SshPublicKeyPath $p.SshPublicKeyPath
+if (-not $vmAccess.Target) { throw "Could not resolve an ssh endpoint for $vmName (no public IP FQDN and the group is not tagged latticeBenchNetwork=private)." }
 
 Write-Host "Fetching last deployment outputs..." -ForegroundColor Cyan
 $lastDeploy = Invoke-AzQuery -AzArgs @('deployment','group','list','-g',$rg,'--query',"[?properties.provisioningState=='Succeeded'] | sort_by(@, &properties.timestamp) | [-1].name",'-o','tsv')
@@ -112,14 +114,14 @@ if ($outs.PSObject.Properties.Name -contains 'storageTableEndpointsAll') {
 $extraTableEndpoints = if ($allTableEndpoints.Count -gt 1) { $allTableEndpoints[1..($allTableEndpoints.Count - 1)] } else { @() }
 $walExtraAccountUris = ($extraTableEndpoints -join ';')
 
-$sshTarget = "$adminUser@$fqdn"
+$sshTarget = $vmAccess.Target
 $sshOpts = @(
 	'-o','StrictHostKeyChecking=accept-new',
 	'-o','ServerAliveInterval=15',
 	'-o','ServerAliveCountMax=3',
 	'-o','ConnectTimeout=10',
 	'-o','BatchMode=yes'
-)
+) + $vmAccess.SshOpts
 
 function Invoke-Ssh {
 	param([Parameter(Mandatory)] [string] $Command,
@@ -133,7 +135,7 @@ function Invoke-SshQuiet {
 	& ssh @sshOpts $sshTarget "timeout $TimeoutSec sh -c `"$($Command -replace '"','\"')`"" 2>&1 | Out-Null
 }
 
-Write-Host "VM         : $vmName ($publicIp / $fqdn)" -ForegroundColor Green
+Write-Host "VM         : $vmName ($($vmAccess.Display))" -ForegroundColor Green
 Write-Host "Storage    : $storageAcct" -ForegroundColor Green
 Write-Host "WAL accts  : $($allTableEndpoints.Count) (extra: $walExtraAccountUris)" -ForegroundColor Green
 Write-Host "SSH        : $sshTarget" -ForegroundColor Green

@@ -18,10 +18,23 @@
 	host alias. Pass this to spin up additional VMs side-by-side without
 	editing the parameters file.
 
+.PARAMETER PrivateNetwork
+	Deploy for a subscription whose policy forbids VM public IPs and public
+	storage access. The VM gets no public IP and is reached through an Azure
+	Bastion (Standard, tunnelling enabled) via `az network bastion tunnel`;
+	outbound internet goes through a NAT gateway; storage accounts have public
+	network access disabled and are reached through private endpoints. The
+	resource group is tagged latticeBenchNetwork=private so update.ps1,
+	run-cohort.ps1 and vm.ps1 pick the tunnel up automatically. Requires the
+	az 'bastion' extension (installed on demand). Omit for the original
+	public layout.
+
 .EXAMPLE
 	./deploy.ps1
 .EXAMPLE
 	./deploy.ps1 -NamePrefix lattice-bench-spike
+.EXAMPLE
+	./deploy.ps1 -NamePrefix lattice-bench-priv -PrivateNetwork
 #>
 [CmdletBinding()]
 param(
@@ -29,13 +42,15 @@ param(
 	[string] $NamePrefix,
 	[string] $VmSize,
 	[ValidateRange(1, 8)]
-	[int] $WalAccountCount = 1
+	[int] $WalAccountCount = 1,
+	[switch] $PrivateNetwork
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $here '_vm-access.ps1')
 
 if (-not $ParametersFile) {
 	$local = Join-Path $here 'parameters.local.ps1'
@@ -127,7 +142,11 @@ Either:
 }
 
 $allowed = $p.AllowedSshSourceAddress
-if ([string]::IsNullOrWhiteSpace($allowed)) {
+if ($PrivateNetwork) {
+	# Ignored by main.bicep in private mode (SSH is admitted from the Bastion
+	# subnet only); passed only because the parameter is mandatory.
+	$allowed = '10.42.0.64/26'
+} elseif ([string]::IsNullOrWhiteSpace($allowed)) {
 	Write-Host 'AllowedSshSourceAddress blank; auto-detecting public IP...' -ForegroundColor Yellow
 	$ip = (Invoke-RestMethod -Uri 'https://api.ipify.org?format=json').ip
 	$allowed = "$ip/32"
@@ -142,7 +161,10 @@ Write-Host "Ensuring resource group $($p.ResourceGroup) in $($p.Location)" -Fore
 # to delete a group whose latticeBenchRun tag disagrees with the prefix it was
 # asked to tear down, which is what stops a mis-set prefix from running
 # `az group delete` against something unrelated and irreversible.
-az group create --name $p.ResourceGroup --location $p.Location --tags "latticeBenchRun=$($p.NamePrefix)" --output none
+# `az group create` replaces the tag set, so latticeBenchNetwork is stamped on
+# every deploy; it is how the other scripts detect private-network mode.
+$networkTag = if ($PrivateNetwork) { 'private' } else { 'public' }
+az group create --name $p.ResourceGroup --location $p.Location --tags "latticeBenchRun=$($p.NamePrefix)" "latticeBenchNetwork=$networkTag" --output none
 
 $bicep = Join-Path $infraDir 'main.bicep'
 $cloudInit = Join-Path $infraDir 'cloud-init.yaml'
@@ -171,15 +193,21 @@ $result = az deployment group create `
 		osDiskSizeGB=$($p.OsDiskSizeGB) `
 		customDataBase64="$customDataB64" `
 		walAccountCount=$WalAccountCount `
+		privateNetwork=$(if ($PrivateNetwork) { 'true' } else { 'false' }) `
 	--output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $result) { throw "az deployment group create failed (exit $LASTEXITCODE)." }
 
 $out = $result.properties.outputs
 Write-Host ''
 Write-Host '=== Deployment complete ===' -ForegroundColor Green
 Write-Host ("VM name      : {0}" -f $out.vmName.value)
-Write-Host ("Public IP    : {0}" -f $out.publicIp.value)
-Write-Host ("FQDN         : {0}" -f $out.fqdn.value)
-Write-Host ("SSH allowed  : {0}" -f $allowed)
+if ($PrivateNetwork) {
+	Write-Host ("Network      : private (no public IP; Bastion {0})" -f $out.bastionName.value)
+} else {
+	Write-Host ("Public IP    : {0}" -f $out.publicIp.value)
+	Write-Host ("FQDN         : {0}" -f $out.fqdn.value)
+	Write-Host ("SSH allowed  : {0}" -f $allowed)
+}
 Write-Host ("Auto-shutdown: {0} {1}" -f $p.AutoShutdownTime, $p.AutoShutdownTimeZone)
 Write-Host ("Storage acct : {0}" -f $out.storageAccountName.value)
 Write-Host ("Table endpt  : {0}" -f $out.storageTableEndpoint.value)
@@ -192,6 +220,19 @@ $fqdn = $out.fqdn.value
 $adminUser = $p.AdminUsername
 $hostAlias = $p.NamePrefix
 
+# Private mode: the ssh config points at the local end of the Bastion tunnel.
+# The port is derived from the prefix, so the block stays valid across tunnel
+# restarts; HostKeyAlias records the VM's key against the alias rather than
+# against 127.0.0.1:<port>.
+if ($PrivateNetwork) {
+	$tunnelPort = Start-BenchBastionTunnel -ResourceGroup $p.ResourceGroup -NamePrefix $hostAlias
+	$hostLine = "Host $hostAlias"
+	$hostDetail = "`tHostName 127.0.0.1`n`tPort $tunnelPort`n`tHostKeyAlias $hostAlias"
+} else {
+	$hostLine = "Host $hostAlias $fqdn"
+	$hostDetail = "`tHostName $fqdn"
+}
+
 Write-Host ''
 Write-Host '=== Configuring local SSH ===' -ForegroundColor Cyan
 $sshCfg = Join-Path $HOME '.ssh/config'
@@ -201,8 +242,8 @@ $blockMarker = "# >>> $hostAlias (managed by deploy-vm.ps1) >>>"
 $blockEnd    = "# <<< $hostAlias <<<"
 $block = @"
 $blockMarker
-Host $hostAlias $fqdn
-	HostName $fqdn
+$hostLine
+$hostDetail
 	User $adminUser
 	IdentityFile $($privKeyPath -replace '\\','/')
 	IdentitiesOnly yes
@@ -236,7 +277,7 @@ Write-Host 'Waiting for SSH to come up + cloud-init to finish...' -ForegroundCol
 # spin until the 8-minute deadline.
 $kh = Join-Path $HOME '.ssh/known_hosts'
 if (Test-Path $kh) {
-	foreach ($name in @($hostAlias, $fqdn)) {
+	foreach ($name in @($hostAlias, $fqdn) | Where-Object { $_ }) {
 		& ssh-keygen -R $name -f $kh 2>$null | Out-Null
 	}
 }

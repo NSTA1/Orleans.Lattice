@@ -99,6 +99,7 @@ role assignments + cloud-init, then chains to `update.ps1` to publish and start 
 | `-NamePrefix <name>` | from parameters | Names the RG (`rg-<name>`) and SSH host alias. |
 | `-VmSize <sku>` | from parameters | VM SKU override. |
 | `-WalAccountCount <1..8>` | `1` | Number of WAL storage accounts to provision up front. Values >1 create extra accounts whose table endpoints are wired into the silo as keyed WAL providers, enabling the `BENCH_WAL_ACCOUNTS` fan-out without a redeploy. |
+| `-PrivateNetwork` | off | Policy-compliant topology for subscriptions that disable storage public access and block VM public IPs: no VM public IP (SSH through an Azure Bastion Standard tunnel to `127.0.0.1`), NAT-gateway egress, storage behind private endpoints with privatelink DNS. Tags the RG `latticeBenchNetwork=private`; every other VM script detects the tag and tunnels automatically. |
 
 To run a second environment side-by-side: `./scripts/deploy.ps1 -NamePrefix lat-exp -VmSize Standard_F8as_v6`.
 
@@ -172,7 +173,9 @@ Mandatory positional `-Action`, plus `-NamePrefix` / `-ParametersFile`.
 | `status` | Show power state. |
 | `ssh` | Open an SSH session to the VM. |
 | `logs` | Tail the silo journal (`journalctl -fu lattice-silo`). |
-| `refresh-ip` | Point the NSG's `AllowSshFromOperator` SSH rule at your current public IP (`/32`); run it after moving to a new network. |
+| `refresh-ip` | Point the NSG's `AllowSshFromOperator` SSH rule at your current public IP (`/32`); run it after moving to a new network. No-op on a `-PrivateNetwork` rig. |
+| `tunnel` | `-PrivateNetwork` rigs only: (re)start the Bastion SSH tunnel to the VM on its per-prefix local port. `ssh`, `logs`, `update.ps1` and `run-cohort.ps1` start it on demand. |
+| `tunnel-stop` | Stop that tunnel. |
 
 ### `deploy-aca.ps1` and `run-cohort-aca.ps1` - Layer 3 (multi-silo, Azure Container Apps)
 
@@ -184,6 +187,14 @@ the silo app (created resting at zero replicas; `run-cohort-aca.ps1` scales it t
 per cohort), and the producer as an ACA Job in Orleans-client mode -
 and builds and pushes both images.
 
+Before provisioning it registers any of the resource providers it needs
+(`Microsoft.App`, `Microsoft.ContainerRegistry`, `Microsoft.OperationalInsights`,
+`Microsoft.Storage`, plus `Microsoft.Network` and `Microsoft.ManagedIdentity` with
+`-PrivateNetwork`) that the subscription has not registered, and waits for them, failing
+after 60 minutes. On a new subscription the first `Microsoft.App` registration can take
+longer than that; registration carries on in Azure regardless, and a re-run picks up the
+wait where it left off (the script creates nothing before this step).
+
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `-NamePrefix <name>` | (required) | Names and tags every resource. |
@@ -193,6 +204,10 @@ and builds and pushes both images.
 | `-SiloMemoryGi <1..8>` | `8` | Memory per replica; ACA Consumption caps a replica at 4 vCPU / 8 GiB. |
 | `-ReuseRg` | off | Provision into the resource group an earlier run created. |
 | `-SkipImageBuild` | off | Reuse the images already in the registry. Only valid with `-ReuseRg`. |
+| `-PrivateNetwork` | off | Internal-only workload-profiles environment on a VNet subnet with NAT-gateway egress, storage with public access and shared keys disabled behind a table private endpoint, and a user-assigned identity for storage (`BENCH_STORAGE_URI`, `BENCH_CLUSTERING_TABLE_SERVICE_URI`, `AZURE_CLIENT_ID`) and ACR pull instead of a connection-string secret and admin credentials. Tags the RG `latticeBenchNetwork=private`. |
+
+`performance-report.ps1 -PrivateNetwork` passes the switch to `deploy.ps1` (Layers 1 and 2)
+and `deploy-aca.ps1` (Layer 3) when it provisions; a reused rig keeps the mode it was created with.
 
 `run-cohort-aca.ps1` runs one cohort: it scales the silos to exactly N, waits for
 membership, runs the producer job, harvests the log from Log Analytics, and scales the

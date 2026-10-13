@@ -719,6 +719,7 @@ refused.
 ./benchmark/performance-report.ps1 -DryRun                          # re-render doc from latest state.json
 ./benchmark/performance-report.ps1 -DryRun -Diff                    # show planned doc, do not write
 ./benchmark/performance-report.ps1 -KeepVm -ReuseVm prdeadbee       # debug session against an existing VM
+./benchmark/performance-report.ps1 -PrivateNetwork                  # no public IPs / storage public access (policy-restricted subscriptions)
 ./benchmark/performance-report.ps1 -Layer 2 -Workloads 'set-point,set-point-mv' -CaptureCounters  # + per-cohort dotnet-counters trace
 ```
 
