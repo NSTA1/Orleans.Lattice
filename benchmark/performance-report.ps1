@@ -921,11 +921,19 @@ function Resolve-WorkloadIds {
 }
 
 function Get-LatestStateFile {
-	[CmdletBinding()] param()
-	# Find the most recently modified state.json under any prefix directory.
+	[CmdletBinding()] param([string] $Layer = 'all')
 	$candidates = @(Get-ChildItem -Path $runRoot -Recurse -Filter 'state.json' -ErrorAction SilentlyContinue)
-	if ($candidates.Count -eq 0) { return $null }
-	return ($candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+	$sections = if ($Layer -eq 'all') { @('layer1', 'layer2') } else { @("layer$Layer") }
+	foreach ($candidate in ($candidates | Sort-Object LastWriteTime -Descending)) {
+		$state = Read-StateFile -Path $candidate.FullName
+		foreach ($section in $sections) {
+			$data = Get-StateOr $state $section @{}
+			$rows = Get-StateOr $data 'rows' @{}
+			$cohorts = Get-StateOr $data 'cohorts' @()
+			if (($null -ne $rows -and $rows.Count -gt 0) -or ($null -ne $cohorts -and $cohorts.Count -gt 0)) { return $candidate.FullName }
+		}
+	}
+	return $null
 }
 
 function Read-StateFile {
@@ -1330,7 +1338,7 @@ function Invoke-Layer2Cohorts {
 
 			# Parse the steady-state mean and per-call p50/p75/p90/p99 from the silo log.
 			$parsed = Read-SiloLogStats -SiloLogPath $siloDest -WorkloadMode $mode -BatchSize $BatchSize
-			$cohortList.Add(@{
+			$cohort = @{
 				cohortName    = $cohortName
 				siloLog       = $siloDest
 				steadyMean    = $parsed.SteadyMean
@@ -1344,7 +1352,9 @@ function Invoke-Layer2Cohorts {
 				rungVehicles  = $rowRung.Vehicles
 				rungTickHz    = $rowRung.TickHz
 				rungDurationSec = $rowRung.DurationSec
-			})
+			}
+			Set-Layer2PreseedEvidence -Cohort $cohort -WorkloadMode $mode
+			$cohortList.Add($cohort)
 		}
 		$result[$mode] = @($cohortList.ToArray())
 	}
@@ -1851,6 +1861,29 @@ function Set-Layer3PreseedEvidence {
 	}
 }
 
+function Set-Layer2PreseedEvidence {
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][hashtable] $Cohort,
+		[Parameter(Mandatory)][string] $WorkloadMode
+	)
+	if ($WorkloadMode -notin @('get-point', 'get-many')) {
+		$Cohort['unseeded'] = $false
+		return
+	}
+	$entries = $null
+	$log = Get-StateOr $Cohort 'siloLog'
+	if ($log -and (Test-Path -LiteralPath $log)) {
+		$line = Select-String -LiteralPath $log -Pattern '\[silo\] preseed treeId=\S+ entries=(\d+)' | Select-Object -Last 1
+		if ($line) { $entries = [long]$line.Matches[0].Groups[1].Value }
+	}
+	$expected = [long](Get-StateOr $Cohort 'rungVehicles' 0)
+	$Cohort['preseedEntries'] = $entries
+	$Cohort['unseeded'] = $null -eq $entries -or $entries -le 0 -or $entries -lt $expected
+	if ($Cohort['unseeded']) {
+		Write-Warning "[layer2] UNSEEDED $log : $WorkloadMode cohort lacks retained evidence of a complete silo preseed (expected $expected keys). Refusing the cohort."
+	}
+}
+
 function Read-SiloLogStats {
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][string] $SiloLogPath,
@@ -2154,6 +2187,9 @@ function Aggregate-Layer2Cells {
 		$mode = $row.WorkloadMode
 		if (-not $CohortsByMode.ContainsKey($mode)) { continue }
 		$cohorts = @($CohortsByMode[$mode])
+		foreach ($cohort in $cohorts) {
+			Set-Layer2PreseedEvidence -Cohort $cohort -WorkloadMode $mode
+		}
 		if ($cohorts.Count -eq 0) {
 			Write-Warning "[aggregate-l2] no cohorts for mode=$mode (row '$($row.Label)')"
 			continue
@@ -2166,9 +2202,9 @@ function Aggregate-Layer2Cells {
 		# Its steady-state mean is equally unrepresentative (drain-tail
 		# thrash depresses it). Dropping non-HEALTHY cohorts keeps the doc a
 		# measurement of the system's healthy behaviour; if a workload has no
-		# HEALTHY cohort the row is left to its preserved/_pending_ state and
+		# HEALTHY cohort the attempted row is marked _pending_ and
 		# a warning is surfaced for the operator.
-		$healthy = @($cohorts | Where-Object { (Get-StateOr $_ 'verdict' '') -eq 'HEALTHY' })
+		$healthy = @($cohorts | Where-Object { (Get-StateOr $_ 'verdict' '') -eq 'HEALTHY' -and -not (Get-StateOr $_ 'unseeded' $false) })
 		if ($healthy.Count -lt $cohorts.Count) {
 			Write-Warning "[aggregate-l2] mode=${mode}: excluding $($cohorts.Count - $healthy.Count)/$($cohorts.Count) non-HEALTHY cohort(s) from aggregation"
 		}
@@ -2176,7 +2212,10 @@ function Aggregate-Layer2Cells {
 			Write-Warning "[aggregate-l2] mode=${mode}: no HEALTHY cohorts in $($cohorts.Count) cohort(s); row '$($row.Label)' not updated"
 			continue
 		}
-		$cohorts = $healthy
+		$cohorts = @($healthy | Where-Object { $_.steadyMean -gt 0 })
+		if ($cohorts.Count -lt $healthy.Count) {
+			Write-Warning "[aggregate-l2] mode=${mode}: excluding $($healthy.Count - $cohorts.Count) HEALTHY cohort(s) without positive throughput; publishing n=$($cohorts.Count)"
+		}
 		$means = @($cohorts | ForEach-Object { $_.steadyMean } | Where-Object { $_ -gt 0 })
 		$p50s  = @($cohorts | ForEach-Object { $_.perCallP50Ms } | Where-Object { $null -ne $_ })
 		$p75s  = @($cohorts | ForEach-Object { $_.perCallP75Ms } | Where-Object { $null -ne $_ })
@@ -2449,6 +2488,12 @@ function Render-Layer2Table {
 		} else {
 			[void]$sb.Append('| ' + $row.Label.PadRight(40) + ' | _pending_            | _pending_     | _pending_     | _pending_     | _pending_     |').Append($nl)
 		}
+	}
+	if ($RowsAgg.Count -gt 0) {
+		$counts = @($Layer2Rows | Where-Object { $RowsAgg.ContainsKey($_.Label) } | ForEach-Object {
+			"$($_.Label): n=$($RowsAgg[$_.Label].cohortN)"
+		})
+		[void]$sb.Append($nl).Append($nl).Append('Usable throughput cohorts: ').Append(($counts -join '; ')).Append('.')
 	}
 	return $sb.ToString().TrimEnd("`r","`n")
 }
@@ -2789,9 +2834,15 @@ function Update-DocMarkers {
 	$existingL2 = Get-ExistingTableRows -Content $content -Layer 'layer2'
 	$existingMetaL1 = Get-ExistingMetaHeader -Content $content -Layer 'layer1'
 	$existingMetaL2 = Get-ExistingMetaHeader -Content $content -Layer 'layer2'
+	$l2Attempted = Get-StateOr $State.layer2 'cohorts' @{}
+	foreach ($row in $Layer2Rows) {
+		if ($l2Attempted.ContainsKey($row.WorkloadMode) -and -not $State.layer2.rows.ContainsKey($row.Label)) {
+			$existingL2.Remove($row.Label)
+		}
+	}
 
-	# Rewrite a layer's block only when we have at least one fresh aggregated
-	# row. If every cohort failed for a layer (RowsAgg empty), leave the
+	# Layer 1 rewrites only when we have at least one fresh aggregated
+	# row. If every cohort failed for Layer 1 (RowsAgg empty), leave the
 	# existing block byte-identical - rewriting it would re-sort meta keys and
 	# re-shape the table header, producing noisy "diff for no reason" output
 	# and (worse) painting a stale meta header (host=current-VM-SKU,
@@ -2818,8 +2869,9 @@ function Update-DocMarkers {
 		$content = [regex]::Replace($content, $pattern1, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $newBlock1 })
 	}
 
-	if ($State.layer2.rows.Count -gt 0) {
+	if ($State.layer2.rows.Count -gt 0 -or $l2Attempted.Count -gt 0) {
 		$meta2 = New-MetaHeaderForLayer2 -State $State -RowsAgg $State.layer2.rows -Existing $existingMetaL2
+		if ($State.layer2.rows.Count -eq 0) { $meta2['cohortN'] = '0' }
 		$header2 = Render-MetaHeader -Layer 'layer2' -Meta $meta2
 		$table2 = Render-Layer2Table -RowsAgg $State.layer2.rows -ExistingRows $existingL2
 		$newBlock2 = $header2 + $nl + $nl + $table2 + $nl + $nl + '<!-- perf-table:layer2:end -->'
@@ -2931,9 +2983,9 @@ function Main {
 
 	# DryRun path: read latest state.json and re-render the doc; no Azure.
 	if ($DryRun) {
-		$stateFile = Get-LatestStateFile
+		$stateFile = Get-LatestStateFile -Layer $Layer
 		if (-not $stateFile) {
-			throw "DryRun: no state.json found under $runRoot. Run a non-DryRun pass first to populate state.json."
+			throw "DryRun: no state.json with Layer $Layer measurements found under $runRoot. Run that layer first."
 		}
 		Write-Host "[dry-run] state file: $stateFile" -ForegroundColor Cyan
 		$state = Read-StateFile -Path $stateFile
@@ -2945,7 +2997,7 @@ function Main {
 		# rewritten", and left the multi-silo doc untouched. A no-op that
 		# announces success is worse than a throw, because the operator's next
 		# move is to conclude the render bug they were chasing is fixed.
-		if ($Layer3) {
+		if ($Layer -eq '3') {
 			if (-not $state.ContainsKey('layer3')) {
 				throw "DryRun -Layer3: $stateFile has no 'layer3' section. Run a Layer 3 pass first, or drop -Layer3 to replay the single-silo doc."
 			}
@@ -2985,6 +3037,10 @@ function Main {
 			}
 			return
 		}
+		# A layer-specific replay must leave the other document block intact,
+		# even when its selected state also contains that layer's older results.
+		if ($Layer -eq '2' -or -not $state.ContainsKey('layer1')) { $state['layer1'] = @{ rows = @{} } }
+		if ($Layer -eq '1' -or -not $state.ContainsKey('layer2')) { $state['layer2'] = @{ rows = @{} } }
 		# Re-aggregate from the raw per-cohort metrics whenever the state file
 		# carries them. The pre-baked $state.layer1.rows / $state.layer2.rows
 		# are kept as a fallback for state files written before the cohorts

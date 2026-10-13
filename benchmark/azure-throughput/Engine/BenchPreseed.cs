@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Orleans.Lattice;
 
 namespace VehicleFleetSimulator.AzureThroughput.Engine;
@@ -106,5 +107,56 @@ internal static class BenchPreseed
             onSliceWritten?.Invoke(offset + slice.Count);
         }
         return entries.Count;
+    }
+
+    internal static async Task SeedWithRetryAsync(
+        ILattice lattice, int count, int sliceSize, string treeId, TimeSpan budget, CancellationToken ct)
+    {
+        const int MaxAttemptsPerSlice = 8;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(budget);
+        var token = deadline.Token;
+        var landed = 0;
+        var attempts = 0;
+        var sliceAttempt = 1;
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                attempts++;
+                try
+                {
+                    await SeedAsync(lattice, count, sliceSize, token, landed, offset =>
+                    {
+                        landed = offset;
+                        sliceAttempt = 1;
+                    }).WaitAsync(token).ConfigureAwait(false);
+                    Console.WriteLine($"[producer] preseed treeId={treeId} entries={count} payloadBytes={PayloadBytes} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0}");
+                    return;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception ex) when (sliceAttempt < MaxAttemptsPerSlice
+                    && (BenchExceptionHelpers.IsOrleansMessageRejection(ex)
+                        || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
+                        || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
+                        || WarmUpRetryClassifier.IsTransientSaturation(ex)
+                        || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)))
+                {
+                    var backoffMs = WarmUpRetryClassifier.IsTransientSaturation(ex)
+                        ? Math.Min(2500 * sliceAttempt, 20000)
+                        : Math.Min(1000 * sliceAttempt, 5000);
+                    Console.WriteLine($"[producer] preseed treeId={treeId} transient ({ex.GetType().Name}) at offset={landed}/{count}; retrying in {backoffMs}ms (sliceAttempt={sliceAttempt}/{MaxAttemptsPerSlice} attempts={attempts}): {ex.Message}");
+                    sliceAttempt++;
+                    await Task.Delay(backoffMs, token).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[producer] ERROR preseed treeId={treeId} entries={count} offset={landed}/{count} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} budgetSec={budget.TotalSeconds:F0} FAILED: {ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
     }
 }

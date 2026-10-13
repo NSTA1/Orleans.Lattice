@@ -10,6 +10,8 @@ namespace VehicleFleetSimulator.AzureThroughput.Engine;
 /// </summary>
 public static class BenchWorkloadMetadata
 {
+    internal static string ViewNameFor(string treeId) => $"bench-{treeId}";
+
     /// <summary>
     /// Parses the <c>BENCH_WORKLOAD_MODE</c> env-var value, accepting
     /// case-insensitive kebab-case and its run-together spelling. Null,
