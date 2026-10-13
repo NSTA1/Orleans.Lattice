@@ -21,8 +21,8 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// <b>The bounded wait is a sibling's completion, never a timer.</b> A refused
-/// touch becomes eligible again only once another touch of this pass has
-/// finished after the refusal, because that is the one freed slot the pass can
+/// touch becomes eligible again only once another non-refused touch of this
+/// pass has finished after the refusal, because that is the freed slot the pass can
 /// know about: it held it. A slot held elsewhere - by a coverage-lag timer
 /// drive, say - frees at a moment the pass cannot observe, so a refusal with
 /// nothing of the pass's own left in flight is not retried here; it falls to the
@@ -169,7 +169,7 @@ internal static class ShareBoundedTouchRunner
         private readonly Action _signal;
         private ManualResetValueTaskSourceCore<bool> _wake;
         private int _waiting;
-        private int _completions;
+        private int _admittedCompletions;
 
         /// <summary>Creates the bookkeeping for <paramref name="count"/> touches, <paramref name="concurrency"/> at a time.</summary>
         public Run(int count, int concurrency)
@@ -190,13 +190,13 @@ internal static class ShareBoundedTouchRunner
 
         /// <summary>
         /// The lowest-indexed touch that may be started now, or -1: a queued
-        /// touch, or a refused one some sibling has finished since.
+        /// touch, or a refused one some non-refused sibling has finished since.
         /// </summary>
         public int LowestEligible()
         {
             for (var i = 0; i < _status.Length; i++)
             {
-                if (_status[i] == Queued || (_status[i] == Refused && _completions > _waitPast[i]))
+                if (_status[i] == Queued || (_status[i] == Refused && _admittedCompletions > _waitPast[i]))
                 {
                     return i;
                 }
@@ -282,17 +282,21 @@ internal static class ShareBoundedTouchRunner
 
         /// <summary>
         /// Records that touch <paramref name="index"/> finished, re-queueing it
-        /// behind the next sibling completion when it was refused and has retries
-        /// left.
+        /// behind the next non-refused sibling completion when it was refused
+        /// and has retries left.
         /// </summary>
         public void Settle(int index, bool refused)
         {
-            _completions++;
+            if (!refused)
+            {
+                _admittedCompletions++;
+            }
+
             if (refused && _retries[index] < MaxInPassRetries)
             {
                 _retries[index]++;
                 _status[index] = Refused;
-                _waitPast[index] = _completions;
+                _waitPast[index] = _admittedCompletions;
             }
             else
             {
