@@ -759,6 +759,12 @@ With correctly stamped records, the projection that a reader observes after acti
 byte-equivalent to the projection at the moment the leaf last deactivated (for
 a freshly-created leaf, the records the WAL holds for its own range).
 
+Committed row replay also rebuilds the leaf's delta version watermark from the
+original row HLC, without minting a newer timestamp. This keeps recovered live
+rows and retained tombstones visible to delta readers, including the committed
+tombstone pass used by replication re-seed. Unresolved prepared rows do not
+advance this watermark before their terminal decision.
+
 ### Single-key delete ownership and older WAL records
 
 Single-key `DeleteAsync` and its tracked leaf path persist the leaf's owning

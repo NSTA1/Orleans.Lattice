@@ -103,8 +103,13 @@ public partial class BPlusLeafGrainTests
         var deletedVersion = await cold.GetWithVersionAsync(keys[2]);
         var recoveredOverwrite = await cold.GetWithVersionAsync(keys[1]);
         var many = await cold.GetManyAsync([.. keys, foreignKey]);
+        var delta = await cold.GetDeltaSinceAsync(new VersionVector());
         Assert.Multiple(() =>
         {
+            Assert.That(delta.Entries.Keys, Is.EquivalentTo(keys));
+            Assert.That(delta.Entries.GetValueOrDefault(keys[2]).IsTombstone, Is.True);
+            Assert.That(delta.Entries.GetValueOrDefault(keys[2]).Timestamp, Is.EqualTo(deleteStamp));
+            Assert.That(delta.Version.Entries.Values.DefaultIfEmpty().Max(), Is.EqualTo(deleteStamp));
             Assert.That(cold.EntriesForTest[keys[2]].IsTombstone, Is.True);
             Assert.That(cold.EntriesForTest[keys[2]].Timestamp, Is.EqualTo(deleteStamp));
             Assert.That(deletedVersion.Value, Is.Null);
@@ -117,6 +122,7 @@ public partial class BPlusLeafGrainTests
         });
         Assert.That(await cold.GetAsync(keys[2]), Is.Null);
         Assert.That(await cold.GetAsync(foreignKey), Is.Null);
+        Assert.That((await cold.GetDeltaSinceAsync(delta.Version)).Entries, Is.Empty);
     }
 
     [TestCase(false)]
@@ -138,5 +144,25 @@ public partial class BPlusLeafGrainTests
         // A default-0 record cannot identify a nonzero owner without a map.
         Assert.That(cold.EntriesForTest[key].IsTombstone, Is.EqualTo(withMap));
         Assert.That(await cold.GetAsync(key), withMap ? Is.Null : Is.EqualTo(new byte[] { 1 }));
+    }
+
+    [TestCase(MutationKind.Set)]
+    [TestCase(MutationKind.Delete)]
+    public async Task Cold_replay_of_unresolved_prepare_does_not_publish_delta_watermark(MutationKind kind)
+    {
+        var prepared = BuildPreparedSet(Guid.NewGuid(), "pending", [1]) with { Kind = kind };
+        var coordinator = BuildCoordinator(2, new CommitLogSliceEntry(1, prepared));
+        var (cold, state, _, _) = CreateGrainWithMaterialiser(coordinator);
+
+        await ActivateAsync(cold);
+
+        var delta = await cold.GetDeltaSinceAsync(new VersionVector());
+        Assert.Multiple(() =>
+        {
+            Assert.That(cold.PendingTransactionCount, Is.EqualTo(1));
+            Assert.That(cold.EntriesForTest, Is.Empty);
+            Assert.That(state.State.Version.Entries, Is.Empty);
+            Assert.That(delta.Entries, Is.Empty);
+        });
     }
 }
