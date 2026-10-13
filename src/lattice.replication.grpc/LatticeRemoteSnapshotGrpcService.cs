@@ -165,6 +165,7 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
                 request.TreeName,
                 request.SourceClusterId,
                 request.FromAsOfHlc,
+                AuthenticatedRequester(context),
                 context.CancellationToken).ConfigureAwait(false);
 
             return new RemoteSnapshotMetadataBox { Value = metadata };
@@ -231,12 +232,14 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
                 request.TreeName,
                 request.SourceClusterId,
                 request.FromAsOfHlc,
+                AuthenticatedRequester(context),
                 context.CancellationToken).ConfigureAwait(false))
             {
                 await responseStream
                     .WriteAsync(new RemoteSnapshotStreamItemBox { Value = item })
                     .ConfigureAwait(false);
             }
+
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
@@ -267,4 +270,9 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
                 ex.Message);
         }
     }
+
+    private static string? AuthenticatedRequester(ServerCallContext context) =>
+        context.UserState.TryGetValue(LatticeReplicationGrpcAuthInterceptor.AuthenticatedPeerKey, out var peer)
+            ? peer as string
+            : null;
 }

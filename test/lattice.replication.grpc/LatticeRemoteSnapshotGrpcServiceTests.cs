@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Replication.Grpc.Tests;
 /// <see cref="LatticeRemoteSnapshotService"/>.
 /// </summary>
 [TestFixture]
-public class LatticeRemoteSnapshotGrpcServiceTests
+public partial class LatticeRemoteSnapshotGrpcServiceTests
 {
     private const string Tree = "tree";
     private const string Source = "site-a";

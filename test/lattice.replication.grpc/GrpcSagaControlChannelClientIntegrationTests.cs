@@ -68,7 +68,12 @@ public class GrpcSagaControlChannelClientIntegrationTests
                     services.AddSingleton(Substitute.For<ISnapshotProvider>());
                     services.AddSingleton<ILatticeSagaControlHandler>(_sagaHandler);
                     services.AddLatticeReplicationGrpc(o => o.Peers[Peer] = new Uri("https://site-a.example/"));
-                    services.Configure<LatticeReplicationSecurityOptions>(x => x.RequireAuthentication = false);
+                    var secrets = Substitute.For<IReplicationSecretProvider>();
+                    secrets.IsAcceptedAsync("saga-test-credential", Arg.Any<CancellationToken>())
+                        .Returns(ValueTask.FromResult(true));
+                    secrets.GetOutboundSecretAsync(Peer, Arg.Any<CancellationToken>())
+                        .Returns(ValueTask.FromResult<string?>("saga-test-credential"));
+                    services.AddSingleton(secrets);
                 });
                 web.Configure(app =>
                 {
@@ -115,7 +120,7 @@ public class GrpcSagaControlChannelClientIntegrationTests
 
         var secrets = Substitute.For<IReplicationSecretProvider>();
         secrets.GetOutboundSecretAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new ValueTask<string?>((string?)null));
+            .Returns(new ValueTask<string?>("saga-test-credential"));
 
         return new GrpcSagaControlChannel(methods, monitor, secrets, replicationMonitor);
     }

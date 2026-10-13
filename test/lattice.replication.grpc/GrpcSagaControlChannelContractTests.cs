@@ -72,9 +72,12 @@ public class GrpcSagaControlChannelContractTests
                         // endpoint is enough; the authorizer only checks keys.
                         o.Peers[AuthorizedPeer] = new Uri("https://site-a.example/");
                     });
-                    // Isolate the peer-authorization gate from the shared-secret
-                    // interceptor, which is covered separately.
-                    services.Configure<LatticeReplicationSecurityOptions>(x => x.RequireAuthentication = false);
+                    var secrets = Substitute.For<IReplicationSecretProvider>();
+                    secrets.IsAcceptedAsync("saga-test-credential", Arg.Any<CancellationToken>())
+                        .Returns(ValueTask.FromResult(true));
+                    secrets.GetOutboundSecretAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                        .Returns(ValueTask.FromResult<string?>("saga-test-credential"));
+                    services.AddSingleton(secrets);
                 });
                 web.Configure(app =>
                 {
@@ -108,10 +111,15 @@ public class GrpcSagaControlChannelContractTests
         SagaControlRequest request)
     {
         var invoker = channel.CreateCallInvoker();
+        var headers = new global::Grpc.Core.Metadata
+        {
+            { LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader, request.CoordinatorClusterId },
+            { LatticeReplicationGrpcMetadataNames.SecretHeader, "saga-test-credential" },
+        };
         using var call = invoker.AsyncUnaryCall(
             method,
             host: null,
-            options: GrpcTestFactories.OriginOptions(request.CoordinatorClusterId),
+            options: new CallOptions(headers: headers),
             request: new SagaControlRequestBox { Value = request });
         var response = await call.ResponseAsync;
         return response.Value;

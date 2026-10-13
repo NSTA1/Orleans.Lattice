@@ -29,7 +29,7 @@ namespace Orleans.Lattice.Replication.Grpc.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class GrpcRemoteSnapshotTransportClientIntegrationTests
+public partial class GrpcRemoteSnapshotTransportClientIntegrationTests
 {
     private const string Source = "site-a";
     private const string Tree = "tree";
@@ -39,6 +39,7 @@ public class GrpcRemoteSnapshotTransportClientIntegrationTests
     private Uri _baseAddress = null!;
     private StubSenderSnapshotProvider _sender = null!;
     private GrpcRemoteSnapshotTransport _transport = null!;
+    private IReplicationTenantIsolationGate _exportGate = null!;
 
     private sealed class StubEncoder : IReplicationBatchEncoder
     {
@@ -54,6 +55,15 @@ public class GrpcRemoteSnapshotTransportClientIntegrationTests
     public async Task OneTimeSetUp()
     {
         _sender = new StubSenderSnapshotProvider();
+        _exportGate = Substitute.For<IReplicationTenantIsolationGate>();
+        _exportGate.IsActive.Returns(true);
+        _exportGate.AuthorizeExportAsync(Arg.Any<string>(), "local", Arg.Any<CancellationToken>())
+            .Returns(ValueTask.FromResult(true));
+        var serverSecrets = Substitute.For<IReplicationSecretProvider>();
+        serverSecrets.IsAcceptedAsync("peer-token", Arg.Any<CancellationToken>())
+            .Returns(ValueTask.FromResult(true));
+        serverSecrets.GetOutboundSecretAsync("local", Arg.Any<CancellationToken>())
+            .Returns(ValueTask.FromResult<string?>("peer-token"));
 
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
@@ -71,6 +81,8 @@ public class GrpcRemoteSnapshotTransportClientIntegrationTests
                     services.AddSingleton(Substitute.For<IGrainFactory>());
                     services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
+                    services.AddSingleton(_exportGate);
+                    services.AddSingleton(serverSecrets);
                     services.Configure<LatticeReplicationSecurityOptions>(o => o.RequireAuthentication = false);
                 });
                 web.Configure(app =>
@@ -98,14 +110,14 @@ public class GrpcRemoteSnapshotTransportClientIntegrationTests
         }
     }
 
-    private GrpcRemoteSnapshotTransport CreateTransport()
+    private GrpcRemoteSnapshotTransport CreateTransport(string? credential = null, string origin = "local")
     {
         var methods = _host.Services.GetRequiredService<LatticeRemoteSnapshotGrpcMethods>();
 
         var options = new GrpcRemoteSnapshotTransportOptions
         {
             AllowPlaintextEndpoints = true,
-            LocalClusterId = "local",
+            LocalClusterId = origin,
             ConfigureChannel = (_, channelOptions) => channelOptions.HttpHandler = _handler,
         };
         options.SenderEndpoints[Source] = _baseAddress;
@@ -114,11 +126,11 @@ public class GrpcRemoteSnapshotTransportClientIntegrationTests
         monitor.CurrentValue.Returns(options);
 
         var replicationMonitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
-        replicationMonitor.CurrentValue.Returns(new LatticeReplicationOptions { ClusterId = "local" });
+        replicationMonitor.CurrentValue.Returns(new LatticeReplicationOptions { ClusterId = origin });
 
         var secrets = Substitute.For<IReplicationSecretProvider>();
         secrets.GetOutboundSecretAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new ValueTask<string?>((string?)null));
+            .Returns(new ValueTask<string?>(credential));
 
         return new GrpcRemoteSnapshotTransport(methods, monitor, secrets, replicationMonitor);
     }

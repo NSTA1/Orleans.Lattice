@@ -140,6 +140,35 @@ Beyond the shared secret, the peer-read RPCs (digest probe, Merkle walk, peer hi
 
 The accepted-set check uses `LatticeReplicationSharedSecret.FixedTimeEquals` to keep comparison time independent of how close the candidate secret is to a real one.
 
+### Tenant snapshot disclosure and saga ownership
+
+The shared `LatticeRemoteSnapshotService` authorizes tenant exports before it opens
+the snapshot provider, including metadata requests and streams carrying prepared
+mutation bytes. An enrolled `t/{tenant}/{tree}` is not enough: the tenancy gate
+reads the current registry record, requires an active tenant, and requires the
+authenticated requesting region to be operator-authorized and `Backfilling` or
+`Online`. Bare legacy and platform trees retain their enrollment-only behavior.
+An absent tenant export gate or an unavailable authenticated requester is a denial.
+
+The gRPC binding obtains requester identity only from successful credential-to-origin
+binding, never from the request's `SourceClusterId` (which pins the exporting
+cluster) or from an unbound origin header. Tenant snapshot export therefore requires
+both `RequireAuthentication` and `BindCredentialToOriginCluster`. Custom transports
+use the sender service's requester-aware overloads with an identity established by
+their own authentication; the legacy overloads cannot export tenant trees.
+
+Saga control RPCs also require a credential-bound origin before peer authorization.
+The service stamps that identity as the coordinator even when the body omits it.
+The durable participant binds prepare retries, commit and abort to the recorded
+saga id, coordinator, target tree, manifest and backup-set id before invoking any
+participant SPI or changing state. A different authorized peer cannot terminate
+the saga by knowing its id; mismatches return `PermissionDenied`. Matching retries,
+fence reminders and operator resolution continue to use the recorded identity.
+
+Turning off authentication or origin binding does not authorize these identity-sensitive
+operations: tenant snapshot and saga RPCs remain denied. An mTLS-only setup below
+does not provide the package's credential-bound peer identity for these operations.
+
 ## Headers on the wire
 
 | Header | Direction | Purpose |

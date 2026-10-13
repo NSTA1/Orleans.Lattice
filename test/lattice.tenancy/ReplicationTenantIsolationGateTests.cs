@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tenancy.Tests;
 /// system-internal, bare legacy, tenant-scoped).
 /// </summary>
 [TestFixture]
-public sealed class ReplicationTenantIsolationGateTests
+public sealed partial class ReplicationTenantIsolationGateTests
 {
     private static readonly TenantId Acme = TenantId.Parse("acme");
 

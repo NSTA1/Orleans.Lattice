@@ -84,4 +84,20 @@ public interface IReplicationTenantIsolationGate
         string? authenticatedSenderClusterId,
         CancellationToken cancellationToken = default) =>
         EvaluateAsync(treeId, cancellationToken);
+
+    /// <summary>
+    /// Authorizes a tenant snapshot export to an authenticated requesting region
+    /// before the snapshot provider is accessed. Implementations must verify the
+    /// tenant's current standing and the requesting region's authorization and
+    /// replication-destination residency. The default denies: an inbound apply
+    /// decision does not authorize exporting raw prepared mutation bytes.
+    /// </summary>
+    /// <param name="treeId">The locally enrolled tree to export.</param>
+    /// <param name="authenticatedRequesterClusterId">The authenticated requesting peer, not the source cluster named by the snapshot request.</param>
+    /// <param name="cancellationToken">Cancels the evaluation.</param>
+    /// <returns><c>true</c> only when exporting to this peer is authorized.</returns>
+    ValueTask<bool> AuthorizeExportAsync(
+        string treeId,
+        string authenticatedRequesterClusterId,
+        CancellationToken cancellationToken = default) => ValueTask.FromResult(false);
 }
