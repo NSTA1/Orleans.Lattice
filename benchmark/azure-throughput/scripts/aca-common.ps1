@@ -942,15 +942,16 @@ function Get-AcaSiloLog {
 		is the strongest available guarantee that a Layer 2 number and a
 		Layer 3 number mean the same thing.
 
-		Only `[phaseA]` lines are taken. That is the whole of what a silo
-		uniquely contributes here, and restricting to it makes the combined
+		By default only `[phaseA]` lines are taken. Restricting to it makes the combined
 		log immune to a superseded revision: a silo still running in `tcp`
 		ingest mode drives its OWN standalone benchmark and emits the exact
 		same `[producer] ...` and `[silo] t=` line shapes, which would
 		otherwise be spliced into this cohort's throughput series and silently
 		blended into the published number.
 
-		Pass -RevisionName to pin the harvest to the cohort's own silos.
+		-IncludeDiagnostics retains all console lines, with time and replica
+		identity on non-phaseA lines so they cannot enter the throughput series.
+		It requires -RevisionName to pin the harvest to the cohort's own silos.
 		Because exactly one `az containerapp update` runs per cohort and the
 		app is in Single revision mode, the active revision is a one-to-one
 		label for this cohort's replica set - a far stronger identification
@@ -961,28 +962,40 @@ function Get-AcaSiloLog {
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
 		[Parameter(Mandatory)][datetime] $SinceUtc,
 		[Parameter(Mandatory)][datetime] $UntilUtc,
-		[string] $RevisionName
+		[string] $RevisionName,
+		[switch] $IncludeDiagnostics
 	)
 	# Single line - see the rationale in Get-AcaJobLog. A multi-line query is
 	# truncated to a bare table scan by az.cmd, which is precisely how this
 	# harvest once returned three experiments' worth of unfiltered logs.
 	$revFilter = if ($RevisionName) { " | where RevisionName_s == '$RevisionName'" } else { '' }
-	$kql = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter | where Log_s startswith '[phaseA]' | project TimeGenerated, Log_s | order by TimeGenerated asc | limit 200000"
-	$json = Invoke-Az @(
-		'monitor', 'log-analytics', 'query',
-		'--workspace', $Context.workspaceId,
-		'--analytics-query', $kql,
-		'-o', 'json'
-	) -AllowFailure
-	if ($LASTEXITCODE -ne 0) {
-		# Same reasoning as the fail-fast guard in Get-AcaJobLog: a malformed
-		# query returns empty, which is indistinguishable from "this cohort
-		# produced no [phaseA] lines". Silence here would publish a row with
-		# missing per-call quantiles and no explanation.
-		throw "[aca] silo log query failed. Query: $kql"
+	if ($IncludeDiagnostics -and -not $RevisionName) { throw 'Silo diagnostics require the cohort RevisionName.' }
+	$lineFilter = if ($IncludeDiagnostics) { '' } else { " | where Log_s startswith '[phaseA]'" }
+	# Freeze ingestion membership across pages, and keep each response well
+	# below Log Analytics' size limit: it can truncate before the row limit.
+	$snapshot = [datetime]::UtcNow.ToString('o')
+	$baseQuery = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ingestion_time() <= datetime($snapshot) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter$lineFilter | project TimeGenerated, ContainerGroupName_s, Log_s | order by TimeGenerated asc, ContainerGroupName_s asc, Log_s asc | serialize row = row_number()"
+	$pageSize = 200
+	$rows = [System.Collections.Generic.List[object]]::new()
+	for ($offset = 0; ; $offset += $pageSize) {
+		$kql = "$baseQuery | where row > $offset and row <= $($offset + $pageSize) | project-away row"
+		$json = Invoke-Az @(
+			'monitor', 'log-analytics', 'query',
+			'--workspace', $Context.workspaceId,
+			'--analytics-query', $kql,
+			'-o', 'json'
+		) -AllowFailure
+		if ($LASTEXITCODE -ne 0) { throw "[aca] silo log query failed. Query: $kql" }
+		$page = if ($json -and $json.Trim()) { @($json | ConvertFrom-Json -ErrorAction Stop) } else { @() }
+		foreach ($row in $page) { $rows.Add($row) }
+		if ($page.Count -lt $pageSize) { break }
+		if ($rows.Count -ge 200000) { throw '[aca] silo log query reached its row limit; diagnostics may be truncated.' }
 	}
-	if (-not $json -or -not $json.Trim()) { return @() }
-	try { return @(@($json | ConvertFrom-Json) | ForEach-Object { $_.Log_s }) } catch { return @() }
+	return @($rows | ForEach-Object {
+		if ($IncludeDiagnostics -and -not $_.Log_s.StartsWith('[phaseA]')) {
+			"[aca-silo time=$($_.TimeGenerated) replica=$($_.ContainerGroupName_s)] $($_.Log_s)"
+		} else { $_.Log_s }
+	})
 }
 
 function Invoke-AcaTeardown {

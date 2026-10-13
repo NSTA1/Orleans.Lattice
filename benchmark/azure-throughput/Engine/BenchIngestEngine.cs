@@ -171,10 +171,11 @@ internal sealed class BenchIngestEngine(
         // tree. The view itself is attached at startup via AddLatticeViews; this
         // probe is read-only observability over its metrics.
         ViewLagMeterProbe? mvLagProbe = null;
+        var viewName = BenchWorkloadMetadata.ViewNameFor(settings.TreeId);
         if (settings.WorkloadMode == BenchWorkloadMode.SetPointMv)
         {
-            mvLagProbe = new ViewLagMeterProbe("bench");
-            Console.WriteLine($"[silo] mv: materialised view 'bench' (view-bench) attached to treeId={settings.TreeId}; apply lag read from orleans.lattice.view.apply_lag and reported as mvLag=N on each progress line and at MV-FINAL.");
+            mvLagProbe = new ViewLagMeterProbe(viewName);
+            Console.WriteLine($"[silo] mv: materialised view '{viewName}' (view-{viewName}) attached to treeId={settings.TreeId}; apply lag read from orleans.lattice.view.apply_lag and reported as mvLag=N on each progress line and at MV-FINAL.");
         }
 
         using var flushGate = new SemaphoreSlim(settings.FlushConcurrency, settings.FlushConcurrency);
@@ -550,11 +551,11 @@ internal sealed class BenchIngestEngine(
             var lagAtStop = mvLagProbe.LatestApplyLag;
             if (lagAtStop < 0)
             {
-                Console.WriteLine("[silo] MV-FINAL view=bench lagAtStop=n/a (the maintainer published no apply_lag sample this run)");
+                Console.WriteLine($"[silo] MV-FINAL view={viewName} lagAtStop=n/a (the maintainer published no apply_lag sample this run)");
             }
             else
             {
-                Console.WriteLine($"[silo] MV-FINAL view=bench lagAtStop={lagAtStop:N0} (0 = the asynchronous materialised view has fully caught up to the source head)");
+                Console.WriteLine($"[silo] MV-FINAL view={viewName} lagAtStop={lagAtStop:N0} (0 = the asynchronous materialised view has fully caught up to the source head)");
             }
 
             mvLagProbe.Dispose();
