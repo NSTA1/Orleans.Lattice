@@ -1618,12 +1618,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var epoch = await hwm.SetBootstrapFloorAsync(lowWatermarks, frontier.Held, cancellationToken).ConfigureAwait(true);
 
         var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await ResolveBootstrapPhysicalTreeIdAsync(treeName).ConfigureAwait(true);
+        var (physicalTreeId, shardMap) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: true).ConfigureAwait(true);
         await registry.RaiseReplicationFloorEpochAsync(physicalTreeId, epoch).ConfigureAwait(true);
-        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
-            ?? ShardMap.GetOrCreateDefaultShared(
-                LatticeConstants.DefaultVirtualShardCount,
-                LatticeConstants.DefaultShardCount);
         var arms = new List<Task>();
         foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
         {
