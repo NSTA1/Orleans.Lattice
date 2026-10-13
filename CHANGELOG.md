@@ -32,6 +32,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Lifecycle registry reads.** Resize emptiness routing, resize undo capture and deletion shard census reuse one fresh registry entry, reducing complete-pin registry calls from 3/2/2 to 1/1/1 without changing the public API. ([#4937](https://github.com/NSTA1/Orleans.Lattice/pull/4937)) (`Orleans.Lattice`)
+
 - **Performance - Repository-context scans reuse sort comparers.** Hot streaming scans now reuse comparison delegates instead of allocating one per call. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Performance - Repository-context operation ids.** Chunk operation ids staged every part through a StringBuilder and a fresh array before hashing. They stage UTF-8 into one stack or pooled buffer and hash it once now: 26-38% faster and 99% less allocated. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
