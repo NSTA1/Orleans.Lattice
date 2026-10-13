@@ -66,6 +66,12 @@ internal sealed class FakeStateClient : ILatticeStateClient
     /// <summary>Overrides a dead-letter page reply, including replies already in flight when cancelled.</summary>
     public Func<DeadLetterQueueRequest, CancellationToken, Task<DeadLetterQueuePage>>? DeadLetterPageReply { get; set; }
 
+    /// <summary>Overrides an entry reply, including replies already in flight when cancelled.</summary>
+    public Func<EntryGetRequest, CancellationToken, Task<EntryGetResponse>>? EntryReply { get; set; }
+
+    /// <summary>Overrides a scan reply, including replies already in flight when cancelled.</summary>
+    public Func<EntryScanRequest, CancellationToken, Task<EntryScanResponse>>? ScanReply { get; set; }
+
     /// <summary>When set, a continuation scan throws this.</summary>
     public Exception? ContinuationFault { get; set; }
 
@@ -189,6 +195,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<EntryScanResponse> ScanEntriesAsync(EntryScanRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(ScanEntriesAsync) + ":" + (request.ContinuationToken ?? "first"));
+        if (ScanReply is { } reply)
+        {
+            return reply(request, cancellationToken);
+        }
+
         ThrowIfFaulted(nameof(ScanEntriesAsync));
         if (request.ContinuationToken is not null && ContinuationFault is { } fault)
         {
@@ -218,6 +229,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<EntryGetResponse> GetEntryAsync(EntryGetRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(GetEntryAsync) + ":" + request.Key);
+        if (EntryReply is { } reply)
+        {
+            return reply(request, cancellationToken);
+        }
+
         ThrowIfFaulted(nameof(GetEntryAsync));
         var found = Entries.TryGetValue(request.TreeId, out var entries) && entries.TryGetValue(request.Key, out var entry) ? entry : null;
         return Task.FromResult(new EntryGetResponse

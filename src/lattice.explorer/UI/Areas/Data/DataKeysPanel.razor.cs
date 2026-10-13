@@ -30,6 +30,7 @@ public partial class DataKeysPanel : IDisposable
         [.. DataPaging.PageSizes.Select(size => new LtSelectOption(size.ToString(CultureInfo.InvariantCulture), size.ToString(CultureInfo.InvariantCulture)))];
 
     private readonly ComponentLifetime _lifetime = new();
+    private readonly ComponentLifetime _scans = new();
     private IDataReader? _reader;
     private ILatticeStateClient? _client;
     private DataPager? _pager;
@@ -39,6 +40,8 @@ public partial class DataKeysPanel : IDisposable
     private string? _tag;
     private IReadOnlyList<TagIndexRef> _indexes = [];
     private IReadOnlyList<string> _tags = [];
+    private string? _indexesFor;
+    private (string StateId, string? Index)? _tagsFor;
     private EntryScanMode _mode = EntryScanMode.Live;
     private int _pageSize = DataPaging.DefaultPageSize;
     private bool _loading;
@@ -133,37 +136,46 @@ public partial class DataKeysPanel : IDisposable
             return;
         }
 
-        var treeChanged = _query?.StateId != workspace.Tree.StateId;
-        var indexChanged = _query?.Index != index || treeChanged;
+        var token = _lifetime.Renew();
+        _scans.Renew();
+        StopFollow();
         _query = query;
         _prefixInput = workspace.Prefix;
         _index = index;
         _tag = tag;
 
-        if (treeChanged)
+        if (_indexesFor != workspace.Tree.StateId)
         {
-            await LoadIndexesAsync(workspace.Tree.StateId);
+            await LoadIndexesAsync(workspace.Tree.StateId, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
         }
 
-        if (indexChanged)
+        if (_tagsFor != (workspace.Tree.StateId, index))
         {
-            await LoadTagsAsync(workspace.Tree.StateId);
+            await LoadTagsAsync(workspace.Tree.StateId, token);
         }
 
-        if (_lifetime.IsLeft)
+        if (token.IsCancellationRequested)
         {
             // Left while the filters were read: nothing is paged or followed for a page that is gone.
             return;
         }
 
         await ResetAsync();
-        RestartFollow();
+        if (!token.IsCancellationRequested)
+        {
+            RestartFollow();
+        }
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
         _follows.Leave();
+        _scans.Leave();
         if (_pager is { } pager)
         {
             _ = CloseQuietlyAsync(pager);
@@ -206,8 +218,9 @@ public partial class DataKeysPanel : IDisposable
         }
     }
 
-    private async Task LoadIndexesAsync(string stateId)
+    private async Task LoadIndexesAsync(string stateId, CancellationToken token)
     {
+        _indexesFor = null;
         _indexes = [];
         if (_reader is null)
         {
@@ -216,8 +229,18 @@ public partial class DataKeysPanel : IDisposable
 
         try
         {
-            _indexes = await _reader.ListTagIndexesForTreeAsync(stateId, _lifetime.Token);
+            var indexes = await _reader.ListTagIndexesForTreeAsync(stateId, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _indexes = indexes;
+            _indexesFor = stateId;
             IndexOptions = [new(string.Empty, "No tag filter"), .. _indexes.Select(index => new LtSelectOption(index.IndexName, index.IndexName))];
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -225,23 +248,38 @@ public partial class DataKeysPanel : IDisposable
         }
     }
 
-    private async Task LoadTagsAsync(string stateId)
+    private async Task LoadTagsAsync(string stateId, CancellationToken token)
     {
+        _tagsFor = null;
         _tags = [];
         TagOptions = [];
         if (_reader is null || _index is null)
         {
+            _tagsFor = (stateId, _index);
             return;
         }
 
         try
         {
-            _tags = await _reader.ListTagValuesForIndexAsync(stateId, _index, _lifetime.Token);
+            var tags = await _reader.ListTagValuesForIndexAsync(stateId, _index, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _tags = tags;
+            _tagsFor = (stateId, _index);
             TagOptions = [new(string.Empty, "Choose a tag"), .. _tags.Select(tag => new LtSelectOption(tag, tag))];
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            _tags = [];
+            if (!token.IsCancellationRequested)
+            {
+                _tags = [];
+            }
         }
     }
 
@@ -259,60 +297,95 @@ public partial class DataKeysPanel : IDisposable
             return;
         }
 
-        _pager ??= new DataPager(_reader);
+        var token = _scans.Renew();
+        var pager = new DataPager(_reader);
         _loading = true;
         _error = null;
         _cursorExpired = false;
         _stale = false;
         try
         {
-            await _pager.ResetAsync(workspace.Tree.StateId, _pageSize, ActiveTagFilter, ActiveTagFilter is null ? workspace.Prefix : null, _mode, _lifetime.Token);
+            await pager.ResetAsync(workspace.Tree.StateId, _pageSize, ActiveTagFilter, ActiveTagFilter is null ? workspace.Prefix : null, _mode, token);
+            if (token.IsCancellationRequested)
+            {
+                await CloseQuietlyAsync(pager);
+                return;
+            }
+
+            var previous = _pager;
+            _pager = pager;
             RecordLoadSuccess();
+            if (previous is not null)
+            {
+                await CloseQuietlyAsync(previous);
+            }
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            _error = DataErrors.Describe(exception, "read this tree's keys");
-            RecordLoadFailure();
+            if (!token.IsCancellationRequested)
+            {
+                _error = DataErrors.Describe(exception, "read this tree's keys");
+                RecordLoadFailure();
+            }
         }
         finally
         {
-            _loading = false;
+            if (!token.IsCancellationRequested)
+            {
+                _loading = false;
+            }
         }
     }
 
     private async Task NextPageAsync()
     {
-        if (_pager is null)
+        if (_pager is not { } pager)
         {
             return;
         }
 
+        var token = _scans.Token;
         _loading = true;
         _stale = false;
         _error = null;
         try
         {
-            await _pager.NextAsync(_lifetime.Token);
+            await pager.NextAsync(token);
+            if (token.IsCancellationRequested)
+            {
+                await CloseQuietlyAsync(pager);
+                return;
+            }
+
             RecordLoadSuccess();
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception) when (DataErrors.IsCursorExpired(exception, resuming: true))
         {
-            _cursorExpired = true;
+            if (!token.IsCancellationRequested)
+            {
+                _cursorExpired = true;
+            }
         }
         catch (Exception exception)
         {
-            _error = DataErrors.Describe(exception, "read the next page of keys");
-            RecordLoadFailure();
+            if (!token.IsCancellationRequested)
+            {
+                _error = DataErrors.Describe(exception, "read the next page of keys");
+                RecordLoadFailure();
+            }
         }
         finally
         {
-            _loading = false;
+            if (!token.IsCancellationRequested)
+            {
+                _loading = false;
+            }
         }
     }
 
@@ -411,7 +484,7 @@ public partial class DataKeysPanel : IDisposable
         {
             await foreach (var change in client.ObserveChangesAsync(request, cancellationToken))
             {
-                await InvokeAsync(() => OnChangeAsync(change));
+                await InvokeAsync(() => cancellationToken.IsCancellationRequested ? Task.CompletedTask : OnChangeAsync(change));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
