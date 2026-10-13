@@ -352,7 +352,19 @@ internal sealed partial class BPlusLeafGrain
         // could not be recorded on an earlier attempt. Drain it even when the
         // donor is now under the byte bound; otherwise no later write may ever
         // re-surface the durable marker.
-        if (HasUnlinkedSplit)
+        //
+        // Not while this activation's _splitGate is held (issue #4918). A capture
+        // nested inside a gated division (the checkpoint-hint loop at the end of
+        // SplitAsync can flush and recheck capture inline) would otherwise call the
+        // shard root while the suspended division still owns the gate. If that
+        // link overflows the parent, the parent's split re-parents this leaf
+        // through SetParentAsync, which is admitted ([AlwaysInterleave], #4914)
+        // but waits on the very gate the suspended division holds while it waits
+        // on the root: a cross-grain wait cycle only the call timeout breaks.
+        // Deferring loses nothing: the marker is durable, the gate holder that
+        // produced it returns its SplitResult for linking once it has released
+        // the gate, and any later write or capture re-surfaces it otherwise.
+        if (HasUnlinkedSplit && _splitGate.CurrentCount > 0)
         {
             await LinkCaptureSplitAsync(UnlinkedSplitResult());
         }
