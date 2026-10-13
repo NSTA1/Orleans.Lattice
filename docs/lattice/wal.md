@@ -822,6 +822,18 @@ it join the original cluster. Read-only assessment uses provider exports and
 offline decoders, not grain activation. This procedure does not authorize
 restarting a live deployment or changing its retention.
 
+On the isolated host, set the default (unnamed) `LatticeOptions.WalGcInterval`
+to `TimeSpan.Zero` before startup to disable the core WAL GC scheduler, and
+set `TombstoneGracePeriod` to `Timeout.InfiniteTimeSpan` globally and in any
+applicable per-tree options to disable tombstone compaction. See
+[WAL GC configuration](configuration.md#walgcinterval) and
+[compaction disabling](tombstone-compaction.md#configuration).
+`WalGcInterval` does not disable manual `ILatticeWalGc.RunOnceAsync` calls or
+replication's independent maintenance driver: do not register replication on
+the working host, and do not invoke manual collection/compaction. Verify the
+effective options before activation; do not assume a longer interval disables
+maintenance.
+
 #### Inventory and classify
 
 Inventory every tree that could have received single-key deletes from the old
@@ -881,7 +893,10 @@ and [cold disaster restore](../lattice.backup/disaster-recovery.md).
 Catch up only from complete, verified post-backup evidence. In-place merge
 onto a corrupted existing tree is not replacement: the absence of a key in a
 backup does not remove an existing value. A pre-delete backup without its
-subsequent deletion history is also insufficient.
+subsequent deletion history is also insufficient. The backup restore API rejects
+reserved system-tree targets and enforces source/target authorization. If the
+scope is unsupported or denied, stop and obtain a separately reviewed supported
+reconstruction path; do not bypass those guards.
 
 **Rebuild:** if no correct backup exists, construct a fresh isolated destination
 from a complete verified baseline and subsequent committed history. Where the
