@@ -70,4 +70,35 @@ public partial class BPlusLeafGrainTests
             Assert.That(state.RecordExists, Is.False);
         });
     }
+
+    /// <summary>
+    /// Issue #4914: <c>SetParentAsync</c> interleaves, so its write can already be
+    /// in flight when the clear runs. The clear must wait for that write rather
+    /// than delete the row underneath it, or the write lands afterwards and
+    /// re-creates the row the clear removed.
+    /// </summary>
+    [Test]
+    public async Task A_clear_waits_for_an_interleaved_persist_already_in_flight()
+    {
+        var wal = new GrowingWal();
+        wal.GrowTo(3);
+        var (grain, state, _, _) = CreateLeafForFlushTail(wal.Coordinator);
+        await ActivateAsync(grain);
+
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        state.BeforeWrite = () => hold.Task;
+        var reparent = grain.SetParentAsync(GrainId.Create("internal", "reparent-4914"));
+        Assert.That(reparent.IsCompleted, Is.False, "the reparent write must be held open");
+
+        var clear = grain.ClearGrainStateAsync();
+        await Task.Delay(50);
+        Assert.That(clear.IsCompleted, Is.False,
+            "THE ASSERTION. The clear must not delete the row while a write is still in flight");
+
+        hold.SetResult();
+        await reparent;
+        await clear;
+
+        Assert.That(state.RecordExists, Is.False, "the row stays deleted once both have finished");
+    }
 }

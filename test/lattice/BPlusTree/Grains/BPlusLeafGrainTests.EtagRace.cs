@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
 
@@ -73,6 +74,46 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(state.EtagConflictCount, Is.EqualTo(0),
             "Per-activation _splitGate must serialise SetParentAsync against SetPrevSiblingAsync's PersistAsync window.");
+    }
+
+    /// <summary>
+    /// Issue #4914 made <c>SetParentAsync</c> interleave, so its persist can now
+    /// overlap a persist from a turn that holds no <c>_splitGate</c> (a checkpoint
+    /// flush, a pending-transaction write). The persist-write gate must keep the
+    /// storage writes single-file regardless of which gate, if any, the caller
+    /// holds. The second persist is driven through the private seam directly
+    /// because it stands for every ungated call site at once.
+    /// </summary>
+    [Test]
+    public async Task Interleaved_SetParentAsync_persist_never_overlaps_an_ungated_persist()
+    {
+        var state = new FakePersistentState<LeafNodeState> { SimulateEtagChecks = true };
+        var grain = CreateGrain(state);
+        await grain.SetTreeIdAsync("fox");
+
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        state.BeforeWrite = () => hold.Task;
+        var parentTask = grain.SetParentAsync(ParentId);
+        Assert.That(parentTask.IsCompleted, Is.False, "the SetParentAsync write must be held open");
+
+        var persist = typeof(BPlusLeafGrain).GetMethod(
+            "PersistAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var ungatedTask = (Task)persist.Invoke(grain, ["ungated-test-persist"])!;
+
+        await Task.Delay(50);
+        Assert.That(state.MaxConcurrentWrites, Is.EqualTo(1),
+            "an ungated persist must queue on the persist-write gate, not reach storage alongside SetParentAsync's write");
+
+        hold.SetResult();
+        await Task.WhenAll(parentTask, ungatedTask);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.MaxConcurrentWrites, Is.EqualTo(1));
+            Assert.That(state.EtagConflictCount, Is.EqualTo(0));
+            Assert.That(state.State.ParentId, Is.EqualTo(ParentId));
+        });
     }
 
     [Test]
