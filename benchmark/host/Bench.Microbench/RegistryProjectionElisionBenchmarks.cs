@@ -58,6 +58,13 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// remediation cutover preparing its alias swap: target Resolve + the prepare's
 /// logical and destination GetEntry -> the two GetEntry, the replaced physical
 /// tree derived from the logical entry, 3 serial reads -> 2.</item>
+/// <item><see cref="Site.ResizeEmptyProbe"/> - resize emptiness routing:
+/// options GetEntry + GetShardMap + Resolve -> one fresh GetEntry.</item>
+/// <item><see cref="Site.ResizeIntentOptions"/> - resize undo capture:
+/// options GetEntry + GetEntry -> one fresh GetEntry.</item>
+/// <item><see cref="Site.DeletionShardCensus"/> - allocated-shard census:
+/// options GetEntry + GetEntry -> one fresh GetEntry, excluding the unchanged
+/// owner read for an aliased copy.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -70,7 +77,9 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <para>
 /// Run it via <c>BENCH_MICROBENCH_SUITE=registryprojection</c> (or
 /// <c>--suite registryprojection</c>); see <c>Program.cs</c>. The suite has no
-/// Orleans silo dependency.
+/// Orleans silo dependency. <c>--suite registryoptions</c> selects just the
+/// three complete-pin resize/deletion lanes; missing or incomplete pins retain
+/// the seeding fallback and are not represented by these timing lanes.
 /// </para>
 /// </summary>
 [MemoryDiagnoser]
@@ -83,7 +92,7 @@ public class RegistryProjectionElisionBenchmarks
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -107,6 +116,22 @@ public class RegistryProjectionElisionBenchmarks
     {
         switch (Path)
         {
+            case Site.ResizeEmptyProbe:
+            {
+                var options = await _registry.GetEntryAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                var physical = await _registry.ResolveAsync(TreeId);
+                return Fold(physical, (map ?? options?.ShardMapVersion) ?? 0);
+            }
+
+            case Site.ResizeIntentOptions:
+            case Site.DeletionShardCensus:
+            {
+                var options = await _registry.GetEntryAsync(TreeId);
+                var entry = await _registry.GetEntryAsync(TreeId);
+                return Fold(entry?.PhysicalTreeId ?? TreeId, (entry?.ShardMapVersion ?? options?.ShardMapVersion) ?? 0);
+            }
+
             case Site.StateObserverOpen:
             case Site.BootstrapFenceResolve:
             case Site.ResizeInitiate:
@@ -219,6 +244,9 @@ public class RegistryProjectionElisionBenchmarks
             case Site.StalePendingSettle:
             case Site.BootstrapReceiverScan:
             case Site.SnapshotInitiate:
+            case Site.ResizeEmptyProbe:
+            case Site.ResizeIntentOptions:
+            case Site.DeletionShardCensus:
             {
                 var entry = await _registry.GetEntryAsync(TreeId);
                 return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0);
@@ -328,6 +356,15 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>A restore commit or remediation cutover preparing its alias swap.</summary>
         CutoverPrepare,
+
+        /// <summary>A resize checking emptiness before choosing its fast path.</summary>
+        ResizeEmptyProbe,
+
+        /// <summary>A resize capturing options and its predecessor for undo.</summary>
+        ResizeIntentOptions,
+
+        /// <summary>A deletion resolving its contiguous allocated-shard range.</summary>
+        DeletionShardCensus,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
