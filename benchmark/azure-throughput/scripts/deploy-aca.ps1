@@ -29,7 +29,31 @@
 	dropped. That is exactly the reachability an Orleans client needs to call
 	silo gateways, so VNet injection, subnet delegation and NSG rules are all
 	unnecessary here. Adding them would move the environment away from the
-	shape actually proven.
+	shape actually proven. The one exception is -PrivateNetwork, below, where
+	subscription policy rather than reachability forces a VNet.
+
+	-PrivateNetwork. For subscriptions whose policy disables storage public
+	network access and shared-key auth, and blocks public IPs on workloads.
+	The topology gains:
+
+	  vnet-<prefix>                    10.43.0.0/16
+	    aca-infra 10.43.0.0/23         delegated to Microsoft.App/environments,
+	                                   egress through nat-<prefix>
+	    pe        10.43.2.0/27         storage private endpoint
+	  nat-<prefix> + pip-nat-<prefix>  outbound only (ACR image pull)
+	  privatelink.table.core.windows.net  private DNS zone linked to the VNet
+	  id-<prefix>                      user-assigned identity: Storage Table
+	                                   Data Contributor on st<prefix>, AcrPull
+	                                   on acr<prefix>
+
+	The environment becomes an internal-only workload-profiles environment on
+	aca-infra (apps still run on the Consumption profile, so the 4 vCPU /
+	8 GiB per-replica budget is unchanged). Storage has public access and
+	shared keys disabled, so the silo and producer authenticate with the
+	identity through BENCH_STORAGE_URI / BENCH_CLUSTERING_TABLE_SERVICE_URI
+	and AZURE_CLIENT_ID instead of a connection-string secret, and images are
+	pulled with the identity instead of ACR admin credentials. The resource
+	group is tagged latticeBenchNetwork=private.
 
 	Why the producer is a Job rather than an app. The producer runs to
 	completion once per cohort and then must stop. A Job models that directly
@@ -74,8 +98,19 @@
 	script instead of creating one. Used during development to avoid paying
 	the image build on every iteration.
 
+.PARAMETER PrivateNetwork
+	Provision the policy-compliant private topology described above: VNet
+	integrated internal environment, storage behind a private endpoint with
+	public access and shared keys disabled, managed-identity auth throughout,
+	and NAT-gateway egress. Off by default, which keeps the original shape.
+	Combining it with -ReuseRg requires the group to have been created with
+	-PrivateNetwork too.
+
 .EXAMPLE
 	./deploy-aca.ps1 -NamePrefix l3ab12cd3 -SiloCount 2
+
+.EXAMPLE
+	./deploy-aca.ps1 -NamePrefix l3ab12cd3 -SiloCount 2 -PrivateNetwork
 #>
 [CmdletBinding()]
 param(
@@ -85,7 +120,8 @@ param(
 	[ValidateRange(1, 4)][double] $SiloCpu = 4,
 	[ValidateRange(1, 8)][double] $SiloMemoryGi = 8,
 	[switch] $SkipImageBuild,
-	[switch] $ReuseRg
+	[switch] $ReuseRg,
+	[switch] $PrivateNetwork
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,7 +132,90 @@ Set-StrictMode -Version Latest
 $names = Get-AcaNames -NamePrefix $NamePrefix
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 
-Write-Host "[aca] prefix=$NamePrefix silos=$SiloCount region=$Location cpu=$SiloCpu mem=${SiloMemoryGi}Gi" -ForegroundColor Cyan
+$networkMode = if ($PrivateNetwork) { 'private' } else { 'public' }
+Write-Host "[aca] prefix=$NamePrefix silos=$SiloCount region=$Location cpu=$SiloCpu mem=${SiloMemoryGi}Gi network=$networkMode" -ForegroundColor Cyan
+
+# Private-mode resource names. Derived here rather than in Get-AcaNames so the
+# default path's name set, and everything that reads it, is untouched.
+$net = [ordered]@{
+	Vnet        = "vnet-$NamePrefix"
+	InfraSubnet = 'aca-infra'
+	PeSubnet    = 'pe'
+	NatPip      = "pip-nat-$NamePrefix"
+	Nat         = "nat-$NamePrefix"
+	Identity    = "id-$NamePrefix"
+	TableZone   = 'privatelink.table.core.windows.net'
+	TablePe     = "pe-$($names.Storage)-table"
+}
+
+function Test-AzShow {
+	# Existence probe for the private-mode network resources, which
+	# Test-AzResourceExists does not cover. Any non-zero exit means absent.
+	param([Parameter(Mandatory)][string[]] $AzArgs)
+	Invoke-Az ($AzArgs + @('-o', 'none')) -AllowFailure | Out-Null
+	return ($LASTEXITCODE -eq 0)
+}
+
+function Grant-AcaRole {
+	# Idempotent role assignment for a freshly created identity. A new
+	# principal takes a short while to replicate into the directory, and until
+	# it does the assignment fails with "principal does not exist", so retry.
+	param(
+		[Parameter(Mandatory)][string] $PrincipalId,
+		[Parameter(Mandatory)][string] $Role,
+		[Parameter(Mandatory)][string] $Scope
+	)
+	$existing = Invoke-Az @(
+		'role', 'assignment', 'list',
+		'--assignee', $PrincipalId, '--role', $Role, '--scope', $Scope,
+		'--query', 'length(@)', '-o', 'tsv'
+	) -AllowFailure
+	if ($LASTEXITCODE -eq 0 -and "$existing".Trim() -ne '' -and [int]"$existing".Trim() -gt 0) { return $false }
+	for ($attempt = 1; $attempt -le 12; $attempt++) {
+		$out = Invoke-Az @(
+			'role', 'assignment', 'create',
+			'--assignee-object-id', $PrincipalId,
+			'--assignee-principal-type', 'ServicePrincipal',
+			'--role', $Role, '--scope', $Scope, '-o', 'none'
+		) -AllowFailure
+		if ($LASTEXITCODE -eq 0) { return $true }
+		if ("$out" -match 'RoleAssignmentExists|already exists') { return $false }
+		Write-Host "[aca] role '$Role' not yet assignable (attempt $attempt): $out" -ForegroundColor DarkYellow
+		Start-Sleep -Seconds 10
+	}
+	throw "Could not assign role '$Role' on $Scope to $PrincipalId."
+}
+
+# ---------------------------------------------------------------------------
+# 0. Resource providers.
+#
+# A fresh subscription may not have every namespace the rig uses registered,
+# and the first create in that namespace then fails with
+# MissingSubscriptionRegistration. Registration is idempotent and only issued
+# for a namespace that is not already Registered.
+# ---------------------------------------------------------------------------
+$providers = @('Microsoft.App', 'Microsoft.ContainerRegistry', 'Microsoft.OperationalInsights', 'Microsoft.Storage')
+if ($PrivateNetwork) { $providers += @('Microsoft.Network', 'Microsoft.ManagedIdentity') }
+$pending = @()
+foreach ($ns in $providers) {
+	$state = "$(Invoke-Az @('provider', 'show', '--namespace', $ns, '--query', 'registrationState', '-o', 'tsv') -AllowFailure)".Trim()
+	if ($state -eq 'Registered') { continue }
+	Write-Host "[aca] registering resource provider $ns (was '$state')" -ForegroundColor Cyan
+	Invoke-Az @('provider', 'register', '--namespace', $ns) | Out-Null
+	$pending += $ns
+}
+# Registration of a new namespace (Microsoft.App in particular) can take tens
+# of minutes, so the registrations above run concurrently and are awaited here.
+$deadline = (Get-Date).AddMinutes(60)
+while ($pending.Count -gt 0) {
+	$pending = @($pending | Where-Object {
+		"$(Invoke-Az @('provider', 'show', '--namespace', $_, '--query', 'registrationState', '-o', 'tsv') -AllowFailure)".Trim() -ne 'Registered'
+	})
+	if ($pending.Count -eq 0) { break }
+	if ((Get-Date) -gt $deadline) { throw "Resource providers still not registered after 60 minutes: $($pending -join ', ')" }
+	Write-Host "[aca] waiting for provider registration: $($pending -join ', ')" -ForegroundColor DarkYellow
+	Start-Sleep -Seconds 30
+}
 
 # ---------------------------------------------------------------------------
 # 1. Resource group.
@@ -107,6 +226,10 @@ Write-Host "[aca] prefix=$NamePrefix silos=$SiloCount region=$Location cpu=$Silo
 # ---------------------------------------------------------------------------
 if ($ReuseRg) {
 	Assert-AcaRunGroup -ResourceGroup $names.Rg -NamePrefix $NamePrefix
+	$existingMode = (Invoke-Az @('group', 'show', '--name', $names.Rg, '--query', 'tags.latticeBenchNetwork', '-o', 'tsv') -AllowFailure)
+	if ("$existingMode".Trim() -eq 'private' -and -not $PrivateNetwork) {
+		throw "$($names.Rg) was provisioned with -PrivateNetwork; pass -PrivateNetwork to reuse it."
+	}
 	Write-Host "[aca] reusing $($names.Rg)" -ForegroundColor Yellow
 } else {
 	if (Test-AzGroupExists -Name $names.Rg) {
@@ -117,8 +240,61 @@ if ($ReuseRg) {
 		'group', 'create',
 		'--name', $names.Rg,
 		'--location', $Location,
-		'--tags', "$AcaRunTagName=$NamePrefix", 'purpose=orleans-lattice-benchmark'
+		'--tags', "$AcaRunTagName=$NamePrefix", 'purpose=orleans-lattice-benchmark', "latticeBenchNetwork=$networkMode"
 	) | Out-Null
+}
+
+# ---------------------------------------------------------------------------
+# 1b. -PrivateNetwork only: VNet, NAT egress, and the user-assigned identity.
+#
+# NAT rather than the platform default egress so outbound traffic (ACR image
+# pulls) never needs a public IP on a workload; the NAT gateway's own IP is the
+# only public address in the group. The infrastructure subnet is a /23
+# delegated to Microsoft.App/environments, which is what a workload-profiles
+# environment requires and leaves room for a 30-replica sweep.
+# ---------------------------------------------------------------------------
+$identityId = ''
+$identityClientId = ''
+$identityPrincipalId = ''
+$infraSubnetId = ''
+$rolesGranted = $false
+if ($PrivateNetwork) {
+	if (-not (Test-AzShow @('network', 'public-ip', 'show', '-g', $names.Rg, '-n', $net.NatPip))) {
+		Write-Host "[aca] creating NAT public IP $($net.NatPip)" -ForegroundColor Cyan
+		Invoke-Az @('network', 'public-ip', 'create', '-g', $names.Rg, '-n', $net.NatPip,
+			'-l', $Location, '--sku', 'Standard', '--allocation-method', 'Static', '-o', 'none') | Out-Null
+	}
+	if (-not (Test-AzShow @('network', 'nat', 'gateway', 'show', '-g', $names.Rg, '-n', $net.Nat))) {
+		Write-Host "[aca] creating NAT gateway $($net.Nat)" -ForegroundColor Cyan
+		Invoke-Az @('network', 'nat', 'gateway', 'create', '-g', $names.Rg, '-n', $net.Nat,
+			'-l', $Location, '--public-ip-addresses', $net.NatPip, '--idle-timeout', '10', '-o', 'none') | Out-Null
+	}
+	if (-not (Test-AzShow @('network', 'vnet', 'show', '-g', $names.Rg, '-n', $net.Vnet))) {
+		Write-Host "[aca] creating VNet $($net.Vnet)" -ForegroundColor Cyan
+		Invoke-Az @('network', 'vnet', 'create', '-g', $names.Rg, '-n', $net.Vnet,
+			'-l', $Location, '--address-prefixes', '10.43.0.0/16', '-o', 'none') | Out-Null
+	}
+	if (-not (Test-AzShow @('network', 'vnet', 'subnet', 'show', '-g', $names.Rg, '--vnet-name', $net.Vnet, '-n', $net.InfraSubnet))) {
+		Invoke-Az @('network', 'vnet', 'subnet', 'create', '-g', $names.Rg, '--vnet-name', $net.Vnet,
+			'-n', $net.InfraSubnet, '--address-prefixes', '10.43.0.0/23',
+			'--delegations', 'Microsoft.App/environments', '--nat-gateway', $net.Nat, '-o', 'none') | Out-Null
+	}
+	if (-not (Test-AzShow @('network', 'vnet', 'subnet', 'show', '-g', $names.Rg, '--vnet-name', $net.Vnet, '-n', $net.PeSubnet))) {
+		Invoke-Az @('network', 'vnet', 'subnet', 'create', '-g', $names.Rg, '--vnet-name', $net.Vnet,
+			'-n', $net.PeSubnet, '--address-prefixes', '10.43.2.0/27',
+			'--private-endpoint-network-policies', 'Disabled', '-o', 'none') | Out-Null
+	}
+	$infraSubnetId = (Invoke-Az @('network', 'vnet', 'subnet', 'show', '-g', $names.Rg, '--vnet-name', $net.Vnet,
+		'-n', $net.InfraSubnet, '--query', 'id', '-o', 'tsv')).Trim()
+
+	if (-not (Test-AzShow @('identity', 'show', '-g', $names.Rg, '-n', $net.Identity))) {
+		Write-Host "[aca] creating managed identity $($net.Identity)" -ForegroundColor Cyan
+		Invoke-Az @('identity', 'create', '-g', $names.Rg, '-n', $net.Identity, '-l', $Location, '-o', 'none') | Out-Null
+	}
+	$idJson = Invoke-Az @('identity', 'show', '-g', $names.Rg, '-n', $net.Identity, '-o', 'json') | ConvertFrom-Json
+	$identityId = $idJson.id
+	$identityClientId = $idJson.clientId
+	$identityPrincipalId = $idJson.principalId
 }
 
 # ---------------------------------------------------------------------------
@@ -129,7 +305,7 @@ if ($ReuseRg) {
 # ---------------------------------------------------------------------------
 if (-not (Test-AzResourceExists -Kind 'storage' -Name $names.Storage -ResourceGroup $names.Rg)) {
 	Write-Host "[aca] creating storage account $($names.Storage)" -ForegroundColor Cyan
-	Invoke-Az @(
+	$storageArgs = @(
 		'storage', 'account', 'create',
 		'--name', $names.Storage,
 		'--resource-group', $names.Rg,
@@ -138,21 +314,55 @@ if (-not (Test-AzResourceExists -Kind 'storage' -Name $names.Storage -ResourceGr
 		'--kind', 'StorageV2',
 		'--min-tls-version', 'TLS1_2',
 		'--allow-blob-public-access', 'false'
-	) | Out-Null
+	)
+	if ($PrivateNetwork) {
+		$storageArgs += @('--public-network-access', 'Disabled', '--default-action', 'Deny',
+			'--allow-shared-key-access', 'false')
+	}
+	Invoke-Az $storageArgs | Out-Null
 }
 
-# Key-based connection string rather than managed identity. A user-assigned
-# identity would need an RBAC role assignment whose propagation is eventually
-# consistent, which on a short-lived rig shows up as an intermittent 403 on
-# first write that is easily misread as a benchmark fault. The account is
-# created and destroyed inside one run, so the key never outlives the rig.
-$storageKey = (Invoke-Az @(
-	'storage', 'account', 'keys', 'list',
-	'--account-name', $names.Storage,
-	'--resource-group', $names.Rg,
-	'--query', '[0].value', '-o', 'tsv'
-)).Trim()
-$storageConn = "DefaultEndpointsProtocol=https;AccountName=$($names.Storage);AccountKey=$storageKey;EndpointSuffix=core.windows.net"
+$storageConn = ''
+$storageTableUri = "https://$($names.Storage).table.core.windows.net"
+if ($PrivateNetwork) {
+	# Table private endpoint + privatelink DNS. The silo and producer use
+	# Table storage only (WAL, clustering, grain state), so no blob or queue
+	# endpoint is needed.
+	$storageId = (Invoke-Az @('storage', 'account', 'show', '-n', $names.Storage, '-g', $names.Rg, '--query', 'id', '-o', 'tsv')).Trim()
+	$vnetId = (Invoke-Az @('network', 'vnet', 'show', '-g', $names.Rg, '-n', $net.Vnet, '--query', 'id', '-o', 'tsv')).Trim()
+	if (-not (Test-AzShow @('network', 'private-dns', 'zone', 'show', '-g', $names.Rg, '-n', $net.TableZone))) {
+		Invoke-Az @('network', 'private-dns', 'zone', 'create', '-g', $names.Rg, '-n', $net.TableZone, '-o', 'none') | Out-Null
+	}
+	if (-not (Test-AzShow @('network', 'private-dns', 'link', 'vnet', 'show', '-g', $names.Rg, '-z', $net.TableZone, '-n', "link-$NamePrefix"))) {
+		Invoke-Az @('network', 'private-dns', 'link', 'vnet', 'create', '-g', $names.Rg, '-z', $net.TableZone,
+			'-n', "link-$NamePrefix", '-v', $vnetId, '-e', 'false', '-o', 'none') | Out-Null
+	}
+	if (-not (Test-AzShow @('network', 'private-endpoint', 'show', '-g', $names.Rg, '-n', $net.TablePe))) {
+		Write-Host "[aca] creating table private endpoint $($net.TablePe)" -ForegroundColor Cyan
+		Invoke-Az @('network', 'private-endpoint', 'create', '-g', $names.Rg, '-n', $net.TablePe, '-l', $Location,
+			'--vnet-name', $net.Vnet, '--subnet', $net.PeSubnet,
+			'--private-connection-resource-id', $storageId, '--group-id', 'table',
+			'--connection-name', "$($net.TablePe)-conn", '-o', 'none') | Out-Null
+		Invoke-Az @('network', 'private-endpoint', 'dns-zone-group', 'create', '-g', $names.Rg,
+			'--endpoint-name', $net.TablePe, '-n', 'default',
+			'--private-dns-zone', $net.TableZone, '--zone-name', 'table', '-o', 'none') | Out-Null
+	}
+	if (Grant-AcaRole -PrincipalId $identityPrincipalId -Role 'Storage Table Data Contributor' -Scope $storageId) { $rolesGranted = $true }
+} else {
+	# Key-based connection string rather than managed identity. A user-assigned
+	# identity would need an RBAC role assignment whose propagation is eventually
+	# consistent, which on a short-lived rig shows up as an intermittent 403 on
+	# first write that is easily misread as a benchmark fault. The account is
+	# created and destroyed inside one run, so the key never outlives the rig.
+	# (-PrivateNetwork has no choice: policy disables shared keys there.)
+	$storageKey = (Invoke-Az @(
+		'storage', 'account', 'keys', 'list',
+		'--account-name', $names.Storage,
+		'--resource-group', $names.Rg,
+		'--query', '[0].value', '-o', 'tsv'
+	)).Trim()
+	$storageConn = "DefaultEndpointsProtocol=https;AccountName=$($names.Storage);AccountKey=$storageKey;EndpointSuffix=core.windows.net"
+}
 
 # ---------------------------------------------------------------------------
 # 3. Container registry + remote image build.
@@ -165,11 +375,18 @@ if (-not (Test-AzResourceExists -Kind 'acr' -Name $names.Acr -ResourceGroup $nam
 		'--resource-group', $names.Rg,
 		'--sku', 'Basic',
 		'--location', $Location,
-		'--admin-enabled', 'true'
+		'--admin-enabled', $(if ($PrivateNetwork) { 'false' } else { 'true' })
 	) | Out-Null
 }
 
 $acrServer = (Invoke-Az @('acr', 'show', '--name', $names.Acr, '--query', 'loginServer', '-o', 'tsv')).Trim()
+if ($PrivateNetwork) {
+	# Pull with the identity rather than admin credentials, which tenant policy
+	# commonly disables. Granted before the image build so the build time
+	# covers RBAC propagation.
+	$acrId = (Invoke-Az @('acr', 'show', '--name', $names.Acr, '--query', 'id', '-o', 'tsv')).Trim()
+	if (Grant-AcaRole -PrincipalId $identityPrincipalId -Role 'AcrPull' -Scope $acrId) { $rolesGranted = $true }
+}
 $siloImage = "$acrServer/lattice-bench-silo:$NamePrefix"
 $prodImage = "$acrServer/lattice-bench-producer:$NamePrefix"
 
@@ -250,9 +467,11 @@ if (-not (Test-AzResourceExists -Kind 'acaenv' -Name $names.Env -ResourceGroup $
 	)).Trim()
 
 	Write-Host "[aca] creating Container Apps environment $($names.Env)" -ForegroundColor Cyan
-	# No --internal-only and no VNet arguments: see the header note on why the
-	# default Consumption environment is the proven shape.
-	Invoke-Az @(
+	# No --internal-only and no VNet arguments by default: see the header note
+	# on why the default Consumption environment is the proven shape.
+	# -PrivateNetwork instead creates an internal-only workload-profiles
+	# environment on the delegated subnet, so it exposes no public IP.
+	$envArgs = @(
 		'containerapp', 'env', 'create',
 		'--name', $names.Env,
 		'--resource-group', $names.Rg,
@@ -261,7 +480,13 @@ if (-not (Test-AzResourceExists -Kind 'acaenv' -Name $names.Env -ResourceGroup $
 		'--logs-workspace-id', $workspaceId,
 		'--logs-workspace-key', $workspaceKey,
 		'-o', 'none'
-	) | Out-Null
+	)
+	if ($PrivateNetwork) {
+		$envArgs += @('--enable-workload-profiles', 'true',
+			'--infrastructure-subnet-resource-id', $infraSubnetId,
+			'--internal-only', 'true')
+	}
+	Invoke-Az $envArgs | Out-Null
 }
 
 $envId = (Invoke-Az @(
@@ -270,8 +495,41 @@ $envId = (Invoke-Az @(
 	'--query', 'id', '-o', 'tsv'
 )).Trim()
 
-$acrUser = (Invoke-Az @('acr', 'credential', 'show', '--name', $names.Acr, '--query', 'username', '-o', 'tsv')).Trim()
-$acrPass = (Invoke-Az @('acr', 'credential', 'show', '--name', $names.Acr, '--query', 'passwords[0].value', '-o', 'tsv')).Trim()
+$acrUser = ''
+$acrPass = ''
+if ($PrivateNetwork) {
+	$registryArgs = @('--registry-server', $acrServer, '--registry-identity', $identityId)
+	$siloAuthArgs = @('--user-assigned', $identityId, '--workload-profile-name', 'Consumption')
+	$jobAuthArgs = @('--mi-user-assigned', $identityId, '--workload-profile-name', 'Consumption')
+	$siloStorageEnv = @(
+		"BENCH_STORAGE_URI=$storageTableUri",
+		"BENCH_CLUSTERING_TABLE_SERVICE_URI=$storageTableUri",
+		"AZURE_CLIENT_ID=$identityClientId"
+	)
+	$prodStorageEnv = @(
+		"BENCH_CLUSTERING_TABLE_SERVICE_URI=$storageTableUri",
+		"AZURE_CLIENT_ID=$identityClientId"
+	)
+	$secretArgs = @()
+	if ($rolesGranted -and $SkipImageBuild) {
+		# No image build to absorb RBAC propagation, so give it a fixed window
+		# before the first replica tries to pull and write.
+		Write-Host '[aca] waiting 60s for new role assignments to propagate' -ForegroundColor Yellow
+		Start-Sleep -Seconds 60
+	}
+} else {
+	$acrUser = (Invoke-Az @('acr', 'credential', 'show', '--name', $names.Acr, '--query', 'username', '-o', 'tsv')).Trim()
+	$acrPass = (Invoke-Az @('acr', 'credential', 'show', '--name', $names.Acr, '--query', 'passwords[0].value', '-o', 'tsv')).Trim()
+	$registryArgs = @('--registry-server', $acrServer, '--registry-username', $acrUser, '--registry-password', $acrPass)
+	$siloAuthArgs = @()
+	$jobAuthArgs = @()
+	$siloStorageEnv = @(
+		'BENCH_CLUSTERING_CONNECTION_STRING=secretref:storageconn',
+		'BENCH_STORAGE_CONN=secretref:storageconn'
+	)
+	$prodStorageEnv = $siloStorageEnv
+	$secretArgs = @('--secrets', "storageconn=$storageConn")
+}
 
 # ---------------------------------------------------------------------------
 # 5. The silo app and the producer job.
@@ -294,30 +552,27 @@ if (-not (Test-AzResourceExists -Kind 'acaapp' -Name $names.SiloApp -ResourceGro
 	# publishes to the clustering table, not through the environment's HTTP
 	# front door. The reachability spike confirmed an app with no ingress
 	# block is still addressable on its replica pod IPs.
-	Invoke-Az @(
+	Invoke-Az (@(
 		'containerapp', 'create',
 		'--name', $names.SiloApp,
 		'--resource-group', $names.Rg,
 		'--environment', $names.Env,
-		'--image', $siloImage,
-		'--registry-server', $acrServer,
-		'--registry-username', $acrUser,
-		'--registry-password', $acrPass,
+		'--image', $siloImage
+	) + $registryArgs + $siloAuthArgs + @(
 		'--cpu', "$SiloCpu",
 		'--memory', "${SiloMemoryGi}Gi",
 		'--min-replicas', '0',
-		'--max-replicas', '30',
-		'--secrets', "storageconn=$storageConn",
+		'--max-replicas', '30'
+	) + $secretArgs + @(
 		'--env-vars',
 			'BENCH_CLUSTERING=azuretable',
 			'BENCH_INGEST_MODE=cluster',
 			'BENCH_SHARD_COUNT=0',
-			'BENCH_CLUSTERING_CONNECTION_STRING=secretref:storageconn',
-			'BENCH_STORAGE_CONN=secretref:storageconn',
 			'BENCH_LEAF_STORAGE_KIND=azure',
-			'BENCH_TOTAL_DURATION_SEC=0',
+			'BENCH_TOTAL_DURATION_SEC=0'
+	) + $siloStorageEnv + @(
 		'-o', 'none'
-	) | Out-Null
+	)) | Out-Null
 } else {
 	Write-Host "[aca] silo app $($names.SiloApp) already exists" -ForegroundColor Yellow
 }
@@ -328,29 +583,26 @@ if (-not (Test-AzResourceExists -Kind 'acajob' -Name $names.ProducerJob -Resourc
 	# and must then stop. A Job models run-to-completion directly, so the
 	# runner starts an execution and waits for it to finish, instead of
 	# scaling an app 1 -> 0 and forcing a new revision for every cohort.
-	Invoke-Az @(
+	Invoke-Az (@(
 		'containerapp', 'job', 'create',
 		'--name', $names.ProducerJob,
 		'--resource-group', $names.Rg,
 		'--environment', $names.Env,
-		'--image', $prodImage,
-		'--registry-server', $acrServer,
-		'--registry-username', $acrUser,
-		'--registry-password', $acrPass,
+		'--image', $prodImage
+	) + $registryArgs + $jobAuthArgs + @(
 		'--trigger-type', 'Manual',
 		'--replica-timeout', '3600',
 		'--replica-retry-limit', '0',
 		'--parallelism', '1',
 		'--replica-completion-count', '1',
 		'--cpu', "$SiloCpu",
-		'--memory', "${SiloMemoryGi}Gi",
-		'--secrets', "storageconn=$storageConn",
+		'--memory', "${SiloMemoryGi}Gi"
+	) + $secretArgs + @(
 		'--env-vars',
-			'BENCH_PRODUCER_MODE=orleans-client',
-			'BENCH_CLUSTERING_CONNECTION_STRING=secretref:storageconn',
-			'BENCH_STORAGE_CONN=secretref:storageconn',
+			'BENCH_PRODUCER_MODE=orleans-client'
+	) + $prodStorageEnv + @(
 		'-o', 'none'
-	) | Out-Null
+	)) | Out-Null
 } else {
 	Write-Host "[aca] producer job $($names.ProducerJob) already exists" -ForegroundColor Yellow
 }
@@ -369,6 +621,10 @@ $ctx = [ordered]@{
 	acrPassword  = $acrPass
 	storage      = $names.Storage
 	storageConn  = $storageConn
+	storageTableUri = $storageTableUri
+	privateNetwork  = [bool]$PrivateNetwork
+	identityId      = $identityId
+	identityClientId= $identityClientId
 	workspace    = $names.Workspace
 	workspaceId  = $workspaceId
 	envName      = $names.Env

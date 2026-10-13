@@ -71,15 +71,18 @@ if ($NamePrefix) { $p.NamePrefix = $NamePrefix; $p.ResourceGroup = "rg-$NamePref
 
 az account set --subscription $p.SubscriptionId | Out-Null
 
-$pipName = "$($p.NamePrefix)-pip"
-$fqdn = (& az network public-ip show -g $p.ResourceGroup -n $pipName --query dnsSettings.fqdn -o tsv).Trim()
-$sshTarget = "$($p.AdminUsername)@$fqdn"
+# Public mode: the VM's FQDN. Private-network mode: the local end of a Bastion
+# tunnel (started here if not already running). See _vm-access.ps1.
+. (Join-Path $here '_vm-access.ps1')
+$vmAccess = Resolve-BenchVmSsh -ResourceGroup $p.ResourceGroup -NamePrefix $p.NamePrefix -AdminUsername $p.AdminUsername -SshPublicKeyPath $p.SshPublicKeyPath
+if (-not $vmAccess.Target) { throw "Could not resolve an ssh endpoint for $($p.NamePrefix)-vm." }
+$sshTarget = $vmAccess.Target
 $sshOpts = @(
 	'-o','StrictHostKeyChecking=accept-new',
 	'-o','ServerAliveInterval=15',
 	'-o','ServerAliveCountMax=3',
 	'-o','ConnectTimeout=10'
-)
+) + $vmAccess.SshOpts
 
 # Hard PowerShell-side timeout wrapper. The server-side `timeout` only
 # helps if the remote sh actually runs - a stalled ssh handshake or a

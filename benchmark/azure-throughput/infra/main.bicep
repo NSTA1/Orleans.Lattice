@@ -47,6 +47,9 @@ param customDataBase64 string = ''
 @maxValue(8)
 param walAccountCount int = 1
 
+@description('Private-network mode for subscriptions whose policy forbids VM public IPs and public storage access. When true: the VM has no public IP and is reached through an Azure Bastion (Standard, native-client tunnelling); outbound internet goes through a NAT gateway; every storage account has public network access disabled and is reached through table/blob/queue private endpoints resolved by privatelink DNS zones linked to the VNet. allowedSshSourceAddress is ignored (SSH is admitted from the Bastion subnet only). Default false = the original public layout, unchanged.')
+param privateNetwork bool = false
+
 var vmName = '${namePrefix}-vm'
 var nicName = '${namePrefix}-nic'
 var pipName = '${namePrefix}-pip'
@@ -54,6 +57,44 @@ var nsgName = '${namePrefix}-nsg'
 var vnetName = '${namePrefix}-vnet'
 var subnetName = 'default'
 var dnsLabel = toLower('${namePrefix}-${uniqueString(resourceGroup().id)}')
+
+// Private-network mode only.
+var peSubnetName = 'private-endpoints'
+var bastionSubnetName = 'AzureBastionSubnet'
+var bastionSubnetPrefix = '10.42.0.64/26'
+var bastionName = '${namePrefix}-bastion'
+var natName = '${namePrefix}-nat'
+var storageSubResources = [ 'table', 'blob', 'queue' ]
+var vmSubnetBase = {
+  name: subnetName
+  properties: {
+	addressPrefix: '10.42.0.0/27'
+	networkSecurityGroup: { id: nsg.id }
+  }
+}
+var vmSubnetPrivate = {
+  name: subnetName
+  properties: {
+	addressPrefix: '10.42.0.0/27'
+	networkSecurityGroup: { id: nsg.id }
+	natGateway: { id: natGateway.id }
+  }
+}
+var privateSubnets = [
+  {
+	name: peSubnetName
+	properties: {
+	  addressPrefix: '10.42.0.32/27'
+	  privateEndpointNetworkPolicies: 'Disabled'
+	}
+  }
+  {
+	name: bastionSubnetName
+	properties: {
+	  addressPrefix: bastionSubnetPrefix
+	}
+  }
+]
 
 // Storage account name: 3-24 chars, lowercase + digits only, globally unique.
 // uniqueString() always returns 13 chars, so 'st' + first 22 = 24-char safe name.
@@ -77,11 +118,11 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
 	  {
 		name: 'AllowSshFromOperator'
 		properties: {
-		  description: 'SSH from the operator IP only.'
+		  description: privateNetwork ? 'SSH from the Bastion subnet only.' : 'SSH from the operator IP only.'
 		  protocol: 'Tcp'
 		  sourcePortRange: '*'
 		  destinationPortRange: '22'
-		  sourceAddressPrefix: allowedSshSourceAddress
+		  sourceAddressPrefix: privateNetwork ? bastionSubnetPrefix : allowedSshSourceAddress
 		  destinationAddressPrefix: '*'
 		  access: 'Allow'
 		  priority: 1000
@@ -113,19 +154,66 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
 	addressSpace: {
 	  addressPrefixes: [ '10.42.0.0/24' ]
 	}
-	subnets: [
+	subnets: privateNetwork ? concat([ vmSubnetPrivate ], privateSubnets) : [ vmSubnetBase ]
+  }
+}
+
+// --- private-network mode: NAT egress, Bastion ingress ---
+// The VM still needs outbound internet (apt, the dotnet SDK, NuGet restore
+// during update.ps1's publish). With no public IP on the NIC that comes from a
+// NAT gateway on the VM subnet; inbound SSH comes only via Bastion.
+resource natPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (privateNetwork) {
+  name: '${natName}-pip'
+  location: location
+  sku: { name: 'Standard' }
+  properties: {
+	publicIPAllocationMethod: 'Static'
+	publicIPAddressVersion: 'IPv4'
+  }
+}
+
+resource natGateway 'Microsoft.Network/natGateways@2024-05-01' = if (privateNetwork) {
+  name: natName
+  location: location
+  sku: { name: 'Standard' }
+  properties: {
+	idleTimeoutInMinutes: 10
+	publicIpAddresses: [ { id: natPip.id } ]
+  }
+}
+
+resource bastionPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (privateNetwork) {
+  name: '${bastionName}-pip'
+  location: location
+  sku: { name: 'Standard' }
+  properties: {
+	publicIPAllocationMethod: 'Static'
+	publicIPAddressVersion: 'IPv4'
+  }
+}
+
+// Standard SKU with tunnelling enabled is what `az network bastion tunnel`
+// needs; the scripts open a local port-forward through it and run the usual
+// ssh/scp against 127.0.0.1.
+resource bastion 'Microsoft.Network/bastionHosts@2024-05-01' = if (privateNetwork) {
+  name: bastionName
+  location: location
+  sku: { name: 'Standard' }
+  properties: {
+	enableTunneling: true
+	ipConfigurations: [
 	  {
-		name: subnetName
+		name: 'bastion-ipconfig'
 		properties: {
-		  addressPrefix: '10.42.0.0/27'
-		  networkSecurityGroup: { id: nsg.id }
+		  subnet: { id: '${vnet.id}/subnets/${bastionSubnetName}' }
+		  publicIPAddress: { id: bastionPip.id }
 		}
 	  }
 	]
   }
 }
 
-resource pip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
+resource pip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (!privateNetwork) {
   name: pipName
   location: location
   sku: { name: 'Standard' }
@@ -149,7 +237,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2024-05-01' = {
 		properties: {
 		  subnet: { id: '${vnet.id}/subnets/${subnetName}' }
 		  privateIPAllocationMethod: 'Dynamic'
-		  publicIPAddress: { id: pip.id }
+		  publicIPAddress: privateNetwork ? null : { id: pip.id }
 		}
 	  }
 	]
@@ -234,11 +322,62 @@ resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' = [for i in rang
 	allowSharedKeyAccess: false
 	minimumTlsVersion: 'TLS1_2'
 	supportsHttpsTrafficOnly: true
-	publicNetworkAccess: 'Enabled'
+	publicNetworkAccess: privateNetwork ? 'Disabled' : 'Enabled'
 	networkAcls: {
-	  defaultAction: 'Allow'
+	  defaultAction: privateNetwork ? 'Deny' : 'Allow'
 	  bypass: 'AzureServices'
 	}
+  }
+}]
+
+// --- private-network mode: storage private endpoints + DNS ---
+// One privatelink zone per storage sub-resource, linked to the VNet, so the
+// silo keeps using the ordinary <account>.table.core.windows.net endpoints
+// and they resolve to the private endpoint addresses from inside the VNet.
+resource storageDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for svc in storageSubResources: if (privateNetwork) {
+  name: 'privatelink.${svc}.${environment().suffixes.storage}'
+  location: 'global'
+}]
+
+resource storageDnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = [for (svc, j) in storageSubResources: if (privateNetwork) {
+  parent: storageDnsZones[j]
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+	registrationEnabled: false
+	virtualNetwork: { id: vnet.id }
+  }
+}]
+
+resource storagePe 'Microsoft.Network/privateEndpoints@2024-05-01' = [for k in range(0, walAccountCount * length(storageSubResources)): if (privateNetwork) {
+  name: '${storageAccountNames[k / length(storageSubResources)]}-${storageSubResources[k % length(storageSubResources)]}-pe'
+  location: location
+  properties: {
+	subnet: { id: '${vnet.id}/subnets/${peSubnetName}' }
+	privateLinkServiceConnections: [
+	  {
+		name: 'storage'
+		properties: {
+		  privateLinkServiceId: storage[k / length(storageSubResources)].id
+		  groupIds: [ storageSubResources[k % length(storageSubResources)] ]
+		}
+	  }
+	]
+  }
+}]
+
+resource storagePeDns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = [for k in range(0, walAccountCount * length(storageSubResources)): if (privateNetwork) {
+  parent: storagePe[k]
+  name: 'default'
+  properties: {
+	privateDnsZoneConfigs: [
+	  {
+		name: storageSubResources[k % length(storageSubResources)]
+		properties: {
+		  privateDnsZoneId: storageDnsZones[k % length(storageSubResources)].id
+		}
+	  }
+	]
   }
 }]
 
@@ -275,10 +414,15 @@ resource raQueue 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for i i
 }]
 
 output vmName string = vm.name
-output publicIp string = pip.properties.ipAddress
-output fqdn string = pip.properties.dnsSettings.fqdn
+// In private-network mode the VM has no public IP; publicIp / fqdn are empty
+// and the scripts reach it through the Bastion tunnel instead.
+output publicIp string = privateNetwork ? '' : pip!.properties.ipAddress
+output fqdn string = privateNetwork ? '' : pip!.properties.dnsSettings.fqdn
 output adminUsername string = adminUsername
-output sshCommand string = 'ssh ${adminUsername}@${pip.properties.dnsSettings.fqdn}'
+output sshCommand string = privateNetwork ? 'ssh ${namePrefix}  (through the Bastion tunnel; see scripts/_vm-access.ps1)' : 'ssh ${adminUsername}@${pip!.properties.dnsSettings.fqdn}'
+output privateNetwork bool = privateNetwork
+output vmId string = vm.id
+output bastionName string = privateNetwork ? bastionName : ''
 output storageAccountName string = storage[0].name
 output storageTableEndpoint string = storage[0].properties.primaryEndpoints.table
 output storageBlobEndpoint string = storage[0].properties.primaryEndpoints.blob

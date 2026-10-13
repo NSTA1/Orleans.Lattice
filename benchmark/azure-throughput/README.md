@@ -62,7 +62,8 @@ journald-backed log capture with no scraper indirection.
 | `scripts/update.ps1` | Inner loop: `git ls-files \| tar \| ssh` -> `dotnet publish` silo+producer on the VM -> `systemctl restart`. |
 | `scripts/run-cohort.ps1` | Single cohort: applies env drop-ins, restarts silo, starts producer, waits for FINAL, extracts journals, prints summary. |
 | `scripts/ladder.ps1` | Thin loop over `run-cohort.ps1` for rung sweeps; writes `.ladder-results.csv`. |
-| `scripts/vm.ps1` | Day-to-day helper: `start` / `stop` / `status` / `ssh` / `logs` / `refresh-ip`. |
+| `scripts/vm.ps1` | Day-to-day helper: `start` / `stop` / `status` / `ssh` / `logs` / `refresh-ip` / `tunnel` / `tunnel-stop`. |
+| `scripts/_vm-access.ps1` | SSH target resolution shared by the VM-path scripts: direct to the public FQDN, or through an Azure Bastion tunnel on a `-PrivateNetwork` rig. |
 | `scripts/_run-cohort-helpers.ps1` | Verdict-computation helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer and its mid-run freeze detector). |
 | `scripts/Test-CohortVerdict.ps1` | Regression tests for those helpers against literal log fixtures (pure pwsh, no Azure). |
 | `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1` | Regression tests for `performance-report.ps1`'s Layer 3 grading: the read-mode preseed gate, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
@@ -109,6 +110,14 @@ The resource group becomes `rg-lat-exp` and the `~/.ssh/config` host alias becom
   `BENCH_WAL_ACCOUNTS` (through `-ExtraSiloEnv`) spreads
   the tree's WAL partitions across that many accounts, clamped to the number
   provisioned; the silo then logs a `[silo] wal-placement ...` line.
+- `-PrivateNetwork` -- for subscriptions whose policy disables storage public network
+  access and blocks VM public IPs. The VM gets no public IP; SSH goes through an Azure
+  Bastion (Standard, tunnelling enabled) tunnel to `127.0.0.1` on a per-prefix port,
+  outbound traffic through a NAT gateway, and storage through private endpoints with
+  privatelink DNS. The resource group is tagged `latticeBenchNetwork=private`, and
+  `update.ps1`, `run-cohort.ps1` and `vm.ps1` detect the tag and open the tunnel
+  themselves. `deploy-aca.ps1 -PrivateNetwork` is the Layer 3 equivalent, and
+  `performance-report.ps1 -PrivateNetwork` forwards the switch to both.
 
 ## Daily workflow
 

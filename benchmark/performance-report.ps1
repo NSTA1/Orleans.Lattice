@@ -146,8 +146,20 @@
 	cell's per-silo rung. Default 3. A cell still offer-bound after the last
 	escalation is published as a lower bound (>=).
 
+.PARAMETER PrivateNetwork
+	Provision for a subscription whose policy disables public storage network
+	access and blocks VM public IPs (e.g. a Microsoft-internal subscription).
+	Layers 1/2: no VM public IP; ssh/scp go through an Azure Bastion tunnel
+	on 127.0.0.1, outbound traffic through a NAT gateway, and storage through
+	private endpoints. Layer 3: VNet-integrated ACA environment, storage
+	private endpoint, managed-identity storage auth. Applies to provisioning
+	only; a -ReuseVm / -ReuseAca rig keeps the mode it was deployed with.
+	Default off: the original public layout.
+
 .EXAMPLE
 	./benchmark/performance-report.ps1                                  # full sweep
+.EXAMPLE
+	./benchmark/performance-report.ps1 -PrivateNetwork                  # policy-restricted subscription
 .EXAMPLE
 	./benchmark/performance-report.ps1 -Layer 2 -Workloads 'set-many'   # one row
 .EXAMPLE
@@ -219,6 +231,19 @@ param(
 
 	# Layer 3 only: leave the ACA rig standing after the sweep. Mirrors -KeepVm.
 	[switch] $KeepAca,
+
+	# Provision for a subscription whose policy forbids VM public IPs and
+	# public storage network access (e.g. a Microsoft-internal subscription).
+	# Layers 1/2: the VM has no public IP and is reached over ssh through an
+	# Azure Bastion tunnel on 127.0.0.1; storage is reached over private
+	# endpoints (deploy.ps1 -PrivateNetwork). Layer 3: the ACA environment is
+	# VNet-integrated, storage is reached over a private endpoint, and the
+	# silo/producer authenticate with a managed identity rather than a
+	# connection string (deploy-aca.ps1 -PrivateNetwork). Only affects
+	# provisioning: a -ReuseVm / -ReuseAca rig is used in whatever mode it was
+	# deployed in (the VM's resource group records it as a tag). Omit for the
+	# original public layout.
+	[switch] $PrivateNetwork,
 
 	# Layer 3 only: resume an interrupted sweep from the rig's state.json.
 	# Every (workload, silo count) cell that already holds its full cohort
@@ -316,6 +341,8 @@ $repoRoot  = Resolve-Path (Join-Path $scriptDir '..')
 $benchmarkRoot = $scriptDir   # benchmark/
 $azureThroughputDir = Join-Path $benchmarkRoot 'azure-throughput'
 $azScriptsDir = Join-Path $azureThroughputDir 'scripts'
+# VM ssh resolution (public FQDN or private-network Bastion tunnel).
+. (Join-Path $azScriptsDir '_vm-access.ps1')
 $docPath = Join-Path $repoRoot 'docs/lattice/performance-single-silo.md'
 $multiSiloDocPath = Join-Path $repoRoot 'docs/lattice/performance-multi-silo.md'
 $runRoot = Join-Path $benchmarkRoot '.run/performance-report'
@@ -1001,6 +1028,7 @@ function Invoke-Provision {
 		VmSize     = $VmSize
 	}
 	if ($ParametersFilePath) { $argMap['ParametersFile'] = $ParametersFilePath }
+	if ($PrivateNetwork) { $argMap['PrivateNetwork'] = $true }
 	& $deployScript @argMap
 	if ($LASTEXITCODE -ne 0) { throw "deploy.ps1 failed (exit $LASTEXITCODE)" }
 }
@@ -1028,6 +1056,10 @@ function Invoke-Teardown {
 		Write-Warning "[teardown] REFUSING to delete '$rg': it is tagged latticeBenchRun='$tag', not '$Prefix'. If it really is yours, delete it by hand: az group delete --name $rg --yes"
 		return
 	}
+
+	# A private-network rig's Bastion tunnel is a local background process;
+	# stop it before the VM it points at disappears.
+	Stop-BenchBastionTunnel -NamePrefix $Prefix
 
 	Write-Host "[teardown] az group delete --name $rg --yes --no-wait" -ForegroundColor Cyan
 	& az group delete --name $rg --yes --no-wait 2>&1 | Out-Null
@@ -1059,16 +1091,20 @@ function Get-VmDotnetVersion {
 	)
 	$p = & $ParametersFilePath
 	if ($Prefix) { $p.NamePrefix = $Prefix; $p.ResourceGroup = "rg-$Prefix" }
-	$pipName = "$($p.NamePrefix)-pip"
-	$fqdn = (& az network public-ip show -g $p.ResourceGroup -n $pipName --query dnsSettings.fqdn -o tsv 2>$null).Trim()
-	if (-not $fqdn) { return $null }
-	$sshTarget = "$($p.AdminUsername)@$fqdn"
+	try {
+		$vmAccess = Resolve-BenchVmSsh -ResourceGroup $p.ResourceGroup -NamePrefix $p.NamePrefix -AdminUsername $p.AdminUsername -SshPublicKeyPath $p.SshPublicKeyPath
+	} catch {
+		Write-Warning "[dotnet-version] could not reach the VM: $($_.Exception.Message)"
+		return $null
+	}
+	if (-not $vmAccess.Target) { return $null }
+	$sshTarget = $vmAccess.Target
 	$sshOpts = @(
 		'-o','StrictHostKeyChecking=accept-new',
 		'-o','ServerAliveInterval=15',
 		'-o','ServerAliveCountMax=3',
 		'-o','ConnectTimeout=10'
-	)
+	) + $vmAccess.SshOpts
 	# Bracket with `timeout 10` so a wedged ssh handshake cannot hang the
 	# whole run. `|| true` keeps the remote shell exiting 0 on any failure;
 	# the empty stdout then trips the trim-empty guard below and we fall
@@ -1107,18 +1143,18 @@ function Invoke-Layer1Cohorts {
 	$filterPatterns = ($rows | ForEach-Object { '*.' + $_.BdnMethod }) -join ','
 	Write-Host "[layer1] filter: $filterPatterns" -ForegroundColor DarkGray
 
-	# SSH plumbing: resolve the VM host alias via parameters + az network public-ip.
+	# SSH plumbing: public FQDN, or the Bastion tunnel in private-network mode.
 	$p = & $ParametersFilePath
 	if ($Prefix) { $p.NamePrefix = $Prefix; $p.ResourceGroup = "rg-$Prefix" }
-	$pipName = "$($p.NamePrefix)-pip"
-	$fqdn = (& az network public-ip show -g $p.ResourceGroup -n $pipName --query dnsSettings.fqdn -o tsv).Trim()
-	$sshTarget = "$($p.AdminUsername)@$fqdn"
+	$vmAccess = Resolve-BenchVmSsh -ResourceGroup $p.ResourceGroup -NamePrefix $p.NamePrefix -AdminUsername $p.AdminUsername -SshPublicKeyPath $p.SshPublicKeyPath
+	if (-not $vmAccess.Target) { throw "[layer1] could not resolve an ssh endpoint for $($p.NamePrefix)-vm" }
+	$sshTarget = $vmAccess.Target
 	$sshOpts = @(
 		'-o','StrictHostKeyChecking=accept-new',
 		'-o','ServerAliveInterval=15',
 		'-o','ServerAliveCountMax=3',
 		'-o','ConnectTimeout=10'
-	)
+	) + $vmAccess.SshOpts
 
 	$prefixDir = Join-Path $runRoot $Prefix
 	$mbDir = Join-Path $prefixDir 'microbench'
@@ -3060,7 +3096,9 @@ function Main {
 				# image build failure, a quota refusal) with billable
 				# resources already standing.
 				$acaProvisioned = $true
-				& $acaScript -NamePrefix $acaPrefix | Out-Host
+				$acaArgs = @{ NamePrefix = $acaPrefix }
+				if ($PrivateNetwork) { $acaArgs['PrivateNetwork'] = $true }
+				& $acaScript @acaArgs | Out-Host
 				if ($LASTEXITCODE -ne 0) { throw "deploy-aca.ps1 exited $LASTEXITCODE" }
 				# Provisioning has now written the context, so the region the
 				# resources actually landed in is knowable. Correct the state
