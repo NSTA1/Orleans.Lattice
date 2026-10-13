@@ -30,6 +30,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **WAL - Experimental replay service-rate controller.** An opt-in, default-off `WalReplayServiceRateControllerEnabled` lets the per-silo cold-replay gate withhold and restore permits from bounded service-time probes on its own ledger, reported as `trigger=service_time` on `orleans.lattice.wal.replay.permit_adaptations`; with it off, replay admission is unchanged. Experimental: not yet acceptance evidence for cold-replay convergence. ([#4925](https://github.com/NSTA1/Orleans.Lattice/pull/4925)) (`Orleans.Lattice`)
+
 ### Changed
 
 - **Performance - Repository-context scans reuse sort comparers.** Hot streaming scans now reuse comparison delegates instead of allocating one per call. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
