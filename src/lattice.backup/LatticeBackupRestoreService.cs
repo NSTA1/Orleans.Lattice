@@ -535,7 +535,8 @@ internal sealed class LatticeBackupRestoreService(
             // release it even if this host dies before the first data write.
             await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
                 .BeginAliasChangeAsync(shadowTreeId).ConfigureAwait(false);
-            previousPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
+            var targetEntry = await registry.GetEntryAsync(targetTreeId).ConfigureAwait(false);
+            previousPhysical = targetEntry?.PhysicalTreeId ?? targetTreeId;
             shadowRouting = await grainFactory.GetGrain<ILattice>(shadowTreeId)
                 .GetRoutingAsync(cancellationToken).ConfigureAwait(false);
         }

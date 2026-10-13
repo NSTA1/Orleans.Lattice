@@ -181,15 +181,30 @@ internal sealed class TreeSnapshotGrain(
             state.State.Complete = false;
         }
 
+        // Capture the source's routing. Splits and reshards write the routing
+        // map and the split allocation high-water mark to the LOGICAL tree's
+        // entry, never to the physical copy an alias points at, so the logical
+        // id is what is read. System trees never carry a custom map, and reading
+        // one would be a circular registry call.
+        var registry = grainFactory.GetLatticeRegistry();
+        var routingTreeId = string.IsNullOrEmpty(logicalTreeId) ? SourceTreeId : logicalTreeId;
+        var sourceEntry = routingTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
+            ? null
+            : await registry.GetEntryAsync(routingTreeId);
+
         // Resolve the source tree's pinned structural sizing from the registry.
+        // When routingTreeId matches SourceTreeId (the standard snapshot case),
+        // sourceEntry already holds the registry row and optionsResolver.Resolve
+        // resolves synchronously without issuing a second registry grain RPC.
         // The destination tree is created by this grain (see InitiateSnapshotStateAsync)
         // and inherits the source's ShardCount - there is no pre-existing
         // destination to compare against, so no "shard counts must match"
         // check against destOptions.ShardCount is required.
-        var sourceResolved = await optionsResolver.ResolveAsync(SourceTreeId);
+        var sourceResolved = string.Equals(routingTreeId, SourceTreeId, StringComparison.Ordinal)
+            ? optionsResolver.Resolve(SourceTreeId, sourceEntry)
+            : await optionsResolver.ResolveAsync(SourceTreeId);
 
         // Validate destination tree doesn't already exist.
-        var registry = grainFactory.GetLatticeRegistry();
         if (await registry.ExistsAsync(destinationTreeId))
             throw new InvalidOperationException(
                 $"Destination tree '{destinationTreeId}' already exists. Choose a new tree ID.");
