@@ -268,4 +268,35 @@ public partial class AtomicWriteGrainTests
         Assert.That(attempts, Is.EqualTo(Storm + 1),
             "Deadline-bounded retry on MarkOneShardAsync must absorb every sequential stale-routing throw.");
     }
+
+    [Test]
+    public async Task ExecuteAsync_absorbs_many_sequential_routing_epoch_changes_before_commit()
+    {
+        // A single reshard can publish more than three map epochs between
+        // prepare and the commit decision. Rebinding must use the same
+        // wall-clock bound as the other stale-routing retry loops.
+        var (grain, state, _, lattice, _) = CreateGrain();
+        var routingReads = 0;
+        RoutingInfo NextRouting()
+        {
+            var map = ShardMap.CreateDefault(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+            map.Version = Math.Min(++routingReads, 12);
+            return new RoutingInfo(TreeId, map);
+        }
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(NextRouting()));
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(NextRouting()));
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
+
+        Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+        Assert.That(routingReads, Is.GreaterThan(8),
+            "The saga must re-dispatch through more than three routing epochs and commit once routing settles.");
+        await lattice.Received(6).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+    }
 }
