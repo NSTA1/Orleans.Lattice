@@ -84,6 +84,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Deadlock - Sibling-pointer setters.** A leaf split that updates a neighbour's sibling pointer while holding its split gate no longer deadlocks when that neighbour's capture split is linking at the shard root. ([#4919](https://github.com/NSTA1/Orleans.Lattice/issues/4919)) (`Orleans.Lattice`)
 - **Deadlock - nested capture link under a held split gate.** A capture nested in a gated leaf split defers linking the unlinked division until the gate is free, since the parent re-split waited on that gate. ([#4918](https://github.com/NSTA1/Orleans.Lattice/issues/4918)) (`Orleans.Lattice`)
 
 - **Explorer - Keys read ownership.** Changing key or prefix discards late replies and faults without ending the new read; abandoned scan cursors are released and pending filter reads retry for the current prefix. ([#4913](https://github.com/NSTA1/Orleans.Lattice/pull/4913)) (`Orleans.Lattice.Explorer.UI`)
