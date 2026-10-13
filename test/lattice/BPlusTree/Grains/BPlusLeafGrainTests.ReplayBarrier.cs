@@ -65,8 +65,10 @@ public partial class BPlusLeafGrainTests
                 + "form of GetKeyRangeAsync and GetPrevSiblingAsync, neither of which waits.",
             ["SetNextSiblingAsync"] =
                 "Topology write. Gating it would put the chain-relink path behind a replay, which is "
-                + "how a split or merge would deadlock against the leaf it is relinking.",
-            ["SetPrevSiblingAsync"] = "Topology write; same reasoning as SetNextSiblingAsync.",
+                + "how a split or merge would deadlock against the leaf it is relinking. Also "
+                + "[AlwaysInterleave] (issue #4919), so a split holding its gate is never queued "
+                + "behind the neighbour's turn.",
+            ["SetPrevSiblingAsync"] = "Topology write; same reasoning as SetNextSiblingAsync, including [AlwaysInterleave].",
             ["GetProjectionCheckpointOffsetAsync"] =
                 "Reports how far the replay HAS got. Waiting for the replay before answering would "
                 + "make the accessor unable to observe a replay in progress, which is the only state "
