@@ -116,7 +116,10 @@
             </table>
             <div class="lt-datetime__time">
                 <label class="lt-datetime__time-label" for="@TimeId">Time (UTC)</label>
-                <input id="@TimeId" class="lt-input lt-input--mono" type="time" step="1" value="@TimeValue" @onchange="OnTimeChangeAsync" />
+                <input id="@TimeId" class="lt-input lt-input--mono" type="time" step="1" value="@TimeValue"
+                       aria-invalid="@(_invalidPickerTime ? "true" : null)"
+                       aria-describedby="@(_invalidPickerTime ? ErrorId : null)"
+                       @onchange="OnTimeChangeAsync" />
             </div>
             <div class="lt-datetime__actions">
                 @if (EmptyText is not null)
