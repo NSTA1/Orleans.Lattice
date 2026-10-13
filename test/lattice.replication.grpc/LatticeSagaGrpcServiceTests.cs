@@ -313,7 +313,9 @@ public partial class LatticeSagaGrpcServiceTests
         {
             { LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader, origin },
         };
-        return new FakeServerCallContext(headers);
+        var context = new FakeServerCallContext(headers);
+        context.UserState[LatticeReplicationGrpcAuthInterceptor.AuthenticatedPeerKey] = origin;
+        return context;
     }
 
     private static ServerCallContext ContextWithoutHeaders() => new FakeServerCallContext(new global::Grpc.Core.Metadata());
@@ -364,9 +366,15 @@ public partial class LatticeSagaGrpcServiceTests
 
     private sealed class FakeServerCallContext : ServerCallContext
     {
-        public FakeServerCallContext(global::Grpc.Core.Metadata headers) => RequestHeadersCore = headers;
+        private readonly string _method;
 
-        protected override string MethodCore => string.Empty;
+        public FakeServerCallContext(global::Grpc.Core.Metadata headers, string method = "")
+        {
+            RequestHeadersCore = headers;
+            _method = method;
+        }
+
+        protected override string MethodCore => _method;
         protected override string HostCore => string.Empty;
         protected override string PeerCore => string.Empty;
         protected override DateTime DeadlineCore => DateTime.MaxValue;

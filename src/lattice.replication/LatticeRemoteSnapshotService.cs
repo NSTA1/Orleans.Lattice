@@ -17,10 +17,10 @@ namespace Orleans.Lattice.Replication;
 /// implementation of the cross-cluster bootstrap transport contract.
 /// <para>
 /// Point-in-time consistency is provided by the underlying
-/// <see cref="ISnapshotProvider"/>: <see cref="GetMetadataAsync"/>
+/// <see cref="ISnapshotProvider"/>: <see cref="GetMetadataAsync(string, string, HybridLogicalClock, CancellationToken)"/>
 /// invokes <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> and returns the
 /// resulting cut-point metadata; a paired
-/// <see cref="RequestSnapshotAsync"/> call invokes
+/// <see cref="RequestSnapshotAsync(string, string, HybridLogicalClock, CancellationToken)"/> call invokes
 /// <see cref="Orleans.Lattice.Replication.ISnapshotProvider.ExportAsync(string, Orleans.Lattice.HybridLogicalClock, System.Threading.CancellationToken)"/> again with the same
 /// receiver-supplied <c>fromAsOfHlc</c> filter and drains the entry
 /// stream. The canonical
@@ -47,6 +47,9 @@ namespace Orleans.Lattice.Replication;
 /// replication enrollment before any tree is read, so a peer holding the
 /// mesh secret cannot dump a tree this cluster deliberately kept
 /// cluster-local by not enrolling it.
+/// Tenant trees additionally require an authenticated requesting peer and the
+/// tenant export gate's approval before any provider access. The legacy
+/// transport signatures have no requester identity and cannot export tenant trees.
 /// </para>
 /// </summary>
 public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
@@ -54,6 +57,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
     private readonly ISnapshotProvider _provider;
     private readonly ILatticeReplicationContext? _replicationContext;
     private readonly ILogger<LatticeRemoteSnapshotService> _logger;
+    private readonly IReplicationTenantIsolationGate? _tenantIsolationGate;
 
     /// <summary>
     /// The cross-tree export preconditions (issue #4684), set when the service
@@ -73,7 +77,8 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         var context = services.GetService<ILatticeReplicationContext>();
         return context is null
             ? new LatticeRemoteSnapshotService(provider, logger)
-            : new LatticeRemoteSnapshotService(provider, context, logger)
+            : new LatticeRemoteSnapshotService(provider, context, logger,
+                services.GetService<IReplicationTenantIsolationGate>())
             {
                 ExportGate = services.GetService<CrossTreeExportGate>(),
             };
@@ -114,9 +119,8 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
     /// Constructs a new <see cref="LatticeRemoteSnapshotService"/> bound to
     /// the supplied sender-side <see cref="ISnapshotProvider"/> and the local
     /// replication enrollment context that scopes what it will export. This
-    /// is the overload the DI container selects, because
-    /// <c>AddLatticeReplication</c> registers an
-    /// <see cref="ILatticeReplicationContext"/>.
+    /// has no tenant disclosure gate and refuses tenant exports. The registered
+    /// factory supplies the gate through the four-argument constructor.
     /// </summary>
     /// <param name="provider">
     /// The sender's local snapshot provider - typically the default
@@ -136,6 +140,24 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         ISnapshotProvider provider,
         ILatticeReplicationContext replicationContext,
         ILogger<LatticeRemoteSnapshotService> logger)
+        : this(provider, replicationContext, logger, null)
+    {
+    }
+
+    /// <summary>
+    /// Constructs a sender with a tenant snapshot disclosure gate. Tenant
+    /// exports require an authenticated requesting peer and an active gate;
+    /// legacy and platform trees retain their enrollment-only export behavior.
+    /// </summary>
+    /// <param name="provider">The local snapshot provider.</param>
+    /// <param name="replicationContext">The local enrollment context.</param>
+    /// <param name="logger">Typed logger.</param>
+    /// <param name="tenantIsolationGate">The tenant export authorizer, or <c>null</c> to deny tenant exports.</param>
+    public LatticeRemoteSnapshotService(
+        ISnapshotProvider provider,
+        ILatticeReplicationContext replicationContext,
+        ILogger<LatticeRemoteSnapshotService> logger,
+        IReplicationTenantIsolationGate? tenantIsolationGate)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(replicationContext);
@@ -144,6 +166,25 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         _provider = provider;
         _replicationContext = replicationContext;
         _logger = logger;
+        _tenantIsolationGate = tenantIsolationGate;
+    }
+
+    private async ValueTask EnsurePeerMayExportAsync(
+        string treeName, string? authenticatedRequesterClusterId, CancellationToken cancellationToken)
+    {
+        var owner = LatticeTenantTrees.GetOwner(treeName);
+        if (owner.IsPlatformOwned || owner.Tenant.IsDefault)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(authenticatedRequesterClusterId)
+            || _tenantIsolationGate is not { IsActive: true }
+            || !await _tenantIsolationGate.AuthorizeExportAsync(
+                treeName, authenticatedRequesterClusterId, cancellationToken).ConfigureAwait(false))
+        {
+            throw new UnauthorizedAccessException("Tenant snapshot export is not authorized for the requesting peer.");
+        }
     }
 
     /// <summary>
@@ -205,16 +246,32 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
     }
 
     /// <inheritdoc />
+    public Task<RemoteSnapshotMetadata> GetMetadataAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock fromAsOfHlc,
+        CancellationToken cancellationToken = default) =>
+        GetMetadataAsync(treeName, sourceClusterId, fromAsOfHlc, null, cancellationToken);
+
+    /// <summary>Captures snapshot metadata after authorizing the authenticated requesting peer.</summary>
+    /// <param name="treeName">The tree to export.</param>
+    /// <param name="sourceClusterId">The source cluster pinned by the receiver, not requester identity.</param>
+    /// <param name="fromAsOfHlc">The requested cut-point filter.</param>
+    /// <param name="authenticatedRequesterClusterId">The identity established by transport authentication; <c>null</c> when unavailable.</param>
+    /// <param name="cancellationToken">Cancels the export.</param>
+    /// <returns>The snapshot metadata.</returns>
     public async Task<RemoteSnapshotMetadata> GetMetadataAsync(
         string treeName,
         string sourceClusterId,
         HybridLogicalClock fromAsOfHlc,
-        CancellationToken cancellationToken = default)
+        string? authenticatedRequesterClusterId,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureTreeEnrolledForExport(treeName);
+        await EnsurePeerMayExportAsync(treeName, authenticatedRequesterClusterId, cancellationToken).ConfigureAwait(false);
         ExportGate?.EnsureMayExport(treeName);
 
         var stream = await _provider
@@ -241,16 +298,32 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
     }
 
     /// <inheritdoc />
+    public IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock fromAsOfHlc,
+        CancellationToken cancellationToken = default) =>
+        RequestSnapshotAsync(treeName, sourceClusterId, fromAsOfHlc, null, cancellationToken);
+
+    /// <summary>Streams entries after authorizing the authenticated requesting peer, before opening the provider.</summary>
+    /// <param name="treeName">The tree to export.</param>
+    /// <param name="sourceClusterId">The source cluster pinned by the receiver.</param>
+    /// <param name="fromAsOfHlc">The requested cut-point filter.</param>
+    /// <param name="authenticatedRequesterClusterId">The transport-authenticated requesting peer, or <c>null</c> when unavailable.</param>
+    /// <param name="cancellationToken">Cancels the export.</param>
+    /// <returns>The authorized entry stream.</returns>
     public async IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
         string treeName,
         string sourceClusterId,
         HybridLogicalClock fromAsOfHlc,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        string? authenticatedRequesterClusterId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureTreeEnrolledForExport(treeName);
+        await EnsurePeerMayExportAsync(treeName, authenticatedRequesterClusterId, cancellationToken).ConfigureAwait(false);
         ExportGate?.EnsureMayExport(treeName);
 
         var stream = await _provider
@@ -272,16 +345,32 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
     }
 
     /// <inheritdoc />
+    public IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock fromAsOfHlc,
+        CancellationToken cancellationToken = default) =>
+        RequestSnapshotItemsAsync(treeName, sourceClusterId, fromAsOfHlc, null, cancellationToken);
+
+    /// <summary>Streams entries and completion fences after authorizing the authenticated requesting peer.</summary>
+    /// <param name="treeName">The tree to export.</param>
+    /// <param name="sourceClusterId">The source cluster pinned by the receiver.</param>
+    /// <param name="fromAsOfHlc">The requested cut-point filter.</param>
+    /// <param name="authenticatedRequesterClusterId">The transport-authenticated requesting peer, or <c>null</c> when unavailable.</param>
+    /// <param name="cancellationToken">Cancels the export.</param>
+    /// <returns>The authorized snapshot stream.</returns>
     public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
         string treeName,
         string sourceClusterId,
         HybridLogicalClock fromAsOfHlc,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        string? authenticatedRequesterClusterId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureTreeEnrolledForExport(treeName);
+        await EnsurePeerMayExportAsync(treeName, authenticatedRequesterClusterId, cancellationToken).ConfigureAwait(false);
         ExportGate?.EnsureMayExport(treeName);
 
         var stream = await _provider

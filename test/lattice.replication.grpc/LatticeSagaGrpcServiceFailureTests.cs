@@ -192,7 +192,9 @@ public class LatticeSagaGrpcServiceFailureTests
         {
             { LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader, Peer },
         };
-        return new FakeServerCallContext(headers, cancellationToken);
+        var context = new FakeServerCallContext(headers, cancellationToken);
+        context.UserState[LatticeReplicationGrpcAuthInterceptor.AuthenticatedPeerKey] = Peer;
+        return context;
     }
 
     /// <summary>

@@ -239,6 +239,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - Tenant snapshot recipients.** Tenant exports authorize credential-bound receiving regions before reading prepared values; missing identity, inactive tenants and unauthorized residency are denied. ([#4915](https://github.com/NSTA1/Orleans.Lattice/issues/4915)) (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`, `Orleans.Lattice.Tenancy`)
+
+- **Security - Saga decision ownership.** Prepare retries, commits and aborts must match the persisted coordinator and resource identity. gRPC saga calls require credential-bound peer identity, preserving legitimate retries and recovery. ([#4915](https://github.com/NSTA1/Orleans.Lattice/issues/4915)) (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`)
+
 - **Security - Explorer sign-in return URL accepted control characters.** A path such as `/<TAB>/evil.com` passed the local-URL check and browsers read it as `//evil.com`, an open redirect. Control characters are now rejected. ([#4790](https://github.com/NSTA1/Orleans.Lattice/pull/4790)) (`Orleans.Lattice.Explorer.Entra.Web`)
 
 - **Security - Graph continuation token accepted a foreign port or userinfo.** Only scheme and host were compared, so a replayed next link could target another port or carry credentials. Both now must match the configured Graph base. ([#4790](https://github.com/NSTA1/Orleans.Lattice/pull/4790)) (`Orleans.Lattice.Membership.Entra.Graph`)

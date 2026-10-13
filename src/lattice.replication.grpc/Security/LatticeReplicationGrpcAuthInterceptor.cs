@@ -31,6 +31,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// </remarks>
 internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
 {
+    internal static readonly object AuthenticatedPeerKey = new();
     private readonly IReplicationSecretProvider _secrets;
     private readonly IOptionsMonitor<LatticeReplicationSecurityOptions> _options;
     private readonly ILogger<LatticeReplicationGrpcAuthInterceptor> _logger;
@@ -218,6 +219,8 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
                 + "With BindCredentialToOriginCluster enabled, a peer must present the secret this cluster "
                 + "is configured to use for that peer, and must stamp its origin cluster id."));
         }
+
+        context.UserState[AuthenticatedPeerKey] = origin!;
     }
 
     /// <summary>

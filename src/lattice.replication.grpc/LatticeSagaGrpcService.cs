@@ -216,6 +216,9 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
         // binds the presented secret to the stamped origin, which is what makes
         // the header below an authenticated input rather than a self-assertion.
         //
+        // Require the interceptor's successful binding as well as the header.
+        // Disabling binding leaves the header self-asserted and cannot authorize
+        // an identity-sensitive saga operation.
         // Absent header is refused rather than falling back to the body:
         // GrpcChannelHardening stamps the header unconditionally on every
         // peer channel, so a conforming sender always carries it and only a
@@ -224,13 +227,16 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
         // applied to one verb of a family and not its siblings is not a gate,
         // because the caller picks the verb.
         var origin = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
-        if (string.IsNullOrWhiteSpace(origin))
+        if (string.IsNullOrWhiteSpace(origin)
+            || !context.UserState.TryGetValue(LatticeReplicationGrpcAuthInterceptor.AuthenticatedPeerKey, out var authenticatedPeer)
+            || authenticatedPeer is not string peer
+            || !string.Equals(origin, peer, StringComparison.Ordinal))
         {
             _logger.LogWarning(
-                "Saga control {Operation} rejected for saga {SagaId} - the call carries no stamped origin cluster.",
+                "Saga control {Operation} rejected for saga {SagaId} - the call carries no credential-bound origin cluster.",
                 operation, request.SagaId);
             throw new RpcException(new Status(StatusCode.PermissionDenied,
-                "Saga control calls must carry the transport-stamped origin cluster header. "
+                "Saga control calls require a credential-bound origin cluster. "
                 + "The coordinator cluster id declared in the request body is not an authorization input."));
         }
 
@@ -258,6 +264,11 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
                 + "stamped on the call; a peer may only drive sagas it coordinates."));
         }
 
+        if (!requesterQuery)
+        {
+            request = request with { CoordinatorClusterId = origin };
+        }
+
         var authorized = await _authorizer.IsAuthorizedAsync(origin, context.CancellationToken).ConfigureAwait(false);
         if (!authorized)
         {
@@ -281,6 +292,10 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
         catch (RpcException)
         {
             throw;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {

@@ -63,6 +63,36 @@ internal sealed class ReplicationTenantIsolationGate(
     public bool IsActive => true;
 
     /// <inheritdoc />
+    public async ValueTask<bool> AuthorizeExportAsync(
+        string treeId,
+        string authenticatedRequesterClusterId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var ownership = LatticeTenantTrees.GetOwner(treeId);
+        if (ownership.IsPlatformOwned || ownership.Tenant.IsDefault)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(authenticatedRequesterClusterId))
+        {
+            return false;
+        }
+
+        // Export is a disclosure, not convergence of a write already made.
+        // Consult the authoritative record even when the inbound fast path has
+        // a cached answer, and require explicit destination authorization.
+        var record = await _registry.GetAsync(ownership.Tenant, cancellationToken).ConfigureAwait(false);
+        return record is not null
+            && record.Id.Equals(ownership.Tenant)
+            && record.IsActive
+            && record.IsRegionAllowed(authenticatedRequesterClusterId)
+            && record.GetRegionStatus(authenticatedRequesterClusterId)
+                is TenantRegionStatus.Backfilling or TenantRegionStatus.Online;
+    }
+
+    /// <inheritdoc />
     public ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync(
         string treeId,
         CancellationToken cancellationToken = default)

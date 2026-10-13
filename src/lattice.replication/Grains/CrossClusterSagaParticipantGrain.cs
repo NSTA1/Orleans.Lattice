@@ -40,6 +40,8 @@ namespace Orleans.Lattice.Replication.Grains;
 /// The fence is durable because it is anchored on an Orleans reminder (grain
 /// timers do not survive deactivation); retention cleanup reuses the
 /// <see cref="TtlGrain{TSelf}"/> reminder lifecycle. Every RPC is idempotent.
+/// Prepare retries and terminal requests must match the persisted coordinator
+/// and immutable resource identity before any participant SPI or state mutation.
 /// </summary>
 internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSagaParticipantGrain>, ICrossClusterSagaParticipantGrain
 {
@@ -262,6 +264,7 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// <inheritdoc />
     public async Task<SagaControlResponse> PrepareAsync(SagaControlRequest request)
     {
+        EnsureRequestIdentity(request);
         // Zero-prime both members of the compensation-cause taxonomy before the
         // idempotent re-attach below can return (issue #2918). Both arms are
         // reachable only from SagaPhase.Prepared - `vote-abort` from a
@@ -373,6 +376,7 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// <inheritdoc />
     public async Task<SagaControlResponse> CommitAsync(SagaControlRequest request)
     {
+        EnsureRequestIdentity(request);
         switch (_state.State.Phase)
         {
             case SagaPhase.Prepared:
@@ -400,6 +404,7 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// <inheritdoc />
     public async Task<SagaControlResponse> AbortAsync(SagaControlRequest request)
     {
+        EnsureRequestIdentity(request);
         switch (_state.State.Phase)
         {
             case SagaPhase.Prepared:
@@ -409,6 +414,10 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
                 // Abort for a saga that was never prepared: record aborted so a
                 // later prepare cannot resurrect it, and so status is stable.
                 _state.State.SagaId = SagaId;
+                _state.State.TargetTree = request.TargetTree;
+                _state.State.ManifestId = request.ManifestId;
+                _state.State.CoordinatorClusterId = request.CoordinatorClusterId;
+                _state.State.SetId = request.SetId;
                 _state.State.Phase = SagaPhase.Aborted;
                 _state.State.Vote = SagaVote.Abort;
                 _state.State.Detail = "Aborted before prepare.";
@@ -433,6 +442,20 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// <inheritdoc />
     public Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request) =>
         Task.FromResult(BuildStatusResponse());
+
+    private void EnsureRequestIdentity(SagaControlRequest request)
+    {
+        if (!string.Equals(request.SagaId, SagaId, StringComparison.Ordinal)
+            || (_state.State.Phase != SagaPhase.None
+                && (!string.Equals(request.CoordinatorClusterId, _state.State.CoordinatorClusterId, StringComparison.Ordinal)
+                    || !string.Equals(request.TargetTree, _state.State.TargetTree, StringComparison.Ordinal)
+                    || !string.Equals(request.ManifestId, _state.State.ManifestId, StringComparison.Ordinal)
+                    || !string.Equals(request.SetId, _state.State.SetId, StringComparison.Ordinal))))
+        {
+            throw new UnauthorizedAccessException(
+                "The saga control request does not match the participant's recorded identity.");
+        }
+    }
 
     /// <summary>
     /// Commits every local participant and records the Committed phase. Every
