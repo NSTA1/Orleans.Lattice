@@ -89,7 +89,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **CI - Browser shard reliability.** Browser fixtures are duration-balanced across five shards. Chromium-only shards skip unused engines; UI and coverage provisioning gets three bounded attempts with process kill deadlines and a final step timeout. ([#4894](https://github.com/NSTA1/Orleans.Lattice/pull/4894)) (`repository-wide`)
 
-- **Explorer - Tenant read ownership.** Switching tenants discards late overview, quota, member and sharing replies and faults and closes the old quota editor. Leaving cancels reads; an old not-found reply or region refresh fault cannot replace the current page. ([#4888](https://github.com/NSTA1/Orleans.Lattice/issues/4888)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Tenant read ownership.** Switching tenants discards late overview, quota, member and sharing replies and faults and closes the old quota editor. Leaving cancels reads; an old not-found reply or region refresh fault cannot replace the current page. ([#4888](https://github.com/NSTA1/Orleans.Lattice/issues/4888), [#4911](https://github.com/NSTA1/Orleans.Lattice/pull/4911)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Access navigation.** Query-only create commands open their dialogs, Explain asks the current address and clears old answers, and superseded rule/group reads cannot publish stale lists, counts or faults. ([#4875](https://github.com/NSTA1/Orleans.Lattice/pull/4875)) (`Orleans.Lattice.Explorer.UI`)
 
@@ -138,7 +138,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Session recovery and preferences.** Failed or cancelled configuration reads can be retried, malformed preference values no longer crash reads, and late work after session disposal cannot alter saved preferences. ([#4801](https://github.com/NSTA1/Orleans.Lattice/pull/4801)) (`Orleans.Lattice.Explorer.Core`)
 
-- **Explorer - Workspace reads.** Switching trees or opening a view discards late dead-letter counts, pages and errors, view-status replies and administration checks. Overlapping view refreshes keep the newest status; tracked view actions stay with their originating workspace. ([#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Workspace reads.** Switching trees or opening a view discards late dead-letter counts, pages and errors, view-status replies and administration checks. Overlapping view refreshes keep the newest status; tracked view actions stay with their originating workspace. ([#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800), [#4911](https://github.com/NSTA1/Orleans.Lattice/pull/4911)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Reliable picker inputs.** Paste keeps unfinished text; stale name checks and multi-value edits cannot overwrite new input or selections. Calendars support date limits, invalid offsets are refused, and nonpositive suggestion limits query nothing. ([#4797](https://github.com/NSTA1/Orleans.Lattice/pull/4797), [#4800](https://github.com/NSTA1/Orleans.Lattice/pull/4800), [#4816](https://github.com/NSTA1/Orleans.Lattice/issues/4816), [#4839](https://github.com/NSTA1/Orleans.Lattice/issues/4839)) (`Orleans.Lattice.Explorer.UI`)
 
