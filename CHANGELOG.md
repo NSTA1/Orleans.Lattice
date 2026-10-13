@@ -46,7 +46,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **WAL - Cold-replay durability and retries.** Acknowledged deletes survive cold replay and remain available to replication reseeding; historical malformed records are not repaired automatically. Refused drives no longer amplify retries. ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)
+- **WAL - Cold-replay durability and retries.** Deletes survive cold replay and replication reseeding; historical records need [recovery assessment](docs/lattice/troubleshooting.md). Refused drives no longer amplify retries. ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)
 - **Explorer - Date-field validation.** Incomplete dates no longer borrow today's date, clearing the picker time blocks stale-value submission, and disabling a field closes its picker. ([#4936](https://github.com/NSTA1/Orleans.Lattice/pull/4936)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Atomic - Reshard retries through routing epochs.** Atomic writes continue rebinding across successive shard-map epochs until the existing retry budget expires, instead of failing after three rebinds before the commit decision. ([#4922](https://github.com/NSTA1/Orleans.Lattice/issues/4922)) (`Orleans.Lattice`)
