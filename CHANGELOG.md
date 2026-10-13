@@ -82,7 +82,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **Explorer - Keys read ownership.** Changing key or prefix discards late replies and faults without ending the new read; abandoned scan cursors are released and pending filter reads retry for the current prefix. (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Keys read ownership.** Changing key or prefix discards late replies and faults without ending the new read; abandoned scan cursors are released and pending filter reads retry for the current prefix. ([#4913](https://github.com/NSTA1/Orleans.Lattice/pull/4913)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Tree read ownership.** Navigating between trees discards superseded catalogue replies and not-found answers; query-only tab changes during a pending read keep the latest workspace address. ([#4903](https://github.com/NSTA1/Orleans.Lattice/issues/4903)) (`Orleans.Lattice.Explorer.UI`)
 
@@ -127,7 +127,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Backup reads stay current.** Schedule replies and errors stay with their tree, changing the capture tree discards late base-backup lookups, and starting an operation invalidates in-flight cached lists. ([#4821](https://github.com/NSTA1/Orleans.Lattice/issues/4821)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Value rendering.** Cut UTF-8 previews omit partial characters, hex previews keep whole bytes, and JSON selection and table compaction accept the same comments and trailing commas as Automatic. Live changes that remove decoded members reset Members to Automatic. ([#4808](https://github.com/NSTA1/Orleans.Lattice/issues/4808), [#4810](https://github.com/NSTA1/Orleans.Lattice/issues/4810), [#4816](https://github.com/NSTA1/Orleans.Lattice/issues/4816)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Value rendering.** Cut UTF-8 previews omit partial characters, hex previews keep whole bytes, and JSON selection and table compaction accept the same comments and trailing commas as Automatic. Live changes that remove decoded members reset Members to Automatic. ([#4808](https://github.com/NSTA1/Orleans.Lattice/issues/4808), [#4810](https://github.com/NSTA1/Orleans.Lattice/issues/4810), [#4816](https://github.com/NSTA1/Orleans.Lattice/issues/4816), [#4913](https://github.com/NSTA1/Orleans.Lattice/pull/4913)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Schema card singular counts.** A size or length bound typed as `01` or `1.0` reads "1 byte" or "1 character", not "1 bytes". ([#4809](https://github.com/NSTA1/Orleans.Lattice/issues/4809)) (`Orleans.Lattice.Explorer.UI`)
 
