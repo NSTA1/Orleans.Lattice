@@ -180,7 +180,7 @@ public partial class TenancyRegions : IDisposable
 
             Adopt(report.Regions);
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        catch (Exception) when (token.IsCancellationRequested)
         {
             // Replaced by a newer read, or the section was left.
         }

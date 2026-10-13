@@ -26,6 +26,7 @@ public partial class DataViewsPanel : IDisposable
     private (DataTreeEntry View, bool Rebuild)? _pending;
     private (DataTreeEntry View, bool Rebuild)? _starting;
     private bool _cancelling;
+    private int _statusGeneration;
 
     [CascadingParameter]
     internal DataWorkspace? Workspace { get; set; }
@@ -163,6 +164,7 @@ public partial class DataViewsPanel : IDisposable
 
     private async Task RefreshStatusesAsync(CancellationToken token)
     {
+        var generation = ++_statusGeneration;
         _statuses.Clear();
         if (Gate.Admin is not { } admin)
         {
@@ -172,7 +174,7 @@ public partial class DataViewsPanel : IDisposable
         foreach (var view in _views)
         {
             var status = await StatusAsync(admin, view, token);
-            if (token.IsCancellationRequested)
+            if (token.IsCancellationRequested || generation != _statusGeneration)
             {
                 return;
             }
