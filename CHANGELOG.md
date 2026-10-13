@@ -44,6 +44,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Atomic - Reshard retries through routing epochs.** Atomic writes continue rebinding across successive shard-map epochs until the existing retry budget expires, instead of failing after three rebinds before the commit decision. ([#4922](https://github.com/NSTA1/Orleans.Lattice/issues/4922)) (`Orleans.Lattice`)
+
+- **Leaf - Coalesced digests retain intervening mutations.** A timer publish no longer clears the dirty mark for a newer split snapshot, preventing stale per-shard counts after coalesced writes. ([#4931](https://github.com/NSTA1/Orleans.Lattice/issues/4931)) (`Orleans.Lattice`)
+
 - **Container - Calibrated shutdown forecast.** A bounded history of clean drains calibrates fixed overhead and aggregate service rate; thin or extrapolated evidence reports unknown instead of a false abandoned-stop prediction. ([#3484](https://github.com/NSTA1/Orleans.Lattice/issues/3484)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Retrieval - Incomplete ANN counts and retrain accounting.** Incomplete source counts are Unknown, retried with bounded backoff and do not trigger speculative repair; retraining skips the count walk and reports submitted WAL input, not physical occupancy. ([#3482](https://github.com/NSTA1/Orleans.Lattice/issues/3482)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
