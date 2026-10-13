@@ -2211,12 +2211,6 @@ internal sealed partial class BPlusLeafGrain(
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
-            // Historical wire shape: the Delete path does not stamp
-            // ShardIndex on the WAL record (see CommitSetAsync for the
-            // Set path, which does). Preserved verbatim through the
-            // direct-WalRecord builder migration so the apply-side
-            // replay filter on the receiving leaf sees the same
-            // default-0 shard slot it always saw on Delete entries.
             var entry = new WalRecord
             {
                 TreeId = state.State.TreeId ?? string.Empty,
@@ -2234,6 +2228,7 @@ internal sealed partial class BPlusLeafGrain(
                 IsPrepared = isPrepared,
                 PrepareStampOriginal = stampOriginal,
                 IsMigrated = tombstone.IsMigrated,
+                ShardIndex = state.State.ShardIndex ?? 0,
             };
             await writer.AppendAsync(entry);
         }

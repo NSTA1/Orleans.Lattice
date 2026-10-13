@@ -44,6 +44,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **WAL - Refused drives no longer amplify retries.** Only an admitted completion credits a floor-ranked retry; refusal-only passes retain their bounded share instead of repeatedly driving the same blocked leaves. ([#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)
+- **WAL - Acknowledged deletes survive cold replay.** Single-key delete records now carry the leaf's shard index, and replayed committed entries restore the version watermark so reseed exports their tombstones. Deletes written earlier without an authoritative shard map are not repaired automatically. ([#4929](https://github.com/NSTA1/Orleans.Lattice/pull/4929)) (`Orleans.Lattice`)
 - **Container - Calibrated shutdown forecast.** A bounded history of clean drains calibrates fixed overhead and aggregate service rate; thin or extrapolated evidence reports unknown instead of a false abandoned-stop prediction. ([#3484](https://github.com/NSTA1/Orleans.Lattice/issues/3484)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Retrieval - Incomplete ANN counts and retrain accounting.** Incomplete source counts are Unknown, retried with bounded backoff and do not trigger speculative repair; retraining skips the count walk and reports submitted WAL input, not physical occupancy. ([#3482](https://github.com/NSTA1/Orleans.Lattice/issues/3482)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

@@ -112,7 +112,8 @@ public sealed class SourceWalTrimFallOffIntegrationTests
         await siteA.SetAsync("stable", [0x11]);
         await siteA.SetAsync("overwritten", [0x22]);
         await siteA.SetAsync("new-while-behind", [0x33]);
-        await siteA.DeleteAsync("deleted");
+        Assert.That(await siteA.DeleteAsync("deleted"), Is.True);
+        Assert.That(await siteA.GetAsync("deleted"), Is.Null);
 
         await TrimPastUnshippedEntriesAsync();
 
@@ -154,7 +155,12 @@ public sealed class SourceWalTrimFallOffIntegrationTests
         await AssertConvergedAsync(siteA, siteB, "new-while-behind");
         await AssertConvergedAsync(siteA, siteB, "after-trim-trigger");
         await AssertConvergedAsync(siteA, siteB, "clear-trigger");
-        await AssertConvergedAsync(siteA, siteB, "deleted");
+        Assert.That(await siteA.GetAsync("deleted"), Is.Null, "the source must retain its acknowledged deletion after WAL trim");
+        await TestPoll.UntilAsync(
+            async () => await siteB.GetAsync("deleted") is null,
+            "the receiver must apply the acknowledged deletion during re-seed",
+            PollBudget,
+            PollCadence);
     }
 
     private async Task TrimPastUnshippedEntriesAsync()
