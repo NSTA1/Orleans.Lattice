@@ -45,7 +45,7 @@ CI selects exhaustive TLC. The acceptance census (#4442) adds two more gates:
 
 Figures are derived from module manifests and refinement notes. Each area's spec
 `README.md` holds the figures the build checks; the B+ tree topology row reflects
-its five checked modules.
+its six checked modules.
 
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
@@ -54,7 +54,7 @@ its five checked modules.
 | Cross-cluster atomic visibility | 1 | 59 | 39 | 116 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 82 | 64 | 190 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
-| B+ tree topology | 5 | 62 | 94 | 50 | [B+ tree topology](../../spec/bplustree/README.md) |
+| B+ tree topology | 6 | 100 | 140 | 65 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |

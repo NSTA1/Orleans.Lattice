@@ -1,0 +1,15 @@
+# Pairs with NoWaitCycle. An undivided accept has no seeding to wait for.
+MODULE: AbsorbedLinkAwaitsSeed
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: a parent that absorbs the split without dividing waits for a seeding that was never queued
+PERTURBS: ParentAcceptNoOverflow
+
+--- FIND
+    /\ ch[o] = "parent"
+    /\ ch' = [ch EXCEPT ![o] = "return"]
+--- REPLACE
+    /\ ch[o] = "parent"
+    \* MUTATION: the accept waits for a seeding
+    /\ ch' = [ch EXCEPT ![o] = "seed"]
+--- END

@@ -120,6 +120,9 @@ internal static class TlcCiShard
     /// <summary>The shared alias routing and cutover interaction runs.</summary>
     public const string Aliasing = "TlcShardAliasing";
 
+    /// <summary>The leaf split-gate and grain-turn wait-cycle runs.</summary>
+    public const string SplitGate = "TlcShardSplitGate";
+
     /// <summary>The BPlusCascade base-model TLC run.</summary>
     public const string BPlusCascadeBase = "TlcShardBPlusCascadeBase";
 
@@ -137,7 +140,7 @@ internal static class TlcCiShard
          MaterialisedViewAggregation, MaterialisedViewRebind,
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair,
-         AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing];
+         AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -291,6 +294,7 @@ internal static class TlcCiShard
         : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
         : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle
         : name.StartsWith("Alias", StringComparison.Ordinal) ? Aliasing
+        : string.Equals(name, "SplitGateCycles", StringComparison.Ordinal) ? SplitGate
         : null;
 
     /// <summary>

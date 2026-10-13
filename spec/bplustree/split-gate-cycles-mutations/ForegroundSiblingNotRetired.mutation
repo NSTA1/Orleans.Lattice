@@ -1,0 +1,17 @@
+# Pairs with NoWaitCycle. A sibling call left marked done blocks every later split of B from calling C.
+MODULE: ForegroundSiblingNotRetired
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: the foreground split moves on without retiring its finished sibling call
+PERTURBS: ForegroundSiblingDone
+
+--- FIND
+    /\ fg = "awaitSib"
+    /\ sib = "done"
+    /\ sib' = "none"
+--- REPLACE
+    /\ fg = "awaitSib"
+    /\ sib = "done"
+    \* MUTATION: the call is not retired
+    /\ sib' = "done"
+--- END

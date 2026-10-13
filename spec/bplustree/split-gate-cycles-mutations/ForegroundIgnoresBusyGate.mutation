@@ -1,0 +1,14 @@
+# Pairs with GateOwnership. Two splits of one leaf under a single gate is exactly what the gate exists to prevent.
+MODULE: ForegroundIgnoresBusyGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: SplitAsync takes B's split gate while another turn holds it
+PERTURBS: ForegroundTakeGate
+
+--- FIND
+    /\ fg = "gate"
+    /\ gate["B"] = "free"
+--- REPLACE
+    /\ fg = "gate"
+    \* MUTATION: the gate is not awaited
+--- END

@@ -79,8 +79,12 @@ public sealed class ReflectionSeamAuditTests
             "SplitAsync is gated by SplitIfNeededUnderGateAsync; SplitGate's Split_proceeds_normally_when_gate_is_free drives that wiring.",
         ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.RevisionCookieCoverage.cs"] =
             "Same SplitAsync exemption as BoundedSplitTransfer: gated by SplitIfNeededUnderGateAsync, whose wiring SplitGate's Split_proceeds_normally_when_gate_is_free drives. Reflection here isolates the division from a triggering write, which would mask the cookie bump under its own.",
+        ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.EtagRace.cs"] =
+            "Census: PersistAsync is the shared write funnel behind dozens of unconditional call sites, so one reflected call stands for every ungated persist at once; the sibling tests in the same file drive the public SetParentAsync / SetNextSiblingAsync / SetPrevSiblingAsync interleavings through the same persist-write gate.",
         ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.MultiPartitionMaterialiser.cs"] =
             "Split-recovery helper; sibling BPlusLeafGrain fixtures drive the public split path.",
+        ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.UnlinkedSplit.cs"] =
+            "TrySplitForByteOverflowAsync is called unconditionally by the capture seam; the reflected call reproduces a capture nested in a gated foreground split (#4918), an interleaving no public call can schedule deterministically. Capture_divides_a_leaf_that_is_already_over_the_byte_bound drives the same seam through public CaptureSnapshotAsync.",
         ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.SplitByteBound.cs"] =
             "Known instance of this defect and the one that motivated issue #2735. Owned by issue #2733, not by this audit.",
         ["test/lattice/BPlusTree/Grains/BPlusLeafGrainTests.SplitRetryStaleCheckpointHint.cs"] =

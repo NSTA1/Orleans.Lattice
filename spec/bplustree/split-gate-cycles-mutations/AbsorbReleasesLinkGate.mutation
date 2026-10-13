@@ -1,0 +1,18 @@
+# Pairs with LinkGateMatchesLinking. A link gate released before the link returns admits a second link onto the parents.
+MODULE: AbsorbReleasesLinkGate
+TARGET: LinkGateMatchesLinking
+CLASS: Invariant
+SUMMARY: the root releases its link gate as the grandparent absorbs the division
+PERTURBS: GrandparentAbsorbs
+
+--- FIND
+    /\ ch[o] = "grand"
+    /\ ch' = [ch EXCEPT ![o] = "return"]
+    /\ UNCHANGED <<fg, cap, cons, gate, sib, lg, seed, overflowed, cascaded, linked, dep, deacts>>
+--- REPLACE
+    /\ ch[o] = "grand"
+    /\ ch' = [ch EXCEPT ![o] = "return"]
+    \* MUTATION: the link gate is released early
+    /\ lg' = "none"
+    /\ UNCHANGED <<fg, cap, cons, gate, sib, seed, overflowed, cascaded, linked, dep, deacts>>
+--- END

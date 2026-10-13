@@ -1,0 +1,13 @@
+# Pairs with NoWaitCycle. A non-interleaving digest read closes the #4914 cycle one call later.
+MODULE: DigestQueuedBehindTurn
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: the digest read queues behind the leaf's running turn
+PERTURBS: ServeDigest
+
+--- FIND
+    /\ Admits(l, DigestInterleaves)
+--- REPLACE
+    \* MUTATION: GetChildDigestSnapshotAsync is not [AlwaysInterleave]
+    /\ Admits(l, FALSE)
+--- END

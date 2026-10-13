@@ -10,6 +10,7 @@
 # AntiEntropy group 1: 18 cases in 539 seconds; group 2: nine cases in 598 seconds,
 # measured with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
 # AntiEntropy group 3: seven cases in 549 seconds after the rebase.
+# SplitGateCycles: 39 successful JVM cases in 511 seconds, same local settings.
 # MaterialisedViewTail: all 24 base/variant/mutation cases in 342 seconds,
 # with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
 # Focused view companions (2026-10-12): Fence 11/11 cases in 48.434s and
@@ -135,6 +136,7 @@ lattice	formal-tlc-anti-entropy	deterministic	9.0
 lattice	formal-tlc-anti-entropy-2	deterministic	10.0
 lattice	formal-tlc-anti-entropy-3	deterministic	9.2
 lattice	formal-tlc-aliasing	deterministic	1.8
+lattice	formal-tlc-split-gate	deterministic	8.6
 lattice	formal-tlc-shard-ownership	deterministic	15.3
 lattice	formal-tlc-convergence	deterministic	14.1
 lattice	formal-tlc-replication-wal	deterministic	18.4

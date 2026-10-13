@@ -1,0 +1,14 @@
+# Pairs with ClimbsOnlyAfterSeed. A division reported before seeding names a parent the leaves do not know yet.
+MODULE: SeedCompleteEarly
+TARGET: ClimbsOnlyAfterSeed
+CLASS: Invariant
+SUMMARY: the root carries the division up before both leaves have been seeded
+PERTURBS: SeedComplete
+
+--- FIND
+    /\ ch[o] = "seed"
+    /\ \A l \in Leaves : seed[l] = "done"
+--- REPLACE
+    /\ ch[o] = "seed"
+    \* MUTATION: the seeding is not awaited
+--- END

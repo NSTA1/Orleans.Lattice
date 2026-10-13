@@ -184,6 +184,13 @@
         "note": "Shared durable alias routing and cutover interactions, retaining same-property controls with their mutations."
       },
       {
+        "shard": "formal-tlc-split-gate",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSplitGate"],
+        "note": "SplitGateCycles base and 38 mutants (leaf split-gate and grain-turn wait cycles): 39 cases measured at 511s wall-clock with Java 17, two visible CPUs and one TLC slot. The two EveryLinkLands temporal mutants dominate at about 80s each."
+      },
+      {
         "shard": "formal-tlc-tree-lifecycle",
         "tlc": true,
         "tiers": ["deterministic"],

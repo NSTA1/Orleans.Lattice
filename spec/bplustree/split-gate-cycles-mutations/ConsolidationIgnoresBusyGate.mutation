@@ -1,0 +1,14 @@
+# Pairs with GateOwnership. Marking C moved away mid-split would strand the split's half.
+MODULE: ConsolidationIgnoresBusyGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: consolidation takes C's split gate while another turn holds it
+PERTURBS: ConsolidationTakeGate
+
+--- FIND
+    /\ cons = "running"
+    /\ gate["C"] = "free"
+--- REPLACE
+    /\ cons = "running"
+    \* MUTATION: the gate is not awaited
+--- END

@@ -1,0 +1,17 @@
+# Pairs with EveryLinkLands. A parked link that is dropped leaves its split unlinked for good.
+MODULE: DeferredLinkDropped
+TARGET: EveryLinkLands
+CLASS: Temporal
+SUMMARY: the root drains a parked link by discarding it
+PERTURBS: RootDrainDeferred
+
+--- FIND
+    /\ ch[o] = "deferred"
+    /\ lg = "none"
+    /\ ch' = [ch EXCEPT ![o] = "root"]
+--- REPLACE
+    /\ ch[o] = "deferred"
+    /\ lg = "none"
+    \* MUTATION: the parked link is discarded
+    /\ ch' = [ch EXCEPT ![o] = "done"]
+--- END

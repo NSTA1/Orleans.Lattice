@@ -1,0 +1,17 @@
+# Pairs with NoWaitCycle. A lost sibling call leaves the split waiting under its gate forever.
+MODULE: ForegroundSiblingCallLost
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: the foreground split awaits a SetPrevSiblingAsync call that was never sent
+PERTURBS: ForegroundCallSibling
+
+--- FIND
+    /\ fg = "sib"
+    /\ sib = "none"
+    /\ sib' = "queued"
+--- REPLACE
+    /\ fg = "sib"
+    /\ sib = "none"
+    \* MUTATION: the call is never sent
+    /\ sib' = "none"
+--- END

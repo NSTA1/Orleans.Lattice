@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. The capture's Wait(0) on the gate is what stops it splitting under a foreground split.
+MODULE: CaptureSkipsGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: a capture turn splits without trying the split gate
+PERTURBS: BeginCapture
+
+--- FIND
+    /\ Admits(l, FALSE)
+    /\ cap' = [cap EXCEPT ![l] = "split"]
+--- REPLACE
+    /\ Admits(l, FALSE)
+    \* MUTATION: the gate is not tried
+    /\ cap' = [cap EXCEPT ![l] = "splitting"]
+--- END

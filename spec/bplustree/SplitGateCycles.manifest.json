@@ -1,0 +1,13 @@
+{
+  "mutations": "split-gate-cycles-mutations",
+  "refinement": "SplitGateCyclesRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 7,
+    "properties": 1,
+    "actions": 39,
+    "mutations": 38,
+    "behaviourRows": 46,
+    "distinctStates": 229031
+  }
+}

@@ -1,0 +1,14 @@
+# Pairs with GateOwnership. Two splits of one leaf under a single gate is exactly what the gate exists to prevent.
+MODULE: CaptureIgnoresBusyGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: a capture takes the split gate while another turn holds it
+PERTURBS: CaptureTakeGate
+
+--- FIND
+    /\ cap[l] = "split"
+    /\ gate[l] = "free"
+--- REPLACE
+    /\ cap[l] = "split"
+    \* MUTATION: the gate is not checked
+--- END

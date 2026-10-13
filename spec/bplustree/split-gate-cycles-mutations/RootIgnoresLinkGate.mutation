@@ -1,0 +1,16 @@
+# Pairs with SingleParentMutation. Two links mutating the parents at once corrupt the separator order.
+MODULE: RootIgnoresLinkGate
+TARGET: SingleParentMutation
+CLASS: Invariant
+SUMMARY: the root hands a link on while another link holds its link gate
+PERTURBS: RootTakeLinkGate
+
+--- FIND
+    /\ ch[o] = "root"
+    /\ lg = "none"
+    /\ lg' = o
+--- REPLACE
+    /\ ch[o] = "root"
+    \* MUTATION: the link gate is not awaited
+    /\ lg' = o
+--- END

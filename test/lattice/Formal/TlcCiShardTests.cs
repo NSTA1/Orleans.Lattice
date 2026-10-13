@@ -280,6 +280,25 @@ public sealed class TlcCiShardTests
     }
 
     [Test]
+    public void Split_gate_cycle_runs_route_every_case_to_one_measured_deterministic_shard()
+    {
+        var module = Module("SplitGateCycles");
+        var cases = new[] { TlcCiShard.OfModule(module) }
+            .Concat(module.Manifest.Variants.Keys.Select(variant => TlcCiShard.OfVariant(module, variant)))
+            .Concat(module.LoadMutations().Select(mutation => TlcCiShard.Of(module, mutation)))
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(cases, Has.Length.EqualTo(39));
+            Assert.That(cases, Is.All.EqualTo(TlcCiShard.SplitGate));
+            Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(TlcCiShard.SplitGate)).Tiers,
+                Is.EqualTo(new[] { "deterministic" }));
+            Assert.That(TlcCiShard.OfModule(Module("SplitLinkTurns")), Is.Null,
+                "the companion model is small enough to stay in the catch-all");
+        });
+    }
+
+    [Test]
     public void Anti_entropy_runs_are_partitioned_into_three_measured_nonempty_deterministic_groups()
     {
         var module = Module("AntiEntropy");

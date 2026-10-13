@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. A busy gate must end the capture's split attempt, not be ignored.
+MODULE: CaptureSplitsPastBusyGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: a capture that finds the split gate busy splits anyway
+PERTURBS: CaptureGateBusy
+
+--- FIND
+    /\ gate[l] # "free"
+    /\ cap' = [cap EXCEPT ![l] = "done"]
+--- REPLACE
+    /\ gate[l] # "free"
+    \* MUTATION: the capture splits anyway
+    /\ cap' = [cap EXCEPT ![l] = "splitting"]
+--- END

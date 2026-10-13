@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. A leaked gate refuses every later split of the leaf.
+MODULE: SetParentKeepsGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: SetParentAsync returns without releasing the leaf's split gate
+PERTURBS: SetParentFinish
+
+--- FIND
+    /\ seed[l] = "writing"
+    /\ gate' = [gate EXCEPT ![l] = "free"]
+--- REPLACE
+    /\ seed[l] = "writing"
+    \* MUTATION: the gate is kept
+    /\ gate' = gate
+--- END

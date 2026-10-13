@@ -1,0 +1,15 @@
+# Pairs with ClimbsOnlyAfterSeed. A division reported before seeding names a parent the leaves do not know yet.
+MODULE: DivisionClimbsBeforeSeed
+TARGET: ClimbsOnlyAfterSeed
+CLASS: Invariant
+SUMMARY: a dividing parent carries its division up before its new sibling has seeded the leaves
+PERTURBS: ParentAccept
+
+--- FIND
+    /\ seed' = [l \in Leaves |-> "queued"]
+    /\ ch' = [ch EXCEPT ![o] = "seed"]
+--- REPLACE
+    /\ seed' = [l \in Leaves |-> "queued"]
+    \* MUTATION: the seeding is not awaited
+    /\ ch' = [ch EXCEPT ![o] = "grand"]
+--- END

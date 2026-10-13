@@ -1,0 +1,13 @@
+# Pairs with NoWaitCycle. A deactivating activation admits no call, even an interleaving one, so a split waiting on one never finishes.
+MODULE: DeactivationWhileBusy
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: a leaf begins deactivating while a split on it still waits for an inbound call
+PERTURBS: Deactivate
+
+--- FIND
+    /\ DeactivationOnlyWhenIdle => ~Running(l)
+--- REPLACE
+    \* MUTATION: deactivation does not wait for the leaf to be idle
+    /\ TRUE
+--- END

@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. A leaked gate refuses every later split of C.
+MODULE: ConsolidationKeepsGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: consolidation returns without releasing C's split gate
+PERTURBS: ConsolidationFinish
+
+--- FIND
+    /\ cons = "holding"
+    /\ gate' = [gate EXCEPT !["C"] = "free"]
+--- REPLACE
+    /\ cons = "holding"
+    \* MUTATION: the gate is kept
+    /\ gate' = gate
+--- END

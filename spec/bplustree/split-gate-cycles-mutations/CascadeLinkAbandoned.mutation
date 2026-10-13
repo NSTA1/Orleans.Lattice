@@ -1,0 +1,15 @@
+# Pairs with EveryLinkLands. A link abandoned after a cascade leaves its split unlinked.
+MODULE: CascadeLinkAbandoned
+TARGET: EveryLinkLands
+CLASS: Temporal
+SUMMARY: the cascade finishes without the link ever being reported
+PERTURBS: CascadeSeeded
+
+--- FIND
+    /\ ch[o] = "cascade"
+    /\ ch' = [ch EXCEPT ![o] = "return"]
+--- REPLACE
+    /\ ch[o] = "cascade"
+    \* MUTATION: the link is abandoned
+    /\ ch' = [ch EXCEPT ![o] = "done"]
+--- END
