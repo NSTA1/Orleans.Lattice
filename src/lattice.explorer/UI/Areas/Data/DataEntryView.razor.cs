@@ -91,11 +91,24 @@ public partial class DataEntryView : IDisposable
             return;
         }
 
+        var token = _lifetime.Renew();
+        var key = Key;
         _loading = true;
         _error = null;
         try
         {
-            _entry = await reader.GetEntryAsync(workspace.Tree.StateId, Key, _lifetime.Token);
+            var entry = await reader.GetEntryAsync(workspace.Tree.StateId, key, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _entry = entry;
+            if (_renderer == DataValueRenderer.Members && _entry is not { CurrentMembers.Count: > 0 })
+            {
+                _renderer = DataValueRenderer.Auto;
+            }
+
             if (_entry is { CurrentMembers.Count: > 0 } && _renderer == DataValueRenderer.Auto && _rendered is null)
             {
                 _renderer = DataValueRenderer.Members;
@@ -103,17 +116,23 @@ public partial class DataEntryView : IDisposable
 
             Render();
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            _entry = null;
-            _error = DataErrors.Describe(exception, "read this entry");
+            if (!token.IsCancellationRequested)
+            {
+                _entry = null;
+                _error = DataErrors.Describe(exception, "read this entry");
+            }
         }
         finally
         {
-            _loading = false;
+            if (!token.IsCancellationRequested)
+            {
+                _loading = false;
+            }
         }
     }
 
