@@ -47,6 +47,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
     private DateTimeOffset? _lastValue;
     private string _text = string.Empty;
     private string? _ownError;
+    private bool _invalidPickerTime;
     private bool _open;
     private DateOnly _month;
     private DateOnly _active;
@@ -102,7 +103,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
     [Parameter]
     public bool QuickPicks { get; set; } = true;
 
-    /// <summary>Whether the field is disabled.</summary>
+    /// <summary>Whether the field is disabled. Disabling it closes an open picker.</summary>
     [Parameter]
     public bool Disabled { get; set; }
 
@@ -188,6 +189,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
     /// <summary>
     /// Reads what is typed, shows the field's own message when it does not read or is out of
     /// range, and otherwise raises the instant: call it before acting on a submit.
+    /// An empty or invalid picker time must be corrected, even when the field allows an empty value.
     /// </summary>
     /// <returns>
     /// <see langword="true"/> when the field holds an instant in range, or is empty and may be;
@@ -261,12 +263,20 @@ public partial class LtDateTimeInput : IAsyncDisposable
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
+        if (Disabled)
+        {
+            _open = false;
+            _focusActiveDay = false;
+            _focusToggle = false;
+        }
+
         if (!_seen || Value != _lastValue)
         {
             _seen = true;
             _lastValue = Value;
             _text = Value is { } value ? LtTimeText.Iso(value) : string.Empty;
             _ownError = null;
+            _invalidPickerTime = false;
         }
     }
 
@@ -334,6 +344,12 @@ public partial class LtDateTimeInput : IAsyncDisposable
 
     private async Task<bool> CommitAsync()
     {
+        if (_invalidPickerTime)
+        {
+            _ownError = "Choose a time in UTC.";
+            return false;
+        }
+
         _ownError = Judge(_text, out var value);
         if (_ownError is not null)
         {
@@ -360,6 +376,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
 
     private Task OnTextInputAsync(ChangeEventArgs args)
     {
+        _invalidPickerTime = false;
         _text = args.Value as string ?? string.Empty;
         _ownError = null;
         return Judge(_text, out var value) is null ? RaiseAsync(value) : Task.CompletedTask;
@@ -367,6 +384,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
 
     private Task OnTextChangeAsync(ChangeEventArgs args)
     {
+        _invalidPickerTime = false;
         _text = args.Value as string ?? string.Empty;
         return CommitAsync();
     }
@@ -465,6 +483,8 @@ public partial class LtDateTimeInput : IAsyncDisposable
     {
         if (!TimeOnly.TryParse(args.Value as string, CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
         {
+            _invalidPickerTime = true;
+            _ownError = "Choose a time in UTC.";
             return Task.CompletedTask;
         }
 
@@ -480,6 +500,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
 
     private async Task ClearAsync()
     {
+        _invalidPickerTime = false;
         _text = string.Empty;
         _ownError = null;
         await RaiseAsync(null).ConfigureAwait(true);
@@ -488,6 +509,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
 
     private Task PickAsync(DateTimeOffset instant)
     {
+        _invalidPickerTime = false;
         var value = Clamp(LtTimeText.ToSecond(instant));
         _text = LtTimeText.Iso(value);
         _ownError = null;
@@ -546,7 +568,7 @@ public partial class LtDateTimeInput : IAsyncDisposable
 
     private DateOnly Today => DateOnly.FromDateTime(Now.UtcDateTime);
 
-    private string TimeValue => Value is { } value ? value.UtcDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture) : string.Empty;
+    private string TimeValue => !_invalidPickerTime && Value is { } value ? value.UtcDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture) : string.Empty;
 
     private string MonthText => _month.ToString("MMMM yyyy", CultureInfo.InvariantCulture);
 

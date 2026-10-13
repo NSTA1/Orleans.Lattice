@@ -44,6 +44,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Date-field validation.** Incomplete dates no longer borrow today's date, clearing the picker time blocks stale-value submission, and disabling a field closes its picker. ([PR pending](https://github.com/NSTA1/Orleans.Lattice/pull/0)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Atomic - Reshard retries through routing epochs.** Atomic writes continue rebinding across successive shard-map epochs until the existing retry budget expires, instead of failing after three rebinds before the commit decision. ([#4922](https://github.com/NSTA1/Orleans.Lattice/issues/4922)) (`Orleans.Lattice`)
 
 - **Leaf - Coalesced digests retain intervening mutations.** A timer publish no longer clears the dirty mark for a newer split snapshot, preventing stale per-shard counts after coalesced writes. ([#4931](https://github.com/NSTA1/Orleans.Lattice/issues/4931)) (`Orleans.Lattice`)

@@ -33,15 +33,18 @@ internal static class LtTimeText
     /// <summary>
     /// Reads a typed instant: ISO 8601 with or without the <c>T</c>, taken as UTC when it
     /// names no offset and converted to UTC when it names one, cut to the second.
+    /// A complete <c>yyyy-MM-dd</c> date is required; no part is borrowed from today.
     /// </summary>
     /// <param name="text">The typed text.</param>
     /// <param name="instant">The instant read, in UTC.</param>
     /// <returns>Whether the text named an instant.</returns>
     public static bool TryParseInstant(string? text, out DateTimeOffset instant)
     {
-        if (!string.IsNullOrWhiteSpace(text)
+        var trimmed = text.AsSpan().Trim();
+        if (trimmed.Length >= 10
+            && DateOnly.TryParseExact(trimmed[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _)
             && DateTimeOffset.TryParse(
-                text.Trim(),
+                trimmed,
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                 out var parsed))
