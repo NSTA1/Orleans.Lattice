@@ -198,6 +198,14 @@ internal sealed partial class BPlusLeafGrain
         await AdmitAndRecordRowAsync();
 
         var treeIdTag = ResolveTreeIdTagForPersist();
+        await _persistWriteGate.WaitAsync().ConfigureAwait(true);
+        if (_leafStateCleared)
+        {
+            _persistWriteGate.Release();
+            throw new InvalidOperationException(
+                $"Leaf {context.GrainId} was cleared; refusing the write from {caller}, which would re-create its row.");
+        }
+
         var startTicks = Stopwatch.GetTimestamp();
         try
         {
@@ -211,6 +219,7 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
+            _persistWriteGate.Release();
             var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
             LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeIdTag),
@@ -523,6 +532,19 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     private readonly SemaphoreSlim _splitGate = new(1, 1);
+
+    /// <summary>
+    /// Serialises the storage write inside <see cref="PersistAsync"/> so that no
+    /// two turns ever have a state write in flight against this leaf's row at
+    /// once. Most persists already run under <see cref="_splitGate"/> or inside a
+    /// non-interleaving turn, but <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetParentAsync"/>
+    /// is <c>[AlwaysInterleave]</c> (issue #4914), so it can land while another
+    /// turn is suspended inside its own ungated persist; without this gate the
+    /// loser of the storage etag check throws <c>InconsistentStateException</c>.
+    /// Held only around the write itself - no grain call is made under it - so it
+    /// cannot take part in a wait cycle.
+    /// </summary>
+    private readonly SemaphoreSlim _persistWriteGate = new(1, 1);
 
     /// <summary>
     /// Per-activation count of foreground commits (<see cref="CommitSetAsync"/>

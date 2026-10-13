@@ -605,6 +605,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// and triggers a fresh full-fold republish so the new parent
     /// converges with the leaf's current digest.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #4914,
+    /// the leaf counterpart of #3523): a leaf's capture turn links its own split
+    /// through the shard root, and when that link overflows the parent internal
+    /// node, the parent's split re-parents the moved children - this leaf among
+    /// them - from inside the root's link frame. Queuing behind the capture turn
+    /// that is waiting on the root formed a turn-level cycle that only the grain
+    /// call timeout broke. The body is serialised by the per-activation
+    /// <c>_splitGate</c>, and the state write by the leaf's persist-write gate.
+    /// </remarks>
+    [AlwaysInterleave]
     Task SetParentAsync(GrainId? parentId);
 
     /// <summary>
@@ -619,6 +630,13 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// freshly-activated internal node observing legacy state, or a
     /// crash-recovery rebuild).
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #4914):
+    /// a synchronous read pulled by a parent internal node from inside its gated
+    /// seeding frame, directly after <see cref="SetParentAsync"/>, so it must not
+    /// queue behind a turn on this leaf that waits on that frame.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync();
 
     /// <summary>
