@@ -103,6 +103,12 @@ internal static class LeafSubstituteCombinedCalls
             var freeze = await leaf.FreezeProjectionAsync(call.Arg<CancellationToken>());
             return new LeafBaselineFreezePage { Freeze = freeze, NextSibling = await leaf.GetNextSiblingAsync() };
         });
+        leaf.GetPendingMutationsForSlotsAndNextSiblingAsync(Arg.Any<int[]>(), Arg.Any<int>()).Returns(async call =>
+        {
+            var mutations = await leaf.GetPendingMutationsForSlotsAsync(call.ArgAt<int[]>(0), call.ArgAt<int>(1));
+            var next = await leaf.GetNextSiblingAsync();
+            return new LeafPendingMutationsPage { Mutations = mutations, NextSibling = next };
+        });
         return leaf;
     }
 }

@@ -74,7 +74,7 @@ internal static class StalePendingClearer
         }
 
         // Per leftover saga, the shards whose leaves hold a bucket of it.
-        var leftover = new Dictionary<Guid, HashSet<int>>();
+        var leftover = new Dictionary<Guid, List<int>>();
         foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -94,10 +94,13 @@ internal static class StalePendingClearer
                     {
                         if (!leftover.TryGetValue(m.TransactionId, out var shards))
                         {
-                            leftover[m.TransactionId] = shards = new HashSet<int>();
+                            leftover[m.TransactionId] = shards = new List<int>();
                         }
 
-                        shards.Add(shardIndex);
+                        if (!shards.Contains(shardIndex))
+                        {
+                            shards.Add(shardIndex);
+                        }
                     }
                 }
 
@@ -121,12 +124,12 @@ internal static class StalePendingClearer
                 committed = local == TxStatus.Committed;
             }
 
-            foreach (var shardIndex in shards)
-            {
-                await grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}")
-                    .AppendTxTerminalAsync(txid, committed, committedValues: null, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+            await BoundedFanOut.ForEachAsync(
+                shards,
+                BoundedFanOut.DefaultWidth,
+                shardIndex => grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}")
+                    .AppendTxTerminalAsync(txid, committed, committedValues: null, cancellationToken))
+                .ConfigureAwait(false);
         }
 
         return leftover.Count;
