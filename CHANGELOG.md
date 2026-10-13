@@ -30,7 +30,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **WAL - Experimental replay service-rate controller.** An opt-in, default-off `WalReplayServiceRateControllerEnabled` lets the per-silo cold-replay gate withhold and restore permits from bounded service-time probes on its own ledger, reported as `trigger=service_time` on `orleans.lattice.wal.replay.permit_adaptations`; with it off, replay admission is unchanged. Experimental: not yet acceptance evidence for cold-replay convergence. ([#4925](https://github.com/NSTA1/Orleans.Lattice/pull/4925)) (`Orleans.Lattice`)
+- **WAL - Experimental replay controller.** An opt-in, default-off controller adjusts cold-replay concurrency using bounded service-time probes. Admission is unchanged when disabled; real-store convergence acceptance remains unproven. ([#4925](https://github.com/NSTA1/Orleans.Lattice/pull/4925)) (`Orleans.Lattice`)
 
 ### Changed
 
@@ -46,8 +46,11 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **WAL - Refused drives no longer amplify retries.** Only an admitted completion credits a floor-ranked retry; refusal-only passes retain their bounded share instead of repeatedly driving the same blocked leaves. ([#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)
-- **WAL - Acknowledged deletes survive cold replay.** Single-key delete records now carry the leaf's shard index, and replayed committed entries restore the version watermark so reseed exports their tombstones. Deletes written earlier without an authoritative shard map are not repaired automatically. ([#4929](https://github.com/NSTA1/Orleans.Lattice/pull/4929)) (`Orleans.Lattice`)
+- **WAL - Cold-replay durability and retries.** Acknowledged deletes survive cold replay and remain available to replication reseeding; historical malformed records are not repaired automatically. Refused drives no longer amplify retries. ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)
+- **Atomic - Reshard retries through routing epochs.** Atomic writes continue rebinding across successive shard-map epochs until the existing retry budget expires, instead of failing after three rebinds before the commit decision. ([#4922](https://github.com/NSTA1/Orleans.Lattice/issues/4922)) (`Orleans.Lattice`)
+
+- **Leaf - Coalesced digests retain intervening mutations.** A timer publish no longer clears the dirty mark for a newer split snapshot, preventing stale per-shard counts after coalesced writes. ([#4931](https://github.com/NSTA1/Orleans.Lattice/issues/4931)) (`Orleans.Lattice`)
+
 - **Container - Calibrated shutdown forecast.** A bounded history of clean drains calibrates fixed overhead and aggregate service rate; thin or extrapolated evidence reports unknown instead of a false abandoned-stop prediction. ([#3484](https://github.com/NSTA1/Orleans.Lattice/issues/3484)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Retrieval - Incomplete ANN counts and retrain accounting.** Incomplete source counts are Unknown, retried with bounded backoff and do not trigger speculative repair; retraining skips the count walk and reports submitted WAL input, not physical occupancy. ([#3482](https://github.com/NSTA1/Orleans.Lattice/issues/3482)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

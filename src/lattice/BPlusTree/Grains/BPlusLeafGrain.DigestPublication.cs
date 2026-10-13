@@ -29,6 +29,12 @@ internal sealed partial class BPlusLeafGrain
     private bool _digestDirty;
 
     /// <summary>
+    /// Changes whenever the digest becomes dirty, so an asynchronous publish
+    /// cannot clear a newer mutation's dirty mark when it completes.
+    /// </summary>
+    private long _digestDirtyVersion;
+
+    /// <summary>
     /// c2-xxviii: handle of the one-shot grain timer scheduled by
     /// <see cref="PublishDigestUpwardAsync"/> when digest coalescing
     /// is enabled (<c>DigestCoalescingWindowMs &gt; 0</c>). Non-null
@@ -68,7 +74,19 @@ internal sealed partial class BPlusLeafGrain
     /// digest funnels (<c>StoreEntry</c>, <c>RemoveEntry</c>) so the
     /// per-mutation publication path can elide no-op publishes.
     /// </summary>
-    internal void MarkDigestDirty() => _digestDirty = true;
+    internal void MarkDigestDirty()
+    {
+        _digestDirty = true;
+        _digestDirtyVersion++;
+    }
+
+    private void ClearDigestDirtyIfUnchanged(long publishedVersion)
+    {
+        if (_digestDirtyVersion == publishedVersion)
+        {
+            _digestDirty = false;
+        }
+    }
 
     /// <summary>
     /// Lazily-seeded, strictly-increasing stamp applied to every
@@ -157,7 +175,7 @@ internal sealed partial class BPlusLeafGrain
             // immediately after this call (driven by the internal-grain
             // seeding path), which keeps the parent's ChildDigests table
             // consistent without a reentrant callback.
-            if (parentId is not null) _digestDirty = true;
+            if (parentId is not null) MarkDigestDirty();
         }
         finally
         {
@@ -450,8 +468,9 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task PublishCurrentDigestAndClearDirtyAsync(GrainId parentId)
     {
+        var publishedVersion = _digestDirtyVersion;
         await PublishCurrentDigestAsync(parentId);
-        _digestDirty = false;
+        ClearDigestDirtyIfUnchanged(publishedVersion);
     }
 
     /// <summary>
@@ -475,8 +494,7 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            await PublishCurrentDigestAsync(parentId);
-            _digestDirty = false;
+            await PublishCurrentDigestAndClearDirtyAsync(parentId);
             LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathCoalescedFiredTag, LeafTenantTag());
         }
         catch
@@ -559,8 +577,9 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task PublishDrainedDigestAsync(GrainId parentId, CancellationToken cancellationToken)
     {
+        var publishedVersion = _digestDirtyVersion;
         await PublishCurrentDigestAsync(parentId).WaitAsync(cancellationToken);
-        _digestDirty = false;
+        ClearDigestDirtyIfUnchanged(publishedVersion);
         LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathDeactivationFlushTag, LeafTenantTag());
     }
 

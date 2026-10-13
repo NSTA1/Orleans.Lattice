@@ -62,8 +62,8 @@ alphanumerics). Common shapes:
   `benchmark/performance-report.ps1 -Layer 3 -ReuseAca <prefix>`. It parks the silos at zero when it
   finishes and leaves `rg-<prefix>` standing for you to delete.
 - **`-DryRun`** re-renders a document from the most recently written `state.json`. Replay the
-  multi-silo document with the `-Layer3` switch: `-Layer 3 -DryRun` falls through to the single-silo
-  replay instead.
+  multi-silo document with either `-Layer3 -DryRun` or `-Layer 3 -DryRun`. Replay selects the
+  newest state containing the requested layer, and a Layer 1/2 replay preserves the other block.
 
 ---
 
@@ -280,19 +280,27 @@ before its TCP listener opens, with one `ILattice.SetManyAsync` of `BENCH_VEHICL
 (the producer's key derivation, 245-byte values); `ILattice.BulkLoadAsync` is not used because it
 requires an empty shard and the warm-up has already materialised the root leaf. The seed runs only
 when the **silo** is given `BENCH_VEHICLE_COUNT` > 0 (its default is 0, no seed), and
-`run-cohort.ps1 -Vehicles` sets that variable for the producer only - so pass
-`-ExtraSiloEnv @{ BENCH_VEHICLE_COUNT = '<same as -Vehicles>' }`, or read a tree populated earlier
-through a pinned `BENCH_TREE_ID`; otherwise the read modes read keys that do not exist in the
-cohort's fresh tree. The silo logs `[silo] preseed treeId=.. entries=..` when the seed ran. On
+`run-cohort.ps1 -Vehicles` sets the same fleet size on both producer and silo, ignoring a
+conflicting `BENCH_VEHICLE_COUNT` in `ExtraSiloEnv`. The silo logs
+`[silo] preseed treeId=.. entries=..` when the seed ran. Layer 2 aggregation refuses read
+cohorts without retained evidence of a complete seed, including legacy miss-path cohorts.
+On
 Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step, and the Orleans-client
 producer seeds the same keys after warm-up instead, logging `[producer] preseed treeId=.. entries=N`;
 `performance-report.ps1` marks a Layer 3 read cohort whose log lacks that line (or reports
 `entries=0`) `UNSEEDED`, re-runs it at the same rung up to twice, and never publishes it, because
-an unseeded cohort measures only the miss path (#3474). Its Layer 2 sweep has no such guard and
-never seeds: it drives `run-cohort.ps1` with a silo environment that omits `BENCH_VEHICLE_COUNT`, so
-every Layer 2 `get-point` and `get-many` cohort it runs reads keys that were never written (its
-silo log carries no `[silo] preseed` line), and a `HEALTHY` one is aggregated into the published
-table like any other: a miss-path number, not the read ceiling.
+an unseeded cohort measures only the miss path (#3474). Layer 3 seeds in bounded slices,
+allowing eight attempts per unlanded slice and 300 seconds overall (including outstanding
+RPCs); progress resets attempts but never the deadline. Failure logs retain the offset,
+exception and budget. Layer 2 does not retry unseeded cohorts: it excludes them from the
+table. Tables state the usable throughput cohort count per row, and a failed attempted row
+cannot preserve an older result under the new run's metadata.
+
+Layer 3 harvest retains revision-scoped silo diagnostics with timestamp and replica identity
+in 200-row pages under one ingestion snapshot. Non-phaseA lines carry an `[aca-silo ...]`
+prefix so they cannot pollute the producer throughput series. The `set-point-mv` view name
+is `bench-{treeId}` for both registration and lag reporting, isolating durable checkpoints
+between cohorts that rotate their source tree but retain VM grain-state storage.
 
 Atomic modes dispatch each saga as its own flush unit (`BenchWorkloadDispatcher.SliceIntoFlushUnits`):
 one `BENCH_FLUSH_CONCURRENCY` slot, one retry ladder and one `ops`/`failed` booking per saga, so
@@ -316,7 +324,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `BENCH_VEHICLE_COUNT` | producer 1000, silo 0 (`run-cohort.ps1 -Vehicles` sets the producer's, default 4000; `run-cohort-aca.ps1` sets `VehiclesPerSilo x SiloCount` on producer and silos) | Fleet size = number of distinct keys. On the silo it is the read-mode pre-seed size, and `run-cohort.ps1` does not set it there (see the read-mode pre-seed note under the workload table). |
+| `BENCH_VEHICLE_COUNT` | producer 1000, silo 0 (`run-cohort.ps1 -Vehicles` sets both, default 4000; `run-cohort-aca.ps1` sets `VehiclesPerSilo x SiloCount` on both) | Fleet size = number of distinct keys; also the silo read-mode pre-seed size. Both cohort runners keep it equal to the offered fleet. |
 | `BENCH_TICK_HZ` | 5 | Samples/sec/vehicle. **Offered rate = vehicles x tickHz.** |
 | `BENCH_DURATION_SEC` | 300 (cohort sets per `-DurationSec`) | Producer run length. `0` = run forever, in both the TCP and the Orleans-client producer modes. |
 | `BENCH_SILO_HOST` | `127.0.0.1` | Silo host the producer connects to. |

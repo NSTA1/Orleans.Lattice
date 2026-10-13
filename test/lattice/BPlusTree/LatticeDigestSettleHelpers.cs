@@ -150,10 +150,17 @@ internal static class LatticeDigestSettleHelpers
 
         var lastTotal = 0L;
         foreach (var d in latest) lastTotal += d.EntryCount;
+        var fullRange = new long[shardCount];
+        for (var s = 0; s < shardCount; s++)
+        {
+            fullRange[s] = (await tree.GetLeafProjectionDigestForRangeAsync(s, null, null)).EntryCount;
+        }
         throw new TimeoutException(
             $"per-shard projection digests across {shardCount} shards did not converge " +
             $"to a total of {expectedTotalEntries} entries within " +
-            $"{(timeout ?? SettleTimeout).TotalMilliseconds} ms (last total: {lastTotal})");
+            $"{(timeout ?? SettleTimeout).TotalMilliseconds} ms (last total: {lastTotal}; " +
+            $"per-shard counts: {string.Join(", ", latest.Select((digest, shard) => $"{shard}:{digest.EntryCount}"))}; " +
+            $"full-range counts: {string.Join(", ", fullRange.Select((count, shard) => $"{shard}:{count}"))})");
     }
 
     /// <summary>

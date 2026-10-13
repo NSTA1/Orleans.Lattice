@@ -168,9 +168,9 @@ Write-Host "Producer log : $prodLog"
 
 # Build the silo drop-in (overrides + a stable tree id per cohort so logs are scoped).
 $treeId = if ($ExtraSiloEnv.ContainsKey('BENCH_TREE_ID')) { $ExtraSiloEnv['BENCH_TREE_ID'] } else { "cohort-$cohortName" }
-$siloEnvLines = @("[Service]","Environment=BENCH_TREE_ID=$treeId")
+$siloEnvLines = @("[Service]","Environment=BENCH_TREE_ID=$treeId","Environment=BENCH_VEHICLE_COUNT=$Vehicles")
 foreach ($k in $ExtraSiloEnv.Keys) {
-	if ($k -eq 'BENCH_TREE_ID') { continue }
+	if ($k -in @('BENCH_TREE_ID', 'BENCH_VEHICLE_COUNT')) { continue }
 	$siloEnvLines += "Environment=$k=$($ExtraSiloEnv[$k])"
 }
 $prodEnvLines = @(

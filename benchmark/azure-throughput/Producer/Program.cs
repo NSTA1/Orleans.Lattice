@@ -548,50 +548,10 @@ static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, Cancella
 
 static async Task PreseedWithRetryAsync(ILattice lattice, IngestSettings settings, CancellationToken ct)
 {
-    // Every seeded entry is deterministic, so re-writing a slice is
-    // idempotent. A retry resumes from the first slice that has not landed
-    // (#3588): restarting from zero re-wrote everything already seeded, so a
-    // large seed that failed late never finished within its attempts. The
-    // attempt cap keeps a persistently failing seed loud.
-    const int MaxPreseedAttempts = 8;
-    // A saturation refusal drains on a seconds timescale, so it backs off
-    // further than the placement and activation races do.
-    const int MaxPreseedBackoffMs = 5000;
-    const int MaxPreseedSaturationBackoffMs = 20000;
-    var sliceSize = Math.Max(1, settings.BatchSize);
-    var landed = 0;
-    var sw = Stopwatch.StartNew();
-    for (var attempt = 1; ; attempt++)
-    {
-        try
-        {
-            var written = await BenchPreseed.SeedAsync(
-                lattice, settings.PreseedKeyCount, sliceSize, ct, landed, offset => landed = offset).ConfigureAwait(false);
-            sw.Stop();
-            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} entries={written} payloadBytes={BenchPreseed.PayloadBytes} attempts={attempt} elapsedMs={sw.Elapsed.TotalMilliseconds:F0}");
-            return;
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) when (attempt < MaxPreseedAttempts
-            && (IsOrleansMessageRejection(ex)
-                || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
-                || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
-                || WarmUpRetryClassifier.IsTransientSaturation(ex)
-                || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)))
-        {
-            var backoffMs = WarmUpRetryClassifier.IsTransientSaturation(ex)
-                ? Math.Min(2500 * attempt, MaxPreseedSaturationBackoffMs)
-                : Math.Min(1000 * attempt, MaxPreseedBackoffMs);
-            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} transient ({ex.GetType().Name}) at offset={landed}/{settings.PreseedKeyCount}; retrying in {backoffMs}ms (attempt={attempt}/{MaxPreseedAttempts})");
-            await Task.Delay(backoffMs, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            Console.Error.WriteLine($"[producer] ERROR preseed treeId={settings.TreeId} entries={settings.PreseedKeyCount} attempts={attempt} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} FAILED: {ex.GetType().Name}: {ex.Message}");
-            throw;
-        }
-    }
+    // Matches the cohort runner's preseed allowance, independently of the
+    // warm-up, response and measurement budgets.
+    await BenchPreseed.SeedWithRetryAsync(lattice, settings.PreseedKeyCount,
+        Math.Max(1, settings.BatchSize), settings.TreeId, TimeSpan.FromSeconds(300), ct).ConfigureAwait(false);
 }
 static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, int shardCount, CancellationToken ct)
 {
