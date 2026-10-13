@@ -51,7 +51,7 @@ FORM: Order diagram, candidate 7 of 7, seed a5e4ebc3. Staging: one proportional 
 2. [A core plus seams](README.md#architecture-a-core-plus-seams) How companion packages fill documented seams, and why one you leave out costs nothing.
 3. [Consistency guarantees](docs/lattice/consistency.md) The contract for what a caller of `ILattice` observes, operation by operation.
 4. [Chaos tests](docs/lattice/chaos-tests.md) A live cluster under concurrent load, topology changes, network partitions, and storage faults.
-5. [Verified atomic commit](docs/lattice/verified-atomic-commit.md) The commit protocol's deterministic core, machine-checked with Coyote and a TLA+ specification.
+5. [Formal verification](docs/lattice/formal-coverage.md) TLA+ and Coyote models of WAL durability, shard ownership, atomic commit, replication, backup, views, resize, reshard and aliasing, each mapped to production tests and stating what it does not cover.
 6. [Single-silo performance](docs/lattice/performance-single-silo.md) Measured throughput and latency against real Azure Tables.
 7. [Reference architecture](reference-architecture.md) An active-active, cross-region estate on Azure Container Apps, with a deployment kit.
 

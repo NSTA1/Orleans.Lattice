@@ -29,7 +29,7 @@ data.
 | Browse the full capability catalogue | [FEATURES.md](FEATURES.md) |
 | Find the right package for a concern | [PACKAGES.md](PACKAGES.md) |
 | See a production deployment blueprint | [reference-architecture.md](reference-architecture.md) |
-| Evaluate correctness guarantees and their limits | [Formal Coverage](docs/lattice/formal-coverage.md) |
+| Check what is formally verified | [Formal Coverage](docs/lattice/formal-coverage.md) |
 | Write code now | [Quick Start](#quick-start) |
 | Read the day-to-day reference docs | [Documentation](#documentation) |
 
@@ -239,13 +239,6 @@ each package delivers is catalogued in [FEATURES.md](FEATURES.md).
 - **No locks, no consensus round-trips.** No Paxos, no Raft, no distributed lock manager. All conflict resolution is algebraic.
 
 Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos-tests.md) that hammer a live cluster with concurrent reads, writes, scans, splits, resizes, and reshards - optionally with random storage-write faults - and assert both live consistency and eventual convergence. The concurrency-critical protocols go further: the atomic-commit protocol, the WAL seams, the distributed lock, and the atomic-action coordinator are driven by pure deterministic cores that a [verification tier](FEATURES.md#reliability-and-formal-verification) machine-checks with Coyote and, for atomic commit, a TLA+ specification.
-
-## Evaluate
-
-[Formal Coverage](docs/lattice/formal-coverage.md) indexes the checked protocols,
-production detectors, defects found, and the limits of each bounded model.
-Read those limits alongside the [chaos tests](docs/lattice/chaos-tests.md): neither
-a small exhaustive model nor a live-cluster test is an unbounded system proof.
 
 ## Quick Start
 
