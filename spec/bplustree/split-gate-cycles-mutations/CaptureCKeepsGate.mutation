@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. The capture must release its split gate before it calls the root.
+MODULE: CaptureCKeepsGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: a capture split of C moves on to link without releasing C's split gate
+PERTURBS: CaptureSplitC
+
+--- FIND
+    /\ cap["C"] = "splitting"
+    /\ gate' = [gate EXCEPT !["C"] = "free"]
+--- REPLACE
+    /\ cap["C"] = "splitting"
+    \* MUTATION: the gate is kept
+    /\ gate' = gate
+--- END

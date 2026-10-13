@@ -1,0 +1,11 @@
+MODULE: SupersessionForgotten
+TARGET: NoFencedRegression
+CLASS: Action
+SUMMARY: a peer-delayed batch ignores the restored HLCs of the newer two-key batch
+PERTURBS: Flush
+
+--- FIND
+                            (IF k = "a" THEN 5 ELSE 6) >= supersession[k]
+--- REPLACE
+                            TRUE
+--- END

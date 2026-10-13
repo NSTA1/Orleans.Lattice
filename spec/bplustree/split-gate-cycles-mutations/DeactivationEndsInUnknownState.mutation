@@ -1,0 +1,15 @@
+# Pairs with TypeOK. The type invariant rejects an activation state outside the lifecycle.
+MODULE: DeactivationEndsInUnknownState
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a finished deactivation leaves the activation in a state it does not have
+PERTURBS: FinishDeactivation
+
+--- FIND
+    /\ ~Running(l)
+    /\ dep' = [dep EXCEPT ![l] = "live"]
+--- REPLACE
+    /\ ~Running(l)
+    \* MUTATION: an unknown activation state
+    /\ dep' = [dep EXCEPT ![l] = "collected"]
+--- END

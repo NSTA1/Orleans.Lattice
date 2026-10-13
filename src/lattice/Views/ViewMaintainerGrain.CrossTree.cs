@@ -61,6 +61,13 @@ internal sealed partial class ViewMaintainerGrain
     private bool _pendingCrossTreeReconcile;
 
     /// <summary>
+    /// Test-only fault seam invoked with the view name immediately before the
+    /// deferred cross-tree reconcile runs; a test throws from it to stand in for
+    /// a failed reconcile. Always <see langword="null"/> in production.
+    /// </summary>
+    internal static Func<string, Task>? BeforeCrossTreeReconcileForTest;
+
+    /// <summary>
     /// The configured bounded interval a cross-tree batch waits for every other
     /// participant view to become ready before degrading to per-tree-slice
     /// atomicity, falling back to the default when unset.
@@ -120,12 +127,12 @@ internal sealed partial class ViewMaintainerGrain
 
     /// <summary>
     /// Handles one completed cross-tree atomic batch: registers this view's slice
-    /// with the coordinator and, once the joint flip has committed, applies this
-    /// view's retraction deletes. Returns <see langword="true"/> when the batch is
-    /// resolved this pass (joint flip observed, degenerate single-view flip, or
-    /// degrade-on-timeout) and the caller should evict it from the staging buffer,
-    /// or <see langword="false"/> while the joint decision is still pending and the
-    /// batch must stay staged for a later drain.
+    /// with the coordinator under durable physical ownership and joins mandatory
+    /// joint repair after original publication. Returns <see langword="true"/>
+    /// after repair applies, a degenerate single-view flip, or pre-decision
+    /// timeout degradation, so the caller can evict the staged transaction.
+    /// Checkpoint ownership remains until durable retirement. Returns
+    /// <see langword="false"/> while original publication or repair is pending.
     /// </summary>
     private async Task<bool> HandleCrossTreeBatchAsync(
         ILattice viewTree,
@@ -147,23 +154,60 @@ internal sealed partial class ViewMaintainerGrain
             return true;
         }
 
-        var coordinator = grainFactory.GetGrain<IViewCrossTreeCoordinatorGrain>(tx.CrossTreeOperationId!);
-        var decision = await coordinator.RegisterReadyAsync(new ViewCrossTreeReadiness
+        if (!await JointRepairAdmissionGate.IsOpenAsync(cancellationToken))
         {
-            OperationId = tx.CrossTreeOperationId!,
-            ViewName = ViewName,
-            WaitSet = waitSet,
-            ViewTreeId = ViewTreeId,
-            Upserts = upserts,
-            Deletes = deletes,
-        });
+            _jointAdmissionWaiting = true;
+            return false;
+        }
+
+        var coordinator = grainFactory.GetGrain<IViewCrossTreeCoordinatorGrain>(tx.CrossTreeOperationId!);
+        var operationId = tx.CrossTreeOperationId!;
+        var protocol = await coordinator.GetRepairProtocolVersionAsync();
+        if (!state.State.CrossTreeRepairHolds.TryGetValue(operationId, out var hold))
+        {
+            hold = new ViewCrossTreeRepairHold
+            {
+                TransactionId = txId,
+                WalTreeId = state.State.BoundPhysicalTreeId,
+                ProjectionVersion = catalog.TryGet(ViewName)!.ProjectionVersion,
+                SourceTreeId = catalog.TryGet(ViewName)!.SourceTreeId,
+                Original = new ViewCrossTreeReadiness
+                {
+                    OperationId = operationId,
+                    ViewName = ViewName,
+                    WaitSet = waitSet,
+                    ViewTreeId = ViewTreeId,
+                    Upserts = upserts,
+                    Deletes = deletes,
+                    RepairProtocolVersion = protocol == 0 ? 0 : 1,
+                },
+            };
+            if (protocol != 0)
+            {
+                state.State.CrossTreeRepairHolds.Add(operationId, hold);
+                await PersistJointStateAsync();
+            }
+        }
+
+        var decision = await coordinator.RegisterReadyAsync(hold.Original);
 
         if (decision.Applied)
         {
+            if (!decision.RequiresRepair)
+            {
+                if (state.State.CrossTreeRepairHolds.Remove(operationId))
+                {
+                    await PersistJointStateAsync();
+                }
+
+                ScheduleReconcileIfJointFlipMayBeSuperseded(tx);
+                return true;
+            }
+
             // The coordinator flipped this view's upserts AND retraction deletes
             // jointly across every participant view tree inside one mixed atomic
             // op, so nothing is left to apply out-of-band.
-            return true;
+            return await CompleteJointRepairAsync(coordinator, hold, tx, cancellationToken);
         }
 
         if (decision.Degraded)
@@ -172,6 +216,7 @@ internal sealed partial class ViewMaintainerGrain
             // our own slice locally too (the coordinator will never issue a joint
             // flip), so every participant converges on per-tree-slice atomicity.
             await DegradeLocallyAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
+            state.State.CrossTreeRepairHolds.Remove(operationId);
             return true;
         }
 
@@ -197,14 +242,53 @@ internal sealed partial class ViewMaintainerGrain
         var degradeDecision = await coordinator.RegisterDegradedAsync(ViewName);
         if (degradeDecision.Applied)
         {
+            if (!degradeDecision.RequiresRepair)
+            {
+                if (state.State.CrossTreeRepairHolds.Remove(operationId))
+                {
+                    await PersistJointStateAsync();
+                }
+
+                ScheduleReconcileIfJointFlipMayBeSuperseded(tx);
+                return true;
+            }
+
             // The joint flip raced in just before our timeout and already carried
             // this view's upserts AND retraction deletes in one mixed atomic op,
             // so nothing is left to apply out-of-band.
-            return true;
+            return await CompleteJointRepairAsync(coordinator, hold, tx, cancellationToken);
         }
 
         await DegradeLocallyAsync(viewTree, txId, tx, upserts, deletes, cancellationToken);
+        state.State.CrossTreeRepairHolds.Remove(operationId);
         return true;
+    }
+
+    /// <summary>
+    /// Schedules an end-of-pass reconcile when a joint flip the coordinator already
+    /// committed may have carried a slice this view registered before an ordinary
+    /// write superseded one of the batch's prepared entries. The coordinator
+    /// flips the slice each view last registered; when a peer completes the wait
+    /// set before this view re-registers its post-supersession slice, the flip
+    /// writes the superseded atomic value over the ordinary write this view has
+    /// already applied, and the slice this view now holds omits that key, so the
+    /// resolved-slice reassert cannot repair it. Conservative: it fires whenever
+    /// any prepared entry is superseded, including when the coordinator stored the
+    /// post-supersession slice.
+    /// </summary>
+    private void ScheduleReconcileIfJointFlipMayBeSuperseded(StagedTransaction tx)
+    {
+        foreach (var prepared in tx.PreparesByIndex.Values)
+        {
+            if (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared))
+            {
+                _pendingCrossTreeReconcile = true;
+                logger.LogWarning(
+                    "View '{ViewName}' cross-tree operation '{OperationId}' was jointly flipped after an ordinary write superseded one of its prepared entries; scheduling a reconcile.",
+                    ViewName, tx.CrossTreeOperationId);
+                return;
+            }
+        }
     }
 
     /// <summary>
@@ -251,20 +335,49 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <summary>
-    /// Runs the deferred reconcile scheduled by a cross-tree degrade this pass, if
-    /// any. Called at the end of a drain pass (after the checkpoint is persisted)
-    /// so the rebuild does not clear the staging buffer under the flush loop.
+    /// Records a reconcile scheduled this pass in the durable checkpoint state, so
+    /// the drain's checkpoint write that advances past the flip also persists the
+    /// obligation to repair it. Returns whether the state changed (the caller then
+    /// forces the write).
+    /// </summary>
+    private bool PersistPendingCrossTreeReconcile()
+    {
+        if (!_pendingCrossTreeReconcile || state.State.PendingCrossTreeReconcile)
+        {
+            return false;
+        }
+
+        state.State.PendingCrossTreeReconcile = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Runs the deferred reconcile scheduled by a cross-tree degrade or a
+    /// possibly-superseded joint flip, if one is outstanding in memory or in the
+    /// persisted state. Called at the end of a drain pass (after the checkpoint is
+    /// persisted) so the rebuild does not clear the staging buffer under the flush
+    /// loop. The obligation is retired only after the reconcile succeeds; a
+    /// failure leaves it set so a later pass retries it.
     /// </summary>
     private async Task RunPendingCrossTreeReconcileAsync(CancellationToken cancellationToken)
     {
-        if (!_pendingCrossTreeReconcile)
+        if (HasJointOwnership)
         {
             return;
         }
 
-        _pendingCrossTreeReconcile = false;
+        if (!_pendingCrossTreeReconcile && !state.State.PendingCrossTreeReconcile)
+        {
+            return;
+        }
+
         try
         {
+            if (BeforeCrossTreeReconcileForTest is { } hook)
+            {
+                await hook(ViewName);
+            }
+
             await ReconcileAsync(cancellationToken);
         }
         catch (Exception ex)
@@ -272,6 +385,14 @@ internal sealed partial class ViewMaintainerGrain
             logger.LogWarning(ex,
                 "View '{ViewName}' reconcile after a cross-tree degrade failed; will retry on a later pass.",
                 ViewName);
+            return;
+        }
+
+        _pendingCrossTreeReconcile = false;
+        if (state.State.PendingCrossTreeReconcile)
+        {
+            state.State.PendingCrossTreeReconcile = false;
+            await state.WriteStateAsync();
         }
     }
 }

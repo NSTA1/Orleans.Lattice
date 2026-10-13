@@ -1,0 +1,11 @@
+MODULE: ReadyHistoryTornRead
+TARGET: HistoryReadAtomic
+CLASS: Invariant
+SUMMARY: A public history read returns only one revision from an atomic two-key batch
+PERTURBS: Observe
+
+--- FIND
+    /\ historySnapshots' = [historySnapshots EXCEPT ![c] = history[c]]
+--- REPLACE
+    /\ historySnapshots' = [historySnapshots EXCEPT ![c] = {r \in history[c] : r[1] = r[2]}]
+--- END

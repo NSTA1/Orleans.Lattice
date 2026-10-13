@@ -1,0 +1,16 @@
+# Pairs with NoConcurrentLeafWrites. Without the gate the reparent write and a checkpoint flush race on the row's etag.
+MODULE: FlushIgnoresGate
+TARGET: NoConcurrentLeafWrites
+CLASS: Invariant
+SUMMARY: an interleaved flush persists without waiting for the persist-write gate
+PERTURBS: BeginFlush
+
+--- FIND
+    /\ flush = "idle"
+    /\ gate = "free"
+    /\ ~cleared
+--- REPLACE
+    /\ flush = "idle"
+    \* MUTATION: the persist-write gate is not awaited
+    /\ ~cleared
+--- END

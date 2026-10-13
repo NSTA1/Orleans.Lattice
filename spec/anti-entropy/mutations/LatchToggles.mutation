@@ -1,0 +1,17 @@
+MODULE: LatchToggles
+TARGET: LatchPermanent
+CLASS: Action
+SUMMARY: a digest fault toggles the latch instead of latching it off
+PERTURBS: LatchOff
+BOUNDS: MaxEnv = 2
+
+--- FIND
+    /\ ~latch
+    /\ env < MaxEnv
+    /\ env' = env + 1
+    /\ latch' = TRUE
+--- REPLACE
+    /\ env < MaxEnv
+    /\ env' = env + 1
+    /\ latch' = ~latch
+--- END

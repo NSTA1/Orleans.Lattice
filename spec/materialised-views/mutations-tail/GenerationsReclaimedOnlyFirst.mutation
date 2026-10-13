@@ -1,0 +1,11 @@
+MODULE: GenerationsReclaimedOnlyFirst
+TARGET: GenerationsReclaimed
+CLASS: Temporal
+SUMMARY: reclamation only ever deletes the initial generation, so a later superseded generation leaks
+PERTURBS: Reclaim
+
+--- FIND
+    /\ \E g \in gens \ {active} : gens' = gens \ {g}
+--- REPLACE
+    /\ \E g \in (gens \ {active}) \cap {0} : gens' = gens \ {g}
+--- END

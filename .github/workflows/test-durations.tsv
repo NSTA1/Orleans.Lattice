@@ -2,6 +2,26 @@
 # Passed, full-scope items >= 0.1 minutes replace their previous estimates;
 # other rows retain their earlier provenance below. No shard or tier is removed.
 
+# New lifecycle rows are local measured item wall-clock (2026-10-11), including
+# VSTest startup: Java 17, two visible CPUs, one concurrent TLC process.
+# TreeLifecycle + TreeLifecycleAdmission: 50 successful JVM cases, 99.2 seconds, no skips.
+# Aliasing: 29 successful JVM cases in 72 seconds, no skips. The 1.8-minute
+# estimate also accommodates the preceding 28-case run's 104-second wall time.
+# AntiEntropy group 1: 18 cases in 539 seconds; group 2: nine cases in 598 seconds,
+# measured with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
+# AntiEntropy group 3: seven cases in 549 seconds after the rebase.
+# SplitGateCycles: 39 successful JVM cases in 511 seconds, same local settings.
+# MaterialisedViewTail: all 24 base/variant/mutation cases in 342 seconds,
+# with the same local Java 17/two-visible-CPU/single-TLC-slot settings.
+# Focused view companions (2026-10-12): Fence 11/11 cases in 48.434s and
+# Horizon 25/25 cases in 196.4s, including the no-build command's startup.
+# Both use one JVM slot, two visible CPUs and a 2GiB heap ceiling; no skips.
+# Aggregation 20/20 cases in 95.417s; strengthened Rebind 22/22 cases in
+# 117.545s, including distinct mutation-specific controls and command startup.
+# These use one JVM slot, two visible CPUs and an 1800MB heap ceiling; no skips.
+# MaterialisedViewJointRepair: all 29 base/variant/mutation cases in 97.221
+# seconds including VSTest startup, with those same settings (2026-10-12).
+
 # Per-work-item duration estimates, in minutes, used only to bin-pack the
 # matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
 # shard of an unsharded package and `all` for its single untiered invocation.
@@ -99,6 +119,24 @@
 # observed wall time; replace them with measured shard medians at the next
 # duration refresh. The smoke model runs separately in seconds.
 lattice	formal-tlc	deterministic	9.1
+lattice	formal-tlc-materialised-views	deterministic	5.7
+lattice	formal-tlc-view-fence	deterministic	0.81
+lattice	formal-tlc-view-horizon	deterministic	3.27
+lattice	formal-tlc-view-aggregation	deterministic	1.59
+lattice	formal-tlc-view-rebind	deterministic	1.96
+# ReadyClosure whole no-build command 94.2000658s; SourceAdmission overlay extension 239.8378192s (26 cases, including paired controls).
+# Java17, 1 JVM, 2 CPU, Xmx1800MiB; shared-host measurements, not isolated performance comparisons.
+lattice	formal-tlc-view-ready-closure	deterministic	1.57
+lattice	formal-tlc-view-source-admission	deterministic	4.00
+# ResolvedIdentity whole no-build command 61.3854248s; Java17, 1 JVM, 2 CPU, Xmx1800MiB, all sixteen paired controls included.
+lattice	formal-tlc-view-resolved-identity	deterministic	1.03
+lattice	formal-tlc-view-joint-repair	deterministic	1.62
+lattice	formal-tlc-tree-lifecycle	deterministic	1.6
+lattice	formal-tlc-anti-entropy	deterministic	9.0
+lattice	formal-tlc-anti-entropy-2	deterministic	10.0
+lattice	formal-tlc-anti-entropy-3	deterministic	9.2
+lattice	formal-tlc-aliasing	deterministic	1.8
+lattice	formal-tlc-split-gate	deterministic	8.6
 lattice	formal-tlc-shard-ownership	deterministic	15.3
 lattice	formal-tlc-convergence	deterministic	14.1
 lattice	formal-tlc-replication-wal	deterministic	18.4

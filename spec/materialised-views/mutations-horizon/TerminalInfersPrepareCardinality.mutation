@@ -1,0 +1,11 @@
+MODULE: TerminalInfersPrepareCardinality
+TARGET: HorizonRequiresHistoryEntitlement
+CLASS: Action
+SUMMARY: a terminal and sampled heads stand in for a retained prepare-cardinality witness
+PERTURBS: CaptureHorizon
+
+--- FIND
+    /\ PrepareCardinalityKnown /\ CompleteTerminalSet
+--- REPLACE
+    /\ TRUE /\ CompleteTerminalSet
+--- END

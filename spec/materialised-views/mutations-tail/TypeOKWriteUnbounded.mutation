@@ -1,0 +1,12 @@
+MODULE: TypeOKWriteUnbounded
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a source write ignores the write budget, so a log outgrows its declared domain
+PERTURBS: Write
+
+--- FIND
+    /\ written < MaxWrites
+    /\ \E k \in Keys :
+--- REPLACE
+    /\ \E k \in Keys :
+--- END

@@ -1,0 +1,14 @@
+MODULE: RefusalTakesReservation
+TARGET: EarlyRefusalNeutral
+CLASS: Action
+SUMMARY: early supersession refusal leaks a reservation
+PERTURBS: Validate
+
+--- FIND
+    /\ UNCHANGED <<alias, map, previous, reservation, lineage, observed, moves,
+                   deleted, migration, migrationDone, staleRevert, staleMigration>>
+--- REPLACE
+    /\ reservation' = TRUE
+    /\ UNCHANGED <<alias, map, previous, lineage, observed, moves,
+                   deleted, migration, migrationDone, staleRevert, staleMigration>>
+--- END

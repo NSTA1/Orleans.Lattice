@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared run settings for every test project under test/, wired in through
+  RunSettingsFilePath in test/Directory.Build.props.
+
+  AssemblySelectLimit: when a VSTest filter selects more tests than this limit
+  (NUnit3TestAdapter default 2000), the adapter stops translating the selection
+  into an NUnit filter and executes EVERY test in the assembly - Chaos, Tlc and
+  all - while reporting only the ones the filter matched. The run looks correct
+  (right counts, right TRX) but silently costs the whole suite: the content-gate
+  leg grew from ~6 to ~38 minutes the moment its lattice selection crossed 2000.
+  Lifting the limit keeps every filtered run, at any size, executing exactly
+  what it selected.
+-->
+<RunSettings>
+  <NUnit>
+    <AssemblySelectLimit>2147483647</AssemblySelectLimit>
+  </NUnit>
+</RunSettings>

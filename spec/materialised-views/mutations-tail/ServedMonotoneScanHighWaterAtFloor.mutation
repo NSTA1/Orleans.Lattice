@@ -1,0 +1,11 @@
+MODULE: ServedMonotoneScanHighWaterAtFloor
+TARGET: ServedMonotone
+CLASS: Action
+SUMMARY: the rebuild records its resume floor rather than its scan point as the high-water mark, so the catch-up replay regresses keys the scanned generation already served
+PERTURBS: RebuildScan
+
+--- FIND
+    /\ rbVal' = SrcState(rbTree) /\ rbHw' = Len(logs[rbTree])
+--- REPLACE
+    /\ rbVal' = SrcState(rbTree) /\ rbHw' = rbFloor
+--- END

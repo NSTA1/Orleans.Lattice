@@ -1,0 +1,14 @@
+MODULE: CheckpointRetainsStagePrepareCheckpoints
+TARGET: CheckpointRetainsStage
+CLASS: Invariant
+SUMMARY: consuming a prepare checkpoints it before its batch is resolved
+PERTURBS: Stage
+
+--- FIND
+    /\ staged' = staged \cup {log[read + 1]} /\ read' = read + 1
+    /\ UNCHANGED <<stamps, log, outcome, source, checkpoint, members,
+--- REPLACE
+    /\ staged' = staged \cup {log[read + 1]} /\ read' = read + 1
+    /\ checkpoint' = read + 1
+    /\ UNCHANGED <<stamps, log, outcome, source, members,
+--- END

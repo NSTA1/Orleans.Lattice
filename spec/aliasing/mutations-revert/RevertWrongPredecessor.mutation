@@ -1,0 +1,13 @@
+MODULE: RevertWrongPredecessor
+TARGET: RevertedBinding
+CLASS: Action
+SUMMARY: revert returns to an unrelated map and physical copy
+PERTURBS: Revert
+
+--- FIND
+    /\ alias' = IF alias = observed THEN previous ELSE alias
+    /\ map' = IF alias = observed THEN previous ELSE map
+--- REPLACE
+    /\ alias' = IF alias = observed THEN "c" ELSE alias
+    /\ map' = IF alias = observed THEN "c" ELSE map
+--- END

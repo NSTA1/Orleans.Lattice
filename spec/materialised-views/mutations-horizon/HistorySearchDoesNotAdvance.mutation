@@ -1,0 +1,11 @@
+MODULE: HistorySearchDoesNotAdvance
+TARGET: HistorySearchProgress
+CLASS: Action
+SUMMARY: the bounded retained-history cursor repeats its first entry instead of resuming
+PERTURBS: HistorySearch
+
+--- FIND
+          /\ historyCursor' = i
+--- REPLACE
+          /\ historyCursor' = historyCursor
+--- END

@@ -1,0 +1,15 @@
+# Pairs with NoWaitCycle. A lost sibling call leaves the capture waiting under its gate forever.
+MODULE: CaptureSiblingCallLost
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: a capture split of B awaits a SetPrevSiblingAsync call that was never sent
+PERTURBS: CaptureCallSibling
+
+--- FIND
+    /\ sib' = "queued"
+    /\ cap' = [cap EXCEPT !["B"] = "awaitSib"]
+--- REPLACE
+    \* MUTATION: the call is never sent
+    /\ sib' = sib
+    /\ cap' = [cap EXCEPT !["B"] = "awaitSib"]
+--- END

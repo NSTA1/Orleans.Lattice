@@ -1,0 +1,11 @@
+MODULE: BeginInvalidToken
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: intent loses its durable operation identity
+PERTURBS: Begin
+
+--- FIND
+        /\ token' = [token EXCEPT ![l] = moves + 1]
+--- REPLACE
+        /\ token' = [token EXCEPT ![l] = MaxMoves + 1]
+--- END

@@ -1,0 +1,13 @@
+MODULE: ResolvedReusedIdSuppressed
+TARGET: CheckpointSafe
+CLASS: Invariant
+SUMMARY: Carry the bare resolved TxId across physical logs and checkpoint the suppressed new transaction
+PERTURBS: EnterTail
+
+--- FIND
+    /\ resolved' = IF candidate = tail THEN resolved ELSE FALSE
+    /\ order' = IF candidate = tail THEN order ELSE <<>>
+--- REPLACE
+    /\ resolved' = resolved
+    /\ order' = order
+--- END

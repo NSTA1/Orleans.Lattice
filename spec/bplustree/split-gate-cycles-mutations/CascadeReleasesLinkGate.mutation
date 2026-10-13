@@ -1,0 +1,18 @@
+# Pairs with LinkGateMatchesLinking. A link gate released mid-cascade admits a second link onto the parents.
+MODULE: CascadeReleasesLinkGate
+TARGET: LinkGateMatchesLinking
+CLASS: Invariant
+SUMMARY: the root releases its link gate as the grandparent divides
+PERTURBS: GrandparentCascade
+
+--- FIND
+    /\ cascaded' = TRUE
+    /\ ch' = [ch EXCEPT ![o] = "cascade"]
+    /\ UNCHANGED <<fg, cap, cons, gate, sib, lg, seed, overflowed, linked, dep, deacts>>
+--- REPLACE
+    /\ cascaded' = TRUE
+    /\ ch' = [ch EXCEPT ![o] = "cascade"]
+    \* MUTATION: the link gate is released early
+    /\ lg' = "none"
+    /\ UNCHANGED <<fg, cap, cons, gate, sib, seed, overflowed, linked, dep, deacts>>
+--- END

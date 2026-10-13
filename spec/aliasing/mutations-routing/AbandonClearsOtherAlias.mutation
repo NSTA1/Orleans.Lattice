@@ -1,0 +1,12 @@
+MODULE: AbandonClearsOtherAlias
+TARGET: IndependentAliases
+CLASS: Action
+SUMMARY: rollback clears every logical alias's retained-copy fence
+PERTURBS: Abandon
+
+--- FIND
+        /\ redirect' = IF alias[l] = source[l] /\ owner[l][source[l]] = token[l]
+                        THEN [redirect EXCEPT ![l][source[l]] = None] ELSE redirect
+--- REPLACE
+        /\ redirect' = [a \in Aliases |-> [p \in Copies |-> None]]
+--- END

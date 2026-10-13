@@ -1,0 +1,15 @@
+# Pairs with TypeOK. The type invariant rejects a chain stage outside the link protocol.
+MODULE: UnknownChainStage
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the capture starts the link in a stage the chain does not have
+PERTURBS: BeginCapture
+
+--- FIND
+    /\ leafTurn' = "capture"
+    /\ chain' = "root"
+--- REPLACE
+    /\ leafTurn' = "capture"
+    \* MUTATION: an unknown chain stage
+    /\ chain' = "rooted"
+--- END

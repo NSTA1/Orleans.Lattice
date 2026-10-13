@@ -1,0 +1,12 @@
+MODULE: ReadyCrashForgetsCompletion
+TARGET: HistoryExact
+CLASS: Invariant
+SUMMARY: A restart forgets applied revision identities while their durable history rows survive
+PERTURBS: Crash
+
+--- FIND
+    /\ UNCHANGED <<ckpt,done,value,history,snapshots,historySnapshots>>
+--- REPLACE
+    /\ done' = [done EXCEPT ![c] = {}]
+    /\ UNCHANGED <<ckpt,value,history,snapshots,historySnapshots>>
+--- END

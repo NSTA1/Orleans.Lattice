@@ -140,7 +140,7 @@ public sealed class BootstrapFallbackPlannerTests
     }
 
     [Test]
-    public async Task PlanAsync_skips_prepared_and_tombstone_rows()
+    public async Task PlanAsync_skips_prepared_rows_and_reships_tombstones_as_deletes()
     {
         var rows = new[]
         {
@@ -153,8 +153,48 @@ public sealed class BootstrapFallbackPlannerTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(outcome.EntriesShipped, Is.EqualTo(2));
+            Assert.That(sink.LastEntries.Select(e => e.Key), Is.EqualTo(new[] { "b", "d" }));
+        });
+    }
+
+    [Test]
+    public async Task PlanAsync_reships_a_tombstone_as_a_delete_carrying_its_own_clock()
+    {
+        // A peer that missed a delete behind a trimmed WAL (or below its cursor)
+        // still holds the old value. The committed projection carries live keys
+        // only, so the tombstone row is the one record that can repair it; the
+        // pre-fix planner dropped it and the peer kept the value for ever.
+        var rows = new[] { Tombstone("d", ticks: 112) };
+
+        var (outcome, sink) = await RunAsync(rows, new[] { Range("a", "m") });
+
+        var record = sink.LastEntries.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Attempted, Is.True);
             Assert.That(outcome.EntriesShipped, Is.EqualTo(1));
-            Assert.That(sink.LastEntries.Single().Key, Is.EqualTo("b"));
+            Assert.That(outcome.SkipReason, Is.EqualTo(BootstrapFallbackSkipReason.None));
+            Assert.That(record.Op, Is.EqualTo(MutationKind.Delete));
+            Assert.That(record.IsTombstone, Is.True);
+            Assert.That(record.Value, Is.Null);
+            Assert.That(record.Key, Is.EqualTo("d"));
+            Assert.That(record.Timestamp, Is.EqualTo(Hlc(112)));
+            Assert.That(record.OriginClusterId, Is.EqualTo(Origin));
+        });
+    }
+
+    [Test]
+    public async Task PlanAsync_out_of_range_tombstone_is_not_reshipped()
+    {
+        var rows = new[] { Tombstone("z", ticks: 112) };
+
+        var (outcome, sink) = await RunAsync(rows, new[] { Range("a", "m") });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.SkipReason, Is.EqualTo(BootstrapFallbackSkipReason.Empty));
+            Assert.That(sink.Calls, Is.Zero);
         });
     }
 

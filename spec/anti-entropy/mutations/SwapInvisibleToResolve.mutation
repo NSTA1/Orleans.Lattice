@@ -1,0 +1,12 @@
+MODULE: SwapInvisibleToResolve
+TARGET: SwapObserved
+CLASS: Invariant
+SUMMARY: an alias swap does not advance the topology generation a routing resolve observes, so a walk keeps resolving the retired physical tree
+PERTURBS: AliasSwap
+BOUNDS: MaxSwap = 1
+
+--- FIND
+    /\ epoch' = swapEpoch'
+--- REPLACE
+    /\ UNCHANGED epoch
+--- END

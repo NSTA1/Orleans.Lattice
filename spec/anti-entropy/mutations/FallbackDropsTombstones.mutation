@@ -1,0 +1,11 @@
+MODULE: FallbackDropsTombstones
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the bootstrap fallback skips tombstone rows, so a delete lost behind a trimmed WAL or below the cursor never heals
+PERTURBS: Fallback
+
+--- FIND
+    /\ inflight' = inflight \cup {RepairMsg(k, aStore[k].ts, aStore[k].del) : k \in FallbackRows}
+--- REPLACE
+    /\ inflight' = inflight \cup {RepairMsg(k, aStore[k].ts, FALSE) : k \in {j \in FallbackRows : ~aStore[j].del}}
+--- END

@@ -1152,6 +1152,14 @@ internal sealed class TreeResizeGrain(
         var logicalBefore = await registry.GetEntryAsync(TreeId)
             ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
 
+        var servingPhysical = logicalBefore.PhysicalTreeId ?? TreeId;
+        if (!string.Equals(servingPhysical, snapshotTreeId, StringComparison.Ordinal)
+            && !string.Equals(servingPhysical, oldPhysical, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Resize '{opId}' of tree '{TreeId}' cannot be undone after a later alias cutover to '{servingPhysical}'.");
+        }
+
         await ClearUnwindForReplicationAsync(opId, logicalBefore, snapshotTreeId);
 
         // Defensively abort any snapshot activation that may have been
@@ -1223,7 +1231,8 @@ internal sealed class TreeResizeGrain(
         {
             using (LatticeAccessGateContext.EnterSystemOrigin())
             {
-                swappedFrom = await registry.SwapAliasAsync(TreeId, oldPhysical, oldMap, oldRow?.NextShardIndex, expectedPhysicalTreeId: null);
+                swappedFrom = await registry.SwapAliasAsync(TreeId, oldPhysical, oldMap, oldRow?.NextShardIndex,
+                    expectedPhysicalTreeId: logicalBefore.PhysicalTreeId ?? TreeId);
             }
         }
         catch

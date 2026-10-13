@@ -1,0 +1,11 @@
+MODULE: ReleaseLeavesDestinationFenced
+TARGET: FinishedCopyUnfenced
+CLASS: Invariant
+SUMMARY: a repeated move returns while its destination still redirects away
+PERTURBS: Release
+
+--- FIND
+        /\ redirect' = [redirect EXCEPT ![l][destination[l]] = None]
+--- REPLACE
+        /\ redirect' = redirect
+--- END

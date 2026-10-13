@@ -1,0 +1,11 @@
+MODULE: ClearanceBeforeCompensationRequestSkipsDecision
+TARGET: ClearanceBeforeCompensation
+CLASS: Invariant
+SUMMARY: accepting undo bypasses replication clearance and enters compensation
+PERTURBS: UndoRequest
+
+--- FIND
+    /\ undo' = "checking"
+--- REPLACE
+    /\ undo' = "armed"
+--- END

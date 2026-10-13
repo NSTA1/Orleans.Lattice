@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Tests.Views;
 /// commit) are all asserted deterministically without an Orleans TestCluster.
 /// </summary>
 [TestFixture]
-public sealed class ViewCrossTreeCoordinatorGrainTests
+public sealed partial class ViewCrossTreeCoordinatorGrainTests
 {
     private const string OperationId = "op-xt-1";
 
@@ -27,29 +27,43 @@ public sealed class ViewCrossTreeCoordinatorGrainTests
         public required ViewCrossTreeCoordinatorGrain Grain { get; init; }
         public required IGrainFactory GrainFactory { get; init; }
         public required FakePersistentState<ViewCrossTreeCoordinatorState> State { get; init; }
+        public required IReminderRegistry Reminders { get; init; }
+        public required IViewJointRepairAdmissionGate AdmissionGate { get; init; }
     }
 
-    private static Harness CreateGrain()
+    private static Harness CreateGrain(
+        FakePersistentState<ViewCrossTreeCoordinatorState>? state = null,
+        IGrainFactory? grainFactory = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("view-cross-tree-coord", OperationId));
 
-        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory ??= Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(new LatticeOptions());
+        var admissionGate = Substitute.For<IViewJointRepairAdmissionGate>();
+        admissionGate.IsOpenAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
 
-        var state = new FakePersistentState<ViewCrossTreeCoordinatorState>();
+        state ??= new FakePersistentState<ViewCrossTreeCoordinatorState>
+        {
+            State = new() { RepairProtocolVersion = ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion },
+        };
 
         var grain = new ViewCrossTreeCoordinatorGrain(
             context,
             grainFactory,
             reminderRegistry,
             optionsMonitor,
+            admissionGate,
             NullLogger<ViewCrossTreeCoordinatorGrain>.Instance,
             state);
 
-        return new Harness { Grain = grain, GrainFactory = grainFactory, State = state };
+        return new Harness
+        {
+            Grain = grain, GrainFactory = grainFactory, State = state,
+            Reminders = reminderRegistry, AdmissionGate = admissionGate,
+        };
     }
 
     private static ViewCrossTreeReadiness Readiness(
@@ -65,6 +79,7 @@ public sealed class ViewCrossTreeCoordinatorGrainTests
             WaitSet = waitSet,
             Upserts = upserts ?? [],
             Deletes = deletes ?? [],
+            RepairProtocolVersion = ViewCrossTreeCoordinatorState.CurrentRepairProtocolVersion,
         };
 
     private static List<KeyValuePair<string, byte[]>> Upsert(string key, params byte[] value) =>
@@ -167,6 +182,8 @@ public sealed class ViewCrossTreeCoordinatorGrainTests
 
         Assert.That(decision.Applied, Is.False);
         Assert.That(decision.Degraded, Is.False);
+        Assert.That(h.State.State.Decided, Is.False,
+            "A missing original participant cannot acquire a durable joint intent.");
         Assert.That(h.State.State.WaitSet, Is.EquivalentTo(new[] { "v1", "v2" }));
         Assert.That(h.State.State.Slices.ContainsKey("v1"), Is.True);
         Assert.That(h.State.WriteCount, Is.GreaterThanOrEqualTo(1));

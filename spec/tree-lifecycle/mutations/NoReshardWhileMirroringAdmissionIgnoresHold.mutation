@@ -1,0 +1,11 @@
+MODULE: NoReshardWhileMirroringAdmissionIgnoresHold
+TARGET: NoReshardWhileMirroring
+CLASS: Invariant
+SUMMARY: reshard starts inside the completed resize's undoable mirror window
+PERTURBS: ReshardBegin
+
+--- FIND
+    /\ operation = "none" /\ ~mirror /\ ~undoable
+--- REPLACE
+    /\ operation = "none"
+--- END

@@ -1,0 +1,11 @@
+MODULE: OperationReturnsFenceNeverBanks
+TARGET: OperationReturns
+CLASS: Temporal
+SUMMARY: a fenced shard is never recorded so the alias flip cannot finish
+PERTURBS: FenceShard
+
+--- FIND
+    /\ fenced' = fenced \cup {s}
+--- REPLACE
+    /\ fenced' = fenced
+--- END

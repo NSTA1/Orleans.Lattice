@@ -1,0 +1,11 @@
+MODULE: FallbackTombstoneAsSet
+TARGET: FallbackCommittedOnly
+CLASS: Action
+SUMMARY: the bootstrap fallback re-ships a tombstone row as a Set rather than a Delete
+PERTURBS: Fallback
+
+--- FIND
+    /\ inflight' = inflight \cup {RepairMsg(k, aStore[k].ts, aStore[k].del) : k \in FallbackRows}
+--- REPLACE
+    /\ inflight' = inflight \cup {RepairMsg(k, aStore[k].ts, FALSE) : k \in FallbackRows}
+--- END

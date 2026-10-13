@@ -1,0 +1,16 @@
+# Pairs with NoResurrectionAfterClear. The in-flight write then lands on the deleted row and re-creates it.
+MODULE: ClearIgnoresGate
+TARGET: NoResurrectionAfterClear
+CLASS: Invariant
+SUMMARY: the clear deletes the row while an interleaved write is still in flight
+PERTURBS: ClearLeaf
+
+--- FIND
+    /\ ~cleared
+    /\ gate = "free"
+    /\ cleared' = TRUE
+--- REPLACE
+    /\ ~cleared
+    \* MUTATION: the clear does not wait for the persist-write gate
+    /\ cleared' = TRUE
+--- END

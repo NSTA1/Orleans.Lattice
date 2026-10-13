@@ -1,0 +1,13 @@
+MODULE: MembershipAccumulatorAtomicMembershipOnly
+TARGET: MembershipAccumulatorAtomic
+CLASS: Invariant
+SUMMARY: ordinary membership advances while its numeric accumulator retains the prior row
+PERTURBS: ReadOrdinary
+
+--- FIND
+    /\ counts' = NextCounts(members, counts, 1)
+    /\ sums' = NextSums(members, sums, 1)
+--- REPLACE
+    /\ counts' = counts
+    /\ sums' = sums
+--- END

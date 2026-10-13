@@ -1,0 +1,11 @@
+MODULE: RepairDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a source advance leaves the bounded version domain
+PERTURBS: Advance
+
+--- FIND
+    /\ source' = [source EXCEPT ![v] = 2]
+--- REPLACE
+    /\ source' = [source EXCEPT ![v] = 3]
+--- END

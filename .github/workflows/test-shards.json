@@ -90,13 +90,118 @@
         "shard": "formal-tlc-convergence",
         "tlc": true,
         "includeCategories": ["TlcShardConvergence"],
-        "note": "The TLC mutation gates are CPU-bound JVM runs, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). Sizes are test-minutes summed over the cases of CI run 37322771720, which the harness runs about four at a time, so wall-clock is about a quarter. This shard holds every Replication EventualConvergence (temporal) mutant: they share one control arm, which the harness runs once per process, about 54 test-minutes (15 minutes wall-clock in that run)."
+        "note": "The TLC mutation gates are CPU-bound JVM runs, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). Sizes are test-minutes summed over the cases of CI run 37322771720, which the harness runs about four at a time, so wall-clock is about a quarter. This shard holds every Replication EventualConvergence (temporal) mutant, about 54 test-minutes (15 minutes wall-clock in that run). Mutation-specific generated config headers mean distinct mutants currently run separate cached controls."
+      },
+      {
+        "shard": "formal-tlc-materialised-views",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViews"],
+        "note": "MaterialisedViewTail base, ThreeWrites variant and 22 mutants: all 24 cases measured at 342s on Java 17 with two visible CPUs and one TLC slot. Mutation names occur in control config headers, so distinct mutants do not share cached controls even when their targets match. Staging companions require separate measured groups when enrolled."
+      },
+      {
+        "shard": "formal-tlc-view-fence",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewFence"],
+        "note": "MaterialisedViewFence base, NewerOrdinary and nine paired mutants: 11/11 cases, zero skips. Final one-JVM/two-CPU/Xmx2g no-build command measured 48.434s; mutation-specific controls are included."
+      },
+      {
+        "shard": "formal-tlc-view-horizon",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewHorizon"],
+        "note": "MaterialisedViewHorizon base, FullScan and twenty-three paired mutants: 25/25 cases, zero skipped, inconclusive or not-executed. Final one-JVM/two-CPU/Xmx2g no-build command measured 196.4s over three distinct prepare/terminal partitions, retained-cardinality witnesses and abandoned recovery."
+      },
+      {
+        "shard": "formal-tlc-view-aggregation",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewAggregation"],
+        "note": "MaterialisedViewAggregation base, Delete and eighteen paired mutants: 20/20 cases, zero skips. Independent one-JVM/two-CPU/1800MB no-build command measured 95.417s including distinct mutation-specific controls; numeric membership, partial public repair and history revisions."
+      },
+      {
+        "shard": "formal-tlc-view-rebind",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewRebind"],
+        "note": "MaterialisedViewRebind base, NoCrash and twenty paired mutants: 22/22 cases, zero skips. Independent one-JVM/two-CPU/1800MB no-build command measured 117.545s including distinct mutation-specific controls; captured source/floor publication, late alias movement and simultaneous bound/candidate floor protection."
+      },
+      {
+        "shard": "formal-tlc-view-ready-closure",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewReadyClosure"],
+        "note": "ReadyClosure base, History, TwoConsumers and twelve paired mutants: 15/15 cases, zero skips. Independent one-JVM/two-CPU/1800MiB no-build command measured 94.200s including distinct controls; independent clocks, transitive replacement closure, external eligibility hold and per-consumer atomic snapshots."
+      },
+      {
+        "shard": "formal-tlc-view-source-admission",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewSourceAdmission"],
+        "note": "SourceAdmission base, CrossTree, History, PendingSource, PendingOverlay and twenty-one paired mutants: 26/26 cases, zero skips. One-JVM/two-CPU/1800MiB no-build command measured 239.838s including distinct controls; logical pending-row/decision identity, source-apply lag, omission entitlement and expected-participant closure. The duration table prices this measured expanded population at 4.00 minutes."
+      },
+      {
+        "shard": "formal-tlc-view-resolved-identity",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewResolvedIdentity"],
+        "note": "ResolvedIdentity base, SameLog, FailedCandidate, LostCandidate and sixteen paired mutants: 20/20 cases, zero skips. Independent one-JVM/two-CPU/1800MiB no-build command measured 61.385s; actual-tail cache ownership, reused transaction IDs, same-log rebuild and uncertain publication responses."
+      },
+      {
+        "shard": "formal-tlc-view-joint-repair",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewJointRepair"],
+        "note": "Fresh joint-repair base, Legacy, SingleTarget and TwoFaults variants, and 25 typed mutation/control pairs: all 29 cases measured at 97.221 seconds including VSTest startup on Java 17, two visible CPUs and one TLC slot. Isolated from the existing materialised-view tail work; bounded two-participant repair, automatic historical completion cleanup and durable acknowledgement closure."
+      },
+      {
+        "shard": "formal-tlc-anti-entropy",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardAntiEntropy"],
+        "note": "Anti-entropy base and 17 mutants: 18 cases measured at 539s on Java 17 with two visible CPUs and one TLC slot. Control config headers contain mutation names, so distinct mutants do not share cached controls even when their targets match."
+      },
+      {
+        "shard": "formal-tlc-anti-entropy-2",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardAntiEntropy2"],
+        "note": "Anti-entropy alias variant and eight mutants: nine cases measured at 598s on the same two-CPU, single-TLC-slot toolchain."
+      },
+      {
+        "shard": "formal-tlc-anti-entropy-3",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardAntiEntropy3"],
+        "note": "Remaining seven anti-entropy mutants, including the expensive convergence controls: seven cases measured at 549s after the rebase with two visible CPUs and one TLC slot."
+      },
+      {
+        "shard": "formal-tlc-aliasing",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardAliasing"],
+        "note": "Shared durable alias routing and cutover interactions, retaining same-property controls with their mutations."
+      },
+      {
+        "shard": "formal-tlc-split-gate",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSplitGate"],
+        "note": "SplitGateCycles base and 38 mutants (leaf split-gate and grain-turn wait cycles): 39 cases measured at 511s wall-clock with Java 17, two visible CPUs and one TLC slot. The two EveryLinkLands temporal mutants dominate at about 80s each."
+      },
+      {
+        "shard": "formal-tlc-tree-lifecycle",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardTreeLifecycle"],
+        "note": "Resize/undo, grow/shrink reshard and shadow-cutover composition base, repeated-crash variant and mutants: 50 cases measured at 99.2s with Java 17, two visible CPUs and one TLC slot. Mutation-specific config headers prevent distinct mutants from sharing cached controls."
       },
       {
         "shard": "formal-tlc-rebootstrap",
         "tlc": true,
         "includeCategories": ["TlcShardReBootstrap"],
-        "note": "The mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations, about 66 test-minutes, 60 of them ReplicationReBootstrap's. Each module's mutants share their controls, so every companion module stays whole in this shard."
+        "note": "The mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations, about 66 test-minutes, 60 of them ReplicationReBootstrap's. Companion modules stay whole in this measured group; mutation-specific headers prevent distinct mutants from sharing cached controls."
       },
       {
         "shard": "formal-tlc-replication-wal",
@@ -114,7 +219,7 @@
         "shard": "formal-tlc-atomic",
         "tlc": true,
         "includeCategories": ["TlcShardAtomic"],
-        "note": "The mutants of every AtomicCommit* module, kept whole because mutants of one module share their control arms. Variant configurations are balanced across six formal-tlc-atomic-variants-* shards because they have no shared control arms."
+        "note": "The mutants of every AtomicCommit* module, retained as a measured mutation group. Variant configurations are balanced across six formal-tlc-atomic-variants-* shards; mutation controls remain separate because generated config headers include mutation names."
       },
       {
         "shard": "formal-tlc-atomic-variants-1",
@@ -168,13 +273,13 @@
         "shard": "formal-tlc-bplus-cascade-mutations-1",
         "tlc": true,
         "includeCategories": ["TlcShardBPlusCascadeMutations1"],
-        "note": "Seven BPlusCascade mutations. The remaining six are grouped by target property in the companion shard, keeping each shared control run in one job."
+        "note": "Seven BPlusCascade mutations. The remaining six are grouped by target property in the companion shard. Distinct mutations run separate controls under the current byte-keyed cache."
       },
       {
         "shard": "formal-tlc-bplus-cascade-mutations-2",
         "tlc": true,
         "includeCategories": ["TlcShardBPlusCascadeMutations2"],
-        "note": "Six BPlusCascade parent-accounting, recovery, separator-range, and maximum-height mutations, grouped by target property to reuse each control run."
+        "note": "Six BPlusCascade parent-accounting, recovery, separator-range, and maximum-height mutations in the companion target-property group; measured costs include each mutation control."
       },
       {
         "shard": "formal-tlc-smoke",
@@ -187,7 +292,7 @@
         "shard": "formal-tlc",
         "tlc": true,
         "include": ["Formal.TlcModelCheckTests"],
-        "note": "Every other TLC case: the base run of every module, variant runs of every module but AtomicCommit*, mutations of ungrouped modules (including BPlusTopology), and synthetic-module gates. BPlusTopology's 15 base/mutation cases took 13s locally, too small to justify a dedicated runner; the catch-all historically measured about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
+        "note": "Every TLC case not already claimed: ungrouped bases and variants, mutations of ungrouped modules (including BPlusTopology), and synthetic-module gates. The lifecycle, materialised-view and anti-entropy areas route their bases, variants and mutants together above this catch-all. BPlusTopology's 15 base/mutation cases took 13s locally, too small to justify a dedicated runner; the catch-all historically measured about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
       },
       {
         "shard": "rest",

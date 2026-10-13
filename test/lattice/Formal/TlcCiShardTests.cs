@@ -44,9 +44,9 @@ public sealed class TlcCiShardTests
     [Test]
     public void Every_category_routes_at_least_one_case_of_the_repository()
     {
-        var routed = SpecModuleCases.Modules()
-            .Concat(SpecModuleCases.Mutations())
-            .Concat(SpecModuleCases.Variants())
+        var routed = SpecModuleCases.TlcModules()
+            .Concat(SpecModuleCases.TlcMutations())
+            .Concat(SpecModuleCases.TlcVariants())
             .SelectMany(Categories)
             .Distinct()
             .ToList();
@@ -141,7 +141,7 @@ public sealed class TlcCiShardTests
                 mutations.Where(mutation => mutation.Target is "ParentChildAccounting" or "RecoverablePending" or "SeparatorRanges" or "ReachMaxHeight")
                     .All(mutation => TlcCiShard.Of(module, mutation) == TlcCiShard.BPlusCascadeMutations2),
                 Is.True,
-                "mutations sharing one target property must stay together to reuse the same control run");
+                "the measured target-property groups must retain their shard assignment");
         });
     }
 
@@ -159,7 +159,7 @@ public sealed class TlcCiShardTests
     }
 
     [Test]
-    public void Only_an_AtomicCommit_or_a_replication_companion_variant_leaves_the_catch_all()
+    public void Variants_leave_the_catch_all_only_for_explicitly_sharded_areas()
     {
         var variants = SpecModuleCatalogue.Repository()
             .SelectMany(module => module.Manifest.Variants.Keys.Select(variant => (module, variant)))
@@ -184,9 +184,35 @@ public sealed class TlcCiShardTests
                 {
                     var expected = module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
+                        : module.Name == "MaterialisedViewFence"
+                        ? TlcCiShard.MaterialisedViewFence
+                        : module.Name == "MaterialisedViewHorizon"
+                        ? TlcCiShard.MaterialisedViewHorizon
+                        : module.Name == "MaterialisedViewAggregation"
+                        ? TlcCiShard.MaterialisedViewAggregation
+                        : module.Name == "MaterialisedViewRebind"
+                        ? TlcCiShard.MaterialisedViewRebind
+                        : module.Name == "MaterialisedViewReadyClosure"
+                        ? TlcCiShard.MaterialisedViewReadyClosure
+                        : module.Name == "MaterialisedViewSourceAdmission"
+                        ? TlcCiShard.MaterialisedViewSourceAdmission
+                        : module.Name == "MaterialisedViewResolvedIdentity"
+                        ? TlcCiShard.MaterialisedViewResolvedIdentity
+                        : module.Name == "MaterialisedViewJointRepair"
+                        ? TlcCiShard.MaterialisedViewJointRepair
+                        : module.Name.StartsWith("MaterialisedView", StringComparison.Ordinal)
+                        ? TlcCiShard.MaterialisedViews
+                        : module.Name.StartsWith("AntiEntropy", StringComparison.Ordinal)
+                        ? module.Name == "AntiEntropy" && variant == "Alias"
+                            ? TlcCiShard.AntiEntropy2 : TlcCiShard.AntiEntropy
+                        : module.Name.StartsWith("TreeLifecycle", StringComparison.Ordinal)
+                        ? TlcCiShard.TreeLifecycle
+                        : module.Name.StartsWith("Alias", StringComparison.Ordinal)
+                        ? TlcCiShard.Aliasing
                         : null;
                     Assert.That(category, Is.EqualTo(expected), $"{module.Name}.{variant}");
                 }
+
             }
         });
     }
@@ -205,6 +231,92 @@ public sealed class TlcCiShardTests
             Assert.That(Categories(mutation), Is.EqualTo(new[] { TlcCiShard.ReBootstrap }));
             Assert.That(TlcCiShard.AtomicVariantShards.Contains(Categories(variant).Single()), Is.True);
             Assert.That(Categories(baseCase), Is.Empty);
+        });
+    }
+
+    [TestCase("view-joint-repair", TlcCiShard.MaterialisedViewJointRepair)]
+    [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
+    [TestCase("aliasing", TlcCiShard.Aliasing)]
+    public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)
+    {
+        var modules = SpecModuleCatalogue.Repository().Where(module =>
+            Path.GetFileName(module.Directory) == area).ToList();
+        Assert.That(modules, Is.Not.Empty, $"the {area} shard must contain real models");
+        Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(expected)).Tiers,
+            Is.EqualTo(new[] { "deterministic" }), "JVM work must not create empty Coyote and Chaos items");
+        foreach (var module in modules)
+        {
+            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(expected));
+            foreach (var mutation in module.LoadMutations())
+                Assert.That(TlcCiShard.Of(module, mutation), Is.EqualTo(expected));
+            foreach (var variant in module.Manifest.Variants.Keys)
+                Assert.That(TlcCiShard.OfVariant(module, variant), Is.EqualTo(expected));
+        }
+    }
+
+    [TestCase("MaterialisedViewTail", TlcCiShard.MaterialisedViews, 24)]
+    [TestCase("MaterialisedViewFence", TlcCiShard.MaterialisedViewFence, 11)]
+    [TestCase("MaterialisedViewHorizon", TlcCiShard.MaterialisedViewHorizon, 25)]
+    [TestCase("MaterialisedViewAggregation", TlcCiShard.MaterialisedViewAggregation, 20)]
+    [TestCase("MaterialisedViewRebind", TlcCiShard.MaterialisedViewRebind, 22)]
+    [TestCase("MaterialisedViewReadyClosure", TlcCiShard.MaterialisedViewReadyClosure, 15)]
+    [TestCase("MaterialisedViewSourceAdmission", TlcCiShard.MaterialisedViewSourceAdmission, 26)]
+    [TestCase("MaterialisedViewResolvedIdentity", TlcCiShard.MaterialisedViewResolvedIdentity, 20)]
+    public void Measured_view_modules_route_every_case_to_a_nonempty_deterministic_shard(
+        string name, string category, int expectedCases)
+    {
+        var module = Module(name);
+        var cases = new[] { TlcCiShard.OfModule(module) }
+            .Concat(module.Manifest.Variants.Keys.Select(variant => TlcCiShard.OfVariant(module, variant)))
+            .Concat(module.LoadMutations().Select(mutation => TlcCiShard.Of(module, mutation)))
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(cases, Has.Length.EqualTo(expectedCases));
+            Assert.That(cases, Is.All.EqualTo(category));
+            Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(category)).Tiers,
+                Is.EqualTo(new[] { "deterministic" }));
+        });
+    }
+
+    [Test]
+    public void Split_gate_cycle_runs_route_every_case_to_one_measured_deterministic_shard()
+    {
+        var module = Module("SplitGateCycles");
+        var cases = new[] { TlcCiShard.OfModule(module) }
+            .Concat(module.Manifest.Variants.Keys.Select(variant => TlcCiShard.OfVariant(module, variant)))
+            .Concat(module.LoadMutations().Select(mutation => TlcCiShard.Of(module, mutation)))
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(cases, Has.Length.EqualTo(39));
+            Assert.That(cases, Is.All.EqualTo(TlcCiShard.SplitGate));
+            Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(TlcCiShard.SplitGate)).Tiers,
+                Is.EqualTo(new[] { "deterministic" }));
+            Assert.That(TlcCiShard.OfModule(Module("SplitLinkTurns")), Is.Null,
+                "the companion model is small enough to stay in the catch-all");
+        });
+    }
+
+    [Test]
+    public void Anti_entropy_runs_are_partitioned_into_three_measured_nonempty_deterministic_groups()
+    {
+        var module = Module("AntiEntropy");
+        var cases = new[] { TlcCiShard.OfModule(module)! }
+            .Concat(module.Manifest.Variants.Keys.Select(variant => TlcCiShard.OfVariant(module, variant)!))
+            .Concat(module.LoadMutations().Select(mutation => TlcCiShard.Of(module, mutation)!))
+            .GroupBy(category => category, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cases, Has.Count.EqualTo(3));
+            Assert.That(cases[TlcCiShard.AntiEntropy], Is.EqualTo(18));
+            Assert.That(cases[TlcCiShard.AntiEntropy2], Is.EqualTo(9));
+            Assert.That(cases[TlcCiShard.AntiEntropy3], Is.EqualTo(7));
+            Assert.That(TlcCiShard.OfVariant(module, "Alias"), Is.EqualTo(TlcCiShard.AntiEntropy2));
+            foreach (var category in cases.Keys)
+                Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(category)).Tiers,
+                    Is.EqualTo(new[] { "deterministic" }));
         });
     }
 

@@ -1,0 +1,11 @@
+MODULE: BindingConvergesScanWrongPhysical
+TARGET: BindingConverges
+CLASS: Temporal
+SUMMARY: the shadow scan reads a different physical copy than the captured floor and binding
+PERTURBS: Scan
+
+--- FIND
+    /\ shadow' = source[candidate] /\ phase' = "scanned"
+--- REPLACE
+    /\ shadow' = source[3 - candidate] /\ phase' = "scanned"
+--- END

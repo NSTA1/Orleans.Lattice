@@ -53,6 +53,7 @@ public sealed class RoutingForceRefreshGuardTests
         ["src/lattice/BPlusTree/Grains/LatticeGrain.cs::GetWithVersionCoreAsync"] = (1, RoutedDataPath),
         ["src/lattice/BPlusTree/Grains/LatticeGrain.cs::ExistsAsyncCore"] = (1, RoutedDataPath),
         ["src/lattice/BPlusTree/Grains/LatticeGrain.cs::GetManyAsyncCore"] = (2, RoutedDataPath),
+        ["src/lattice/Views/ViewMaintainerGrain.SourceVersions.cs::ReadSourceAsync"] = (1, RoutedDataPath),
         ["src/lattice/BPlusTree/Grains/LatticeGrain.cs::GetOrSetAsyncCore"] = (1, RoutedDataPath),
         ["src/lattice/BPlusTree/Grains/LatticeGrain.cs::SetAsyncCore"] = (1, RoutedDataPath),
         ["src/lattice/BPlusTree/Grains/LatticeGrain.cs::SetIfVersionAsyncCore"] = (1, RoutedDataPath),
@@ -93,7 +94,7 @@ public sealed class RoutingForceRefreshGuardTests
     };
 
     private static readonly Regex MemberDeclaration = new(
-        @"^\s{4,8}(?:public|private|internal|protected)\s[^;=]*?\b(\w+)\s*(?:<[^()]*>)?\s*\(",
+        @"^\s{4,8}(?:public|private|internal|protected)\s+(?:async\s+)?(?:[\w\.<>,\[\]\s?()]+)\s+(\w+)\s*(?:<[^()<>]*>)?\s*\(",
         RegexOptions.Compiled);
 
     private static readonly Regex RoutingDeclaration = new(

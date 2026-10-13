@@ -1,0 +1,14 @@
+MODULE: CheckpointWithinAppliedSwapDiscardsLog
+TARGET: CheckpointWithinApplied
+CLASS: Invariant
+SUMMARY: an identity swap discards the retained pre-swap log the view is still bound to
+PERTURBS: SourceSwap
+
+--- FIND
+    /\ alias' = "P2" /\ swapped' = TRUE
+    /\ UNCHANGED <<logs, written, EnvVars, ViewVars>>
+--- REPLACE
+    /\ alias' = "P2" /\ swapped' = TRUE
+    /\ logs' = [logs EXCEPT !["P1"] = <<>>]
+    /\ UNCHANGED <<written, EnvVars, ViewVars>>
+--- END

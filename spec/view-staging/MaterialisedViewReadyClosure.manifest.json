@@ -1,0 +1,17 @@
+{
+  "mutations": "mutations-ready",
+  "refinement": "RefinementReadyClosure.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 5,
+    "properties": 2,
+    "actions": 9,
+    "mutations": 12,
+    "behaviourRows": 14,
+    "distinctStates": 46846
+  },
+  "variants": {
+    "History": { "distinctStates": 39651 },
+    "TwoConsumers": { "distinctStates": 31577 }
+  }
+}

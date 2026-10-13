@@ -1,0 +1,11 @@
+MODULE: MembershipAccumulatorAtomicShadowKeepsOldSlots
+TARGET: MembershipAccumulatorAtomic
+CLASS: Invariant
+SUMMARY: rebuild installs newly scanned membership with accumulator slots from the retired generation
+PERTURBS: InstallRebuild
+
+--- FIND
+    /\ members' = shadow /\ counts' = Counts(shadow) /\ sums' = Sums(shadow)
+--- REPLACE
+    /\ members' = shadow /\ counts' = counts /\ sums' = sums
+--- END

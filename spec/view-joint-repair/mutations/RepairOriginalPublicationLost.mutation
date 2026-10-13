@@ -1,0 +1,11 @@
+MODULE: RepairOriginalPublicationLost
+TARGET: RepairClosed
+CLASS: Temporal
+SUMMARY: decided original publication is never issued despite fair maintenance
+PERTURBS: PublishOriginal
+
+--- FIND
+    /\ Live /\ decided /\ ~applied /\ stage = Zero
+--- REPLACE
+    /\ FALSE /\ Live /\ decided /\ ~applied /\ stage = Zero
+--- END

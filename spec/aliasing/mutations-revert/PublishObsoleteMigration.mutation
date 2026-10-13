@@ -1,0 +1,11 @@
+MODULE: PublishObsoleteMigration
+TARGET: BoundMigration
+CLASS: Invariant
+SUMMARY: obsolete migration changes the later logical map
+PERTURBS: PublishMigration
+
+--- FIND
+    /\ map' = map
+--- REPLACE
+    /\ map' = migration
+--- END

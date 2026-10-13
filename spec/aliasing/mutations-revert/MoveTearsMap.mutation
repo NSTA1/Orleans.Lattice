@@ -1,0 +1,11 @@
+MODULE: MoveTearsMap
+TARGET: CoherentRow
+CLASS: Invariant
+SUMMARY: administrative publication leaves another copy's map
+PERTURBS: MoveAlias
+
+--- FIND
+        /\ alias' = p /\ map' = p /\ moves' = moves + 1
+--- REPLACE
+        /\ alias' = p /\ map' = map /\ moves' = moves + 1
+--- END

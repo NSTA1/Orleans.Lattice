@@ -1,0 +1,15 @@
+MODULE: CursorTrimEntitledCandidateDropsBoundFloor
+TARGET: CursorTrimEntitled
+CLASS: Invariant
+SUMMARY: candidate admission replaces the old bound checkpoint entitlement with its WAL head while keeping a nonempty hold
+PERTURBS: BeginRebuild
+
+--- FIND
+    /\ held' = [held EXCEPT ![candidate'] = floor']
+    /\ phase' = "captured"
+--- REPLACE
+    /\ held' = [p \in Physical |->
+         IF p = candidate' THEN floor'
+         ELSE IF p = bound THEN Len(logs[p]) ELSE held[p]]
+    /\ phase' = "captured"
+--- END

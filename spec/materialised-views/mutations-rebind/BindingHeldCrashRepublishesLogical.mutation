@@ -1,0 +1,11 @@
+MODULE: BindingHeldCrashRepublishesLogical
+TARGET: BindingHeld
+CLASS: Invariant
+SUMMARY: a reactivated maintainer publishes no read hold for its persisted physical binding
+PERTURBS: Crash
+
+--- FIND
+    /\ held' = [held EXCEPT ![bound] = checkpoint]
+--- REPLACE
+    /\ held' = [held EXCEPT ![bound] = -1]
+--- END

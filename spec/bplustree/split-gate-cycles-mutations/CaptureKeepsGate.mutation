@@ -1,0 +1,17 @@
+# Pairs with GateOwnership. The capture must release its split gate before it calls the root.
+MODULE: CaptureKeepsGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: a capture split of B moves on to link without releasing B's split gate
+PERTURBS: CaptureSiblingDone
+
+--- FIND
+    /\ sib' = "none"
+    /\ gate' = [gate EXCEPT !["B"] = "free"]
+    /\ cap' = [cap EXCEPT !["B"] = "link"]
+--- REPLACE
+    /\ sib' = "none"
+    \* MUTATION: the gate is kept
+    /\ gate' = gate
+    /\ cap' = [cap EXCEPT !["B"] = "link"]
+--- END

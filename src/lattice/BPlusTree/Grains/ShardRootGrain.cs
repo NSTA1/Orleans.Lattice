@@ -689,8 +689,34 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
+    public Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys)
+        => GetRawEntriesCoreAsync(keys, includeTombstones: false);
+
+    /// <inheritdoc />
+    public Task<List<LwwEntry?>> GetRawEntriesIncludingTombstonesAsync(List<string> keys)
+        => GetRawEntriesCoreAsync(keys, includeTombstones: true);
+
+    /// <inheritdoc />
+    public Task<List<LwwEntry?>> GetVisibleRawEntriesAsync(List<string> keys)
+        => GetRawEntriesCoreAsync(keys, includeTombstones: true, resolvePending: true);
+
+    /// <inheritdoc />
+    public async Task<List<HybridLogicalClock>> GetRawVersionsAsync(List<string> keys)
     {
+        var raws = await GetRawEntriesCoreAsync(keys, includeTombstones: true, resolvePending: true);
+        var versions = new List<HybridLogicalClock>(raws.Count);
+        foreach (var raw in raws)
+        {
+            versions.Add(raw?.Timestamp ?? HybridLogicalClock.Zero);
+        }
+
+        return versions;
+    }
+
+    private async Task<List<LwwEntry?>> GetRawEntriesCoreAsync(
+        List<string> keys, bool includeTombstones, bool resolvePending = false)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
         EnsureInternalOrigin(LatticeOperation.Read);
         var ready = await PrepareForReadAsync();
         var result = new List<LwwEntry?>(keys.Count);
@@ -704,8 +730,7 @@ internal sealed partial class ShardRootGrain(
 
         // Group keys by their target leaf. Mirrors TraverseForBatchReadAsync
         // but addresses the raw leaf grain directly (bypassing LeafCacheGrain)
-        // so tombstones and TTL metadata survive - matching single-key
-        // GetRawEntryAsync semantics.
+        // so TTL metadata and, when requested, tombstones survive.
         //
         // The overwhelmingly common shape here is single-leaf: this is the
         // saga capture path, whose affected keys were resolved from one leaf
@@ -785,11 +810,13 @@ internal sealed partial class ShardRootGrain(
             // input order, so it is handed over as-is and the response scatters
             // back by position.
             var soleLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(soleLeafId);
-            var soleResult = await soleLeaf.GetRawEntriesAsync(keys);
+            var soleResult = resolvePending
+                ? await soleLeaf.GetVisibleRawEntriesAsync(keys)
+                : await soleLeaf.GetRawEntriesAsync(keys);
             for (int i = 0; i < keys.Count; i++)
             {
                 var raw = soleResult[i];
-                if (raw is null || raw.Value.IsTombstone)
+                if (raw is null || (raw.Value.IsTombstone && !includeTombstones))
                 {
                     continue;
                 }
@@ -817,16 +844,18 @@ internal sealed partial class ShardRootGrain(
             // The bucket already holds its keys as the List<string> the grain
             // call takes, so it is passed through directly rather than copied
             // out of a (key, index) tuple list into a second list per leaf.
-            var leafResult = await leaf.GetRawEntriesAsync(bucket.Keys);
+            var leafResult = resolvePending
+                ? await leaf.GetVisibleRawEntriesAsync(bucket.Keys)
+                : await leaf.GetRawEntriesAsync(bucket.Keys);
 
             for (int i = 0; i < bucket.Keys.Count; i++)
             {
                 var raw = leafResult[i];
-                // Tombstones are surfaced as null to match the single-key
+                // The live-only variant surfaces tombstones as null to match
                 // GetRawEntryAsync semantics. Already-expired entries are
                 // returned (callers filter via LwwValue.IsExpired) for
                 // parity with the single-key variant.
-                if (raw is null || raw.Value.IsTombstone)
+                if (raw is null || (raw.Value.IsTombstone && !includeTombstones))
                 {
                     // result slot already initialised to null above.
                     continue;

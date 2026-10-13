@@ -1,0 +1,14 @@
+MODULE: CrashDropsIntent
+TARGET: DurableMove
+CLASS: Action
+SUMMARY: restart forgets a persisted move phase
+PERTURBS: Crash
+
+--- FIND
+    /\ UNCHANGED <<alias, map, version, phase, source, destination, expected,
+                   token, redirect, owner, moves, route, overwritten>>
+--- REPLACE
+    /\ phase' = [l \in Aliases |-> "idle"]
+    /\ UNCHANGED <<alias, map, version, source, destination, expected,
+                   token, redirect, owner, moves, route, overwritten>>
+--- END

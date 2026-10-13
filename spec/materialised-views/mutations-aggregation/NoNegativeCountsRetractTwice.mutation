@@ -1,0 +1,11 @@
+MODULE: NoNegativeCountsRetractTwice
+TARGET: NoNegativeCounts
+CLASS: Invariant
+SUMMARY: a replacement subtracts a count twice before adding its new member
+PERTURBS: ReadOrdinary
+
+--- FIND
+    /\ counts' = NextCounts(members, counts, 1)
+--- REPLACE
+    /\ counts' = [g \in Groups |-> counts[g] - 2]
+--- END

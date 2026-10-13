@@ -1,0 +1,12 @@
+MODULE: AdmissionLaggingRowsAccepted
+TARGET: AdmissionComplete
+CLASS: Action
+SUMMARY: Treat absent older or same-version mismatching rows as eligible once terminal heads are consumed
+PERTURBS: Confirm
+BOUNDS: InitiallyNewer = FALSE
+
+--- FIND
+    /\ classes' = [k \in Keys |-> Classify(VisibleSource[k],k)]
+--- REPLACE
+    /\ classes' = [k \in Keys |-> IF Classify(VisibleSource[k],k) = "pending" THEN "prepared" ELSE Classify(VisibleSource[k],k)]
+--- END

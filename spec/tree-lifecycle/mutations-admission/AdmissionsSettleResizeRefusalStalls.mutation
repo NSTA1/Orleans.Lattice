@@ -1,0 +1,21 @@
+MODULE: AdmissionsSettleResizeRefusalStalls
+TARGET: AdmissionsSettle
+CLASS: Temporal
+SUMMARY: a refused resize retains its announcement and treats a completed peer record as permanently busy
+PERTURBS: ResizeRefuse, ResizeAdmit
+
+--- FIND
+    /\ competitor \in {"announced", "active"}
+    /\ resize' = "done"
+--- REPLACE
+    /\ competitor \in {"announced", "active"}
+    /\ resize' = "announced"
+--- END
+
+--- FIND
+    /\ competitor \notin {"announced", "active"}
+    /\ resize' = "active"
+--- REPLACE
+    /\ competitor = "idle"
+    /\ resize' = "active"
+--- END

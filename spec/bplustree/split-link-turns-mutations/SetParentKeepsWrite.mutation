@@ -1,0 +1,19 @@
+# Pairs with NoConcurrentLeafWrites. A gate released before the reparent write lands lets a checkpoint flush overlap it.
+MODULE: SetParentKeepsWrite
+TARGET: NoConcurrentLeafWrites
+CLASS: Invariant
+SUMMARY: the reparent write releases the gate without retiring its write
+PERTURBS: FinishSetParent
+
+--- FIND
+    /\ gate' = "free"
+    /\ writes' = writes - 1
+    /\ resurrected' = (resurrected \/ cleared)
+    /\ seed' = "digestQueued"
+--- REPLACE
+    /\ gate' = "free"
+    \* MUTATION: the write is still in flight
+    /\ writes' = writes
+    /\ resurrected' = (resurrected \/ cleared)
+    /\ seed' = "digestQueued"
+--- END

@@ -1,0 +1,11 @@
+MODULE: RepairTornObservation
+TARGET: JointVisible
+CLASS: Invariant
+SUMMARY: a public multiview read samples different joint publication phases
+PERTURBS: Observe
+
+--- FIND
+    /\ observed' = stage
+--- REPLACE
+    /\ observed' = [stage EXCEPT ![1] = 0]
+--- END

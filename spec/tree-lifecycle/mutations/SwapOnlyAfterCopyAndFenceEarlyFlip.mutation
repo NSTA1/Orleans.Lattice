@@ -1,0 +1,13 @@
+MODULE: SwapOnlyAfterCopyAndFenceEarlyFlip
+TARGET: SwapOnlyAfterCopyAndFence
+CLASS: Invariant
+SUMMARY: the alias flips before every captured old shard refuses stale routing
+PERTURBS: ResizeSwap
+
+--- FIND
+    /\ fenced = captured
+    /\ alias' = "resized" /\ phase' = "complete"
+--- REPLACE
+    /\ fenced \subseteq captured
+    /\ alias' = "resized" /\ phase' = "complete"
+--- END

@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. A split that never takes its gate races every capture split of the same leaf.
+MODULE: ForegroundSkipsGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: the foreground split proceeds without taking B's split gate
+PERTURBS: BeginForeground
+
+--- FIND
+    /\ Admits("B", TRUE)
+    /\ fg' = "gate"
+--- REPLACE
+    /\ Admits("B", TRUE)
+    \* MUTATION: the split gate is skipped
+    /\ fg' = "sib"
+--- END

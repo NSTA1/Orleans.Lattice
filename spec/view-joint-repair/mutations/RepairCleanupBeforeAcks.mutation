@@ -1,0 +1,11 @@
+MODULE: RepairCleanupBeforeAcks
+TARGET: CleanupEntitled
+CLASS: Invariant
+SUMMARY: retention clears the decision while a participant can still replay its held checkpoint
+PERTURBS: Cleanup
+
+--- FIND
+    /\ Live /\ repairApplied /\ acknowledged = Views
+--- REPLACE
+    /\ Live /\ applied
+--- END

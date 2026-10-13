@@ -1,0 +1,13 @@
+# Pairs with NoWaitCycle. This is the #4914 deadlock: the reparent callback is not [AlwaysInterleave].
+MODULE: SetParentQueuedBehindTurn
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: SetParentAsync queues behind the leaf's running turn (#4914)
+PERTURBS: AdmitSetParent
+
+--- FIND
+    /\ Admits(l, SetParentInterleaves)
+--- REPLACE
+    \* MUTATION: SetParentAsync is not [AlwaysInterleave]
+    /\ Admits(l, FALSE)
+--- END

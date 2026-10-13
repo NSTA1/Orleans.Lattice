@@ -1,0 +1,12 @@
+MODULE: AbandonedRecoveryRequiresHistory
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: an abandoned commit-triggered rebuild is incorrectly gated on retained history
+PERTURBS: RecoverAbandoned
+
+--- FIND
+    /\ phase = "idle" /\ ~requested /\ abandoned /\ KnownTerminals # {}
+--- REPLACE
+    /\ phase = "idle" /\ ~requested /\ abandoned /\ KnownTerminals # {}
+    /\ HistoryEntitled
+--- END

@@ -62,6 +62,7 @@ public static class LatticeViewsServiceCollectionExtensions
             static sp => new HistoryLatticeViewProjection(sp.GetRequiredService<HistoryRowCodec>()));
         builder.Services.TryAddSingleton<IViewCatalog, ViewCatalog>();
         builder.Services.TryAddSingleton<IViewSourceGuard, ViewSourceGuard>();
+        builder.Services.TryAddSingleton<IViewJointRepairAdmissionGate, ClusterManifestViewJointRepairAdmissionGate>();
         builder.Services.TryAddSingleton<ILatticeViewFactory, LatticeViewFactory>();
         builder.Services.TryAddSingleton<IReadOnlyList<StartupViewRegistration>>(
             _ => registrationBuilder.Registrations);

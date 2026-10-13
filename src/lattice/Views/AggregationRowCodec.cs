@@ -10,12 +10,14 @@ namespace Orleans.Lattice.Views;
 /// Reserved-key layout and binary (de)serialisation for an aggregation view's
 /// internal rows, which live in the <c>view-{name}</c> tree under a reserved NUL
 /// (<c>\u0000</c>) prefix that can never collide with a materialised group key
-/// (group keys are forbidden from beginning with NUL). Three row families share
+/// (group keys are forbidden from beginning with NUL). Five row families share
 /// the tree alongside the bare-keyed materialised group values:
 /// <list type="bullet">
 /// <item><b>Membership</b> (<c>\u0000m{sourceKey}</c>) - the group and value a source key last contributed; the "read before write" retraction pointer.</item>
 /// <item><b>Accumulator</b> (<c>\u0000a{groupKey}\u0000{slot}</c>) - the running count and sum of a group shard (count / sum kinds).</item>
 /// <item><b>Inverse</b> (<c>\u0000i{groupKey}\u0000{slot}</c>) - the per-source-key contributions of a group shard (min / max / set-union kinds).</item>
+/// <item><b>Fold inverse</b> (<c>\u0000f{groupKey}\u0000{slot}</c>) - timestamped per-source-key values for a custom fold.</item>
+/// <item><b>Numeric materialisation intent</b> (<c>\u0000p{sourceKey}</c>) - the one or two affected groups a committed numeric flip must publish before its repair obligation retires.</item>
 /// </list>
 /// The payloads are opaque bytes in the view tree and use a compact manual
 /// encoding rather than an Orleans serializer. They are <b>not</b> purely local:
@@ -105,6 +107,33 @@ internal static class AggregationRowCodec
 
     /// <summary>Returns the membership row key for <paramref name="sourceKey"/>.</summary>
     internal static string MembershipKey(string sourceKey) => "\u0000m" + sourceKey;
+
+    /// <summary>Returns the durable numeric rematerialisation intent key for a source member.</summary>
+    internal static string NumericMaterialisationKey(string sourceKey) => "\u0000p" + sourceKey;
+
+    /// <summary>Encodes the one or two groups a committed numeric flip must rematerialise.</summary>
+    internal static byte[] EncodeNumericMaterialisation(string groupKey, string? otherGroupKey)
+    {
+        var buffer = new byte[Utf8Size(groupKey) + sizeof(bool)
+            + (otherGroupKey is null ? 0 : Utf8Size(otherGroupKey))];
+        var writer = new RowWriter(buffer);
+        writer.WriteString(groupKey);
+        writer.WriteBool(otherGroupKey is not null);
+        if (otherGroupKey is not null)
+        {
+            writer.WriteString(otherGroupKey);
+        }
+
+        return buffer;
+    }
+
+    /// <summary>Decodes a numeric rematerialisation intent, rejecting truncated rows.</summary>
+    internal static (string GroupKey, string? OtherGroupKey) DecodeNumericMaterialisation(byte[] bytes)
+    {
+        var reader = new RowReader(bytes);
+        var group = reader.ReadString();
+        return (group, reader.ReadBool() ? reader.ReadString() : null);
+    }
 
     /// <summary>Returns the accumulator row key for a group shard.</summary>
     internal static string AccumulatorKey(string groupKey, int slot) => "\u0000a" + groupKey + "\u0000" + slot.ToString();

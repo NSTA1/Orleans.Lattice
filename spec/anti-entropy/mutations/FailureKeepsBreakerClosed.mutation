@@ -1,0 +1,11 @@
+MODULE: FailureKeepsBreakerClosed
+TARGET: BreakerOpensAtThreshold
+CLASS: Action
+SUMMARY: a rejected re-ship counts the failure but never opens the breaker
+PERTURBS: ShipRejected
+
+--- FIND
+    /\ open' = (open \/ failures + 1 >= Threshold)
+--- REPLACE
+    /\ open' = open
+--- END

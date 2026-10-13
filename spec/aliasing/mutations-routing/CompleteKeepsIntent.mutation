@@ -1,0 +1,13 @@
+MODULE: CompleteKeepsIntent
+TARGET: MovesSettle
+CLASS: Temporal
+SUMMARY: successful release never retires the durable move
+PERTURBS: Complete
+
+--- FIND
+        /\ running /\ phase[l] = "released"
+        /\ phase' = [phase EXCEPT ![l] = "idle"]
+--- REPLACE
+        /\ running /\ phase[l] = "released"
+        /\ phase' = phase
+--- END

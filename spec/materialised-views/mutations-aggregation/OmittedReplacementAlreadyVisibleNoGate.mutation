@@ -1,0 +1,11 @@
+MODULE: OmittedReplacementAlreadyVisibleNoGate
+TARGET: OmittedReplacementAlreadyVisible
+CLASS: Invariant
+SUMMARY: source confirmation omits a batch member before its replacing ordinary contribution is visible
+PERTURBS: Flush
+
+--- FIND
+    /\ outcome = "abort" \/ ReplacementVisible
+--- REPLACE
+    /\ TRUE
+--- END

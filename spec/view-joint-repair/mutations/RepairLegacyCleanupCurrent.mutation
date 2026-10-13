@@ -1,0 +1,11 @@
+MODULE: RepairLegacyCleanupCurrent
+TARGET: CleanupEntitled
+CLASS: Invariant
+SUMMARY: original-contract TTL cleanup releases an unclosed current repair operation
+PERTURBS: CleanupLegacy
+
+--- FIND
+    /\ legacy /\ applied /\ ~cleared
+--- REPLACE
+    /\ applied /\ ~cleared
+--- END

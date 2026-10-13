@@ -1,0 +1,11 @@
+MODULE: UndoRedirectBeforeSwapRedirectOmitted
+TARGET: UndoRedirectBeforeSwap
+CLASS: Invariant
+SUMMARY: the resized copy is not armed before undo swaps the alias back
+PERTURBS: UndoRedirect
+
+--- FIND
+    /\ redirect' = [redirect EXCEPT !["resized"] = source]
+--- REPLACE
+    /\ redirect' = redirect
+--- END

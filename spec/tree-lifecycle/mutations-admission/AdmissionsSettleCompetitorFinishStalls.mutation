@@ -1,0 +1,15 @@
+MODULE: AdmissionsSettleCompetitorFinishStalls
+TARGET: AdmissionsSettle
+CLASS: Temporal
+SUMMARY: competing work never clears its active record
+PERTURBS: CompetitorFinish
+
+--- FIND
+CompetitorFinish ==
+    /\ running /\ competitor = "active"
+    /\ competitor' = "done"
+--- REPLACE
+CompetitorFinish ==
+    /\ running /\ competitor = "active"
+    /\ competitor' = "active"
+--- END

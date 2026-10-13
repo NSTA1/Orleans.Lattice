@@ -1,0 +1,16 @@
+MODULE: GatedPassShips
+TARGET: BreakerBlocks
+CLASS: Action
+SUMMARY: a gated remediation pass still ships the localised rows
+PERTURBS: RemediationGated
+
+--- FIND
+    /\ optOut \/ Blocking \/ consumed >= Budget
+    /\ phase' = "idle" /\ loc' = {}
+    /\ UNCHANGED dataVars
+--- REPLACE
+    /\ optOut \/ Blocking \/ consumed >= Budget
+    /\ phase' = "idle" /\ loc' = {}
+    /\ inflight' = inflight \cup {RepairMsg(k, aStore[k].ts, FALSE) : k \in FallbackRows}
+    /\ UNCHANGED <<aStore, bStore, applied, hwm, wal, journal, walFloor, clock>>
+--- END

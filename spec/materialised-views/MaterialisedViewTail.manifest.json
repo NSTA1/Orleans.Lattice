@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-tail",
+  "refinement": "RefinementTail.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 7,
+    "properties": 5,
+    "actions": 17,
+    "mutations": 22,
+    "behaviourRows": 27,
+    "distinctStates": 121488
+  },
+  "variants": {
+    "ThreeWrites": { "distinctStates": 1937776 }
+  }
+}

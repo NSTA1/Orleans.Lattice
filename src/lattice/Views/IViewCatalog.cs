@@ -30,6 +30,77 @@ internal interface IViewCatalog
     /// </summary>
     void Remove(string viewName);
 
+    /// <summary>
+    /// Replaces the binding for <paramref name="expected"/>'s view name with
+    /// <paramref name="replacement"/> (or removes it when
+    /// <paramref name="replacement"/> is <see langword="null"/>), but only while
+    /// the current binding is still <paramref name="expected"/>. Returns
+    /// <see langword="false"/> and changes nothing when a concurrent
+    /// registration has already replaced or removed it, so a maintainer
+    /// correcting a stale entry can never clobber a newer one.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation is a non-atomic check-then-act for simple
+    /// catalogs; <see cref="ViewCatalog"/> overrides it with an atomic
+    /// compare-and-swap.
+    /// </remarks>
+    bool TryReplace(ViewRegistration expected, ViewRegistration? replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        if (!ReferenceEquals(TryGet(expected.ViewName), expected))
+        {
+            return false;
+        }
+
+        if (replacement is null)
+        {
+            Remove(expected.ViewName);
+        }
+        else
+        {
+            Register(replacement);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Marks <paramref name="registration"/> as registered in this catalog ahead
+    /// of its durable runtime-registry record, which the synchronous factory path
+    /// persists in the background. While marked, an absent or different durable
+    /// record is not evidence that the entry is stale, so a maintainer activating
+    /// in that window must leave the entry alone.
+    /// </summary>
+    void MarkDurablyPending(ViewRegistration registration)
+    {
+    }
+
+    /// <summary>
+    /// Clears the mark set by <see cref="MarkDurablyPending"/> once the durable
+    /// record for <paramref name="registration"/> has been persisted.
+    /// </summary>
+    void ClearDurablyPending(ViewRegistration registration)
+    {
+    }
+
+    /// <summary>
+    /// Records that the background persist for <paramref name="registration"/>
+    /// failed, moving its mark from
+    /// <see cref="ViewCatalogDurability.PersistInFlight"/> to
+    /// <see cref="ViewCatalogDurability.PersistFailed"/>. Has no effect once the
+    /// entry has been replaced, removed, or its mark cleared.
+    /// </summary>
+    void MarkDurablePersistFailed(ViewRegistration registration)
+    {
+    }
+
+    /// <summary>
+    /// The durability mark of <paramref name="registration"/> (by reference):
+    /// <see cref="ViewCatalogDurability.Settled"/> when it is unmarked. Replacing
+    /// or removing an entry discards its mark.
+    /// </summary>
+    ViewCatalogDurability GetDurability(ViewRegistration registration) => ViewCatalogDurability.Settled;
+
     /// <summary>Returns a snapshot of every currently-registered view.</summary>
     IReadOnlyCollection<ViewRegistration> All();
 }

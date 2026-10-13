@@ -1,0 +1,11 @@
+MODULE: ResumeNamesBoundLogOldOffsets
+TARGET: ResumeNamesBoundLog
+CLASS: Invariant
+SUMMARY: physical rebind keeps retired absolute WAL offsets instead of its newly captured floor
+PERTURBS: Install
+
+--- FIND
+    /\ read' = floor /\ checkpoint' = floor
+--- REPLACE
+    /\ read' = read /\ checkpoint' = checkpoint
+--- END

@@ -1,0 +1,14 @@
+MODULE: BindingConvergesOrdinaryNotRead
+TARGET: BindingConverges
+CLASS: Temporal
+SUMMARY: the fair ordinary drain remains stalled after the binding changes to the current source
+PERTURBS: ReadOrdinary
+
+--- FIND
+ReadOrdinary ==
+    /\ Idle /\ bound = alias /\ read < Len(logs[bound])
+--- REPLACE
+ReadOrdinary ==
+    /\ FALSE
+    /\ Idle /\ bound = alias /\ read < Len(logs[bound])
+--- END

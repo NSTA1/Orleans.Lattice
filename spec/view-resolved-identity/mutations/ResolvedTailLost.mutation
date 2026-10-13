@@ -1,0 +1,11 @@
+MODULE: ResolvedTailLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: The subscriber never enters its confirmed physical tail
+PERTURBS: EnterTail
+
+--- FIND
+    /\ phase' = "entered"
+--- REPLACE
+    /\ phase' = phase
+--- END

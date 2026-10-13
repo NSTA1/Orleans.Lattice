@@ -1,0 +1,13 @@
+# Pairs with CaptureEventuallyLinked. The liveness face of #4914: the timeout ends the cycle but the split stays unlinked.
+MODULE: SetParentQueuedNeverLinks
+TARGET: CaptureEventuallyLinked
+CLASS: Temporal
+SUMMARY: SetParentAsync queues behind the capture turn, so the split is never linked
+PERTURBS: AdmitSetParent
+
+--- FIND
+    /\ seed' = IF SetParentInterleaves \/ leafTurn # "capture" THEN "admitted" ELSE "blocked"
+--- REPLACE
+    \* MUTATION: SetParentAsync is not [AlwaysInterleave]
+    /\ seed' = IF FALSE THEN "admitted" ELSE "blocked"
+--- END

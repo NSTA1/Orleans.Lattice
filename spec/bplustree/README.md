@@ -14,6 +14,8 @@ refinement note mapping each construct to production and to detector tests.
 | [`BPlusTopology.tla`](BPlusTopology.tla) | Concurrent writes across split and fold transfers, sibling-chain publication, parent routing, and recovery of an unlinked sibling. |
 | [`BPlusCascade.tla`](BPlusCascade.tla) | Rightmost leaf splits cascading through level-indexed internal nodes and repeated root promotions. |
 | [`BPlusReclaimRecovery.tla`](BPlusReclaimRecovery.tla) | The durable retirement, unlink, route removal, successor back-link repair, clear, and recovery ordering for a reclaimed leaf. |
+| [`SplitLinkTurns.tla`](SplitLinkTurns.tla) | The grain turns of a split linked from inside the donor's capture turn: the seeding callbacks a parent overflow sends back to the donor, the leaf's persist-write gate, and the clear latch. |
+| [`SplitGateCycles.tla`](SplitGateCycles.tla) | The cross-grain wait-for graph of two adjacent leaves' split gates: foreground, capture and nested-capture splits, the sibling setter, consolidation, the root's link gate with its defer-and-drain path, a parent overflow and cascade, and deactivation. |
 
 ## Counts
 
@@ -23,6 +25,8 @@ refinement note mapping each construct to production and to detector tests.
 | `BPlusTopology` | 8 | 0 | 14 | 14 | 21 | 232 |
 | `BPlusCascade` | 10 | 1 | 9 | 13 | 19 | 1271 |
 | `BPlusReclaimRecovery` | 6 | 1 | 9 | 9 | 15 | 24 |
+| `SplitLinkTurns` | 7 | 1 | 14 | 15 | 21 | 33 |
+| `SplitGateCycles` | 7 | 1 | 39 | 38 | 46 | 229031 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`.
 `Behaviour rows` counts the action rows of the refinement note, excluding
@@ -45,6 +49,12 @@ for the module's cfg.
 | [`BPlusReclaimRecovery.cfg`](BPlusReclaimRecovery.cfg) / [`BPlusReclaimRecovery.manifest.json`](BPlusReclaimRecovery.manifest.json) | The reclaim crash-boundary instance and its verified gate counts. |
 | [`reclaim-recovery-mutations/`](reclaim-recovery-mutations/) | Controlled defects for every behavior in `BPlusReclaimRecovery`. |
 | [`BPlusReclaimRecoveryRefinement.md`](BPlusReclaimRecoveryRefinement.md) | The reclaim recovery model mapped to production and detector tests. |
+| [`SplitLinkTurns.cfg`](SplitLinkTurns.cfg) / [`SplitLinkTurns.manifest.json`](SplitLinkTurns.manifest.json) | The single capture-link instance and its verified gate counts. |
+| [`split-link-turns-mutations/`](split-link-turns-mutations/) | Controlled defects for every behavior in `SplitLinkTurns`. |
+| [`SplitLinkTurnsRefinement.md`](SplitLinkTurnsRefinement.md) | The split-link turn model mapped to production and detector tests. |
+| [`SplitGateCycles.cfg`](SplitGateCycles.cfg) / [`SplitGateCycles.manifest.json`](SplitGateCycles.manifest.json) | The two-leaf split-gate instance and its verified gate counts. |
+| [`split-gate-cycles-mutations/`](split-gate-cycles-mutations/) | Controlled defects for every behavior in `SplitGateCycles`. |
+| [`SplitGateCyclesRefinement.md`](SplitGateCyclesRefinement.md) | The split-gate wait-for model mapped to production and detector tests. |
 
 ## Properties checked
 
@@ -81,6 +91,19 @@ for the module's cfg.
 | `SplitRequiresData` | Invariant | A split starts only when the donor holds rows. |
 | `BornImpliesSplit` | Invariant | A sibling exists only as part of a split or settled topology. |
 | `StableNoDuplicate` | Invariant | A settled split or fold has no duplicate keys across leaves. |
+| `NoTurnWaitCycle` | Invariant | No seeding callback queues behind the capture turn that is waiting on it. |
+| `NoAcknowledgedWriteLost` | Invariant | The call timeout never fails a capture whose write was acknowledged. |
+| `NoConcurrentLeafWrites` | Invariant | At most one storage write is in flight on a leaf row. |
+| `NoResurrectionAfterClear` | Invariant | No write lands on a leaf after it has been cleared. |
+| `LinkGateMatchesLinking` | Invariant | The shard root holds its link gate exactly while a link is outstanding. |
+| `LinkedOnlyAfterSeed` | Invariant | A link is reported only after the new parent has reparented and read the donor. |
+| `CaptureEventuallyLinked` | Liveness | A capture that starts a split link eventually has it linked. |
+| `GateOwnership` | Invariant | A leaf's split gate is held only by the turn that took it. |
+| `SingleParentMutation` | Invariant | At most one link mutates the parents at a time. |
+| `ClimbsOnlyAfterSeed` | Invariant | A division climbs a level only after the seeding it caused has finished. |
+| `DeferredOnlyForCapture` | Invariant | Only a capture link is deferred, and a deferred link never holds the root's link gate. |
+| `NoWaitCycle` | Invariant | Some in-flight turn can always step, so no set of turns waits only on each other. |
+| `EveryLinkLands` | Liveness | Every split that reaches the root is eventually linked. |
 
 ## Defects this specification found
 
@@ -89,6 +112,9 @@ for the module's cfg.
 | #4795 | A root crash after a leaf split completes but before the root records its link intent strands a populated, chained sibling no parent routes to, and its WAL pin freezes the trim floor. Fixed: the donor persists a marker that recovery re-surfaces until the root acknowledges. | `LinkObligationDurableNoMarker` |
 | #4815 | A reclaimed leaf could be unlinked from its predecessor while still routed, then reactivate and accept a write before the parent route was retired. Fixed: persist a retirement latch before granting unlink and restore it on activation. | `RetirementGrantWithoutLatch` |
 | #4818 | A failed successor back-link write during reclaim could be followed by victim clear and marker completion, stranding a stale backward pointer without durable repair intent. Fixed: retain the victim and marker until repair succeeds. | `ClearBeforeBackLinkRepair` |
+| #4914 | A leaf linking its split from inside its capture turn could make the parent overflow, and the new internal sibling's `SetParentAsync` and `GetChildDigestSnapshotAsync` callbacks then queued behind that same turn. Only the call timeout broke the cycle, failing an acknowledged write. Fixed: both callbacks are `[AlwaysInterleave]`, and the leaf serialises its storage writes and clear behind a persist-write gate. | `SetParentQueuedBehindCapture` |
+| #4918 | A capture nested inside a foreground split's checkpoint-hint loop linked its pending split by calling the shard root while the leaf's split gate was held; a parent overflow's `SetParentAsync` into that leaf then waited on the gate, and the root waited on the callback. Fixed: the nested capture defers the link while the gate is held, leaving the durable marker for the next capture. | `NestedCaptureLinksUnderGate` |
+| #4919 | A leaf split holding its split gate called a neighbour's `SetNextSiblingAsync` / `SetPrevSiblingAsync` while that neighbour was running a non-interleaving capture turn that was itself waiting, through the shard root, on the first leaf's gate; the setters queued behind the turn and the cycle never broke. Fixed: both setters are `[AlwaysInterleave]`, so they wait only on the neighbour's gate holder. | `SiblingSetterQueuedBehindCapture` |
 
 ## What the assurance covers, and what it does not
 
@@ -100,7 +126,10 @@ level-indexed, but the finite TLC run is not an unbounded-height proof.
 `BPlusReclaimRecovery` checks that a routed victim remains durable and
 write-protected until the route is retired, that unlink retains its recovery
 marker until the successor back link is repaired and the victim is cleared, and
-that crash recovery eventually completes the obligation. The models do not
+that crash recovery eventually completes the obligation. `SplitLinkTurns`
+checks the wait-for graph of one capture-path link through a parent overflow,
+and that admitting the seeding callbacks into the busy leaf neither overlaps
+two writes on its row nor lets a write land after a clear. `SplitGateCycles` checks the wait-for graph across two leaves, the root's link gate and the parents, with every turn that holds or waits on a split gate, and that every link still lands. The models do not
 cover the orphan audit/repair algorithm itself. The existing `ShardOwnership`
 models cover range ownership through adaptive shard split, online reshard and
 resize. See the refinement notes for bounded claims and abstraction gaps.

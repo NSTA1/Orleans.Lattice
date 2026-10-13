@@ -97,6 +97,14 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys);
 
     /// <summary>
+    /// Returns index-aligned logical rows, including tombstones and expired rows.
+    /// Pending values and their metadata are resolved together against one
+    /// transaction-decision view, so committed prepares are visible before their
+    /// terminals drain. Raw prepare capture must use <see cref="GetRawEntriesAsync"/>.
+    /// </summary>
+    Task<List<LwwEntry?>> GetVisibleRawEntriesAsync(List<string> keys);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns a <see cref="GetOrSetResult"/> containing
     /// the existing value when the key is live, or <c>null</c> existing value when the
@@ -290,12 +298,30 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<GrainId?> GetNextSiblingAsync();
 
     /// <summary>Sets the right sibling pointer (called during splits).</summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #4919,
+    /// the sibling-pointer counterpart of #4914): a split calls a sibling setter on
+    /// a neighbouring leaf while holding its own <c>_splitGate</c>. Queuing behind a
+    /// neighbour turn suspended on the shard root - whose link can split the parent
+    /// internal node and re-parent the caller, which then waits on the caller's gate -
+    /// formed a cross-grain cycle that only the grain call timeout broke. The body is
+    /// serialised by the per-activation <c>_splitGate</c>, and the state write by the
+    /// leaf's persist-write gate.
+    /// </remarks>
+    [AlwaysInterleave]
     Task SetNextSiblingAsync(GrainId? siblingId);
 
     /// <summary>Returns the grain identity of the left sibling leaf, or <c>null</c>.</summary>
     Task<GrainId?> GetPrevSiblingAsync();
 
     /// <summary>Sets the left sibling pointer (called during splits).</summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same
+    /// reason as <see cref="SetNextSiblingAsync"/> (issue #4919): a splitting leaf
+    /// repoints its right neighbour's back-link while holding its own
+    /// <c>_splitGate</c>, so the call must not queue behind that neighbour's turn.
+    /// </remarks>
+    [AlwaysInterleave]
     Task SetPrevSiblingAsync(GrainId? siblingId);
 
     /// <summary>
@@ -597,6 +623,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// and triggers a fresh full-fold republish so the new parent
     /// converges with the leaf's current digest.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #4914,
+    /// the leaf counterpart of #3523): a leaf's capture turn links its own split
+    /// through the shard root, and when that link overflows the parent internal
+    /// node, the parent's split re-parents the moved children - this leaf among
+    /// them - from inside the root's link frame. Queuing behind the capture turn
+    /// that is waiting on the root formed a turn-level cycle that only the grain
+    /// call timeout broke. The body is serialised by the per-activation
+    /// <c>_splitGate</c>, and the state write by the leaf's persist-write gate.
+    /// </remarks>
+    [AlwaysInterleave]
     Task SetParentAsync(GrainId? parentId);
 
     /// <summary>
@@ -611,6 +648,13 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// freshly-activated internal node observing legacy state, or a
     /// crash-recovery rebuild).
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #4914):
+    /// a synchronous read pulled by a parent internal node from inside its gated
+    /// seeding frame, directly after <see cref="SetParentAsync"/>, so it must not
+    /// queue behind a turn on this leaf that waits on that frame.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync();
 
     /// <summary>

@@ -1,0 +1,14 @@
+MODULE: ResolvedMutableCheckpointOwner
+TARGET: CacheOwned
+CLASS: Invariant
+SUMMARY: Mutated live checkpoint binding changes cache ownership while the original tail still runs
+PERTURBS: PublishCheckpoint
+
+--- FIND
+    /\ UNCHANGED <<tail,owner,resolved,order,prepared,terminal,stagedOwner,
+        read,heads,projections,candidate,capturedHead>>
+--- REPLACE
+    /\ owner' = liveBinding'
+    /\ UNCHANGED <<tail,resolved,order,prepared,terminal,stagedOwner,
+        read,heads,projections,candidate,capturedHead>>
+--- END

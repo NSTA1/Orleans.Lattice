@@ -1,0 +1,11 @@
+MODULE: ReadySplitPublication
+TARGET: SnapshotExact
+CLASS: Invariant
+SUMMARY: The closure updates only one source key in the first observable flip
+PERTURBS: Publish
+
+--- FIND
+    /\ value' = [value EXCEPT ![c] = Fold(Complete(c) \cup done[c])]
+--- REPLACE
+    /\ value' = [value EXCEPT ![c][1] = 30]
+--- END

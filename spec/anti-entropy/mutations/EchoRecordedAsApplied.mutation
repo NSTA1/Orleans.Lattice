@@ -1,0 +1,14 @@
+MODULE: EchoRecordedAsApplied
+TARGET: NoOwnOriginApplied
+CLASS: Invariant
+SUMMARY: a reflected own-origin echo is recorded by the receiver's dedup as applied
+PERTURBS: Reflect
+
+--- FIND
+    /\ inflight' # inflight
+    /\ UNCHANGED <<aStore, bStore, applied, hwm, wal, journal, walFloor, clock>>
+--- REPLACE
+    /\ inflight' # inflight
+    /\ applied' = applied \cup {[k |-> k, ts |-> aStore[k].ts, del |-> aStore[k].del, org |-> "B"]}
+    /\ UNCHANGED <<aStore, bStore, hwm, wal, journal, walFloor, clock>>
+--- END

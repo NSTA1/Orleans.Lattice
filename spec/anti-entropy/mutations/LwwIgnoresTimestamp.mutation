@@ -1,0 +1,11 @@
+MODULE: LwwIgnoresTimestamp
+TARGET: LwwNoRegress
+CLASS: Action
+SUMMARY: A's receiver applies an incoming row without the last-writer-wins comparison
+PERTURBS: DeliverA
+
+--- FIND
+    /\ aStore' = IF m.ts > aStore[m.k].ts
+--- REPLACE
+    /\ aStore' = IF TRUE
+--- END

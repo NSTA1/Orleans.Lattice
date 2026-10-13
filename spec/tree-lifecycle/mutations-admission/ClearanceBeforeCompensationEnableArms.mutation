@@ -1,0 +1,13 @@
+MODULE: ClearanceBeforeCompensationEnableArms
+TARGET: ClearanceBeforeCompensation
+CLASS: Invariant
+SUMMARY: enabling replication incorrectly arms undo without clearance
+PERTURBS: EnableReplication
+
+--- FIND
+    /\ replicated' = TRUE /\ enabledReplication' = TRUE
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, undo,
+--- REPLACE
+    /\ replicated' = TRUE /\ enabledReplication' = TRUE /\ undo' = "armed"
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias,
+--- END

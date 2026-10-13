@@ -1,0 +1,11 @@
+MODULE: ReadyPrepareLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: A prepare in a bounded subscription window is never staged
+PERTURBS: Read
+
+--- FIND
+          /\ prepares' = IF i <= 2 /\ t \notin done[c]
+--- REPLACE
+          /\ prepares' = IF FALSE /\ i <= 2 /\ t \notin done[c]
+--- END

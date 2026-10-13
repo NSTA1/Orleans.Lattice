@@ -1,0 +1,11 @@
+MODULE: StagingNamesBoundLogLogicalTag
+TARGET: StagingNamesBoundLog
+CLASS: Invariant
+SUMMARY: staging tags a prepare with the logical or retired source instead of its bound physical log
+PERTURBS: Stage
+
+--- FIND
+    /\ staged' = TRUE /\ stageOrigin' = bound /\ read' = read + 1
+--- REPLACE
+    /\ staged' = TRUE /\ stageOrigin' = 3 - bound /\ read' = read + 1
+--- END

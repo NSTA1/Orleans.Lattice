@@ -1,0 +1,11 @@
+MODULE: OperationReturnsCopyNeverBanks
+TARGET: OperationReturns
+CLASS: Temporal
+SUMMARY: a copied shard never advances durable copy progress
+PERTURBS: CopyShard
+
+--- FIND
+    /\ copied' = copied \cup {s}
+--- REPLACE
+    /\ copied' = copied
+--- END

@@ -1,0 +1,11 @@
+MODULE: ReadyHoldNeverReleased
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: A deferred replacement never becomes eligible despite fair external admission
+PERTURBS: Release
+
+--- FIND
+    /\ deferred' = FALSE
+--- REPLACE
+    /\ deferred' = deferred
+--- END

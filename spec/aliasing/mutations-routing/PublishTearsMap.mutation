@@ -1,0 +1,11 @@
+MODULE: PublishTearsMap
+TARGET: CoherentRow
+CLASS: Invariant
+SUMMARY: the alias moves without its matching physical shard map
+PERTURBS: Publish
+
+--- FIND
+        /\ map' = [map EXCEPT ![l] = destination[l]]
+--- REPLACE
+        /\ map' = map
+--- END

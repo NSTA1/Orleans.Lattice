@@ -1,0 +1,13 @@
+MODULE: ClearanceBeforeCompensationForgetsDecision
+TARGET: ClearanceBeforeCompensation
+CLASS: Invariant
+SUMMARY: compensation discards the decision needed for retry
+PERTURBS: UndoCompensate
+
+--- FIND
+    /\ compensated' = TRUE /\ undo' = "swapping"
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, cleared,
+--- REPLACE
+    /\ compensated' = TRUE /\ undo' = "swapping" /\ cleared' = FALSE
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias,
+--- END

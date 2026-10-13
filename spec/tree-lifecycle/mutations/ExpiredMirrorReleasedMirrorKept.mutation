@@ -1,0 +1,11 @@
+MODULE: ExpiredMirrorReleasedMirrorKept
+TARGET: ExpiredMirrorReleased
+CLASS: Invariant
+SUMMARY: retirement releases undo admission while a shard-for-shard mirror remains
+PERTURBS: ExpireUndo
+
+--- FIND
+    /\ undoable' = FALSE /\ mirror' = FALSE
+--- REPLACE
+    /\ undoable' = FALSE /\ mirror' = TRUE
+--- END

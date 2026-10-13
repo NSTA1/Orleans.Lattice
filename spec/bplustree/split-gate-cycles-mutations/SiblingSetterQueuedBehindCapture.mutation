@@ -1,0 +1,13 @@
+# Pairs with NoWaitCycle. The split holding B's gate waits on C's capture, whose seeding waits on B's gate.
+MODULE: SiblingSetterQueuedBehindCapture
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: SetPrevSiblingAsync queues behind C's running turn
+PERTURBS: AdmitSibling
+
+--- FIND
+    /\ Admits("C", SiblingSettersInterleave)
+--- REPLACE
+    \* MUTATION: SetPrevSiblingAsync is not [AlwaysInterleave]
+    /\ Admits("C", FALSE)
+--- END

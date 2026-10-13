@@ -1,0 +1,11 @@
+MODULE: AdmissionPendingDecisionLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: A pending replacement decision never commits despite fair source progress
+PERTURBS: CommitPending
+
+--- FIND
+    /\ pendingCommitted' = TRUE
+--- REPLACE
+    /\ pendingCommitted' = pendingCommitted
+--- END

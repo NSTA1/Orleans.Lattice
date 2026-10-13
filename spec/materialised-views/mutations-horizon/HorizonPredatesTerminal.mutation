@@ -1,0 +1,11 @@
+MODULE: HorizonPredatesTerminal
+TARGET: HorizonAfterTerminal
+CLASS: Invariant
+SUMMARY: the horizon uses stale pre-prepare heads rather than the post-terminal head vector
+PERTURBS: CaptureHorizon
+
+--- FIND
+    /\ horizon' = length /\ horizonWal' = wal
+--- REPLACE
+    /\ horizon' = Zero /\ horizonWal' = wal
+--- END

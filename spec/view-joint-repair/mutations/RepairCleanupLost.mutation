@@ -1,0 +1,11 @@
+MODULE: RepairCleanupLost
+TARGET: RepairClosed
+CLASS: Temporal
+SUMMARY: all durable acknowledgements arrive but terminal cleanup is permanently disabled
+PERTURBS: Cleanup
+
+--- FIND
+    /\ Live /\ repairApplied /\ acknowledged = Views
+--- REPLACE
+    /\ FALSE /\ Live /\ repairApplied /\ acknowledged = Views
+--- END

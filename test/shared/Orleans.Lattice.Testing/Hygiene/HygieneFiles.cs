@@ -43,7 +43,7 @@ public static class HygieneFiles
         ".srt", ".vtt", ".jsonl", ".mjs", ".cjs", ".nvmrc", ".npmrc",
         ".css", ".env", ".bicep", ".bicepparam", ".mutation", ".sql", ".py",
         ".proto", ".gitignore", ".dockerignore", ".gitattributes", ".gitmodules",
-        ".props", ".targets", ".js", ".ts", ".svg", ".sh", ".slnx", ".sln",
+        ".props", ".targets", ".runsettings", ".js", ".ts", ".svg", ".sh", ".slnx", ".sln",
         ".xaml", ".txt", ".example", ".tsv", ".csv", ".service", ".html", ".tla",
         ".cfg", ".conf", ".config", ".manifest", ".appxmanifest", ".xml",
         ".editorconfig", ".toml", ".ini", ".resx", ".http", ".bat", ".cmd", ".sample",

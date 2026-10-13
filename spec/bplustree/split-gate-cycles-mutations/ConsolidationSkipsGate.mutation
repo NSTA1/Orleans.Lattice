@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. The move-away marker is written only under C's split gate.
+MODULE: ConsolidationSkipsGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: the admitted consolidation turn proceeds as if it held C's split gate
+PERTURBS: AdmitConsolidation
+
+--- FIND
+    /\ Admits("C", FALSE)
+    /\ cons' = "running"
+--- REPLACE
+    /\ Admits("C", FALSE)
+    \* MUTATION: the gate is skipped
+    /\ cons' = "holding"
+--- END

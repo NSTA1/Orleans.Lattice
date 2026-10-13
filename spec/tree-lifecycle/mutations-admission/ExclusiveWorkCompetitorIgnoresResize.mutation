@@ -1,0 +1,11 @@
+MODULE: ExclusiveWorkCompetitorIgnoresResize
+TARGET: ExclusiveWork
+CLASS: Invariant
+SUMMARY: a migration or legacy import ignores the published resize intent
+PERTURBS: CompetitorAdmit
+
+--- FIND
+    /\ resize \notin {"announced", "active"} /\ undo \in {"idle", "done"}
+--- REPLACE
+    /\ undo \in {"idle", "done"}
+--- END

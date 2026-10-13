@@ -1,0 +1,19 @@
+MODULE: ReplayConvergesCrashForgetsHighWater
+TARGET: ReplayConverges
+CLASS: Invariant
+SUMMARY: a crash treats the checkpoint as the high-water mark, so the view is assumed to reflect exactly the checkpointed prefix while it still serves later entries
+PERTURBS: Crash
+
+--- FIND
+    /\ applied' = ckpt /\ rb' = "idle"
+    /\ pubTree' = bound /\ pubPos' = ckpt
+    /\ crashes' = crashes + 1
+    /\ UNCHANGED <<SourceVars, trim, ttlUsed, driftUsed, drifted, bound, vval,
+                   hw, ckpt,
+--- REPLACE
+    /\ applied' = ckpt /\ rb' = "idle" /\ hw' = ckpt
+    /\ pubTree' = bound /\ pubPos' = ckpt
+    /\ crashes' = crashes + 1
+    /\ UNCHANGED <<SourceVars, trim, ttlUsed, driftUsed, drifted, bound, vval,
+                   ckpt,
+--- END

@@ -1,0 +1,11 @@
+MODULE: PinOnlyOnBindingSwapKeepsBinding
+TARGET: PinOnlyOnBinding
+CLASS: Invariant
+SUMMARY: the swap flips the generation but does not rebind the checkpoint to the scanned copy
+PERTURBS: RebuildSwap
+
+--- FIND
+    /\ bound' = rbTree
+--- REPLACE
+    /\ bound' = bound
+--- END

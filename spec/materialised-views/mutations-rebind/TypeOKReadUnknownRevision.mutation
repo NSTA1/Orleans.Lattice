@@ -1,0 +1,11 @@
+MODULE: TypeOKReadUnknownRevision
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an ordinary read publishes a revision outside the finite source domain
+PERTURBS: ReadOrdinary
+
+--- FIND
+    /\ view' = IF source[bound] = 1 THEN Winner(view, 1) ELSE view
+--- REPLACE
+    /\ view' = 3
+--- END

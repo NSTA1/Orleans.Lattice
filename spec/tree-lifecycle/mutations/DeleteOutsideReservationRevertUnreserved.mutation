@@ -1,0 +1,13 @@
+MODULE: DeleteOutsideReservationRevertUnreserved
+TARGET: DeleteOutsideReservation
+CLASS: Invariant
+SUMMARY: revert starts after tree deletion
+PERTURBS: RevertBegin
+
+--- FIND
+RevertBegin ==
+    /\ running /\ ~deleted /\ operation = "none"
+--- REPLACE
+RevertBegin ==
+    /\ running /\ operation = "none"
+--- END

@@ -306,14 +306,24 @@ public class AggregationApplierTests
             _ => AggregationContribution.OfNumeric(group, source, numeric, Clock(ticks)),
         };
 
-        return
-        [
+        var scenario = new List<AggregationContribution>
+        {
             Contribute("g1", "a", 10, "ma", 1),   // fresh contribute
             Contribute("g1", "b", 5, "mb", 2),     // fresh contribute
-            Contribute("g1", "a", 3, "ma2", 3),    // overwrite (value / member change)
-            Contribute("g2", "a", 4, "ma3", 4),    // re-group (group key change)
-            AggregationContribution.Retract("b", Clock(5)), // delete
-        ];
+        };
+
+        // For Count, membership holds only (group, source); an overwrite with the
+        // same group is an identical membership row which #4900 skips as already
+        // installed. Sum, Min, Max, and SetUnion carry value/member updates within
+        // the same group.
+        if (kind != AggregationKind.Count)
+        {
+            scenario.Add(Contribute("g1", "a", 3, "ma2", 3)); // overwrite (value / member change)
+        }
+
+        scenario.Add(Contribute("g2", "a", 4, "ma3", 4));    // re-group (group key change)
+        scenario.Add(AggregationContribution.Retract("b", Clock(5))); // delete
+        return scenario;
     }
 
     private static Dictionary<string, string> MaterialisedView(InMemoryStore store) =>
@@ -415,6 +425,34 @@ public class AggregationApplierTests
         }
 
         Assert.That(Count(store, "g"), Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task Count_redundant_overwrite_batch_dedup_preserves_membership_intent()
+    {
+        // An unchanged Count membership is already installed (#4900). A replay of
+        // a batch containing a redundant overwrite must preserve the durable membership
+        // and keyset under saga dedup without double-counting.
+        var store = new InMemoryStore { DedupAtomic = true };
+        var applier = Applier(store, AggregationKind.Count);
+        var batch = new[]
+        {
+            AggregationContribution.Membership("g", "a", Clock(1)),
+            AggregationContribution.Membership("g", "a", Clock(2)), // redundant overwrite
+            AggregationContribution.Membership("g", "b", Clock(3)),
+        };
+
+        foreach (var contribution in batch)
+        {
+            await applier.ApplyAsync(contribution);
+        }
+
+        foreach (var contribution in batch)
+        {
+            await applier.ApplyAsync(contribution);
+        }
+
+        Assert.That(Count(store, "g"), Is.EqualTo(2));
     }
 
     [Test]

@@ -1,0 +1,14 @@
+MODULE: OperationReturnsCrashLosesProgress
+TARGET: OperationReturns
+CLASS: Temporal
+SUMMARY: crash loses the resumable phase but keeps the operation's reservation
+PERTURBS: Crash
+
+--- FIND
+    /\ running' = FALSE /\ faults' = faults + 1
+    /\ UNCHANGED <<alias, maps, operation, phase, source, captured, copied, fenced,
+--- REPLACE
+    /\ running' = FALSE /\ faults' = faults + 1
+    /\ phase' = "idle"
+    /\ UNCHANGED <<alias, maps, operation, source, captured, copied, fenced,
+--- END

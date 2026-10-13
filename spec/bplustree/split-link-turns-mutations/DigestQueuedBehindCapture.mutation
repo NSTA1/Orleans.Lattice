@@ -1,0 +1,13 @@
+# Pairs with NoAcknowledgedWriteLost. A non-interleaving digest read closes the same cycle one call later.
+MODULE: DigestQueuedBehindCapture
+TARGET: NoAcknowledgedWriteLost
+CLASS: Invariant
+SUMMARY: the digest read queues behind the capture turn, so the timeout fails the capture
+PERTURBS: AdmitDigest
+
+--- FIND
+    /\ seed' = IF DigestInterleaves \/ leafTurn # "capture" THEN "digest" ELSE "digestBlocked"
+--- REPLACE
+    \* MUTATION: GetChildDigestSnapshotAsync is not [AlwaysInterleave]
+    /\ seed' = IF leafTurn # "capture" THEN "digest" ELSE "digestBlocked"
+--- END

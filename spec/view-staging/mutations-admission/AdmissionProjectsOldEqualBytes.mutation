@@ -1,0 +1,11 @@
+MODULE: AdmissionProjectsOldEqualBytes
+TARGET: ProjectionMonotone
+CLASS: Action
+SUMMARY: An equal-byte superseded prepare replaces a timestamp-sensitive newer projection
+PERTURBS: Publish
+
+--- FIND
+        [k \in Keys |-> IF classes[k] = "prepared" THEN Prepared[k] ELSE value[k]]
+--- REPLACE
+        [k \in Keys |-> IF sampled[k].bytes = Prepared[k].bytes THEN Prepared[k] ELSE value[k]]
+--- END

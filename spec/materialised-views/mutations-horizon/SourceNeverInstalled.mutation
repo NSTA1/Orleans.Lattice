@@ -1,0 +1,11 @@
+MODULE: SourceNeverInstalled
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: source installation never completes and terminals cannot be appended
+PERTURBS: InstallSource
+
+--- FIND
+    /\ installed' = installed \cup {p}
+--- REPLACE
+    /\ installed' = installed
+--- END

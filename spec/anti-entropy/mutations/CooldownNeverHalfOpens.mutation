@@ -1,0 +1,11 @@
+MODULE: CooldownNeverHalfOpens
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the breaker cooldown never elapses, so an open breaker blocks forever
+PERTURBS: Cooldown
+
+--- FIND
+    /\ cooled' = TRUE
+--- REPLACE
+    /\ cooled' = FALSE
+--- END

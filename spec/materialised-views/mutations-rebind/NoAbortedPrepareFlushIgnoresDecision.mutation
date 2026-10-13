@@ -1,0 +1,12 @@
+MODULE: NoAbortedPrepareFlushIgnoresDecision
+TARGET: NoAbortedPrepare
+CLASS: Invariant
+SUMMARY: a staged prepare is flushed on an abort terminal instead of discarded
+PERTURBS: Flush
+
+--- FIND
+    /\ view' = IF outcome = "commit" /\ source[bound] = 2
+               THEN Winner(view, 2) ELSE view
+--- REPLACE
+    /\ view' = Winner(view, 2)
+--- END

@@ -1,0 +1,13 @@
+MODULE: SupersedingCopyPreservedCutoverImportsClearance
+TARGET: SupersedingCopyPreserved
+CLASS: Invariant
+SUMMARY: a later alias change incorrectly inherits the old resize's clearance
+PERTURBS: LaterCutover
+
+--- FIND
+    /\ alias' = "later"
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, undo, cleared,
+--- REPLACE
+    /\ alias' = "later" /\ cleared' = TRUE
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, undo,
+--- END

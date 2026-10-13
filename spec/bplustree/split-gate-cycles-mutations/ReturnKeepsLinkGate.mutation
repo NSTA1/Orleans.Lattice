@@ -1,0 +1,15 @@
+# Pairs with NoWaitCycle. A link gate held past its link wedges every later link.
+MODULE: ReturnKeepsLinkGate
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: the link returns without releasing the root's link gate
+PERTURBS: ReturnLink
+
+--- FIND
+    /\ ch[o] = "return"
+    /\ lg' = "none"
+--- REPLACE
+    /\ ch[o] = "return"
+    \* MUTATION: the link gate is kept
+    /\ lg' = lg
+--- END

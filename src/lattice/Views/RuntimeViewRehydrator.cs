@@ -253,7 +253,7 @@ internal static class RuntimeViewRehydrator
                 return null;
             }
 
-            return registration;
+            return registration with { DurableRecord = record };
         }
         catch (Exception ex)
         {

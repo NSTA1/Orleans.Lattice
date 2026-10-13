@@ -1,0 +1,11 @@
+MODULE: ClearanceWasUnreplicatedIgnoresReplication
+TARGET: ClearanceWasUnreplicated
+CLASS: Action
+SUMMARY: an after-swap undo is cleared even when writes may already be on peers
+PERTURBS: UndoClearance
+
+--- FIND
+    /\ running /\ undo = "checking" /\ ~replicated /\ alias = "new"
+--- REPLACE
+    /\ running /\ undo = "checking" /\ alias = "new"
+--- END

@@ -1,0 +1,12 @@
+MODULE: PlanSkipsUndecided
+TARGET: RebuildReplayEntitled
+CLASS: Action
+SUMMARY: a scanned undecided prepare is skipped by the rebuild resume floor
+PERTURBS: Plan
+
+--- FIND
+    /\ floor' = [p \in Partitions |-> IF heads[p] > 0 /\ p < ScanLimit /\
+                      ~AllCommitted(heads) /\ ~abandoned THEN 0 ELSE heads[p]]
+--- REPLACE
+    /\ floor' = heads
+--- END

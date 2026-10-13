@@ -1,0 +1,11 @@
+MODULE: AdmissionDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: Crash restores an offset outside the WAL domain
+PERTURBS: Crash
+
+--- FIND
+    /\ read' = ckpt /\ prepares' = {} /\ terminals' = {} /\ sampled' = Blank
+--- REPLACE
+    /\ read' = [k \in Keys |-> 4] /\ prepares' = {} /\ terminals' = {} /\ sampled' = Blank
+--- END

@@ -1,0 +1,11 @@
+MODULE: RestampInvalidLineage
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: lineage stamp violates its bounded domain
+PERTURBS: Restamp
+
+--- FIND
+    /\ lineage' = lineage + 1 /\ phase' = "stamped"
+--- REPLACE
+    /\ lineage' = lineage + 2 /\ phase' = "stamped"
+--- END

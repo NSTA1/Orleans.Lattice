@@ -1,0 +1,11 @@
+MODULE: ExclusiveWorkCompetitorUnannounced
+TARGET: ExclusiveWork
+CLASS: Invariant
+SUMMARY: the competing operation skips its publish-before-read handshake
+PERTURBS: CompetitorAnnounce
+
+--- FIND
+    /\ competitor' = "announced" /\ competitorUsed' = TRUE
+--- REPLACE
+    /\ competitor' = "active" /\ competitorUsed' = TRUE
+--- END

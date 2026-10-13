@@ -1,0 +1,14 @@
+# Pairs with GateOwnership. The reparent write must not overlap a split of the same leaf.
+MODULE: SetParentIgnoresBusyGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: SetParentAsync persists without waiting for the leaf's split gate
+PERTURBS: SetParentTakeGate
+
+--- FIND
+    /\ seed[l] = "admitted"
+    /\ gate[l] = "free"
+--- REPLACE
+    /\ seed[l] = "admitted"
+    \* MUTATION: the gate is not awaited
+--- END

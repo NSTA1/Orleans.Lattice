@@ -75,7 +75,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </para>
 /// </summary>
 [TestFixture]
-[Category(SpecModuleGates.TlcCategory)]
+[Category("Tlc")]
 [Parallelizable(ParallelScope.Children)]
 public sealed class TlcModelCheckTests
 {
@@ -179,7 +179,8 @@ public sealed class TlcModelCheckTests
     /// that change announce itself and its README restate the count.
     /// </para>
     /// </summary>
-    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcModules))]
+    [Category("Tlc")]
     public void The_base_specification_holds(SpecModule module)
     {
         AssertBaseSpecificationHolds(module);
@@ -190,6 +191,7 @@ public sealed class TlcModelCheckTests
     /// Exhaustive base-model coverage remains in the full TLC shard.
     /// </summary>
     [Test]
+    [Category("Tlc")]
     public void The_atomic_commit_base_specification_holds()
     {
         var module = SpecModuleCatalogue.Repository().Single(module => module.Name == "AtomicCommit");
@@ -235,7 +237,8 @@ public sealed class TlcModelCheckTests
     /// reason to exist.
     /// </para>
     /// </summary>
-    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Variants))]
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcVariants))]
+    [Category("Tlc")]
     public void Each_variant_configuration_holds(SpecModule module, string variant)
     {
         ArgumentNullException.ThrowIfNull(module);
@@ -304,7 +307,8 @@ public sealed class TlcModelCheckTests
     /// and one that stopped being needed would never be noticed.
     /// </para>
     /// </summary>
-    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Mutations))]
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcMutations))]
+    [Category("Tlc")]
     public void Each_property_fires_under_its_mutation_and_not_on_the_base(SpecModule module, SpecMutation mutation)
     {
         ArgumentNullException.ThrowIfNull(module);
@@ -378,6 +382,7 @@ public sealed class TlcModelCheckTests
     /// <see cref="SpecModuleDiscoveryControlTests"/>.
     /// </summary>
     [Test]
+    [Category("Tlc")]
     public void A_synthetic_module_is_model_checked_by_every_TLC_gate()
     {
         var gates = SpecModuleGates.All().Where(g => g.RunsTlc).ToArray();

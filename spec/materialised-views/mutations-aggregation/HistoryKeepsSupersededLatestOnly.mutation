@@ -1,0 +1,11 @@
+MODULE: HistoryKeepsSupersededLatestOnly
+TARGET: HistoryKeepsSuperseded
+CLASS: Invariant
+SUMMARY: history incorrectly borrows replacement admission and discards a superseded ordinary revision
+PERTURBS: ReadOrdinary
+
+--- FIND
+    /\ history' = history \cup Revision({1})
+--- REPLACE
+    /\ history' = IF Eligible(1, members) THEN history \cup Revision({1}) ELSE history
+--- END

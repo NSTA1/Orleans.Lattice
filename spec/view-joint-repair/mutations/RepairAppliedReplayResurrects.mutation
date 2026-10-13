@@ -1,0 +1,17 @@
+MODULE: RepairAppliedReplayResurrects
+TARGET: NewerPeerPreserved
+CLASS: Invariant
+SUMMARY: a retry replays a committed repair over a legitimately newer ordinary peer
+PERTURBS: Retry
+
+--- FIND
+Retry(v) ==
+    /\ Live /\ v \in Fresh
+    /\ UNCHANGED vars
+--- REPLACE
+Retry(v) ==
+    /\ Live /\ v \in Fresh /\ repairApplied
+    /\ rows' = [rows EXCEPT ![v][target[v]] = captured[v]]
+    /\ UNCHANGED <<Coordinator,source,bound,reported,stage,Snapshots,retired,
+                   faults,ordinarySeen>>
+--- END

@@ -1,0 +1,11 @@
+MODULE: ResolvedDeliveryLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: Neither the late original duplicates nor the reused new-log transaction arrive
+PERTURBS: Deliver
+
+--- FIND
+    /\ heads' = [l \in Logs |-> IF l = 1 THEN 4 ELSE IF candidate = 2 THEN 2 ELSE 0]
+--- REPLACE
+    /\ heads' = heads
+--- END

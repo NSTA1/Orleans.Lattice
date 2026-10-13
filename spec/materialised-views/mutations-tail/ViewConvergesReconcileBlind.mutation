@@ -1,0 +1,11 @@
+MODULE: ViewConvergesReconcileBlind
+TARGET: ViewConverges
+CLASS: Temporal
+SUMMARY: reconcile never sees a digest mismatch, so out-of-band drift on a caught-up view is never repaired
+PERTURBS: Reconcile
+
+--- FIND
+    /\ vval # SrcState(bound)
+--- REPLACE
+    /\ vval # vval
+--- END

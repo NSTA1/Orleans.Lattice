@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. A gate leaked by a finished split refuses every later split of the leaf.
+MODULE: ForegroundKeepsGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: the foreground split returns without releasing B's split gate
+PERTURBS: ForegroundRelease
+
+--- FIND
+    /\ fg = "release"
+    /\ gate' = [gate EXCEPT !["B"] = "free"]
+--- REPLACE
+    /\ fg = "release"
+    \* MUTATION: the gate is kept
+    /\ gate' = gate
+--- END

@@ -234,6 +234,36 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<List<LwwEntry?>> GetRawEntriesAsync(List<string> keys);
 
     /// <summary>
+    /// Returns each materialised raw row, including tombstones and expiry metadata,
+    /// aligned with <paramref name="keys"/>. An absent row is <c>null</c>.
+    /// Consumers deciding from both liveness and version must use this single
+    /// observation rather than combine separate row and version reads. Logical
+    /// admission over undrained prepares uses <see cref="GetVisibleRawEntriesAsync"/>.
+    /// </summary>
+    Task<List<LwwEntry?>> GetRawEntriesIncludingTombstonesAsync(List<string> keys);
+
+    /// <summary>
+    /// Returns index-aligned logical rows, including tombstones and expiry metadata.
+    /// Each leaf resolves values and metadata from the same transaction-decision
+    /// view, including committed prepares whose terminals have not drained.
+    /// This is row-coherent evidence, not a transaction-atomic multi-leaf snapshot.
+    /// Raw prepare capture continues to use <see cref="GetRawEntriesAsync"/>.
+    /// </summary>
+    Task<List<LwwEntry?>> GetVisibleRawEntriesAsync(List<string> keys);
+
+    /// <summary>
+    /// The logically visible last-writer-wins version of every key in
+    /// <paramref name="keys"/>, aligned by index: the committed row's HLC,
+    /// <b>including a tombstone's</b>, or <see cref="HybridLogicalClock.Zero"/>
+    /// when the key holds no row (never written, or its tombstone already
+    /// reclaimed). Uses the same group-by-leaf traversal as
+    /// <see cref="GetVisibleRawEntriesAsync(List{string})"/>, including committed
+    /// prepares whose terminals have not drained. Consumers deciding from both
+    /// liveness and version must use that row observation, not independent reads.
+    /// </summary>
+    Task<List<HybridLogicalClock>> GetRawVersionsAsync(List<string> keys);
+
+    /// <summary>
     /// Sets <paramref name="key"/> to <paramref name="value"/> only if the key does not
     /// already exist (or is tombstoned). Returns the existing value when the key is live,
     /// or <c>null</c> when the write was performed.

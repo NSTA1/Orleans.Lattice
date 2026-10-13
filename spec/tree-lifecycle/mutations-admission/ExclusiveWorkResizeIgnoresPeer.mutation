@@ -1,0 +1,12 @@
+MODULE: ExclusiveWorkResizeIgnoresPeer
+TARGET: ExclusiveWork
+CLASS: Invariant
+SUMMARY: resize admits despite a published competing operation
+PERTURBS: ResizeAdmit
+
+--- FIND
+    /\ competitor \notin {"announced", "active"}
+    /\ resize' = "active"
+--- REPLACE
+    /\ resize' = "active"
+--- END

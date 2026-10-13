@@ -1,0 +1,11 @@
+MODULE: CheckpointRetainsStageCheckpointIgnoresBuffer
+TARGET: CheckpointRetainsStage
+CLASS: Invariant
+SUMMARY: checkpoint banking ignores the unresolved staged batch floor
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ ~rebuilding /\ dirty = {} /\ staged = {} /\ checkpoint # read
+--- REPLACE
+    /\ ~rebuilding /\ dirty = {} /\ checkpoint # read
+--- END

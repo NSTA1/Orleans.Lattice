@@ -772,6 +772,8 @@ internal static class TypeAliases
 
     /// <summary>Alias for one participating view's recorded ready slice.</summary>
     internal const string ViewCrossTreeSlice = "olr.vl";
+    internal const string ViewCrossTreeRepairHold = "ol.vrh";
+    internal const string IViewJointRepairCapable = "ol.jrc";
 
     /// <summary>Alias for the durable runtime-view registry grain interface.</summary>
     internal const string IViewRegistryGrain = "ol.vrg";

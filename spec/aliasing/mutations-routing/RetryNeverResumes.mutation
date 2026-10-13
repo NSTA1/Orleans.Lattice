@@ -1,0 +1,11 @@
+MODULE: RetryNeverResumes
+TARGET: MovesSettle
+CLASS: Temporal
+SUMMARY: reminder retry cannot restart finite-fault move progress
+PERTURBS: Retry
+
+--- FIND
+    /\ ~running /\ running' = TRUE
+--- REPLACE
+    /\ ~running /\ running' = FALSE
+--- END

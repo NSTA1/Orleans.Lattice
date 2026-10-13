@@ -1,0 +1,18 @@
+MODULE: UnavailableClosesBreaker
+TARGET: ProbeReadOnly
+CLASS: Action
+SUMMARY: an unavailable digest probe closes an open circuit breaker
+PERTURBS: ProbeUnavailable
+
+--- FIND
+    /\ ~latch /\ phase = "idle"
+    /\ UNCHANGED dataVars
+    /\ UNCHANGED probeVars
+    /\ UNCHANGED envVars /\ UNCHANGED guardVars
+--- REPLACE
+    /\ ~latch /\ phase = "idle"
+    /\ open' = FALSE
+    /\ UNCHANGED dataVars
+    /\ UNCHANGED probeVars
+    /\ UNCHANGED envVars /\ UNCHANGED <<failures, cooled, consumed>>
+--- END

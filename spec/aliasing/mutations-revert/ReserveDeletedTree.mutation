@@ -1,0 +1,11 @@
+MODULE: ReserveDeletedTree
+TARGET: DeletionBlocksReservation
+CLASS: Action
+SUMMARY: revert reserves a deleted tree
+PERTURBS: Reserve
+
+--- FIND
+    /\ phase = "validated" /\ ~deleted
+--- REPLACE
+    /\ phase = "validated"
+--- END

@@ -1,0 +1,11 @@
+MODULE: ServedNeverAheadScanReadsAlias
+TARGET: ServedNeverAhead
+CLASS: Invariant
+SUMMARY: the rebuild scans whatever copy the alias names rather than the copy it captured floors on and binds
+PERTURBS: RebuildScan
+
+--- FIND
+    /\ rbVal' = SrcState(rbTree)
+--- REPLACE
+    /\ rbVal' = SrcState(alias)
+--- END

@@ -146,7 +146,7 @@ public class ViewMaintainerDecommissionTests
         await h.Trees[TreeIdFor(0)].Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
         Assert.Multiple(() =>
         {
-            Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1),
+            Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(2),
                 "The checkpoint must advance past every generation just deleted so a re-created "
                 + "view never addresses a permanently inaccessible tree id.");
             Assert.That(h.State.WriteCount, Is.GreaterThanOrEqualTo(1),
@@ -161,13 +161,27 @@ public class ViewMaintainerDecommissionTests
 
         await h.Grain.DecommissionAsync();
 
-        foreach (var generation in new[] { 0L, 1L, 2L })
+        foreach (var generation in new[] { 0L, 1L, 2L, 3L })
         {
             await h.Trees[TreeIdFor(generation)].Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
         }
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(3));
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(4));
     }
 
+    [Test]
+    public async Task Decommission_deletes_the_shadow_generation_an_interrupted_rebuild_may_have_left()
+    {
+        // A derive-locally rebuild writes ActiveGeneration + 1 before its durable
+        // swap, so an interrupted build leaves that tree partially written with no
+        // durable record; teardown must delete it and advance past it.
+        var h = Create(activeGeneration: 1);
+
+        await h.Grain.DecommissionAsync();
+
+        await h.Trees[TreeIdFor(2)].Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(3),
+            "A re-created view must never address the possibly orphaned shadow generation.");
+    }
     [Test]
     public async Task Decommission_also_deletes_a_generation_awaiting_reclamation()
     {
@@ -191,7 +205,7 @@ public class ViewMaintainerDecommissionTests
 
         Assert.That(h.Trees.ContainsKey(TreeIdFor(9)), Is.False,
             "An unflagged reclaim generation must not be treated as a backing tree.");
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1));
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(2));
     }
 
     [Test]
@@ -268,7 +282,7 @@ public class ViewMaintainerDecommissionTests
 
         await cursors.DidNotReceive().UnregisterAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1),
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(2),
             "Teardown must still complete when the source id cannot be resolved.");
     }
 
@@ -285,7 +299,7 @@ public class ViewMaintainerDecommissionTests
         await cursors.DidNotReceive().UnregisterAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         await h.Trees[TreeIdFor(0)].Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1));
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(2));
     }
 
     [Test]
@@ -313,7 +327,7 @@ public class ViewMaintainerDecommissionTests
         await h.Grain.DecommissionAsync();
 
         await h.Trees[TreeIdFor(0)].Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1),
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(2),
             "A stranded pin must not leave the backing trees and checkpoint behind as well.");
     }
 
@@ -328,7 +342,7 @@ public class ViewMaintainerDecommissionTests
         await h.Grain.DecommissionAsync();
 
         await h.Trees[TreeIdFor(0)].Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1));
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(2));
     }
 
     [Test]
@@ -343,7 +357,7 @@ public class ViewMaintainerDecommissionTests
 
         await h.Grain.DecommissionAsync();
 
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(1));
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(2));
     }
 
     [Test]
@@ -376,7 +390,7 @@ public class ViewMaintainerDecommissionTests
 
         await h.Trees[TreeIdFor(0)].Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
         await h.Trees[TreeIdFor(2)].Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(3),
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(4),
             "One undeletable generation must not strand the checkpoint on a dead generation.");
     }
 
@@ -433,6 +447,6 @@ public class ViewMaintainerDecommissionTests
 
         // The second pass tears down the generation the first pass advanced to.
         await h.Trees[TreeIdFor(0)].Received(2).DeleteTreeAsync(Arg.Any<CancellationToken>());
-        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(2));
+        Assert.That(h.State.State.ActiveGeneration, Is.EqualTo(4));
     }
 }

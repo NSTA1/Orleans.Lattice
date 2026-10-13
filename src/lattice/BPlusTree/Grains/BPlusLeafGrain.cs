@@ -2691,6 +2691,9 @@ internal sealed partial class BPlusLeafGrain(
         // concurrent PersistAsync against the same row and the
         // loser of the etag CAS throws InconsistentStateException.
         // Mirrors c2-vi-followup's fix on BPlusInternalGrain.
+        // The setter is [AlwaysInterleave] (issue #4919): a split calls it on
+        // a neighbour while holding its own gate, so it waits only for this
+        // leaf's gate, never for a turn suspended on the shard root.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
@@ -4704,19 +4707,29 @@ internal sealed partial class BPlusLeafGrain(
         _snapshotStorageRetired = true;
         await WaitForSnapshotCaptureToDrainAsync();
 
-        await state.ClearStateAsync();
+        await _persistWriteGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await state.ClearStateAsync();
 
-        // Nothing may write the row back now (issue #4419). The deactivation
-        // below runs the checkpoint-flush barrier, which used to persist an
-        // advance still pending from before the clear onto the cleared, default
-        // state: a row holding only the checkpoint, with no tree id, that nothing
-        // references and nothing ever clears. The pending advance describes rows
-        // that no longer exist, so it is discarded, and the latch makes any other
-        // persist on this activation fail instead of re-creating the row. Both
-        // are set only once the clear has succeeded: a failed clear leaves the
-        // leaf intact and still able to persist.
-        _pendingCheckpointOffsetsByPartition = null;
-        _leafStateCleared = true;
+            // Nothing may write the row back now (issue #4419). The deactivation
+            // below runs the checkpoint-flush barrier, which used to persist an
+            // advance still pending from before the clear onto the cleared, default
+            // state: a row holding only the checkpoint, with no tree id, that nothing
+            // references and nothing ever clears. The pending advance describes rows
+            // that no longer exist, so it is discarded, and the latch makes any other
+            // persist on this activation fail instead of re-creating the row. Both
+            // are set only once the clear has succeeded: a failed clear leaves the
+            // leaf intact and still able to persist. Both are set under the
+            // persist-write gate, so an interleaved persist (issue #4914) waiting
+            // on it observes the latch rather than re-creating the row.
+            _pendingCheckpointOffsetsByPartition = null;
+            _leafStateCleared = true;
+        }
+        finally
+        {
+            _persistWriteGate.Release();
+        }
 
         try
         {

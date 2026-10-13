@@ -1,0 +1,11 @@
+MODULE: AdmissionHistoryFiltered
+TARGET: HistoryRetained
+CLASS: Invariant
+SUMMARY: Accumulative history loses one committed revision to current-state winner filtering
+PERTURBS: Publish
+
+--- FIND
+    /\ history' = IF accumulative THEN RevisionIds ELSE history
+--- REPLACE
+    /\ history' = IF accumulative THEN {<<1,1>>} ELSE history
+--- END

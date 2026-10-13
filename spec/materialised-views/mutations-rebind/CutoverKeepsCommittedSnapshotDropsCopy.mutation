@@ -1,0 +1,11 @@
+MODULE: CutoverKeepsCommittedSnapshotDropsCopy
+TARGET: CutoverKeepsCommittedSnapshot
+CLASS: Action
+SUMMARY: topology cutover publishes a new identity without copying the committed source snapshot
+PERTURBS: SourceMove
+
+--- FIND
+    /\ source' = [source EXCEPT ![alias'] = source[alias]]
+--- REPLACE
+    /\ source' = [source EXCEPT ![alias'] = 0]
+--- END

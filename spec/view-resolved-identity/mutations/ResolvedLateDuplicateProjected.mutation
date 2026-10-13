@@ -1,0 +1,13 @@
+MODULE: ResolvedLateDuplicateProjected
+TARGET: ProjectionOnce
+CLASS: Invariant
+SUMMARY: Ignore same-owner resolved suppression and project late duplicate prepares and terminals again
+PERTURBS: Read
+
+--- FIND
+          /\ prepared' = IF ~resolved /\ i \in {1,3} THEN TRUE ELSE prepared
+          /\ terminal' = IF ~resolved /\ i \in {2,4} THEN TRUE ELSE terminal
+--- REPLACE
+          /\ prepared' = IF i \in {1,3} THEN TRUE ELSE prepared
+          /\ terminal' = IF i \in {2,4} THEN TRUE ELSE terminal
+--- END

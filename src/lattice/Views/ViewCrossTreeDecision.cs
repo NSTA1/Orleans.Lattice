@@ -33,11 +33,21 @@ internal sealed record ViewCrossTreeDecision
     /// </summary>
     [Id(1)] public bool Degraded { get; init; }
 
+    /// <summary>
+    /// Whether this original publication requires the current fresh-repair and
+    /// durable checkpoint-acknowledgement round. False for released legacy
+    /// operations; their original Applied result is not repair certification.
+    /// </summary>
+    [Id(2)] public bool RequiresRepair { get; init; }
+
     /// <summary>A not-yet-applied result: the wait set is still incomplete.</summary>
     public static ViewCrossTreeDecision NotReady { get; } = new() { Applied = false };
 
     /// <summary>An applied result: the joint flip has durably committed.</summary>
-    public static ViewCrossTreeDecision Committed { get; } = new() { Applied = true };
+    public static ViewCrossTreeDecision Committed { get; } = new() { Applied = true, RequiresRepair = true };
+
+    /// <summary>An original-contract completion, without fresh repair certification.</summary>
+    public static ViewCrossTreeDecision LegacyCommitted { get; } = new() { Applied = true };
 
     /// <summary>
     /// A terminally-degraded result: no joint flip will be issued; the caller

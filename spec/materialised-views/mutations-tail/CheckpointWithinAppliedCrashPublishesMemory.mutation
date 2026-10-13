@@ -1,0 +1,13 @@
+MODULE: CheckpointWithinAppliedCrashPublishesMemory
+TARGET: CheckpointWithinApplied
+CLASS: Invariant
+SUMMARY: the reactivated maintainer publishes its lost in-memory progress instead of the persisted applied offsets
+PERTURBS: Crash
+
+--- FIND
+    /\ pubTree' = bound /\ pubPos' = ckpt
+    /\ crashes' = crashes + 1
+--- REPLACE
+    /\ pubTree' = bound /\ pubPos' = applied
+    /\ crashes' = crashes + 1
+--- END

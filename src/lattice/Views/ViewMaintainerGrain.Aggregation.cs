@@ -48,13 +48,14 @@ internal sealed partial class ViewMaintainerGrain
         var options = Options;
         var batchSize = options.BatchSize > 0 ? options.BatchSize : LatticeViewOptions.DefaultBatchSize;
         var sourceTreeId = registration.SourceTreeId;
-        var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
-        batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
+        var walTreeId = state.State.BoundPhysicalTreeId;
+        batchSize = ApplyBackpressureBatchScaling(walTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Hold every entry of this log the view has not durably consumed against
         // the WAL GC on every silo, before reading it (issue #4584).
         await EnsureReadRegisteredAsync(walTreeId);
+        RestoreRepairedTransactions(walTreeId);
 
         // Tail the source WAL through the shared subscriber (identical mechanics
         // to the filter path); the handler folds each applicable entry into the
@@ -62,14 +63,21 @@ internal sealed partial class ViewMaintainerGrain
         // the maintainer reports its own cursor after the fold below.
         var contributions = new List<AggregationContribution>();
         var completedTransactions = new List<Guid>();
+        SeedStillStagedCompletedTransactions(completedTransactions);
         // Classify while folding: the drain loop already visits every projected
         // contribution, so record whether any is a RangeReconcile here instead of
         // re-walking the whole buffer with a separate .Exists pass after the drain.
         var hasRangeReconcile = false;
+        var ordinarySpans = new List<OrdinaryWriteSpan>();
+        var numericSourceKeys = registration.AggregationProjection!.Aggregation is AggregationKind.Count or AggregationKind.Sum
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : null;
         var handler = new ViewDrainHandler(
             this,
             mutation =>
             {
+                numericSourceKeys?.Add(mutation.Key);
+                var spanStart = contributions.Count;
                 foreach (var contribution in registration.AggregationProjection!.Project(mutation))
                 {
                     contributions.Add(contribution);
@@ -78,10 +86,13 @@ internal sealed partial class ViewMaintainerGrain
                         hasRangeReconcile = true;
                     }
                 }
+
+                RecordOrdinaryWriteSpan(ordinarySpans, mutation, spanStart, contributions.Count);
             },
             completedTransactions);
 
-        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
+        var readFrom = DrainReadCheckpoints(walTreeId, state.State.AppliedOffsets);
+        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, readFrom)
         {
             HighestApplied = state.State.HighestAppliedTimestamp,
             BatchSize = batchSize,
@@ -104,7 +115,10 @@ internal sealed partial class ViewMaintainerGrain
         var backlogRead = drain.EntriesRead;
 
         // Bounded-buffer / retention backstop, identical to the filter path.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)))
+        if (!HasCommittedJointOwnership && (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId))
+            || AbandonedBatchCommitted()
+            || BackstopDegradePending()
+            || await OrphanedCommittedBatchAsync(walTreeId, partitions, readFrom, advancedOffsets, cancellationToken)))
         {
             await RebuildAsync(cancellationToken);
             return 0;
@@ -121,13 +135,35 @@ internal sealed partial class ViewMaintainerGrain
             return 0;
         }
 
+        // A contribution of an ordinary write the source already superseded by
+        // last-writer-wins (an older write logged after a newer one, issue #4885)
+        // would retract the newer membership and re-add the stale one.
+        if (!registration.Accumulative)
+        {
+            await DropWritesSupersededAtSourceAsync(
+                contributions, ordinarySpans, static c => c.SourceKey, walTreeId, partitions, cancellationToken);
+        }
+
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
         var applier = CreateAggregationApplier(viewTree);
+        if (!registration.Accumulative)
+        {
+            await ConfirmCompletedBatchesAgainstSourceAsync(
+                completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
+            GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
+        }
+        SetJointReadHorizon(readFrom, advancedOffsets, completedTransactions);
+        var jointApplied = await FlushCompletedAggregationBatchesAsync(
+            viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: true);
+        if (DeferPublicationForJointRepair(walTreeId, readFrom, advancedOffsets))
+        {
+            return jointApplied;
+        }
 
         // Apply in ascending source-HLC order so each source key's read-before-write
         // retraction folds in source-commit order (a source key lives on one
         // partition, so this is exact for that key).
-        var applied = 0;
+        var applied = jointApplied;
         contributions.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
         foreach (var contribution in contributions)
         {
@@ -135,13 +171,29 @@ internal sealed partial class ViewMaintainerGrain
             applied++;
         }
 
+        if (numericSourceKeys is not null)
+        {
+            // Source admission can suppress an interrupted event, and its
+            // successor can project nothing. Repair still precedes checkpoint retirement.
+            foreach (var sourceKey in numericSourceKeys)
+            {
+                await applier.CompletePendingNumericSourceAsync(sourceKey, cancellationToken);
+            }
+        }
+
         // Fold every atomic batch that completed this pass into the group
         // accumulators through the SAME aggregation applier (its per-group
         // atomic membership+accumulator flip), after the ordinary contributions.
-        applied += await FlushCompletedAggregationBatchesAsync(viewTree, registration, completedTransactions, cancellationToken);
+        // Joint batches rendezvous before ordinary public groups change, so a
+        // stale registered membership cannot roll back a published regrouping.
+        applied += await FlushCompletedAggregationBatchesAsync(
+            viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: false);
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
+        RecordDrainReadOffsets(walTreeId, readFrom, advancedOffsets);
+        var replayFenceChanged = UpdateReplayFence(walTreeId, readFrom, advancedOffsets);
+        CoverReadPosition(advancedOffsets, readFrom);
         ApplyCheckpointHoldBack(advancedOffsets, partitions);
 
         var offsetsAdvanced = false;
@@ -157,20 +209,23 @@ internal sealed partial class ViewMaintainerGrain
         state.State.HighestAppliedTimestamp = highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
 
-        if (offsetsAdvanced || applied > 0)
+        var reconcileScheduled = PersistPendingCrossTreeReconcile();
+        var repairRetired = RetireJointRepairHolds(advancedOffsets);
+        if (offsetsAdvanced || applied > 0 || replayFenceChanged || reconcileScheduled || repairRetired)
         {
             LowerReadPositions(walTreeId, state.State.AppliedOffsets);
-            await state.WriteStateAsync();
+            await PersistJointStateAsync();
             PublishReadPositions(walTreeId, state.State.AppliedOffsets);
+            await AcknowledgeRetiredJointRepairsAsync();
         }
 
         var blockedAtHlc = ComputeBlockedAtHlc();
         if (highest > HybridLogicalClock.Zero || blockedAtHlc is not null)
         {
-            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken);
+            await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken);
         }
 
-        ApplyLag.Record(await ComputeLagAsync(sourceTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
+        ApplyLag.Record(await ComputeLagAsync(walTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
         BacklogDepth.Record(backlogRead, ViewTag, ViewTenantTag);
         if (applied > 0)
         {
@@ -204,13 +259,22 @@ internal sealed partial class ViewMaintainerGrain
         ILattice viewTree,
         ViewRegistration registration,
         List<Guid> completed,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool crossTreeOnly)
     {
         var applied = 0;
         foreach (var txId in completed)
         {
-            if (!_staging.TryGetValue(txId, out var tx))
+            if (!_staging.TryGetValue(txId, out var tx)
+                || (tx.CrossTreeOperationId is not null) != crossTreeOnly)
             {
+                continue;
+            }
+
+            var closure = registration.Accumulative ? null : LocalPublicationClosure(txId, completed);
+            if (closure is { Count: > 1 })
+            {
+                applied += await PublishLocalAggregationClosureAsync(viewTree, registration, closure, cancellationToken);
                 continue;
             }
 
@@ -222,7 +286,7 @@ internal sealed partial class ViewMaintainerGrain
                 // batch was staged, is the source last-writer; dropping the
                 // prepared entry keeps the group accumulator convergent with the
                 // source instead of folding in a superseded atomic contribution.
-                if (IsSupersededByOrdinary(prepared))
+                if (!registration.Accumulative && (IsSupersededByOrdinary(prepared) || IsSourceSuperseded(tx, prepared)))
                 {
                     continue;
                 }
@@ -258,6 +322,7 @@ internal sealed partial class ViewMaintainerGrain
                 if (resolved)
                 {
                     applied += upserts.Count + deletes.Count;
+                    RecordFlushedPreparesOverStagedKeys(tx);
                     ReleaseStagedKeys(tx);
                     _staging.Remove(txId);
                     MarkResolved(txId);
@@ -272,6 +337,7 @@ internal sealed partial class ViewMaintainerGrain
             // so the whole batch becomes visible together.
             await FlipLocalSliceAsync(viewTree, txId, upserts, deletes, cancellationToken);
             applied += upserts.Count + deletes.Count;
+            RecordFlushedPreparesOverStagedKeys(tx);
             ReleaseStagedKeys(tx);
             _staging.Remove(txId);
             MarkResolved(txId);

@@ -1,0 +1,11 @@
+MODULE: RepairRebindBeforeCheckpoint
+TARGET: PhysicalHeld
+CLASS: Invariant
+SUMMARY: a pending captured participant switches physical generation before checkpoint retirement
+PERTURBS: Rebind
+
+--- FIND
+    /\ v \in retired /\ bound[v] = 0
+--- REPLACE
+    /\ v \in Fresh /\ bound[v] = 0
+--- END

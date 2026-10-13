@@ -78,9 +78,19 @@ internal sealed class MaterialisedViewClusterFixture
                     [$"view-{ShipViewAmbiguousViewName}"] = LatticeMergeMode.LwwRegister,
                     [$"view-{ShipViewRuntimeAmbiguousViewName}"] = LatticeMergeMode.LwwRegister,
                     [$"view-{ShipViewHistoryViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{CrossTreeBackstopShipViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{CrossTreeBackstopFaultRebuildViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{CrossTreeBackstopReactivationRebuildViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{CrossTreePriorRegistrationViewName}"] = LatticeMergeMode.LwwRegister,
                 };
             });
             siloBuilder.AddLatticeViews(MaterialisedViewRuntimeProjectionProvider.Configure);
+            siloBuilder.AddIncomingGrainCallFilter<CrossTreeDegradeFaultFilter>();
+            siloBuilder.AddIncomingGrainCallFilter<RawVersionReadHoldFilter>();
+            siloBuilder.AddIncomingGrainCallFilter<LeafTerminalFaultFilter>();
+            siloBuilder.AddOutgoingGrainCallFilter<CrossTreeRegisterReadyHookFilter>();
+            siloBuilder.AddOutgoingGrainCallFilter<HistoryPublicationHoldFilter>();
+            siloBuilder.AddOutgoingGrainCallFilter<NumericPublicationResponseFaultFilter>();
 
             // Pin a long coalesce window for every view so the maintainer's
             // background drain timer stays dormant during the test and
@@ -101,6 +111,97 @@ internal sealed class MaterialisedViewClusterFixture
             siloBuilder.Services.Configure<LatticeViewOptions>(
                 BackstopViewName,
                 o => o.MaxStagedTransactions = 1);
+
+            // A reserved view name with a two-entry drain batch so an atomic
+            // batch's commit terminal can sit further past its staged prepare
+            // than one drain pass reads.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                NarrowBatchStagingViewName,
+                o => o.BatchSize = 2);
+
+            // A second backstop view (same cap) so the backstop-then-commit split
+            // can be driven against its own source tree.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                BackstopSplitViewName,
+                o => o.MaxStagedTransactions = 1);
+
+            // A backstop view for the abandoned-batch-under-replay-fence regression.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                BackstopFenceViewName,
+                o => o.MaxStagedTransactions = 1);
+
+            // A backstop view that remembers a single abandoned batch, so a second
+            // abandoned batch evicts the first.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                AbandonedEvictionViewName,
+                o =>
+                {
+                    o.MaxStagedTransactions = 1;
+                    o.AbandonedTransactionCapacity = 1;
+                });
+
+            // A view whose rebuild resume-floor capture examines a single WAL entry
+            // per partition, so an in-flight batch's prepare can fall outside it.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                TruncatedRebuildScanViewName,
+                o => o.RebuildPrepareScanLimit = 1);
+
+            // A backstop view for an abandoned batch that commits shard by shard.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                AbandonedMultiShardViewName,
+                o => o.MaxStagedTransactions = 1);
+
+            // A cross-tree participant view whose backstop discards a registered batch.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                CrossTreeBackstopViewName,
+                o => o.MaxStagedTransactions = 1);
+
+            // The same discarded-registration regression on a ShipView producer, which
+            // rebuilds in place into its stable generation-0 view tree.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                CrossTreeBackstopShipViewName,
+                o =>
+                {
+                    o.MaxStagedTransactions = 1;
+                    o.ReplicationMode = LatticeViewReplicationMode.ShipView;
+                });
+
+            // Cross-tree backstop views whose first degrade call at the joint
+            // coordinator is failed by CrossTreeDegradeFaultFilter.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                CrossTreeBackstopFaultViewName,
+                o => o.MaxStagedTransactions = 1);
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                CrossTreeBackstopReactivationViewName,
+                o => o.MaxStagedTransactions = 1);
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                CrossTreeBackstopFaultRebuildViewName,
+                o =>
+                {
+                    o.MaxStagedTransactions = 1;
+                    o.ReplicationMode = LatticeViewReplicationMode.ShipView;
+                });
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                CrossTreeBackstopReactivationRebuildViewName,
+                o =>
+                {
+                    o.MaxStagedTransactions = 1;
+                    o.ReplicationMode = LatticeViewReplicationMode.ShipView;
+                });
+
+            // A one-entry-per-pass view over a two-second-retention source for the
+            // regression in which a backstop rebuild after reactivation resumes past
+            // a cross-tree slice the previous activation registered.
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                CrossTreePriorRegistrationViewName,
+                o =>
+                {
+                    o.BatchSize = 1;
+                    o.ReplicationMode = LatticeViewReplicationMode.ShipView;
+                });
+            siloBuilder.ConfigureLattice(
+                CrossTreePriorRegistrationSourceTreeId,
+                o => o.WalRetention = TimeSpan.FromSeconds(2));
 
             // A reserved view name with a deliberately tiny cross-tree readiness
             // timeout so the joint-flip liveness path (degrade to per-tree-slice
@@ -187,6 +288,91 @@ internal sealed class MaterialisedViewClusterFixture
     /// bounded-buffer staging backstop fires on the second staged transaction.
     /// </summary>
     public const string BackstopViewName = "mv-atomic-backstop-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>BatchSize = 2</c> so a staged atomic
+    /// batch's terminal lies beyond one drain pass of its held-back checkpoint.
+    /// </summary>
+    public const string NarrowBatchStagingViewName = "mv-atomic-narrow-batch-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxStagedTransactions = 1</c>, separate from
+    /// <see cref="BackstopViewName"/>, for the backstop-then-commit split regression.
+    /// </summary>
+    public const string BackstopSplitViewName = "mv-atomic-backstop-split-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxStagedTransactions = 1</c> for the regression in
+    /// which a replay fence resolved a batch the staging backstop had abandoned.
+    /// </summary>
+    public const string BackstopFenceViewName = "mv-atomic-backstop-fence-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxStagedTransactions = 1</c> and a one-entry
+    /// abandoned-batch memory, so a second abandoned batch evicts the first.
+    /// </summary>
+    public const string AbandonedEvictionViewName = "mv-atomic-abandoned-eviction-view";
+
+    /// <summary>
+    /// View name whose rebuild resume-floor capture examines one WAL entry per
+    /// partition, so an in-flight batch's prepare can lie outside the scan.
+    /// </summary>
+    public const string TruncatedRebuildScanViewName = "mv-atomic-truncated-scan-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxStagedTransactions = 1</c> for an abandoned
+    /// batch whose shard terminals commit in separate drain passes.
+    /// </summary>
+    public const string AbandonedMultiShardViewName = "mv-atomic-abandoned-multishard-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxStagedTransactions = 1</c> for the regression in
+    /// which the staging backstop discarded a registered cross-tree batch whose joint flip
+    /// later landed the stale registered slice.
+    /// </summary>
+    public const string CrossTreeBackstopViewName = "mv-xt-backstop-view";
+
+    /// <summary>
+    /// ShipView producer view name pre-configured with <c>MaxStagedTransactions = 1</c>
+    /// for the discarded-registration regression on a view that rebuilds in place.
+    /// </summary>
+    public const string CrossTreeBackstopShipViewName = "mv-xt-backstop-shipview";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxStagedTransactions = 1</c> for the regression in
+    /// which degrading a discarded cross-tree registration fails and the next drain must retry it.
+    /// </summary>
+    public const string CrossTreeBackstopFaultViewName = "mv-xt-backstop-fault-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>MaxStagedTransactions = 1</c> for the regression in
+    /// which the maintainer reactivates between a failed degrade and its retry.
+    /// </summary>
+    public const string CrossTreeBackstopReactivationViewName = "mv-xt-backstop-reactivation-view";
+
+    /// <summary>
+    /// ShipView producer view name pre-configured with <c>MaxStagedTransactions = 1</c> for the
+    /// regression in which an in-place rebuild runs between a failed degrade and any drain that would retry it.
+    /// </summary>
+    public const string CrossTreeBackstopFaultRebuildViewName = "mv-xt-backstop-fault-rebuild-view";
+
+    /// <summary>
+    /// ShipView producer view name pre-configured with <c>MaxStagedTransactions = 1</c> for the
+    /// regression in which the maintainer reactivates and then rebuilds in place after a failed degrade.
+    /// </summary>
+    public const string CrossTreeBackstopReactivationRebuildViewName = "mv-xt-backstop-reactivation-rebuild-view";
+
+    /// <summary>
+    /// View name pre-configured with <c>BatchSize = 1</c> for the regression in which a
+    /// backstop rebuild after reactivation resumes past a cross-tree slice the previous activation registered.
+    /// </summary>
+    public const string CrossTreePriorRegistrationViewName = "mv-xt-prior-registration-view";
+
+    /// <summary>
+    /// Source tree of <see cref="CrossTreePriorRegistrationViewName"/>, configured with a two-second
+    /// <c>WalRetention</c> so a re-read un-terminated batch trips the retention backstop.
+    /// </summary>
+    public const string CrossTreePriorRegistrationSourceTreeId = "mv-xt-prior-reg-a-src";
 
     /// <summary>
     /// View name pre-configured with a tiny <c>CrossTreeReadinessTimeout</c> so

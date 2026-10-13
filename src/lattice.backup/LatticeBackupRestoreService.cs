@@ -350,6 +350,9 @@ internal sealed class LatticeBackupRestoreService(
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            await AliasCutoverShardMaps.ValidateRevertBindingAsync(
+                registry, restore.TargetTreeId, restore.ShadowPhysicalTreeId, restore.PreviousPhysicalTreeId)
+                .ConfigureAwait(false);
             await grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId)
                 .BeginAliasChangeAsync($"{restore.OperationId}:revert").ConfigureAwait(false);
 

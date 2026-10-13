@@ -1,0 +1,12 @@
+MODULE: SourceMatchesDecisionOrdinaryLosesHlc
+TARGET: SourceMatchesDecision
+CLASS: Invariant
+SUMMARY: an ordinary append uses WAL arrival order instead of independent source HLC
+PERTURBS: AppendOrdinary
+
+--- FIND
+    /\ source' = IF Stamp(1) > Stamp(source[1])
+                  THEN Replace(source, 1) ELSE source
+--- REPLACE
+    /\ source' = Replace(source, 1)
+--- END

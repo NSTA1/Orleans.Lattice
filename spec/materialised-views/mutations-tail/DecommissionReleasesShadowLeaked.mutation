@@ -1,0 +1,13 @@
+MODULE: DecommissionReleasesShadowLeaked
+TARGET: DecommissionReleases
+CLASS: Invariant
+SUMMARY: decommission deletes only the generations up to the active one, leaking the partial shadow generation an interrupted rebuild left behind (the pre-fix defect, #4856)
+PERTURBS: Delete
+
+--- FIND
+    /\ gens' = {}
+    /\ shadow' = FALSE
+--- REPLACE
+    /\ gens' = {}
+    /\ shadow' = shadow
+--- END

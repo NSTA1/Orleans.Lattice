@@ -67,7 +67,8 @@ public interface ILatticeBackupRestoreService
     /// the target tree's registry alias back to the physical tree it resolved to
     /// before the cutover (<see cref="LatticeRestoreResult.PreviousPhysicalTreeId"/>),
     /// restoring the pre-restore state. Idempotent. Rejects a result that did not
-    /// come from a shadow-cutover restore.
+    /// come from a shadow-cutover restore, or whose shadow was superseded by an
+    /// unrelated later physical copy.
     /// </summary>
     /// <param name="restore">The result of the shadow-cutover restore to revert. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the revert.</param>
@@ -75,7 +76,7 @@ public interface ILatticeBackupRestoreService
     /// <exception cref="ArgumentException"><paramref name="restore"/> is not a shadow-cutover restore result.</exception>
     /// <exception cref="LatticeRestoreValidationException">The supplied physical tree ids do not belong to the target tree.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope.</exception>
-    /// <exception cref="InvalidOperationException">The target tree cannot change aliases because another alias-changing operation or a delete is in progress.</exception>
+    /// <exception cref="InvalidOperationException">Another alias-changing operation or a delete is in progress, or an unrelated later physical copy superseded the restore.</exception>
     /// <exception cref="Orleans.Lattice.LatticeTreeOwnershipDeniedException">The registered ownership guard refuses the alias swap.</exception>
     Task RevertRestoreAsync(
         LatticeRestoreResult restore,

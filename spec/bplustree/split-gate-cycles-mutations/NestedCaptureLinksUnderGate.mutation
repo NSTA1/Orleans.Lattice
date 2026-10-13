@@ -1,0 +1,15 @@
+# Pairs with NoWaitCycle. The nested link's seeding needs B's gate, which the waiting split holds.
+MODULE: NestedCaptureLinksUnderGate
+TARGET: NoWaitCycle
+CLASS: Invariant
+SUMMARY: a capture nested in the split's checkpoint-hint loop calls the root while B's split gate is held
+PERTURBS: ForegroundNestedLink
+
+--- FIND
+    /\ fg = "nested"
+    /\ ~NestedCaptureDefersLink
+--- REPLACE
+    /\ fg = "nested"
+    \* MUTATION: the nested capture links inline
+    /\ TRUE
+--- END

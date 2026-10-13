@@ -1,0 +1,25 @@
+# Pairs with GateOwnership. Even an inline nested link that lands must hand the gate back before the split returns.
+MODULE: NestedLinkLeaksGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: a split whose nested capture linked inline returns without releasing its split gate
+PERTURBS: ForegroundNestedDone
+
+--- FIND
+    /\ fg = "nested"
+    /\ ~NestedCaptureDefersLink
+--- REPLACE
+    /\ fg = "nested"
+    \* MUTATION: the nested capture links inline
+    /\ TRUE
+--- END
+--- FIND
+    /\ fg = "awaitNest"
+    /\ ch["nest"] \in {"done", "deferred"}
+    /\ fg' = "release"
+--- REPLACE
+    /\ fg = "awaitNest"
+    /\ ch["nest"] \in {"done", "deferred"}
+    \* MUTATION: the split returns holding its gate
+    /\ fg' = "done"
+--- END

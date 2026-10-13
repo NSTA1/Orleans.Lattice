@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations",
+  "refinement": "Refinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 5,
+    "properties": 14,
+    "actions": 22,
+    "mutations": 32,
+    "behaviourRows": 39,
+    "distinctStates": 475438
+  },
+  "variants": {
+    "Alias": { "distinctStates": 200460 }
+  }
+}

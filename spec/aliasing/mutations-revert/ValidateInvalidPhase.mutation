@@ -1,0 +1,11 @@
+MODULE: ValidateInvalidPhase
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: validation persists an invalid phase
+PERTURBS: Validate
+
+--- FIND
+    /\ phase' = IF alias \in {"s", previous} THEN "validated" ELSE "refused"
+--- REPLACE
+    /\ phase' = "unknown"
+--- END

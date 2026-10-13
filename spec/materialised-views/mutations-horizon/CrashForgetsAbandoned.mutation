@@ -1,0 +1,15 @@
+MODULE: CrashForgetsAbandoned
+TARGET: NoPrematureRetirement
+CLASS: Action
+SUMMARY: crash forgets the durable abandoned batch before the all-shard decision
+PERTURBS: Crash
+
+--- FIND
+    /\ crashes' = crashes+1
+    /\ UNCHANGED <<length, installed, value, ckpt, abandoned, historyRetained,
+                   sourceDecisionCommitted, wal, heads, floor, shadow,
+--- REPLACE
+    /\ crashes' = crashes+1 /\ abandoned' = FALSE
+    /\ UNCHANGED <<length, installed, value, ckpt, historyRetained,
+                   sourceDecisionCommitted, wal, heads, floor, shadow,
+--- END

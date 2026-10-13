@@ -1,0 +1,15 @@
+MODULE: MaterialisedWhenCleanCrashForgetsIntent
+TARGET: MaterialisedWhenClean
+CLASS: Invariant
+SUMMARY: a lost flip response erases the outstanding old-group rematerialisation obligation
+PERTURBS: Crash
+
+--- FIND
+    /\ crashes' = crashes + 1
+    /\ UNCHANGED <<stamps, log, outcome, source, checkpoint, members,
+         counts, sums, materialised, dirty, history, seen, seed,
+--- REPLACE
+    /\ crashes' = crashes + 1 /\ dirty' = {}
+    /\ UNCHANGED <<stamps, log, outcome, source, checkpoint, members,
+         counts, sums, materialised, history, seen, seed,
+--- END

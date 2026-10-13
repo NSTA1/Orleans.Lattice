@@ -202,6 +202,19 @@ public sealed class LatticeViewOptions
     public long MaxStagedBytes { get; set; } = DefaultMaxStagedBytes;
 
     /// <summary>
+    /// Test hook: the most abandoned atomic-write transaction ids the maintainer
+    /// remembers before evicting the oldest. Zero or less uses the built-in bound.
+    /// </summary>
+    internal int AbandonedTransactionCapacity { get; set; }
+
+    /// <summary>
+    /// Test hook: the most WAL entries per partition a rebuild's resume-floor
+    /// capture examines below the head for in-flight atomic batches. Zero or less
+    /// uses the built-in bound.
+    /// </summary>
+    internal int RebuildPrepareScanLimit { get; set; }
+
+    /// <summary>
     /// How long a view read handle reuses its cached active-generation tree id
     /// before re-resolving it from the maintainer. After a shadow-swap rebuild a
     /// reader may serve the prior (fully-built, slightly stale) generation for up

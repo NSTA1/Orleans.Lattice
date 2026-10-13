@@ -1,0 +1,11 @@
+MODULE: OneTerminalRetires
+TARGET: NoPrematureRetirement
+CLASS: Action
+SUMMARY: rebuild treats one captured shard commit as a batch-wide decision
+PERTURBS: Swap
+
+--- FIND
+    /\ abandoned' = (abandoned /\ ~AllCommitted(heads))
+--- REPLACE
+    /\ abandoned' = (abandoned /\ ~(\E p \in TerminalPartitions : heads[p] = LastOffset(p)))
+--- END

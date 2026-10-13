@@ -1,0 +1,11 @@
+MODULE: AdmissionTwinNeverSuperseded
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: A conflicting same-clock tombstone never yields to the fair newer source revision
+PERTURBS: SupersedeTwin
+
+--- FIND
+    /\ source' = [source EXCEPT ![2] = Newer[2]]
+--- REPLACE
+    /\ source' = source
+--- END

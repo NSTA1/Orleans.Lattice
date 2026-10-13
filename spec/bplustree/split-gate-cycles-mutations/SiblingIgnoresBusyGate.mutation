@@ -1,0 +1,14 @@
+# Pairs with GateOwnership. The setter's write must not overlap a split of C.
+MODULE: SiblingIgnoresBusyGate
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: SetPrevSiblingAsync writes C without waiting for C's split gate
+PERTURBS: SiblingTakeGate
+
+--- FIND
+    /\ sib = "admitted"
+    /\ gate["C"] = "free"
+--- REPLACE
+    /\ sib = "admitted"
+    \* MUTATION: the gate is not awaited
+--- END

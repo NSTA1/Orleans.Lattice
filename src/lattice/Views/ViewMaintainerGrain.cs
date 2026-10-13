@@ -48,7 +48,7 @@ internal sealed partial class ViewMaintainerGrain(
     HistoryRowCodec historyRowCodec,
     [PersistentState("view-checkpoint", LatticeOptions.StorageProviderName)]
     IPersistentState<ViewCheckpointState> state)
-    : IGrainBase, IRemindable, IViewMaintainerGrain
+    : IGrainBase, IRemindable, IViewMaintainerGrain, IViewJointRepairCapable
 {
     private const string KeepaliveReminderName = "view-maintainer-keepalive";
 
@@ -140,6 +140,145 @@ internal sealed partial class ViewMaintainerGrain(
     {
         await EnsureGenerationNamingPinnedAsync();
         PublishActivationReadPositions();
+        await ReconcileCatalogRegistrationAsync();
+    }
+
+    /// <summary>
+    /// Corrects this silo's catalog entry for a runtime view against the durable
+    /// runtime-view registry, which is the cluster-wide authority for every view
+    /// not declared at startup.
+    /// </summary>
+    /// <remarks>
+    /// The catalog is a per-silo cache with no cross-silo invalidation:
+    /// <see cref="ILatticeViewFactory.DeleteAsync"/> removes the entry only on the
+    /// silo that served the delete, so a silo that created or re-hydrated the view
+    /// earlier keeps the deleted definition. Without this check a maintainer
+    /// activating there would resurrect the deleted view over its old source, or
+    /// project the old source into a view re-created under the same name over a
+    /// different one. Every delete deactivates the maintainer, so checking once per
+    /// activation covers every activation that follows a delete. Only entries
+    /// created through a runtime projection provider are checked; an entry
+    /// registered directly through <see cref="IViewCatalog.Register"/> is
+    /// catalog-only by design. A transient registry fault leaves the entry
+    /// untouched, as it was before this check. An entry the factory registered
+    /// ahead of its background registry write is left untouched while that write
+    /// is in flight: a missing or different record may simply predate it. If the
+    /// write failed, a missing record is still not evidence of a delete (the entry
+    /// is catalog-only until a restart, as the factory logs), but a different
+    /// record can only be a later re-create or the definition the failed write
+    /// never replaced, so it supersedes the entry; the mark therefore cannot
+    /// shield a stale definition from a re-create indefinitely. Replacing or
+    /// removing an entry discards its mark. A record matches the entry only when it is
+    /// the full durable binding the entry was built from (see <see cref="IsBoundTo"/>),
+    /// including the provider payload, which the reconstructed projection cannot expose.
+    /// </remarks>
+    private async Task ReconcileCatalogRegistrationAsync()
+    {
+        var cached = catalog.TryGet(ViewName);
+        if (cached is null || IsStartupDeclared())
+        {
+            return;
+        }
+
+        var durability = catalog.GetDurability(cached);
+        if (durability == ViewCatalogDurability.PersistInFlight)
+        {
+            return;
+        }
+
+        RuntimeViewRegistration? record;
+        try
+        {
+            record = await FindDurableRegistrationAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "View '{ViewName}' could not verify its catalog entry against the durable runtime registry.", ViewName);
+            return;
+        }
+
+        if (record is null)
+        {
+            // Only a runtime-provider entry is backed by the durable registry. An
+            // entry registered directly through IViewCatalog.Register (no provider
+            // key) is catalog-only by design, so its missing record proves nothing.
+            if (durability == ViewCatalogDurability.Settled
+                && cached.ProjectionProviderKey is not null
+                && catalog.TryReplace(cached, replacement: null))
+            {
+                logger.LogInformation("View '{ViewName}' has no durable runtime registration; discarded this silo's stale catalog entry.", ViewName);
+            }
+
+            return;
+        }
+
+        if (IsBoundTo(cached, record))
+        {
+            return;
+        }
+
+        var resolved = RuntimeViewRehydrator.Resolve(
+            record,
+            context.ActivationServices,
+            context.ActivationServices.GetRequiredService<RuntimeViewProjectionProviderCatalog>(),
+            logger);
+        if (catalog.TryReplace(cached, resolved))
+        {
+            logger.LogInformation("View '{ViewName}' replaced this silo's stale catalog entry with its durable runtime registration.", ViewName);
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="cached"/> already projects <paramref name="record"/>.
+    /// A re-hydrated entry is compared against the full durable record it was built
+    /// from, so a delete and re-create over the same source, provider and version
+    /// that changes only the provider payload or projection type is still a
+    /// different binding. The provider contract pins a projection version, not a
+    /// payload, so comparing the reconstructed shape alone would keep the deleted
+    /// definition's projection. Only an entry registered directly through
+    /// <see cref="IViewCatalog.Register"/> carries no durable record; it falls back
+    /// to the shape it can expose.
+    /// </summary>
+    private static bool IsBoundTo(ViewRegistration cached, RuntimeViewRegistration record) =>
+        cached.DurableRecord is { } bound
+            ? bound.Equals(record)
+            : string.Equals(record.SourceTreeId, cached.SourceTreeId, StringComparison.Ordinal)
+                && string.Equals(record.ProjectionVersion, cached.ProjectionVersion, StringComparison.Ordinal)
+                && string.Equals(record.ProjectionProviderKey, cached.ProjectionProviderKey, StringComparison.Ordinal)
+                && record.IsAggregation == cached.IsAggregation
+                && record.Accumulative == cached.Accumulative;
+
+    private bool IsStartupDeclared()
+    {
+        var startup = context.ActivationServices.GetService<IReadOnlyList<StartupViewRegistration>>();
+        if (startup is null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < startup.Count; i++)
+        {
+            if (string.Equals(startup[i].ViewName, ViewName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<RuntimeViewRegistration?> FindDurableRegistrationAsync()
+    {
+        var records = await grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey).ListAsync();
+        for (var i = 0; i < records.Count; i++)
+        {
+            if (string.Equals(records[i].ViewName, ViewName, StringComparison.Ordinal))
+            {
+                return records[i];
+            }
+        }
+
+        return null;
     }
 
     private string ViewName => context.GrainId.Key.ToString()!;
@@ -227,12 +366,20 @@ internal sealed partial class ViewMaintainerGrain(
 
         _shipViewSuppressed = false;
 
+        if (await PauseJointProtocolForUpgradeAsync(cancellationToken))
+        {
+            return;
+        }
+
+        await AcknowledgeRetiredJointRepairsAsync();
+
         // A projection-version change means the view's logic is no longer the one
         // that built the persisted state; rebuild from current source state. An
         // accumulative (history) view is the exception: its tree is an append-only
         // log, so a version change adopts the new version forward and keeps the
         // existing rows rather than wiping and rebuilding (only an explicit
         // operator RebuildAsync clears it).
+        GuardJointProjectionVersion(registration);
         if (!string.IsNullOrEmpty(state.State.ProjectionVersion)
             && !string.Equals(state.State.ProjectionVersion, registration.ProjectionVersion, StringComparison.Ordinal))
         {
@@ -356,6 +503,20 @@ internal sealed partial class ViewMaintainerGrain(
 
         _shipViewSuppressed = false;
 
+        if (await PauseJointProtocolForUpgradeAsync(cancellationToken))
+        {
+            return 0;
+        }
+
+        await AcknowledgeRetiredJointRepairsAsync();
+        GuardJointProjectionVersion(registration);
+        if (await ResumeCapturedJointRepairsAsync(cancellationToken))
+        {
+            return 0;
+        }
+
+        GuardJointStagingBudget(topologyOptions);
+
         // Heal a source physical-identity swap (restore / revert / resize / undo / remediation / set-alias) before
         // any drain work: if the alias now resolves to a different physical tree, the
         // view resets, rebuilds from the new source, and rebinds its WAL cursor. A
@@ -375,7 +536,7 @@ internal sealed partial class ViewMaintainerGrain(
         // maintainer reactivated on a keepalive tick - unpins the source WAL and
         // re-onboards via rebuild so it can no longer pin WAL retention. Disabled
         // (zero overhead) when the budget is 0 (the default).
-        if (await TryEvictForLagBudgetAsync(registration, cancellationToken))
+        if (!HasJointOwnership && await TryEvictForLagBudgetAsync(registration, cancellationToken))
         {
             return 0;
         }
@@ -398,12 +559,16 @@ internal sealed partial class ViewMaintainerGrain(
         var walTreeId = string.IsNullOrEmpty(state.State.BoundPhysicalTreeId)
             ? await ResolveSourcePhysicalAsync(sourceTreeId)
             : state.State.BoundPhysicalTreeId;
-        batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
+        // Saturation is sampled per physical WAL id, so back-pressure is read under
+        // the bound physical id too: after a resize / undo / restore / revert the
+        // logical id names no sampled log and would read Healthy forever.
+        batchSize = ApplyBackpressureBatchScaling(walTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
         // Hold every entry of this log the view has not durably consumed against
         // the WAL GC on every silo, before reading it (issue #4584).
         await EnsureReadRegisteredAsync(walTreeId);
+        RestoreRepairedTransactions(walTreeId);
 
         // Tail the source WAL through the shared subscriber: the cursored read,
         // fall-off-log detection, dynamic shard onboarding and back-pressure all
@@ -414,16 +579,19 @@ internal sealed partial class ViewMaintainerGrain(
         // (highest applied plus the staging blocked-floor) after the flush.
         var collected = new List<ViewWrite>();
         var completedTransactions = new List<Guid>();
+        SeedStillStagedCompletedTransactions(completedTransactions);
         // Classify while folding: the drain loop already visits every projected
         // write, so record the range-kind classifications here instead of
         // re-walking the whole buffer with separate .Exists passes after the drain
         // (one for RangeReconcile below, one for RangeDelete in ApplySurvivorsAsync).
         var hasRangeReconcile = false;
         var hasRangeDelete = false;
+        var ordinarySpans = new List<OrdinaryWriteSpan>();
         var handler = new ViewDrainHandler(
             this,
             mutation =>
             {
+                var spanStart = collected.Count;
                 foreach (var write in registration.Projection!.Project(mutation))
                 {
                     collected.Add(write);
@@ -436,10 +604,13 @@ internal sealed partial class ViewMaintainerGrain(
                         hasRangeDelete = true;
                     }
                 }
+
+                RecordOrdinaryWriteSpan(ordinarySpans, mutation, spanStart, collected.Count);
             },
             completedTransactions);
 
-        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, state.State.AppliedOffsets)
+        var readFrom = DrainReadCheckpoints(walTreeId, state.State.AppliedOffsets);
+        var drainContext = new WalSubscriptionContext(walTreeId, ConsumerId, partitions, readFrom)
         {
             HighestApplied = state.State.HighestAppliedTimestamp,
             BatchSize = batchSize,
@@ -465,8 +636,13 @@ internal sealed partial class ViewMaintainerGrain(
         // bound or an un-terminated batch can no longer be held under the WAL
         // retention ceiling, abandon incremental staging and rebuild from
         // current committed source state (which excludes the uncommitted
-        // prepares). The rebuild owns the checkpoint and cursor for this pass.
-        if (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId)))
+        // prepares). Likewise when a batch the backstop abandoned has since
+        // committed: only a rebuild can read it. The rebuild owns the checkpoint
+        // and cursor for this pass.
+        if (!HasCommittedJointOwnership && (StagingBackstopTripped(options, await GetSourceWalRetentionAsync(walTreeId))
+            || AbandonedBatchCommitted()
+            || BackstopDegradePending()
+            || await OrphanedCommittedBatchAsync(walTreeId, partitions, readFrom, advancedOffsets, cancellationToken)))
         {
             await RebuildAsync(cancellationToken);
             return 0;
@@ -496,6 +672,15 @@ internal sealed partial class ViewMaintainerGrain(
             }
         }
 
+        // An ordinary write the source already superseded by last-writer-wins (an
+        // older write logged after a newer one, issue #4885) must not reach the view.
+        // An accumulative view records every revision, so it keeps them all.
+        if (!registration.Accumulative)
+        {
+            await DropWritesSupersededAtSourceAsync(
+                collected, ordinarySpans, static w => w.SourceKey, walTreeId, partitions, cancellationToken);
+        }
+
         // On an accumulative view the retention mode (read once from the source
         // tree's live registry override) shapes each revision row before it is
         // applied: it stamps the age-bound expiry and strips LWW value bytes to
@@ -506,14 +691,45 @@ internal sealed partial class ViewMaintainerGrain(
             await ShapeHistoryWritesAsync(collected, sourceTreeId);
         }
 
+        // Confirm completed batches against the source before the survivor guard
+        // and the flush both read the completed list: a deferred batch must neither
+        // flush nor suppress an ordinary survivor this pass.
+        if (!registration.Accumulative)
+        {
+            await ConfirmCompletedBatchesAgainstSourceAsync(
+                completedTransactions, walTreeId, partitions, ConsumedThrough(readFrom, advancedOffsets), cancellationToken);
+            GateBatchesOnUnappliedReplacements(completedTransactions, ConsumedThrough(readFrom, advancedOffsets));
+        }
+
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
+        SetJointReadHorizon(readFrom, advancedOffsets, completedTransactions);
+
+        // An accumulative view records every revision, so it never drops one.
+        var batchHlcByViewKey = registration.Accumulative
+            ? null
+            : CompletedBatchHlcByViewKey(registration, completedTransactions);
+        // A peer can complete a previously registered joint slice during this
+        // rendezvous. Publish ordinary successors only after that decision so
+        // the stale registration cannot roll back an already-public survivor.
+        var jointApplied = await FlushCompletedFilterBatchesAsync(
+            viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: true);
+        if (DeferPublicationForJointRepair(walTreeId, readFrom, advancedOffsets))
+        {
+            return jointApplied;
+        }
         int appliedCount;
         if (hasRangeDelete)
         {
             // Range path: the batch cannot be coalesced by view key, so collision
             // detection runs on its own over the whole batch.
             ReportCollisions(ViewKeyCollisionDetector.Detect(collected));
-            appliedCount = await ApplyInSourceOrderAsync(viewTree, collected, cancellationToken);
+            var ordered = DropSurvivorsOverwrittenByCompletedBatches(collected, batchHlcByViewKey);
+            appliedCount = await ApplyInSourceOrderAsync(
+                viewTree,
+                ordered as List<ViewWrite> ?? [.. ordered],
+                registration.Accumulative ? null : walTreeId,
+                batchHlcByViewKey,
+                cancellationToken);
         }
         else
         {
@@ -524,7 +740,10 @@ internal sealed partial class ViewMaintainerGrain(
             // applied, exactly as when the two ran back to back.
             var fold = ViewBatchFold.Fold(collected);
             ReportCollisions(fold.Collisions);
-            appliedCount = await ApplySurvivorsAsync(viewTree, fold.Survivors, cancellationToken);
+            var survivors = registration.Accumulative
+                ? fold.Survivors
+                : DropSurvivorsOverwrittenByCompletedBatches(fold.Survivors, batchHlcByViewKey);
+            appliedCount = await ApplySurvivorsAsync(viewTree, survivors, cancellationToken);
         }
 
         // Flush every atomic batch that completed this pass through the view
@@ -532,10 +751,14 @@ internal sealed partial class ViewMaintainerGrain(
         // batch wins a same-pass non-atomic write to the same key. Each batch is
         // projected through the SAME filter / re-key projection as ordinary
         // writes - staging only defers WHEN they are applied, not HOW.
-        appliedCount += await FlushCompletedFilterBatchesAsync(viewTree, registration, completedTransactions, cancellationToken);
+        appliedCount += jointApplied + await FlushCompletedFilterBatchesAsync(
+            viewTree, registration, completedTransactions, cancellationToken, crossTreeOnly: false);
 
         // Hold the persisted resume offset back below the lowest still-staged
         // entry so a restart re-reads and re-stages an incomplete batch.
+        RecordDrainReadOffsets(walTreeId, readFrom, advancedOffsets);
+        var replayFenceChanged = UpdateReplayFence(walTreeId, readFrom, advancedOffsets);
+        CoverReadPosition(advancedOffsets, readFrom);
         ApplyCheckpointHoldBack(advancedOffsets, partitions);
 
         var offsetsAdvanced = false;
@@ -551,21 +774,24 @@ internal sealed partial class ViewMaintainerGrain(
         state.State.HighestAppliedTimestamp = highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
 
-        if (offsetsAdvanced || appliedCount > 0)
+        var reconcileScheduled = PersistPendingCrossTreeReconcile();
+        var repairRetired = RetireJointRepairHolds(advancedOffsets);
+        if (offsetsAdvanced || appliedCount > 0 || replayFenceChanged || reconcileScheduled || repairRetired)
         {
             LowerReadPositions(walTreeId, state.State.AppliedOffsets);
-            await state.WriteStateAsync();
+            await PersistJointStateAsync();
             PublishReadPositions(walTreeId, state.State.AppliedOffsets);
+            await AcknowledgeRetiredJointRepairsAsync();
         }
 
         var blockedAtHlc = ComputeBlockedAtHlc();
         if (highest > HybridLogicalClock.Zero || blockedAtHlc is not null)
         {
-            await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken)
+            await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken)
                 ;
         }
 
-        ApplyLag.Record(await ComputeLagAsync(sourceTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
+        ApplyLag.Record(await ComputeLagAsync(walTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
         BacklogDepth.Record(backlogRead, ViewTag, ViewTenantTag);
         if (appliedCount > 0)
         {
@@ -594,7 +820,9 @@ internal sealed partial class ViewMaintainerGrain(
         }
 
         await ThrowIfShipViewConsumerAsync(registration, cancellationToken);
-        var walTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
+        var walTreeId = HasJointOwnership
+            ? state.State.BoundPhysicalTreeId
+            : await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
         return await ComputeLagAsync(walTreeId, partitions, cancellationToken);
     }
@@ -740,7 +968,13 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     public async Task RebuildAsync(CancellationToken cancellationToken = default)
     {
+        await GuardJointMaintenanceAdmissionAsync(cancellationToken);
         using var viewWriteScope = ViewWriteContext.BeginScope();
+        await ReleaseUncommittedJointOwnershipAsync();
+        if (HasJointOwnership)
+        {
+            throw new InvalidOperationException($"View '{ViewName}' cannot rebuild before its submitted joint repair checkpoint retires.");
+        }
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {
@@ -785,7 +1019,7 @@ internal sealed partial class ViewMaintainerGrain(
         // observe a half-built view.
         var built = await BuildShadowAsync(registration, cancellationToken);
         await ReportMaintenanceProgressAsync(Operations.LatticeMaintenanceProgress.Swapping);
-        await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
+        await SwapToShadowAsync(registration, built, cancellationToken);
     }
 
     /// <summary>
@@ -855,6 +1089,11 @@ internal sealed partial class ViewMaintainerGrain(
         ViewRegistration registration,
         CancellationToken cancellationToken)
     {
+        if (HasJointOwnership)
+        {
+            throw new InvalidOperationException($"View '{ViewName}' cannot withdraw its WAL ownership while a submitted joint round is outstanding.");
+        }
+
         if (!_shipViewSuppressed)
         {
             var currentPhysicalTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
@@ -1073,16 +1312,20 @@ internal sealed partial class ViewMaintainerGrain(
     /// the first bind it records the identity with no rebuild (unless the source is
     /// already aliased, in which case it reprojects from the physical tree). When the
     /// bound identity no longer matches, the source was swapped underneath the alias
-    /// (restore / revert / resize / undo / remediation / set-alias): the old WAL cursor pin is released, the durable
-    /// per-partition offsets are reset (they are absolute against the retired WAL and
-    /// must never resume against a different physical log), the view is rebuilt from
-    /// the new physical source, and the new identity is recorded. Returns whether a
+    /// (restore / revert / resize / undo / remediation / set-alias): the view is rebuilt
+    /// from a captured physical source, publishing its identity, generation and
+    /// source-specific offsets together before releasing the old WAL pin. Returns whether a
     /// heal ran this drain so the caller can short-circuit the rest of the pass.
     /// </summary>
     private async Task<bool> EnsureBoundToCurrentSourceIdentityAsync(
         ViewRegistration registration,
         CancellationToken cancellationToken)
     {
+        if (HasJointOwnership)
+        {
+            return false;
+        }
+
         var logical = registration.SourceTreeId;
 
         // Steady-state gate: skip the registry resolve entirely once the binding
@@ -1128,10 +1371,7 @@ internal sealed partial class ViewMaintainerGrain(
             // an unbuilt view behind a satisfied equality check.
             if (!string.Equals(physical, logical, StringComparison.Ordinal))
             {
-                state.State.AppliedOffsets.Clear();
                 await RebuildAsync(cancellationToken);
-                state.State.BoundPhysicalTreeId = physical;
-                await state.WriteStateAsync();
                 MarkConverged();
                 return true;
             }
@@ -1151,15 +1391,11 @@ internal sealed partial class ViewMaintainerGrain(
             return false;
         }
 
-        // The source's physical identity was swapped underneath the alias. Release
-        // the pin on the retired WAL so the garbage collector is no longer blocked by
-        // this view, reset the offsets (they are meaningless against a new log),
-        // rebuild from the new physical source, and only then rebind.
+        // Retain the old binding and pin until the captured new generation and
+        // its source-specific offsets are durably published.
         logger.LogWarning(
-            "View '{ViewName}' source '{Source}' physical identity changed from '{OldPhysical}' to '{NewPhysical}'; unpinning the retired WAL and rebuilding from the new source.",
+            "View '{ViewName}' source '{Source}' physical identity changed from '{OldPhysical}' to '{NewPhysical}'; rebuilding before retiring the old WAL pin.",
             ViewName, logical, bound, physical);
-
-        await cursorRegistry.UnregisterAsync(bound, ConsumerId, cancellationToken);
 
         // Rebuild from the new physical source BEFORE persisting the advanced
         // binding. The rebuild is the step that can fail (a transient source-scan
@@ -1169,15 +1405,9 @@ internal sealed partial class ViewMaintainerGrain(
         // check above would then short-circuit every subsequent drain so the view
         // would never re-heal. Rebuilding first and rebinding only on success leaves
         // a failed rebuild's old binding intact so the next drain retries the heal.
-        state.State.AppliedOffsets.Clear();
         await RebuildAsync(cancellationToken);
 
-        state.State.BoundPhysicalTreeId = physical;
-        await state.WriteStateAsync();
-
-        // The rebuild registered this view with the new log before reading it, so
-        // the retired log can be released now without a window holding neither.
-        await WithdrawReadRegistrationAsync(bound);
+        // The rebuild owns both tuple publication and old-log retirement.
         MarkConverged();
         return true;
     }
@@ -1258,7 +1488,12 @@ internal sealed partial class ViewMaintainerGrain(
         return survivors.Count;
     }
 
-    private async Task<int> ApplyInSourceOrderAsync(ILattice viewTree, List<ViewWrite> collected, CancellationToken cancellationToken)
+    private async Task<int> ApplyInSourceOrderAsync(
+        ILattice viewTree,
+        List<ViewWrite> collected,
+        string? rangeConfirmationSource,
+        Dictionary<string, HybridLogicalClock>? batchHlcByViewKey,
+        CancellationToken cancellationToken)
     {
         // Range path: a range delete cannot be globally coalesced by view key
         // against point writes, and its outcome interleaves with point writes by
@@ -1271,7 +1506,20 @@ internal sealed partial class ViewMaintainerGrain(
         collected.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
         foreach (var write in collected)
         {
-            await ApplyAsync(viewTree, write, cancellationToken);
+            // A range delete on a non-accumulative view spares every key the
+            // source holds at a newer version than the range (issue #4885), and
+            // every key a batch completing this pass writes at a newer version
+            // (issue #4869).
+            if (write.Kind == ViewWriteKind.RangeDelete && rangeConfirmationSource is not null)
+            {
+                await ApplyRangeDeleteAgainstSourceAsync(
+                    viewTree, write, rangeConfirmationSource, batchHlcByViewKey, cancellationToken);
+            }
+            else
+            {
+                await ApplyAsync(viewTree, write, cancellationToken);
+            }
+
             appliedOrdered++;
         }
 
@@ -1372,24 +1620,26 @@ internal sealed partial class ViewMaintainerGrain(
         UpdateBackpressureDeferral();
     }
 
-    // Reads the source tree's current WAL saturation regime, honouring the
+    // Reads the source's current WAL saturation regime, honouring the
     // ObeySourceBackpressure switch and a missing signal (returns Healthy in both
-    // cases, i.e. full-rate draining).
-    private WalSaturationState GetSourceSaturationState(string sourceTreeId)
+    // cases, i.e. full-rate draining). The sampler keys its signal by the PHYSICAL
+    // WAL tree id, so callers pass the physical id they drain, never the logical
+    // alias.
+    private WalSaturationState GetSourceSaturationState(string walTreeId)
     {
         if (saturationSignal is null || !Options.ObeySourceBackpressure)
         {
             return WalSaturationState.Healthy;
         }
 
-        return saturationSignal.GetCurrentState(sourceTreeId);
+        return saturationSignal.GetCurrentState(walTreeId);
     }
 
     // Scales the configured per-pass batch down under source back-pressure and, when
     // the source is not healthy, records the self-throttle on the metrics surface.
-    private int ApplyBackpressureBatchScaling(string sourceTreeId, int batchSize, LatticeViewOptions options)
+    private int ApplyBackpressureBatchScaling(string walTreeId, int batchSize, LatticeViewOptions options)
     {
-        var saturation = GetSourceSaturationState(sourceTreeId);
+        var saturation = GetSourceSaturationState(walTreeId);
         if (saturation == WalSaturationState.Healthy)
         {
             return batchSize;
@@ -1408,21 +1658,32 @@ internal sealed partial class ViewMaintainerGrain(
     // source's current saturation regime so the next ticks back off while it is hot.
     private void UpdateBackpressureDeferral()
     {
-        var registration = catalog.TryGet(ViewName);
-        if (registration is null || _shipViewSuppressed)
-        {
-            _backpressureResumeUtc = DateTime.MinValue;
-            return;
-        }
-
-        var options = Options;
-        var pauseMs = ViewBackpressure.PauseMs(
-            GetSourceSaturationState(registration.SourceTreeId),
-            options.ThrottledPauseMs,
-            options.SaturatedPauseMs);
+        var pauseMs = ComputeBackpressurePauseMs();
 
         _backpressureResumeUtc = pauseMs > 0
             ? DateTime.UtcNow.AddMilliseconds(pauseMs)
             : DateTime.MinValue;
+    }
+
+    // The tick-skip window for the source's current saturation regime, read under
+    // the physical WAL id the view is bound to (the id the sampler keys by). An
+    // unbound maintainer has drained nothing yet and falls back to the logical id,
+    // which is the physical id of a never-swapped source.
+    internal int ComputeBackpressurePauseMs()
+    {
+        var registration = catalog.TryGet(ViewName);
+        if (registration is null || _shipViewSuppressed)
+        {
+            return 0;
+        }
+
+        var options = Options;
+        var walTreeId = string.IsNullOrEmpty(state.State.BoundPhysicalTreeId)
+            ? registration.SourceTreeId
+            : state.State.BoundPhysicalTreeId;
+        return ViewBackpressure.PauseMs(
+            GetSourceSaturationState(walTreeId),
+            options.ThrottledPauseMs,
+            options.SaturatedPauseMs);
     }
 }

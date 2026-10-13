@@ -31,7 +31,8 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
 {
     /// <summary>
     /// The published read positions: an immutable snapshot replaced whole, read by
-    /// the interleaved <see cref="GetDurableReadPositionsAsync"/>. A
+    /// the interleaved <see cref="GetDurableReadPositionsAsync"/>. A rebuild holds
+    /// both its candidate log and the old bound log until durable publication. A
     /// <see langword="null"/> <see cref="ViewReadPositions.Positions"/> means the
     /// maintainer reads no log.
     /// </summary>
@@ -40,7 +41,14 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
     /// <summary>The source logs this activation has registered with.</summary>
     private readonly HashSet<string> _registeredReadLogs = new(StringComparer.Ordinal);
 
-    private sealed record ViewReadPositions(string? WalTreeId, long[]? Positions);
+    // The durable identity survives primary/retained role changes and failed
+    // writes that have already mutated the checkpoint's in-memory binding.
+    private sealed record ViewReadPositions(
+        string? WalTreeId,
+        long[]? Positions,
+        string? RetainedWalTreeId = null,
+        long[]? RetainedPositions = null,
+        string? DurableBoundWalTreeId = null);
 
     /// <inheritdoc />
     public Task<long[]?> GetDurableReadPositionsAsync(string walTreeId)
@@ -52,13 +60,15 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
             return Task.FromResult<long[]?>([]);
         }
 
-        if (snapshot.Positions is null
-            || (snapshot.WalTreeId is { } bound && !string.Equals(bound, walTreeId, StringComparison.Ordinal)))
+        var positions = snapshot.WalTreeId is { } bound && !string.Equals(bound, walTreeId, StringComparison.Ordinal)
+            ? string.Equals(snapshot.RetainedWalTreeId, walTreeId, StringComparison.Ordinal) ? snapshot.RetainedPositions : null
+            : snapshot.Positions;
+        if (positions is null)
         {
             return Task.FromResult<long[]?>(null);
         }
 
-        return Task.FromResult<long[]?>((long[])snapshot.Positions.Clone());
+        return Task.FromResult<long[]?>((long[])positions.Clone());
     }
 
     /// <summary>
@@ -71,7 +81,7 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
         var bound = state.State.BoundPhysicalTreeId;
         _readPositions = string.IsNullOrEmpty(bound)
             ? new ViewReadPositions(null, null)
-            : new ViewReadPositions(bound, ToPositions(state.State.AppliedOffsets));
+            : new ViewReadPositions(bound, ToPositions(state.State.AppliedOffsets), DurableBoundWalTreeId: bound);
     }
 
     /// <summary>
@@ -80,6 +90,30 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
     /// </summary>
     private async Task EnsureReadRegisteredAsync(string walTreeId)
     {
+        // Registration can become visible before its response. Publish the hold
+        // first; an old physical log's offsets cannot bound the candidate log.
+        var previous = _readPositions;
+        var persistedLog = previous?.DurableBoundWalTreeId ?? state.State.BoundPhysicalTreeId;
+        var positions = string.Equals(persistedLog, walTreeId, StringComparison.Ordinal)
+            ? (string.Equals(previous?.RetainedWalTreeId, walTreeId, StringComparison.Ordinal)
+                ? previous!.RetainedPositions
+                : string.Equals(previous?.WalTreeId, walTreeId, StringComparison.Ordinal) ? previous!.Positions : null)
+                ?? ToPositions(state.State.AppliedOffsets)
+            : [];
+        string? retainedLog = null;
+        long[]? retainedPositions = null;
+        if (persistedLog is { Length: > 0 }
+            && !string.Equals(persistedLog, walTreeId, StringComparison.Ordinal))
+        {
+            retainedLog = persistedLog;
+            retainedPositions = string.Equals(previous?.WalTreeId, persistedLog, StringComparison.Ordinal)
+                ? previous!.Positions
+                : string.Equals(previous?.RetainedWalTreeId, persistedLog, StringComparison.Ordinal)
+                    ? previous!.RetainedPositions
+                    : ToPositions(state.State.AppliedOffsets);
+        }
+
+        _readPositions = new ViewReadPositions(walTreeId, positions, retainedLog, retainedPositions, persistedLog);
         if (_registeredReadLogs.Contains(walTreeId))
         {
             return;
@@ -87,19 +121,28 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
 
         await grainFactory.GetGrain<IWalOffsetConsumerRegistryGrain>(walTreeId).RegisterAsync(context.GrainId);
         _registeredReadLogs.Add(walTreeId);
-
-        // Answer for this log from the resume point as it stands, which is never
-        // ahead of what is persisted at the moment a read is about to start.
-        _readPositions = new ViewReadPositions(walTreeId, ToPositions(state.State.AppliedOffsets));
     }
 
     /// <summary>
     /// Publishes <paramref name="offsets"/> as this view's read positions in
     /// <paramref name="walTreeId"/>. Called after the write that persisted them,
-    /// or with a rebuild's captured resume floors.
+    /// or with a rebuild's captured resume floors. Only a successful tuple
+    /// publication retires the previous bound log.
     /// </summary>
-    private void PublishReadPositions(string walTreeId, IReadOnlyDictionary<int, long> offsets)
-        => _readPositions = new ViewReadPositions(walTreeId, ToPositions(offsets));
+    private void PublishReadPositions(string walTreeId, IReadOnlyDictionary<int, long> offsets, bool retirePrevious = false)
+    {
+        var previous = _readPositions;
+        if (!retirePrevious && string.Equals(previous?.RetainedWalTreeId, walTreeId, StringComparison.Ordinal))
+        {
+            _readPositions = previous! with { RetainedPositions = ToPositions(offsets) };
+            return;
+        }
+
+        _readPositions = new ViewReadPositions(walTreeId, ToPositions(offsets),
+            retirePrevious ? null : previous?.RetainedWalTreeId,
+            retirePrevious ? null : previous?.RetainedPositions,
+            retirePrevious ? walTreeId : previous?.DurableBoundWalTreeId ?? state.State.BoundPhysicalTreeId);
+    }
 
     /// <summary>
     /// Lowers the published positions for <paramref name="walTreeId"/> to
@@ -110,8 +153,11 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
     {
         var current = _readPositions;
         var candidate = ToPositions(offsets);
-        if (current?.Positions is not { } published
-            || (current.WalTreeId is { } bound && !string.Equals(bound, walTreeId, StringComparison.Ordinal)))
+        var retained = string.Equals(current?.RetainedWalTreeId, walTreeId, StringComparison.Ordinal);
+        var published = retained ? current?.RetainedPositions
+            : current?.WalTreeId is { } bound && !string.Equals(bound, walTreeId, StringComparison.Ordinal)
+                ? null : current?.Positions;
+        if (published is null)
         {
             return;
         }
@@ -125,7 +171,9 @@ internal sealed partial class ViewMaintainerGrain : IWalOffsetConsumer
                 p < candidate.Length ? candidate[p] : 0);
         }
 
-        _readPositions = new ViewReadPositions(walTreeId, lowered);
+        _readPositions = retained
+            ? current! with { RetainedPositions = lowered }
+            : current! with { Positions = lowered };
     }
 
     /// <summary>

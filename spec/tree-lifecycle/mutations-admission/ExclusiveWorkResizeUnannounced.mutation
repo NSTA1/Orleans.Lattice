@@ -1,0 +1,11 @@
+MODULE: ExclusiveWorkResizeUnannounced
+TARGET: ExclusiveWork
+CLASS: Invariant
+SUMMARY: resize skips publishing intent and probing the migration record
+PERTURBS: ResizeAnnounce
+
+--- FIND
+    /\ resize' = "announced" /\ resizeUsed' = TRUE
+--- REPLACE
+    /\ resize' = "active" /\ resizeUsed' = TRUE
+--- END

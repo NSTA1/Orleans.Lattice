@@ -1,0 +1,11 @@
+MODULE: ResolvedCheckpointLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: Resolved physical progress is never checkpointed
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ offsets' = [offsets EXCEPT ![tail] = read[tail]]
+--- REPLACE
+    /\ offsets' = offsets
+--- END

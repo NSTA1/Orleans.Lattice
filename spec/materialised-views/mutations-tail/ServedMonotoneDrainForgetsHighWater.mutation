@@ -1,0 +1,11 @@
+MODULE: ServedMonotoneDrainForgetsHighWater
+TARGET: ServedMonotone
+CLASS: Action
+SUMMARY: the drain never advances the high-water mark, so a crash replay of an older entry regresses a key the served view already reflected
+PERTURBS: Drain
+
+--- FIND
+    /\ hw' = IF applied + 1 > hw THEN applied + 1 ELSE hw
+--- REPLACE
+    /\ hw' = hw
+--- END

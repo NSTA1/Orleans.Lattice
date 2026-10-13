@@ -1,0 +1,14 @@
+MODULE: FallbackIgnoresBreaker
+TARGET: BreakerBlocks
+CLASS: Action
+SUMMARY: the bootstrap fallback ships while the circuit breaker is open and cooling
+PERTURBS: Fallback
+
+--- FIND
+    /\ ~Blocking
+    /\ consumed < Budget
+    /\ WalTrimmed \/ Selection = {}
+--- REPLACE
+    /\ consumed < Budget
+    /\ WalTrimmed \/ Selection = {}
+--- END

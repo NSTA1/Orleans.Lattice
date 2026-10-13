@@ -1,0 +1,15 @@
+# Pairs with GateOwnership. The move-away marker is written only under C's split gate.
+MODULE: ConsolidationSkipsAdmission
+TARGET: GateOwnership
+CLASS: Invariant
+SUMMARY: the consolidation turn holds C's split gate before it is admitted or takes the gate
+PERTURBS: BeginConsolidation
+
+--- FIND
+    /\ cons = "idle"
+    /\ cons' = "queued"
+--- REPLACE
+    /\ cons = "idle"
+    \* MUTATION: the turn skips admission and the gate
+    /\ cons' = "holding"
+--- END

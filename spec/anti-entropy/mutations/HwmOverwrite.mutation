@@ -1,0 +1,11 @@
+MODULE: HwmOverwrite
+TARGET: HwmMonotone
+CLASS: Action
+SUMMARY: the receiver overwrites the high-water-mark instead of advancing it monotonically
+PERTURBS: DeliverB
+
+--- FIND
+               /\ hwm' = Max(hwm, m.ts)
+--- REPLACE
+               /\ hwm' = m.ts
+--- END

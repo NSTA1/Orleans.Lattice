@@ -1,0 +1,11 @@
+MODULE: ReadyDependencyIgnored
+TARGET: PublicationEntitled
+CLASS: Action
+SUMMARY: A ready batch publishes before its transitive replacement closure is ready
+PERTURBS: Publish
+
+--- FIND
+    /\ Closed(c,Complete(c))
+--- REPLACE
+    /\ TRUE
+--- END

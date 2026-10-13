@@ -1,0 +1,12 @@
+MODULE: PeerWriteNotShipped
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: a peer write is never replicated back, and the one-directional link cannot repair it
+PERTURBS: BWrite
+
+--- FIND
+    /\ inflight' = inflight \cup {[k |-> k, ts |-> clock + 1, del |-> FALSE, org |-> "B",
+                                   via |-> "ship", to |-> "A"]}
+--- REPLACE
+    /\ inflight' = inflight
+--- END

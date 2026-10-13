@@ -1,0 +1,13 @@
+MODULE: InstallUsesCapturedIdentityFreshAlias
+TARGET: InstallUsesCapturedIdentity
+CLASS: Action
+SUMMARY: cutover re-resolves the alias and labels an old-source scan with the new physical identity
+PERTURBS: Install
+
+--- FIND
+    /\ phase = "validated"
+    /\ bound' = candidate /\ view' = shadow /\ generation' = generation + 1
+--- REPLACE
+    /\ phase = "validated"
+    /\ bound' = alias /\ view' = shadow /\ generation' = generation + 1
+--- END

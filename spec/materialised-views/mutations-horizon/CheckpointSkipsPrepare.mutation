@@ -1,0 +1,14 @@
+MODULE: CheckpointSkipsPrepare
+TARGET: CheckpointHeld
+CLASS: Invariant
+SUMMARY: the durable checkpoint advances over a still-staged prepared entry
+PERTURBS: Consume
+
+--- FIND
+          /\ staged' = (staged \/ ~abandoned)
+    /\ UNCHANGED <<length, installed, value, ckpt, abandoned, historyRetained,
+--- REPLACE
+          /\ staged' = (staged \/ ~abandoned)
+    /\ ckpt' = [ckpt EXCEPT ![p] = read[p]+1]
+    /\ UNCHANGED <<length, installed, value, abandoned, historyRetained,
+--- END

@@ -1,0 +1,11 @@
+MODULE: AdmissionDroppedReplacementApplied
+TARGET: ReplacementEntitled
+CLASS: Action
+SUMMARY: V treats a dropped ordinary entry as an applied replacement without publishing its row
+PERTURBS: Repair
+
+--- FIND
+    /\ value' = [value EXCEPT ![k] = Newer[k]]
+--- REPLACE
+    /\ value' = value
+--- END

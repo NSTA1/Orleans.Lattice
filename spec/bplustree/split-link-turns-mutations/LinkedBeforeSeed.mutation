@@ -1,0 +1,17 @@
+# Pairs with LinkedOnlyAfterSeed. A link reported before the donor is reparented leaves it naming the wrong parent.
+MODULE: LinkedBeforeSeed
+TARGET: LinkedOnlyAfterSeed
+CLASS: Invariant
+SUMMARY: the parent overflow reports the link before its sibling seeds the donor
+PERTURBS: ParentOverflow
+
+--- FIND
+    /\ chain = "parent"
+    /\ chain' = "seed"
+    /\ seed' = "queued"
+--- REPLACE
+    /\ chain = "parent"
+    \* MUTATION: the seeding is skipped
+    /\ chain' = "return"
+    /\ seed' = "queued"
+--- END

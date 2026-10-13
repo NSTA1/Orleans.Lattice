@@ -1,0 +1,11 @@
+MODULE: ScanDropsCommitted
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: a completed rebuild publishes an empty shadow despite committed source keys
+PERTURBS: Scan
+
+--- FIND
+    /\ shadow' = Source /\ phase' = "scanned"
+--- REPLACE
+    /\ shadow' = Zero /\ phase' = "scanned"
+--- END

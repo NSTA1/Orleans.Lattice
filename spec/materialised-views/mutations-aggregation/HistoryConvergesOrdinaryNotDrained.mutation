@@ -1,0 +1,14 @@
+MODULE: HistoryConvergesOrdinaryNotDrained
+TARGET: HistoryConverges
+CLASS: Temporal
+SUMMARY: a fair ordinary-drain action never consumes its available revision
+PERTURBS: ReadOrdinary
+
+--- FIND
+ReadOrdinary ==
+    /\ ~rebuilding /\ read < Len(log) /\ log[read + 1] = 1 /\ dirty = {}
+--- REPLACE
+ReadOrdinary ==
+    /\ FALSE
+    /\ ~rebuilding /\ read < Len(log) /\ log[read + 1] = 1 /\ dirty = {}
+--- END

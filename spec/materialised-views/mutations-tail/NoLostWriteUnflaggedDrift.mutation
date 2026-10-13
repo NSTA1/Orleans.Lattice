@@ -1,0 +1,13 @@
+MODULE: NoLostWriteUnflaggedDrift
+TARGET: NoLostWrite
+CLASS: Invariant
+SUMMARY: an out-of-band view mutation is not recorded as drift, so the regression reads as a lost write
+PERTURBS: Drift
+
+--- FIND
+    /\ driftUsed' = driftUsed + 1 /\ drifted' = TRUE
+    /\ UNCHANGED <<SourceVars, trim, ttlUsed, crashes, bound, applied, hw, ckpt,
+--- REPLACE
+    /\ driftUsed' = driftUsed + 1
+    /\ UNCHANGED <<SourceVars, trim, ttlUsed, crashes, drifted, bound, applied, hw, ckpt,
+--- END

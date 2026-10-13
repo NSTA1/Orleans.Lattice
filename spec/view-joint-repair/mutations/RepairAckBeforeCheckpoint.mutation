@@ -1,0 +1,11 @@
+MODULE: RepairAckBeforeCheckpoint
+TARGET: AckEntitled
+CLASS: Invariant
+SUMMARY: acknowledgement is sent before durable checkpoint retirement
+PERTURBS: Acknowledge
+
+--- FIND
+    /\ Live /\ repairApplied /\ v \in retired /\ v \notin acknowledged
+--- REPLACE
+    /\ Live /\ repairApplied /\ v \notin acknowledged
+--- END

@@ -1,0 +1,11 @@
+MODULE: CursorTrimEntitledIgnoresCandidatePin
+TARGET: CursorTrimEntitled
+CLASS: Invariant
+SUMMARY: GC ignores the physical read hold while the shadow scan is using its captured floor
+PERTURBS: CursorTrim
+
+--- FIND
+    /\ held[p] = -1 \/ trim[p] < held[p]
+--- REPLACE
+    /\ TRUE
+--- END

@@ -21,17 +21,16 @@ namespace Orleans.Lattice.Tests.Formal;
 /// declared variant is routed automatically and the work remains balanced.
 /// </para>
 /// <para>
-/// SHARE A CONTROL WHERE YOU CAN. <see cref="TlcModelCheckTests"/> runs each
-/// distinct control arm once per test process, so mutants that share a
-/// control (the same module, target property and options) are cheaper in one
-/// shard than split across two. Every group here is therefore whole modules,
-/// or a split along a target property: every Replication EventualConvergence
-/// mutant shares one control and so lives in <see cref="Convergence"/>.
+/// CONTROL COST. <see cref="TlcModelCheckTests"/> caches byte-identical
+/// control inputs per process. Generated configurations include the mutation
+/// name, so distinct mutants currently run separate controls even when their
+/// module, target property and options match. Grouping by module or target
+/// does not eliminate that cost; measured item durations include it.
 /// </para>
 /// </summary>
 internal static class TlcCiShard
 {
-    /// <summary>The Replication EventualConvergence* (temporal) mutants, which share one control arm.</summary>
+    /// <summary>The Replication EventualConvergence* temporal mutants.</summary>
     public const string Convergence = "TlcShardConvergence";
 
     /// <summary>The other Replication mutants, plus the mutants of every Wal* module.</summary>
@@ -50,7 +49,7 @@ internal static class TlcCiShard
     /// <summary>
     /// The mutants of every AtomicCommit* module. Its variant configurations
     /// are split into <see cref="AtomicVariantShards"/>: a variant has no control arm, so
-    /// splitting them off leaves every shared control with its mutants.
+    /// splitting them off separates their measured JVM work from mutation controls.
     /// </summary>
     public const string Atomic = "TlcShardAtomic";
 
@@ -79,6 +78,51 @@ internal static class TlcCiShard
     /// <summary>The mutants of every Backup* module.</summary>
     public const string Backup = "TlcShardBackup";
 
+    /// <summary>The measured materialised-view tail base, variant and mutation runs.</summary>
+    public const string MaterialisedViews = "TlcShardMaterialisedViews";
+
+    /// <summary>The focused physical replay-fence lifetime runs.</summary>
+    public const string MaterialisedViewFence = "TlcShardMaterialisedViewFence";
+
+    /// <summary>The focused three-partition terminal-horizon recovery runs.</summary>
+    public const string MaterialisedViewHorizon = "TlcShardMaterialisedViewHorizon";
+
+    /// <summary>The focused numeric aggregation and history revision runs.</summary>
+    public const string MaterialisedViewAggregation = "TlcShardMaterialisedViewAggregation";
+
+    /// <summary>The focused captured physical source and generation rebind runs.</summary>
+    public const string MaterialisedViewRebind = "TlcShardMaterialisedViewRebind";
+
+    /// <summary>The independent-clock ready replacement closure runs.</summary>
+    public const string MaterialisedViewReadyClosure = "TlcShardMaterialisedViewReadyClosure";
+
+    /// <summary>The coherent revision and expected-participant admission runs.</summary>
+    public const string MaterialisedViewSourceAdmission = "TlcShardMaterialisedViewSourceAdmission";
+
+    /// <summary>The physical-tail resolved cache ownership runs.</summary>
+    public const string MaterialisedViewResolvedIdentity = "TlcShardMaterialisedViewResolvedIdentity";
+
+    /// <summary>The bounded fresh joint-repair, retry and acknowledgement-closure runs.</summary>
+    public const string MaterialisedViewJointRepair = "TlcShardMaterialisedViewJointRepair";
+
+    /// <summary>The anti-entropy base and first measured mutation group.</summary>
+    public const string AntiEntropy = "TlcShardAntiEntropy";
+
+    /// <summary>The anti-entropy alias variant and second measured mutation group.</summary>
+    public const string AntiEntropy2 = "TlcShardAntiEntropy2";
+
+    /// <summary>The third measured anti-entropy mutation group.</summary>
+    public const string AntiEntropy3 = "TlcShardAntiEntropy3";
+
+    /// <summary>The resize, reshard and shadow-cutover composition runs.</summary>
+    public const string TreeLifecycle = "TlcShardTreeLifecycle";
+
+    /// <summary>The shared alias routing and cutover interaction runs.</summary>
+    public const string Aliasing = "TlcShardAliasing";
+
+    /// <summary>The leaf split-gate and grain-turn wait-cycle runs.</summary>
+    public const string SplitGate = "TlcShardSplitGate";
+
     /// <summary>The BPlusCascade base-model TLC run.</summary>
     public const string BPlusCascadeBase = "TlcShardBPlusCascadeBase";
 
@@ -91,7 +135,12 @@ internal static class TlcCiShard
     /// <summary>Every category <see cref="Of"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
         [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup,
-         BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2];
+         BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2,
+         MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
+         MaterialisedViewAggregation, MaterialisedViewRebind,
+         MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
+         MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair,
+         AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -107,6 +156,23 @@ internal static class TlcCiShard
         ArgumentNullException.ThrowIfNull(mutation);
 
         var name = module.Name;
+        if (string.Equals(name, "AntiEntropy", StringComparison.Ordinal))
+        {
+            return mutation.Name switch
+            {
+                "CooldownNeverHalfOpens" or "FallbackDropsTombstones" or "DeleteReplayedAsSet"
+                    or "ReplayBelowCursor" or "ReplayReadsRetiredWal" or "EchoRecordedAsApplied"
+                    or "OwnOriginApplied" or "SwapInvisibleToResolve" => AntiEntropy2,
+                "WindowNeverRolls" or "PeerWriteNotShipped" or "DigestIgnoresDivergence"
+                    or "AbortRollsBudgetWindow" or "ProbeAdvancesCursor" or "UnavailableClosesBreaker"
+                    or "StaleTopologyWalk" => AntiEntropy3,
+                _ => AntiEntropy,
+            };
+        }
+        if (LifecycleCategory(name) is { } lifecycleCategory)
+        {
+            return lifecycleCategory;
+        }
         if (string.Equals(name, "Replication", StringComparison.Ordinal))
         {
             return mutation.Name.StartsWith("EventualConvergence", StringComparison.Ordinal)
@@ -148,9 +214,9 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
+        return LifecycleCategory(module.Name) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
             ? BPlusCascadeBase
-            : null;
+            : null);
     }
 
     /// <summary>
@@ -162,6 +228,17 @@ internal static class TlcCiShard
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(variant);
+
+        if (string.Equals(module.Name, "AntiEntropy", StringComparison.Ordinal)
+            && string.Equals(variant, "Alias", StringComparison.Ordinal))
+        {
+            return AntiEntropy2;
+        }
+
+        if (LifecycleCategory(module.Name) is { } lifecycleCategory)
+        {
+            return lifecycleCategory;
+        }
 
         if (IsReplicationCompanion(module.Name))
         {
@@ -203,6 +280,22 @@ internal static class TlcCiShard
     private static bool IsReplicationCompanion(string name) =>
         name.StartsWith("Replication", StringComparison.Ordinal)
         && !string.Equals(name, "Replication", StringComparison.Ordinal);
+
+    private static string? LifecycleCategory(string name) =>
+        name == "MaterialisedViewFence" ? MaterialisedViewFence
+        : name == "MaterialisedViewHorizon" ? MaterialisedViewHorizon
+        : name == "MaterialisedViewAggregation" ? MaterialisedViewAggregation
+        : name == "MaterialisedViewRebind" ? MaterialisedViewRebind
+        : name == "MaterialisedViewReadyClosure" ? MaterialisedViewReadyClosure
+        : name == "MaterialisedViewSourceAdmission" ? MaterialisedViewSourceAdmission
+        : name == "MaterialisedViewResolvedIdentity" ? MaterialisedViewResolvedIdentity
+        : string.Equals(name, "MaterialisedViewJointRepair", StringComparison.Ordinal) ? MaterialisedViewJointRepair
+        : name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
+        : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
+        : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle
+        : name.StartsWith("Alias", StringComparison.Ordinal) ? Aliasing
+        : string.Equals(name, "SplitGateCycles", StringComparison.Ordinal) ? SplitGate
+        : null;
 
     /// <summary>
     /// Adds <see cref="Of"/>'s category to a mutation case whose arguments are

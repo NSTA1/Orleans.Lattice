@@ -1,0 +1,11 @@
+MODULE: ReadWrongBinding
+TARGET: CapturedBinding
+CLASS: Action
+SUMMARY: helper captures another physical copy
+PERTURBS: ReadBinding
+
+--- FIND
+    /\ observed' = alias
+--- REPLACE
+    /\ observed' = previous
+--- END

@@ -1,0 +1,11 @@
+MODULE: BindWrongMigrationCopy
+TARGET: CapturedMigration
+CLASS: Action
+SUMMARY: shard migration binds to a noncurrent copy
+PERTURBS: BindMigration
+
+--- FIND
+    /\ migration' = alias
+--- REPLACE
+    /\ migration' = "c"
+--- END

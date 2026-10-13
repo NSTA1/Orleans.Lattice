@@ -48,4 +48,11 @@ internal sealed record ViewCrossTreeReadiness
     /// retractions.
     /// </summary>
     [Id(5)] public IReadOnlyList<string> Deletes { get; init; } = [];
+
+    /// <summary>
+    /// The caller's repair protocol, set to the current version only after its
+    /// original identity hold is durable. Missing in older callers (zero).
+    /// A current operation cannot decide from an older caller's readiness.
+    /// </summary>
+    [Id(6)] public int RepairProtocolVersion { get; init; }
 }

@@ -1,0 +1,11 @@
+MODULE: EpochOverflow
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a topology change skips a generation past the modelled bound
+PERTURBS: Reshard
+
+--- FIND
+    /\ epoch' = epoch + 1
+--- REPLACE
+    /\ epoch' = epoch + 2
+--- END

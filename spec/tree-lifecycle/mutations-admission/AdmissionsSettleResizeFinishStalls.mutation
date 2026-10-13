@@ -1,0 +1,11 @@
+MODULE: AdmissionsSettleResizeFinishStalls
+TARGET: AdmissionsSettle
+CLASS: Temporal
+SUMMARY: resize never marks its admitted work complete
+PERTURBS: ResizeFinish
+
+--- FIND
+    /\ alias' = "new" /\ resize' = "done"
+--- REPLACE
+    /\ alias' = "new" /\ resize' = "active"
+--- END

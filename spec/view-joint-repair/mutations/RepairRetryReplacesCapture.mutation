@@ -1,0 +1,19 @@
+MODULE: RepairRetryReplacesCapture
+TARGET: CaptureFrozen
+CLASS: Invariant
+SUMMARY: a retry replaces a participant's first persisted repair payload
+PERTURBS: Retry
+
+--- FIND
+Retry(v) ==
+    /\ Live /\ v \in Fresh
+    /\ UNCHANGED vars
+--- REPLACE
+Retry(v) ==
+    /\ Live /\ v \in Fresh
+    /\ captured' = [captured EXCEPT ![v] = IF @ = 1 THEN 2 ELSE 1]
+    /\ UNCHANGED <<legacy,registered,decided,applied,degraded,source,bound,rows,target,
+                   first,firstTarget,repairDecided,repairApplied,reported,stage,
+                   observed,retired,acknowledged,cleared,faults,ordinarySeen,
+                   snapshotRows,snapshotOrdinary>>
+--- END

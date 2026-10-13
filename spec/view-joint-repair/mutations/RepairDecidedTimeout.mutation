@@ -1,0 +1,13 @@
+MODULE: RepairDecidedTimeout
+TARGET: OriginalIntentHeld
+CLASS: Invariant
+SUMMARY: timeout abandons a decided joint intent after a lost publication response
+PERTURBS: Timeout
+
+--- FIND
+    /\ Live /\ ~decided
+    /\ degraded' = TRUE
+--- REPLACE
+    /\ Live
+    /\ degraded' = TRUE
+--- END

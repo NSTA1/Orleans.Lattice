@@ -1,0 +1,15 @@
+# Pairs with TypeOK. The type invariant rejects a capture state outside the turn.
+MODULE: CaptureEndsInUnknownState
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the capture turn ends in a state the turn does not have
+PERTURBS: CaptureLinkReturns
+
+--- FIND
+    /\ ch[IF l = "B" THEN "capB" ELSE "capC"] \in {"done", "deferred"}
+    /\ cap' = [cap EXCEPT ![l] = "done"]
+--- REPLACE
+    /\ ch[IF l = "B" THEN "capB" ELSE "capC"] \in {"done", "deferred"}
+    \* MUTATION: an unknown capture state
+    /\ cap' = [cap EXCEPT ![l] = "returned"]
+--- END

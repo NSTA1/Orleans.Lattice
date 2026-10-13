@@ -1,0 +1,11 @@
+MODULE: TrimLeavesFloor
+TARGET: WalComplete
+CLASS: Invariant
+SUMMARY: WAL garbage collection prunes entries without raising the trim floor
+PERTURBS: Trim
+
+--- FIND
+          /\ walFloor' = f
+--- REPLACE
+          /\ walFloor' = walFloor
+--- END

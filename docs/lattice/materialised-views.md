@@ -337,6 +337,16 @@ persisted registration exactly. Missing providers, malformed state, empty or
 mismatched versions, and provider failures leave the maintainer dormant rather
 than rebuilding through different logic.
 
+Each silo reconciles its runtime catalog entry with the durable registration on
+activation. A durable delete or a recreation with a different source, projection
+type, provider payload or version retires the stale cached entry, even if the
+reconstructed projection has the same shape. Replacement compares the full
+durable registration and is conditional on the exact cached
+registration instance, so reconciliation cannot overwrite a concurrently created
+registration. A factory registration awaiting persistence is protected until
+that attempt settles; a failed attempt does not permanently mask a different
+durable registration.
+
 Filter-only `PredicateLatticeViewProjection` definitions receive the built-in
 predicate descriptor automatically. Predicate value/key selectors, aggregation
 delegates, folds, and other application state require an explicit provider. The
@@ -363,6 +373,31 @@ the new source never had, so a rebuild is required for correctness. A view
 that first activates over a source whose alias already resolves to a different
 physical tree likewise builds from that tree's current state rather than
 replaying its log.
+
+A rebuild captures one physical source with its resume floor, scans that source,
+and publishes the generation, physical binding and offsets together. If a source
+move is observed before publication validation, the rebuild rejects its stale
+candidate. Validation is not a registry lock: a later alias move may still allow
+the coherent captured generation to publish, after which a subsequent rebind
+heals it. The maintainer never labels the captured scan with a newly resolved
+physical identity. A failed checkpoint leaves recovery governed by the persisted
+tuple; a committed checkpoint whose response is lost resumes that committed
+physical tuple after reactivation.
+
+During a rebuild, the maintainer publishes separate offset read holds for the
+persisted bound WAL and the candidate WAL. The candidate is held before its
+consumer registration becomes visible and at its captured floor before scanning.
+Rejected candidates, failed checkpoint responses and retries of an already
+registered physical source do not replace the original durable-bound hold.
+Only successful durable publication retires that old hold. These offset holds
+are visible to WAL GC on other silos; the process-local HLC cursor alone is not
+that protection. Retention-TTL trimming may still overtake a view, which then
+detects the missing suffix and rebuilds from source state.
+
+The retained cursor, consumer registration and lag report follow that same
+physical WAL binding, for both filter and aggregation views. A position from
+the replacement WAL must not advance a pin on the former copy. Deleting the
+view releases its bound physical consumer and any legacy logical registration.
 
 The rebind is **event-driven**. The tree registry pushes the alias change to every
 view maintainer sourcing that tree the moment the swap commits, and the next drain
@@ -440,6 +475,16 @@ built-in reduces are exposed through `AggregationKind`:
 `AggregationLatticeViewProjection.Create<T>`; `Fold` is a custom, non-commutative
 reduce declared with `LatticeFoldProjection` (see
 [Folded (custom-reducer) views](#folded-custom-reducer-views) below).
+
+Numeric `Count` and `Sum` flips atomically persist membership, accumulator slots,
+and a bounded one/two-group rematerialisation intent. Ordinary public group
+publication remains separate, not snapshot-atomic. The intent survives a lost
+flip or group-write response; a subsequent numeric apply or retract (including
+a rejected regroup) for that source key completes every affected group write
+before retiring it. Losing the
+intent-delete response is safe because deletion follows those writes. This
+repairs future interruptions, not group identities already lost before the
+intent format existed.
 
 Group keys share the view tree with the maintainer's internal rows, which live
 under a reserved NUL (`\u0000`) prefix. A group-key selector that returns an
@@ -718,6 +763,14 @@ still-unterminated batch is older than that window, because the batch could no
 longer complete before the log trims under it. Each backstop trip increments
 `orleans.lattice.view.atomic_staging_backstop`.
 
+The read cursor advances independently of the applied checkpoint while a batch
+is staged: the maintainer must continue reading to discover its terminal, while
+the durable checkpoint and WAL pin remain behind the unresolved prepare. A
+physical-WAL-bound replay fence preserves the drained window and newer ordinary
+write clocks across reactivation. It suppresses ordinary survivors already
+projected in that window while reconstructing the still-pending atomic staging;
+a fence from a different physical source is never reused.
+
 When a completed batch flushes to the view tree, the maintainer carries the
 projection's upserts **and** its retraction deletes inside a single mixed atomic
 op (`ILattice.SetManyAtomicAsync(upserts, deletes, operationId)`). This closes
@@ -740,14 +793,104 @@ A source-side **cross-tree** atomic write (`IGrainFactory.SetManyAtomicAsync` /
 `BeginAtomicWrite`, see [atomic writes](atomic-writes.md)) commits across several
 source trees all-or-nothing. The views derived from those trees preserve that
 coupling: when the cross-tree batch commits, the participating views flip
-**jointly** - a reader never observes one participating view committed while
-another is still pre-commit.
+**jointly**: one joint publication changes the participating slices, rather than
+independent per-view commits. This is not a shared multi-view read snapshot.
+Snapshot cursors are scoped to one tree, and independently opening or reading
+two views can straddle the joint commit and observe different publication points.
 
-If a participant view is permanently unavailable, the present views **degrade to
-per-tree atomicity** after a bounded wait (`CrossTreeReadinessTimeout`, default
-5 s): each flips its own slice, increments
-`orleans.lattice.view.cross_tree_joint_violation`, and schedules a reconcile that
-heals any divergence - choosing liveness over an indefinite stall.
+Before the original joint publication is decided, an unavailable participant can
+cause the present views to **degrade to per-tree atomicity** after a bounded wait
+(`CrossTreeReadinessTimeout`, default 5 s). Each flips its own slice, increments
+`orleans.lattice.view.cross_tree_joint_violation`, and schedules a reconcile. An
+already-decided publication is retried with its frozen payload and physical
+view targets instead of degrading after a lost response.
+
+A current-protocol committed joint publication has a mandatory, once-only **joint repair round**.
+Every original participant, including one whose projection emitted no rows,
+contributes a fresh, locally admitted replacement-inclusive slice. This accounts
+for source writes that superseded a previously registered slice. A participant's
+first repair contribution freezes its bytes and physical target immediately;
+reactivation and lost responses reattach to that exact capture. The original
+publication stays immutable. Repair uses a separate idempotent operation identity
+and publishes all participating repair slices jointly, never by independent
+per-view reassertion.
+
+Append-only history is different: repair reuses the original retention-shaped
+slice instead of replacing recorded revisions with a current source winner.
+
+Until repair commits, maintainers defer ordinary and local-batch publication,
+keep their source WAL checkpoints pinned, and retain the submitted physical
+source and view-generation identities. After repair, deferred ordinary work is
+replayed before checkpoint retirement. Retirement and a pending acknowledgement
+are recorded together durably; only then does the maintainer acknowledge the
+repair. Coordinator retention starts only after every participant has acknowledged,
+so a lost completion or acknowledgement response cannot recreate an old joint
+publication after its state expires.
+
+This repair round is **fail-closed**: unlike the original readiness timeout, it
+never degrades to independent slices. Progress requires every participant to
+recover and receive maintenance turns. During a prolonged peer outage, WAL
+retention and view lag can therefore grow, and explicit rebuild or reconcile
+cannot replace a submitted generation before its repair checkpoint retires.
+Once local repair captures are frozen and only peers are missing, the maintainer
+polls their coordinators without accumulating more source staging. If capture
+closure itself exceeds the configured staging budget, maintenance fails visibly
+without discarding the submitted identity; recovery can require a larger budget.
+
+Each view still has one source; this is not a multi-source join or an arbitrary
+dependency-graph contract. Ordinary unrelated database work is not a shared
+global barrier. Rebuild, reconcile, physical-source rebind and decommission
+respect these holds. Legacy operations keep their released completion contract,
+as described below.
+
+### Automatic upgrades of joint-view coordinators
+
+Existing deployments require no migration command, approval, explicit reconcile,
+or operator-issued completion certificate. The durable coordinator protocol
+version separates already admitted legacy work from the new joint-repair
+contract; absence of the version field in a released record means legacy
+protocol 0, not successful repair under protocol 1.
+
+A legacy committed decision resumes its shipped completion path and normal
+retention cleanup, even when participants have already retired their original
+source context. An interrupted legacy decision replays its frozen projected
+slices against the original physical view targets with the original idempotency
+key. It does not rebuild history from current source winners or invent missing
+source keys. Legacy completion never sets the new repair-completion or
+participant-acknowledgement fields. Previously degraded legacy work remains
+per-tree work; upgrading does not retroactively certify joint publication.
+
+Once a protocol-1 joint publication is decided, its retirement requires every
+participant's durable repair ownership, joint repair publication and checkpoint
+acknowledgement. A legacy readiness message cannot stand in for a protocol-1
+participant. A retention timeout cannot discharge a decided protocol-1
+publication or an open repair obligation; the pre-decision readiness timeout
+remains a separate, explicitly degraded outcome.
+
+New repair admission is paused automatically while any remaining cluster member
+has an unavailable manifest or does not advertise joint-repair capability.
+Joining and draining members count until they are dead, and an empty active
+membership is not a successful upgrade. Manifest or membership changes cause
+the admission decision to be re-evaluated; there is no hardcoded override or
+persisted "migration finished" flag. New-protocol status and repair calls must
+also wait for that capability boundary so they are not dispatched to an older
+coordinator that lacks those methods. Pending view work remains staged and
+resumes automatically when the cluster finishes upgrading.
+
+The supported deployment paths are an automated homogeneous cluster restart
+or a monotonic rolling replacement of old silos with the new build. The host's
+deployment controller must not reintroduce old binaries after protocol-1 work
+has been admitted; arbitrary binary downgrade or old-silo rejoin is not
+supported. The admission gate reads Orleans membership and manifest snapshots,
+not a consensus-locked deployment inventory, and cannot make old code enforce
+new persistent-state obligations. An already admitted protocol-1 obligation is
+never downgraded if admission subsequently closes.
+
+While mixed-version joint protocol admission is closed, explicit rebuild,
+reconcile, and decommission also reject maintenance of a view with pending
+joint ownership or acknowledgements. They retain its checkpoint and generation
+without sending coordinator RPCs or tearing down state. Maintenance can be
+retried once admission reopens; ordinary automatic drain resumption is unchanged.
 
 ## Replication modes
 
@@ -904,12 +1047,12 @@ with a smaller batch. Each self-throttled pass is emitted on
 `orleans.lattice.view.source_backpressure` (tagged with the observed source
 regime). Set `ObeySourceBackpressure` to `false` to opt out and always drain at
 full rate. The throttle engages only while the source is actually saturated, so
-leaving it on costs nothing on a healthy source. The maintainer reads the signal
-under the source's logical id, while the signal is sampled under the id of the
-write-ahead log the source's writes land in, so while the source resolves to a
-different physical copy - after a resize or undo, a shadow-cutover restore or revert,
-a schema remediation or an administrative alias change (see [Source-identity rebind](#source-identity-rebind)) - the
-maintainer does not see that copy's saturation and drains at full rate.
+leaving it on costs nothing on a healthy source. Both filter and aggregation
+drains, and the background tick deferral, read the signal under the physical
+WAL identity they are bound to. They therefore follow the replacement source's
+saturation after a resize/undo, shadow restore/revert, schema remediation or
+administrative alias change (see [Source-identity rebind](#source-identity-rebind));
+a stale signal under the logical alias does not throttle a different copy.
 
 Separately from this client-side self-throttle, the maintainer's catch-up reads
 no longer contend with foreground writes at the WAL grain itself. Each
@@ -1047,7 +1190,9 @@ cost. See [Durable per-key history views](history-views.md).
   resolve by source HLC.** Within a drain pass a committed atomic batch is applied
   after the ordinary survivors, but a staged entry whose source key took a
   higher-HLC ordinary write while its batch was staged is skipped when the batch
-  flushes, so the view keeps the source's last-writer-wins outcome.
+  flushes, so the view keeps the source's last-writer-wins outcome. A skipped
+  older filter entry must not retract the newer projected key, and an older
+  aggregation entry must not remove the source key from its newer group.
 - **Approximate set-union cardinality is a bounded sample, not HyperLogLog.**
   `AggregationMaxGroupEntries` bounds `SetUnion` with a distinct sample; a true
   HyperLogLog estimator is a later phase.

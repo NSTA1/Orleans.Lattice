@@ -1,0 +1,12 @@
+MODULE: CursorTrimEntitledUnbudgetedTtl
+TARGET: CursorTrimEntitled
+CLASS: Action
+SUMMARY: a retention-TTL trim is not accounted as a TTL trim, so it reads as an unentitled cursor trim
+PERTURBS: RetentionTrim
+
+--- FIND
+    /\ ttlUsed' = ttlUsed + 1
+    /\ UNCHANGED <<SourceVars, driftUsed, drifted, crashes, ViewVars>>
+--- REPLACE
+    /\ UNCHANGED <<SourceVars, ttlUsed, driftUsed, drifted, crashes, ViewVars>>
+--- END

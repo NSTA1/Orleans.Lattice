@@ -148,7 +148,7 @@ internal sealed class LatticeViewFactory(
         var durable = IsStartupDeclared(viewName)
             ? null
             : BuildDurableRegistration(registration, runtimeProjection);
-        return (registration, durable);
+        return (durable is null ? registration : registration with { DurableRecord = durable }, durable);
     }
 
     private void ValidateReplicationTopology(string viewName, string sourceTreeId) =>
@@ -211,6 +211,14 @@ internal sealed class LatticeViewFactory(
         ViewRegistration registration,
         RuntimeViewRegistration? durable)
     {
+        // Mark before registering: the durable record is persisted in the
+        // background, so a maintainer activating meanwhile must not read its
+        // absence as a deletion and discard this entry.
+        if (durable is not null)
+        {
+            catalog.MarkDurablyPending(registration);
+        }
+
         catalog.Register(registration);
 
         var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
@@ -406,10 +414,19 @@ internal sealed class LatticeViewFactory(
             if (durable is not null)
             {
                 await RegistryGrain.RegisterAsync(durable);
+                catalog.ClearDurablyPending(registration);
             }
         }
         catch (Exception ex)
         {
+            // The entry stays catalog-only on this silo (an absent record is still
+            // not a delete), but a different durable record written later - a
+            // re-create through another silo - now supersedes it.
+            if (durable is not null)
+            {
+                catalog.MarkDurablePersistFailed(registration);
+            }
+
             logger.LogWarning(ex, "Failed to persist the durable runtime registration for view '{ViewName}'; it will not survive a restart until re-created.", viewName);
         }
 

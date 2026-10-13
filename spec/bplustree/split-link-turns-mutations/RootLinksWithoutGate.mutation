@@ -1,0 +1,15 @@
+# Pairs with LinkGateMatchesLinking. Two concurrent links could otherwise both record against the same parent.
+MODULE: RootLinksWithoutGate
+TARGET: LinkGateMatchesLinking
+CLASS: Invariant
+SUMMARY: the root hands the link on without taking its link gate
+PERTURBS: RootRecordLink
+
+--- FIND
+    /\ linkGate' = TRUE
+    /\ chain' = "parent"
+--- REPLACE
+    \* MUTATION: the link gate is not taken
+    /\ linkGate' = FALSE
+    /\ chain' = "parent"
+--- END

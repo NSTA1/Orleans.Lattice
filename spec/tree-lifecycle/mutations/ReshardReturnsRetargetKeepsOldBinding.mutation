@@ -1,0 +1,11 @@
+MODULE: ReshardReturnsRetargetKeepsOldBinding
+TARGET: ReshardReturns
+CLASS: Temporal
+SUMMARY: after cutover every retry still addresses the abandoned physical copy
+PERTURBS: MigrationRetarget
+
+--- FIND
+    /\ migrationCopy' = alias /\ migration' = "moving"
+--- REPLACE
+    /\ migrationCopy' = migrationCopy /\ migration' = "moving"
+--- END

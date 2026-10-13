@@ -1,0 +1,11 @@
+MODULE: ResolvedQueueNotCleared
+TARGET: QueueSound
+CLASS: Invariant
+SUMMARY: Clear the new tail's resolved set but retain the old owner's eviction queue
+PERTURBS: EnterTail
+
+--- FIND
+    /\ order' = IF candidate = tail THEN order ELSE <<>>
+--- REPLACE
+    /\ order' = order
+--- END

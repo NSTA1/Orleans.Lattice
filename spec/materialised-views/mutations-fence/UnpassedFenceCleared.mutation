@@ -1,0 +1,11 @@
+MODULE: UnpassedFenceCleared
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: P (#4881) empties staging and clears the fence before its old read head was consumed
+PERTURBS: Persist
+
+--- FIND
+               clear == staged = {} /\ ~unpassed
+--- REPLACE
+               clear == staged = {}
+--- END

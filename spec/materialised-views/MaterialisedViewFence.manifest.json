@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-fence",
+  "refinement": "RefinementFence.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 4,
+    "properties": 2,
+    "actions": 9,
+    "mutations": 9,
+    "behaviourRows": 13,
+    "distinctStates": 194
+  },
+  "variants": {
+    "NewerOrdinary": { "distinctStates": 359 }
+  }
+}

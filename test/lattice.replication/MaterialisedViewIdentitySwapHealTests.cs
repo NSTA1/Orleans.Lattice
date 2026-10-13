@@ -251,6 +251,92 @@ public class MaterialisedViewIdentitySwapHealTests
         });
     }
 
+    // After healing onto a swapped physical identity the view must report its WAL
+    // cursor (the HLC retention pin the WAL GC reads, keyed by the physical log it
+    // tails) under the NEW physical id, and must not leave a pin behind on the
+    // logical id. Regression: the steady drain reported under the logical
+    // registration id, so after the swap the new physical log's pin froze at the
+    // rebuild cursor while a phantom pin re-registered on the orphaned old log the
+    // rebind had just released.
+    [Test]
+    public async Task View_reports_its_wal_cursor_under_the_bound_physical_identity_after_swap()
+    {
+        const string logical = "idswap-cursor-src";
+        const string shadow = "idswap-cursor-restored";
+        const string view = "idswap-cursor-view";
+        const string consumerId = "view:" + view;
+
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(logical);
+        var latticeView = CreateAdultView(logical, view);
+        var cursors = _fixture.SiloServices.GetRequiredService<IWalCursorRegistry>();
+
+        await source.SetAsync("a", Person(30, "orig"));
+        await DrainToZeroAsync(view);
+        Assert.That((await cursors.SnapshotAsync(logical)).Any(c => c.ConsumerId == consumerId), Is.True,
+            "precondition: before any swap the view pins its source log, whose physical id is the logical id");
+
+        var shadowTree = _fixture.Cluster.Client.GetGrain<ILattice>(shadow);
+        await shadowTree.SetAsync("a", Person(31, "restored"));
+        var registry = _fixture.Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.SetAliasAsync(logical, shadow);
+        await DrainToZeroAsync(view);
+
+        var healed = (await cursors.SnapshotAsync(shadow)).Single(c => c.ConsumerId == consumerId).Cursor;
+
+        await shadowTree.SetAsync("c", Person(50, "postswap"));
+        await DrainToZeroAsync(view);
+        await WaitUntilAsync(async () => await latticeView.GetAsync("c") is not null,
+            "View did not tail the post-swap write.");
+
+        var onPhysical = (await cursors.SnapshotAsync(shadow)).Where(c => c.ConsumerId == consumerId).ToList();
+        var onLogical = (await cursors.SnapshotAsync(logical)).Where(c => c.ConsumerId == consumerId).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(onPhysical, Has.Count.EqualTo(1), "The view must pin the physical log it tails.");
+            Assert.That(onPhysical[0].Cursor, Is.GreaterThan(healed),
+                "The pin on the tailed physical log must advance with the drain, not freeze at the rebuild cursor.");
+            Assert.That(onLogical, Is.Empty,
+                "No pin may remain on the orphaned pre-swap log once the view rebinds away from it.");
+        });
+    }
+
+    // Deleting a view whose source was swapped to a new physical identity must
+    // release the WAL cursor pin on that physical log as well as on the logical id.
+    // Regression: decommission released only the logical registration id, so the pin
+    // the rebuild reported on the physical log held its WAL GC forever.
+    [Test]
+    public async Task Deleting_a_view_after_a_swap_releases_the_pin_on_the_physical_identity()
+    {
+        const string logical = "idswap-delete-src";
+        const string shadow = "idswap-delete-restored";
+        const string view = "idswap-delete-view";
+        const string consumerId = "view:" + view;
+
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(logical);
+        _ = CreateAdultView(logical, view);
+        var cursors = _fixture.SiloServices.GetRequiredService<IWalCursorRegistry>();
+
+        await source.SetAsync("a", Person(30, "orig"));
+        await DrainToZeroAsync(view);
+
+        var shadowTree = _fixture.Cluster.Client.GetGrain<ILattice>(shadow);
+        await shadowTree.SetAsync("a", Person(31, "restored"));
+        var registry = _fixture.Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.SetAliasAsync(logical, shadow);
+        await DrainToZeroAsync(view);
+        Assert.That((await cursors.SnapshotAsync(shadow)).Any(c => c.ConsumerId == consumerId), Is.True,
+            "precondition: the healed view pins the new physical log");
+
+        await _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>().DeleteAsync(view);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That((await cursors.SnapshotAsync(shadow)).Any(c => c.ConsumerId == consumerId), Is.False,
+                "Deleting the view must release its pin on the physical log it tailed.");
+            Assert.That((await cursors.SnapshotAsync(logical)).Any(c => c.ConsumerId == consumerId), Is.False,
+                "Deleting the view must release its pin on the logical id.");
+        });
+    }
     /// <summary>
     /// Polls <paramref name="condition"/> until it holds, failing with
     /// <paramref name="failureMessage"/> at the barrier if it never does.

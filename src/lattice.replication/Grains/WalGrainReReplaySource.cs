@@ -7,11 +7,12 @@ namespace Orleans.Lattice.Replication.Grains;
 /// The production <see cref="IWalReReplaySource"/>: reads retained
 /// write-ahead-log entries from the local shard's WAL partition grains. It
 /// addresses them as <c>{treeName}/{partition}</c> using exactly the tree name it
-/// is constructed with, and does not resolve a registry alias. The outbound
-/// shipper instead addresses the WAL by the tree's resolved physical id, which is
-/// what the WAL is keyed by after an alias swap (shadow-cutover restore, resize,
-/// schema remediation, or operator alias change), so for an aliased tree constructed with its logical name this source
-/// reads the partitions of that name rather than the physical tree's. It reads
+/// is constructed with, and does not resolve a registry alias itself. WAL
+/// partitions are keyed by the physical tree id, which a registry alias swap
+/// (shadow-cutover restore, resize, schema remediation, or operator alias change)
+/// repoints, so callers must construct it with the resolved physical id, as the
+/// outbound shipper addresses the WAL; the logical name's partitions belong to
+/// the retired physical tree after a swap. It reads
 /// oldest-first per partition up to a bounded budget shared across partitions; a
 /// partition whose oldest retained entry sits at a sequence greater than zero is
 /// reported as trimmed so the engine can detect a garbage-collected-past-divergence

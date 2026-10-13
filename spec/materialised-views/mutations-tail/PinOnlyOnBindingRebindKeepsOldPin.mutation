@@ -1,0 +1,14 @@
+MODULE: PinOnlyOnBindingRebindKeepsOldPin
+TARGET: PinOnlyOnBinding
+CLASS: Invariant
+SUMMARY: a rebind does not release the cursor pin on the pre-swap copy
+PERTURBS: Rebind
+
+--- FIND
+    /\ pinned' = pinned \ {bound}
+    /\ StartRebuild(alias)
+    /\ UNCHANGED <<SourceVars, EnvVars, bound, vval, applied, hw, ckpt, pin,
+--- REPLACE
+    /\ StartRebuild(alias)
+    /\ UNCHANGED <<SourceVars, EnvVars, bound, vval, applied, hw, ckpt, pinned, pin,
+--- END

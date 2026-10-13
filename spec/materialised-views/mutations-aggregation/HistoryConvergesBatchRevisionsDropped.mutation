@@ -1,0 +1,14 @@
+MODULE: HistoryConvergesBatchRevisionsDropped
+TARGET: HistoryConverges
+CLASS: Temporal
+SUMMARY: numeric membership commits but the accumulative composition silently drops the batch revisions
+PERTURBS: Flush
+
+--- FIND
+    /\ history' = IF outcome = "commit"
+                  THEN history \cup Revision(Batch) ELSE history
+    /\ seen' = IF outcome = "commit" THEN seen \cup Batch ELSE seen
+--- REPLACE
+    /\ history' = history
+    /\ seen' = seen
+--- END

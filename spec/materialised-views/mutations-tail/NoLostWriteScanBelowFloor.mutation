@@ -1,0 +1,11 @@
+MODULE: NoLostWriteScanBelowFloor
+TARGET: NoLostWrite
+CLASS: Invariant
+SUMMARY: the rebuild scans the source as of before its captured resume floor, so the entry at the floor is never applied
+PERTURBS: RebuildScan
+
+--- FIND
+    /\ rbVal' = SrcState(rbTree)
+--- REPLACE
+    /\ rbVal' = StateAt(rbTree, rbFloor - 1)
+--- END

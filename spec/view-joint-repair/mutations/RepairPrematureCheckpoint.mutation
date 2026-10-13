@@ -1,0 +1,11 @@
+MODULE: RepairPrematureCheckpoint
+TARGET: CheckpointHeld
+CLASS: Invariant
+SUMMARY: the original publication alone retires the participant's repair checkpoint hold
+PERTURBS: Retire
+
+--- FIND
+    /\ Live /\ repairApplied /\ v \notin retired
+--- REPLACE
+    /\ Live /\ applied /\ v \notin retired
+--- END

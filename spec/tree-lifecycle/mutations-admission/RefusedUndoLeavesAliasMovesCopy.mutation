@@ -1,0 +1,15 @@
+MODULE: RefusedUndoLeavesAliasMovesCopy
+TARGET: RefusedUndoLeavesAlias
+CLASS: Invariant
+SUMMARY: replication refusal nevertheless moves the serving alias
+PERTURBS: UndoRefuse
+
+--- FIND
+    /\ running /\ undo = "checking" /\ (replicated \/ alias = "later")
+    /\ undo' = "done"
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, alias, cleared,
+--- REPLACE
+    /\ running /\ undo = "checking" /\ replicated
+    /\ undo' = "done" /\ alias' = "old"
+    /\ UNCHANGED <<resize, competitor, resizeUsed, competitorUsed, cleared,
+--- END

@@ -35,7 +35,9 @@ namespace Orleans.Lattice.Views;
 /// <see cref="ViewCheckpointState.ActiveGeneration"/> unchanged, so the prior
 /// generation keeps serving; the orphaned shadow under the
 /// <c>ActiveGeneration + 1</c> tree id is exactly the next rebuild attempt's
-/// target and is cleared before that attempt re-builds, so it never leaks. The
+/// target and is cleared before that attempt re-builds. If no rebuild follows,
+/// decommission deletes that shadow generation too and advances the checkpoint
+/// past it, so a view re-created under the same name never adopts it. The
 /// swap is a single write, so it either fully happens or not at all.
 /// </para>
 /// <para>
@@ -50,8 +52,8 @@ namespace Orleans.Lattice.Views;
 /// </summary>
 internal sealed partial class ViewMaintainerGrain
 {
-    /// <summary>The captured per-partition resume floor and highest HLC of a completed shadow build.</summary>
-    private readonly record struct ShadowBuildResult(Dictionary<int, long> Offsets, HybridLogicalClock Highest);
+    /// <summary>The physical source, resume floor and highest HLC of one shadow build.</summary>
+    private readonly record struct ShadowBuildResult(string WalTreeId, Dictionary<int, long> Offsets, HybridLogicalClock Highest);
 
     /// <inheritdoc />
     public async Task RebuildTrackedAsync(LatticeOperationTicket ticket, CancellationToken cancellationToken = default)
@@ -211,7 +213,14 @@ internal sealed partial class ViewMaintainerGrain
     /// <inheritdoc />
     public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
     {
+        await GuardJointMaintenanceAdmissionAsync(cancellationToken);
         using var viewWriteScope = ViewWriteContext.BeginScope();
+        await ReleaseUncommittedJointOwnershipAsync();
+        if (HasJointOwnership)
+        {
+            throw new InvalidOperationException($"View '{ViewName}' cannot reconcile before its submitted joint repair checkpoint retires.");
+        }
+
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {
@@ -276,7 +285,7 @@ internal sealed partial class ViewMaintainerGrain
 
         // DeriveLocally drift: the freshly-built shadow is the repaired view.
         await ReportMaintenanceProgressAsync(LatticeMaintenanceProgress.Swapping);
-        await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
+        await SwapToShadowAsync(registration, built, cancellationToken);
         return true;
     }
 
@@ -293,6 +302,11 @@ internal sealed partial class ViewMaintainerGrain
     /// </summary>
     private async Task InPlaceRebuildAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
+        // Terminally degrade any cross-tree slice a staging backstop discarded
+        // before the live tree is cleared and re-derived, so a later joint flip
+        // can never land that stale slice over the rebuilt view.
+        await DegradeBackstopDiscardedCrossTreeAsync();
+
         var sourceTreeId = registration.SourceTreeId;
         var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
@@ -307,6 +321,10 @@ internal sealed partial class ViewMaintainerGrain
         // until a later reconcile.
         var capturedOffsets = await CaptureResumeFloorsAsync(walTreeId, partitions, cancellationToken);
 
+        // The capture queues every decided cross-tree batch it retires without
+        // replay; degrade those too before anything is cleared or published.
+        await DegradeBackstopDiscardedCrossTreeAsync();
+
         // A rebuild reconverges from current committed source state, so abandon any
         // partially-staged atomic batch (its uncommitted prepares are not part of
         // committed source state); an in-flight batch held back above is re-staged
@@ -314,6 +332,7 @@ internal sealed partial class ViewMaintainerGrain
         _staging.Clear();
         _stagedSourceKeyRefCount.Clear();
         _ordinaryHlcOverStagedKey.Clear();
+        _droppedSuperseders.Clear();
 
         // Freshen the aggregation idempotency keys (see BuildShadowAsync) so the
         // re-accumulation mints fresh sagas rather than re-attaching to the retained
@@ -371,7 +390,9 @@ internal sealed partial class ViewMaintainerGrain
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
             sourceKeys,
             RebuildFanOutWidth,
-            k => sourceTree.GetWithVersionAsync(k, cancellationToken),
+            k => string.Equals(sourceTreeId, walTreeId, StringComparison.Ordinal)
+                ? sourceTree.GetWithVersionAsync(k, cancellationToken)
+                : ReadPhysicalSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
             cancellationToken))
         {
             var key = sourceKeys[index++];
@@ -423,15 +444,33 @@ internal sealed partial class ViewMaintainerGrain
 
         // Keep the active generation at 0 (stable tree id) and advance the resume
         // checkpoint to the captured source heads in one durable write.
+        var currentPhysical = await ResolveSourcePhysicalAsync(sourceTreeId);
+        if (!string.Equals(currentPhysical, walTreeId, StringComparison.Ordinal))
+        {
+            _sourceIdentityRebindRequested = true;
+            throw new StaleTreeRoutingException(sourceTreeId, walTreeId, currentPhysical);
+        }
+
+        var retiredPhysical = state.State.BoundPhysicalTreeId;
         state.State.ActiveGeneration = 0;
+        state.State.BoundPhysicalTreeId = walTreeId;
         state.State.AppliedOffsets = capturedOffsets;
+        ApplyRebuildReplayFence();
         state.State.HighestAppliedTimestamp = highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
         await state.WriteStateAsync();
+        PublishReadPositions(walTreeId, capturedOffsets, retirePrevious: true);
 
         if (highest > HybridLogicalClock.Zero)
         {
             await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, cancellationToken);
+        }
+
+        if (!string.IsNullOrEmpty(retiredPhysical)
+            && !string.Equals(retiredPhysical, walTreeId, StringComparison.Ordinal))
+        {
+            await cursorRegistry.UnregisterAsync(retiredPhysical, ConsumerId, cancellationToken);
+            await WithdrawReadRegistrationAsync(retiredPhysical);
         }
     }
 
@@ -447,6 +486,10 @@ internal sealed partial class ViewMaintainerGrain
     /// </summary>
     private async Task<ShadowBuildResult> BuildShadowAsync(ViewRegistration registration, CancellationToken cancellationToken)
     {
+        // As for the in-place rebuild: no shadow built from current source state
+        // may be swapped in while a discarded cross-tree slice can still flip.
+        await DegradeBackstopDiscardedCrossTreeAsync();
+
         var sourceTreeId = registration.SourceTreeId;
         var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
@@ -462,6 +505,10 @@ internal sealed partial class ViewMaintainerGrain
         // a later reconcile.
         var capturedOffsets = await CaptureResumeFloorsAsync(walTreeId, partitions, cancellationToken);
 
+        // The capture queues every decided cross-tree batch it retires without
+        // replay; degrade those too before anything is cleared or published.
+        await DegradeBackstopDiscardedCrossTreeAsync();
+
         // A rebuild reconverges the view from current committed source state, so
         // any partially-staged atomic batch is abandoned: its uncommitted prepares
         // are not part of committed source state and must not leak into the view;
@@ -470,6 +517,7 @@ internal sealed partial class ViewMaintainerGrain
         _staging.Clear();
         _stagedSourceKeyRefCount.Clear();
         _ordinaryHlcOverStagedKey.Clear();
+        _droppedSuperseders.Clear();
 
         // Bump and durably persist the rebuild generation BEFORE re-applying so the
         // aggregation flip's idempotency keys are freshened: re-using the prior
@@ -533,7 +581,9 @@ internal sealed partial class ViewMaintainerGrain
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
             sourceKeys,
             RebuildFanOutWidth,
-            k => sourceTree.GetWithVersionAsync(k, cancellationToken),
+            k => string.Equals(sourceTreeId, walTreeId, StringComparison.Ordinal)
+                ? sourceTree.GetWithVersionAsync(k, cancellationToken)
+                : ReadPhysicalSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
             cancellationToken))
         {
             var key = sourceKeys[index++];
@@ -586,7 +636,7 @@ internal sealed partial class ViewMaintainerGrain
             }
         }
 
-        return new ShadowBuildResult(capturedOffsets, highest);
+        return new ShadowBuildResult(walTreeId, capturedOffsets, highest);
     }
 
     /// <summary>
@@ -596,8 +646,7 @@ internal sealed partial class ViewMaintainerGrain
     /// </summary>
     private async Task SwapToShadowAsync(
         ViewRegistration registration,
-        Dictionary<int, long> capturedOffsets,
-        HybridLogicalClock highest,
+        ShadowBuildResult built,
         CancellationToken cancellationToken)
     {
         var oldGeneration = state.State.ActiveGeneration;
@@ -608,9 +657,22 @@ internal sealed partial class ViewMaintainerGrain
         // already beyond the single post-swap staleness window).
         await TryReclaimPendingGenerationAsync(cancellationToken, force: true);
 
+        var currentPhysical = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
+        if (!string.Equals(currentPhysical, built.WalTreeId, StringComparison.Ordinal))
+        {
+            _sourceIdentityRebindRequested = true;
+            logger.LogWarning(
+                "View '{ViewName}' rejected a shadow scanned from '{CapturedPhysical}' after its source moved to '{CurrentPhysical}'.",
+                ViewName, built.WalTreeId, currentPhysical);
+            throw new StaleTreeRoutingException(registration.SourceTreeId, built.WalTreeId, currentPhysical);
+        }
+
+        var retiredPhysical = state.State.BoundPhysicalTreeId;
         state.State.ActiveGeneration = newGeneration;
-        state.State.AppliedOffsets = capturedOffsets;
-        state.State.HighestAppliedTimestamp = highest;
+        state.State.BoundPhysicalTreeId = built.WalTreeId;
+        state.State.AppliedOffsets = built.Offsets;
+        ApplyRebuildReplayFence();
+        state.State.HighestAppliedTimestamp = built.Highest;
         state.State.ProjectionVersion = registration.ProjectionVersion;
         state.State.HasPendingReclaim = true;
         state.State.PendingReclaimGeneration = oldGeneration;
@@ -619,11 +681,18 @@ internal sealed partial class ViewMaintainerGrain
         // Single durable commit: readers resolving the active generation flip from
         // the old fully-built tree to the new fully-built tree with no empty window.
         await state.WriteStateAsync();
+        PublishReadPositions(built.WalTreeId, built.Offsets, retirePrevious: true);
 
-        if (highest > HybridLogicalClock.Zero)
+        if (built.Highest > HybridLogicalClock.Zero)
         {
-            var walTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
-            await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, cancellationToken);
+            await cursorRegistry.ReportCursorAsync(built.WalTreeId, ConsumerId, built.Highest, cancellationToken);
+        }
+
+        if (!string.IsNullOrEmpty(retiredPhysical)
+            && !string.Equals(retiredPhysical, built.WalTreeId, StringComparison.Ordinal))
+        {
+            await cursorRegistry.UnregisterAsync(retiredPhysical, ConsumerId, cancellationToken);
+            await WithdrawReadRegistrationAsync(retiredPhysical);
         }
     }
 
@@ -793,37 +862,37 @@ internal sealed partial class ViewMaintainerGrain
         var capturedOffsets = new Dictionary<int, long>(Math.Max(0, partitions));
         if (partitions <= 0)
         {
+            _pendingRebuildFence = null;
+            _abandonedBatchCommitted = false;
             return capturedOffsets;
         }
 
         // One partition has nothing to overlap: keep the direct await.
-        if (partitions == 1)
-        {
-            capturedOffsets[0] = ResumeFloor(
-                await commitLogReader.GetHeadOffsetAsync(walTreeId, 0, cancellationToken),
-                0);
-            PublishReadPositions(walTreeId, capturedOffsets);
-            return capturedOffsets;
-        }
-
-        var heads = await BoundedFanOut.RunAsync(
-            partitions,
-            BoundedFanOut.DefaultWidth,
-            partition => commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken),
-            cancellationToken);
+        var heads = partitions == 1
+            ? [await commitLogReader.GetHeadOffsetAsync(walTreeId, 0, cancellationToken)]
+            : await BoundedFanOut.RunAsync(
+                partitions,
+                BoundedFanOut.DefaultWidth,
+                partition => commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken),
+                cancellationToken);
 
         for (var partition = 0; partition < heads.Length; partition++)
         {
             capturedOffsets[partition] = ResumeFloor(heads[partition], partition);
         }
 
+        // Lower the floors below any in-flight batch's unread prepares too, and
+        // plan the replay fence the rebuild's checkpoint write persists.
+        await PlanRebuildReplayAsync(walTreeId, heads, capturedOffsets, cancellationToken);
         PublishReadPositions(walTreeId, capturedOffsets);
         return capturedOffsets;
 
         long ResumeFloor(long head, int partition)
         {
             var floor = head - 1;
-            var stagedFloor = HeldFloorForPartition(partition);
+            var stagedFloor = string.Equals(state.State.BoundPhysicalTreeId, walTreeId, StringComparison.Ordinal)
+                ? HeldFloorForPartition(partition)
+                : long.MaxValue;
             if (stagedFloor != long.MaxValue && stagedFloor - 1 < floor)
             {
                 floor = stagedFloor - 1;

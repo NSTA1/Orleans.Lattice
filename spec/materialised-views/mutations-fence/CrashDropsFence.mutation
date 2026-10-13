@@ -1,0 +1,13 @@
+MODULE: CrashDropsFence
+TARGET: FenceCoversUnread
+CLASS: Invariant
+SUMMARY: activation forgets the persisted fence before replay has passed its head
+PERTURBS: Crash
+
+--- FIND
+    /\ crashes' = crashes + 1
+    /\ UNCHANGED <<established, wal, fenceWal, value, ckpt, fence,
+--- REPLACE
+    /\ crashes' = crashes + 1 /\ fence' = 0
+    /\ UNCHANGED <<established, wal, fenceWal, value, ckpt,
+--- END

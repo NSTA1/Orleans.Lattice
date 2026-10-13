@@ -1,0 +1,13 @@
+MODULE: DeleteOutsideReservationDeleteIgnoresHold
+TARGET: DeleteOutsideReservation
+CLASS: Invariant
+SUMMARY: deletion ignores a resize or restore's held alias reservation
+PERTURBS: Delete
+
+--- FIND
+Delete ==
+    /\ running /\ ~deleted /\ operation = "none"
+--- REPLACE
+Delete ==
+    /\ running /\ ~deleted
+--- END

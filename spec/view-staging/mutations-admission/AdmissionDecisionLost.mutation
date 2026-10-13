@@ -1,0 +1,11 @@
+MODULE: AdmissionDecisionLost
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: No durable source decision is ever made
+PERTURBS: Decide
+
+--- FIND
+    /\ ~decision /\ decision' = TRUE
+--- REPLACE
+    /\ ~decision /\ decision' = FALSE
+--- END

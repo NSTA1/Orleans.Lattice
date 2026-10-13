@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-horizon",
+  "refinement": "RefinementHorizon.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 5,
+    "properties": 8,
+    "actions": 19,
+    "mutations": 23,
+    "behaviourRows": 30,
+    "distinctStates": 16792
+  },
+  "variants": {
+    "FullScan": { "distinctStates": 29932 }
+  }
+}

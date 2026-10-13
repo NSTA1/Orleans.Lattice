@@ -1,0 +1,14 @@
+MODULE: ReplayIgnoresBudget
+TARGET: BudgetGate
+CLASS: Action
+SUMMARY: leaf re-replay ships past an exhausted traffic-budget window
+PERTURBS: ReReplay
+
+--- FIND
+    /\ ~Blocking
+    /\ consumed < Budget
+    /\ ~WalTrimmed
+--- REPLACE
+    /\ ~Blocking
+    /\ ~WalTrimmed
+--- END

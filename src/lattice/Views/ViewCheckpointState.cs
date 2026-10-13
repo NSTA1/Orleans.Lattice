@@ -147,4 +147,93 @@ internal sealed class ViewCheckpointState
     /// </remarks>
     [Id(9)]
     public long? LegacyGenerationCeiling { get; set; }
+
+    /// <summary>
+    /// Per-partition read position the maintainer had reached when it last
+    /// persisted while an atomic batch was still staged, or <see langword="null"/>
+    /// when nothing was staged. The persisted <see cref="AppliedOffsets"/> are
+    /// held back below the oldest staged entry, so a restart re-reads entries the
+    /// previous activation had already applied or resolved. Every re-read entry at
+    /// or below this fence is replayed only into the staging bookkeeping: an
+    /// ordinary write is not re-applied over a newer flushed batch, and a batch
+    /// absent from <see cref="ReplayFenceStagedTransactions"/> is treated as
+    /// already resolved rather than re-staged.
+    /// </summary>
+    [Id(10)]
+    public Dictionary<int, long>? ReplayFenceOffsets { get; set; }
+
+    /// <summary>
+    /// The physical source tree id whose write-ahead log
+    /// <see cref="ReplayFenceOffsets"/> addresses. A fence recorded against any
+    /// other log is ignored.
+    /// </summary>
+    [Id(11)]
+    public string? ReplayFenceWalTreeId { get; set; }
+
+    /// <summary>
+    /// The atomic transactions still staged when <see cref="ReplayFenceOffsets"/>
+    /// was recorded. Only these are re-staged from entries at or below the fence.
+    /// </summary>
+    [Id(12)]
+    public List<Guid>? ReplayFenceStagedTransactions { get; set; }
+
+    /// <summary>
+    /// The highest HLC of any ordinary write, or flushed overlapping prepare,
+    /// recorded against each still-staged source key when
+    /// <see cref="ReplayFenceOffsets"/> was recorded. Restored on replay because
+    /// a flushed batch below the fence is not re-staged and so cannot record its
+    /// prepares against the overlapping batch again.
+    /// </summary>
+    [Id(13)]
+    public Dictionary<string, HybridLogicalClock>? ReplayFenceSupersession { get; set; }
+
+    /// <summary>
+    /// Atomic transactions whose staged batch the staging backstop discarded
+    /// before their decision was known, or <see langword="null"/> when none are
+    /// outstanding. The rebuild that follows the backstop reconverges from
+    /// committed source state, which omits a batch still in flight, so a later
+    /// commit terminal for one of these ids forces another rebuild (which then
+    /// reads the committed batch from source) instead of staging a terminal
+    /// whose prepares will never be re-read. An abort terminal simply retires
+    /// the id. Bounded; the oldest ids are evicted first.
+    /// </summary>
+    [Id(14)]
+    public List<Guid>? AbandonedTransactions { get; set; }
+
+    /// <summary>
+    /// Cross-tree operation ids whose complete, possibly registered, slice the
+    /// staging backstop discarded and which have not yet been terminally degraded
+    /// at their joint coordinator. Persisted before the coordinator is called and
+    /// retired only once it answers, so a failed degrade (or a reactivation before
+    /// it) is retried by the next drain or rebuild before anything is published
+    /// over the discarded slice.
+    /// </summary>
+    [Id(15)]
+    public List<string>? BackstopDiscardedCrossTreeOperations { get; set; }
+
+    /// <summary>
+    /// Whether a reconcile scheduled after a cross-tree degrade, or after a joint
+    /// flip that may have landed a superseded slice, is still outstanding. Set in
+    /// the same state write that advances the checkpoint past the flip, and
+    /// cleared only after the reconcile succeeds, so a failed reconcile or a
+    /// deactivation before it is retried by a later drain rather than leaving the
+    /// stale slice in the view with no entry left to replay.
+    /// </summary>
+    [Id(16)]
+    public bool PendingCrossTreeReconcile { get; set; }
+
+    /// <summary>
+    /// Submitted joint operations that still own this source log and view
+    /// generation. Retirement waits for the mandatory repair and for the durable
+    /// checkpoint to cover every ordinary mutation deferred behind it.
+    /// </summary>
+    [Id(17)]
+    public Dictionary<string, ViewCrossTreeRepairHold> CrossTreeRepairHolds { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Joint repair acknowledgements owed after their checkpoints were durably
+    /// retired. A lost acknowledgement response leaves the id here for retry.
+    /// </summary>
+    [Id(18)]
+    public List<string> PendingCrossTreeRepairAcknowledgements { get; set; } = [];
 }

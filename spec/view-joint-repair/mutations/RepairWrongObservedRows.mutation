@@ -1,0 +1,11 @@
+MODULE: RepairWrongObservedRows
+TARGET: SnapshotExact
+CLASS: Invariant
+SUMMARY: a multiview snapshot reports a published phase without its installed row
+PERTURBS: Observe
+
+--- FIND
+    /\ snapshotRows' = ActiveRows
+--- REPLACE
+    /\ snapshotRows' = [ActiveRows EXCEPT ![1] = 0]
+--- END

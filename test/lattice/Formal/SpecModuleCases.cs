@@ -21,7 +21,13 @@ public static class SpecModuleCases
     public const string SmokeTestName = "The_atomic_commit_base_specification_holds";
 
     /// <summary>One case per discovered module.</summary>
-    public static IEnumerable<TestCaseData> Modules() => Expand(ModulesFor).Select(TlcCiShard.Tag);
+    public static IEnumerable<TestCaseData> Modules() => Expand(ModulesFor);
+
+    /// <summary>Base-model JVM cases with CI categories, separate from structural gates.</summary>
+    public static IEnumerable<TestCaseData> TlcModules() => Expand(TlcModulesFor).Select(TlcCiShard.Tag);
+
+    /// <summary>The JVM base-model case for <paramref name="module"/>.</summary>
+    public static IEnumerable<object[]> TlcModulesFor(SpecModule module) => ModulesFor(module);
 
     /// <summary>The single case for <paramref name="module"/>.</summary>
     public static IEnumerable<object[]> ModulesFor(SpecModule module)
@@ -31,11 +37,16 @@ public static class SpecModuleCases
     }
 
     /// <summary>
-    /// One case per mutation of every discovered module, each tagged with the
-    /// CI shard category <see cref="TlcCiShard.Of"/> assigns it.
+    /// One structural case per mutation of every discovered module.
     /// </summary>
     public static IEnumerable<TestCaseData> Mutations() =>
-        Expand(MutationsFor).Select(TlcCiShard.Tag);
+        Expand(MutationsFor);
+
+    /// <summary>JVM mutation experiments with their control-sharing CI categories.</summary>
+    public static IEnumerable<TestCaseData> TlcMutations() => Expand(TlcMutationsFor).Select(TlcCiShard.Tag);
+
+    /// <summary>The JVM mutation cases for <paramref name="module"/>.</summary>
+    public static IEnumerable<object[]> TlcMutationsFor(SpecModule module) => MutationsFor(module);
 
     /// <summary>One case per mutation of <paramref name="module"/>.</summary>
     public static IEnumerable<object[]> MutationsFor(SpecModule module)
@@ -45,11 +56,16 @@ public static class SpecModuleCases
     }
 
     /// <summary>
-    /// One case per variant configuration of every discovered module, each
-    /// tagged with the CI shard category <see cref="TlcCiShard.OfVariant"/> assigns it.
+    /// One structural case per variant configuration of every discovered module.
     /// </summary>
     public static IEnumerable<TestCaseData> Variants() =>
-        Expand(VariantsFor).Select(TlcCiShard.Tag);
+        Expand(VariantsFor);
+
+    /// <summary>JVM variant experiments with their CI categories.</summary>
+    public static IEnumerable<TestCaseData> TlcVariants() => Expand(TlcVariantsFor).Select(TlcCiShard.Tag);
+
+    /// <summary>The JVM variant cases for <paramref name="module"/>.</summary>
+    public static IEnumerable<object[]> TlcVariantsFor(SpecModule module) => VariantsFor(module);
 
     /// <summary>One case per variant configuration <paramref name="module"/>'s manifest declares.</summary>
     public static IEnumerable<object[]> VariantsFor(SpecModule module)

@@ -1,0 +1,11 @@
+MODULE: PeerNeverReady
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: a registered peer is never reported ready, stranding the replayed first batch
+PERTURBS: PeerReady
+
+--- FIND
+    /\ peer' = TRUE
+--- REPLACE
+    /\ peer' = FALSE
+--- END

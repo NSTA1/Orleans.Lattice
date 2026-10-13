@@ -1,0 +1,14 @@
+# Pairs with DeferredOnlyForCapture. Only a capture can leave its link to the durable marker; a foreground link must be awaited.
+MODULE: RootDefersForegroundLink
+TARGET: DeferredOnlyForCapture
+CLASS: Invariant
+SUMMARY: the root parks a foreground split's link that found its link gate busy
+PERTURBS: RootDeferLink
+
+--- FIND
+    /\ RootDefersBusyLink
+    /\ o \in CaptureOrigins
+--- REPLACE
+    /\ RootDefersBusyLink
+    \* MUTATION: any link may be parked
+--- END

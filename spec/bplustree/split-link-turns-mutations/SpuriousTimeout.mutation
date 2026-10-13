@@ -1,0 +1,15 @@
+# Pairs with NoAcknowledgedWriteLost. Only a genuine wait cycle may reach the timeout.
+MODULE: SpuriousTimeout
+TARGET: NoAcknowledgedWriteLost
+CLASS: Invariant
+SUMMARY: the call timeout fires on a link that is still making progress
+PERTURBS: Timeout
+
+--- FIND
+    /\ seed \in {"blocked", "digestBlocked"}
+    /\ lost' = TRUE
+--- REPLACE
+    \* MUTATION: the timeout fires on an admitted call
+    /\ seed \in {"admitted", "blocked", "digestBlocked"}
+    /\ lost' = TRUE
+--- END

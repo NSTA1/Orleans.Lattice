@@ -1,0 +1,11 @@
+MODULE: AdmissionPendingMetadataDropped
+TARGET: LogicalVisibilityMonotone
+CLASS: Action
+SUMMARY: Retire committed pending metadata without installing its row and regress logical source visibility
+PERTURBS: MaterialisePending
+
+--- FIND
+    /\ source' = [source EXCEPT ![1] = Newer[1]] /\ pending' = FALSE
+--- REPLACE
+    /\ source' = source /\ pending' = FALSE
+--- END

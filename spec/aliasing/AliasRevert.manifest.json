@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-revert",
+  "refinement": "RefinementRevert.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 5,
+    "properties": 7,
+    "actions": 11,
+    "mutations": 13,
+    "behaviourRows": 21,
+    "distinctStates": 1724
+  },
+  "variants": {
+    "ABA": { "distinctStates": 3020 }
+  }
+}

@@ -17,30 +17,35 @@ checking found, and, just as prominently, what each area does **not** cover.
 Each area follows the pattern the
 [atomic-commit specification](verified-atomic-commit.md) set:
 
-- **TLA+ modules checked by TLC on every pull request.** They live under
-  [`spec/`](../../spec/README.md), one directory per area.
+- **TLA+ modules checked by TLC in CI.** They live under
+  [`spec/`](../../spec/README.md), one directory per area. Routine pull requests
+  retain a base smoke check; exhaustive bases, variants and mutants run when the
+  diff touches a TLC input, and on integration/release pushes and nightly runs.
 - **A mutation for every property and every action.** Each is a deliberate
   defect that must make TLC report a violation, so no property holds
   vacuously and no protocol step goes unchecked.
 - **A refinement note per module.** It maps every variable, action and property
   to the production code that plays its role, and to detector tests that were
   shown to go red when that code is perturbed.
-- **Pure cores and Coyote models.** The decisions the specifications check run
-  in production through pure cores, and Coyote models drive those cores under
-  systematic interleaving, each with a guard test that must find a violation.
+- **Production detectors, with pure-core and Coyote tiers where applicable.**
+  The established concurrency cores also run under systematic Coyote
+  interleaving with negative controls. The view, anti-entropy and lifecycle
+  additions check bounded TLA+ protocol abstractions mapped to production grain
+  and integration tests; they do not claim a new pure-core or Coyote proof.
 
-The Formal test gates discover every module from disk and check all of this on
-every build. The acceptance census (#4442) adds two more gates:
+The structural Formal gates discover every module from disk and check its
+manifest, mutation coverage and refinement mappings independently of whether
+CI selects exhaustive TLC. The acceptance census (#4442) adds two more gates:
 
 - every behaviour-asserting row of every refinement note must read `Yes`, with no
   `Partial`, `None`, gap or assumption-only verdict;
 - no note may cite an open issue as the place a gap is tracked.
 
-## The six areas
+## Areas
 
 Figures are derived from module manifests and refinement notes. Each area's spec
 `README.md` holds the figures the build checks; the B+ tree topology row reflects
-its four checked modules.
+its six checked modules.
 
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
@@ -49,11 +54,114 @@ its four checked modules.
 | Cross-cluster atomic visibility | 1 | 59 | 39 | 116 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 82 | 64 | 190 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
-| B+ tree topology | 4 | 47 | 73 | 45 | [B+ tree topology](../../spec/bplustree/README.md) |
+| B+ tree topology | 6 | 100 | 140 | 65 | [B+ tree topology](../../spec/bplustree/README.md) |
+| Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
+| Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
+| Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
+| Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
 rows cite.
+
+## Focused materialised-view companions
+
+The tail row in the area census above is one lifecycle model, not a claim that
+it checks every view interaction. Eight focused companions supply separate
+replay, admission, physical identity, projection and joint-repair contracts.
+Together with the tail they have nine modules, 166 mutations, 213 behaviour
+rows and 192 TLC harness cases, derived from their checked manifests.
+
+| Module | Base states | Variant states | Mutants | Harness cases | Production refinement |
+|--------|-------------|----------------|---------|---------------|-----------------------|
+| `MaterialisedViewFence` | 194 | 359 (`NewerOrdinary`) | 9 | 11 | Yes, bounded replay/rebind |
+| `MaterialisedViewHorizon` | 16,792 | 29,932 (`FullScan`) | 23 | 25 | Yes, retained witness/horizon |
+| `MaterialisedViewAggregation` | 24,072 | 7,176 (`Delete`) | 18 | 20 | Yes, bounded numeric/history seams |
+| `MaterialisedViewRebind` | 21,086 | 8,143 (`NoCrash`) | 20 | 22 | Yes, captured physical identity |
+| `MaterialisedViewReadyClosure` | 46,846 | 39,651 (`History`); 31,577 (`TwoConsumers`) | 12 | 15 | Yes, transitive local closure |
+| `MaterialisedViewSourceAdmission` | 22,720 | 836 (`CrossTree`); 16,412 (`History`); 660 (`PendingSource`); 1,028 (`PendingOverlay`) | 21 | 26 | Yes, logical tuple/participant admission |
+| `MaterialisedViewResolvedIdentity` | 196 | 52 (`SameLog`); 60 (`FailedCandidate`); 49 (`LostCandidate`) | 16 | 20 | Yes, actual-log cache ownership |
+| `MaterialisedViewJointRepair` | 11,006 | 144 (`Legacy`); 4,572 (`SingleTarget`); 16,437 (`TwoFaults`) | 25 | 29 | Yes, conditional joint lifecycle |
+
+**Yes is a bounded seam mapping, not a machine-checked implementation proof.**
+The full refinement acceptance/resolver audit passes without waived Pending or
+Partial rows. Each note identifies exact production detectors, paired negative
+controls and the assumptions that remain outside its finite abstraction.
+
+The fence checks an established two-batch prefix, source-HLC winners at different
+WAL arrival offsets, unread replay after staging empties, fresh activation and
+live retirement of every old fence component when rebinding to an empty source.
+The horizon separates prepare partitions p0/p2 from terminal partitions p0/p1.
+One retained positive batch-size witness suffices for regular orphan recovery,
+but every distinct terminal and the consumed post-terminal horizon are required.
+Terminal-only history cannot invent cardinality; losing every prepare witness
+is outside convergence. Abandoned batches have their own terminal-triggered
+rebuild path. Source decision, row installation and terminal delivery remain
+distinct; the model relaxes the producer's stronger decision-before-any-terminal
+order and does not certify fabricated terminals or whole-tree snapshot scans.
+See the [replay/horizon scope](../../spec/materialised-views/README.md#focused-replay-and-horizon-companions).
+
+The aggregation checks independent numeric contributions, retract/add arithmetic,
+durable per-group publication obligations and ordinary/committed history revisions
+after a fixed captured floor. Public Count/Sum and omission controls are separate
+from local dependency closure; neither certifies every numeric projection or
+cross-tree snapshot. Rebind separates capture, scan, validation and publication:
+an alias move after validation may publish the coherent captured tuple and heal
+later, never relabel the scan with a fresh alias. Actual rebuild/GC controls hold
+both immutable bound and candidate floors through rejected and uncertain
+publication responses, with controlled registry/transport collaborators rather
+than a cluster-durability proof. The resolved-identity companion separately checks
+two physical logs reusing a transaction ID, actual-tail cache ownership, both
+cache structures, same-log rebuild and failed-before-commit versus committed-lost
+responses. Rebind alone lacks that reuse dimension. See the
+[aggregation/rebind scope](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions)
+and [resolved identity](../../spec/view-resolved-identity/README.md).
+
+ReadyClosure checks crossed independent clocks on a replacement-dependency ring,
+whole transitive local publication, external eligibility distinct from consumed
+heads, history and lost-response replay. SourceAdmission distinguishes coherent
+HLC/bytes/tombstone identity from byte equality, source-apply lag, dropped
+ordinary progress from applied replacement, and current-state from accumulative
+history. Its pending overlay resolves the bounded captured decision and newer
+undrained prepare, not just the older materialised row. Actual maintainer caller
+controls independently reject local source-admission and expected-peer bypasses.
+Post-observation head controls change a head inside the real source read, so a
+premature sample cannot pass merely because the head happened not to move.
+Neither model promises source-wide transaction-atomic capture or simultaneous
+independent consumers. See the [staging composition contract](../../spec/view-staging/README.md).
+
+JointRepair preserves original intent after response loss, freezes fresh
+contributions/physical targets, fences ordinary publication until mandatory
+repair completes, and orders durable checkpoint retirement before acknowledgements
+and cleanup. Actual fresh-capture controls require a six-key transitive closure,
+current source HLC witnesses and consumed post-observation heads. Separate real
+paired-view detectors hold publication boundaries, change source after freeze,
+lose completion/ack responses and reactivate maintainers; independent view opens
+can still straddle a valid joint commit. Backend atomicity is a separate rely.
+Legacy original-contract completion expires automatically without fabricated
+fresh certification. Rolling patch onboarding pauses new RPCs/holds until all
+non-dead members advertise capability, then resumes automatically; public
+maintenance observes the same admission fence. No manual migration, unsupported
+old-binary rejoin or downgrade is assumed safe.
+See [joint repair and automatic upgrade](../../spec/view-joint-repair/README.md).
+
+Recovery claims assume finite faults, eventual peer/source recovery, fair
+maintenance and sufficient staging capacity. Permanent unavailability stays
+fail-closed; arbitrary retention gaps, complete projection encodings, join/view
+DAGs and a shared multi-view snapshot cursor are not checked. Composing named
+seams is not an exhaustive Cartesian product of every feature.
+
+Every companion has a dedicated deterministic TLC shard. Existing independent
+one-JVM/two-visible-CPU measurements, including startup and distinct paired
+controls, price Fence at 48.434 seconds, Horizon at 196.4, Aggregation at 95.417,
+Rebind at 117.545, ReadyClosure at 94.200, expanded SourceAdmission at 239.838,
+ResolvedIdentity at 61.385 and JointRepair at 97.221. A later isolated Horizon
+run passed the same 25 cases in 113.521 seconds; the planner retains the earlier
+conservative measured weight rather than claiming a performance improvement.
+Heap ceilings were 2 GiB for Fence/Horizon and 1,800 MiB for the other companions;
+peak live heap was not measured. These are local observations, not predicted CI
+deadlines. Exhaustive TLC is validated in CI's sharded runs; local iteration uses
+the structural and production-detector scopes rather than serially repeating it.
 
 ## What each area covers, and what it does not
 
@@ -81,7 +189,10 @@ gaps, states its full scope.
     parent splits from three to six levels in the checked instance; interleaved
     writes through a bounded leaf split and fold; sibling-chain and parent-route
     publication; and durable retirement, route removal, successor back-link
-    repair, clearing, and recovery for a reclaimed leaf. Range ownership during
+    repair, clearing, and recovery for a reclaimed leaf; and the grain-turn
+    wait-for graph of a split linked from inside the donor's capture turn,
+    including a parent overflow whose seeding calls back into that donor, the
+    leaf's persist-write gate, and its clear latch. Range ownership during
     adaptive shard split, online reshard and resize is already covered by the
     `ShardOwnership` models above.
   - **Does not cover:** an unbounded-height proof (the level-indexed model is
@@ -113,6 +224,60 @@ gaps, states its full scope.
     backup set's members during the alias swap, and a replication batch delayed
     across a whole restore cutover.
 
+- **Materialised-view tail and lifecycle** ([`spec/materialised-views/`](../../spec/materialised-views/README.md)).
+  - **Covers:** physical WAL binding, checkpoint and published read-position
+    entitlement, cursor and retention trims, fall-off and lag rebuild, finite
+    crash replay, shadow-generation publication, reclaim and decommission,
+    and source identity cutover followed by rebind.
+  - **Does not cover:** atomic/cross-tree staging, aggregation membership,
+    history shaping, per-partition terminal recovery, or reader-handle reclaim
+    grace. Source swaps are environment steps; lifecycle internals are checked
+    by the lifecycle and alias companions. Replay can transiently regress a
+    value: this model checks prefix convergence, not monotonic reads across a
+    replay. Its seven invariants and five temporal properties are not a claim
+    of read-atomic safety for the separate staging protocol.
+
+- **Tree lifecycle composition** ([`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md)).
+  - **Covers:** sparse resize copy/fence/swap/undo; grow and shrink reshard;
+    local shadow restore/revert overtaking a physically bound migration; alias
+    reservations, deletion exclusion and completion-before-release recovery;
+    publish-before-read resize versus split/fold or legacy bootstrap admission;
+    once-per-operation undo clearance when replication becomes enabled; and
+    refusal of old undo after a later restore or administrative alias cutover.
+  - **Does not cover:** arbitrary-await crash safety, a cutover racing every
+    compensation await of a still-undoable resize, snapshot transport, or the
+    data-plane rows and saga internals already modelled by the ownership, WAL
+    and backup companions.
+    An undo request can overtake already-admitted work; its admission interlock
+    prevents new work, not retroactive cancellation.
+
+- **Anti-entropy remediation** ([`spec/anti-entropy/`](../../spec/anti-entropy/README.md)).
+  - **Covers:** digest comparison and Merkle localisation; opt-in, traffic-window
+    and breaker gates; retained-WAL targeted replay and snapshot fallback;
+    origin suppression, receiver dedup and LWW joins; dropped Sets and Deletes, foreign-origin
+    rows, trim/cursor blind spots, finite transport faults and activation restart.
+    Topology changes invalidate localisation through a physical generation.
+  - **Does not cover:** full topology data movement, bounded-cache eviction,
+    unbounded clocks or transport faults, or repairing lost deletes after their
+    tombstones have been reaped. Retained snapshot tombstones repair trimmed-WAL
+    and below-cursor lost deletes; reaping is outside the model. The Alias variant
+    covers one physical swap, not rollback restores. See the refinement note.
+
+- **Shared alias routing and revert** ([`spec/aliasing/`](../../spec/aliasing/README.md)).
+  - **Covers:** two logical aliases sharing physical copies; intent-before-fence
+    and fence-before-publication ordering; atomic alias/map publication;
+    logical-alias-specific fence ownership; finite crash/retry and stale durable
+    administrative recovery after ABA; restore revert's early refusal and
+    expected-physical fence; deletion admission; and split/fold physical binding
+    across repeated alias publications.
+  - **Does not cover:** unbounded redirect chains, physical purge of shared
+    copies, authorization, or an epoch-fenced restore revert. A revert admission
+    read is not a lock: a superseding move after it can leave lineage/reservation
+    changed on later refusal, and a return to the same shadow passes the physical
+    check. No completion guarantee is claimed for permanently superseded work.
+    Physical WAL consumers, atomic visibility and data movement retain the
+    view, ownership, anti-entropy and lifecycle companion models' guarantees.
+
 Across every area, the instances are bounded: each module checks a small number
 of copies, shards, keys and faults exhaustively, and says which. A clean run is
 a statement about the design over that instance. The integration and
@@ -125,10 +290,10 @@ protocol, [Verified Atomic Action](verified-atomic-action.md) and
 
 ## Defects the coverage found and fixed
 
-Each defect below was found by building or reviewing an area's specification,
+The runtime defects below were found by building or reviewing an area's specification,
 reproduced against production, and fixed; each fix is pinned by detectors, and
 the mutation that reproduced production stays as a regression check. Each
-area's list is the authoritative one:
+area's list is the authoritative one. The separately listed interrupted-shadow detector correction is a test flaw, not a runtime defect:
 
 | Area | Defects | Full list |
 |------|---------|-----------|
@@ -137,7 +302,27 @@ area's list is the authoritative one:
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
 | Backup and restore | #4485, #4490, #4589, #4593, #4686 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
-| B+ tree topology | #4795, #4815, #4818 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
+| B+ tree topology | #4795, #4815, #4818, #4914 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
+| Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |
+| Materialised-view physical rebuild and resolved identity | #4891, #4895, #4905 | [Physical-rebind companion](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) and [resolved identity](../../spec/view-resolved-identity/README.md) |
+| Materialised-view staging, replay and source admission | #4864, #4865, #4866, #4867, #4868, #4869, #4870, #4871, #4872, #4877, #4878, #4879, #4880, #4881, #4882, #4883, #4884, #4885, #4886, #4890, #4900 | [Tail and focused companions](../../spec/materialised-views/README.md), [staging](../../spec/view-staging/README.md) |
+| Materialised-view joint repair and automatic upgrade | #4876, #4897, #4898, #4899, #4902 | [Joint repair](../../spec/view-joint-repair/README.md) |
+| Interrupted-shadow regression detector | #4906 | [Exact physical generation control](../../spec/materialised-views/RefinementHorizon.md) |
+| Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
+| Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
+| Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
+
+## CI partition and non-vacuity
+
+The new view, anti-entropy and lifecycle JVM cases use dedicated
+deterministic-only TLC shards with measured durations in the matrix planner.
+Bases and variants leave the catch-all. Anti-entropy is split into three
+measured groups; its generated mutation-specific config headers prevent
+same-target controls from sharing the current byte-keyed cache. Structural
+discovery and refinement cases remain
+outside the TLC shards and run even when policy skips exhaustive model checking.
+The #4852 regression prevents a shard category from silently moving those
+structural checks into skipped work.
 
 ## Related
 

@@ -1,0 +1,11 @@
+MODULE: PrepareNeverAppended
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: prepares never reach either partition, so the fair source cannot commit
+PERTURBS: AppendPrepare
+
+--- FIND
+    /\ length' = [length EXCEPT ![p] = 1]
+--- REPLACE
+    /\ length' = length
+--- END

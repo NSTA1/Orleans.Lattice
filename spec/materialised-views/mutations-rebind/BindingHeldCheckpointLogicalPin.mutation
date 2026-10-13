@@ -1,0 +1,11 @@
+MODULE: BindingHeldCheckpointLogicalPin
+TARGET: BindingHeld
+CLASS: Invariant
+SUMMARY: checkpoint banking withdraws the bound physical pin rather than reporting its floor
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ checkpoint' = read /\ held' = [held EXCEPT ![bound] = read]
+--- REPLACE
+    /\ checkpoint' = read /\ held' = [held EXCEPT ![bound] = -1]
+--- END
