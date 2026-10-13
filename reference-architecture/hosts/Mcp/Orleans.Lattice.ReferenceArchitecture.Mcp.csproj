@@ -25,9 +25,9 @@
     transitively.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Mcp.Telemetry.Azure" Version="10.1.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
   </ItemGroup>
@@ -51,15 +51,15 @@
     9.7.0.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="10.0.0" />
-    <PackageReference Include="Orleans.Lattice.Api.TenantAdmin.Grpc" Version="10.0.0" />
+    <PackageReference Include="Orleans.Lattice" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.State.Grpc" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Data.Grpc" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Auth.Grpc" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TreeAdmin.Grpc" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.Schema.Grpc" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice.Api.TenantAdmin.Grpc" Version="10.1.0" />
   </ItemGroup>
 
   <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
