@@ -808,8 +808,16 @@ if (string.Equals(suite, "decisionstamp", StringComparison.OrdinalIgnoreCase))
     return decisionStampSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
-if (string.Equals(suite, "registryprojection", StringComparison.OrdinalIgnoreCase))
+if (string.Equals(suite, "registryprojection", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(suite, "registryoptions", StringComparison.OrdinalIgnoreCase))
 {
+    if (string.Equals(suite, "registryoptions", StringComparison.OrdinalIgnoreCase))
+    {
+        config = config.AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is RegistryProjectionElisionBenchmarks.Site.ResizeEmptyProbe
+                or RegistryProjectionElisionBenchmarks.Site.ResizeIntentOptions
+                or RegistryProjectionElisionBenchmarks.Site.DeletionShardCensus));
+    }
     Console.WriteLine("[microbench] suite   -> registryprojection (RegistryProjectionElisionBenchmarks)");
     var registryProjectionSummary = BenchmarkRunner.Run<RegistryProjectionElisionBenchmarks>(config);
     return registryProjectionSummary.HasCriticalValidationErrors ? 1 : 0;
