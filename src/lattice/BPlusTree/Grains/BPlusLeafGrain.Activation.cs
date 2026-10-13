@@ -679,13 +679,9 @@ internal sealed partial class BPlusLeafGrain
 
             Volatile.Write(ref _withheldReplayPermits, _withheldReplayPermits + 1);
             _replayServiceRateController?.Reset();
-            LatticeMetrics.WalReplayPermitAdaptations.Add(
-                1,
-                LatticeMetrics.PermitAdaptationWithheld,
-                trigger,
-                LatticeTenantLabel.Platform);
-            return true;
         }
+        RecordReplayPermitAdaptation(LatticeMetrics.PermitAdaptationWithheld, trigger);
+        return true;
     }
 
     /// <summary>
@@ -754,12 +750,9 @@ internal sealed partial class BPlusLeafGrain
 
             Volatile.Write(ref _withheldReplayPermits, _withheldReplayPermits - 1);
             _replayServiceRateController?.Reset();
-            LatticeMetrics.WalReplayPermitAdaptations.Add(
-                1,
-                LatticeMetrics.PermitAdaptationRestored,
-                LatticeTenantLabel.Platform);
-            return true;
         }
+        RecordReplayPermitAdaptation(LatticeMetrics.PermitAdaptationRestored);
+        return true;
     }
 
     /// <summary>
@@ -2000,7 +1993,6 @@ internal sealed partial class BPlusLeafGrain
     internal static void ReleaseStarvationReplayPermit(SemaphoreSlim gate)
     {
         gate.Release();
-        Interlocked.Increment(ref _replayPermitsServed);
         Interlocked.Decrement(ref _starvationReplayPermits);
     }
 
@@ -2376,6 +2368,7 @@ internal sealed partial class BPlusLeafGrain
         var startedAt = Stopwatch.GetTimestamp();
         var acquiredAt = startedAt;
         var permitAcquired = false;
+        long serviceHold = -1;
 
         // Issue #3479. Sampled so that an abandoned drive can report whether its
         // replay banked anything. Summed across partitions because the log reports
@@ -2410,6 +2403,7 @@ internal sealed partial class BPlusLeafGrain
             }
 
             acquiredAt = Stopwatch.GetTimestamp();
+            serviceHold = BeginReplayServiceRateHold();
             permitAcquired = true;
 
             // The permit is acquired and released in THIS frame, and the work
@@ -2519,6 +2513,7 @@ internal sealed partial class BPlusLeafGrain
         {
             if (replayPermit is not null)
             {
+                CompleteReplayServiceRateHold(serviceHold);
                 ReleaseStarvationReplayPermit(replayPermit);
                 if (permitAcquired)
                     RecordReplayPermitHold(acquiredAt);
@@ -2827,7 +2822,6 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="treeId">The tree id the tenant tag is derived from.</param>
     internal static void RecordReplayPermitHold(long acquiredAt, string metricTreeId, string? treeId)
     {
-        CompleteReplayServiceRateHold(acquiredAt);
         try
         {
             LatticeMetrics.WalReplayPermitHold.Record(
@@ -3106,6 +3100,7 @@ internal sealed partial class BPlusLeafGrain
         bool advanced;
         SemaphoreSlim? replayPermit = null;
         long replayPermitAcquiredAt = 0;
+        long replayServiceHold = -1;
 
         // Memory-adaptive backpressure state for this activation (issue #2781).
         // Both are read only in the finally, and both default to the inert value
@@ -3200,6 +3195,7 @@ internal sealed partial class BPlusLeafGrain
                 // observation below, so the hold measures the replay and not
                 // the bookkeeping around it.
                 replayPermitAcquiredAt = Stopwatch.GetTimestamp();
+                replayServiceHold = BeginReplayServiceRateHold();
                 // The cold/warm discriminator is precisely the replay-start
                 // override computed at step 0.5: a -1 sentinel means neither the
                 // snapshot rehydrate nor a pre-populated cache supplied an anchor,
@@ -3485,7 +3481,7 @@ internal sealed partial class BPlusLeafGrain
                 // happens while there is still heap left to reduce into.
                 FinishReplayPermit(
                     replayPermit, withholdReplayPermitOnPressure, replayCompletedCleanly,
-                    replayPermitAcquiredAt, MetricTreeId, state.State.TreeId);
+                    replayPermitAcquiredAt, MetricTreeId, state.State.TreeId, replayServiceHold);
             }
         }
 

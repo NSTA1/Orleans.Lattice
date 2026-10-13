@@ -20,7 +20,6 @@ public sealed class ReplayServiceRateControllerTests
             // A serial store completes the same work per window at every limit.
             served += 100;
             var change = controller.Observe(window * 100L, served, true, 0, ceiling - withheld, withheld);
-            CompletePreviousCohort(controller, change, ceiling - withheld, window * 100L);
             withheld -= change;
             Assert.That(ceiling - withheld, Is.InRange(1, ceiling));
             if (window > 500)
@@ -49,7 +48,6 @@ public sealed class ReplayServiceRateControllerTests
             // CPU work scales linearly with circulating concurrency.
             served += (ceiling - withheld) * 100L;
             var change = controller.Observe(window * 100L, served, true, 0, ceiling - withheld, withheld);
-            CompletePreviousCohort(controller, change, ceiling - withheld, window * 100L);
             withheld -= change;
             Assert.That(withheld, Is.InRange(0, 1),
                 "a CPU-bound reduction must be undone before a second reduction is attempted");
@@ -75,7 +73,6 @@ public sealed class ReplayServiceRateControllerTests
         {
             served += window < 200 ? 100 : (Ceiling - withheld) * 100L;
             var change = controller.Observe(window * 100L, served, true, 0, Ceiling - withheld, withheld);
-            CompletePreviousCohort(controller, change, Ceiling - withheld, window * 100L);
             withheld -= change;
             if (window == 199)
                 Assert.That(Ceiling - withheld, Is.LessThanOrEqualTo(2));
@@ -122,14 +119,15 @@ public sealed class ReplayServiceRateControllerTests
     public void Observe_never_grades_a_probe_before_every_old_cold_hold_completes()
     {
         var controller = new ReplayServiceRateController(100);
+        var oldHolds = Enumerable.Range(0, 6).Select(_ => controller.Begin()).ToArray();
         controller.Observe(0, 0, true, 0, 6, 0);
         Assert.That(controller.Observe(100, 100, true, 0, 6, 0), Is.EqualTo(-1));
         for (var i = 0; i < 5; i++)
-            controller.Complete(50);
-        controller.Complete(101);
+            controller.Complete(oldHolds[i]);
+        controller.Complete(controller.Begin());
         Assert.That(controller.Observe(10000, 10000, true, 0, 5, 1), Is.Zero,
             "new holds cannot substitute for the last old cold replay");
-        controller.Complete(50);
+        controller.Complete(oldHolds[5]);
         Assert.That(controller.Observe(10100, 10100, true, 0, 5, 1), Is.Zero);
         Assert.That(controller.Observe(10200, 10200, true, 0, 5, 1), Is.Zero);
         Assert.That(controller.Observe(10300, 10300, true, 0, 5, 1), Is.Zero);
@@ -159,22 +157,17 @@ public sealed class ReplayServiceRateControllerTests
     }
 
     [Test]
-    public void Observe_clock_tie_and_repeated_resets_keep_exactly_one_rollback()
+    public void Observe_generation_enrollment_ignores_clock_ties_and_repeated_resets_keep_one_rollback()
     {
         var controller = new ReplayServiceRateController(100);
+        var hold = controller.Begin();
         controller.Observe(0, 0, true, 0, 6, 0);
         Assert.That(controller.Observe(100, 100, true, 0, 6, 0), Is.EqualTo(-1));
-        controller.Complete(100);
         controller.Reset();
         controller.Reset();
+        controller.Complete(hold);
         Assert.That(controller.Observe(200, 200, true, 0, 5, 1), Is.EqualTo(1));
         Assert.That(controller.Observe(300, 300, true, 0, 6, 0), Is.Zero);
     }
 
-    private static void CompletePreviousCohort(ReplayServiceRateController controller, int change, int circulating, long now)
-    {
-        if (change != 0)
-            for (var i = 0; i < circulating; i++)
-                controller.Complete(now - 1);
-    }
 }

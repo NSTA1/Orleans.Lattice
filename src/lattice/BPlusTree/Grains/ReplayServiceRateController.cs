@@ -19,9 +19,17 @@ internal sealed class ReplayServiceRateController(long windowTicks)
     private int _probe;
     private int _direction = -1;
     private int _cooldown;
-    private long _probeAt;
     private int _oldHolds;
     private int _rollback;
+    private long _generation;
+    private int _activeHolds;
+
+    /// <summary>Enrolls replay work after acquisition, before any work starts.</summary>
+    internal long Begin()
+    {
+        _activeHolds++;
+        return _generation;
+    }
 
     /// <summary>
     /// Returns -1 to withhold this returning permit, +1 to restore a service
@@ -79,7 +87,7 @@ internal sealed class ReplayServiceRateController(long windowTicks)
             {
                 _direction = -probe;
                 _cooldown = RecoveryWindows;
-                DrainOldHolds(now, circulating);
+                DrainOldHolds();
                 return -probe;
             }
             _cooldown = 1;
@@ -102,23 +110,19 @@ internal sealed class ReplayServiceRateController(long windowTicks)
 
         _referenceRate = rate;
         _probe = _direction;
-        DrainOldHolds(now, circulating);
+        DrainOldHolds();
         return _probe;
     }
 
     /// <summary>
-    /// Excludes all holds admitted before a limit change, including minute-long
+    /// Excludes all holds enrolled before a limit change, including minute-long
     /// cold replays. A fixed settling delay cannot prove those holds drained.
-    /// Called after the physical permit disposition, even if metrics fail.
+    /// Completed before returning a physical permit, even if metrics fail.
     /// </summary>
-    internal void Complete(long acquiredAt)
+    internal void Complete(long generation)
     {
-        if (_oldHolds > 0 && acquiredAt == _probeAt)
-        {
-            // Clock resolution cannot distinguish this admission's cohort.
-            Reset();
-        }
-        else if (_oldHolds > 0 && acquiredAt < _probeAt)
+        _activeHolds--;
+        if (_oldHolds > 0 && generation < _generation)
             _oldHolds--;
     }
 
@@ -129,14 +133,15 @@ internal sealed class ReplayServiceRateController(long windowTicks)
         _hasWindow = false;
         _probe = 0;
         _oldHolds = 0;
+        _generation++;
         _direction = -1;
         _cooldown = 0;
     }
 
-    private void DrainOldHolds(long now, int circulating)
+    private void DrainOldHolds()
     {
-        _probeAt = now;
-        _oldHolds = circulating;
+        _oldHolds = _activeHolds;
+        _generation++;
         _hasWindow = false;
     }
 

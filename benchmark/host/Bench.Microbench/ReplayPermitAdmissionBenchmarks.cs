@@ -178,6 +178,8 @@ public class ReplayPermitAdmissionBenchmarks
         // Keep the accounting at the combined floor after warmup; recovery
         // probes still visit both the withholding and restoring branches.
         while (_releaseGate.Wait(0)) { }
+        var hold = BPlusLeafGrain.BeginReplayServiceRateHold();
+        BPlusLeafGrain.CompleteReplayServiceRateHold(hold);
         BPlusLeafGrain.SeedReplayServiceRateForTest(_releaseServed += 100, 100);
         var withhold = BPlusLeafGrain.AdaptReplayServiceRate(_releaseGate, true, _releaseClock += 100);
         BPlusLeafGrain.RecordReplayPermitHold(1, "replay-benchmark", "replay-benchmark");
@@ -194,7 +196,8 @@ public class ReplayPermitAdmissionBenchmarks
     public void ReleaseFullPath()
     {
         BPlusLeafGrain.FinishReplayPermit(
-            _releaseGate, false, true, 1, "replay-benchmark", "replay-benchmark");
+            _releaseGate, false, true, 1, "replay-benchmark", "replay-benchmark",
+            BPlusLeafGrain.BeginReplayServiceRateHold());
         if (!_releaseGate.Wait(0))
             throw new InvalidOperationException("The default-off release must return its permit.");
     }
@@ -208,7 +211,8 @@ public class ReplayPermitAdmissionBenchmarks
     public void ReleaseFullPathEnabled()
     {
         BPlusLeafGrain.FinishReplayPermit(
-            _releaseGate, false, true, 1, "replay-benchmark", "replay-benchmark");
+            _releaseGate, false, true, 1, "replay-benchmark", "replay-benchmark",
+            BPlusLeafGrain.BeginReplayServiceRateHold());
         while (_releaseGate.Wait(0)) { }
     }
 
