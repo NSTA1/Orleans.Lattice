@@ -290,6 +290,13 @@ public class DigestCoalescingMetricsIntegrationTests
         var perShard = await LatticeDigestSettleHelpers.AwaitAllShardDigestsConvergeAsync(
             tree, shardCount: shardCount, expectedTotalEntries: live);
 
+        for (var s = 0; s < shardCount; s++)
+        {
+            var fullRange = await tree.GetLeafProjectionDigestForRangeAsync(s, null, null);
+            Assert.That(perShard[s].EntryCount, Is.EqualTo(fullRange.EntryCount),
+                $"cached chained-fold count must match a fresh full-range fold for shard {s}");
+        }
+
         // Independence sanity check: at least two shards must be
         // populated after a 32-write key-distributed burst. If we
         // accidentally pinned everything onto one shard the test would
