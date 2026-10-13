@@ -793,6 +793,10 @@ the checkpoint or a newly captured snapshot can already cover that offset.
 Recovery of such data needs a separately reviewed rebuild or restore from
 verified evidence, not relaxed cross-shard filtering.
 
+For evidence-preserving assessment and recovery of historical records, see
+[Acknowledged deletes reappear after cold replay](troubleshooting.md#acknowledged-deletes-reappear-after-cold-replay)
+in the troubleshooting guide.
+
 ### Replay reads are filtered at the source
 
 A WAL partition is shared by every leaf whose keys hash to it, so a leaf
