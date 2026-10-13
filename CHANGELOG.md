@@ -86,6 +86,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Keys read ownership.** Changing key or prefix discards late replies and faults without ending the new read; abandoned scan cursors are released and pending filter reads retry for the current prefix. ([#4913](https://github.com/NSTA1/Orleans.Lattice/pull/4913)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Deadlock - Split-link reparent callbacks.** A capture split whose link overflowed the parent no longer deadlocks when the new internal node calls back into the busy leaf; leaf persistence is serialised. ([#4914](https://github.com/NSTA1/Orleans.Lattice/issues/4914)) (`Orleans.Lattice`)
+
 - **Views - Physical identity, retention, and backpressure.** Maintainers bind to physical tree identities, observe floor-holder retention across WAL partitions, enforce backpressure against uncommitted staging, and clear candidate garbage on shadow cutover. ([#4853](https://github.com/NSTA1/Orleans.Lattice/issues/4853), [#4857](https://github.com/NSTA1/Orleans.Lattice/issues/4857), [#4891](https://github.com/NSTA1/Orleans.Lattice/issues/4891), [#4895](https://github.com/NSTA1/Orleans.Lattice/issues/4895), [#4905](https://github.com/NSTA1/Orleans.Lattice/issues/4905)) (`Orleans.Lattice`)
 
 - **Views - Decommissioning and registry synchronization.** View removal cleans up active maintainers and staging state, prevents dropped views from re-registering during concurrent scan ticks, and unblocks pending drain tasks cleanly. ([#4856](https://github.com/NSTA1/Orleans.Lattice/issues/4856), [#4864](https://github.com/NSTA1/Orleans.Lattice/issues/4864)) (`Orleans.Lattice`)
