@@ -396,9 +396,9 @@ public class ShardConsolidationChaosTests
                 {
                     return await tree.GetAsync(key);
                 }
-                catch (TimeoutException) when (attempt < 5)
+                catch (TimeoutException) when (attempt < 2)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(2));
+                    await Task.Delay(TimeSpan.FromSeconds(1));
                 }
             }
         }
