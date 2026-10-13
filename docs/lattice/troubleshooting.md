@@ -691,6 +691,201 @@ These are different faults with different remedies:
 - For a wedged WAL floor, use the WAL reclamation report as the diagnostic record: it tells you which materialiser pin, leaf and WAL partition hold the floor, and whether the condition is a stranded pin rather than an idle tree. Do not treat a flat retained-WAL graph alone as proof that reclamation works or is broken.
 - For a cold-replay loop, remediate the arm the warning names. Back off workload or raise replay-admission headroom for queued-for-permit pressure; investigate shared option / registry resolution if activations cancel before requesting a permit; and reduce replay work or improve snapshot coverage when cancellations happen mid-replay. Retrying the same activation without changing the named cause reproduces the loop.
 
+## Acknowledged deletes reappear after cold replay
+
+### Symptom
+
+A single-key `DeleteAsync` succeeded and reads confirmed the key absent before
+shutdown, but after cold WAL replay both point and multi-read APIs return its
+older payload and version. This can affect nonzero shards whose delete records
+were written by older producers. A newer acknowledged set can legitimately
+recreate the same key, so a live value alone is not proof of this defect.
+
+### Likely cause
+
+Older single-key delete producers persisted tombstones with `ShardIndex = 0`
+even when the owning shard was nonzero. Without an authoritative shard map,
+replay cannot distinguish that malformed record from a legitimate shard-0
+delete and may reject it while still banking coverage of its offset. See the
+acknowledged-delete reproduction in
+[#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928).
+
+The producer and committed replay-watermark fixes in
+[#4929](https://github.com/NSTA1/Orleans.Lattice/pull/4929) protect new writes
+and expose recovered tombstones to delta readers. They do **not** repair
+historical records or tombstones already rejected and covered by a snapshot.
+An authoritative map present before replay can route a retained old record;
+adding a map after consumption and restarting alone is not a repair.
+[#4930](https://github.com/NSTA1/Orleans.Lattice/issues/4930) tracks the
+evidence-preserving historical assessment and recovery procedure below.
+
+### How to confirm and recover
+
+Preserve evidence **before** starting diagnostic grain calls or activation.
+Assess offline first; do not apply the general "take a diagnostic report first"
+advice to a pristine copy in this incident. This is not an automatic migration.
+A successful startup, a new-write test, or matching digests of two
+already-corrupted projections is not recovery evidence.
+
+#### Preserve before assessing
+
+Quiesce writers, replication and background maintenance under the deployment's
+approved incident procedure, then take a storage-provider-consistent copy of
+**all** grain storage, leaf snapshots, every retained WAL partition and registry
+state. Include placement/provider configuration, tree aliases, shard maps and
+their history, transaction outcomes, retention/trim positions, and application
+acknowledgement/audit records. A filesystem copy of a running database is not a
+consistent backup; use its supported backup/export mechanism or a stopped store.
+Record the deployed binaries/revision and UTC capture boundary. Hash and retain
+the originals, inventory and logs read-only; keep a second copy for analysis.
+Do not activate the pristine copy: activation can bank new checkpoints/snapshots.
+
+Use a separate cluster id, storage namespace, snapshot store and WAL location
+for each working copy. Block outbound replication and application traffic,
+disable trimming/compaction on the working host before it starts, and bound its
+CPU, memory and run duration. Never connect it to the original provider or let
+it join the original cluster. Read-only assessment uses provider exports and
+offline decoders, not grain activation. This procedure does not authorize
+restarting a live deployment or changing its retention.
+
+On the isolated host, set the default (unnamed) `LatticeOptions.WalGcInterval`
+to `TimeSpan.Zero` before startup to disable the core WAL GC scheduler, and
+set `TombstoneGracePeriod` to `Timeout.InfiniteTimeSpan` globally and in any
+applicable per-tree options to disable tombstone compaction. See
+[WAL GC configuration](configuration.md#walgcinterval) and
+[compaction disabling](tombstone-compaction.md#configuration).
+`WalGcInterval` does not disable manual `ILatticeWalGc.RunOnceAsync` calls or
+replication's independent maintenance driver: do not register replication on
+the working host, and do not invoke manual collection/compaction. Verify the
+effective options before activation; do not assume a longer interval disables
+maintenance.
+
+#### Inventory and classify
+
+Inventory every tree that could have received single-key deletes from the old
+producer, including implicit/no-map trees and system trees. Read the retained
+WAL directly from the analysis copy, not a filtered leaf replay or a live-only
+export: those can already omit the evidence. Examine all partitions, paginating
+to the recorded head and recording gaps and trimmed prefixes. A WAL partition
+number is **not** a shard index.
+
+For each single-key `Delete` with `ShardIndex = 0`, record tree/physical alias
+identity, exact key, partition/offset, original HLC, tombstone/value flags,
+origin/vector metadata and transaction status. Correlate it with successful
+delete acknowledgements, prior sets and every later mutation of that key.
+Preserve source bytes and hashes alongside the decoded ledger. The candidate
+set is a suspicion list, not a list of keys to delete. A valid shard-0 delete has
+exactly the same shape; a newer set can legitimately recreate a deleted key.
+Do not include prepared writes until their committed outcome is established.
+
+For each candidate, record these independent findings:
+
+| Finding | Required evidence |
+|---|---|
+| Intended deletion | A committed tombstone and acknowledgement/audit provenance tied to the exact tree/key/operation, or an independently verified authoritative application history. A missing current value alone is not proof. |
+| Ownership | Authoritative routing/topology and its applicable version, including migrations, key ranges and moved-away slots. Validate its applicability to the proposed replay, not just its existence. A prior set's shard stamp or today's default hash alone does not prove historical ownership. |
+| Replay coverage | Per-partition leaf checkpoint and snapshot coverage relative to the candidate offset, plus retained WAL boundaries. Coverage means scanned, not necessarily applied. A scalar checkpoint from another partition is not evidence. |
+| Final expected state | Complete later mutation/transaction history through a chosen cutover boundary, including overwrites, recreation, expiry and compaction. Preserve original causal metadata; do not interpret a later set as resurrection without comparing it. |
+
+Classify the result explicitly:
+
+| Assessment | Action |
+|---|---|
+| Proven legitimate shard-0 record | No historical correction. Retain as an isolation control. |
+| Proven nonzero-owner delete, retained and not covered by the replay baseline | Trial replay only on an isolated copy with verified authoritative routing present **before first activation**. Verify the exact delete outcome and other shards. |
+| Proven delete already covered by a snapshot/checkpoint, or routing installed only after consumption | Do not treat map publication/restart as repair. Restore a verified correct backup or rebuild into a fresh destination from complete evidence, below. |
+| Missing/ambiguous acknowledgement, ownership, transaction outcome or later history; trimmed required evidence | Mark **unknown/unrecoverable from available evidence** and stop correction for that scope. Do not guess, broadcast a delete, or silently omit an unknown key from the replacement. Obtain independent authoritative history or leave the scope quarantined. |
+
+No suspect records in the retained suffix does **not** certify an unaffected
+tree: malformed records may have been consumed and trimmed. If the complete
+affected time window is unavailable, report that assessment as incomplete.
+Likewise, a backup captured from an already-resurrected projection is not a
+known-good backup, even when its artifact checksums pass.
+
+#### Restore or rebuild a separate destination
+
+Choose a recovery boundary, fence subsequent writes and account for all
+acknowledged operations up to it. Do not silently discard operations after a
+backup's capture point. Agree the scope and expected final key/value/version
+inventory with the incident reviewer before building anything.
+
+**Restore:** select a backup chain whose contents are independently proven
+correct for the affected keys. Use the backup package's
+`ILatticeBackupRestoreService.RestoreAsync` with an explicit, fresh
+`LatticeRestoreRequest.TargetTreeId` on the isolated host; verify the manifest
+chain and artifact digests. Never leave the target implicit (it defaults to the
+captured source tree). See the [restore pipeline](../lattice.backup/architecture.md#restore-pipeline)
+and [cold disaster restore](../lattice.backup/disaster-recovery.md).
+Catch up only from complete, verified post-backup evidence. In-place merge
+onto a corrupted existing tree is not replacement: the absence of a key in a
+backup does not remove an existing value. A pre-delete backup without its
+subsequent deletion history is also insufficient. The backup restore API rejects
+reserved system-tree targets and enforces source/target authorization. If the
+scope is unsupported or denied, stop and obtain a separately reviewed supported
+reconstruction path; do not bypass those guards.
+
+**Rebuild:** if no correct backup exists, construct a fresh isolated destination
+from a complete verified baseline and subsequent committed history. Where the
+original retained WAL is complete, a new projection may replay the unchanged
+records with authoritative routing in place before activation. Where it is not,
+use an independently complete application history/export with an explicitly
+reviewed reconstruction of final state. Preserve original HLCs, tombstones,
+versions, origin, expiry and transaction semantics through the causal-preserving
+restore/merge seams, not ordinary `SetAsync`/`DeleteAsync` calls which create new
+timestamps. If the required baseline, routing or history cannot be provided,
+there is no supported lossless rebuild from the available evidence.
+
+Do not reset checkpoints or discard snapshots, including on the source used as
+evidence. Do not edit any retained WAL stamp. A fresh destination has its own
+new state and checkpoints; it is not the old store with its coverage erased.
+Do not install a guessed default map to make replay pass. Existing rebuild-on-
+fall-off policies, view reconciliation and replication re-seed are not repair
+oracles: they cannot recreate a tombstone the source already rejected.
+
+#### Verify, then separately approve cutover
+
+Keep a per-key expected-versus-actual report tied to the preserved evidence.
+Prove deleted keys absent through point, versioned and multi-read APIs; inspect
+retained tombstones through the delta/backup surface as well. A missing live
+value is insufficient if the tombstone is absent and an older replica can
+reintroduce it. Verify legitimate later recreations with their newer original
+version, surviving payload hashes and all unrelated shard controls. Compare a
+complete expected inventory, not merely equality between two recovered trees.
+
+Stop and reopen **only the isolated destination**, then repeat those assertions
+over its new durable snapshots and WAL. Verify source hashes and coverage did
+not change during the experiment. Any missing evidence, wrong causal metadata,
+unknown key or mismatched control blocks cutover; keep the originals and failed
+working copies for review.
+
+Cutover is a separate authorized incident action, not part of assessment:
+publish only the verified destination, with correct tenant/access/schema/view
+configuration and routing, while writes remain fenced. Do not reconnect old
+replicas until their state and tombstone retention have been reconciled against
+the verified history. Retain the previous destination and evidence for rollback;
+switching back restores the prior defect too and is not a recovery claim.
+
+The bounded executable proof is
+`BPlusLeafGrainTests.HistoricalDeleteRecovery.cs`. It first reproduces a
+nonzero-shard legacy delete being skipped and banked in a real snapshot by the
+leaf replay path; reactivation with a late map still returns the old value.
+A separate fresh rebuild with the map installed first retains the original
+tombstone/HLC, preserves sibling and foreign-shard isolation, and survives
+snapshot rehydration. Its second case preserves a legitimate newer recreation.
+Run it together with the retained-record and encoded-producer controls:
+
+```powershell
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj -c Release --filter "FullyQualifiedName~Historical_delete_recovery|FullyQualifiedName~Cold_replay_of_legacy_zero_stamped_delete|FullyQualifiedName~Cold_replay_of_encoded_acknowledged_writes"
+```
+
+These are synthetic single-partition unit proofs using the real leaf
+replay/snapshot codec, not a certification of any historical deployment or an
+end-to-end backup restore. Each incident still needs the evidence inventory,
+complete causal reconstruction and isolated provider-specific verification
+above. No automatic ownership inference or historical migration is supplied.
+
+---
+
 ## Symptom index
 
 | Symptom | Section |
@@ -713,6 +908,7 @@ These are different faults with different remedies:
 | Leaf `Error` that it cannot advance its durable projection checkpoint, or `LeafProjectionStaleException` | [A live leaf whose projection has gone stale](projection-rebuild.md#a-live-leaf-whose-projection-has-gone-stale) - data at risk: capture a backup before the activation is recycled |
 | High `TombstoneRatio` | [Slow scans](#slow-scans) and [Tombstone compaction](tombstone-compaction.md) |
 | Read returns an overwritten value | [Stale reads and cache behaviour](#stale-reads-and-cache-behaviour) |
+| A previously acknowledged delete reappears after cold replay | [Acknowledged deletes reappear after cold replay](#acknowledged-deletes-reappear-after-cold-replay) - preserve pristine storage, snapshots, WAL and acknowledgement evidence before recovery |
 | One shard reports all zeros on a tree that holds data | [Traps when reading a report](#traps-when-reading-a-report) |
 | Report is older than expected | [Traps when reading a report](#traps-when-reading-a-report) |
 | `Depth` growing across shards | [Tree sizing](tree-sizing.md) |
