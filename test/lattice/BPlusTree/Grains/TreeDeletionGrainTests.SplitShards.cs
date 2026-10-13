@@ -152,4 +152,17 @@ public partial class TreeDeletionGrainTests
 
         Assert.That(await grain.ResolveAllocatedShardCountAsync(), Is.EqualTo(ShardCount));
     }
+
+    [Test]
+    public async Task ResolveAllocatedShardCount_reads_pins_and_high_water_mark_in_one_registry_turn()
+    {
+        var (grain, _, _, factory, _) = CreateGrain();
+        UseSplitTopology(factory, routeToSplitShard: false);
+        var registry = factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.ClearReceivedCalls();
+
+        Assert.That(await grain.ResolveAllocatedShardCountAsync(), Is.EqualTo(SplitShardIndex + 1));
+
+        await registry.Received(1).GetEntryAsync(TreeId);
+    }
 }
