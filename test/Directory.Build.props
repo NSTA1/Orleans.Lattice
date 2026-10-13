@@ -25,4 +25,13 @@
     <AssemblyAttribute Include="System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage" />
   </ItemGroup>
 
+  <!--
+    Shared run settings (see nunit.runsettings): lifts NUnit3TestAdapter's
+    AssemblySelectLimit so a filter selecting more than 2000 tests is not
+    silently widened to the whole assembly.
+  -->
+  <PropertyGroup>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)nunit.runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+
 </Project>
