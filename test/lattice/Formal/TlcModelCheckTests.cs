@@ -180,6 +180,7 @@ public sealed class TlcModelCheckTests
     /// </para>
     /// </summary>
     [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcModules))]
+    [Category("Tlc")]
     public void The_base_specification_holds(SpecModule module)
     {
         AssertBaseSpecificationHolds(module);
@@ -237,6 +238,7 @@ public sealed class TlcModelCheckTests
     /// </para>
     /// </summary>
     [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcVariants))]
+    [Category("Tlc")]
     public void Each_variant_configuration_holds(SpecModule module, string variant)
     {
         ArgumentNullException.ThrowIfNull(module);
@@ -306,6 +308,7 @@ public sealed class TlcModelCheckTests
     /// </para>
     /// </summary>
     [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.TlcMutations))]
+    [Category("Tlc")]
     public void Each_property_fires_under_its_mutation_and_not_on_the_base(SpecModule module, SpecMutation mutation)
     {
         ArgumentNullException.ThrowIfNull(module);
@@ -379,6 +382,7 @@ public sealed class TlcModelCheckTests
     /// <see cref="SpecModuleDiscoveryControlTests"/>.
     /// </summary>
     [Test]
+    [Category("Tlc")]
     public void A_synthetic_module_is_model_checked_by_every_TLC_gate()
     {
         var gates = SpecModuleGates.All().Where(g => g.RunsTlc).ToArray();
