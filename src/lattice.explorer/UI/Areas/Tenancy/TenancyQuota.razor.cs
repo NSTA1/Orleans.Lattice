@@ -11,8 +11,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// dimension reads as having no ceiling and an unmeasured one as not measured;
 /// neither is ever drawn as an empty or full bar.
 /// </summary>
-public partial class TenancyQuota
+public partial class TenancyQuota : IDisposable
 {
+    private readonly ComponentLifetime _lifetime = new();
     private TenantQuotaUsageReport? _report;
     private IReadOnlyList<TenancyQuotaGauge> _gauges = [];
     private TenancyFailure? _failure;
@@ -53,18 +54,38 @@ public partial class TenancyQuota
         }
 
         _loadedFor = TenantId;
+        _editing = false;
+        _saving = false;
+        _draft = null;
         await LoadAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Cancels the quota reads when this section is left.</summary>
+    public void Dispose()
+    {
+        _lifetime.Leave();
+        GC.SuppressFinalize(this);
     }
 
     private async Task LoadAsync()
     {
+        var token = _lifetime.Renew();
         _failure = null;
         _report = null;
         try
         {
             var quota = Catalog.Quota ?? throw new NotSupportedException();
-            _report = await quota.GetQuotaUsageAsync(TenantId).ConfigureAwait(true);
+            var report = await quota.GetQuotaUsageAsync(TenantId, token).ConfigureAwait(true);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _report = report;
             _gauges = TenancyQuotaGauge.All(_report);
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
@@ -116,10 +137,17 @@ public partial class TenancyQuota
         }
 
         _saving = true;
+        var tenant = TenantId;
+        var token = _lifetime.Token;
         try
         {
             var admin = Catalog.Admin ?? throw new NotSupportedException();
-            await admin.SetTenantQuotasAsync(TenantId, quotas).ConfigureAwait(true);
+            await admin.SetTenantQuotasAsync(tenant, quotas).ConfigureAwait(true);
+            Catalog.Invalidate();
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
+            return;
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
@@ -128,12 +156,19 @@ public partial class TenancyQuota
         }
         finally
         {
-            _saving = false;
+            if (!token.IsCancellationRequested)
+            {
+                _saving = false;
+            }
+        }
+
+        if (token.IsCancellationRequested)
+        {
+            return;
         }
 
         _editing = false;
-        Catalog.Invalidate();
-        Toasts.Show(quotas.IsUnbounded ? $"Tenant {TenantId} now has no quota ceilings." : $"Quotas of tenant {TenantId} saved.", LtToastTone.Success);
+        Toasts.Show(quotas.IsUnbounded ? $"Tenant {tenant} now has no quota ceilings." : $"Quotas of tenant {tenant} saved.", LtToastTone.Success);
         await LoadAsync().ConfigureAwait(true);
     }
 }

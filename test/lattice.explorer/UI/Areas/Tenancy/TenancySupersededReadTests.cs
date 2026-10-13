@@ -16,6 +16,131 @@ public sealed class TenancySupersededReadTests : TenancyTestContext
 {
     [TestCase(false)]
     [TestCase(true)]
+    public async Task Quota_superseded_read_keeps_the_current_tenants_limits(bool fault)
+    {
+        var previous = new TaskCompletionSource<TenantQuotaUsageReport>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var quota = Substitute.For<ILatticeTenantQuotaUsage>();
+        quota.GetQuotaUsageAsync("acme", Arg.Any<CancellationToken>()).Returns(previous.Task);
+        quota.GetQuotaUsageAsync("globex", Arg.Any<CancellationToken>()).Returns(new TenantQuotaUsageReport
+        {
+            TenantId = "globex",
+            BurstPercent = 17,
+        });
+        Services.AddKeyedSingleton(ShellFacades.Key, quota);
+        Cluster.WithTenant("globex");
+        UseTenancyAs();
+        var cut = RenderAt<TenancyQuotaPage>("tenancy/acme/quota");
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-skeleton"), Has.Count.EqualTo(1)));
+        var panel = cut.FindComponent<TenancyQuota>().Instance;
+
+        Navigation.NavigateTo("tenancy/globex/quota");
+        cut.Render();
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("17% above each ceiling")));
+        Assert.That(cut.FindComponent<TenancyQuota>().Instance, Is.SameAs(panel), "synchronous admission retains the section");
+        if (fault)
+        {
+            previous.SetException(new TimeoutException());
+        }
+        else
+        {
+            previous.SetResult(new TenantQuotaUsageReport { TenantId = "acme", BurstPercent = 23 });
+        }
+
+        Assert.That(await TestPoll.TryUntilAsync(
+            () => cut.Markup.Contains("23% above each ceiling", StringComparison.Ordinal)
+                || cut.Markup.Contains("Quota could not be read", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(1)), Is.False, "neither another tenant's quota nor its fault belongs under globex");
+    }
+
+    [Test]
+    public async Task Quota_disposal_cancels_its_outstanding_read()
+    {
+        var previous = new TaskCompletionSource<TenantQuotaUsageReport>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var quota = Substitute.For<ILatticeTenantQuotaUsage>();
+        quota.GetQuotaUsageAsync("acme", Arg.Any<CancellationToken>()).Returns(previous.Task);
+        Services.AddKeyedSingleton(ShellFacades.Key, quota);
+        RenderSection<TenancyQuota>(parameters => parameters.Add(component => component.TenantId, "acme"));
+
+        await DisposeComponentsAsync();
+        previous.SetResult(new TenantQuotaUsageReport { TenantId = "acme" });
+
+        var token = quota.ReceivedCalls().Single(call => call.GetMethodInfo().Name == nameof(ILatticeTenantQuotaUsage.GetQuotaUsageAsync))
+            .GetArguments()[1];
+        Assert.That(token, Is.TypeOf<CancellationToken>());
+        Assert.That(((CancellationToken)token!).IsCancellationRequested, Is.True);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Quota_previous_tenants_save_cannot_close_or_fault_the_current_editor(bool fault)
+    {
+        Cluster.WithTenant("globex");
+        Cluster.Tenants["globex"].Quotas = new TenantQuotasDescriptor { MaxKeys = 200 };
+        var previous = Cluster.Hold(nameof(FakeTenancyCluster.SetTenantQuotasAsync));
+        var cut = RenderSection<TenancyQuota>(parameters => parameters
+            .Add(component => component.TenantId, "acme")
+            .Add(component => component.CanEdit, true));
+        cut.WaitUntil(() => TenancyForms.Button(cut, "Edit quotas"));
+        TenancyForms.Button(cut, "Edit quotas").Click();
+        TenancyForms.Type(cut, "Keys", "100");
+        cut.Find("form.lt-tenancy-form").Submit();
+        cut.WaitUntil(() => Assert.That(Cluster.Calls, Does.Contain(nameof(FakeTenancyCluster.SetTenantQuotasAsync))));
+
+        cut.Render(parameters => parameters.Add(component => component.TenantId, "globex"));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("form.lt-tenancy-form"), Is.Empty);
+            Assert.That(cut.FindAll("tbody tr")[1].Children[2].TextContent.Trim(), Is.EqualTo("200"));
+        });
+        TenancyForms.Button(cut, "Edit quotas").Click();
+        cut.WaitUntil(() => Assert.That(TenancyForms.Field(cut, "Keys").GetAttribute("value"), Is.EqualTo("200")));
+        if (fault)
+        {
+            previous.SetException(new TimeoutException());
+        }
+        else
+        {
+            previous.SetResult();
+        }
+
+        Assert.That(await TestPoll.TryUntilAsync(
+            () => cut.FindAll("form.lt-tenancy-form").Count == 0
+                || cut.FindAll(".lt-tenancy-form__error").Count != 0
+                || Services.GetToasts().Any(),
+            TimeSpan.FromSeconds(1)), Is.False, "an old save must not alter the new tenant's editor or publish its toast");
+    }
+
+    [Test]
+    public async Task Regions_superseded_refresh_fault_keeps_the_newer_reading()
+    {
+        var previous = new TaskCompletionSource<TenantRegionStatusReport>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var regions = Substitute.For<ILatticeTenantRegionAdmin>();
+        regions.GetTenantRegionStatusAsync("acme", Arg.Any<CancellationToken>()).Returns(previous.Task);
+        Services.AddKeyedSingleton(ShellFacades.Key, regions);
+        var cut = RenderSection<TenancyRegions>(parameters => parameters.Add(component => component.TenantId, "acme"));
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-skeleton"), Has.Count.EqualTo(1)));
+        regions.GetTenantRegionStatusAsync("acme", Arg.Any<CancellationToken>()).Returns(new TenantRegionStatusReport
+        {
+            TenantId = "acme",
+            Regions = [new TenantRegionStatusDescriptor
+            {
+                RegionId = "current-region",
+                IsAllowed = true,
+                Status = TenantRegionLifecycleStatus.Online,
+            }],
+        });
+
+        await TenancyForms.Button(cut, "Refresh").ClickAsync(new());
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("current-region")));
+        previous.SetException(new TimeoutException());
+
+        Assert.That(await TestPoll.TryUntilAsync(
+            () => cut.Markup.Contains("Regions could not be read", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(1)), Is.False, "a superseded refresh fault cannot hide the successful reading");
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
     public async Task Overview_superseded_read_keeps_the_current_tenants_state(bool fault)
     {
         var previous = new TaskCompletionSource<TenantStatusReport>(TaskCreationOptions.RunContinuationsAsynchronously);

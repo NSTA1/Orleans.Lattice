@@ -178,6 +178,8 @@ rows.
 
 The Views tab lists materialised views over a tree, or the view itself when the
 current workspace is a view. It shows kind, projection version and apply lag.
+Overlapping refreshes keep the newest status rather than a late reply or fault
+from an earlier refresh.
 For callers that can administer the source tree, Reconcile compares the
 expected view with the live one and swaps it only when they differ; Rebuild
 builds a new generation and swaps it in. Both actions are behind destructive
@@ -268,6 +270,10 @@ caller is an operator or administers the scoped tenant. Operators get the
 `/tenancy?set-regions=true`) commands; whoever administers a non-default scoped
 tenant gets `tenancy.change-residency` ("Change residency") and
 `tenancy.offer-grant`.
+
+Changing tenants closes the previous quota editor and discards its pending quota
+replies, faults and save notifications. Leaving the quota page cancels its reads.
+A late region refresh fault cannot hide a newer successful reading.
 
 A tenant's Regions page splits **Allowed regions (set by a platform operator)**
 from **Residency (where the tenant's data is kept)**, and says what each region's

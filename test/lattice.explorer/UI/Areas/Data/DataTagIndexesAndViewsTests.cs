@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Operations;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Testing;
 using static Orleans.Lattice.Explorer.Tests.UI.Operations.TreeAdminOperationScript;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
@@ -24,6 +25,41 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
 public sealed class DataTagIndexesAndViewsTests : DataTestContext
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Views_superseded_refresh_keeps_the_newer_status(bool fault)
+    {
+        SeedViews();
+        var cut = RenderAt("data/orders?tab=views");
+        cut.WaitUntil(() => Assert.That(Rows(cut)[0].TextContent, Does.Contain("Current")));
+        var previous = new TaskCompletionSource<TreeViewStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Admin.GetViewStatusAsync("by-status", Arg.Any<CancellationToken>()).Returns(previous.Task);
+        var firstRefresh = Button(cut, "Refresh").ClickAsync(new());
+        cut.WaitUntil(() => Assert.That(Rows(cut)[0].TextContent, Does.Contain("Status unknown")));
+        Admin.GetViewStatusAsync("by-status", Arg.Any<CancellationToken>()).Returns(new TreeViewStatus
+        {
+            ViewName = "by-status",
+            SourceTreeId = "orders",
+            ApplyLag = 7,
+        });
+
+        await Button(cut, "Refresh").ClickAsync(new());
+        cut.WaitUntil(() => Assert.That(Rows(cut)[0].TextContent, Does.Contain("7 behind")));
+        if (fault)
+        {
+            previous.SetException(new TimeoutException());
+        }
+        else
+        {
+            previous.SetResult(new TreeViewStatus { ViewName = "by-status", SourceTreeId = "orders", ApplyLag = 19 });
+        }
+
+        await firstRefresh;
+        Assert.That(await TestPoll.TryUntilAsync(
+            () => !Rows(cut)[0].TextContent.Contains("7 behind", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(1)), Is.False, "an older refresh cannot replace the latest lag or mark it unknown");
+    }
+
     [Test]
     public void Tag_indexes_list_their_status_then_covered_trees_tags_and_members()
     {
