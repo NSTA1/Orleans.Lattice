@@ -263,8 +263,18 @@ public sealed class ViewMaintainerRebuildIdentityTests
     {
         var physical = First;
         var registry = Substitute.For<ILatticeRegistry>();
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { PhysicalTreeId = physical, ShardCount = 1, MaxLeafKeys = 128, MaxInternalChildren = 128 }));
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(call =>
+        {
+            var id = call.ArgAt<string>(0);
+            return Task.FromResult<TreeRegistryEntry?>(
+                new TreeRegistryEntry
+                {
+                    PhysicalTreeId = id == Logical ? physical : null,
+                    ShardCount = 1,
+                    MaxLeafKeys = 128,
+                    MaxInternalChildren = 128
+                });
+        });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         var offsetRegistry = Substitute.For<IWalOffsetConsumerRegistryGrain>();
@@ -287,6 +297,10 @@ public sealed class ViewMaintainerRebuildIdentityTests
             .Returns(EmptyKeys());
         factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(call =>
             call.ArgAt<string>(0) == First ? tree : shadow);
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        shardRoot.GetWithVersionAsync(Arg.Any<string>()).Returns(call =>
+            tree.GetWithVersionAsync(call.ArgAt<string>(0), CancellationToken.None));
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shardRoot);
         var projection = Substitute.For<ILatticeViewProjection>();
         projection.Project(Arg.Any<LatticeMutation>()).Returns(call =>
             new[] { ViewWrite.Upsert("k", [1], call.Arg<LatticeMutation>().Timestamp) });

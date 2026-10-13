@@ -271,7 +271,11 @@ public sealed class ShadowCutoverAtomicVisibilityChaosTests
     /// <summary>
     /// A saga that cannot complete across the swap rolls back as a unit and reports
     /// it; the batch is then absent everywhere, which the readers still verify.
+    /// Under concurrent resharding and cutovers, an atomic-write saga may also abort
+    /// if the shard-map routing epoch changes repeatedly, which is a safe non-committed outcome.
     /// </summary>
     private static bool IsRolledBackSaga(Exception ex) =>
-        ex is InvalidOperationException && ex.Message.Contains("rolled back", StringComparison.Ordinal);
+        ex is InvalidOperationException
+        && (ex.Message.Contains("rolled back", StringComparison.Ordinal)
+            || ex.Message.Contains("could not commit because the shard-map routing epoch kept changing", StringComparison.Ordinal));
 }

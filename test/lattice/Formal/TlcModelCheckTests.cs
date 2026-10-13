@@ -190,6 +190,7 @@ public sealed class TlcModelCheckTests
     /// Exhaustive base-model coverage remains in the full TLC shard.
     /// </summary>
     [Test]
+    [Category(SpecModuleGates.TlcCategory)]
     public void The_atomic_commit_base_specification_holds()
     {
         var module = SpecModuleCatalogue.Repository().Single(module => module.Name == "AtomicCommit");
