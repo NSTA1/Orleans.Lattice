@@ -298,12 +298,30 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<GrainId?> GetNextSiblingAsync();
 
     /// <summary>Sets the right sibling pointer (called during splits).</summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> (issue #4919,
+    /// the sibling-pointer counterpart of #4914): a split calls a sibling setter on
+    /// a neighbouring leaf while holding its own <c>_splitGate</c>. Queuing behind a
+    /// neighbour turn suspended on the shard root - whose link can split the parent
+    /// internal node and re-parent the caller, which then waits on the caller's gate -
+    /// formed a cross-grain cycle that only the grain call timeout broke. The body is
+    /// serialised by the per-activation <c>_splitGate</c>, and the state write by the
+    /// leaf's persist-write gate.
+    /// </remarks>
+    [AlwaysInterleave]
     Task SetNextSiblingAsync(GrainId? siblingId);
 
     /// <summary>Returns the grain identity of the left sibling leaf, or <c>null</c>.</summary>
     Task<GrainId?> GetPrevSiblingAsync();
 
     /// <summary>Sets the left sibling pointer (called during splits).</summary>
+    /// <remarks>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the same
+    /// reason as <see cref="SetNextSiblingAsync"/> (issue #4919): a splitting leaf
+    /// repoints its right neighbour's back-link while holding its own
+    /// <c>_splitGate</c>, so the call must not queue behind that neighbour's turn.
+    /// </remarks>
+    [AlwaysInterleave]
     Task SetPrevSiblingAsync(GrainId? siblingId);
 
     /// <summary>

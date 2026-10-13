@@ -2691,6 +2691,9 @@ internal sealed partial class BPlusLeafGrain(
         // concurrent PersistAsync against the same row and the
         // loser of the etag CAS throws InconsistentStateException.
         // Mirrors c2-vi-followup's fix on BPlusInternalGrain.
+        // The setter is [AlwaysInterleave] (issue #4919): a split calls it on
+        // a neighbour while holding its own gate, so it waits only for this
+        // leaf's gate, never for a turn suspended on the shard root.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
