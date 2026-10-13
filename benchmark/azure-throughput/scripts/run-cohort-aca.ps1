@@ -519,7 +519,7 @@ try {
 	}
 
 	$lines = Get-AcaJobLog -Context $ctx -ExecutionName $execName -SinceUtc $startedUtc -TreeId $TreeId -MaxWaitSec $harvestWait
-	$siloLines = Get-AcaSiloLog -Context $ctx -SinceUtc $startedUtc -UntilUtc ((Get-Date).ToUniversalTime()) -RevisionName $siloRevision
+	$siloLines = Get-AcaSiloLog -Context $ctx -SinceUtc $startedUtc -UntilUtc ((Get-Date).ToUniversalTime()) -RevisionName $siloRevision -IncludeDiagnostics
 
 	# Sort the silo half by its `t=` timestamp. Read-SiloLogStats takes the
 	# LAST productive [phaseA] window as the representative one, and Log

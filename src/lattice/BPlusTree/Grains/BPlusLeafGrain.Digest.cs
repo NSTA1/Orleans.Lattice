@@ -435,7 +435,7 @@ internal sealed partial class BPlusLeafGrain
         // At this point the running hash has changed (we did not take
         // the no-op fast path above), so the parent's snapshot for
         // this leaf is stale and must be refreshed.
-        _digestDirty = true;
+        MarkDigestDirty();
     }
 
     /// <summary>
@@ -472,7 +472,7 @@ internal sealed partial class BPlusLeafGrain
             for (var i = 0; i < ProjectionHashSize; i++) hash[i] ^= newContribution[i];
         }
 
-        _digestDirty = true;
+        MarkDigestDirty();
     }
 
     /// <summary>

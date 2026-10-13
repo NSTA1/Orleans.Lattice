@@ -917,7 +917,7 @@ builder.UseOrleans(silo =>
     if (workloadMode == BenchWorkloadMode.SetPointMv)
     {
         silo.AddLatticeViews(views =>
-            views.AddView("bench", treeId, new PredicateLatticeViewProjection()));
+            views.AddView(BenchWorkloadMetadata.ViewNameFor(treeId), treeId, new PredicateLatticeViewProjection()));
     }
 });
 
