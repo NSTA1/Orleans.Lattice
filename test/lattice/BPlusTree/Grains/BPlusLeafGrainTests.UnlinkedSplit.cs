@@ -23,10 +23,10 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public partial class BPlusLeafGrainTests
 {
     private static async Task<(BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State, SplitResult Split)>
-        CompleteADivisionAsync()
+        CompleteADivisionAsync(IGrainFactory? factory = null)
     {
         var state = new FakePersistentState<LeafNodeState>();
-        var grainFactory = Substitute.For<IGrainFactory>();
+        var grainFactory = factory ?? Substitute.For<IGrainFactory>();
         var siblingMock = Substitute.For<IBPlusLeafGrain>();
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
@@ -130,5 +130,99 @@ public partial class BPlusLeafGrainTests
         var (_, _, split) = await CompleteADivisionAsync();
 
         Assert.That(split.Donor, Is.EqualTo(GrainId.Create("leaf", "test-leaf")));
+    }
+
+    /// <summary>
+    /// Issue #4918. A capture nested inside a gated division (the checkpoint-hint
+    /// loop at the end of <c>SplitAsync</c>) used to drain the durable unlinked
+    /// marker by calling the shard root while the outer division still held this
+    /// leaf's <c>_splitGate</c>. When that link overflows the parent, the parent's
+    /// new sibling re-parents this leaf through <c>SetParentAsync</c>, which is
+    /// admitted (<c>[AlwaysInterleave]</c>, #4914) but waits on the held gate: the
+    /// root waits on the leaf, the leaf's gate holder waits on the root. The stub
+    /// root reproduces that callback, so the pre-fix behaviour hangs here.
+    /// </summary>
+    [Test]
+    public async Task Nested_capture_under_a_held_split_gate_defers_the_unlinked_link_instead_of_deadlocking()
+    {
+        var reparentedTo = GrainId.Create("internal", "parent-sibling");
+        var factory = Substitute.For<IGrainFactory>();
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shardRoot);
+        BPlusLeafGrain? donor = null;
+        var links = new List<SplitResult>();
+        shardRoot.LinkLeafSplitFromCaptureAsync(Arg.Any<SplitResult>())
+            .Returns(async ci =>
+            {
+                links.Add(ci.Arg<SplitResult>());
+
+                // The link overflowed the parent; its split re-parents the moved
+                // children, this donor among them, before the root call returns.
+                await donor!.SetParentAsync(reparentedTo);
+            });
+
+        var (grain, state, split) = await CompleteADivisionAsync(factory);
+        donor = grain;
+        Assert.That(state.State.UnlinkedSplitSiblingId, Is.EqualTo(split.NewSiblingId));
+
+        var gateField = typeof(BPlusLeafGrain).GetField("_splitGate", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(gateField, Is.Not.Null, "_splitGate field not found - was it renamed?");
+        var gate = (SemaphoreSlim)gateField!.GetValue(grain)!;
+        Assert.That(gate.Wait(0), Is.True, "gate should start free");
+
+        Task<bool> nestedCapture;
+        bool completedWhileGateHeld;
+        try
+        {
+            // The outer division holds the gate, suspended in its hint loop,
+            // while the nested capture re-runs the byte-overflow seam.
+            nestedCapture = InvokeCaptureByteOverflowSeam(grain);
+            completedWhileGateHeld = await Task.WhenAny(nestedCapture, Task.Delay(TimeSpan.FromSeconds(1)))
+                == nestedCapture;
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        if (!completedWhileGateHeld)
+        {
+            // Pre-fix: releasing the gate lets the parked SetParentAsync through.
+            await nestedCapture;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(completedWhileGateHeld, Is.True,
+                "THE ASSERTION. A capture nested under a held split gate must not call the root, whose "
+                + "re-parenting callback waits on that same gate.");
+            Assert.That(links, Is.Empty, "the nested capture must defer the link, not attempt it");
+            Assert.That(state.State.UnlinkedSplitSiblingId, Is.EqualTo(split.NewSiblingId),
+                "a deferred link must leave the durable marker for a later turn");
+        });
+
+        // Once the gate is free the next capture links it: deferral loses nothing.
+        await InvokeCaptureByteOverflowSeam(grain);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(links, Has.Count.EqualTo(1));
+            Assert.That(links[0].NewSiblingId, Is.EqualTo(split.NewSiblingId));
+            Assert.That(links[0].PromotedKey, Is.EqualTo(split.PromotedKey));
+            Assert.That(state.State.ParentId, Is.EqualTo(reparentedTo));
+            Assert.That(state.State.UnlinkedSplitSiblingId, Is.Null,
+                "the root's acknowledgement retires the marker once the link lands");
+        });
+    }
+
+    // The capture seam that drains the unlinked marker; maxLeafBytes 0 disables
+    // the byte-overflow division so only the drain runs.
+    private static Task<bool> InvokeCaptureByteOverflowSeam(BPlusLeafGrain grain)
+    {
+        var method = typeof(BPlusLeafGrain).GetMethod(
+            "TrySplitForByteOverflowAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(method, Is.Not.Null, "TrySplitForByteOverflowAsync not found - was it renamed?");
+        return (Task<bool>)method!.Invoke(grain, [128, 0L])!;
     }
 }
