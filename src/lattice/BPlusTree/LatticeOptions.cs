@@ -2386,6 +2386,23 @@ public class LatticeOptions
     public const int DefaultWalMaterialiserMaxConcurrentReplays = 0;
 
     /// <summary>
+    /// Enables experimental, process-wide service-rate probing of replay
+    /// concurrency. Defaults to false. Set globally before the first replay
+    /// sizes the gate; like the ceiling, this setting is latched on first use.
+    /// </summary>
+    /// <remarks>
+    /// One-permit probes compare completed holds over saturated windows of at
+    /// least 30 seconds and eight completions, after all holds admitted before
+    /// each change have completed. A reduction is kept only if measured service rate
+    /// does not fall. Recovery probes detect improved storage parallelism.
+    /// Memory backpressure has a separate ledger and always takes precedence.
+    /// The combined floor is one; the configured ceiling is never exceeded.
+    /// Heterogeneous replay costs and changing workloads can bias comparisons,
+    /// so this remains opt-in pending store-bound deployment calibration.
+    /// </remarks>
+    public bool WalReplayServiceRateControllerEnabled { get; set; }
+
+    /// <summary>
     /// How many activations may be <b>queued</b> for a WAL replay permit, per
     /// permit still in circulation. The admitted-waiter bound is this figure
     /// multiplied by the resolved ceiling less withheld permits (at least one),
