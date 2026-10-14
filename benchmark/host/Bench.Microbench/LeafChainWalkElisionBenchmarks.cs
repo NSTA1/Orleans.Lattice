@@ -64,6 +64,8 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <item><see cref="Site.FreezeWalk"/> - the snapshot-baseline capture's freeze
 /// pass: <c>FreezeProjectionAsync</c> + <c>GetNextSiblingAsync</c> ->
 /// <c>FreezeProjectionAndNextSiblingAsync</c>, 2 calls per leaf -> 1.</item>
+/// <item><see cref="Site.CheckpointWalk"/> - the materialiser-lag walk:
+/// checkpoint + chain link -> one metadata page, 2 calls per leaf -> 1.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -88,7 +90,7 @@ public class LeafChainWalkElisionBenchmarks
     private Guid[] _transactionIds = null!;
 
     /// <summary>The leaf-chain walk being measured; see the class summary.</summary>
-    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk, Site.ShardScanWalk, Site.PayloadDrainWalk, Site.ReverseScanWalk, Site.RangeDeleteWalk, Site.RangeClockWalk, Site.FreezeWalk)]
+    [Params(Site.LiveRawWalk, Site.PendingWalk, Site.DiscardWalk, Site.KeyRangeWalk, Site.DeltaWalk, Site.ShardScanWalk, Site.PayloadDrainWalk, Site.ReverseScanWalk, Site.RangeDeleteWalk, Site.RangeClockWalk, Site.FreezeWalk, Site.CheckpointWalk)]
     public Site Path { get; set; }
 
     /// <summary>The number of leaves in the walked chain.</summary>
@@ -126,6 +128,15 @@ public class LeafChainWalkElisionBenchmarks
         {
             switch (Path)
             {
+                case Site.CheckpointWalk:
+                {
+                    total += await _chain.GetCheckpointAsync(current);
+                    var (range, next) = await _chain.GetKeyRangeAndNextSiblingAsync(current);
+                    total += next is null ? 0 : range;
+                    leaf = next;
+                    continue;
+                }
+
                 case Site.LiveRawWalk:
                     total += (await _chain.GetLiveRawEntriesAsync(current)).Count;
                     break;
@@ -201,6 +212,14 @@ public class LeafChainWalkElisionBenchmarks
         {
             switch (Path)
             {
+                case Site.CheckpointWalk:
+                {
+                    var (checkpoint, range, next) = await _chain.GetCheckpointWithLinkAsync(current);
+                    total += checkpoint + (next is null ? 0 : range);
+                    leaf = next;
+                    break;
+                }
+
                 case Site.LiveRawWalk:
                 {
                     var (entries, next) = await _chain.GetLiveRawEntriesAndNextSiblingAsync(current);
@@ -318,6 +337,9 @@ public class LeafChainWalkElisionBenchmarks
 
         /// <summary>The snapshot-baseline capture's freeze pass.</summary>
         FreezeWalk,
+
+        /// <summary>The bounded materialiser-lag metadata walk.</summary>
+        CheckpointWalk,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
@@ -338,6 +360,18 @@ public class LeafChainWalkElisionBenchmarks
     private sealed class LeafChain(HopModel hop, int leaves)
     {
         private readonly List<int> _payload = [1, 2, 3, 4, 5, 6, 7, 8];
+
+        public async Task<long> GetCheckpointAsync(int leaf)
+        {
+            await HopAsync();
+            return leaf + 10L;
+        }
+
+        public async Task<(long Checkpoint, int KeyRange, int? Next)> GetCheckpointWithLinkAsync(int leaf)
+        {
+            await HopAsync();
+            return (leaf + 10L, leaf, Next(leaf));
+        }
 
         public async Task<List<int>> GetLiveRawEntriesAsync(int leaf)
         {

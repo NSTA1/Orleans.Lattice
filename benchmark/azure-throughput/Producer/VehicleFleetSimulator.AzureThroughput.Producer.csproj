@@ -22,6 +22,14 @@
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.Orleans.Client" Version="10.2.2" />
     <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.2" />
+    <!--
+      Not used directly. Silo-side grain-storage faults propagate to this
+      Orleans client as provider exception types defined in this package
+      (observed: TableStorageUpdateConditionNotSatisfiedException, an ETag
+      conflict during preseed); without it the client cannot deserialise them,
+      fails with an opaque TypeLoadException and can crash outright.
+    -->
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.2" />
   </ItemGroup>
 
 </Project>

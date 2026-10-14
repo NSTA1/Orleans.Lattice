@@ -148,6 +148,42 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Released
 
+## [2026-10-14]
+
+Patch release: `Orleans.Lattice` 10.1.1 and `Orleans.Lattice.Explorer.UI` 10.1.1.
+
+### Added
+
+- **WAL - Experimental replay service-rate controller.** A default-off, bounded controller probes cold-replay throughput; convergence acceptance remains unproven. ([#4925](https://github.com/NSTA1/Orleans.Lattice/pull/4925)) (`Orleans.Lattice` 10.1.1)
+
+### Changed
+
+- **Performance - Coordinator grain calls.** Merge admission, resize undo and materialiser-lag walks reuse metadata reads, removing redundant coordinator round trips. ([#4947](https://github.com/NSTA1/Orleans.Lattice/pull/4947)) (`Orleans.Lattice` 10.1.1)
+
+- **Performance - Registry reads.** Lifecycle, diagnostic and maintenance paths reuse registry entries to reduce serial calls without changing public APIs. ([#4937](https://github.com/NSTA1/Orleans.Lattice/pull/4937), [#4940](https://github.com/NSTA1/Orleans.Lattice/pull/4940), [#4943](https://github.com/NSTA1/Orleans.Lattice/pull/4943)) (`Orleans.Lattice` 10.1.1)
+
+### Fixed
+
+- **WAL - Refused drives no longer trigger uncredited retries.** ([#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice` 10.1.1)
+
+- **WAL - Cold replay preserves acknowledged deletes.** ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4930](https://github.com/NSTA1/Orleans.Lattice/issues/4930)) (`Orleans.Lattice` 10.1.1)
+
+- **Atomic - Reshard retries across routing epochs until the existing budget expires.** ([#4922](https://github.com/NSTA1/Orleans.Lattice/issues/4922)) (`Orleans.Lattice` 10.1.1)
+
+- **Leaf - Coalesced digest publishes retain intervening mutations.** ([#4931](https://github.com/NSTA1/Orleans.Lattice/issues/4931)) (`Orleans.Lattice` 10.1.1)
+
+- **Leaf - Unrouted compaction nominations are discarded only after a complete routing proof.** ([#4927](https://github.com/NSTA1/Orleans.Lattice/pull/4927)) (`Orleans.Lattice` 10.1.1)
+
+- **Leaf - Starvation drives no longer block the leaf turn.** ([#4949](https://github.com/NSTA1/Orleans.Lattice/issues/4949)) (`Orleans.Lattice` 10.1.1)
+
+- **Explorer - Date and time fields reject incomplete or stale picker values.** ([#4936](https://github.com/NSTA1/Orleans.Lattice/pull/4936)) (`Orleans.Lattice.Explorer.UI` 10.1.1)
+
+- **Explorer - History and metrics responses remain bound to the active selection.** ([#4941](https://github.com/NSTA1/Orleans.Lattice/issues/4941)) (`Orleans.Lattice.Explorer.UI` 10.1.1)
+
+- **Explorer - Tenant reads cannot overwrite a newer navigation state.** ([#4944](https://github.com/NSTA1/Orleans.Lattice/issues/4944)) (`Orleans.Lattice.Explorer.UI` 10.1.1)
+
+- **Tests - Layer 3 rig reports lag and failure evidence and cannot revive superseded revisions.** ([#4950](https://github.com/NSTA1/Orleans.Lattice/pull/4950)) (`repository-wide`)
+
 ## [2026-10-13]
 
 Coordinated lockstep minor release: 50 packages advance to `10.1.0` - `Orleans.Lattice` 10.1.0, `Orleans.Lattice.Api.Abstractions` 10.1.0, `Orleans.Lattice.Api.Apps` 10.1.0, `Orleans.Lattice.Api.Apps.Grpc` 10.1.0, `Orleans.Lattice.Api.Auth` 10.1.0, `Orleans.Lattice.Api.Auth.Grpc` 10.1.0, `Orleans.Lattice.Api.Backup` 10.1.0, `Orleans.Lattice.Api.Backup.Grpc` 10.1.0, `Orleans.Lattice.Api.Data` 10.1.0, `Orleans.Lattice.Api.Data.Grpc` 10.1.0, `Orleans.Lattice.Api.Mcp` 10.1.0, `Orleans.Lattice.Api.Mcp.Apps` 10.1.0, `Orleans.Lattice.Api.Mcp.Telemetry` 10.1.0, `Orleans.Lattice.Api.Mcp.Telemetry.Azure` 10.1.0, `Orleans.Lattice.Api.Replication` 10.1.0, `Orleans.Lattice.Api.Replication.Grpc` 10.1.0, `Orleans.Lattice.Api.Schema` 10.1.0, `Orleans.Lattice.Api.Schema.Grpc` 10.1.0, `Orleans.Lattice.Api.State` 10.1.0, `Orleans.Lattice.Api.State.Grpc` 10.1.0, `Orleans.Lattice.Api.Telemetry` 10.1.0, `Orleans.Lattice.Api.Telemetry.Grpc` 10.1.0, `Orleans.Lattice.Api.TenantAdmin` 10.1.0, `Orleans.Lattice.Api.TenantAdmin.Grpc` 10.1.0, `Orleans.Lattice.Api.TreeAdmin` 10.1.0, `Orleans.Lattice.Api.TreeAdmin.Grpc` 10.1.0, `Orleans.Lattice.Apps` 10.1.0, `Orleans.Lattice.Auth` 10.1.0, `Orleans.Lattice.Backup` 10.1.0, `Orleans.Lattice.Backup.AzureBlob` 10.1.0, `Orleans.Lattice.Caching.AzureBlob` 10.1.0, `Orleans.Lattice.Dashboards` 10.1.0, `Orleans.Lattice.Explorer.AppKit` 10.1.0, `Orleans.Lattice.Explorer.Core` 10.1.0, `Orleans.Lattice.Explorer.Entra` 10.1.0, `Orleans.Lattice.Explorer.Entra.Web` 10.1.0, `Orleans.Lattice.Explorer.UI` 10.1.0, `Orleans.Lattice.Explorer.Web` 10.1.0, `Orleans.Lattice.GrainIndex` 10.1.0, `Orleans.Lattice.Membership` 10.1.0, `Orleans.Lattice.Membership.Entra` 10.1.0, `Orleans.Lattice.Membership.Entra.Graph` 10.1.0, `Orleans.Lattice.Membership.Oidc` 10.1.0, `Orleans.Lattice.Replication` 10.1.0, `Orleans.Lattice.Replication.Grpc` 10.1.0, `Orleans.Lattice.Scaling` 10.1.0, `Orleans.Lattice.Schema` 10.1.0, `Orleans.Lattice.Storage.AzureTable` 10.1.0, `Orleans.Lattice.Storage.File` 10.1.0, `Orleans.Lattice.Tenancy` 10.1.0. Every package requires its family dependencies at this version. The three held packages `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Api.Mcp.RepoContext.Replication` and `Orleans.Lattice.Vector` are not part of this wave and remain unpublished to NuGet.

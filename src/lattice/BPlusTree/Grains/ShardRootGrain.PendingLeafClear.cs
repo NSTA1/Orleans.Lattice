@@ -178,6 +178,11 @@ internal sealed partial class ShardRootGrain
 
         _leafGrains.TryRemove(leafId, out _);
 
+        if (state.State.DirtyLeavesSinceLastCompaction.Remove(leafId.ToString()))
+        {
+            _pendingLeafClearsNeedPersist = true;
+        }
+
         if (state.State.PendingLeafClears.Remove(leafId))
         {
             _pendingLeafClearsNeedPersist = true;

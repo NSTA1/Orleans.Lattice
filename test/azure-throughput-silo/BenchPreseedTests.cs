@@ -136,4 +136,77 @@ public class BenchPreseedTests
 
         Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => BenchPreseed.SeedAsync(lattice, 1, 0, CancellationToken.None));
     }
+
+    [Test]
+    public async Task SeedWithRetryAsync_progress_resets_attempt_budget_for_each_slice()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var attempts = new Dictionary<string, int>();
+        var written = new List<string>();
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var key = ci.Arg<List<KeyValuePair<string, byte[]>>>()[0].Key;
+                attempts.TryGetValue(key, out var previous);
+                attempts[key] = previous + 1;
+                if (previous == 0) return Task.FromException(new TimeoutException("transient slice"));
+                written.Add(key);
+                return Task.CompletedTask;
+            });
+
+        await BenchPreseed.SeedWithRetryAsync(lattice, 9, 1, "test", TimeSpan.FromSeconds(60), CancellationToken.None);
+
+        Assert.That(written, Is.EqualTo(Enumerable.Range(0, 9).Select(GeneratorKey)));
+        Assert.That(attempts.Values, Is.All.EqualTo(2));
+    }
+
+    [Test]
+    public void SeedWithRetryAsync_persistently_failing_slice_stops_at_eight_attempts()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var calls = 0;
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                calls++;
+                return Task.FromException(new TimeoutException("persistent slice"));
+            });
+
+        Assert.ThrowsAsync<TimeoutException>(() =>
+            BenchPreseed.SeedWithRetryAsync(lattice, 1, 1, "test", TimeSpan.FromSeconds(60), CancellationToken.None));
+        Assert.That(calls, Is.EqualTo(8));
+    }
+
+    [Test]
+    public void SeedWithRetryAsync_wall_clock_budget_bounds_a_hung_call()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(pending.Task);
+
+        try
+        {
+            Assert.CatchAsync<OperationCanceledException>(() =>
+                BenchPreseed.SeedWithRetryAsync(lattice, 1, 1, "test", TimeSpan.FromMilliseconds(100), CancellationToken.None));
+        }
+        finally { pending.SetResult(); }
+    }
+
+    [Test]
+    public void SeedWithRetryAsync_terminal_fault_is_not_retried()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var calls = 0;
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                calls++;
+                return Task.FromException(new InvalidOperationException("terminal"));
+            });
+
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            BenchPreseed.SeedWithRetryAsync(lattice, 1, 1, "test", TimeSpan.FromSeconds(60), CancellationToken.None));
+        Assert.That(calls, Is.EqualTo(1));
+    }
 }

@@ -452,14 +452,15 @@ internal sealed class TreeResizeGrain(
         // budget on a tree being written concurrently. See TreeEmptinessProbe
         // for why an existence question needs no such reconciliation.
         var registryForProbe = grainFactory.GetLatticeRegistry();
-        var resolvedOptions = await optionsResolver.ResolveAsync(TreeId);
-        var probeMap = await registryForProbe.GetShardMapAsync(TreeId)
+        var (probeEntry, resolvedOptions) = await RegistryEntryOptions.ReadAsync(
+            registryForProbe, optionsResolver, TreeId);
+        var probeMap = probeEntry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount, resolvedOptions.ShardCount);
 
         if (await TreeEmptinessProbe.IsObservablyEmptyAsync(
                 grainFactory,
-                await registryForProbe.ResolveAsync(TreeId),
+                probeEntry?.PhysicalTreeId ?? TreeId,
                 probeMap.GetPhysicalShardIndices(),
                 resolvedOptions.EmptyTreeProbeBudget))
         {
@@ -527,7 +528,6 @@ internal sealed class TreeResizeGrain(
         bool holdForBootstrap = false,
         string? operationIdOverride = null)
     {
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
         var operationId = operationIdOverride ?? Guid.NewGuid().ToString("N");
         ArgumentException.ThrowIfNullOrEmpty(operationId);
 
@@ -536,7 +536,7 @@ internal sealed class TreeResizeGrain(
         // can restore it. ResolveAsync is a projection of the entry, so one
         // registry read serves both.
         var registry = grainFactory.GetLatticeRegistry();
-        var oldEntry = await registry.GetEntryAsync(TreeId);
+        var (oldEntry, resolved) = await RegistryEntryOptions.ReadAsync(registry, optionsResolver, TreeId);
         var currentPhysical = oldEntry?.PhysicalTreeId ?? TreeId;
         var snapshotTreeId = $"{TreeId}/resized/{operationId}";
 
@@ -813,7 +813,15 @@ internal sealed class TreeResizeGrain(
         var registry = grainFactory.GetLatticeRegistry();
         var entry = await registry.GetEntryAsync(TreeId);
         var physical = entry?.PhysicalTreeId ?? TreeId;
-        var shardCount = (await optionsResolver.ResolveAsync(physical)).ShardCount;
+        // An aliased copy owns its own pins; only reuse the logical row when
+        // it is also the physical owner and has no lazy-seeding work left.
+        var resolved = physical == TreeId
+            && entry?.MaxLeafKeys is not null
+            && entry.MaxInternalChildren is not null
+            && entry.ShardCount is not null
+                ? optionsResolver.Resolve(TreeId, entry)
+                : await optionsResolver.ResolveAsync(physical);
+        var shardCount = resolved.ShardCount;
         var shardIndices = RoutedShardIndices.Resolve(shardCount, entry?.ShardMap);
         return await TreeBootstrapReadFence.FindFencedShardAsync(grainFactory, physical, shardIndices);
     }

@@ -297,11 +297,12 @@ internal sealed partial class ShardRootGrain
             // partition's min, yielding a slightly-overcounted lag
             // figure - which is the right direction for an operator
             // alarm signal (better to over-report lag than miss it).
-            var legacyCheckpoint = await walk.CurrentLeaf.GetProjectionCheckpointOffsetAsync();
+            var page = await walk.CurrentLeaf.GetProjectionCheckpointAndNextSiblingAsync();
+            var legacyCheckpoint = page.CheckpointOffset;
             if (legacyCheckpoint < minCheckpoint)
                 minCheckpoint = legacyCheckpoint;
 
-            if (!await walk.MoveNextAsync()) break;
+            if (!walk.MoveNext(page.Link)) break;
 
             // Bankable checkpoint (issue 2807). perPartitionHeads has to ride
             // along or a banked first batch loses the heads entirely and the
@@ -704,4 +705,3 @@ internal sealed partial class ShardRootGrain
         }
     }
 }
-

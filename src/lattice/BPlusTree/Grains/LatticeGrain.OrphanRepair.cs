@@ -110,7 +110,7 @@ internal sealed partial class LatticeGrain
         var physicalShards = shardMap.GetPhysicalShardIndices().ToArray();
         Array.Sort(physicalShards);
 
-        var options = await optionsResolver.ResolveAsync(TreeId);
+        var options = optionsResolver.GetConfiguredOptions(TreeId);
         var budget = LeafWalkBudget.ForOrphanedLeafPass(options, startTimestamp);
 
         var leavesWalked = 0;

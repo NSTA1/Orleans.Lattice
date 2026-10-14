@@ -72,6 +72,15 @@ internal sealed class FakeStateClient : ILatticeStateClient
     /// <summary>Overrides a scan reply, including replies already in flight when cancelled.</summary>
     public Func<EntryScanRequest, CancellationToken, Task<EntryScanResponse>>? ScanReply { get; set; }
 
+    /// <summary>Overrides history replies, including late replies after cancellation.</summary>
+    public Func<EntryHistoryRequest, CancellationToken, Task<EntryHistoryResponse>>? HistoryReply { get; set; }
+
+    /// <summary>Overrides metrics replies, including late replies after cancellation.</summary>
+    public Func<TreeMetricsRequest, CancellationToken, Task<TreeMetricsSnapshot>>? MetricsReply { get; set; }
+
+    /// <summary>Lets a change feed deliver buffered items after cancellation.</summary>
+    public bool IgnoreObserveCancellation { get; set; }
+
     /// <summary>When set, a continuation scan throws this.</summary>
     public Exception? ContinuationFault { get; set; }
 
@@ -249,6 +258,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<EntryHistoryResponse> GetEntryHistoryAsync(EntryHistoryRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(GetEntryHistoryAsync) + ":" + (request.ContinuationToken ?? "first"));
+        if (HistoryReply is { } reply)
+        {
+            return reply(request, cancellationToken);
+        }
+
         ThrowIfFaulted(nameof(GetEntryHistoryAsync));
         var revisions = History.TryGetValue((request.TreeId, request.Key), out var found) ? found : [];
         IEnumerable<EntryRevisionRecord> ordered = revisions.Where(revision => request.ToHlc is not { } to || revision.Hlc <= to);
@@ -282,6 +296,11 @@ internal sealed class FakeStateClient : ILatticeStateClient
     public Task<TreeMetricsSnapshot> GetMetricsSnapshotAsync(TreeMetricsRequest request, CancellationToken cancellationToken = default)
     {
         Record(nameof(GetMetricsSnapshotAsync));
+        if (MetricsReply is { } reply)
+        {
+            return reply(request, cancellationToken);
+        }
+
         ThrowIfFaulted(nameof(GetMetricsSnapshotAsync));
         var trees = request.TreeIds is { } ids ? ids.Where(Metrics.ContainsKey).Select(id => Metrics[id]).ToList() : Metrics.Values.ToList();
         return Task.FromResult(new TreeMetricsSnapshot { Trees = trees });
@@ -336,7 +355,7 @@ internal sealed class FakeStateClient : ILatticeStateClient
         Interlocked.Increment(ref _observerCount);
         try
         {
-            await foreach (var change in feed.Reader.ReadAllAsync(cancellationToken))
+            await foreach (var change in feed.Reader.ReadAllAsync(IgnoreObserveCancellation ? CancellationToken.None : cancellationToken))
             {
                 yield return change;
             }

@@ -3055,13 +3055,14 @@ internal sealed partial class AtomicWriteGrain(
     /// prepared write sits on the copy the decision then makes visible. Re-running
     /// a prepared write is idempotent at the leaf. A swap after the decision is
     /// handled by the broadcast, which then delivers the terminals to the bound
-    /// copy. Bounded so a tree whose alias never settles still commits.
+    /// copy. Bounded by the stale-routing wall-clock budget so a tree whose
+    /// routing never settles still terminates.
     /// </summary>
     private async Task RebindAcrossAliasSwapAsync()
     {
-        const int MaxRebinds = 3;
+        var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
         _preDecisionRouting = null;
-        for (var rebind = 0; rebind <= MaxRebinds; rebind++)
+        while (true)
         {
             if (state.State.Phase != AtomicWritePhase.Execute
                 || state.State.NextIndex < state.State.Entries.Count
@@ -3077,7 +3078,7 @@ internal sealed partial class AtomicWriteGrain(
             {
                 if (state.State.RoutingEpoch != routing.Map.Version)
                 {
-                    if (rebind == MaxRebinds)
+                    if (DateTime.UtcNow >= deadline)
                     {
                         throw new InvalidOperationException(
                             $"Atomic-write saga {OperationKey} could not commit because the shard-map routing epoch kept changing.");
@@ -3099,7 +3100,7 @@ internal sealed partial class AtomicWriteGrain(
                 return;
             }
 
-            if (rebind == MaxRebinds)
+            if (DateTime.UtcNow >= deadline)
             {
                 throw new InvalidOperationException(
                     $"Atomic-write saga {OperationKey} could not commit because the physical tree routing kept changing.");

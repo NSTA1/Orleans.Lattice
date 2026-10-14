@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
 using System.Text;
 
@@ -114,5 +115,40 @@ public class TombstoneCompactionIntegrationTests
         Assert.That(keys.Count, Is.EqualTo(2));
         Assert.That(keys, Does.Contain("w1-a"));
         Assert.That(keys, Does.Contain("w2-b"));
+    }
+
+    [Test]
+    public async Task Compaction_discards_a_persisted_unrouted_nomination_without_admitting_the_rowless_leaf()
+    {
+        var treeName = $"{SmallLeafClusterFixture.CompactionTreeName}-stale-{Guid.NewGuid():N}";
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeName, new TreeRegistryEntry
+        {
+            ShardCount = 1,
+            MaxLeafKeys = SmallLeafClusterFixture.SmallMaxLeafKeys,
+        });
+        var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
+        for (var i = 0; i < 30; i++)
+            await router.SetAsync($"k{i:D3}", [(byte)i]);
+
+        var routing = await router.GetRoutingAsync();
+        Assert.That((await router.DiagnoseAsync()).Shards.Single().RootIsLeaf, Is.False,
+            "the recovery proof must traverse real internal routing, not just a single-leaf root");
+        var shardIndex = routing.Map.GetPhysicalShardIndices()[0];
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
+        var rowless = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+        var rowlessId = rowless.GetGrainId();
+        await shard.RetainDirtyLeafAsync(rowlessId, default);
+        Assert.That((await shard.GetDirtyLeavesSinceLastCompactionAsync()).DirtyLeaves, Does.Contain(rowlessId));
+
+        var compaction = _cluster.GrainFactory.GetGrain<ITombstoneCompactionGrain>(treeName);
+        await compaction.RunCompactionPassAsync();
+
+        Assert.That((await shard.GetDirtyLeavesSinceLastCompactionAsync()).DirtyLeaves, Does.Not.Contain(rowlessId));
+        await compaction.RunCompactionPassAsync();
+        Assert.That((await shard.GetDirtyLeavesSinceLastCompactionAsync()).DirtyLeaves, Does.Not.Contain(rowlessId));
+        Assert.ThrowsAsync<LeafStateRowLostException>(() => rowless.GetAsync("k000"));
+        for (var i = 0; i < 30; i++)
+            Assert.That(await router.GetAsync($"k{i:D3}"), Is.EqualTo(new byte[] { (byte)i }));
     }
 }

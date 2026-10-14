@@ -18,6 +18,7 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
     public async Task A_folded_leaf_whose_clear_failed_is_recorded_as_owed()
     {
         var h = CreateHarness();
+        h.State.State.DirtyLeavesSinceLastCompaction[h.LeafB.ToString()] = default;
         h.B.ClearGrainStateAsync().Returns(
             _ => Task.FromException(new InvalidOperationException("storage unavailable")),
             _ => Task.CompletedTask);
@@ -27,6 +28,7 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
         Assert.That(reclaimed, Is.EqualTo(1));
         Assert.That(h.State.State.PendingLeafClears, Is.EqualTo(new[] { h.LeafB }),
             "the only surviving reference to an unlinked, unrouted leaf must be durable");
+        Assert.That(h.State.State.DirtyLeavesSinceLastCompaction.ContainsKey(h.LeafB.ToString()), Is.True);
     }
 
     [Test]
@@ -85,6 +87,23 @@ public sealed partial class ShardRootGrainLeafReclaimResilienceTests
 
         await h.B.Received(1).ClearGrainStateAsync();
         Assert.That(h.State.State.PendingLeafClears, Is.Empty);
+    }
+
+    [Test]
+    public async Task ReclaimEmptyLeaves_clears_the_retired_leaf_dirty_nomination()
+    {
+        var h = CreateHarness();
+        h.State.State.DirtyLeavesSinceLastCompaction[h.LeafB.ToString()] = default;
+        h.State.State.DirtyLeavesSinceLastCompaction[h.LeafA.ToString()] = default;
+        string[]? persistedMarks = null;
+        h.State.OnWriteState = s => persistedMarks = s.DirtyLeavesSinceLastCompaction.Keys.ToArray();
+
+        Assert.That(await h.Grain.ReclaimEmptyLeavesAsync(4), Is.EqualTo(1));
+
+        Assert.That(h.State.State.DirtyLeavesSinceLastCompaction.Keys, Is.EqualTo(new[] { h.LeafA.ToString() }));
+        Assert.That(persistedMarks, Is.EqualTo(new[] { h.LeafA.ToString() }));
+        Assert.That((await h.Grain.GetDirtyLeavesSinceLastCompactionAsync()).DirtyLeaves,
+            Does.Not.Contain(h.LeafB));
     }
 
     [Test]

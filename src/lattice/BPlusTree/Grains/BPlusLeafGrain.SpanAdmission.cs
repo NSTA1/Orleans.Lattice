@@ -504,10 +504,20 @@ internal sealed partial class BPlusLeafGrain
         SplitResult? recovered = null;
         if (completeInterruptedSplit && NeedsSplitRecovery)
         {
-            recovered = await CompleteRecoverySplitUnderGateAsync();
+            using (AwaitDiagnostics.Begin("leaf.relocate.recover-split", context.GrainId, null))
+            {
+                recovered = await CompleteRecoverySplitUnderGateAsync();
+            }
         }
 
-        var (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(stranded, isCrossShardMigration);
+        Dictionary<string, LwwValue<byte[]>> local;
+        SplitResult? forwardedSplit;
+        using (AwaitDiagnostics.Begin(
+            "leaf.relocate.forward", context.GrainId, AwaitDiagnostics.Enabled ? "rows=" + stranded.Count : null))
+        {
+            (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(stranded, isCrossShardMigration);
+        }
+
         foreach (var (key, lww) in local)
         {
             StoreEntry(key, lww);

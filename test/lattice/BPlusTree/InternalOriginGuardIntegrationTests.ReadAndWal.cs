@@ -375,6 +375,15 @@ public sealed partial class InternalOriginGuardIntegrationTests
             async () => await wal.GetRetainedByteSizeAsync(CancellationToken.None));
     }
 
+    [Test]
+    public void Wal_GetByteSizesAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var wal = _cluster.GrainFactory.GetGrain<IWalShardGrain>("origin-guard-wal-size-pair/0");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await wal.GetByteSizesAsync(CancellationToken.None));
+    }
+
     // The administrative move surface is the tampering half: an unguarded
     // QuiesceForMoveAsync fences a live WAL shard against new appends, and
     // DeactivateForMoveAsync tears its activation down.

@@ -244,7 +244,7 @@ internal sealed class TombstoneCompactionGrain(
         // Snapshot the leaf batch size for this operator-driven pass so
         // the per-shard loop below honours the same cap as the
         // reminder-driven pass.
-        _currentLeafBatchSize = (await optionsResolver.ResolveAsync(TreeId)).CompactionLeafBatchSize;
+        _currentLeafBatchSize = optionsResolver.GetCompactionSchedule(TreeId).LeafBatchSize;
         try
         {
             var (physicalTreeId, physicalShards) = await ResolveShardTopologyAsync();
@@ -371,9 +371,7 @@ internal sealed class TombstoneCompactionGrain(
         _passStartTimestamp = Stopwatch.GetTimestamp();
         // Snapshot the resolved tick interval at pass start; mid-pass
         // option changes do not retroactively reshape the in-flight pass.
-        var resolvedScoped = await optionsResolver.ResolveAsync(TreeId);
-        _currentTickInterval = resolvedScoped.CompactionShardTickInterval;
-        _currentLeafBatchSize = resolvedScoped.CompactionLeafBatchSize;
+        (_currentTickInterval, _currentLeafBatchSize) = optionsResolver.GetCompactionSchedule(TreeId);
         var prevInProgress = state.State.InProgress;
         var prevNextShardIndex = state.State.NextShardIndex;
         var prevShardRetries = state.State.ShardRetries;
@@ -504,9 +502,7 @@ internal sealed class TombstoneCompactionGrain(
 
         // Snapshot the resolved tick interval at pass start; mid-pass
         // option changes do not retroactively reshape the in-flight pass.
-        var resolvedBegin = await optionsResolver.ResolveAsync(TreeId);
-        _currentTickInterval = resolvedBegin.CompactionShardTickInterval;
-        _currentLeafBatchSize = resolvedBegin.CompactionLeafBatchSize;
+        (_currentTickInterval, _currentLeafBatchSize) = optionsResolver.GetCompactionSchedule(TreeId);
 
         // Snapshot before mutating so a transient WriteStateAsync failure
         // does not leave the in-memory InProgress / shard cursor ahead of
@@ -983,6 +979,26 @@ internal sealed class TombstoneCompactionGrain(
                     catch (Exception leafEx)
                     {
                         leafFaulted = true;
+                        if (leafEx is LeafStateRowLostException)
+                        {
+                            try
+                            {
+                                if (await shardRoot.DiscardUnroutedDirtyLeafAsync(dirtyLeafId))
+                                {
+                                    dirtyIndex++;
+                                    budget.RecordLeafVisited();
+                                    if (dirtyIndex < dirtyLeaves.Length && budget.ShouldYield()) break;
+                                    continue;
+                                }
+                            }
+                            catch (Exception routingEx)
+                            {
+                                logger.LogWarning(routingEx,
+                                    "Could not prove rowless leaf {LeafId} of shard {ShardKey} unrouted; its dirty mark will be retained.",
+                                    dirtyLeafId, shardKey);
+                            }
+                        }
+
                         // A leaf that will not compact is a LEAF-scoped fault and
                         // must not abort the shard's walk. Re-throwing here left
                         // dirtyIndex pinned on the blocker for the life of the

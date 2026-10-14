@@ -117,6 +117,14 @@ internal sealed partial class ShardRootGrain
     private TaskCompletionSource? _serialTurnsReleased;
 
     /// <summary>
+    /// The method of the serial turn most recently admitted, and its await
+    /// diagnostic scope. Populated only while <see cref="AwaitDiagnostics"/> is enabled.
+    /// </summary>
+    private string? _serialTurnOwner;
+
+    private AwaitDiagnostics.Scope _serialTurnDiagScope;
+
+    /// <summary>
     /// Fences new writes while deactivation is pending or issued. Cleared only
     /// when the runtime refuses the request.
     /// </summary>
@@ -246,6 +254,12 @@ internal sealed partial class ShardRootGrain
     {
         // Loop: another serial turn may have become active between the release
         // and this continuation running.
+        using var awaitDiag = AwaitDiagnostics.Enabled
+            ? AwaitDiagnostics.Begin(
+                "shard.point-wait-serial",
+                this.GetGrainId(),
+                $"owner={_serialTurnOwner} serialActive={_serialTurnsActive} pointInFlight={_interleavedPointWritesInFlight}")
+            : default;
         while (_serialTurnsActive > 0)
         {
             _serialTurnsReleased ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -321,6 +335,16 @@ internal sealed partial class ShardRootGrain
     private Task InvokeSerialTurnAsync(IIncomingGrainCallContext context)
     {
         _serialTurnsActive++;
+        if (AwaitDiagnostics.Enabled)
+        {
+            _serialTurnDiagScope.Dispose();
+            _serialTurnOwner = context.Request.GetInterfaceName() + "." + context.Request.GetMethodName();
+            _serialTurnDiagScope = AwaitDiagnostics.Begin(
+                "shard.serial-turn",
+                this.GetGrainId(),
+                $"method={_serialTurnOwner} pointInFlight={_interleavedPointWritesInFlight}");
+        }
+
         if (_interleavedPointWritesInFlight > 0)
         {
             return InvokeSerialTurnAfterDrainAsync(context);
@@ -350,10 +374,18 @@ internal sealed partial class ShardRootGrain
     {
         try
         {
-            while (_interleavedPointWritesInFlight > 0)
+            using (AwaitDiagnostics.Enabled
+                ? AwaitDiagnostics.Begin(
+                    "shard.serial-drain-wait",
+                    this.GetGrainId(),
+                    $"method={_serialTurnOwner} pointInFlight={_interleavedPointWritesInFlight}")
+                : default)
             {
-                _pointWritesDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                await _pointWritesDrained.Task;
+                while (_interleavedPointWritesInFlight > 0)
+                {
+                    _pointWritesDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    await _pointWritesDrained.Task;
+                }
             }
 
             await InvokeRoutingFiltered(context);
@@ -378,7 +410,13 @@ internal sealed partial class ShardRootGrain
 
     private void EndSerialTurn()
     {
-        if (--_serialTurnsActive == 0 && _serialTurnsReleased is { } released)
+        if (--_serialTurnsActive == 0)
+        {
+            _serialTurnDiagScope.Dispose();
+            _serialTurnDiagScope = default;
+        }
+
+        if (_serialTurnsActive == 0 && _serialTurnsReleased is { } released)
         {
             _serialTurnsReleased = null;
             released.TrySetResult();

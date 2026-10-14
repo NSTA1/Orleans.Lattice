@@ -256,9 +256,10 @@ function Set-AcaSiloCount {
 		mechanism that does work is deactivating the active revision, which
 		reports runningState=Stopped with replicas=0 and bills nothing.
 
-		Coming back up is free of extra ceremony because every cohort sets its
-		own env vars first, and `--set-env-vars` mints a fresh active revision
-		- so the deactivated one is never reactivated, just superseded.
+		Coming back up mints a fresh active revision. The app must be in
+		Multiple revision mode first (Set-AcaSiloMultipleRevisionMode): in
+		Single mode that update also reactivates the parked revision at its
+		old replica count, against tables the cohort reset just deleted.
 
 		Neither path returns until every superseded revision has retired
 		(Wait-AcaRevisionsRetired). Deactivation and supersession both take
@@ -337,11 +338,13 @@ function Set-AcaSiloCount {
 	}
 
 	Write-Host "[aca] scaling $($Context.siloApp) to $Count replica(s)" -ForegroundColor Cyan
+	Set-AcaSiloMultipleRevisionMode -Context $Context
 	# ONE update, carrying both the env vars and the replica pinning.
 	#
 	# This must not be split into two `az containerapp update` calls. Every
-	# update mints a NEW revision, and the app runs in Single revision mode,
-	# so a second update supersedes the first: the replicas that had already
+	# update mints a NEW revision, and a second update supersedes the first
+	# (the retirement below deactivates every revision but the newest), so
+	# the replicas that had already
 	# started, joined the clustering table and formed a cluster are torn down
 	# and replaced. Observed directly - a cohort produced revisions
 	# --0000004 (env) and --0000005 (scale) 2.5 minutes apart, so the cluster
@@ -386,8 +389,8 @@ function Set-AcaSiloCount {
 	# Retire every superseded revision before handing the cluster to the
 	# caller.
 	#
-	# Single revision mode deactivates the previous revision on its own, but
-	# it does so LAZILY: the old replicas keep running while they drain, and
+	# Single revision mode deactivated the previous revision on its own, but
+	# it did so LAZILY: the old replicas kept running while they drained, and
 	# ACA gives no completion signal. Every cohort so far logged "2 active
 	# revisions" at this point, which means the measurement window could open
 	# with up to 2N silos alive instead of N - all of them pointed at the one
@@ -482,6 +485,54 @@ function Set-AcaSiloCount {
 	Wait-AcaRevisionsRetired -Context $Context -KeepRevision $keep -TimeoutSec $TimeoutSec
 
 	return $replicas
+}
+
+function Set-AcaSiloMultipleRevisionMode {
+	<#
+	.SYNOPSIS
+		Put the silo app in Multiple revision mode before a cohort update.
+	.DESCRIPTION
+		In Single revision mode, an `az containerapp update` on an app whose
+		revisions were all deactivated by a park briefly REACTIVATES the last
+		parked revision, at its old replica count, alongside the new one.
+		Proven on a parked rig: the update brought back the previous revision
+		with 2 replicas for 30-40 s. Those silos restart with the previous
+		cohort's WAL and grain-state table names, which Reset-AcaBenchTables
+		has just deleted, so they log TableBeingDeleted and exit 139 while the
+		new cohort warms up. In Multiple revision mode the same update creates
+		only the new revision and parked revisions stay Stopped.
+
+		The silo app has no ingress, so the traffic split that Multiple mode
+		adds is irrelevant; Set-AcaSiloCount retires superseded revisions
+		explicitly. Changing the mode mints no revision. Fail-closed: a rig
+		that cannot be confirmed in Multiple mode is not measured.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context
+	)
+
+	$query = @(
+		'containerapp', 'show',
+		'--name', $Context.siloApp,
+		'--resource-group', $Context.resourceGroup,
+		'--query', 'properties.configuration.activeRevisionsMode',
+		'-o', 'tsv'
+	)
+	$mode = "$(Invoke-Az $query -AllowFailure)".Trim()
+	if ($mode -ieq 'Multiple') { return }
+
+	Write-Host "[aca]   switching $($Context.siloApp) from '$mode' to Multiple revision mode (a Single-mode update reactivates the parked revision)" -ForegroundColor DarkGray
+	Invoke-Az @(
+		'containerapp', 'revision', 'set-mode',
+		'--name', $Context.siloApp,
+		'--resource-group', $Context.resourceGroup,
+		'--mode', 'multiple',
+		'-o', 'none'
+	) | Out-Null
+	$mode = "$(Invoke-Az $query -AllowFailure)".Trim()
+	if ($mode -ine 'Multiple') {
+		throw "Could not put $($Context.siloApp) in Multiple revision mode (reads '$mode'). A Single-mode update would reactivate the parked revision against deleted tables, so the cohort is not run."
+	}
 }
 
 function Reset-AcaBenchTables {
@@ -942,15 +993,16 @@ function Get-AcaSiloLog {
 		is the strongest available guarantee that a Layer 2 number and a
 		Layer 3 number mean the same thing.
 
-		Only `[phaseA]` lines are taken. That is the whole of what a silo
-		uniquely contributes here, and restricting to it makes the combined
+		By default only `[phaseA]` lines are taken. Restricting to it makes the combined
 		log immune to a superseded revision: a silo still running in `tcp`
 		ingest mode drives its OWN standalone benchmark and emits the exact
 		same `[producer] ...` and `[silo] t=` line shapes, which would
 		otherwise be spliced into this cohort's throughput series and silently
 		blended into the published number.
 
-		Pass -RevisionName to pin the harvest to the cohort's own silos.
+		-IncludeDiagnostics retains all console lines, with time and replica
+		identity on non-phaseA lines so they cannot enter the throughput series.
+		It requires -RevisionName to pin the harvest to the cohort's own silos.
 		Because exactly one `az containerapp update` runs per cohort and the
 		app is in Single revision mode, the active revision is a one-to-one
 		label for this cohort's replica set - a far stronger identification
@@ -961,28 +1013,40 @@ function Get-AcaSiloLog {
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
 		[Parameter(Mandatory)][datetime] $SinceUtc,
 		[Parameter(Mandatory)][datetime] $UntilUtc,
-		[string] $RevisionName
+		[string] $RevisionName,
+		[switch] $IncludeDiagnostics
 	)
 	# Single line - see the rationale in Get-AcaJobLog. A multi-line query is
 	# truncated to a bare table scan by az.cmd, which is precisely how this
 	# harvest once returned three experiments' worth of unfiltered logs.
 	$revFilter = if ($RevisionName) { " | where RevisionName_s == '$RevisionName'" } else { '' }
-	$kql = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter | where Log_s startswith '[phaseA]' | project TimeGenerated, Log_s | order by TimeGenerated asc | limit 200000"
-	$json = Invoke-Az @(
-		'monitor', 'log-analytics', 'query',
-		'--workspace', $Context.workspaceId,
-		'--analytics-query', $kql,
-		'-o', 'json'
-	) -AllowFailure
-	if ($LASTEXITCODE -ne 0) {
-		# Same reasoning as the fail-fast guard in Get-AcaJobLog: a malformed
-		# query returns empty, which is indistinguishable from "this cohort
-		# produced no [phaseA] lines". Silence here would publish a row with
-		# missing per-call quantiles and no explanation.
-		throw "[aca] silo log query failed. Query: $kql"
+	if ($IncludeDiagnostics -and -not $RevisionName) { throw 'Silo diagnostics require the cohort RevisionName.' }
+	$lineFilter = if ($IncludeDiagnostics) { '' } else { " | where Log_s startswith '[phaseA]'" }
+	# Freeze ingestion membership across pages, and keep each response well
+	# below Log Analytics' size limit: it can truncate before the row limit.
+	$snapshot = [datetime]::UtcNow.ToString('o')
+	$baseQuery = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ingestion_time() <= datetime($snapshot) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter$lineFilter | project TimeGenerated, ContainerGroupName_s, Log_s | order by TimeGenerated asc, ContainerGroupName_s asc, Log_s asc | serialize row = row_number()"
+	$pageSize = 200
+	$rows = [System.Collections.Generic.List[object]]::new()
+	for ($offset = 0; ; $offset += $pageSize) {
+		$kql = "$baseQuery | where row > $offset and row <= $($offset + $pageSize) | project-away row"
+		$json = Invoke-Az @(
+			'monitor', 'log-analytics', 'query',
+			'--workspace', $Context.workspaceId,
+			'--analytics-query', $kql,
+			'-o', 'json'
+		) -AllowFailure
+		if ($LASTEXITCODE -ne 0) { throw "[aca] silo log query failed. Query: $kql" }
+		$page = if ($json -and $json.Trim()) { @($json | ConvertFrom-Json -ErrorAction Stop) } else { @() }
+		foreach ($row in $page) { $rows.Add($row) }
+		if ($page.Count -lt $pageSize) { break }
+		if ($rows.Count -ge 200000) { throw '[aca] silo log query reached its row limit; diagnostics may be truncated.' }
 	}
-	if (-not $json -or -not $json.Trim()) { return @() }
-	try { return @(@($json | ConvertFrom-Json) | ForEach-Object { $_.Log_s }) } catch { return @() }
+	return @($rows | ForEach-Object {
+		if ($IncludeDiagnostics -and -not $_.Log_s.StartsWith('[phaseA]')) {
+			"[aca-silo time=$($_.TimeGenerated) replica=$($_.ContainerGroupName_s)] $($_.Log_s)"
+		} else { $_.Log_s }
+	})
 }
 
 function Invoke-AcaTeardown {

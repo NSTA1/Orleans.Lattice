@@ -2007,6 +2007,14 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task RetainDirtyLeafAsync(GrainId leafId, HybridLogicalClock above);
 
     /// <summary>
+    /// Removes a stale compaction nomination only after a complete, bounded
+    /// traversal of current routing proves <paramref name="leafId"/> unreachable.
+    /// Returns false for a routed leaf or an inconclusive traversal. Does not
+    /// activate, clear or admit the leaf. Storage and routing faults propagate.
+    /// </summary>
+    Task<bool> DiscardUnroutedDirtyLeafAsync(GrainId leafId);
+
+    /// <summary>
     /// Engages a durable write fence on this shard for the cross-cluster saga
     /// <paramref name="sagaId"/>. While engaged, every mutation routed through
     /// this shard is refused with a

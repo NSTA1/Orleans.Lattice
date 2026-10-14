@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using Orleans.Lattice;
 using VehicleFleetSimulator.AzureThroughput.Engine;
 
 namespace VehicleFleetSimulator.AzureThroughput.Silo.Tests;
@@ -20,6 +21,21 @@ namespace VehicleFleetSimulator.AzureThroughput.Silo.Tests;
 [TestFixture]
 public sealed class BenchWorkloadMetadataTests
 {
+    [Test]
+    public void ViewNameFor_isolates_checkpoint_and_lag_identity_by_source_tree()
+    {
+        var first = BenchWorkloadMetadata.ViewNameFor("cohort-one");
+        var second = BenchWorkloadMetadata.ViewNameFor("cohort-two");
+        Assert.That(first, Is.Not.EqualTo(second));
+        Assert.That(first, Is.EqualTo(BenchWorkloadMetadata.ViewNameFor("cohort-one")));
+        using var probe = new ViewLagMeterProbe(second);
+
+        LatticeMetrics.ViewApplyLag.Record(100, new KeyValuePair<string, object?>(LatticeMetrics.TagView, first));
+        Assert.That(probe.LatestApplyLag, Is.EqualTo(-1), "previous cohort cannot populate this cohort's lag");
+        LatticeMetrics.ViewApplyLag.Record(7, new KeyValuePair<string, object?>(LatticeMetrics.TagView, second));
+        Assert.That(probe.LatestApplyLag, Is.EqualTo(7));
+    }
+
     [Test]
     public void ParseWorkloadMode_round_trips_every_enum_value_through_its_formatted_name()
     {

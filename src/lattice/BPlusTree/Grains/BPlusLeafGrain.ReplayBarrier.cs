@@ -280,6 +280,7 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
+            using var awaitDiag = AwaitDiagnostics.Begin("leaf.replay-wait", context.GrainId, "tree=" + state.State.TreeId);
             await barrier.WaitAsync(cancellation);
         }
         catch
@@ -335,7 +336,10 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            await ExecuteActivationReplayAsync(cancellationToken);
+            using (AwaitDiagnostics.Begin("leaf.replay", context.GrainId, "tree=" + treeId))
+            {
+                await ExecuteActivationReplayAsync(cancellationToken);
+            }
 
             _replayBarrierSatisfied = true;
             RecordReplayBarrierOutcome(treeId, LatticeMetrics.ReplayBarrierCompleted);

@@ -755,9 +755,47 @@ Three cases:
   hash and its publish sequence, a snapshot-size hint and the replay
   ledger - it is never the source of truth for committed entry values.
 
-In both replay cases, the projection that a reader observes after activation is
+With correctly stamped records, the projection that a reader observes after activation is
 byte-equivalent to the projection at the moment the leaf last deactivated (for
 a freshly-created leaf, the records the WAL holds for its own range).
+
+Committed row replay also rebuilds the leaf's delta version watermark from the
+original row HLC, without minting a newer timestamp. This keeps recovered live
+rows and retained tombstones visible to delta readers, including the committed
+tombstone pass used by replication re-seed. Unresolved prepared rows do not
+advance this watermark before their terminal decision.
+
+### Single-key delete ownership and older WAL records
+
+Single-key `DeleteAsync` and its tracked leaf path persist the leaf's owning
+shard index on the tombstone, just as single-key sets do. Replay uses the
+current authoritative shard map when available; otherwise it compares that
+persisted stamp with the leaf's shard index. Both paths retain the leaf's
+key-range check, so sharing a WAL partition never grants another shard's delete
+ownership.
+
+Older producers omitted the shard index on single-key delete WAL records,
+leaving it at `0` even for nonzero shards (issue #4928). A retained tombstone
+with that shape can be recovered when an authoritative map assigns its key to
+the leaf **before that replay**. With no map, the record is indistinguishable
+from a legitimate shard-0 delete; upgrading the producer does not repair those
+already-written records, and replay must not apply them to every shard. A
+registered tree can legitimately have no explicit map, so a successful registry
+lookup alone does not remove this limitation.
+
+For a suspected historical resurrection, preserve a pristine copy of grain
+storage, snapshots and the retained WAL before attempting recovery. Verify the
+key's ownership and the set/delete HLCs against that copy; do not rewrite shard
+stamps, reset checkpoints, or discard snapshots on the live deployment. There
+is no automatic historical repair in this fix. If replay has already consumed
+the malformed record, publishing a map and restarting alone is not a repair:
+the checkpoint or a newly captured snapshot can already cover that offset.
+Recovery of such data needs a separately reviewed rebuild or restore from
+verified evidence, not relaxed cross-shard filtering.
+
+For evidence-preserving assessment and recovery of historical records, see
+[Acknowledged deletes reappear after cold replay](troubleshooting.md#acknowledged-deletes-reappear-after-cold-replay)
+in the troubleshooting guide.
 
 ### Replay reads are filtered at the source
 

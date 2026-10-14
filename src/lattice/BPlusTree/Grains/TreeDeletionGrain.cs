@@ -957,11 +957,9 @@ internal sealed partial class TreeDeletionGrain(
     /// </summary>
     internal async Task<int> ResolveAllocatedShardCountAsync()
     {
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var highest = resolved.ShardCount - 1;
-
         var registry = grainFactory.GetLatticeRegistry();
-        var entry = await registry.GetEntryAsync(TreeId);
+        var (entry, resolved) = await RegistryEntryOptions.ReadAsync(registry, optionsResolver, TreeId);
+        var highest = resolved.ShardCount - 1;
         highest = Math.Max(highest, HighestRecordedShardIndex(entry));
 
         if (entry?.DerivedFrom is { } owner

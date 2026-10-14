@@ -62,8 +62,8 @@ alphanumerics). Common shapes:
   `benchmark/performance-report.ps1 -Layer 3 -ReuseAca <prefix>`. It parks the silos at zero when it
   finishes and leaves `rg-<prefix>` standing for you to delete.
 - **`-DryRun`** re-renders a document from the most recently written `state.json`. Replay the
-  multi-silo document with the `-Layer3` switch: `-Layer 3 -DryRun` falls through to the single-silo
-  replay instead.
+  multi-silo document with either `-Layer3 -DryRun` or `-Layer 3 -DryRun`. Replay selects the
+  newest state containing the requested layer, and a Layer 1/2 replay preserves the other block.
 
 ---
 
@@ -255,6 +255,24 @@ kept, and the removal rides the same update, so each cohort still mints exactly 
 `-1`-defaulted arm therefore runs the library default. The producer job is unaffected: every
 cohort sets its whole env list.
 
+**The silo app runs in Multiple revision mode.** `deploy-aca.ps1` creates it with
+`--revisions-mode multiple`, and `Set-AcaSiloCount` (via `Set-AcaSiloMultipleRevisionMode`)
+switches an older rig over before every cohort update, failing closed if the mode cannot be
+confirmed. In Single mode an update on a parked app briefly reactivated the last parked
+revision at its old replica count; those silos restarted against the previous cohort's WAL and
+grain-state tables, which `-ResetStorage` had just deleted, logged `TableBeingDeleted` and exited
+139 while the new cohort warmed up. The silo app has no ingress, so Multiple mode's traffic split
+is irrelevant; superseded revisions are retired explicitly.
+
+**Invoke `run-cohort-aca.ps1` in-process, not with `pwsh -File`.** `-ExtraSiloEnv` is a string
+array, and `pwsh -File` passes `@('A=1','B=2')` as one literal string, so the silos receive a
+single malformed variable. From `benchmark/azure-throughput/scripts`:
+
+```powershell
+& .\run-cohort-aca.ps1 -NamePrefix <prefix> -SiloCount 1 -WorkloadMode set-point-mv -DurationSec 45 `
+  -CohortTag repro -ExtraSiloEnv @('LATTICE_BENCH_AWAIT_DIAG_MS=5000','BENCH_GRAIN_TURN_DIAG_MS=5000')
+```
+
 ---
 
 ## Workload options (`BENCH_WORKLOAD_MODE`)
@@ -280,19 +298,27 @@ before its TCP listener opens, with one `ILattice.SetManyAsync` of `BENCH_VEHICL
 (the producer's key derivation, 245-byte values); `ILattice.BulkLoadAsync` is not used because it
 requires an empty shard and the warm-up has already materialised the root leaf. The seed runs only
 when the **silo** is given `BENCH_VEHICLE_COUNT` > 0 (its default is 0, no seed), and
-`run-cohort.ps1 -Vehicles` sets that variable for the producer only - so pass
-`-ExtraSiloEnv @{ BENCH_VEHICLE_COUNT = '<same as -Vehicles>' }`, or read a tree populated earlier
-through a pinned `BENCH_TREE_ID`; otherwise the read modes read keys that do not exist in the
-cohort's fresh tree. The silo logs `[silo] preseed treeId=.. entries=..` when the seed ran. On
+`run-cohort.ps1 -Vehicles` sets the same fleet size on both producer and silo, ignoring a
+conflicting `BENCH_VEHICLE_COUNT` in `ExtraSiloEnv`. The silo logs
+`[silo] preseed treeId=.. entries=..` when the seed ran. Layer 2 aggregation refuses read
+cohorts without retained evidence of a complete seed, including legacy miss-path cohorts.
+On
 Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step, and the Orleans-client
 producer seeds the same keys after warm-up instead, logging `[producer] preseed treeId=.. entries=N`;
 `performance-report.ps1` marks a Layer 3 read cohort whose log lacks that line (or reports
 `entries=0`) `UNSEEDED`, re-runs it at the same rung up to twice, and never publishes it, because
-an unseeded cohort measures only the miss path (#3474). Its Layer 2 sweep has no such guard and
-never seeds: it drives `run-cohort.ps1` with a silo environment that omits `BENCH_VEHICLE_COUNT`, so
-every Layer 2 `get-point` and `get-many` cohort it runs reads keys that were never written (its
-silo log carries no `[silo] preseed` line), and a `HEALTHY` one is aggregated into the published
-table like any other: a miss-path number, not the read ceiling.
+an unseeded cohort measures only the miss path (#3474). Layer 3 seeds in bounded slices,
+allowing eight attempts per unlanded slice and 300 seconds overall (including outstanding
+RPCs); progress resets attempts but never the deadline. Failure logs retain the offset,
+exception and budget. Layer 2 does not retry unseeded cohorts: it excludes them from the
+table. Tables state the usable throughput cohort count per row, and a failed attempted row
+cannot preserve an older result under the new run's metadata.
+
+Layer 3 harvest retains revision-scoped silo diagnostics with timestamp and replica identity
+in 200-row pages under one ingestion snapshot. Non-phaseA lines carry an `[aca-silo ...]`
+prefix so they cannot pollute the producer throughput series. The `set-point-mv` view name
+is `bench-{treeId}` for both registration and lag reporting, isolating durable checkpoints
+between cohorts that rotate their source tree but retain VM grain-state storage.
 
 Atomic modes dispatch each saga as its own flush unit (`BenchWorkloadDispatcher.SliceIntoFlushUnits`):
 one `BENCH_FLUSH_CONCURRENCY` slot, one retry ladder and one `ops`/`failed` booking per saga, so
@@ -316,7 +342,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `BENCH_VEHICLE_COUNT` | producer 1000, silo 0 (`run-cohort.ps1 -Vehicles` sets the producer's, default 4000; `run-cohort-aca.ps1` sets `VehiclesPerSilo x SiloCount` on producer and silos) | Fleet size = number of distinct keys. On the silo it is the read-mode pre-seed size, and `run-cohort.ps1` does not set it there (see the read-mode pre-seed note under the workload table). |
+| `BENCH_VEHICLE_COUNT` | producer 1000, silo 0 (`run-cohort.ps1 -Vehicles` sets both, default 4000; `run-cohort-aca.ps1` sets `VehiclesPerSilo x SiloCount` on both) | Fleet size = number of distinct keys; also the silo read-mode pre-seed size. Both cohort runners keep it equal to the offered fleet. |
 | `BENCH_TICK_HZ` | 5 | Samples/sec/vehicle. **Offered rate = vehicles x tickHz.** |
 | `BENCH_DURATION_SEC` | 300 (cohort sets per `-DurationSec`) | Producer run length. `0` = run forever, in both the TCP and the Orleans-client producer modes. |
 | `BENCH_SILO_HOST` | `127.0.0.1` | Silo host the producer connects to. |
@@ -410,6 +436,9 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_INFLIGHT_TAIL_BUDGET_SEC` | 12 | How long the ingest engine may spend draining in-flight flushes before emitting `FINAL`; it decides whether trailing work is counted in `ops` or in `failed`. The default fits the VM units' systemd stop window; `run-cohort-aca.ps1 -InFlightTailBudgetSec` raises it (default 120). |
 | `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
 | `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (p50/p90/p99 per instrument/tree/shard/phase). `0` disables. |
+| `BENCH_MV_LAG_REPORT_SEC` | 5 | `set-point-mv` only: cadence (s) of the silo-side `[silo:mv-lag] t=.. view=.. applyLag=.. backlog=..` lines, plus a `final` line at shutdown. On Layer 3 the ingest engine runs in the producer process, which cannot observe the view maintainer's instruments, so `MV-FINAL lagAtStop=n/a` there is expected and these silo lines are the lag evidence. `0` disables. |
+| `BENCH_GRAIN_TURN_DIAG_MS` | unset (off) | Positive threshold (ms) for a grain-turn occupancy filter on lattice grains: each incoming grain call running at least that long inside its activation prints `[turn-diag] state=done ms=.. grain=.. method=..`, and calls still running are summarised periodically as `state=pending ... count=N`. It times execution, not mailbox queueing, so a long `done` on a non-reentrant grain is the turn that blocked its callers. Diagnostic only. |
+| `LATTICE_BENCH_AWAIT_DIAG_MS` | unset (off) | Library-side positive threshold (ms) for named await regions inside the lattice grains (leaf replay, split and relocate steps, leaf timer arms such as `leaf.timer.coverage-lag arm=..` and `leaf.timer.digest`, shard serial-turn and point-write waits, `tx.terminal-hlc-leaf`). Prints `[await-diag] state=done|pending|suppressed region=.. ms=.. grain=..`; output is rate-limited per region. Read once at process start; diagnostic only. |
 | `BENCH_DISABLE_STORAGE_USAGE_POLLER` | empty | Set to `1` to disable the storage-usage poller for the cohort (`StorageUsagePollInterval = 0`). |
 
 ### Multi-silo cluster (Layer 3)
@@ -466,7 +495,10 @@ Key lines in the silo log:
   drained flush, so it excludes the pre-connect idle window but not a post-producer drain
   stall; the summary repeats it as the secondary `FINAL active` line, marked
   `(drain-inflated; ignore)` on a WEDGE verdict. `failed` / `discarded` count unsuccessful
-  operations.
+  operations. The line ends with `unresolved=.. unresolvedFlushes=..`: entries (and flushes)
+  still in flight when the `BENCH_INFLIGHT_TAIL_BUDGET_SEC` tail budget expired. They settle
+  after `FINAL`, so they are in neither `ops` nor `failed`; a cohort that abandoned work used to
+  report `failed=0`. `run-cohort-aca.ps1` grades any `unresolved > 0` as `WEDGE`.
 - `Verdict : HEALTHY | DEGRADED | WEDGE | FAILED` and `Drain tail : N trailing rate=0 sample(s) post-producer`
   - the run-cohort classification, appended to the log by `run-cohort.ps1` after the drain
   (the silo does not emit it). A non-zero `failed` - on the `FINAL` line or on any per-second
