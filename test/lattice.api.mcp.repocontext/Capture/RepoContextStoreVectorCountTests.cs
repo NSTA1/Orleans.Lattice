@@ -41,9 +41,8 @@ public sealed class RepoContextStoreVectorCountTests
         var (store, writer) = Resolve(harness);
         await SeedRepoMarkerAsync(harness, RepoId, Ct);
         await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
-        var beforeScan = DateTimeOffset.UtcNow;
         await writer.ScanEmbeddedAsync(RepoId, Ct);
-        var afterScan = DateTimeOffset.UtcNow;
+        var scanned = writer.ReadEmbeddedCount(RepoId);
 
         var original = (await store.ListReposAsync(Ct)).Repos.Single(r => r.RepoId == RepoId);
         await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/B.cs") }, Ct);
@@ -52,12 +51,22 @@ public sealed class RepoContextStoreVectorCountTests
         var originalStamp = original.EmbeddedVectorCountAsOf;
         Assert.Multiple(() =>
         {
-            Assert.That(originalStamp, Is.InRange(beforeScan, afterScan));
+            Assert.That(scanned.AsOf, Is.Not.Null.And.Not.EqualTo(default(DateTimeOffset)),
+                "ScanEmbeddedAsync stamps the snapshot at scan start; UTC is not a monotonic test clock.");
+            Assert.That(originalStamp, Is.EqualTo(scanned.AsOf),
+                "The listing must expose the served scan's timestamp, not the listing time.");
+            Assert.That(original.EmbeddedVectorCount, Is.EqualTo(1));
+            Assert.That(original.EmbeddedVectorCountPending, Is.False);
             Assert.That(stale.EmbeddedVectorCountAsOf, Is.EqualTo(originalStamp),
                 "A pending refresh must not re-stamp the old count with the listing time.");
             Assert.That(stale.EmbeddedVectorCount, Is.EqualTo(1));
             Assert.That(stale.EmbeddedVectorCountPending, Is.True);
         });
+
+        Assert.That(await SettledEmbeddedVectorCountAsync(store, writer, RepoId, Ct), Is.EqualTo(2));
+        var refreshed = (await store.ListReposAsync(Ct)).Repos.Single(r => r.RepoId == RepoId);
+        Assert.That(refreshed.EmbeddedVectorCountAsOf, Is.EqualTo(writer.ReadEmbeddedCount(RepoId).AsOf),
+            "Once the refresh settles, the listing exposes the replacement snapshot's timestamp.");
     }
 
     private static (RepoContextStore Store, RepoContextVectorWriter Writer) Resolve(RepoContextMcpHarness harness)
