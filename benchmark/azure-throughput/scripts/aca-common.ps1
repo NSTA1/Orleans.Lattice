@@ -256,9 +256,10 @@ function Set-AcaSiloCount {
 		mechanism that does work is deactivating the active revision, which
 		reports runningState=Stopped with replicas=0 and bills nothing.
 
-		Coming back up is free of extra ceremony because every cohort sets its
-		own env vars first, and `--set-env-vars` mints a fresh active revision
-		- so the deactivated one is never reactivated, just superseded.
+		Coming back up mints a fresh active revision. The app must be in
+		Multiple revision mode first (Set-AcaSiloMultipleRevisionMode): in
+		Single mode that update also reactivates the parked revision at its
+		old replica count, against tables the cohort reset just deleted.
 
 		Neither path returns until every superseded revision has retired
 		(Wait-AcaRevisionsRetired). Deactivation and supersession both take
@@ -337,11 +338,13 @@ function Set-AcaSiloCount {
 	}
 
 	Write-Host "[aca] scaling $($Context.siloApp) to $Count replica(s)" -ForegroundColor Cyan
+	Set-AcaSiloMultipleRevisionMode -Context $Context
 	# ONE update, carrying both the env vars and the replica pinning.
 	#
 	# This must not be split into two `az containerapp update` calls. Every
-	# update mints a NEW revision, and the app runs in Single revision mode,
-	# so a second update supersedes the first: the replicas that had already
+	# update mints a NEW revision, and a second update supersedes the first
+	# (the retirement below deactivates every revision but the newest), so
+	# the replicas that had already
 	# started, joined the clustering table and formed a cluster are torn down
 	# and replaced. Observed directly - a cohort produced revisions
 	# --0000004 (env) and --0000005 (scale) 2.5 minutes apart, so the cluster
@@ -386,8 +389,8 @@ function Set-AcaSiloCount {
 	# Retire every superseded revision before handing the cluster to the
 	# caller.
 	#
-	# Single revision mode deactivates the previous revision on its own, but
-	# it does so LAZILY: the old replicas keep running while they drain, and
+	# Single revision mode deactivated the previous revision on its own, but
+	# it did so LAZILY: the old replicas kept running while they drained, and
 	# ACA gives no completion signal. Every cohort so far logged "2 active
 	# revisions" at this point, which means the measurement window could open
 	# with up to 2N silos alive instead of N - all of them pointed at the one
@@ -482,6 +485,54 @@ function Set-AcaSiloCount {
 	Wait-AcaRevisionsRetired -Context $Context -KeepRevision $keep -TimeoutSec $TimeoutSec
 
 	return $replicas
+}
+
+function Set-AcaSiloMultipleRevisionMode {
+	<#
+	.SYNOPSIS
+		Put the silo app in Multiple revision mode before a cohort update.
+	.DESCRIPTION
+		In Single revision mode, an `az containerapp update` on an app whose
+		revisions were all deactivated by a park briefly REACTIVATES the last
+		parked revision, at its old replica count, alongside the new one.
+		Proven on a parked rig: the update brought back the previous revision
+		with 2 replicas for 30-40 s. Those silos restart with the previous
+		cohort's WAL and grain-state table names, which Reset-AcaBenchTables
+		has just deleted, so they log TableBeingDeleted and exit 139 while the
+		new cohort warms up. In Multiple revision mode the same update creates
+		only the new revision and parked revisions stay Stopped.
+
+		The silo app has no ingress, so the traffic split that Multiple mode
+		adds is irrelevant; Set-AcaSiloCount retires superseded revisions
+		explicitly. Changing the mode mints no revision. Fail-closed: a rig
+		that cannot be confirmed in Multiple mode is not measured.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context
+	)
+
+	$query = @(
+		'containerapp', 'show',
+		'--name', $Context.siloApp,
+		'--resource-group', $Context.resourceGroup,
+		'--query', 'properties.configuration.activeRevisionsMode',
+		'-o', 'tsv'
+	)
+	$mode = "$(Invoke-Az $query -AllowFailure)".Trim()
+	if ($mode -ieq 'Multiple') { return }
+
+	Write-Host "[aca]   switching $($Context.siloApp) from '$mode' to Multiple revision mode (a Single-mode update reactivates the parked revision)" -ForegroundColor DarkGray
+	Invoke-Az @(
+		'containerapp', 'revision', 'set-mode',
+		'--name', $Context.siloApp,
+		'--resource-group', $Context.resourceGroup,
+		'--mode', 'multiple',
+		'-o', 'none'
+	) | Out-Null
+	$mode = "$(Invoke-Az $query -AllowFailure)".Trim()
+	if ($mode -ine 'Multiple') {
+		throw "Could not put $($Context.siloApp) in Multiple revision mode (reads '$mode'). A Single-mode update would reactivate the parked revision against deleted tables, so the cohort is not run."
+	}
 }
 
 function Reset-AcaBenchTables {

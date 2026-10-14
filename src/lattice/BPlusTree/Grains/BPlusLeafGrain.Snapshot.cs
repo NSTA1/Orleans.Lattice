@@ -2986,7 +2986,9 @@ internal sealed partial class BPlusLeafGrain
             // here rather than falling through is what keeps that a single
             // evaluation on the post-replay state instead of two, the second of
             // which would re-decline on the pre-replay reading.
-            await DriveStarvedCheckpointFromTimerAsync(starvationPartitionCount);
+            // Dispatched onto an interleaving turn rather than awaited here:
+            // see DispatchTimerDriveAsync.
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=starved-drive");
             return;
         }
 
@@ -3010,10 +3012,16 @@ internal sealed partial class BPlusLeafGrain
         // that found the projection stale: that verdict cannot clear by replay,
         // so the drive is skipped until a persisted checkpoint moves (issue
         // #3450).
-        if (await IsCheckpointStalledBehindLiveDataAsync(starvationPartitionCount, cancellationToken))
+        bool stalled;
+        using (AwaitDiagnostics.Begin("leaf.timer.coverage-lag", context.GrainId, "arm=stall-check"))
+        {
+            stalled = await IsCheckpointStalledBehindLiveDataAsync(starvationPartitionCount, cancellationToken);
+        }
+
+        if (stalled)
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
-            await DriveStarvedCheckpointFromTimerAsync(starvationPartitionCount);
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=stalled-drive");
             return;
         }
 
@@ -3050,10 +3058,15 @@ internal sealed partial class BPlusLeafGrain
         // nothing and coalescing is intact. The commit persists only an advance
         // an apply already banked - no replay, no permit - and the pin it makes
         // bankable stays clamped by coverage exactly as above.
-        await BankDurablePinCoreAsync(
-            starvationPartitionCount,
-            flushPendingCheckpoint: IsResidualPendingCheckpointPersistDue(resolved),
-            cancellationToken);
+        var flushPending = IsResidualPendingCheckpointPersistDue(resolved);
+        using (AwaitDiagnostics.Begin(
+            "leaf.timer.coverage-lag", context.GrainId, AwaitDiagnostics.Enabled ? "arm=bank-pin flush=" + flushPending : null))
+        {
+            await BankDurablePinCoreAsync(
+                starvationPartitionCount,
+                flushPendingCheckpoint: flushPending,
+                cancellationToken);
+        }
     }
 
     /// <summary>

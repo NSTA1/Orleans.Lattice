@@ -2242,6 +2242,101 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// The one-shot interleaving timer carrying a coverage-lag starvation drive
+    /// off the timer's own turn, or <see langword="null"/> when none is pending
+    /// or running.
+    /// </summary>
+    private IDisposable? _interleavedTimerDrive;
+
+    /// <summary>
+    /// Test-only: marks a dispatched coverage-lag drive as pending (or clears
+    /// it), so a fixture without a grain runtime can reach the tick's
+    /// single-outstanding-dispatch path.
+    /// </summary>
+    /// <param name="pending">Whether a dispatched drive is pending.</param>
+    internal void SetInterleavedTimerDrivePendingForTest(bool pending)
+        => _interleavedTimerDrive = pending ? new PendingTimerDriveMarker() : null;
+
+    /// <summary>Whether a dispatched coverage-lag drive is pending or running.</summary>
+    internal bool InterleavedTimerDrivePendingForTest => _interleavedTimerDrive is not null;
+
+    private sealed class PendingTimerDriveMarker : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
+    /// <summary>
+    /// Hands a coverage-lag starvation drive to a one-shot interleaving grain
+    /// timer and returns without awaiting it.
+    /// <para>
+    /// The coverage-lag timer is registered without <c>Interleave</c>, so every
+    /// tick holds the activation's turn for as long as it runs. That is right
+    /// for the bank-pin and stall-check arms, which are short and mutate
+    /// persisted state, and wrong for the drive: the drive replays the readable
+    /// WAL window and can run for minutes, which is exactly why
+    /// <see cref="IBPlusLeafGrain.DriveStarvedCheckpointAsync"/> is
+    /// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>. Awaited on
+    /// the tick it blocked every non-interleaving call on the leaf - including
+    /// the shard root's serial <c>GetVisibleRawEntriesAsync</c>, and so every
+    /// point write queued behind that serial turn - for the drive's whole
+    /// duration (Layer 3 <c>set-point-mv</c> wedge). Running it on an
+    /// interleaving turn gives the timer path the concurrency the interface
+    /// path already has; it adds no new interleaving, because the GC sweep's
+    /// drive already overlaps foreground turns, and the drive's own
+    /// single-flight latch and the bank step's in-flight check are unchanged.
+    /// </para>
+    /// <para>
+    /// At most one dispatched drive is outstanding per activation: a tick that
+    /// finds one pending or running returns without dispatching another. With
+    /// no grain runtime (a unit-test harness, where <c>RegisterGrainTimer</c>
+    /// throws) the drive is awaited inline, the behaviour before this existed.
+    /// </para>
+    /// </summary>
+    /// <param name="partitionCount">The tree's WAL partition count.</param>
+    /// <param name="arm">The diagnostic label of the arm that requested the drive.</param>
+    private async Task DispatchTimerDriveAsync(int partitionCount, string arm)
+    {
+        if (_interleavedTimerDrive is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            // The callback cannot run before this assignment: it is queued on
+            // the activation and the current turn does not yield before it.
+            _interleavedTimerDrive = this.RegisterGrainTimer(
+                _ => RunInterleavedTimerDriveAsync(partitionCount, arm),
+                new GrainTimerCreationOptions(TimeSpan.Zero, Timeout.InfiniteTimeSpan) { Interleave = true });
+        }
+        catch
+        {
+            _interleavedTimerDrive = null;
+            using (AwaitDiagnostics.Begin("leaf.timer.coverage-lag", context.GrainId, arm))
+            {
+                await DriveStarvedCheckpointFromTimerAsync(partitionCount);
+            }
+        }
+    }
+
+    private async Task RunInterleavedTimerDriveAsync(int partitionCount, string arm)
+    {
+        try
+        {
+            using (AwaitDiagnostics.Begin("leaf.timer.coverage-lag.interleaved", context.GrainId, arm))
+            {
+                await DriveStarvedCheckpointFromTimerAsync(partitionCount);
+            }
+        }
+        finally
+        {
+            System.Threading.Interlocked.Exchange(ref _interleavedTimerDrive, null)?.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Counts a refused coverage-lag timer drive and sizes the backoff that
     /// follows it (issue #3575).
     /// </summary>
@@ -3145,7 +3240,10 @@ internal sealed partial class BPlusLeafGrain
         {
             // Step 0 (see above).
             _replayAdmissionPhase = ReplayAdmissionPhase.RehydratingSnapshot;
-            rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
+            using (AwaitDiagnostics.Begin("leaf.replay.rehydrate", context.GrainId))
+            {
+                rehydratedFromSnapshot = await TryRehydrateFromSnapshotAsync(cancellationToken);
+            }
 
             // Step 0.5 (see above). A snapshot that failed to load is not the
             // absence of one (issue #4450): the replay fails closed, leaving the
@@ -3187,7 +3285,10 @@ internal sealed partial class BPlusLeafGrain
             _coldRebuildPending = replayStart == LeafReplayStartPolicy.Start.Cold;
             _cacheUnanchored = _coldRebuildPending;
 
-            replayPermit = await AcquireReplayPermitAsync(cancellationToken);
+            using (AwaitDiagnostics.Begin("leaf.replay.permit", context.GrainId))
+            {
+                replayPermit = await AcquireReplayPermitAsync(cancellationToken);
+            }
 
             if (replayPermit is not null)
             {
@@ -3262,7 +3363,13 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+            using (AwaitDiagnostics.Begin(
+                "leaf.replay.wal",
+                context.GrainId,
+                AwaitDiagnostics.Enabled ? (replayCheckpointOverride == -1L ? "cold" : "warm") : null))
+            {
+                advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+            }
 
             // The replay read the whole window to head, so a cold rebuild has
             // converged: the cache now holds every row through the checkpoint,

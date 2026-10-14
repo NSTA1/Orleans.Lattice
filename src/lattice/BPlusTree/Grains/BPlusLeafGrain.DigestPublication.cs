@@ -494,7 +494,11 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            await PublishCurrentDigestAndClearDirtyAsync(parentId);
+            using (AwaitDiagnostics.Begin("leaf.timer.digest", context.GrainId, AwaitDiagnostics.Enabled ? "parent=" + parentId : null))
+            {
+                await PublishCurrentDigestAndClearDirtyAsync(parentId);
+            }
+
             LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathCoalescedFiredTag, LeafTenantTag());
         }
         catch

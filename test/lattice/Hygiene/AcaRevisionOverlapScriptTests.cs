@@ -85,6 +85,14 @@ public sealed class AcaRevisionOverlapScriptTests
                 $global:LASTEXITCODE = 0
                 return
             }
+            if ($verb -eq 'containerapp show --name' -and (Get-StubArg $a '--query') -eq 'properties.configuration.activeRevisionsMode') {
+                $global:LASTEXITCODE = 0
+                return 'Multiple'
+            }
+            if ($verb -eq 'containerapp revision set-mode') {
+                $global:LASTEXITCODE = 0
+                return
+            }
             if ($verb -eq 'containerapp revision deactivate') {
                 if ((Get-StubArg $a '--revision') -eq $NewName) { $global:Parked = $true }
                 $global:LASTEXITCODE = 0

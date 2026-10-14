@@ -652,6 +652,15 @@ builder.UseOrleans(silo =>
         o.ResponseTimeout = TimeSpan.FromSeconds(responseTimeoutSec);
     });
 
+    // Diagnostic-only grain-turn occupancy filter (BENCH_GRAIN_TURN_DIAG_MS).
+    var grainTurnDiagMs = VehicleFleetSimulator.AzureThroughput.Silo.GrainTurnDiagnosticsFilter.ParseThresholdMs(
+        Environment.GetEnvironmentVariable("BENCH_GRAIN_TURN_DIAG_MS"));
+    if (grainTurnDiagMs > 0)
+    {
+        silo.AddIncomingGrainCallFilter(new VehicleFleetSimulator.AzureThroughput.Silo.GrainTurnDiagnosticsFilter(grainTurnDiagMs));
+        Console.WriteLine($"[silo] turn-diag thresholdMs={grainTurnDiagMs}");
+    }
+
     if (clusteringMode == "azuretable")
     {
         silo.UseAzureStorageClustering(o =>
@@ -920,6 +929,14 @@ builder.UseOrleans(silo =>
             views.AddView(BenchWorkloadMetadata.ViewNameFor(treeId), treeId, new PredicateLatticeViewProjection()));
     }
 });
+
+if (workloadMode == BenchWorkloadMode.SetPointMv)
+{
+    // The maintainer's lag instruments live on the silo hosting it; on Layer 3
+    // the producer process cannot see them, so report the lag from here.
+    var mvViewName = BenchWorkloadMetadata.ViewNameFor(treeId);
+    builder.Services.AddHostedService(_ => new VehicleFleetSimulator.AzureThroughput.Silo.MvLagSiloReporter(mvViewName));
+}
 
 var host = builder.Build();
 
