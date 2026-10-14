@@ -88,8 +88,8 @@ public sealed class LatticeTreeAdminTenantScopingTests
             await facade.CreateTreeAsync(Tree);
         }
 
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
-        await registry.DidNotReceive().RegisterAsync(Tree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.DidNotReceive().RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>());
     }
 
     [Test]
@@ -143,9 +143,9 @@ public sealed class LatticeTreeAdminTenantScopingTests
 
         // The crux of issue 1689: the same requested name must NOT collide in one
         // physical tree once tenancy is on.
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
-        await registry.Received(1).RegisterAsync(GlobexTree, Arg.Any<TreeRegistryEntry?>());
-        await registry.DidNotReceive().RegisterAsync(Tree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(GlobexTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.DidNotReceive().RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>());
     }
 
     [Test]
@@ -187,7 +187,7 @@ public sealed class LatticeTreeAdminTenantScopingTests
             Assert.That(gate.AuthorizedTreeIds, Is.EqualTo(new[] { Tree }));
         });
 
-        await registry.Received(1).RegisterAsync(Tree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>());
     }
 
     [Test]
@@ -205,7 +205,7 @@ public sealed class LatticeTreeAdminTenantScopingTests
             await facade.CreateTreeAsync(Tree);
         }
 
-        await registry.Received(1).RegisterAsync(Tree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>());
     }
 
     [Test]
@@ -220,7 +220,7 @@ public sealed class LatticeTreeAdminTenantScopingTests
         // default-tenant adoption and must leave the name alone.
         await facade.CreateTreeAsync(Tree);
 
-        await registry.Received(1).RegisterAsync(Tree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>());
         Assert.That(resolver.SynchronousResolutions, Is.EqualTo(1),
             "the warm path must resolve synchronously, with no await");
     }
@@ -283,7 +283,7 @@ public sealed class LatticeTreeAdminTenantScopingTests
             await facade.CreateTreeAsync(Tree);
         }
 
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
     }
 
     [Test]
@@ -318,7 +318,7 @@ public sealed class LatticeTreeAdminTenantScopingTests
         }
 
         // t/acme/t/acme/orders would be the double-composition bug.
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
     }
 
     [Test]
@@ -555,7 +555,7 @@ public sealed class LatticeTreeAdminTenantScopingTests
             await facade.CreateTreeAsync(Tree);
         }
 
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
         Assert.Multiple(() =>
         {
             Assert.That(resolver.AsynchronousResolutions, Is.EqualTo(1));

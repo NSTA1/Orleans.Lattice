@@ -58,6 +58,37 @@ internal sealed partial class LatticeRegistryGrain(
             () => RegisterCoreAsync(treeId, entry));
     }
 
+    public Task<(bool Created, TreeRegistryEntry? Entry)> RegisterAndGetEntryAsync(string treeId, TreeRegistryEntry? entry = null)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ThrowIfReservedPrefix(treeId, nameof(treeId));
+
+        return RegistryCallCensus.MeasureAsync(
+            RegistryCallCensus.Register,
+            () => RegisterAndGetEntryCoreAsync(treeId, entry));
+    }
+
+    /// <summary>
+    /// Registration that also returns the effective entry, uninstrumented.
+    /// </summary>
+    /// <remarks>
+    /// The existence probe reads the row itself rather than calling
+    /// <c>ExistsAsync</c>, so an already-registered tree answers from the same
+    /// single hop onto the backing system tree, and a newly registered tree
+    /// answers with the entry this turn just wrote - no re-read. The write path
+    /// is <see cref="WriteNewRegistrationAsync"/>, shared with
+    /// <see cref="RegisterCoreAsync"/>, so both verbs refine the same
+    /// <c>Register</c> action.
+    /// </remarks>
+    private async Task<(bool Created, TreeRegistryEntry? Entry)> RegisterAndGetEntryCoreAsync(string treeId, TreeRegistryEntry? entry)
+    {
+        var existing = await GetEntryCoreAsync(treeId);
+        if (existing is not null)
+            return (false, existing);
+
+        return (true, await WriteNewRegistrationAsync(treeId, entry));
+    }
+
     /// <summary>
     /// The registration itself, uninstrumented.
     /// </summary>
@@ -69,7 +100,8 @@ internal sealed partial class LatticeRegistryGrain(
     /// hop onto the backing system tree.
     /// </remarks>
     private async Task RegisterCoreAsync(string treeId, TreeRegistryEntry? entry)
-    {        // The existence check is also used by the DIAG block below; keep
+    {
+        // The existence check is also used by the DIAG block below; keep
         // the call outside the directive so foreground behaviour is
         // identical whether or not LATTICE_DIAG is defined.
         var existsAtCall = await Registry.ExistsAsync(treeId);
@@ -87,6 +119,15 @@ internal sealed partial class LatticeRegistryGrain(
         if (existsAtCall)
             return;
 
+        await WriteNewRegistrationAsync(treeId, entry);
+    }
+
+    /// <summary>
+    /// Seeds, places and writes a registration for a tree this turn has just
+    /// observed as absent, returning the entry it wrote.
+    /// </summary>
+    private async Task<TreeRegistryEntry> WriteNewRegistrationAsync(string treeId, TreeRegistryEntry? entry)
+    {
         // Seed the structural sizing pin from LatticeConstants so every tree
         // has an unambiguous, immutable structural identity from the moment
         // it is first registered. After seeding, the registry is the only
@@ -114,6 +155,7 @@ internal sealed partial class LatticeRegistryGrain(
         }
 
         await Registry.SetAsync(treeId, bytes);
+        return seeded;
     }
 
     private static TreeRegistryEntry SeedStructuralDefaults(TreeRegistryEntry? entry, int siloDefaultWalPartitions)

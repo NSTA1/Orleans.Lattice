@@ -150,7 +150,7 @@ public sealed class LatticeTreeAdminTenantQuotaTests
 
         // The refusal must precede the registry write, or the ceiling would be
         // advisory: the tree would exist and only the caller's result would differ.
-        await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!, default);
+        await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!, default);
     }
 
     [Test]
@@ -167,7 +167,7 @@ public sealed class LatticeTreeAdminTenantQuotaTests
             async () => await facade.CreateTreeAsync(Tree),
             Throws.TypeOf<LatticeQuotaExceededException>());
 
-        await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!, default);
+        await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!, default);
     }
 
     // ----- authorize before accounting (cross-tenant regression) -----
@@ -205,7 +205,7 @@ public sealed class LatticeTreeAdminTenantQuotaTests
         LatticeActiveTenantContext.Current = Acme;
         await facade.CreateTreeAsync(Tree);
 
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
     }
 
     [Test]
@@ -220,7 +220,7 @@ public sealed class LatticeTreeAdminTenantQuotaTests
         await facade.CreateTreeAsync(Tree);
 
         Assert.That(admission.AdmitCalls, Is.Zero);
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
     }
 
     // ----- internal machinery is exempt -----
@@ -241,7 +241,7 @@ public sealed class LatticeTreeAdminTenantQuotaTests
 
         Assert.That(admission.AdmitCalls, Is.Zero,
             "platform machinery must not be refused by, or accounted against, a tenant's quota");
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
     }
 
     /// <summary>
@@ -342,7 +342,7 @@ public sealed class LatticeTreeAdminTenantQuotaTests
             async () => await facade.CreateTreeAsync(Tree),
             Throws.TypeOf<LatticeTenantAccessDeniedException>());
 
-        await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!, default);
+        await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!, default);
     }
 
     [Test]
@@ -357,7 +357,7 @@ public sealed class LatticeTreeAdminTenantQuotaTests
         LatticeActiveTenantContext.Current = Acme;
         await facade.CreateTreeAsync(Tree);
 
-        await registry.Received(1).RegisterAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
+        await registry.Received(1).RegisterAndGetEntryAsync(AcmeTree, Arg.Any<TreeRegistryEntry?>());
     }
 
     [Test]

@@ -97,4 +97,20 @@ internal sealed partial class ShardRootGrain
             Window = DateTime.UtcNow - _countersSince,
         });
     }
+
+    /// <inheritdoc />
+    public Task<ShardSamplingStatus> GetSamplingStatusAsync()
+    {
+        return Task.FromResult(new ShardSamplingStatus
+        {
+            Hotness = new ShardHotness
+            {
+                Reads = _readOps,
+                Writes = _writeOps,
+                Window = DateTime.UtcNow - _countersSince,
+            },
+            IsSplitting = state.State.SplitInProgress is not null,
+            HasPendingBulkOperation = state.State.PendingBulkGraft is not null,
+        });
+    }
 }

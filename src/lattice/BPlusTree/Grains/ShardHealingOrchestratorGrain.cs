@@ -300,26 +300,21 @@ internal sealed class ShardHealingOrchestratorGrain(
         _lastInFlight = inFlight;
 
         // Load observation. Only an over-split tree pays for this.
-        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
         bool inTreeMaintenance;
 
-        // These status verbs are access-gated (LatticeOperation.Read). This
-        // timer-driven pass runs with no caller identity, so on a deny-by-default
-        // tree the gate would fail closed, the catch-and-warn handler in
-        // OnTimerTickAsync would swallow the denial as a routine warning, and
-        // healing would be silently disabled on exactly the trees that need it.
-        // Enter a system-origin scope, following the same precedent as
-        // HotShardMonitorGrain's sampling pass: AccessGateSystemOrigin is a
+        // The coordinators are probed directly rather than through the four
+        // ILattice status verbs, which only forward to them after a gate check
+        // this in-silo pass would bypass anyway - see TreeMaintenanceProbe. The
+        // system-origin scope is kept, following HotShardMonitorGrain's sampling
+        // pass, so a future gated status read cannot silently fail this
+        // timer-driven pass (which runs with no caller identity) and disable
+        // healing on exactly the trees that need it. AccessGateSystemOrigin is a
         // reserved capability key that LatticeCapabilityStrippingCallFilter
         // strips from any genuine external client, so it cannot be forged
         // inbound and only ever marks in-silo library machinery such as this.
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            inTreeMaintenance =
-                !await lattice.IsResizeCompleteAsync()
-                || !await lattice.IsReshardCompleteAsync()
-                || !await lattice.IsMergeCompleteAsync()
-                || !await lattice.IsSnapshotCompleteAsync();
+            inTreeMaintenance = await TreeMaintenanceProbe.IsMaintenanceInFlightAsync(grainFactory, TreeId);
         }
 
         var sample = await ObserveLoadAsync(physicalTreeId, physicalShards, shardCount, inTreeMaintenance);
@@ -589,26 +584,22 @@ internal sealed class ShardHealingOrchestratorGrain(
         int shardCount,
         bool inTreeMaintenance)
     {
-        var hotnessTasks = new Task<ShardHotness>[shardCount];
-        var splittingTasks = new Task<bool>[shardCount];
-        var pendingBulkTasks = new Task<bool>[shardCount];
+        // One sampling call per shard returns hotness, split, and pending-bulk
+        // status together (three calls per shard before).
+        var statusTasks = new Task<ShardSamplingStatus>[shardCount];
 
         for (var i = 0; i < shardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
-            hotnessTasks[i] = shard.GetHotnessAsync();
-            splittingTasks[i] = shard.IsSplittingAsync();
-            pendingBulkTasks[i] = shard.HasPendingBulkOperationAsync();
+            statusTasks[i] = shard.GetSamplingStatusAsync();
         }
 
-        await Task.WhenAll(hotnessTasks);
-        await Task.WhenAll(splittingTasks);
-        await Task.WhenAll(pendingBulkTasks);
+        await Task.WhenAll(statusTasks);
 
         var isSplitting = false;
         for (var i = 0; i < shardCount; i++)
         {
-            if (splittingTasks[i].Result) { isSplitting = true; break; }
+            if (statusTasks[i].Result.IsSplitting) { isSplitting = true; break; }
         }
 
         if (!inTreeMaintenance)
@@ -617,7 +608,7 @@ internal sealed class ShardHealingOrchestratorGrain(
             {
                 // A pending bulk graft mutates topology in ways a fold cannot
                 // interleave with, exactly as it suppresses an adaptive split.
-                if (pendingBulkTasks[i].Result) { inTreeMaintenance = true; break; }
+                if (statusTasks[i].Result.HasPendingBulkOperation) { inTreeMaintenance = true; break; }
             }
         }
 
@@ -631,7 +622,7 @@ internal sealed class ShardHealingOrchestratorGrain(
             var maxRate = 0d;
             for (var i = 0; i < shardCount; i++)
             {
-                var hotness = hotnessTasks[i].Result;
+                var hotness = statusTasks[i].Result.Hotness;
                 var rate = ShardSplitAdmissionCore.ComputeRate(hotness.Reads, hotness.Writes, hotness.Window);
                 rates[i] = rate;
                 if (rate > maxRate) maxRate = rate;

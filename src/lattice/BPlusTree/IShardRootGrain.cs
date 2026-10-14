@@ -1027,6 +1027,24 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardHotness> GetHotnessAsync();
 
     /// <summary>
+    /// Returns this shard's hotness counters, split status, and pending-bulk
+    /// status in one grain turn - the three values the hot-shard monitor and
+    /// the shard-healing orchestrator sample per shard on every pass. Each
+    /// component equals what <see cref="GetHotnessAsync"/>,
+    /// <see cref="IsSplittingAsync"/>, and <see cref="HasPendingBulkOperationAsync"/>
+    /// return, so a sampler pays one call per shard instead of three.
+    /// <para>
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the
+    /// same reason as those three: it is a pure synchronous read with no awaits
+    /// and no mutation. The three values are read in one synchronous step, so
+    /// they are at least as consistent with each other as three interleaved
+    /// calls were.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<ShardSamplingStatus> GetSamplingStatusAsync();
+
+    /// <summary>
     /// Returns a complete <see cref="ShardDiagnosticReport"/> for this shard.
     /// Bundles depth, root-is-leaf, split/bulk state, live-key count, and
     /// hotness into a single RPC. When <paramref name="deep"/> is <c>true</c>,

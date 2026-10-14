@@ -112,6 +112,64 @@ public partial class LatticeRegistryGrainTests
     }
 
     [Test]
+    public async Task RegisterAndGetEntryAsync_registers_a_new_tree_and_returns_the_seeded_entry()
+    {
+        var (grain, tree) = CreateGrain(new LatticeOptions { WalPartitions = 8 });
+        tree.GetAsync("new-tree").Returns((byte[]?)null);
+        byte[]? written = null;
+        tree.SetAsync("new-tree", Arg.Do<byte[]>(b => written = b)).Returns(Task.CompletedTask);
+
+        var (created, entry) = await grain.RegisterAndGetEntryAsync("new-tree", new TreeRegistryEntry { ShardCount = 4 });
+
+        Assert.That(created, Is.True);
+        Assert.That(entry, Is.Not.Null);
+        Assert.That(written, Is.Not.Null);
+        var persisted = System.Text.Json.JsonSerializer.Deserialize<TreeRegistryEntry>(written!)!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry!.ShardCount, Is.EqualTo(4));
+            Assert.That(entry.MaxLeafKeys, Is.EqualTo(LatticeConstants.DefaultMaxLeafKeys));
+            Assert.That(entry.MaxInternalChildren, Is.EqualTo(LatticeConstants.DefaultMaxInternalChildren));
+            Assert.That(entry.WalPartitions, Is.EqualTo(8));
+            Assert.That(entry.ShardCount, Is.EqualTo(persisted.ShardCount));
+            Assert.That(entry.MaxLeafKeys, Is.EqualTo(persisted.MaxLeafKeys));
+            Assert.That(entry.MaxInternalChildren, Is.EqualTo(persisted.MaxInternalChildren));
+            Assert.That(entry.WalPartitions, Is.EqualTo(persisted.WalPartitions));
+        });
+        // One read of the row and one write; no separate existence probe.
+        await tree.DidNotReceive().ExistsAsync(Arg.Any<string>());
+        await tree.Received(1).GetAsync("new-tree");
+        await tree.Received(1).SetAsync("new-tree", Arg.Any<byte[]>());
+    }
+
+    [Test]
+    public async Task RegisterAndGetEntryAsync_preserves_an_existing_tree_and_returns_its_entry()
+    {
+        var (grain, tree) = CreateGrain();
+        var existing = new TreeRegistryEntry { ShardCount = 64, MaxLeafKeys = 128, MaxInternalChildren = 32 };
+        tree.GetAsync("old-tree").Returns(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(existing));
+
+        var (created, entry) = await grain.RegisterAndGetEntryAsync("old-tree", new TreeRegistryEntry { ShardCount = 4 });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(created, Is.False);
+            Assert.That(entry!.ShardCount, Is.EqualTo(64));
+            Assert.That(entry.MaxLeafKeys, Is.EqualTo(128));
+            Assert.That(entry.MaxInternalChildren, Is.EqualTo(32));
+        });
+        await tree.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+    }
+
+    [Test]
+    public void RegisterAndGetEntryAsync_rejects_a_reserved_tree_id()
+    {
+        var (grain, _) = CreateGrain();
+
+        Assert.ThrowsAsync<ArgumentException>(() => grain.RegisterAndGetEntryAsync("_lattice_my_tree"));
+    }
+
+    [Test]
     public async Task RegisterAsync_preserves_caller_supplied_WalPartitions_pin()
     {
         // The caller can opt out of silo-default seeding by passing an

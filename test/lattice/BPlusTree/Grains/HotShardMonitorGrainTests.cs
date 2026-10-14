@@ -53,6 +53,7 @@ public partial class HotShardMonitorGrainTests
         lattice.IsMergeCompleteAsync().Returns(true);
         lattice.IsSnapshotCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        TreeMaintenanceProbeStub.BridgeToLattice(grainFactory, TreeId, lattice);
 
         var splitGrain = Substitute.For<ITreeShardSplitGrain>();
         splitGrain.IsIdleAsync().Returns(true);
@@ -86,6 +87,7 @@ public partial class HotShardMonitorGrainTests
             sub.HasPendingBulkOperationAsync().Returns(false);
             sub.IsSplittingAsync().Returns(false);
             sub.CountAsync().Returns(WellOccupiedShardEntryCount);
+            ShardSamplingStatusStub.BridgeFromProbes(sub);
             shardSubs[i] = sub;
             return sub;
         }
@@ -194,6 +196,7 @@ public partial class HotShardMonitorGrainTests
         lattice.IsMergeCompleteAsync().Returns(true);
         lattice.IsSnapshotCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        TreeMaintenanceProbeStub.BridgeToLattice(grainFactory, TreeId, lattice);
         var splitGrain = Substitute.For<ITreeShardSplitGrain>();
         splitGrain.IsIdleAsync().Returns(true);
         grainFactory.GetGrain<ITreeShardSplitGrain>(Arg.Any<string>()).Returns(splitGrain);
@@ -206,6 +209,8 @@ public partial class HotShardMonitorGrainTests
         coldShard0.GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
         coldShard0.HasPendingBulkOperationAsync().Returns(false);
         coldShard0.IsSplittingAsync().Returns(false);
+        ShardSamplingStatusStub.BridgeFromProbes(hotShard1);
+        ShardSamplingStatusStub.BridgeFromProbes(coldShard0);
         grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0").Returns(coldShard0);
         grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/1").Returns(hotShard1);
 
@@ -321,6 +326,7 @@ public partial class HotShardMonitorGrainTests
         lattice.IsMergeCompleteAsync().Returns(true);
         lattice.IsSnapshotCompleteAsync().Returns(true);
         gf.GetGrain<ILattice>(TreeId).Returns(lattice);
+        TreeMaintenanceProbeStub.BridgeToLattice(gf, TreeId, lattice);
         var reg = Substitute.For<ILatticeRegistry>();
         reg.ResolveAsync(TreeId).Returns(TreeId);
         reg.GetShardMapAsync(TreeId).Returns(ShardMap.CreateDefault(16, 2));

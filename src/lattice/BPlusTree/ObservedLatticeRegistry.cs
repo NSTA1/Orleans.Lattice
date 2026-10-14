@@ -223,6 +223,9 @@ internal static class ObservedLatticeRegistry
         public Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null) =>
             Observe(Stopwatch.GetTimestamp(), Inner.RegisterAsync(treeId, entry), MethodTag(nameof(RegisterAsync)));
 
+        public Task<(bool Created, TreeRegistryEntry? Entry)> RegisterAndGetEntryAsync(string treeId, TreeRegistryEntry? entry = null) =>
+            Observe(Stopwatch.GetTimestamp(), Inner.RegisterAndGetEntryAsync(treeId, entry), MethodTag(nameof(RegisterAndGetEntryAsync)));
+
         /// <inheritdoc />
         public Task UpdateAsync(string treeId, TreeRegistryEntry entry) =>
             Observe(Stopwatch.GetTimestamp(), Inner.UpdateAsync(treeId, entry), MethodTag(nameof(UpdateAsync)));

@@ -97,6 +97,25 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task RegisterAsync(string treeId, State.TreeRegistryEntry? entry = null);
 
     /// <summary>
+    /// Registers a tree exactly as <see cref="RegisterAsync"/> does, and returns
+    /// whether this call created the registration together with the effective
+    /// entry - the default-seeded entry it just wrote, or the existing entry it
+    /// preserved. One grain call in place of the
+    /// <see cref="ExistsAsync"/> + <see cref="RegisterAsync"/> +
+    /// <see cref="GetEntryAsync"/> triple, and the three observations come from a
+    /// single registry turn, so no concurrent register can interleave between them.
+    /// </summary>
+    /// <param name="treeId">The tree ID to register.</param>
+    /// <param name="entry">
+    /// Optional configuration overrides, honoured only when the tree is not yet registered.
+    /// </param>
+    /// <returns>
+    /// <c>Created</c> is <c>true</c> when this call wrote the registration;
+    /// <c>Entry</c> is the effective registry entry.
+    /// </returns>
+    Task<(bool Created, State.TreeRegistryEntry? Entry)> RegisterAndGetEntryAsync(string treeId, State.TreeRegistryEntry? entry = null);
+
+    /// <summary>
     /// Updates the registry entry for a tree, replacing any previous
     /// configuration overrides. If the tree is not yet registered, it is
     /// registered with the given entry (upsert semantics).

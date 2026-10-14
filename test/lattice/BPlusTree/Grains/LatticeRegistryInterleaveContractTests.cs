@@ -83,6 +83,7 @@ public sealed class LatticeRegistryInterleaveContractTests
     private static readonly string[] MutatingMembers =
     [
         nameof(ILatticeRegistry.RegisterAsync),
+        nameof(ILatticeRegistry.RegisterAndGetEntryAsync),
         nameof(ILatticeRegistry.UpdateAsync),
         nameof(ILatticeRegistry.UnregisterAsync),
         nameof(ILatticeRegistry.SetAliasAsync),

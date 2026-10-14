@@ -10,7 +10,7 @@ refinement of registry replication.
 | --- | --- | --- |
 | `limit`, `burst` | Declared cap and floored burst headroom | `TenantQuotas.MaxTreeCount`, `TenantQuotas.BurstPercent`, `TenantQuotaEvaluator.AdmitTreeCreate` |
 | `phase`, `checked` | Outstanding creates and the count each decision saw | `LatticeTenantAdmissionController.IsTreeCreateAdmittedAsync` |
-| `owned` | Authoritatively registered trees | `LatticeRegistryGrain.RegisterAsync` and `LatticeRegistryGrain.GetAllTreeIdsAsync` supply the count callback |
+| `owned` | Authoritatively registered trees | `LatticeRegistryGrain.RegisterAsync` (or `RegisterAndGetEntryAsync`, which shares its registration write) and `LatticeRegistryGrain.GetAllTreeIdsAsync` supply the count callback |
 | `observed`, `allow` | Count and result of a later fresh create-admission check | `TenantQuotaEvaluator.AdmitTreeCreate` |
 
 ## Action mapping
@@ -18,7 +18,7 @@ refinement of registry replication.
 | Spec action | Protocol step | Code counterpart | Detector |
 | --- | --- | --- | --- |
 | `CheckCreate` | Read authoritative count, charge the proposed tree, allow/refuse | `LatticeTenantAdmissionController.IsTreeCreateAdmittedAsync` and `TenantQuotaEvaluator.AdmitTreeCreate` | Yes: `LatticeTenantAdmissionControllerTests.IsTreeCreateAdmitted_enforces_the_ceiling_for_a_cold_unmetered_tenant` and `LatticeTenantAdmissionControllerTests.IsTreeCreateAdmitted_refuses_when_the_live_count_is_at_the_ceiling`. |
-| `Register` | A separately scheduled admitted create joins the owned count | `LatticeRegistryGrain.RegisterAsync` after `LatticeTenantAdmissionController.IsTreeCreateAdmittedAsync` | Yes: `LatticeRegistryGrainTests.RegisterAsync_sets_key_in_registry_tree` detects an omitted registration write; `LatticeTenantAdmissionControllerTests.IsTreeCreateAdmitted_concurrent_checks_can_overshoot_but_next_live_check_refuses` separately detects the check/register split. |
+| `Register` | A separately scheduled admitted create joins the owned count | `LatticeRegistryGrain.RegisterAsync`, or `LatticeRegistryGrain.RegisterAndGetEntryAsync` (the tree-admin create path; same absent-row check and registration write in one registry turn), after `LatticeTenantAdmissionController.IsTreeCreateAdmittedAsync` | Yes: `LatticeRegistryGrainTests.RegisterAsync_sets_key_in_registry_tree` and `LatticeRegistryGrainTests.RegisterAndGetEntryAsync_registers_a_new_tree_and_returns_the_seeded_entry` detect an omitted registration write; `LatticeTenantAdmissionControllerTests.IsTreeCreateAdmitted_concurrent_checks_can_overshoot_but_next_live_check_refuses` separately detects the check/register split. |
 | `Probe` | Later creates read the current count rather than a cached decision | `LatticeTenantAdmissionController.IsTreeCreateAdmittedAsync` | Yes: `LatticeTenantAdmissionControllerTests.IsTreeCreateAdmitted_concurrent_checks_can_overshoot_but_next_live_check_refuses`. |
 
 ## Property mapping
