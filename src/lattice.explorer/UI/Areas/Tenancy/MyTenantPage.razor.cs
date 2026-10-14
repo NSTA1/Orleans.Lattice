@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TenantAdmin;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
@@ -13,8 +14,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// regions and sharing of the tenant. It also serves tenant admins who cannot
 /// see the directory.
 /// </summary>
-public partial class MyTenantPage
+public partial class MyTenantPage : IDisposable
 {
+    private readonly ComponentLifetime _lifetime = new();
     private ExplorerAddress? _loaded;
     private TenancyStanding? _standing;
     private TenantStatusReport? _status;
@@ -54,6 +56,7 @@ public partial class MyTenantPage
         _loaded = Address;
         if (string.IsNullOrEmpty(TenantId) || Address.Path.Count > 1 || (Section is not null && !TenancyRoutes.IsMyTenantSection(Section)))
         {
+            _lifetime.Renew();
             Navigation.NotFound();
             return;
         }
@@ -63,16 +66,27 @@ public partial class MyTenantPage
 
     private async Task LoadAsync()
     {
+        var token = _lifetime.Renew();
+        var tenantId = TenantId;
+        var overview = Section is null;
         _failure = null;
         _standing = null;
         _status = null;
+        _quota = null;
+        _apps = null;
+        _others = [];
         try
         {
-            _standing = await Catalog.GetStandingAsync(CancellationToken.None).ConfigureAwait(true);
-            if (Section is null)
+            var standing = await Catalog.GetStandingAsync(token).ConfigureAwait(true);
+            token.ThrowIfCancellationRequested();
+            _standing = standing;
+            if (overview)
             {
-                await LoadOverviewAsync().ConfigureAwait(true);
+                await LoadOverviewAsync(tenantId, token).ConfigureAwait(true);
             }
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
@@ -80,34 +94,47 @@ public partial class MyTenantPage
         }
     }
 
-    private async Task LoadOverviewAsync()
+    private async Task LoadOverviewAsync(string tenantId, CancellationToken token)
     {
         var selfService = Catalog.SelfService ?? throw new NotSupportedException();
-        _status = await selfService.GetTenantAsync(TenantId).ConfigureAwait(true);
-        _quota = null;
+        var status = await selfService.GetTenantAsync(tenantId, token).ConfigureAwait(true);
+        token.ThrowIfCancellationRequested();
+        _status = status;
+        string? headline = null;
         if (Catalog.Quota is { } quota)
         {
             try
             {
-                _quota = TenancyFormat.QuotaHeadline(await quota.GetQuotaUsageAsync(TenantId).ConfigureAwait(true));
+                headline = TenancyFormat.QuotaHeadline(await quota.GetQuotaUsageAsync(tenantId, token).ConfigureAwait(true));
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                _quota = null;
+                headline = null;
             }
         }
 
-        _apps = await Catalog.GetInstalledAppCountAsync(TenantId, CancellationToken.None).ConfigureAwait(true);
+        token.ThrowIfCancellationRequested();
+        _quota = headline;
+        var apps = await Catalog.GetInstalledAppCountAsync(tenantId, token).ConfigureAwait(true);
+        token.ThrowIfCancellationRequested();
+        _apps = apps;
+        IReadOnlyList<TenantDescriptor> others = [];
         try
         {
-            var tenants = await Catalog.GetTenantsAsync(CancellationToken.None).ConfigureAwait(true);
-            _others = [.. tenants.Where(tenant => !string.Equals(tenant.TenantId, TenantId, StringComparison.Ordinal))];
+            var tenants = await Catalog.GetTenantsAsync(token).ConfigureAwait(true);
+            others = [.. tenants.Where(tenant => !string.Equals(tenant.TenantId, tenantId, StringComparison.Ordinal))];
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            _others = [];
+            others = [];
         }
+
+        token.ThrowIfCancellationRequested();
+        _others = others;
     }
+
+    /// <summary>Cancels the workspace reads when the page is left.</summary>
+    public void Dispose() => _lifetime.Leave();
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address).ToHref();
 }

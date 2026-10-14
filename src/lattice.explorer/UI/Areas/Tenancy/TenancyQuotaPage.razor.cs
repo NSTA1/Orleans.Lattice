@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
@@ -10,8 +11,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// use is shown but its limits are not set here. Anyone else is sent to the same
 /// section of their tenant's workspace.
 /// </summary>
-public partial class TenancyQuotaPage
+public partial class TenancyQuotaPage : IDisposable
 {
+    private readonly ComponentLifetime _lifetime = new();
     private ExplorerAddress? _loaded;
     private bool _admitted;
     private TenancyFailure? _failure;
@@ -38,6 +40,7 @@ public partial class TenancyQuotaPage
         }
 
         _loaded = Address;
+        var token = _lifetime.Renew();
         _admitted = false;
         _failure = null;
         if (!global::Orleans.Lattice.TenantId.TryParse(TenantId, out _))
@@ -48,11 +51,21 @@ public partial class TenancyQuotaPage
 
         try
         {
-            _admitted = await TenancyAdministrationGate.AdmitAsync(Catalog, Navigator, TenantId, TenancyRoutes.QuotaSegment).ConfigureAwait(true);
+            var admitted = await TenancyAdministrationGate.AdmitAsync(Catalog, Navigator, TenantId, TenancyRoutes.QuotaSegment, token).ConfigureAwait(true);
+            if (!token.IsCancellationRequested)
+            {
+                _admitted = admitted;
+            }
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
             _failure = failure;
         }
     }
+
+    /// <summary>Cancels admission and redirects when the page is left.</summary>
+    public void Dispose() => _lifetime.Leave();
 }
