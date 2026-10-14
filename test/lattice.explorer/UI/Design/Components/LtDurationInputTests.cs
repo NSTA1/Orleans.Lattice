@@ -209,6 +209,128 @@ public sealed class LtDurationInputTests : ShellDesignTestContext
             Throws.InvalidOperationException.With.Message.Contains("offers no unit"));
     }
 
+    [Test]
+    public void Change_raises_a_valid_duration_and_repeated_changes_do_not_raise_it_again()
+    {
+        var raised = new List<TimeSpan?>();
+        var cut = RenderField(p => p.Add(x => x.ValueChanged, (TimeSpan? value) => raised.Add(value)));
+
+        cut.FindAll("input")[0].Change("2");
+        cut.FindAll("input")[0].Change("2");
+        cut.FindAll("input")[1].Change("30");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(raised, Is.EqualTo(new TimeSpan?[] { TimeSpan.FromHours(2), TimeSpan.FromMinutes(150) }));
+            Assert.That(cut.Instance.Value, Is.EqualTo(TimeSpan.FromMinutes(150)));
+            Assert.That(cut.FindAll(".lt-field__error"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void A_single_unit_names_its_validation_message_and_a_hint_is_announced_without_an_error()
+    {
+        var cut = RenderField(p => p.Add(x => x.Units, LtDurationUnits.Seconds).Add(x => x.Hint, "How long."));
+        Assert.That(cut.Find("input").GetAttribute("aria-describedby"), Is.EqualTo(cut.Find(".lt-field__hint").Id));
+
+        cut.Find("input").Change("x");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find(".lt-field__error").TextContent, Does.EndWith("Give a whole number of seconds."));
+            Assert.That(cut.Find("input").GetAttribute("aria-describedby"),
+                Is.EqualTo(cut.Find(".lt-field__hint").Id + " " + cut.Find(".lt-field__error").Id));
+        });
+    }
+
+    [Test]
+    public void A_count_that_fits_in_a_long_but_overflows_its_unit_is_refused_without_a_callback()
+    {
+        var raised = new List<TimeSpan?>();
+        var cut = RenderField(p => p.Add(x => x.Units, LtDurationUnits.Days)
+            .Add(x => x.ValueChanged, (TimeSpan? value) => raised.Add(value)));
+        var tooManyDays = TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerDay + 1;
+
+        cut.Find("input").Change(tooManyDays.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find(".lt-field__error").TextContent, Does.EndWith("Give a whole number of days."));
+            Assert.That(raised, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Individually_valid_counts_whose_sum_overflows_are_refused()
+    {
+        var raised = new List<TimeSpan?>();
+        var cut = RenderField(p => p.Add(x => x.Units, LtDurationUnits.Minutes | LtDurationUnits.Seconds)
+            .Add(x => x.ValueChanged, (TimeSpan? value) => raised.Add(value)));
+        var minutes = TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerMinute;
+        cut.FindAll("input")[0].Change(minutes.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Assert.That(raised, Has.Count.EqualTo(1), "the first count alone is representable");
+        raised.Clear();
+
+        cut.FindAll("input")[1].Change("59");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find(".lt-field__error").TextContent, Does.EndWith("Give a whole number of minutes and seconds."));
+            Assert.That(raised, Is.Empty);
+            Assert.That(cut.Instance.Value, Is.EqualTo(TimeSpan.FromTicks(minutes * TimeSpan.TicksPerMinute)));
+        });
+    }
+
+    [TestCase("1")]
+    [TestCase("2")]
+    public async Task Exact_range_boundaries_are_accepted_and_trimmed_input_is_not_rewritten(string hours)
+    {
+        var raised = new List<TimeSpan?>();
+        var cut = RenderField(p => p.Add(x => x.Min, TimeSpan.FromHours(1)).Add(x => x.Max, TimeSpan.FromHours(2))
+            .Add(x => x.ValueChanged, (TimeSpan? value) => raised.Add(value)));
+
+        cut.FindAll("input")[0].Change(" " + hours + " ");
+        var accepted = await cut.InvokeAsync(() => cut.Instance.ConfirmAsync());
+        cut.Render();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(accepted, Is.True);
+            Assert.That(raised, Is.EqualTo(new TimeSpan?[] { TimeSpan.FromHours(int.Parse(hours, System.Globalization.CultureInfo.InvariantCulture)) }));
+            Assert.That(Values(cut)[0], Is.EqualTo(" " + hours + " "));
+            Assert.That(cut.FindAll(".lt-field__error"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Changing_units_resplits_the_same_value_and_clears_a_previous_error()
+    {
+        var cut = RenderField(p => p.Add(x => x.Value, TimeSpan.FromMinutes(90)));
+        cut.FindAll("input")[0].Change("bad");
+
+        cut.Render(p => p.Add(x => x.Units, LtDurationUnits.Minutes));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Values(cut), Is.EqualTo(new[] { "90" }));
+            Assert.That(cut.FindAll(".lt-field__error"), Is.Empty);
+            Assert.That(cut.Find("input").GetAttribute("aria-label"), Is.EqualTo("Every, minutes"));
+        });
+    }
+
+    [Test]
+    public void Negative_values_are_displayed_as_zero_and_subunit_remainders_are_not_displayed()
+    {
+        var negative = RenderField(p => p.Add(x => x.Value, TimeSpan.FromHours(-1)));
+        var remainder = RenderField(p => p.Add(x => x.Value, TimeSpan.FromHours(1) + TimeSpan.FromSeconds(59)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Values(negative), Is.EqualTo(new[] { "0", "0" }));
+            Assert.That(Values(remainder), Is.EqualTo(new[] { "1", "0" }));
+        });
+    }
+
     private IRenderedComponent<LtDurationInput> RenderField(Action<ComponentParameterCollectionBuilder<LtDurationInput>>? more = null) =>
         Render<LtDurationInput>(p =>
         {
