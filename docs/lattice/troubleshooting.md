@@ -691,6 +691,50 @@ These are different faults with different remedies:
 - For a wedged WAL floor, use the WAL reclamation report as the diagnostic record: it tells you which materialiser pin, leaf and WAL partition hold the floor, and whether the condition is a stranded pin rather than an idle tree. Do not treat a flat retained-WAL graph alone as proof that reclamation works or is broken.
 - For a cold-replay loop, remediate the arm the warning names. Back off workload or raise replay-admission headroom for queued-for-permit pressure; investigate shared option / registry resolution if activations cancel before requesting a permit; and reduce replay work or improve snapshot coverage when cancellations happen mid-replay. Retrying the same activation without changing the named cause reproduces the loop.
 
+## Repeated row-loss exceptions during compaction
+
+### Symptom
+
+Compaction repeatedly logs `LeafStateRowLostException` for the same leaf IDs,
+with a warning that their dirty marks will be retained for the next pass. The
+runtime exception counter can rise even while the routed tree remains readable.
+
+### Likely cause
+
+A rowless leaf without a create intent is refused, not recreated empty. That
+refusal can identify a missing routed state row, but it can also come from a
+stale maintenance reference to a leaf that was already removed from routing and
+cleared. Older compaction code retained that reference above its pass watermark
+on every failure; successful retirement did not remove the dirty nomination.
+The result was recurring work against an unrouted leaf. See the investigation
+and fix in [PR #4927](https://github.com/NSTA1/Orleans.Lattice/pull/4927).
+
+### How to confirm
+
+Correlate complete logs by leaf ID, caller and time interval, then compare those
+IDs with authoritative current routing and preserved storage evidence. A dirty
+nomination alone is not proof that a leaf is still routed. An exception counter
+counts runtime exception occurrences, not unique missing rows: propagation and
+retries can contribute several occurrences for one failed call. Missing early
+logs or labels remain an attribution gap, not evidence of zero faults. Current
+absence from routing does not prove the history of the leaf's removal or that
+no data was lost earlier.
+
+### How to fix
+
+The fix removes dirty nominations when a leaf clear succeeds. For existing stale
+nominations, compaction discards only the maintenance hint after a complete,
+bounded traversal of fresh current routing proves the rowless leaf unreachable.
+It does not restore, clear or admit that leaf. A routed leaf, changed topology,
+exhausted traversal budget or routing/storage fault retains the nomination and
+existing failure behavior; do not bypass the rowless admission guard.
+
+If the missing leaf is routed, or routing cannot be established, preserve
+storage, snapshots and WAL before attempting recovery. Investigate the provider
+and historical removal evidence; upgrading this maintenance fix is not a repair
+of missing routed data. Do not infer a healthy deployment from a falling
+aggregate counter or from a sampled routing snapshot alone.
+
 ## Acknowledged deletes reappear after cold replay
 
 ### Symptom
@@ -906,6 +950,7 @@ above. No automatic ownership inference or historical migration is supplied.
 | `SELF-REINFORCING COLD REPLAY LOOP` warning, or `orleans.lattice.leaf.activation.cold_replay_loop` advances | [WAL reclamation and cold replay loops](#wal-reclamation-and-cold-replay-loops) - read the warning split by arm: mid-replay, queued-for-permit, and resolving-options have different remedies |
 | `LatticeTreeOwnershipDeniedException` from an alias change | [Ownership-bounded aliasing](tree-registry.md#ownership-bounded-aliasing) - the registered `ITreeOwnershipGuard` refused the alias before anything was written; `Reason` carries the guard's explanation |
 | Leaf `Error` that it cannot advance its durable projection checkpoint, or `LeafProjectionStaleException` | [A live leaf whose projection has gone stale](projection-rebuild.md#a-live-leaf-whose-projection-has-gone-stale) - data at risk: capture a backup before the activation is recycled |
+| Repeated `LeafStateRowLostException` from compaction on the same IDs | [Repeated row-loss exceptions during compaction](#repeated-row-loss-exceptions-during-compaction) - distinguish stale unrouted nominations from missing routed state |
 | High `TombstoneRatio` | [Slow scans](#slow-scans) and [Tombstone compaction](tombstone-compaction.md) |
 | Read returns an overwritten value | [Stale reads and cache behaviour](#stale-reads-and-cache-behaviour) |
 | A previously acknowledged delete reappears after cold replay | [Acknowledged deletes reappear after cold replay](#acknowledged-deletes-reappear-after-cold-replay) - preserve pristine storage, snapshots, WAL and acknowledgement evidence before recovery |
