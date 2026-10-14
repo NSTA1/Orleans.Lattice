@@ -72,6 +72,7 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
         nameof(IShardRootGrain.DeleteAsync),
         nameof(IShardRootGrain.DeleteRangeAsync),
         nameof(IShardRootGrain.DeleteRangeBoundedAsync),
+        nameof(IShardRootGrain.DiscardUnroutedDirtyLeafAsync),
         nameof(IShardRootGrain.EngageWriteFenceAsync),
         nameof(IShardRootGrain.EnterRejectingAsync),
         nameof(IShardRootGrain.EnterRejectPhaseAsync),
