@@ -98,6 +98,15 @@ internal static class LeafSubstituteCombinedCalls
                 NextSibling = await leaf.GetNextSiblingAsync(),
             };
         });
+        leaf.GetProjectionCheckpointAndNextSiblingAsync().Returns(async _ =>
+        {
+            var checkpoint = await leaf.GetProjectionCheckpointOffsetAsync();
+            return new LeafCheckpointPage
+            {
+                CheckpointOffset = checkpoint,
+                Link = await leaf.GetKeyRangeAndNextSiblingAsync(),
+            };
+        });
         leaf.FreezeProjectionAndNextSiblingAsync(Arg.Any<CancellationToken>()).Returns(async call =>
         {
             var freeze = await leaf.FreezeProjectionAsync(call.Arg<CancellationToken>());

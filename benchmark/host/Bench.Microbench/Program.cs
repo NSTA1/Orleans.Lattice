@@ -814,6 +814,20 @@ if (string.Equals(suite, "decisionstamp", StringComparison.OrdinalIgnoreCase))
     return decisionStampSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
+if (string.Equals(suite, "coordinatorreads", StringComparison.OrdinalIgnoreCase))
+{
+    var registrySummary = BenchmarkRunner.Run<RegistryProjectionElisionBenchmarks>(
+        new HarnessConfig(Path.ChangeExtension(resultsPath, "registry.json")).AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is RegistryProjectionElisionBenchmarks.Site.MergeFrontDoor
+                or RegistryProjectionElisionBenchmarks.Site.ResizeUndoFence)));
+    var leafSummary = BenchmarkRunner.Run<LeafChainWalkElisionBenchmarks>(
+        new HarnessConfig(Path.ChangeExtension(resultsPath, "leaf.json")).AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is LeafChainWalkElisionBenchmarks.Site.CheckpointWalk)));
+    return registrySummary.HasCriticalValidationErrors || leafSummary.HasCriticalValidationErrors
+        || registrySummary.Reports.Any(report => !report.Success)
+        || leafSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "diagnosticregistry", StringComparison.OrdinalIgnoreCase))
 {
     config = config.AddFilter(new SimpleFilter(benchmark =>

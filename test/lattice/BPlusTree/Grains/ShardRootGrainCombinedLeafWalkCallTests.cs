@@ -146,6 +146,43 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
     }
 
     [Test]
+    public async Task Materialiser_lag_walk_makes_one_leaf_call_per_hop()
+    {
+        var (grain, leaves, factory, ids, _) = CreateShard(new LatticeOptions
+        {
+            WalPartitions = 1,
+            MaxLeavesPerScanPage = 1000,
+            MaxScanPageDuration = TimeSpan.Zero,
+        });
+        var coordinator = Substitute.For<ILeafReplayCoordinatorGrain>();
+        coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(100L));
+        factory.GetGrain<ILeafReplayCoordinatorGrain>($"{TreeId}/0").Returns(coordinator);
+        for (var i = 0; i < LeafCount; i++)
+        {
+            leaves[i].GetProjectionCheckpointAndNextSiblingAsync().Returns(new LeafCheckpointPage
+            {
+                CheckpointOffset = 20 - i,
+                Link = new LeafChainLink { KeyRange = Bounds(i), NextSibling = Next(ids, i) },
+            });
+        }
+
+        var page = await grain.GetShardMaterialiserLagBoundedAsync(null, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.ResumeFromInclusive, Is.Null);
+            Assert.That(page.WalHeadOffsets, Is.EqualTo(new[] { 100L }));
+            Assert.That(page.MinCheckpointOffset, Is.EqualTo(20 - LeafCount + 1));
+        });
+        foreach (var leaf in leaves)
+        {
+            await leaf.Received(1).GetProjectionCheckpointAndNextSiblingAsync();
+            await leaf.DidNotReceive().GetProjectionCheckpointOffsetAsync();
+            AssertNoSeparateLinkReads(leaf);
+        }
+    }
+
+    [Test]
     public async Task Snapshot_baseline_freeze_pass_makes_one_leaf_call_per_hop()
     {
         var (grain, leaves, factory, ids, _) = CreateShard(new LatticeOptions
