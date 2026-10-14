@@ -30,17 +30,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
-- **WAL - Experimental replay controller.** An opt-in, default-off controller adjusts cold-replay concurrency using bounded service-time probes. Admission is unchanged when disabled; real-store convergence acceptance remains unproven. ([#4925](https://github.com/NSTA1/Orleans.Lattice/pull/4925)) (`Orleans.Lattice`)
-
 ### Changed
-
-- **Performance - Coordinator grain calls.** Merge admission and resize undo reuse complete registry entries, and materialiser-lag walks combine checkpoint and sibling metadata. Complete-pin calls fall from 4/2/2 to 2/1/1 without changing public APIs or replay/fence ordering. ([#4947](https://github.com/NSTA1/Orleans.Lattice/pull/4947)) (`Orleans.Lattice`)
-
-- **Performance - Maintenance grain calls.** Snapshot copy budgets, orphan-pass budgets and compaction schedules skip redundant registry calls while retaining bounded progress, clamped scheduling and fresh topology and reap-ceiling reads. ([#4943](https://github.com/NSTA1/Orleans.Lattice/pull/4943)) (`Orleans.Lattice`)
-
-- **Performance - Diagnostic grain calls.** Cached tree stats skip registry calls, WAL report misses reuse their topology read, and WAL byte accounting combines two shard calls into one. Public APIs and fresh runtime ceiling reads are unchanged. ([#4940](https://github.com/NSTA1/Orleans.Lattice/pull/4940)) (`Orleans.Lattice`)
-
-- **Performance - Lifecycle registry reads.** Resize emptiness routing, resize undo capture and deletion shard census reuse one fresh registry entry, reducing complete-pin registry calls from 3/2/2 to 1/1/1 without changing the public API. ([#4937](https://github.com/NSTA1/Orleans.Lattice/pull/4937)) (`Orleans.Lattice`)
 
 - **Performance - Repository-context scans reuse sort comparers.** Hot streaming scans now reuse comparison delegates instead of allocating one per call. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
@@ -53,24 +43,6 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ### Fixed
-
-- **Leaf - Starvation drives no longer hold the leaf turn.** The coverage-lag timer dispatches starved and stalled replay drives onto an interleaving one-shot timer, so a long drive no longer blocks shard reads and wedges MV point writes. ([#4949](https://github.com/NSTA1/Orleans.Lattice/issues/4949)) (`Orleans.Lattice`)
-
-- **Tests - Layer 3 rig lifecycle and evidence.** Superseded revisions can no longer resurrect against deleted tables; unresolved tails, cross-process MV lag and provider exceptions are reported; opt-in await and grain-turn diagnostics localise stalls. ([#4949](https://github.com/NSTA1/Orleans.Lattice/issues/4949)) (`repository-wide`)
-
-- **Leaf - Stale compaction nominations.** Retirement clears nominations; existing rowless hints are discarded only after a complete routing proof. Missing routed rows still fail closed. See [troubleshooting](docs/lattice/troubleshooting.md#repeated-row-loss-exceptions-during-compaction). ([#4927](https://github.com/NSTA1/Orleans.Lattice/pull/4927)) (`Orleans.Lattice`)
-
-- **WAL - Cold-replay recovery.** Deletes survive replay and reseeding; refusals no longer amplify retries. Historical data needs [evidence-preserving recovery](docs/lattice/troubleshooting.md#acknowledged-deletes-reappear-after-cold-replay), not automatic repair. ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4930](https://github.com/NSTA1/Orleans.Lattice/issues/4930), [#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)
-
-- **Explorer - Tenant page read ownership.** Quota and sharing pages discard late admission failures and redirects after navigation. My tenant keeps overview reads tied to their tenant, discarding old replies and stopping follow-on reads after a section change or disposal. ([#4944](https://github.com/NSTA1/Orleans.Lattice/issues/4944)) (`Orleans.Lattice.Explorer.UI`)
-
-- **Explorer - History and metrics read ownership.** Switching tree, key or as-of time discards late replies and errors without ending the current load; cancelled history feeds cannot add changes to the replacement prefix. ([#4941](https://github.com/NSTA1/Orleans.Lattice/issues/4941)) (`Orleans.Lattice.Explorer.UI`)
-
-- **Explorer - Date-field validation.** Incomplete dates no longer borrow today's date, clearing the picker time blocks stale-value submission, and disabling a field closes its picker. ([#4936](https://github.com/NSTA1/Orleans.Lattice/pull/4936)) (`Orleans.Lattice.Explorer.UI`)
-
-- **Atomic - Reshard retries through routing epochs.** Atomic writes continue rebinding across successive shard-map epochs until the existing retry budget expires, instead of failing after three rebinds before the commit decision. ([#4922](https://github.com/NSTA1/Orleans.Lattice/issues/4922)) (`Orleans.Lattice`)
-
-- **Leaf - Coalesced digests retain intervening mutations.** A timer publish no longer clears the dirty mark for a newer split snapshot, preventing stale per-shard counts after coalesced writes. ([#4931](https://github.com/NSTA1/Orleans.Lattice/issues/4931)) (`Orleans.Lattice`)
 
 - **Container - Calibrated shutdown forecast.** A bounded history of clean drains calibrates fixed overhead and aggregate service rate; thin or extrapolated evidence reports unknown instead of a false abandoned-stop prediction. ([#3484](https://github.com/NSTA1/Orleans.Lattice/issues/3484)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
@@ -175,6 +147,42 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Container - Provenance and tooling.** The image git revision reaches the assembly instead of publishing an unknown build, the provenance guard adjudicates the real deployment rather than a default service name, metrics are served rather than answering 404, and tuning no longer drops a path. ([#2363](https://github.com/NSTA1/Orleans.Lattice/issues/2363), [#2686](https://github.com/NSTA1/Orleans.Lattice/issues/2686), [#2886](https://github.com/NSTA1/Orleans.Lattice/issues/2886), [#2929](https://github.com/NSTA1/Orleans.Lattice/issues/2929), [#3086](https://github.com/NSTA1/Orleans.Lattice/issues/3086), [#3169](https://github.com/NSTA1/Orleans.Lattice/issues/3169)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ## Released
+
+## [2026-10-14]
+
+Patch release: `Orleans.Lattice` 10.1.1 and `Orleans.Lattice.Explorer.UI` 10.1.1.
+
+### Added
+
+- **WAL - Experimental replay service-rate controller.** A default-off, bounded controller probes cold-replay throughput; convergence acceptance remains unproven. ([#4925](https://github.com/NSTA1/Orleans.Lattice/pull/4925)) (`Orleans.Lattice` 10.1.1)
+
+### Changed
+
+- **Performance - Coordinator grain calls.** Merge admission, resize undo and materialiser-lag walks reuse metadata reads, removing redundant coordinator round trips. ([#4947](https://github.com/NSTA1/Orleans.Lattice/pull/4947)) (`Orleans.Lattice` 10.1.1)
+
+- **Performance - Registry reads.** Lifecycle, diagnostic and maintenance paths reuse registry entries to reduce serial calls without changing public APIs. ([#4937](https://github.com/NSTA1/Orleans.Lattice/pull/4937), [#4940](https://github.com/NSTA1/Orleans.Lattice/pull/4940), [#4943](https://github.com/NSTA1/Orleans.Lattice/pull/4943)) (`Orleans.Lattice` 10.1.1)
+
+### Fixed
+
+- **WAL - Refused drives no longer trigger uncredited retries.** ([#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice` 10.1.1)
+
+- **WAL - Cold replay preserves acknowledged deletes.** ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4930](https://github.com/NSTA1/Orleans.Lattice/issues/4930)) (`Orleans.Lattice` 10.1.1)
+
+- **Atomic - Reshard retries across routing epochs until the existing budget expires.** ([#4922](https://github.com/NSTA1/Orleans.Lattice/issues/4922)) (`Orleans.Lattice` 10.1.1)
+
+- **Leaf - Coalesced digest publishes retain intervening mutations.** ([#4931](https://github.com/NSTA1/Orleans.Lattice/issues/4931)) (`Orleans.Lattice` 10.1.1)
+
+- **Leaf - Unrouted compaction nominations are discarded only after a complete routing proof.** ([#4927](https://github.com/NSTA1/Orleans.Lattice/pull/4927)) (`Orleans.Lattice` 10.1.1)
+
+- **Leaf - Starvation drives no longer block the leaf turn.** ([#4949](https://github.com/NSTA1/Orleans.Lattice/issues/4949)) (`Orleans.Lattice` 10.1.1)
+
+- **Explorer - Date and time fields reject incomplete or stale picker values.** ([#4936](https://github.com/NSTA1/Orleans.Lattice/pull/4936)) (`Orleans.Lattice.Explorer.UI` 10.1.1)
+
+- **Explorer - History and metrics responses remain bound to the active selection.** ([#4941](https://github.com/NSTA1/Orleans.Lattice/issues/4941)) (`Orleans.Lattice.Explorer.UI` 10.1.1)
+
+- **Explorer - Tenant reads cannot overwrite a newer navigation state.** ([#4944](https://github.com/NSTA1/Orleans.Lattice/issues/4944)) (`Orleans.Lattice.Explorer.UI` 10.1.1)
+
+- **Tests - Layer 3 rig reports lag and failure evidence and cannot revive superseded revisions.** ([#4950](https://github.com/NSTA1/Orleans.Lattice/pull/4950)) (`repository-wide`)
 
 ## [2026-10-13]
 
