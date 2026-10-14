@@ -39,16 +39,17 @@ internal sealed class LatticeWalUsageGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        var ttl = optionsResolver.GetConfiguredOptions(TreeId).StorageUsageCacheTtl;
         var now = DateTimeOffset.UtcNow;
 
         // Cache hit: serve the most recent report and re-publish it to
         // the metrics sink so a sibling silo's poller can keep the gauge
         // alive without doing redundant Azure Table work.
         if (_cached is { } cached
-            && resolved.StorageUsageCacheTtl > TimeSpan.Zero
-            && (now - cached.SampledAt) < resolved.StorageUsageCacheTtl)
+            && ttl > TimeSpan.Zero
+            && (now - cached.SampledAt) < ttl)
         {
+            var resolved = await optionsResolver.ResolveAsync(TreeId);
             PublishToMetrics(cached, resolved);
             return cached;
         }
@@ -78,7 +79,9 @@ internal sealed class LatticeWalUsageGrain(
             // mutations. The registry is the source of truth for alias
             // resolution and is not in the per-write path.
             var registry = grainFactory.GetLatticeRegistry();
-            var entry = await registry.GetEntryAsync(TreeId);
+            // Derive initial options from this fresh topology read, retaining
+            // lazy seeding and the partition cache used below.
+            var (entry, _) = await RegistryEntryOptions.ReadAsync(registry, optionsResolver, TreeId);
             var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -113,6 +116,7 @@ internal sealed class LatticeWalUsageGrain(
                 }
             }
 
+            // Runtime ceilings may change during the fan-out: read them again.
             var options = await optionsResolver.ResolveAsync(TreeId);
             var report = new TreeWalUsageReport
             {
@@ -192,8 +196,7 @@ internal sealed class LatticeWalUsageGrain(
     {
         try
         {
-            var physical = await wal.GetPhysicalByteSizeAsync(cancellationToken);
-            var retained = await wal.GetRetainedByteSizeAsync(cancellationToken);
+            var (retained, physical) = await wal.GetByteSizesAsync(cancellationToken);
             return (retained, physical < 0 ? retained : physical);
         }
         catch (Exception ex)

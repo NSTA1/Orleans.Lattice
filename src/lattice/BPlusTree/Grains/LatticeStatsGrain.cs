@@ -29,7 +29,7 @@ internal sealed class LatticeStatsGrain(
     public async Task<TreeDiagnosticReport> GetReportAsync(bool deep, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var options = await optionsResolver.ResolveAsync(TreeId);
+        var options = optionsResolver.GetConfiguredOptions(TreeId);
         var ttl = options.DiagnosticsCacheTtl;
         var now = DateTimeOffset.UtcNow;
 
@@ -39,6 +39,8 @@ internal sealed class LatticeStatsGrain(
             return c;
         }
 
+        // TTL is configuration-only; retain lazy registration on cache misses.
+        await optionsResolver.ResolveAsync(TreeId);
         var report = await BuildReportAsync(deep, cancellationToken);
 
         if (deep) _cachedDeep = report;

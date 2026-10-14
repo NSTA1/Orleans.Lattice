@@ -808,6 +808,16 @@ if (string.Equals(suite, "decisionstamp", StringComparison.OrdinalIgnoreCase))
     return decisionStampSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
+if (string.Equals(suite, "diagnosticregistry", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is RegistryProjectionElisionBenchmarks.Site.StatsCacheHit
+            or RegistryProjectionElisionBenchmarks.Site.WalByteSizes
+            or RegistryProjectionElisionBenchmarks.Site.WalUsageMiss));
+    var diagnosticSummary = BenchmarkRunner.Run<RegistryProjectionElisionBenchmarks>(config);
+    return diagnosticSummary.HasCriticalValidationErrors || diagnosticSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "registryprojection", StringComparison.OrdinalIgnoreCase)
     || string.Equals(suite, "registryoptions", StringComparison.OrdinalIgnoreCase))
 {

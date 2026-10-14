@@ -21,6 +21,14 @@ public class LatticeStatsGrainTests
 
         var factory = Substitute.For<IGrainFactory>();
         options ??= new LatticeOptions();
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(TreeId).Returns(new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry
+        {
+            MaxLeafKeys = 128,
+            MaxInternalChildren = 128,
+            ShardCount = physicalShardCount,
+        });
 
         var lattice = Substitute.For<ILattice>();
         var map = ShardMap.CreateDefault(virtualShardCount, physicalShardCount);
@@ -101,6 +109,37 @@ public class LatticeStatsGrainTests
         await shards[0].Received(1).GetDiagnosticsBoundedAsync(false, null);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task GetReportAsync_cached_report_does_not_read_registry(bool deep)
+    {
+        var (grain, factory, _, _) = CreateGrain(
+            options: new LatticeOptions { DiagnosticsCacheTtl = TimeSpan.FromMinutes(5) });
+        var first = await grain.GetReportAsync(deep, CancellationToken.None);
+        var registry = factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.ClearReceivedCalls();
+
+        var cached = await grain.GetReportAsync(deep, CancellationToken.None);
+
+        Assert.That(cached, Is.EqualTo(first));
+        await registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
+        await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!);
+    }
+
+    [Test]
+    public async Task GetReportAsync_cache_miss_still_resolves_registry_options()
+    {
+        var (grain, factory, _, _) = CreateGrain(
+            options: new LatticeOptions { DiagnosticsCacheTtl = TimeSpan.Zero });
+        var registry = factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        await grain.GetReportAsync(false, CancellationToken.None);
+        registry.ClearReceivedCalls();
+        await grain.GetReportAsync(false, CancellationToken.None);
+
+        await registry.Received().GetEntryAsync(TreeId);
+    }
+
     [Test]
     public async Task GetReportAsync_does_not_cache_when_ttl_is_zero()
     {
@@ -108,6 +147,19 @@ public class LatticeStatsGrainTests
 
         await grain.GetReportAsync(deep: false, CancellationToken.None);
         await grain.GetReportAsync(deep: false, CancellationToken.None);
+
+        await shards[0].Received(2).GetDiagnosticsBoundedAsync(false, null);
+    }
+
+    [Test]
+    public async Task GetReportAsync_changed_configured_ttl_invalidates_cache_immediately()
+    {
+        var options = new LatticeOptions { DiagnosticsCacheTtl = TimeSpan.FromMinutes(5) };
+        var (grain, _, _, shards) = CreateGrain(options: options);
+        await grain.GetReportAsync(false, CancellationToken.None);
+        options.DiagnosticsCacheTtl = TimeSpan.Zero;
+
+        await grain.GetReportAsync(false, CancellationToken.None);
 
         await shards[0].Received(2).GetDiagnosticsBoundedAsync(false, null);
     }
@@ -273,4 +325,3 @@ public class LatticeStatsGrainTests
         _ = lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
     }
 }
-
