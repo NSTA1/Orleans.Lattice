@@ -353,7 +353,7 @@ internal static class TypeAliases
     internal const string LeafCompactionPage = "ol.lcn";
     internal const string LeafRangeDeletePage = "ol.lrx";
     internal const string LeafClockPage = "ol.lcq";
-    internal const string LeafCheckpointPage = "ol.lckp";
+    internal const string LeafCheckpointPage = "ol.lpc";
     internal const string LeafBaselineFreezePage = "ol.lfp";
 
     // Atomic multi-key writes
