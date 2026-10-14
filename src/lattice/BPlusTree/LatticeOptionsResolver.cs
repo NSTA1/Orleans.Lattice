@@ -964,6 +964,13 @@ internal sealed class LatticeOptionsResolver(
     /// </summary>
     internal LatticeOptions GetConfiguredOptions(string treeId) => optionsMonitor.Get(treeId);
 
+    /// <summary>
+    /// The configuration-only compaction schedule, with the same floors and
+    /// one-shot warnings as a full resolve, without a registry round trip.
+    /// </summary>
+    internal (TimeSpan TickInterval, int LeafBatchSize) GetCompactionSchedule(string treeId) =>
+        ResolveCompactionSchedule(treeId, optionsMonitor.Get(treeId));
+
     private ResolvedLatticeOptions BuildResolved(string treeId, State.TreeRegistryEntry? entry)
     {
         var baseOptions = optionsMonitor.Get(treeId);
@@ -1077,43 +1084,7 @@ internal sealed class LatticeOptionsResolver(
             walMaxRetainedBytes = entry?.WalMaxRetainedBytes ?? baseOptions.WalMaxRetainedBytes;
         }
 
-        // Compaction shard-tick interval: clamp configured values below
-        // the documented floor up to the floor with a one-shot warning
-        // per tree per process. The floor exists so a pathological
-        // setting cannot starve the rest of the compactor grain's
-        // scheduler quota by yielding too briefly between shard walks.
-        var configuredTickInterval = baseOptions.CompactionShardTickInterval;
-        var effectiveTickInterval = configuredTickInterval;
-        if (configuredTickInterval < LatticeOptions.MinCompactionShardTickInterval)
-        {
-            effectiveTickInterval = LatticeOptions.MinCompactionShardTickInterval;
-            if (WarnedClampedTickIntervalTrees.TryAdd(treeId, 0))
-            {
-                _logger.LogWarning(
-                    "Tree {TreeId} has CompactionShardTickInterval={Configured} configured below the {Floor} floor; " +
-                    "clamping to the floor. The floor protects scheduler fairness; lower it only if you have a measured reason.",
-                    treeId, configuredTickInterval, LatticeOptions.MinCompactionShardTickInterval);
-            }
-        }
-
-        // Compaction leaf-batch size: clamp configured values below the
-        // documented floor (1) up to the floor with a one-shot warning per
-        // tree per process. A batch size of zero would stall the leaf walk
-        // indefinitely; a batch size of one is the legitimate "yield after
-        // every leaf" extreme.
-        var configuredLeafBatchSize = baseOptions.CompactionLeafBatchSize;
-        var effectiveLeafBatchSize = configuredLeafBatchSize;
-        if (configuredLeafBatchSize < LatticeOptions.MinCompactionLeafBatchSize)
-        {
-            effectiveLeafBatchSize = LatticeOptions.MinCompactionLeafBatchSize;
-            if (WarnedClampedLeafBatchSizeTrees.TryAdd(treeId, 0))
-            {
-                _logger.LogWarning(
-                    "Tree {TreeId} has CompactionLeafBatchSize={Configured} configured below the {Floor} floor; " +
-                    "clamping to the floor. A batch size of zero would stall the leaf walk indefinitely.",
-                    treeId, configuredLeafBatchSize, LatticeOptions.MinCompactionLeafBatchSize);
-            }
-        }
+        var (effectiveTickInterval, effectiveLeafBatchSize) = ResolveCompactionSchedule(treeId, baseOptions);
 
         // Leaf hydration residency budget against the byte-split threshold
         // (issue #2836). Advisory only, with a one-shot warning per tree per
@@ -1194,6 +1165,41 @@ internal sealed class LatticeOptionsResolver(
         resolved.WalMaxRetainedBytes = walMaxRetainedBytes;
 
         return resolved;
+    }
+
+    private (TimeSpan TickInterval, int LeafBatchSize) ResolveCompactionSchedule(string treeId, LatticeOptions baseOptions)
+    {
+        // The interval floor protects scheduler fairness; the leaf floor
+        // guarantees forward progress even with a configured zero batch.
+        var configuredTickInterval = baseOptions.CompactionShardTickInterval;
+        var effectiveTickInterval = configuredTickInterval;
+        if (configuredTickInterval < LatticeOptions.MinCompactionShardTickInterval)
+        {
+            effectiveTickInterval = LatticeOptions.MinCompactionShardTickInterval;
+            if (WarnedClampedTickIntervalTrees.TryAdd(treeId, 0))
+            {
+                _logger.LogWarning(
+                    "Tree {TreeId} has CompactionShardTickInterval={Configured} configured below the {Floor} floor; " +
+                    "clamping to the floor. The floor protects scheduler fairness; lower it only if you have a measured reason.",
+                    treeId, configuredTickInterval, LatticeOptions.MinCompactionShardTickInterval);
+            }
+        }
+
+        var configuredLeafBatchSize = baseOptions.CompactionLeafBatchSize;
+        var effectiveLeafBatchSize = configuredLeafBatchSize;
+        if (configuredLeafBatchSize < LatticeOptions.MinCompactionLeafBatchSize)
+        {
+            effectiveLeafBatchSize = LatticeOptions.MinCompactionLeafBatchSize;
+            if (WarnedClampedLeafBatchSizeTrees.TryAdd(treeId, 0))
+            {
+                _logger.LogWarning(
+                    "Tree {TreeId} has CompactionLeafBatchSize={Configured} configured below the {Floor} floor; " +
+                    "clamping to the floor. A batch size of zero would stall the leaf walk indefinitely.",
+                    treeId, configuredLeafBatchSize, LatticeOptions.MinCompactionLeafBatchSize);
+            }
+        }
+
+        return (effectiveTickInterval, effectiveLeafBatchSize);
     }
 
     /// <summary>
