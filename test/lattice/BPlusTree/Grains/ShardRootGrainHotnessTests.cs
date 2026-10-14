@@ -304,5 +304,68 @@ public class ShardRootGrainHotnessTests
         Assert.That(hotness.Reads, Is.EqualTo(0));
         Assert.That(hotness.Writes, Is.EqualTo(0));
     }
+
+    // --- GetSamplingStatusAsync ---
+
+    [Test]
+    public async Task GetSamplingStatusAsync_reports_idle_shard_with_its_hotness()
+    {
+        var grain = CreateGrain();
+        await grain.GetAsync("key");
+
+        var status = await grain.GetSamplingStatusAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Hotness.Reads, Is.EqualTo(1));
+            Assert.That(status.Hotness.Writes, Is.EqualTo(0));
+            Assert.That(status.IsSplitting, Is.False);
+            Assert.That(status.HasPendingBulkOperation, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetSamplingStatusAsync_agrees_with_the_individual_probes()
+    {
+        var state = new FakePersistentState<ShardRootState>();
+        state.State.SplitInProgress = new ShardSplitInProgress
+        {
+            Phase = ShardSplitPhase.BeginShadowWrite,
+            ShadowTargetShardIndex = 1,
+            MovedSlots = [0],
+            VirtualShardCount = 2,
+        };
+        state.State.PendingBulkGraft = new PendingBulkGraft
+        {
+            OperationId = "bulk-1",
+            ExistingRightmostLeafId = GrainId.Create("leaf", "rightmost"),
+            NewLeaves = [],
+            RootWasLeaf = true,
+        };
+        var grain = CreateGrain(state);
+
+        var status = await grain.GetSamplingStatusAsync();
+        var isSplitting = await grain.IsSplittingAsync();
+        var hasPendingBulk = await grain.HasPendingBulkOperationAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(isSplitting, Is.True);
+            Assert.That(hasPendingBulk, Is.True);
+            Assert.That(status.IsSplitting, Is.EqualTo(isSplitting));
+            Assert.That(status.HasPendingBulkOperation, Is.EqualTo(hasPendingBulk));
+        });
+    }
+
+    [Test]
+    public async Task GetSamplingStatusAsync_does_not_increment_any_counter()
+    {
+        var grain = CreateGrain();
+        await grain.GetSamplingStatusAsync();
+
+        var hotness = await grain.GetHotnessAsync();
+        Assert.That(hotness.Reads, Is.EqualTo(0));
+        Assert.That(hotness.Writes, Is.EqualTo(0));
+    }
 }
 

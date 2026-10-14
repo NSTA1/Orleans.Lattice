@@ -70,13 +70,12 @@ public sealed class LatticeTreeAdminLifecycleTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var registry = Registry(factory);
-        registry.ExistsAsync(Tree).Returns(false);
-        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry
+        registry.RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>()).Returns((true, new TreeRegistryEntry
         {
             ShardCount = 8,
             MaxLeafKeys = 64,
             MaxInternalChildren = 32,
-        });
+        }));
         var facade = Create(factory);
 
         var result = await facade.CreateTreeAsync(Tree, shardCount: 8, maxLeafKeys: 64, maxInternalChildren: 32);
@@ -89,8 +88,27 @@ public sealed class LatticeTreeAdminLifecycleTests
             Assert.That(result.MaxLeafKeys, Is.EqualTo(64));
             Assert.That(result.MaxInternalChildren, Is.EqualTo(32));
         });
-        await registry.Received(1).RegisterAsync(Tree, Arg.Is<TreeRegistryEntry>(e =>
+        await registry.Received(1).RegisterAndGetEntryAsync(Tree, Arg.Is<TreeRegistryEntry>(e =>
             e.ShardCount == 8 && e.MaxLeafKeys == 64 && e.MaxInternalChildren == 32));
+    }
+
+    [Test]
+    public async Task CreateTreeAsync_makes_exactly_one_registry_call()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Registry(factory);
+        registry.RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>())
+            .Returns((true, new TreeRegistryEntry { ShardCount = 8 }));
+        var facade = Create(factory);
+
+        await facade.CreateTreeAsync(Tree, shardCount: 8);
+
+        // The existence probe, the register and the effective-entry re-read used to
+        // be three serial calls on the registry singleton; they are now one.
+        Assert.That(registry.ReceivedCalls().Count(), Is.EqualTo(1));
+        await registry.DidNotReceive().ExistsAsync(Arg.Any<string>());
+        await registry.DidNotReceive().RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
+        await registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
     }
 
     [Test]
@@ -98,13 +116,12 @@ public sealed class LatticeTreeAdminLifecycleTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var registry = Registry(factory);
-        registry.ExistsAsync(Tree).Returns(true);
-        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry
+        registry.RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>()).Returns((false, new TreeRegistryEntry
         {
             ShardCount = 64,
             MaxLeafKeys = 128,
             MaxInternalChildren = 128,
-        });
+        }));
         var facade = Create(factory);
 
         var result = await facade.CreateTreeAsync(Tree);
@@ -115,7 +132,7 @@ public sealed class LatticeTreeAdminLifecycleTests
             Assert.That(result.ShardCount, Is.EqualTo(64));
         });
         // No sizing supplied -> a null entry is passed to the idempotent register.
-        await registry.Received(1).RegisterAsync(Tree, null);
+        await registry.Received(1).RegisterAndGetEntryAsync(Tree, null);
     }
 
     [Test]
@@ -123,8 +140,8 @@ public sealed class LatticeTreeAdminLifecycleTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var registry = Registry(factory);
-        registry.ExistsAsync(Tree).Returns(false);
-        registry.GetEntryAsync(Tree).Returns((TreeRegistryEntry?)null);
+        registry.RegisterAndGetEntryAsync(Tree, Arg.Any<TreeRegistryEntry?>())
+            .Returns((true, (TreeRegistryEntry?)null));
         var facade = Create(factory);
 
         var result = await facade.CreateTreeAsync(Tree);

@@ -219,6 +219,8 @@ internal sealed class CatalogGrainSurface
 
         public Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null) => throw NotDriven();
 
+        public Task<(bool Created, TreeRegistryEntry? Entry)> RegisterAndGetEntryAsync(string treeId, TreeRegistryEntry? entry = null) => throw NotDriven();
+
         public Task UpdateAsync(string treeId, TreeRegistryEntry entry) => throw NotDriven();
 
         public Task UnregisterAsync(string treeId) => throw NotDriven();

@@ -138,6 +138,7 @@ internal static class TypeAliases
     internal const string OptimisticReadResult = "ol.orr";
     internal const string LatticeRangeReadGateCoverage = "ol.rrc";
     internal const string ShardHotness = "ol.sh";
+    internal const string ShardSamplingStatus = "ol.shs";
     internal const string ShardMap = "ol.sm";
     internal const string RoutingInfo = "ol.ri";
     internal const string ShardCountResult = "ol.scr";

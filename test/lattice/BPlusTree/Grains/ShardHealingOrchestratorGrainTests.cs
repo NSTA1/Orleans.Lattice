@@ -88,6 +88,7 @@ public partial class ShardHealingOrchestratorGrainTests
         lattice.IsMergeCompleteAsync().Returns(true);
         lattice.IsSnapshotCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        TreeMaintenanceProbeStub.BridgeToLattice(grainFactory, TreeId, lattice);
 
         var map = ShardMap.CreateDefault(virtualShardCount, physicalShardCount);
         var registry = Substitute.For<ILatticeRegistry>();
@@ -138,6 +139,7 @@ public partial class ShardHealingOrchestratorGrainTests
             sub.GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(30) });
             sub.IsSplittingAsync().Returns(false);
             sub.HasPendingBulkOperationAsync().Returns(false);
+            ShardSamplingStatusStub.BridgeFromProbes(sub);
             shardSubs[i] = sub;
             return sub;
         }
@@ -256,6 +258,7 @@ public partial class ShardHealingOrchestratorGrainTests
 
         await h.Grain.RunHealingPassAsync();
 
+        await h.ShardOf(0).DidNotReceive().GetSamplingStatusAsync();
         await h.ShardOf(0).DidNotReceive().GetHotnessAsync();
         await h.Lattice.DidNotReceive().IsResizeCompleteAsync();
     }
@@ -353,9 +356,10 @@ public partial class ShardHealingOrchestratorGrainTests
 
         await h.Grain.RunHealingPassAsync();
 
+        await h.ShardOf(0).DidNotReceive().GetSamplingStatusAsync();
         await h.ShardOf(0).DidNotReceive().GetHotnessAsync();
-        await h.ShardOf(0).DidNotReceive().IsSplittingAsync();
         await h.Lattice.DidNotReceive().IsResizeCompleteAsync();
+        await h.ShardOf(0).DidNotReceive().IsSplittingAsync();
     }
 
     // --- Admission --------------------------------------------------------

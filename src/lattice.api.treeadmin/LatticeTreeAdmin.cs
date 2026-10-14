@@ -625,10 +625,10 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
 
         // Idempotent create: registering a tree that already exists is a registry
         // no-op that preserves the existing configuration, so the caller-supplied
-        // sizing is honoured only on first registration. Probe existence first so the
-        // result can report whether a new tree was actually registered.
-        var existedBefore = await registry.ExistsAsync(effectiveTreeId).ConfigureAwait(false);
-
+        // sizing is honoured only on first registration. One registry call reports
+        // whether this call created the tree and returns the effective
+        // (default-seeded or preserved) entry, in place of an existence probe, the
+        // register and a re-read - three serial hops on the registry singleton.
         var entry = (shardCount is null && maxLeafKeys is null && maxInternalChildren is null)
             ? null
             : new TreeRegistryEntry
@@ -638,15 +638,12 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
                 MaxInternalChildren = maxInternalChildren,
             };
 
-        await registry.RegisterAsync(effectiveTreeId, entry).ConfigureAwait(false);
-
-        // Re-read for the effective (default-seeded) sizing values.
-        var effective = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
+        var (created, effective) = await registry.RegisterAndGetEntryAsync(effectiveTreeId, entry).ConfigureAwait(false);
 
         return new TreeCreationResult
         {
             TreeId = treeId,
-            Created = !existedBefore,
+            Created = created,
             ShardCount = effective?.ShardCount ?? LatticeConstants.DefaultShardCount,
             MaxLeafKeys = effective?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys,
             MaxInternalChildren = effective?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren,

@@ -402,27 +402,19 @@ internal sealed class HotShardMonitorGrain(
 
         // Suppress while bulk maintenance is in flight.
         //
-        // These four status verbs are access-gated (LatticeOperation.Read). This
-        // timer-driven pass runs with no caller identity, so on a deny-by-default
-        // tree the gate would fail closed and deny every poll; the catch-and-warn
-        // handler in OnTimerTickAsync would then swallow that denial as a routine
-        // warning and auto-split would be silently disabled. Enter a system-origin
-        // scope so these internal observations bypass the gate, following the same
-        // precedent as the atomic-write saga's internal write leg (see
-        // AtomicWriteGrain, which enters this scope because an internal leg "runs
-        // without the caller's identity and would otherwise fail-closed").
-        //
-        // The scope is safe to assert here because AccessGateSystemOrigin is a
-        // reserved capability key: LatticeCapabilityStrippingCallFilter strips it
+        // The coordinators are probed directly rather than through the four
+        // ILattice status verbs, which only forward to them after a gate check
+        // this in-silo pass would bypass anyway - see TreeMaintenanceProbe. The
+        // system-origin scope is kept so that, should a coordinator ever gate its
+        // status read, this timer-driven pass (which runs with no caller identity)
+        // is not silently denied and auto-split silently disabled by the
+        // catch-and-warn handler in OnTimerTickAsync. AccessGateSystemOrigin is a
+        // reserved capability key that LatticeCapabilityStrippingCallFilter strips
         // from any genuine external Orleans client, so it cannot be forged inbound
         // and only ever marks in-silo library machinery such as this monitor.
-        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (!await lattice.IsResizeCompleteAsync() ||
-                !await lattice.IsReshardCompleteAsync() ||
-                !await lattice.IsMergeCompleteAsync() ||
-                !await lattice.IsSnapshotCompleteAsync())
+            if (await TreeMaintenanceProbe.IsMaintenanceInFlightAsync(grainFactory, TreeId))
             {
                 await RefreshOutstandingFootprintAsync(options);
                 return;
@@ -466,22 +458,18 @@ internal sealed class HotShardMonitorGrain(
         // key per candidate.
         var shardCount = physicalShards.Count;
         var shards = ArrayPool<IShardRootGrain>.Shared.Rent(shardCount);
-        var hotnessTasks = new Task<ShardHotness>[shardCount];
-        var pendingBulkTasks = new Task<bool>[shardCount];
-        var splittingTasks = new Task<bool>[shardCount];
+        var statusTasks = new Task<ShardSamplingStatus>[shardCount];
         try
         {
+            // One sampling call per shard returns hotness, pending-bulk, and
+            // splitting status together (three calls per shard before).
             for (int i = 0; i < shardCount; i++)
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
                 shards[i] = shard;
-                hotnessTasks[i] = shard.GetHotnessAsync();
-                pendingBulkTasks[i] = shard.HasPendingBulkOperationAsync();
-                splittingTasks[i] = shard.IsSplittingAsync();
+                statusTasks[i] = shard.GetSamplingStatusAsync();
             }
-            await Task.WhenAll(hotnessTasks);
-            await Task.WhenAll(pendingBulkTasks);
-            await Task.WhenAll(splittingTasks);
+            await Task.WhenAll(statusTasks);
 
             // Count shard migrations already in flight from the splitting-status
             // results. A shard reports IsSplitting==true while it is the
@@ -490,7 +478,7 @@ internal sealed class HotShardMonitorGrain(
             // counter, surviving silo restarts and monitor reactivation.
             var inFlight = 0;
             for (int i = 0; i < shardCount; i++)
-                if (splittingTasks[i].Result) inFlight++;
+                if (statusTasks[i].Result.IsSplitting) inFlight++;
 
             // Emit the per-tree in-flight migration count every pass, regardless of
             // whether the cluster gate is enabled, so operators can compute the
@@ -507,7 +495,7 @@ internal sealed class HotShardMonitorGrain(
             // before bailing out rather than letting the footprint lapse.
             for (int i = 0; i < shardCount; i++)
             {
-                if (!pendingBulkTasks[i].Result) continue;
+                if (!statusTasks[i].Result.HasPendingBulkOperation) continue;
 
                 if (options.MaxClusterConcurrentAutoSplits is null && (inFlight > 0 || _reportedFootprint > 0))
                     await PublishFootprintAsync(inFlight, options);
@@ -545,7 +533,7 @@ internal sealed class HotShardMonitorGrain(
                 var maxRate = 0d;
                 for (int i = 0; i < shardCount; i++)
                 {
-                    var h = hotnessTasks[i].Result;
+                    var h = statusTasks[i].Result.Hotness;
                     var rate = ShardSplitAdmissionCore.ComputeRate(h.Reads, h.Writes, h.Window);
                     rates[i] = rate;
                     if (rate > maxRate) maxRate = rate;
@@ -563,7 +551,7 @@ internal sealed class HotShardMonitorGrain(
                             Rate = rates[i],
                             Entries = ShardSplitSample.EntriesNotSampled,
                             OwnedSlots = CountOwnedSlots(map, physicalShards[i]),
-                            IsSplitting = splittingTasks[i].Result,
+                            IsSplitting = statusTasks[i].Result.IsSplitting,
                             InCooldown = _shardCooldownUntilUtc.TryGetValue(physicalShards[i], out var until)
                                 && nowUtc < until,
                         };

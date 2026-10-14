@@ -78,6 +78,7 @@ public partial class HotShardMonitorGrainTests
         lattice.IsMergeCompleteAsync().Returns(true);
         lattice.IsSnapshotCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        TreeMaintenanceProbeStub.BridgeToLattice(grainFactory, TreeId, lattice);
 
         var splitGrain = Substitute.For<ITreeShardSplitGrain>();
         splitGrain.IsIdleAsync().Returns(true);
@@ -106,6 +107,7 @@ public partial class HotShardMonitorGrainTests
             sub.HasPendingBulkOperationAsync().Returns(false);
             sub.IsSplittingAsync().Returns(false);
             sub.CountAsync().Returns(WellOccupiedShardEntryCount);
+            ShardSamplingStatusStub.BridgeFromProbes(sub);
             shardSubs[i] = sub;
             return sub;
         }
