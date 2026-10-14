@@ -54,6 +54,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **WAL - Cold-replay recovery.** Deletes survive replay and reseeding; refusals no longer amplify retries. Historical data needs [evidence-preserving recovery](docs/lattice/troubleshooting.md#acknowledged-deletes-reappear-after-cold-replay), not automatic repair. ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4930](https://github.com/NSTA1/Orleans.Lattice/issues/4930), [#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)
 
+- **Explorer - Tenant page read ownership.** Quota and sharing pages discard late admission failures and redirects after navigation. My tenant keeps overview reads tied to their tenant, discarding old replies and stopping follow-on reads after a section change or disposal. ([#4944](https://github.com/NSTA1/Orleans.Lattice/issues/4944)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - History and metrics read ownership.** Switching tree, key or as-of time discards late replies and errors without ending the current load; cancelled history feeds cannot add changes to the replacement prefix. ([#4941](https://github.com/NSTA1/Orleans.Lattice/issues/4941)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Date-field validation.** Incomplete dates no longer borrow today's date, clearing the picker time blocks stale-value submission, and disabling a field closes its picker. ([#4936](https://github.com/NSTA1/Orleans.Lattice/pull/4936)) (`Orleans.Lattice.Explorer.UI`)
