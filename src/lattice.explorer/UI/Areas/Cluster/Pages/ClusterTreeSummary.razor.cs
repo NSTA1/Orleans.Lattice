@@ -20,6 +20,7 @@ public partial class ClusterTreeSummary : IDisposable
     private ClusterLoad<TreeResizeStatus> _resize = ClusterLoad<TreeResizeStatus>.Loading;
     private ClusterLoad<TreeSnapshotStatus> _snapshot = ClusterLoad<TreeSnapshotStatus>.Loading;
     private ClusterStatusPoller? _poller;
+    private bool _refreshPending;
 
     /// <summary>The logical tree id.</summary>
     [Parameter, EditorRequired]
@@ -77,7 +78,7 @@ public partial class ClusterTreeSummary : IDisposable
         _resize = await resize;
         _snapshot = await snapshot;
 
-        if (AnyRunning)
+        if (!_lifetime.IsLeft && AnyRunning)
         {
             _poller = new ClusterStatusPoller(Time);
             _poller.Follow(RefreshAsync);
@@ -97,34 +98,42 @@ public partial class ClusterTreeSummary : IDisposable
             ? await ClusterLoad<TreeSnapshotStatus>.RunAsync(ct => admin.GetSnapshotStatusAsync(TreeId, ct), cancellationToken)
             : _snapshot;
 
-        if (reshard.Denied || resize.Denied || snapshot.Denied)
-        {
-            return ClusterPollOutcome.Settled;
-        }
-
         // An operation that finished changed what the tree's other reads
         // describe - its shard count, its alias, its size - so they are read
         // again rather than left showing the tree as it was.
         var settled = Settled(_reshard.Value, reshard.Value) || Settled(_resize.Value, resize.Value) || Settled(_snapshot.Value, snapshot.Value);
-        var stats = settled
+        var refresh = settled || _refreshPending;
+        var stats = refresh
             ? await ClusterLoad<TreeStatsReport>.RunAsync(ct => admin.GetTreeStatsAsync(TreeId, ct), cancellationToken)
             : null;
-        var alias = settled
+        var alias = refresh
             ? await ClusterLoad<TreeAliasResolution>.RunAsync(ct => admin.ResolveTreeAliasAsync(TreeId, ct), cancellationToken)
             : null;
 
-        var failed = reshard.Value is null || resize.Value is null || snapshot.Value is null;
+        cancellationToken.ThrowIfCancellationRequested();
+        var refreshFailed = stats is { Value: null, Denied: false } || alias is { Value: null, Denied: false };
+        var failed = reshard is { Value: null, Denied: false }
+            || resize is { Value: null, Denied: false }
+            || snapshot is { Value: null, Denied: false }
+            || refreshFailed;
         await InvokeAsync(async () =>
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             // A failed read keeps the last answer on screen rather than
-            // replacing a running operation with an error mid-follow.
-            _reshard = reshard.Value is null ? _reshard : reshard;
-            _resize = resize.Value is null ? _resize : resize;
-            _snapshot = snapshot.Value is null ? _snapshot : snapshot;
-            _stats = stats is { Value: not null } ? stats : _stats;
-            _alias = alias is { Value: not null } ? alias : _alias;
+            // replacing a running operation with an error mid-follow. A denial
+            // replaces that answer and ends only that operation's follow.
+            _reshard = reshard.Value is not null || reshard.Denied ? reshard : _reshard;
+            _resize = resize.Value is not null || resize.Denied ? resize : _resize;
+            _snapshot = snapshot.Value is not null || snapshot.Denied ? snapshot : _snapshot;
+            _stats = stats is { Value: not null } or { Denied: true } ? stats : _stats;
+            _alias = alias is { Value: not null } or { Denied: true } ? alias : _alias;
+            _refreshPending = refreshFailed;
             StateHasChanged();
-            if (settled)
+            if (refresh && !refreshFailed)
             {
                 await OperationSettled.InvokeAsync();
             }
