@@ -128,6 +128,11 @@ public partial class ClusterOrphansPage : IDisposable
 
     private void Stop()
     {
+        if (_run is not null)
+        {
+            _error = "Stopped. The findings so far describe only the part of the tree the pass reached.";
+        }
+
         _run = null;
         _runs.Renew();
     }
@@ -276,7 +281,10 @@ public partial class ClusterOrphansPage : IDisposable
         {
             do
             {
-                pass.Add(await batch(pass.ResumeFrom, token));
+                token.ThrowIfCancellationRequested();
+                var report = await batch(pass.ResumeFrom, token);
+                token.ThrowIfCancellationRequested();
+                pass.Add(report);
                 StateHasChanged();
             }
             while (!pass.Complete && pass.Batches < MaximumBatches);
@@ -290,19 +298,17 @@ public partial class ClusterOrphansPage : IDisposable
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            if (_lifetime.IsLeft)
-            {
-                throw;
-            }
-
-            _error = "Stopped. The findings so far describe only the part of the tree the pass reached.";
             return null;
         }
         catch (Exception exception)
         {
-            _error = kind == "Repair"
-                ? ClusterFaults.Describe(exception) + " A repair's reply is not proof of what happened: audit again to learn the tree's true state."
-                : ClusterFaults.Describe(exception);
+            if (!token.IsCancellationRequested)
+            {
+                _error = kind == "Repair"
+                    ? ClusterFaults.Describe(exception) + " A repair's reply is not proof of what happened: audit again to learn the tree's true state."
+                    : ClusterFaults.Describe(exception);
+            }
+
             return null;
         }
         finally
