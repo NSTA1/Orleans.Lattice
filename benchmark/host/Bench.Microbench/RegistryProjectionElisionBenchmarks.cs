@@ -65,6 +65,14 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <item><see cref="Site.DeletionShardCensus"/> - allocated-shard census:
 /// options GetEntry + GetEntry -> one fresh GetEntry, excluding the unchanged
 /// owner read for an aliased copy.</item>
+/// <item><see cref="Site.StatsCacheHit"/> - cached diagnostics: options
+/// GetEntry -> configured TTL, 1 serial read -> 0.</item>
+/// <item><see cref="Site.WalByteSizes"/> - one WAL partition's accounting:
+/// physical + retained grain calls -> combined pair, 2 serial calls -> 1.
+/// This models grain dispatch only, not the unchanged provider I/O.</item>
+/// <item><see cref="Site.WalUsageMiss"/> - a complete-pin WAL report miss:
+/// initial options + topology + final policy -> topology/options + final
+/// policy, 3 serial reads -> 2. The final fresh policy read stays.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -92,7 +100,7 @@ public class RegistryProjectionElisionBenchmarks
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -116,6 +124,27 @@ public class RegistryProjectionElisionBenchmarks
     {
         switch (Path)
         {
+            case Site.StatsCacheHit:
+            {
+                await _registry.GetEntryAsync(TreeId);
+                return Fold("cached-report", 7);
+            }
+
+            case Site.WalByteSizes:
+            {
+                var physical = await _registry.GetEntryAsync(TreeId);
+                var retained = await _registry.GetEntryAsync(TreeId);
+                return Fold(physical?.PhysicalTreeId ?? TreeId, retained?.ShardMapVersion ?? 0);
+            }
+
+            case Site.WalUsageMiss:
+            {
+                await _registry.GetEntryAsync(TreeId);
+                var topology = await _registry.GetEntryAsync(TreeId);
+                var policy = await _registry.GetEntryAsync(TreeId);
+                return Fold(topology?.PhysicalTreeId ?? TreeId, policy?.ShardMapVersion ?? 0);
+            }
+
             case Site.ResizeEmptyProbe:
             {
                 var options = await _registry.GetEntryAsync(TreeId);
@@ -237,6 +266,22 @@ public class RegistryProjectionElisionBenchmarks
     {
         switch (Path)
         {
+            case Site.StatsCacheHit:
+                return Fold("cached-report", 7);
+
+            case Site.WalByteSizes:
+            {
+                var sizes = await _registry.GetEntryAsync(TreeId);
+                return Fold(sizes?.PhysicalTreeId ?? TreeId, sizes?.ShardMapVersion ?? 0);
+            }
+
+            case Site.WalUsageMiss:
+            {
+                var topology = await _registry.GetEntryAsync(TreeId);
+                var policy = await _registry.GetEntryAsync(TreeId);
+                return Fold(topology?.PhysicalTreeId ?? TreeId, policy?.ShardMapVersion ?? 0);
+            }
+
             case Site.StateObserverOpen:
             case Site.BootstrapFenceResolve:
             case Site.ResizeInitiate:
@@ -365,6 +410,15 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>A deletion resolving its contiguous allocated-shard range.</summary>
         DeletionShardCensus,
+
+        /// <summary>A cache hit in the per-tree diagnostics aggregator.</summary>
+        StatsCacheHit,
+
+        /// <summary>One WAL partition's physical and retained accounting calls.</summary>
+        WalByteSizes,
+
+        /// <summary>A complete-pin WAL report refresh, including final policy.</summary>
+        WalUsageMiss,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
