@@ -257,14 +257,19 @@ internal sealed class ShardHealingOrchestratorGrain(
         // must not recreate one. A purged tree stops this orchestrator instead of
         // being swept; a tree that was never created is merely skipped, because
         // its first write still needs a running orchestrator.
-        var resolved = await optionsResolver.ResolveIfRegisteredAsync(TreeId);
-        if (resolved is null)
+        //
+        // One entry read serves the options, the map and the physical id: the
+        // map and the alias are projections of the same registry row, so the
+        // sweep pays one bounded registry call where it used to pay three.
+        var observed = await optionsResolver.ResolveWithEntryIfRegisteredAsync(TreeId);
+        if (observed is not { } registered)
         {
             if (await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).HoldsCompletedPurgeAsync())
                 await StopAsync();
             return;
         }
-        var map = await optionsResolver.RegistryReads.GetShardMapAsync(TreeId)
+        var (resolved, entry) = registered;
+        var map = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();
         var shardCount = physicalShards.Count;
@@ -286,7 +291,7 @@ internal sealed class ShardHealingOrchestratorGrain(
             return;
         }
 
-        var physicalTreeId = await optionsResolver.RegistryReads.ResolveAsync(TreeId);
+        var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
 
         // Reconcile the persisted in-flight set before anything else: it is
         // bounded by MaxConcurrentShardConsolidations, it is what a reactivated

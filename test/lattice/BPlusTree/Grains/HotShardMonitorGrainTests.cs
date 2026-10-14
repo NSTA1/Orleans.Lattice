@@ -60,13 +60,15 @@ public partial class HotShardMonitorGrainTests
 
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(TreeId).Returns(TreeId);
-        registry.GetShardMapAsync(TreeId).Returns(ShardMap.CreateDefault(virtualShardCount, physicalShardCount));
+        var shardMap = ShardMap.CreateDefault(virtualShardCount, physicalShardCount);
+        registry.GetShardMapAsync(TreeId).Returns(shardMap);
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry
             {
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = physicalShardCount,
+                ShardMap = shardMap,
             }));
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
@@ -180,7 +182,7 @@ public partial class HotShardMonitorGrainTests
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetShardMapAsync(TreeId).Returns(new ShardMap { Slots = slots });
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2 }));
+            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2, ShardMap = new ShardMap { Slots = slots } }));
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("monitor", TreeId));
@@ -323,7 +325,7 @@ public partial class HotShardMonitorGrainTests
         reg.ResolveAsync(TreeId).Returns(TreeId);
         reg.GetShardMapAsync(TreeId).Returns(ShardMap.CreateDefault(16, 2));
         reg.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2 }));
+            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2, ShardMap = ShardMap.CreateDefault(16, 2) }));
         gf.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(reg);
         var sharedResolver = TestOptionsResolver.ForFactory(gf, opts);
 

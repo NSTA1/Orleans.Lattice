@@ -32,6 +32,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Autonomic registry reads.** Hot-shard ticks, shard-healing sweeps and the replication applier's de-enrolled-tree discard read the physical tree and shard map from one registry entry, cutting registry calls from 3/3/3 to 2/1/1 without changing public APIs. ([#4952](https://github.com/NSTA1/Orleans.Lattice/pull/4952)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
 - **Performance - Repository-context scans reuse sort comparers.** Hot streaming scans now reuse comparison delegates instead of allocating one per call. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Performance - Repository-context operation ids.** Chunk operation ids staged every part through a StringBuilder and a fresh array before hashing. They stage UTF-8 into one stack or pooled buffer and hash it once now: 26-38% faster and 99% less allocated. ([#4137](https://github.com/NSTA1/Orleans.Lattice/pull/4137)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

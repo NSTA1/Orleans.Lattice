@@ -92,6 +92,7 @@ public partial class HotShardMonitorGrainTests
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = physicalShardCount,
+                ShardMap = ShardMap.CreateDefault(virtualShardCount, physicalShardCount),
             }));
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);

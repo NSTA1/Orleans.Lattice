@@ -68,13 +68,18 @@ internal sealed partial class ReplicationApplier
     private async Task DiscardAbsentParticipantBucketAsync(string treeId, Guid transactionId, CancellationToken cancellationToken)
     {
         var registry = grainFactory.GetLatticeRegistry();
-        if (!await registry.ExistsAsync(treeId).ConfigureAwait(false))
+
+        // Existence, the physical id and the shard map are all projections of
+        // the one registry row, so read it once rather than paying an exists, a
+        // resolve and a map read against the registry singleton.
+        var registryEntry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        if (registryEntry is null)
         {
             return;
         }
 
-        var physicalTreeId = await registry.ResolveAsync(treeId).ConfigureAwait(false);
-        var shardMap = await registry.GetShardMapAsync(treeId).ConfigureAwait(false)
+        var physicalTreeId = registryEntry.PhysicalTreeId ?? treeId;
+        var shardMap = registryEntry.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
                 LatticeConstants.DefaultShardCount);
