@@ -58,6 +58,7 @@ public class WalShardGrainReadInterleaveTests
         var readMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.ReadAsync));
         var shipMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.ReadShippingAsync));
         var filteredMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.ReadFilteredAsync));
+        var sizesMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.GetByteSizesAsync));
 
         Assert.Multiple(() =>
         {
@@ -70,6 +71,9 @@ public class WalShardGrainReadInterleaveTests
                 "ReadShippingAsync must be [AlwaysInterleave] so shipper drains do not block foreground appends.");
             Assert.That(filteredMethod!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
                 "ReadFilteredAsync must be [AlwaysInterleave] so leaf replay reads do not block foreground appends.");
+            Assert.That(sizesMethod, Is.Not.Null, "GetByteSizesAsync was renamed; update this guard test.");
+            Assert.That(sizesMethod!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
+                "Byte accounting must not queue behind append or trim turns.");
         });
     }
 
@@ -101,6 +105,11 @@ public class WalShardGrainReadInterleaveTests
                 "A foreground append issued while a read is parked inside the WAL grain turn");
             Assert.That(appendedOffset, Is.EqualTo(3L),
                 "The interleaved append must take the next dense offset.");
+            var sizes = await InterleaveProbe.AnswersWhileHeldAsync(
+                grain.GetByteSizesAsync(CancellationToken.None), GatingWalStorageProvider.ReadGate!.Task,
+                "Combined byte accounting while a read is parked inside the WAL grain turn");
+            Assert.That(sizes.Retained, Is.GreaterThan(0),
+                "The tuple must survive an Orleans grain-result boundary.");
         }
         finally
         {

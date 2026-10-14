@@ -399,6 +399,9 @@ public partial class ReplicationShipperGrainTests
         public Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken) =>
             Task.FromResult(-1L);
 
+        public Task<(long Retained, long Physical)> GetByteSizesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult((-1L, -1L));
+
         public Task<long> GetPhysicalByteSizeAsync(CancellationToken cancellationToken) =>
             Task.FromResult(-1L);
 

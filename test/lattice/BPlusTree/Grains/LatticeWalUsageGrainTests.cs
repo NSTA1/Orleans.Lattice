@@ -67,8 +67,7 @@ public sealed class LatticeWalUsageGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var wal = Substitute.For<IWalShardGrain>();
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(1234L);
-        wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(1234L);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((1234L, 1234L));
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         var grain = CreateGrain(factory, out _);
@@ -100,8 +99,7 @@ public sealed class LatticeWalUsageGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var wal = Substitute.For<IWalShardGrain>();
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(-1L);
-        wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(-1L);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((-1L, -1L));
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         var grain = CreateGrain(factory, out _);
@@ -121,8 +119,7 @@ public sealed class LatticeWalUsageGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var wal = Substitute.For<IWalShardGrain>();
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(500L);
-        wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(500L);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((500L, 500L));
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         var grain = CreateGrain(factory, out var metrics);
@@ -139,8 +136,7 @@ public sealed class LatticeWalUsageGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var wal = Substitute.For<IWalShardGrain>();
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(800L);
-        wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(800L);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((800L, 800L));
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         var grain = CreateGrain(factory, out _, options: new LatticeOptions { WalMaxRetainedBytes = 500L });
@@ -156,8 +152,7 @@ public sealed class LatticeWalUsageGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var wal = Substitute.For<IWalShardGrain>();
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(800L);
-        wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(800L);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((800L, 800L));
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         var grain = CreateGrain(factory, out _, options: new LatticeOptions { WalMaxRetainedBytes = null });
@@ -176,8 +171,7 @@ public sealed class LatticeWalUsageGrainTests
         // occupies 800 bytes. The ceiling has to bound what is on disk.
         var factory = Substitute.For<IGrainFactory>();
         var wal = Substitute.For<IWalShardGrain>();
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(100L);
-        wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(800L);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((100L, 800L));
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         var grain = CreateGrain(factory, out _, options: new LatticeOptions { WalMaxRetainedBytes = 500L });
@@ -206,8 +200,7 @@ public sealed class LatticeWalUsageGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var wal = Substitute.For<IWalShardGrain>();
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(1234L);
-        wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(1234L);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((1234L, 1234L));
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         // Large TTL so a sequential second call is well inside the window.
@@ -222,7 +215,7 @@ public sealed class LatticeWalUsageGrainTests
         // calls; the second call is served from the per-activation cache
         // and must not pile a duplicate Azure Table query onto the same
         // connection pool the foreground writes share.
-        await wal.Received(1).GetRetainedByteSizeAsync(Arg.Any<CancellationToken>());
+        await wal.Received(1).GetByteSizesAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -231,8 +224,11 @@ public sealed class LatticeWalUsageGrainTests
         var factory = Substitute.For<IGrainFactory>();
         var wal = Substitute.For<IWalShardGrain>();
         var gate = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
-        wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            var size = await gate.Task;
+            return (size, size);
+        });
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         var grain = CreateGrain(factory, out _);
@@ -254,7 +250,7 @@ public sealed class LatticeWalUsageGrainTests
             Assert.That(resultA.SampledAt, Is.EqualTo(resultB.SampledAt),
                 "both callers must observe the same sampled report from a single in-flight fan-out");
         });
-        await wal.Received(1).GetRetainedByteSizeAsync(Arg.Any<CancellationToken>());
+        await wal.Received(1).GetByteSizesAsync(Arg.Any<CancellationToken>());
     }
 
     private static long? ReadWalGauge(string treeId)

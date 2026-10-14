@@ -299,6 +299,15 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long> GetPhysicalByteSizeAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Reads physical occupancy followed by retained payload size in one grain
+    /// call. Each is an at-a-moment provider observation, not an atomic pair;
+    /// unsupported surfaces retain their <c>-1</c> sentinel.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task<(long Retained, long Physical)> GetByteSizesAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Diagnostic helper: returns the number of entries currently
     /// persisted in this WAL shard. <b>Trim-unaware</b> -
     /// <see cref="IWalStorageProvider.TrimAsync"/> reduces the

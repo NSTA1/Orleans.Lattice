@@ -34,6 +34,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Diagnostic grain calls.** Cached tree stats skip registry calls, WAL report misses reuse their topology read, and WAL byte accounting combines two shard calls into one. Public APIs and fresh runtime ceiling reads are unchanged. ([#4940](https://github.com/NSTA1/Orleans.Lattice/pull/4940)) (`Orleans.Lattice`)
+
 - **Performance - Lifecycle registry reads.** Resize emptiness routing, resize undo capture and deletion shard census reuse one fresh registry entry, reducing complete-pin registry calls from 3/2/2 to 1/1/1 without changing the public API. ([#4937](https://github.com/NSTA1/Orleans.Lattice/pull/4937)) (`Orleans.Lattice`)
 
 - **Performance - Repository-context scans reuse sort comparers.** Hot streaming scans now reuse comparison delegates instead of allocating one per call. ([#4224](https://github.com/NSTA1/Orleans.Lattice/pull/4224)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

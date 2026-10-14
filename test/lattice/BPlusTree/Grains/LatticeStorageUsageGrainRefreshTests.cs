@@ -64,7 +64,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         factory.GetGrain<IShardRootGrain>($"{TreeId}/0").Returns(shard);
 
         var wal = Substitute.For<IWalShardGrain>();
-        wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(0L);
+        wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((0L, 0L));
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(wal);
 
         var usageMetrics = new LatticeStorageUsageMetrics();
@@ -268,14 +268,8 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         // wants and quietly mark the WAL surface unsupported.
         var h = CreateGrain();
         using var cts = new CancellationTokenSource();
-        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>())
-            .Returns<Task<long>>(_ =>
-            {
-                cts.Cancel();
-                throw new OperationCanceledException(cts.Token);
-            });
-        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>())
-            .Returns<Task<long>>(_ =>
+        h.Wal.GetByteSizesAsync(Arg.Any<CancellationToken>())
+            .Returns<Task<(long, long)>>(_ =>
             {
                 cts.Cancel();
                 throw new OperationCanceledException(cts.Token);
@@ -294,9 +288,8 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         // zero, so the assembled report is flagged Partial instead of claiming
         // the tree retains no WAL bytes at all.
         var h = CreateGrain();
-        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>())
-            .Returns<Task<long>>(_ => throw new TimeoutException("wal partition unreachable"));
-        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns<Task<long>>(_ => throw new TimeoutException("wal partition unreachable"));
+        h.Wal.GetByteSizesAsync(Arg.Any<CancellationToken>())
+            .Returns<Task<(long, long)>>(_ => throw new TimeoutException("wal partition unreachable"));
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 64, SnapshotBytes = 8, LiveKeys = 2 });
 
@@ -318,8 +311,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         var h = CreateGrain(new LatticeOptions { WalMaxRetainedBytes = 1_000 });
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
-        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
-        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
+        h.Wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((4_096L, 4_096L));
 
         var report = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -338,8 +330,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         var h = CreateGrain(new LatticeOptions { WalMaxRetainedBytes = 1_000_000 });
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
-        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
-        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
+        h.Wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((4_096L, 4_096L));
 
         await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -355,9 +346,8 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         var h = CreateGrain(new LatticeOptions { WalMaxRetainedBytes = 1_000 });
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
-        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>())
-            .Returns<Task<long>>(_ => throw new TimeoutException("wal partition unreachable"));
-        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns<Task<long>>(_ => throw new TimeoutException("wal partition unreachable"));
+        h.Wal.GetByteSizesAsync(Arg.Any<CancellationToken>())
+            .Returns<Task<(long, long)>>(_ => throw new TimeoutException("wal partition unreachable"));
 
         var report = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -383,8 +373,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         var h = CreateGrain(new LatticeOptions { WalMaxRetainedBytes = 4_096 });
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
-        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(100L);
-        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(8_192L);
+        h.Wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((100L, 8_192L));
 
         var report = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -411,8 +400,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         var h = CreateGrain(new LatticeOptions { WalMaxRetainedBytes = 1_000 });
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
-        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
-        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(-1L);
+        h.Wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((4_096L, -1L));
 
         var report = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
 
@@ -438,8 +426,7 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         });
         h.Shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ShardStorageUsage { LeafStateBytes = 10, SnapshotBytes = 0, LiveKeys = 1 });
-        h.Wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
-        h.Wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>()).Returns(4_096L);
+        h.Wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((4_096L, 4_096L));
 
         var first = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
         var second = await h.Grain.GetReportAsync(forceRefresh: false, CancellationToken.None);
@@ -449,6 +436,6 @@ public sealed class LatticeStorageUsageGrainRefreshTests
             Assert.That(second.SampledAt, Is.EqualTo(first.SampledAt), "the second read must be a cache hit");
             Assert.That(ReadPolicyGauge(TreeId), Is.EqualTo(1));
         });
-        await h.Wal.Received(1).GetRetainedByteSizeAsync(Arg.Any<CancellationToken>());
+        await h.Wal.Received(1).GetByteSizesAsync(Arg.Any<CancellationToken>());
     }
 }
