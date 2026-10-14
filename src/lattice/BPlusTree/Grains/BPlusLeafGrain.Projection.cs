@@ -1418,6 +1418,9 @@ internal sealed partial class BPlusLeafGrain
         // stale migration marker, keeping replay's post-state bit-
         // identical to foreground's.
         StoreEntry(key, incoming);
+        // Rebuild the delta watermark with the committed row, not a fresh HLC
+        // tick. Prepared rows never enter this seam before their terminal.
+        PublishVersionAdvance(incoming.Timestamp);
     }
 
     /// <summary>

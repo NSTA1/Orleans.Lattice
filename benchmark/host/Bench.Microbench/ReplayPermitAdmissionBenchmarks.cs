@@ -158,6 +158,64 @@ public class ReplayPermitAdmissionBenchmarks
     public void NoteQueueWait() =>
         BPlusLeafGrain.NoteReplayPermitQueueWaitForTest(HealthyWait, acquired: true);
 
+    private readonly SemaphoreSlim _releaseGate = new(0, 6);
+    private long _releaseClock;
+    private long _releaseServed;
+
+    /// <summary>Installs a saturated gate and a short virtual sampling window.</summary>
+    [GlobalSetup(Targets = new[] { nameof(ReleaseServiceRateController), nameof(ReleaseFullPathEnabled) })]
+    public void SetupReleaseController()
+    {
+        Setup();
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(6, 1);
+        BPlusLeafGrain.SeedReplayServiceRateForTest(0, 100);
+    }
+
+    /// <summary>Measures the enabled release decision, including window grading.</summary>
+    [Benchmark]
+    public bool ReleaseServiceRateController()
+    {
+        // Keep the accounting at the combined floor after warmup; recovery
+        // probes still visit both the withholding and restoring branches.
+        while (_releaseGate.Wait(0)) { }
+        var hold = BPlusLeafGrain.BeginReplayServiceRateHold();
+        BPlusLeafGrain.CompleteReplayServiceRateHold(hold);
+        BPlusLeafGrain.SeedReplayServiceRateForTest(_releaseServed += 100, 100);
+        var withhold = BPlusLeafGrain.AdaptReplayServiceRate(_releaseGate, true, _releaseClock += 100);
+        BPlusLeafGrain.RecordReplayPermitHold(1, "replay-benchmark", "replay-benchmark");
+        return withhold;
+    }
+
+    /// <summary>Measures the default-off release decision.</summary>
+    [Benchmark]
+    public bool ReleaseServiceRateControllerDisabled() =>
+        BPlusLeafGrain.AdaptReplayServiceRate(_releaseGate, true, 100);
+
+    /// <summary>Measures the complete production release seam with the live heap read.</summary>
+    [Benchmark]
+    public void ReleaseFullPath()
+    {
+        BPlusLeafGrain.FinishReplayPermit(
+            _releaseGate, false, true, 1, "replay-benchmark", "replay-benchmark",
+            BPlusLeafGrain.BeginReplayServiceRateHold());
+        if (!_releaseGate.Wait(0))
+            throw new InvalidOperationException("The default-off release must return its permit.");
+    }
+
+    /// <summary>
+    /// Measures the enabled production release seam, including live heap,
+    /// ledger changes, cohort completion and metrics. The synthetic busy gate
+    /// is an allocation probe, not a storage-throughput experiment.
+    /// </summary>
+    [Benchmark]
+    public void ReleaseFullPathEnabled()
+    {
+        BPlusLeafGrain.FinishReplayPermit(
+            _releaseGate, false, true, 1, "replay-benchmark", "replay-benchmark",
+            BPlusLeafGrain.BeginReplayServiceRateHold());
+        while (_releaseGate.Wait(0)) { }
+    }
+
     /// <summary>
     /// Measures the successful GC reservation and shared-permit round trip for a
     /// WAL GC sweep drive, which may use the whole GC share.

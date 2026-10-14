@@ -343,6 +343,66 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
+    public async Task<bool> DiscardUnroutedDirtyLeafAsync(GrainId leafId)
+    {
+        var start = LeafWalkBudget.StartClock();
+        await PrepareForOperationAsync();
+        if (state.State.SplitInProgress is not null || state.State.RootNodeId is not { } root)
+            return false;
+
+        var generation = _routingGeneration;
+        var pending = new Stack<(GrainId Id, bool IsLeaf, int Depth)>();
+        pending.Push((root, RootIsLeafTyped, 0));
+        var visited = new HashSet<GrainId>();
+        var budget = LeafWalkBudget.ForBackgroundDrain(4_096, await GetOptionsAsync(), start);
+        while (pending.TryPop(out var node))
+        {
+            if (node.Id == leafId) return false;
+            if (!visited.Add(node.Id))
+                throw new InvalidOperationException($"Shard {context.GrainId} has repeated routing node {node.Id}.");
+            if (node.Depth >= MaxTreeDescentLevels || budget.ShouldYield())
+                return false;
+
+            budget.RecordLeafVisited();
+            if (node.IsLeaf) continue;
+
+            // A cached table can still name a retired child. Only current
+            // routing may justify discarding maintenance work.
+            var table = await ResolveInternalGrain(node.Id).GetRoutingTableAsync();
+            if (table.ChildIds is not { Length: > 0 })
+                throw new InvalidOperationException($"Shard {context.GrainId} has empty routing node {node.Id}.");
+            if (table.ChildIds.Length > 4_096 - visited.Count - pending.Count)
+                return false;
+            foreach (var child in table.ChildIds)
+                pending.Push((child, table.ChildrenAreLeaves && IsLeafGrainId(child), node.Depth + 1));
+        }
+
+        if (generation != _routingGeneration || state.State.RootNodeId != root
+            || state.State.SplitInProgress is not null)
+            return false;
+
+        var key = leafId.ToString();
+        if (!state.State.DirtyLeavesSinceLastCompaction.Remove(key, out var mark))
+            return true;
+
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch
+        {
+            if (!state.State.DirtyLeavesSinceLastCompaction.TryGetValue(key, out var current) || current < mark)
+                state.State.DirtyLeavesSinceLastCompaction[key] = mark;
+            throw;
+        }
+
+        logger.LogInformation(
+            "Discarded stale compaction nomination for leaf {LeafId} of shard {ShardKey}: a complete current routing traversal does not name it. No leaf state was changed.",
+            leafId, context.GrainId.Key.ToString());
+        return true;
+    }
+
+    /// <inheritdoc />
     public async Task ClearDirtyLeavesUpToAsync(HybridLogicalClock advance)
     {
         await PrepareForOperationAsync();
@@ -402,4 +462,3 @@ internal sealed partial class ShardRootGrain
         }
     }
 }
-

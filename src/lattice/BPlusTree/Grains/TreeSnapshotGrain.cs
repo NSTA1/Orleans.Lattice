@@ -480,7 +480,7 @@ internal sealed class TreeSnapshotGrain(
         if (!state.State.InProgress) return true;
 
         var sliceStart = Stopwatch.GetTimestamp();
-        var drainOptions = await optionsResolver.ResolveAsync(SourceTreeId);
+        var drainOptions = optionsResolver.GetConfiguredOptions(SourceTreeId);
         var sliceDuration = SliceDuration(drainOptions);
 
         // Always take at least one step, so a slice whose prologue already spent
@@ -545,7 +545,7 @@ internal sealed class TreeSnapshotGrain(
                 case SnapshotPhase.Copy:
                     var cursorBeforeCopy = state.State.CopyCursorKey;
                     var copyBudget = state.State.Mode == SnapshotMode.Online
-                        ? LeafWalkBudget.ForBackgroundDrain(await optionsResolver.ResolveAsync(SourceTreeId))
+                        ? LeafWalkBudget.ForBackgroundDrain(optionsResolver.GetConfiguredOptions(SourceTreeId))
                         : LeafWalkBudget.Unbounded();
                     var (copyComplete, copyResumeFrom) = await CopyShardAsync(
                         shardIndex, cursorBeforeCopy, copyBudget);
@@ -1039,7 +1039,7 @@ internal sealed class TreeSnapshotGrain(
     /// </summary>
     internal async Task DrainAllShardsOnlineAsync()
     {
-        var drainOptions = await optionsResolver.ResolveAsync(SourceTreeId);
+        var drainOptions = optionsResolver.GetConfiguredOptions(SourceTreeId);
         var sliceDuration = SliceDuration(drainOptions);
         while (state.State.NextShardIndex < CopiedShardIndices.Length)
         {

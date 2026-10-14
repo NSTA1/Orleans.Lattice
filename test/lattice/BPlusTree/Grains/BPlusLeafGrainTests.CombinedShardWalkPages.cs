@@ -14,6 +14,27 @@ public partial class BPlusLeafGrainTests
 {
     private static readonly GrainId ShardWalkPageSibling = GrainId.Create("leaf", "shard-walk-page-next");
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task GetProjectionCheckpointAndNextSiblingAsync_matches_metadata_reads(bool tail)
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.LowKeyInclusive = "a";
+        state.State.HighKeyExclusive = "k";
+        state.State.ProjectionCheckpointOffset = 42;
+        var grain = CreateGrain(state);
+        if (!tail) await grain.SetNextSiblingAsync(ShardWalkPageSibling);
+
+        var page = await grain.GetProjectionCheckpointAndNextSiblingAsync();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(page.CheckpointOffset, Is.EqualTo(await grain.GetProjectionCheckpointOffsetAsync()));
+            Assert.That(page.Link.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(page.Link.NextSibling, Is.EqualTo(await grain.GetNextSiblingAsync()));
+        });
+    }
+
     [Test]
     public async Task DeleteRangeAndNextSiblingAsync_deletes_like_the_separate_call_and_carries_the_link()
     {

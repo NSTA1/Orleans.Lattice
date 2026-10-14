@@ -45,6 +45,12 @@ public sealed class LtTimeTextTests
     public void Text_that_names_no_instant_is_refused(string? text) =>
         Assert.That(LtTimeText.TryParseInstant(text, out _), Is.False);
 
+    [TestCase("14:05:07")]
+    [TestCase("September 28")]
+    [TestCase("2026-09")]
+    public void An_incomplete_date_does_not_borrow_the_system_date(string text) =>
+        Assert.That(LtTimeText.TryParseInstant(text, out _), Is.False);
+
     [Test]
     public void An_offset_is_named_from_utc()
     {

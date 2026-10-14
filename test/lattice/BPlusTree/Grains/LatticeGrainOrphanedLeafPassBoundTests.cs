@@ -63,7 +63,8 @@ public sealed class LatticeGrainOrphanedLeafPassBoundTests
     private static (LatticeGrain Grain, IReadOnlyList<IShardRootGrain> Shards) CreateGrain(
         LatticeOptions options,
         int shardCount = 1,
-        int[]? slots = null)
+        int[]? slots = null,
+        ILatticeRegistry? registry = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", TreeId));
@@ -72,7 +73,7 @@ public sealed class LatticeGrainOrphanedLeafPassBoundTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);
 
-        var registry = Substitute.For<ILatticeRegistry>();
+        registry ??= Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(Arg.Any<string>()).Returns(c => Task.FromResult(c.Arg<string>()));
         registry.GetShardMapAsync(Arg.Any<string>())
@@ -123,6 +124,25 @@ public sealed class LatticeGrainOrphanedLeafPassBoundTests
                 };
             });
         return issued;
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Pass_budget_does_not_read_registry_beyond_fresh_routing(bool dryRun)
+    {
+        var registry = Substitute.For<ILatticeRegistry>();
+        var options = YieldImmediately();
+        var (grain, shards) = CreateGrain(options, registry: registry);
+        ArrangeChain(shards[0], batches: 3);
+        registry.ClearReceivedCalls();
+
+        var report = dryRun
+            ? await grain.InspectOrphanedLeavesAsync()
+            : await grain.RepairOrphanedLeavesAsync();
+
+        Assert.That(report.IsComplete, Is.False);
+        await registry.Received(1).GetEntryAsync(TreeId);
+        await registry.DidNotReceive().RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
     }
 
     // ------------------------------------------------------- the bound itself

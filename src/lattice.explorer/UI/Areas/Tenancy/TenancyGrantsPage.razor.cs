@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
@@ -6,8 +7,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// <summary>
 /// A tenant's sharing - its cross-tenant grants - (<c>/tenancy/{tenant}/sharing</c>, and the earlier <c>/grants</c>) for a platform operator: the offers made to it and by it, with every verb of the two-step agreement. Anyone else is sent to the same section of their tenant's workspace.
 /// </summary>
-public partial class TenancyGrantsPage
+public partial class TenancyGrantsPage : IDisposable
 {
+    private readonly ComponentLifetime _lifetime = new();
     private ExplorerAddress? _loaded;
     private bool _admitted;
     private TenancyFailure? _failure;
@@ -32,6 +34,7 @@ public partial class TenancyGrantsPage
         }
 
         _loaded = Address;
+        var token = _lifetime.Renew();
         _admitted = false;
         _failure = null;
         if (!global::Orleans.Lattice.TenantId.TryParse(TenantId, out _))
@@ -42,11 +45,21 @@ public partial class TenancyGrantsPage
 
         try
         {
-            _admitted = await TenancyAdministrationGate.AdmitAsync(Catalog, Navigator, TenantId, TenancyRoutes.SharingSegment).ConfigureAwait(true);
+            var admitted = await TenancyAdministrationGate.AdmitAsync(Catalog, Navigator, TenantId, TenancyRoutes.SharingSegment, token).ConfigureAwait(true);
+            if (!token.IsCancellationRequested)
+            {
+                _admitted = admitted;
+            }
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
             _failure = failure;
         }
     }
+
+    /// <summary>Cancels admission and redirects when the page is left.</summary>
+    public void Dispose() => _lifetime.Leave();
 }

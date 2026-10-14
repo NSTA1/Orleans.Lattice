@@ -142,6 +142,7 @@ internal sealed class BenchIngestEngine(
         long failedTotal = 0;
         long failedSinceReport = 0;
         long inFlight = 0;
+        long inFlightEntries = 0;
         // FX-029: count entries that were discarded from the channel
         // because the producer-stop boundary coincided with a Saturated
         // signal regime. These are neither `written` nor `failed` -
@@ -171,10 +172,11 @@ internal sealed class BenchIngestEngine(
         // tree. The view itself is attached at startup via AddLatticeViews; this
         // probe is read-only observability over its metrics.
         ViewLagMeterProbe? mvLagProbe = null;
+        var viewName = BenchWorkloadMetadata.ViewNameFor(settings.TreeId);
         if (settings.WorkloadMode == BenchWorkloadMode.SetPointMv)
         {
-            mvLagProbe = new ViewLagMeterProbe("bench");
-            Console.WriteLine($"[silo] mv: materialised view 'bench' (view-bench) attached to treeId={settings.TreeId}; apply lag read from orleans.lattice.view.apply_lag and reported as mvLag=N on each progress line and at MV-FINAL.");
+            mvLagProbe = new ViewLagMeterProbe(viewName);
+            Console.WriteLine($"[silo] mv: materialised view '{viewName}' (view-{viewName}) attached to treeId={settings.TreeId}; apply lag read from orleans.lattice.view.apply_lag and reported as mvLag=N on each progress line and at MV-FINAL.");
         }
 
         using var flushGate = new SemaphoreSlim(settings.FlushConcurrency, settings.FlushConcurrency);
@@ -200,6 +202,7 @@ internal sealed class BenchIngestEngine(
             BenchMetrics.DrainFlushDispatchWaitMs.Record(gateWaitMs, treeTag);
             BenchMetrics.DrainFlushDispatchSize.Record(batchToFlush.Count, treeTag);
             Interlocked.Increment(ref inFlight);
+            Interlocked.Add(ref inFlightEntries, batchToFlush.Count);
             if (Interlocked.Exchange(ref firstDispatchLogged, 1) == 0)
             {
                 Interlocked.Exchange(ref firstAcceptedAt, Stopwatch.GetTimestamp());
@@ -236,6 +239,7 @@ internal sealed class BenchIngestEngine(
                 }
                 finally
                 {
+                    Interlocked.Add(ref inFlightEntries, -batchToFlush.Count);
                     Interlocked.Decrement(ref inFlight);
                     flushGate.Release();
                 }
@@ -500,7 +504,7 @@ internal sealed class BenchIngestEngine(
             }
             else
             {
-                Console.WriteLine($"[silo:ingest] in-flight-tail release: budget {InFlightTailWhenAllBudget} expired with {outstanding.Length} flush(es) still settling; emitting FINAL now (unsettled batches account as failed=N through their dispatch deadlines).");
+                Console.WriteLine($"[silo:ingest] in-flight-tail release: budget {InFlightTailWhenAllBudget} expired with {outstanding.Count(static t => !t.IsCompleted)} of {outstanding.Length} flush(es) still settling; emitting FINAL now with them booked as unresolved= (they settle after FINAL, so neither ops= nor failed= counts them).");
                 _ = whenAll.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
             }
         }
@@ -550,11 +554,11 @@ internal sealed class BenchIngestEngine(
             var lagAtStop = mvLagProbe.LatestApplyLag;
             if (lagAtStop < 0)
             {
-                Console.WriteLine("[silo] MV-FINAL view=bench lagAtStop=n/a (the maintainer published no apply_lag sample this run)");
+                Console.WriteLine($"[silo] MV-FINAL view={viewName} lagAtStop=n/a (no apply_lag sample in this process; when the engine runs in a separate client process (Layer 3) the maintainer's lag is reported silo-side as [silo:mv-lag] lines)");
             }
             else
             {
-                Console.WriteLine($"[silo] MV-FINAL view=bench lagAtStop={lagAtStop:N0} (0 = the asynchronous materialised view has fully caught up to the source head)");
+                Console.WriteLine($"[silo] MV-FINAL view={viewName} lagAtStop={lagAtStop:N0} (0 = the asynchronous materialised view has fully caught up to the source head)");
             }
 
             mvLagProbe.Dispose();
@@ -600,7 +604,13 @@ internal sealed class BenchIngestEngine(
         var satExhausted = Interlocked.Read(ref saturationExhaustedTotal);
         var satBackoffSec = Interlocked.Read(ref saturationBackoffMsTotal) / 1000.0;
         var offeredActive = (opsFinal + failedFinal) / Math.Max(0.001, activeElapsed);
-        Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0} satRetries={satRetries:N0} satRecovered={satRecovered:N0} satExhausted={satExhausted:N0} satBackoff={satBackoffSec:0.0}s offeredPerSec={offeredActive:N0}");
+        // Flushes still running when FINAL is emitted (the in-flight-tail
+        // budget expired). They settle after FINAL, so they are in neither
+        // ops= nor failed=; without this token a cohort that abandoned work
+        // reported failed=0. Suffix-appended like the tokens above.
+        var unresolvedFlushes = Interlocked.Read(ref inFlight);
+        var unresolvedEntries = Interlocked.Read(ref inFlightEntries);
+        Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0} satRetries={satRetries:N0} satRecovered={satRecovered:N0} satExhausted={satExhausted:N0} satBackoff={satBackoffSec:0.0}s offeredPerSec={offeredActive:N0} unresolved={unresolvedEntries:N0} unresolvedFlushes={unresolvedFlushes:N0}");
     }
 
     // Sentinel returned by FlushAsync when a SetManyAsync was rejected

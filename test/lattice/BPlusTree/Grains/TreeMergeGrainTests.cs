@@ -193,7 +193,7 @@ public partial class TreeMergeGrainTests
     {
         var (grain, _, _, grainFactory, _) = CreateGrain();
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        registry.ExistsAsync("nonexistent").Returns(false);
+        registry.GetEntryAsync("nonexistent").Returns(Task.FromResult<TreeRegistryEntry?>(null));
 
         Assert.ThrowsAsync<InvalidOperationException>(
             () => grain.MergeAsync("nonexistent"));

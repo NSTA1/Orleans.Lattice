@@ -49,6 +49,8 @@ A field that takes a point in time is never a bare text box. The date and time f
 
 The calendar button opens a picker below the field, or in the flow of the page on a phone. It has quick picks (Now, 1 hour ago, 24 hours ago, 7 days ago; one outside the field's range is disabled), a month grid starting on Monday, a time to the second in UTC, and **Done** (with **Clear** when the field may be empty). In the grid the arrow keys move by a day or a week, Page Up and Page Down by a month (with Shift, by a year), and Home and End to the start and end of the week. Escape closes the picker and returns focus to its button.
 
+Typed instants require a complete `yyyy-MM-dd` date; a time alone or a date missing its year or day is refused rather than filled from today's date. Clearing the picker's time shows an error and blocks submission until a new time or another valid choice is made. Use **Clear** to select the optional empty value deliberately. Disabling the field closes its picker.
+
 A field that takes a duration has a whole-number box for each unit it offers - days, hours, minutes or seconds - in one control box, each named by the field and its unit. A box that is not a whole number, or a total outside the field's range, is refused with the reason shown under the box. `ShellTimeFieldHygieneTests` fails the build when a field whose label, hint or placeholder names a date, a time, UTC, ISO or a duration is drawn as a plain text box.
 
 ## Sizes

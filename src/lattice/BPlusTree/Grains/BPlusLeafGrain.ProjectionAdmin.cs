@@ -35,6 +35,14 @@ internal sealed partial class BPlusLeafGrain
         Task.FromResult(state.State.ProjectionCheckpointOffset);
 
     /// <inheritdoc />
+    public Task<LeafCheckpointPage> GetProjectionCheckpointAndNextSiblingAsync() =>
+        Task.FromResult(new LeafCheckpointPage
+        {
+            CheckpointOffset = state.State.ProjectionCheckpointOffset,
+            Link = new LeafChainLink { KeyRange = CurrentKeyRange(), NextSibling = state.State.NextSibling },
+        });
+
+    /// <inheritdoc />
     public async Task RebuildProjectionFromWalAsync()
     {
         // Step 0 - an unreadable snapshot is discarded, accepting the loss

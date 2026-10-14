@@ -234,6 +234,64 @@ public sealed class LatticeWalGcPartitionedOffsetFloorTests
     }
 
     [Test]
+    public async Task RunOnceAsync_shared_partitions_reclaim_on_offset_only_progress_without_crossing_a_lagging_leaf()
+    {
+        var provider = await SeededProviderAsync();
+        await provider.AppendBatchAsync(
+            Tree, 0, new[] { Entry(0, Hlc(10)), Entry(1, Hlc(11)), Entry(2, Hlc(12)) },
+            CancellationToken.None);
+
+        const string laggingPartitionZero = "_lattice_materialiser_tree_leaf-2_0";
+        const string laggingPartitionOne = "_lattice_materialiser_tree_leaf-2_1";
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [DrainedPartitionConsumer] = 2,
+            [LivePartitionConsumer] = 12,
+            [laggingPartitionZero] = 1,
+            [laggingPartitionOne] = 11,
+        };
+        var durablePins = durableOffsets.Keys.ToDictionary(
+            static consumer => consumer, static _ => Hlc(1), StringComparer.Ordinal);
+        var registry = new InMemoryWalCursorRegistry();
+        foreach (var consumer in durablePins.Keys)
+        {
+            await registry.ReportCursorAsync(Tree, consumer, Hlc(1));
+        }
+
+        var sut = new LatticeWalGc(Services(provider, durablePins, durableOffsets), registry, Monitor());
+        var first = await sut.RunOnceAsync(Tree);
+        var firstPartitionZero = await SurvivingOffsetsAsync(provider, 0);
+        var firstPartitionOne = await SurvivingOffsetsAsync(provider, 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.MinCursor, Is.EqualTo(Hlc(1)));
+            Assert.That(first.EntriesTrimmed, Is.EqualTo(4),
+                "Only offset entitlement can admit these entries: every HLC is above every leaf cursor.");
+            Assert.That(firstPartitionZero, Is.EqualTo(new[] { 2L }),
+                "The faster leaf must not release the entry the slower leaf still needs in partition 0.");
+            Assert.That(firstPartitionOne, Is.EqualTo(new[] { 12L }),
+                "Partition 1 uses its own minimum (11), not partition 0's unrelated minimum (1).");
+        });
+
+        // Compaction/reap processing can advance applied offsets without advancing
+        // the HLC frontier. Only that durable proof changes on the second pass.
+        durableOffsets[laggingPartitionZero] = 2;
+        durableOffsets[laggingPartitionOne] = 12;
+        var second = await sut.RunOnceAsync(Tree);
+        var secondPartitionZero = await SurvivingOffsetsAsync(provider, 0);
+        var secondPartitionOne = await SurvivingOffsetsAsync(provider, 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.MinCursor, Is.EqualTo(first.MinCursor));
+            Assert.That(second.EntriesTrimmed, Is.EqualTo(2));
+            Assert.That(secondPartitionZero, Is.Empty);
+            Assert.That(secondPartitionOne, Is.Empty);
+        });
+    }
+
+    [Test]
     public void TryParseConsumerPartition_accepts_only_a_canonical_partition_suffix()
     {
         Assert.Multiple(() =>

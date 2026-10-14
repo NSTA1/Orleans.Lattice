@@ -24,8 +24,7 @@ public partial class TombstoneCompactionGrainTests
             Assert.That(state.State.PhysicalShardIndices, Is.EqualTo(new[] { 0, 3 }));
             Assert.That(registry.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ILatticeRegistry.ResolveAsync)), Is.Zero);
             Assert.That(registry.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ILatticeRegistry.GetShardMapAsync)), Is.Zero);
-            // One topology read plus the pass-start options snapshot.
-            Assert.That(registry.ReceivedCalls().Count(), Is.EqualTo(2));
+            Assert.That(registry.ReceivedCalls().Count(), Is.EqualTo(1));
         });
     }
 }

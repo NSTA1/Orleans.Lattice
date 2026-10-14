@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Grpc.Core;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Transport;
 
@@ -38,6 +39,20 @@ internal sealed class ShellTransportPeer : HttpMessageHandler
 
     /// <summary>The requests seen so far, in arrival order.</summary>
     public IReadOnlyList<ShellTransportRequest> Requests => [.. _requests];
+
+    /// <summary>Decodes a captured unary request with the real Orleans wire serializer.</summary>
+    /// <typeparam name="TRequest">The RPC request message type.</typeparam>
+    /// <param name="request">The captured request.</param>
+    /// <returns>The deserialized message.</returns>
+    public TRequest Decode<TRequest>(ShellTransportRequest request)
+    {
+        Assert.That(request.Body.Length, Is.GreaterThanOrEqualTo(5), "A unary request must carry a gRPC frame.");
+        Assert.That(request.Body[0], Is.Zero, "The test peer expects an uncompressed frame.");
+        Assert.That(BinaryPrimitives.ReadUInt32BigEndian(request.Body.AsSpan(1, 4)),
+            Is.EqualTo(request.Body.Length - 5), "The captured frame must contain exactly one complete message.");
+        return Serializers!.GetRequiredService<Orleans.Serialization.Serializer<TRequest>>()
+            .Deserialize(request.Body.AsSpan(5));
+    }
 
     /// <summary>Answers every later call with a trailers-only <paramref name="status"/>.</summary>
     /// <param name="status">The status to answer with.</param>
@@ -101,12 +116,11 @@ internal sealed class ShellTransportPeer : HttpMessageHandler
             header => header.Key.ToLowerInvariant(),
             header => string.Join(",", header.Value),
             StringComparer.Ordinal);
-        if (request.Content is not null)
-        {
-            await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
-        }
+        var body = request.Content is not null
+            ? await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false)
+            : [];
 
-        _requests.Enqueue(new ShellTransportRequest(path, headers));
+        _requests.Enqueue(new ShellTransportRequest(path, headers) { Body = body });
 
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {

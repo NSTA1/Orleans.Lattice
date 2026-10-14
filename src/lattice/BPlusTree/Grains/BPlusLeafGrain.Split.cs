@@ -45,10 +45,19 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys, long maxLeafBytes = 0)
     {
-        var result = await SplitIfNeededHoldingGateAsync(maxLeafKeys, maxLeafBytes);
+        SplitResult? result;
+        using (AwaitDiagnostics.Begin("leaf.split", context.GrainId, AwaitDiagnostics.Enabled ? "keys=" + maxLeafKeys : null))
+        {
+            result = await SplitIfNeededHoldingGateAsync(maxLeafKeys, maxLeafBytes);
+        }
+
         if (result is not null)
         {
-            await PublishSplitDigestAsync(result.PromotedKey);
+            using (AwaitDiagnostics.Begin(
+                "leaf.split-digest", context.GrainId, AwaitDiagnostics.Enabled ? "sibling=" + result.NewSiblingId : null))
+            {
+                await PublishSplitDigestAsync(result.PromotedKey);
+            }
         }
 
         return result;
@@ -527,7 +536,11 @@ internal sealed partial class BPlusLeafGrain
 
     private async Task<SplitResult?> CompleteRecoverySplitHoldingGateAsync()
     {
-        await _splitGate.WaitAsync().ConfigureAwait(true);
+        using (AwaitDiagnostics.Begin("leaf.split-gate", context.GrainId, "recovery"))
+        {
+            await _splitGate.WaitAsync().ConfigureAwait(true);
+        }
+
         try
         {
             // Issue #3265. This re-check is the inverted twin of the callers'
@@ -1101,6 +1114,7 @@ internal sealed partial class BPlusLeafGrain
         var siblingId = state.State.SplitSiblingId!.Value;
         var donorPreSplitHigh = state.State.HighKeyExclusive;
         var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(siblingId);
+        var splitDiag = AwaitDiagnostics.Enabled ? "sibling=" + siblingId : null;
 
         // Fresh per-partition WAL-head reads on the recovery path.
         long[]? resolvedHeads = walHeadsAtSplit;
@@ -1109,7 +1123,10 @@ internal sealed partial class BPlusLeafGrain
             var treeId = state.State.TreeId;
             if (!string.IsNullOrEmpty(treeId))
             {
-                resolvedHeads = await CaptureWalHeadsByPartitionAsync(treeId);
+                using (AwaitDiagnostics.Begin("leaf.split.wal-heads", context.GrainId, splitDiag))
+                {
+                    resolvedHeads = await CaptureWalHeadsByPartitionAsync(treeId);
+                }
             }
         }
 
@@ -1137,7 +1154,10 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // The witness for the moved keys rides the sibling's birth write below.
-        await EnsureTerminalWitnessHydratedAsync();
+        using (AwaitDiagnostics.Begin("leaf.split.witness-hydrate", context.GrainId, splitDiag))
+        {
+            await EnsureTerminalWitnessHydratedAsync();
+        }
         var siblingInit = new SiblingInitialization
         {
             TreeId = state.State.TreeId!,
@@ -1178,6 +1198,7 @@ internal sealed partial class BPlusLeafGrain
         // The sibling is being created here, so its first row write carries a
         // create intent naming it (issue #4654).
         using (LatticeNewLeafIntentContext.BeginScope(siblingId))
+        using (AwaitDiagnostics.Begin("leaf.split.init-sibling", context.GrainId, splitDiag))
         {
             await newLeaf.InitializeSiblingAsync(siblingInit);
         }
@@ -1193,7 +1214,10 @@ internal sealed partial class BPlusLeafGrain
             state.State.NextSibling = siblingId;
             try
             {
-                await PersistAsync();
+                using (AwaitDiagnostics.Begin("leaf.split.persist-link", context.GrainId, splitDiag))
+                {
+                    await PersistAsync();
+                }
             }
             catch
             {
@@ -1206,7 +1230,10 @@ internal sealed partial class BPlusLeafGrain
         // fixup is idempotent on recovery and still precedes every transfer.
         if (oldNextId is { } oldNext)
         {
-            await grainFactory.GetGrain<IBPlusLeafGrain>(oldNext).SetPrevSiblingAsync(siblingId);
+            using (AwaitDiagnostics.Begin("leaf.split.set-prev", context.GrainId, splitDiag))
+            {
+                await grainFactory.GetGrain<IBPlusLeafGrain>(oldNext).SetPrevSiblingAsync(siblingId);
+            }
         }
 
         // Migrate the >= splitKey rows in bounded batches rather than in one
@@ -1284,14 +1311,21 @@ internal sealed partial class BPlusLeafGrain
                 // key's current owner and clears the marker). Must precede
                 // MergeEntriesAsync so the gate is armed before the migrated value
                 // becomes visible on the sibling.
-                await TransferShadowMarkersToSiblingAsync(newLeaf, batch.Keys);
+                using (AwaitDiagnostics.Begin("leaf.split.transfer-shadow", context.GrainId, splitDiag))
+                {
+                    await TransferShadowMarkersToSiblingAsync(newLeaf, batch.Keys);
+                }
 
                 // The batch's payload arrays are the donor cache's own arrays,
                 // and MergeEntriesAsync's parameter is [Immutable], so the
                 // sibling retains these references rather than copies of them.
                 // Nothing below may write into them: the removal loop only drops
                 // the donor's reference, which is why sharing them is safe here.
-                await newLeaf.MergeEntriesAsync(batch);
+                using (AwaitDiagnostics.Begin(
+                    "leaf.split.merge-batch", context.GrainId, AwaitDiagnostics.Enabled ? splitDiag + " rows=" + batch.Count : null))
+                {
+                    await newLeaf.MergeEntriesAsync(batch);
+                }
 
                 // Drop the batch from the donor before reading the next one, so
                 // the migrated payload is released rather than accumulating
@@ -1337,7 +1371,10 @@ internal sealed partial class BPlusLeafGrain
         // right offset space - replacing the per-partition RPC fan-out.
         if (resolvedHeads is not null)
         {
-            await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
+            using (AwaitDiagnostics.Begin("leaf.split.sibling-hints", context.GrainId, splitDiag))
+            {
+                await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
+            }
         }
 
         // Sweep for rows at or above the split key that arrived while the
@@ -1364,8 +1401,12 @@ internal sealed partial class BPlusLeafGrain
                 break;
             }
 
-            await TransferShadowMarkersToSiblingAsync(newLeaf, stragglers.Keys);
-            await newLeaf.MergeEntriesAsync(stragglers);
+            using (AwaitDiagnostics.Begin(
+                "leaf.split.stragglers", context.GrainId, AwaitDiagnostics.Enabled ? splitDiag + " rows=" + stragglers.Count : null))
+            {
+                await TransferShadowMarkersToSiblingAsync(newLeaf, stragglers.Keys);
+                await newLeaf.MergeEntriesAsync(stragglers);
+            }
             RemoveTransferredRows(stragglers);
             BumpLocalRevision();
         }
@@ -1396,6 +1437,7 @@ internal sealed partial class BPlusLeafGrain
         if (HasWitnessNotIn(movedWitnesses, siblingInit.TerminalWitnesses))
         {
             using (LatticeNewLeafIntentContext.BeginScope(siblingId))
+            using (AwaitDiagnostics.Begin("leaf.split.reinit-sibling", context.GrainId, splitDiag))
             {
                 await newLeaf.InitializeSiblingAsync(siblingInit with { TerminalWitnesses = movedWitnesses });
             }
@@ -1421,9 +1463,12 @@ internal sealed partial class BPlusLeafGrain
         // which is issue #3360.
         if (resolvedHeads is not null)
         {
-            for (var p = 0; p < resolvedHeads.Length; p++)
+            using (AwaitDiagnostics.Begin("leaf.split.donor-hints", context.GrainId, splitDiag))
             {
-                await ApplyCheckpointHintAsync(p, resolvedHeads[p]);
+                for (var p = 0; p < resolvedHeads.Length; p++)
+                {
+                    await ApplyCheckpointHintAsync(p, resolvedHeads[p]);
+                }
             }
         }
 
@@ -1436,7 +1481,10 @@ internal sealed partial class BPlusLeafGrain
         // thrown deadline used to take the SplitResult below with it. The
         // caller publishes through PublishSplitDigestAsync once it has let
         // the gate go.
-        await PersistAsync();
+        using (AwaitDiagnostics.Begin("leaf.split.persist-final", context.GrainId, splitDiag))
+        {
+            await PersistAsync();
+        }
 
         return new SplitResult
         {

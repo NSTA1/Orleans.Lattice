@@ -66,7 +66,7 @@ journald-backed log capture with no scraper indirection.
 | `scripts/_vm-access.ps1` | SSH target resolution shared by the VM-path scripts: direct to the public FQDN, or through an Azure Bastion tunnel on a `-PrivateNetwork` rig. |
 | `scripts/_run-cohort-helpers.ps1` | Verdict-computation helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer and its mid-run freeze detector). |
 | `scripts/Test-CohortVerdict.ps1` | Regression tests for those helpers against literal log fixtures (pure pwsh, no Azure). |
-| `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1` | Regression tests for `performance-report.ps1`'s Layer 3 grading: the read-mode preseed gate, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
+| `scripts/Test-PerformanceReportHarness.ps1`, `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1` | Offline regressions for report grading and replay, VM seed wiring, revision-scoped diagnostic paging, the read-mode preseed gates, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
 | `scripts/deploy-aca.ps1` | Layer 3: provisions the multi-silo Azure Container Apps rig and builds its images remotely with `az acr build`. |
 | `scripts/run-cohort-aca.ps1` | Layer 3: one cohort - by default empties the rig's storage first (`-ResetStorage`), pins the silos to exactly N, runs the producer job, parks the silos at zero, then harvests the producer and silo logs from Log Analytics into one cohort log. |
 | `scripts/aca-common.ps1` | Shared Layer 3 helpers, also dot-sourced by `performance-report.ps1`: resource naming, the Azure CLI convention, the run-context file, silo scaling, the per-cohort storage reset, job waits and log harvest, and teardown with its ownership guard. |
@@ -188,8 +188,22 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `cross-tree-atomic-64` | The same cross-tree saga with 64 keys (32 per tree). |
 | `set-point` | One `SetAsync` per key. |
 | `set-point-mv` | `set-point` with an asynchronous materialised view attached to the tree - the A/B partner that shows whether maintaining a view perturbs the source write path. |
-| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo reads the same variable as the producer, and its silo-side default of 0 skips the pre-seed: `run-cohort.ps1` sets it only for the producer, so pass it to the silo through `-ExtraSiloEnv` as well. `performance-report.ps1`'s Layer 2 rows do not pass it, so their `get-point` and `get-many` cohorts read keys that were never written (each cohort gets a fresh tree). In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
+| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo-side default of 0 skips the pre-seed, but `run-cohort.ps1 -Vehicles` sets the same fleet size on both processes (including when `ExtraSiloEnv` contains a conflicting count). Layer 2 aggregation requires retained `[silo] preseed ... entries=N` evidence covering the offered fleet; legacy miss-path cohorts and missing logs are excluded. In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
 | `get-many` | `GetManyAsync` over the same keyspace, with the same pre-seed caveats. |
+
+Layer 3 preseed retries are bounded to eight attempts per unlanded slice and 300 seconds
+for the entire seed, including outstanding RPCs. Successful slices reset the attempt
+counter, not the deadline; failures retain offset, exception and budget diagnostics.
+The `set-point-mv` view name is `bench-{treeId}`, shared by registration and lag reporting,
+so a fresh cohort cannot resume an earlier source tree's view checkpoints.
+
+Layer 2 tables show the usable throughput cohort count per row. A partial healthy
+population remains publishable; excluded or failed attempted rows become `_pending_`
+instead of inheriting old measurements, while unattempted rows remain intact.
+Layer 3 logs retain silo diagnostics with time and replica identity, scoped to the
+cohort revision. Non-phaseA silo lines are prefixed to keep them out of the producer
+throughput series. Harvest uses 200-row pages under a fixed ingestion snapshot to
+avoid Log Analytics' response-size truncation; malformed responses fail explicitly.
 
 In atomic modes each saga is its own flush unit: it takes its own
 `BENCH_FLUSH_CONCURRENCY` slot, is retried on its own, and is counted in `ops` or
@@ -242,8 +256,9 @@ cells with the new producer before making a cluster-ceiling claim.
 Scaling ratios are omitted when the cell or its 1-silo anchor is producer-bound,
 and charts omit affected workload curves rather than plot a misleading plateau.
 An omission note appears only when a curve was actually excluded. Resume and
-dry-run aggregation (the `-Layer3 -DryRun` switch form; `-Layer 3 -DryRun` replays
-the single-silo document instead) re-read retained logs; the evidence is retained in cohort
+dry-run aggregation (both `-Layer3 -DryRun` and `-Layer 3 -DryRun`) re-read retained
+logs; replay selects the latest state containing measurements for the requested layer,
+and a Layer 1 or Layer 2 replay leaves the other document block unchanged. The evidence is retained in cohort
 state as `producerSlipMaxMs`, `producerGenBlockedFrac`, `producerGeneratedPerSec`
 and the resulting `producerBound` verdict.
 

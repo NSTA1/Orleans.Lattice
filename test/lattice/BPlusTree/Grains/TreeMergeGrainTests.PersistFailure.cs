@@ -125,7 +125,7 @@ public partial class TreeMergeGrainTests
         var (grain, _, _, grainFactory, _) = CreateGrain();
         var systemSource = $"{LatticeConstants.SystemDataTreePrefix}audit";
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        registry.ExistsAsync(systemSource).Returns(false);
+        registry.GetEntryAsync(systemSource).Returns(Task.FromResult<TreeRegistryEntry?>(null));
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {

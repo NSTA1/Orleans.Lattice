@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// the compaction coordinator's fast path.
 /// </summary>
 [TestFixture]
-public class ShardRootGrainDirtyLeavesTests
+public partial class ShardRootGrainDirtyLeavesTests
 {
     private const string ShardKey = "dirty-tree/0";
 

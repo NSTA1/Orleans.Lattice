@@ -74,14 +74,16 @@ public sealed class LatticeStorageUsageGrainTests
         {
             var partition = p;
             var wal = Substitute.For<IWalShardGrain>();
-            wal.GetRetainedByteSizeAsync(Arg.Any<CancellationToken>())
-                .Returns(_ => walBehaviour(partition));
             // Physical size defaults to mirroring retained, which is the
             // shape of a backend holding no dead bytes. A test that needs
             // the two to diverge - the whole point of the split - passes
             // walPhysicalBehaviour explicitly.
-            wal.GetPhysicalByteSizeAsync(Arg.Any<CancellationToken>())
-                .Returns(_ => (walPhysicalBehaviour ?? walBehaviour)(partition));
+            wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
+            {
+                var physical = await (walPhysicalBehaviour ?? walBehaviour)(partition);
+                var retained = await walBehaviour(partition);
+                return (retained, physical);
+            });
             factory.GetGrain<IWalShardGrain>($"{tree}/{partition}").Returns(wal);
         }
 

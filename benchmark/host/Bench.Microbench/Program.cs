@@ -87,6 +87,12 @@ for (var i = 0; i < args.Length - 1; i++)
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
 }
 
+if (string.Equals(suite, "maintenanceoptions", StringComparison.OrdinalIgnoreCase))
+{
+    var maintenanceSummary = BenchmarkRunner.Run<MaintenanceOptionsElisionBenchmarks>(config);
+    return maintenanceSummary.HasCriticalValidationErrors || maintenanceSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "coveragestall", StringComparison.OrdinalIgnoreCase))
 {
     var stallSummary = BenchmarkRunner.Run<CoverageStallTimerBenchmarks>(config);
@@ -808,8 +814,40 @@ if (string.Equals(suite, "decisionstamp", StringComparison.OrdinalIgnoreCase))
     return decisionStampSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
-if (string.Equals(suite, "registryprojection", StringComparison.OrdinalIgnoreCase))
+if (string.Equals(suite, "coordinatorreads", StringComparison.OrdinalIgnoreCase))
 {
+    var registrySummary = BenchmarkRunner.Run<RegistryProjectionElisionBenchmarks>(
+        new HarnessConfig(Path.ChangeExtension(resultsPath, "registry.json")).AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is RegistryProjectionElisionBenchmarks.Site.MergeFrontDoor
+                or RegistryProjectionElisionBenchmarks.Site.ResizeUndoFence)));
+    var leafSummary = BenchmarkRunner.Run<LeafChainWalkElisionBenchmarks>(
+        new HarnessConfig(Path.ChangeExtension(resultsPath, "leaf.json")).AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is LeafChainWalkElisionBenchmarks.Site.CheckpointWalk)));
+    return registrySummary.HasCriticalValidationErrors || leafSummary.HasCriticalValidationErrors
+        || registrySummary.Reports.Any(report => !report.Success)
+        || leafSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "diagnosticregistry", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is RegistryProjectionElisionBenchmarks.Site.StatsCacheHit
+            or RegistryProjectionElisionBenchmarks.Site.WalByteSizes
+            or RegistryProjectionElisionBenchmarks.Site.WalUsageMiss));
+    var diagnosticSummary = BenchmarkRunner.Run<RegistryProjectionElisionBenchmarks>(config);
+    return diagnosticSummary.HasCriticalValidationErrors || diagnosticSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "registryprojection", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(suite, "registryoptions", StringComparison.OrdinalIgnoreCase))
+{
+    if (string.Equals(suite, "registryoptions", StringComparison.OrdinalIgnoreCase))
+    {
+        config = config.AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is RegistryProjectionElisionBenchmarks.Site.ResizeEmptyProbe
+                or RegistryProjectionElisionBenchmarks.Site.ResizeIntentOptions
+                or RegistryProjectionElisionBenchmarks.Site.DeletionShardCensus));
+    }
     Console.WriteLine("[microbench] suite   -> registryprojection (RegistryProjectionElisionBenchmarks)");
     var registryProjectionSummary = BenchmarkRunner.Run<RegistryProjectionElisionBenchmarks>(config);
     return registryProjectionSummary.HasCriticalValidationErrors ? 1 : 0;

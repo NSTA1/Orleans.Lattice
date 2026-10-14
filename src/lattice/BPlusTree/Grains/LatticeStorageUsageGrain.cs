@@ -336,8 +336,7 @@ internal sealed class LatticeStorageUsageGrain(
     {
         try
         {
-            var physical = await wal.GetPhysicalByteSizeAsync(cancellationToken);
-            var retained = await wal.GetRetainedByteSizeAsync(cancellationToken);
+            var (retained, physical) = await wal.GetByteSizesAsync(cancellationToken);
             return (retained, physical < 0 ? retained : physical);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests;
 /// driver of one WAL GC reactivation pass's touches (issue #3761 item 1(a)).
 /// </summary>
 [TestFixture]
-public class ShareBoundedTouchRunnerTests
+public partial class ShareBoundedTouchRunnerTests
 {
     /// <summary>A scripted pass: records every start and lets the test settle touches by hand.</summary>
     private sealed class Script
