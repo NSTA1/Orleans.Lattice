@@ -38,7 +38,7 @@
     would be.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="10.1.0" />
+    <PackageReference Include="Orleans.Lattice" Version="10.1.1" />
     <PackageReference Include="Orleans.Lattice.Storage.AzureTable" Version="10.1.0" />
     <PackageReference Include="Orleans.Lattice.Replication" Version="10.1.0" />
     <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="10.1.0" />
