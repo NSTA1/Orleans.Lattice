@@ -1,5 +1,5 @@
-using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.Operations;
@@ -21,7 +21,9 @@ namespace Orleans.Lattice.Schema.Tests.Chaos;
 /// so the kill loses only the runner, its in-process work and the killed silo's
 /// activations. The build is pinned by an outgoing-call filter that holds its
 /// first destination write, so the kill lands inside the build without timing.
-/// Waits are bounded polls on observable state.
+/// Waits are bounded polls on observable state. A second case injects one lost
+/// status response after the kill, proving the observation retries without
+/// treating the timeout as a failed operation or masking a permanently stuck one.
 /// </remarks>
 [TestFixture]
 [Category("Chaos")]
@@ -31,8 +33,8 @@ public sealed class SchemaOperationSiloLossChaosTests
 
     private TestCluster _cluster = null!;
 
-    [OneTimeSetUp]
-    public async Task OneTimeSetUp()
+    [SetUp]
+    public async Task SetUp()
     {
         var builder = new TestClusterBuilder(2);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
@@ -40,8 +42,8 @@ public sealed class SchemaOperationSiloLossChaosTests
         await _cluster.DeployAsync();
     }
 
-    [OneTimeTearDown]
-    public async Task OneTimeTearDown()
+    [TearDown]
+    public async Task TearDown()
     {
         HeldBuildWrite.Release.TrySetResult();
         await _cluster.StopAllSilosAsync();
@@ -50,8 +52,10 @@ public sealed class SchemaOperationSiloLossChaosTests
 
     private static IServiceProvider Services(SiloHandle silo) => ((InProcessSiloHandle)silo).SiloHost.Services;
 
-    [Test]
-    public async Task A_remediation_whose_runner_silo_is_killed_fails_then_resumes_when_started_again()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_remediation_whose_runner_silo_is_killed_fails_then_resumes_when_started_again(
+        bool loseFirstStatusResponse)
     {
         var treeId = $"chaos-remediate-{Guid.NewGuid():N}";
         var tree = _cluster.Client.GetGrain<ILattice>(treeId);
@@ -77,13 +81,15 @@ public sealed class SchemaOperationSiloLossChaosTests
 
         await _cluster.KillSiloAsync(secondary);
         HeldBuildWrite.Release.TrySetResult();
+        if (loseFirstStatusResponse)
+        {
+            HeldBuildWrite.LoseNextStatusResponse(operationId);
+        }
 
-        await TestPoll.UntilAsync(
-            async () => (await survivor.Runner.GetAsync("default", operationId))?.State == LatticeOperationState.Failed,
-            "the remediation of the killed runner to read as failed rather than running",
-            timeout: TimeSpan.FromMinutes(2),
-            cadence: TimeSpan.FromMilliseconds(250));
-        var lost = await survivor.Runner.GetAsync("default", operationId);
+        var lost = await SchemaOperationStatusPoll.WaitForFailedAsync(
+            () => survivor.Runner.GetAsync("default", operationId));
+        Assert.That(HeldBuildWrite.LostStatusResponses, Is.EqualTo(loseFirstStatusResponse ? 1 : 0),
+            "The controlled response-loss case must exercise the timeout branch.");
 
         // Starting it again joins the remediation still recorded in flight and
         // drives it from its last slice. Membership may still be settling, so a
@@ -110,30 +116,66 @@ public sealed class SchemaOperationSiloLossChaosTests
             timeout: TimeSpan.FromMinutes(2),
             cadence: TimeSpan.FromMilliseconds(500));
 
-        var k0 = Encoding.UTF8.GetString(await tree.GetAsync("k0") ?? []);
         Assert.Multiple(() =>
         {
-            Assert.That(lost!.Phase, Is.EqualTo(SchemaOperationPhases.Build), "the failure keeps the phase it was lost in");
+            Assert.That(lost.State, Is.EqualTo(LatticeOperationState.Failed));
+            Assert.That(lost.Phase, Is.EqualTo(SchemaOperationPhases.Build), "the failure keeps the phase it was lost in");
             Assert.That(resumed!.Result[SchemaOperationResultKeys.ValuesProcessed], Is.EqualTo("4"));
             Assert.That(resumed.Result[SchemaOperationResultKeys.RemediationOperationId], Is.EqualTo(operationId),
                 "the restart drives the remediation the lost operation accepted");
-            Assert.That(k0, Does.Contain("status"), "the tree serves the remediated values");
         });
+        for (var i = 0; i < 4; i++)
+        {
+            var value = await tree.GetAsync($"k{i}");
+            Assert.That(value, Is.Not.Null, $"Remediation must retain k{i}.");
+            using var json = JsonDocument.Parse(value!);
+            Assert.Multiple(() =>
+            {
+                Assert.That(json.RootElement.GetProperty("v").GetInt32(), Is.EqualTo(i));
+                Assert.That(json.RootElement.GetProperty("status").GetString(), Is.EqualTo("ok"));
+                Assert.That(json.RootElement.EnumerateObject().Count(), Is.EqualTo(2));
+            });
+        }
     }
 
     /// <summary>Holds the first destination write of the armed tree's remediation.</summary>
     private sealed class HeldBuildWrite : IOutgoingGrainCallFilter
     {
         private static volatile string? _armed;
+        private static string? _lostStatusKey;
 
-        public static TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public static TaskCompletionSource Entered { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public static TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public static TaskCompletionSource Release { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public static void Arm(string treeId) => _armed = treeId;
+        public static int LostStatusResponses { get; private set; }
+
+        public static void Arm(string treeId)
+        {
+            _armed = treeId;
+            _lostStatusKey = null;
+            LostStatusResponses = 0;
+            Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public static void LoseNextStatusResponse(string operationId)
+            => _lostStatusKey = LatticeOperationKey.For("default", operationId);
 
         public async Task Invoke(IOutgoingGrainCallContext context)
         {
+            var lostStatusKey = Volatile.Read(ref _lostStatusKey);
+            if (lostStatusKey is not null
+                && context.InterfaceMethod?.DeclaringType == typeof(ILatticeOperationGrain)
+                && context.MethodName == nameof(ILatticeOperationGrain.GetAsync)
+                && context.TargetId.Key.ToString() is { } statusKey
+                && string.Equals(statusKey, lostStatusKey, StringComparison.Ordinal)
+                && ReferenceEquals(Interlocked.CompareExchange(ref _lostStatusKey, null, lostStatusKey), lostStatusKey))
+            {
+                LostStatusResponses++;
+                throw new TimeoutException("Controlled loss of the first post-kill operation-status response (issue #4842).");
+            }
+
             if (_armed is { } armed
                 && context.InterfaceMethod?.DeclaringType == typeof(ILattice)
                 && context.MethodName == nameof(ILattice.SetAsync)
