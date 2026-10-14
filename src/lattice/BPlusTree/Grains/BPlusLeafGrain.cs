@@ -72,6 +72,7 @@ internal sealed partial class BPlusLeafGrain(
         // in-flight latch. Disposal is unconditional and needs no null check.
         var coverageLagTimer = System.Threading.Interlocked.Exchange(ref _coverageLagTimer, null);
         coverageLagTimer?.Dispose();
+        System.Threading.Interlocked.Exchange(ref _interleavedTimerDrive, null)?.Dispose();
 
         // Issue #3643: the frontier_pin barrier may elide only against a pin
         // acknowledged IN THIS deactivation, so any record left from an earlier

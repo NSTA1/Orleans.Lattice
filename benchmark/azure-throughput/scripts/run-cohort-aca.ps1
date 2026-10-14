@@ -570,6 +570,14 @@ try {
 		$_.Contains('[silo] t=') -and ($_ -match 'ops/sec=\s*([\d,]+)') -and ([long]($Matches[1] -replace ',','') -gt 0)
 	}).Count
 	$longestFreeze = Get-SiloProgressLongestStall -Lines @($lines)
+	# Flushes still unsettled when FINAL was emitted (the in-flight-tail
+	# budget expired). They are in neither ops= nor failed=, so a cell that
+	# abandoned work used to read failed=0 and grade HEALTHY.
+	$unresolvedAtFinal = 0L
+	$finalLine = @($lines | Where-Object { $_.Contains('[silo] FINAL ') }) | Select-Object -Last 1
+	if ($finalLine -and ($finalLine -match '\bunresolved=([\d,]+)')) {
+		$unresolvedAtFinal = [long]($Matches[1] -replace ',','')
+	}
 
 	$verdictState = 'HEALTHY'
 	$verdictDetail = ''
@@ -582,6 +590,9 @@ try {
 	} elseif ($FreezeWedgeSec -gt 0 -and $longestFreeze -ge $FreezeWedgeSec) {
 		$verdictState = 'WEDGE'
 		$verdictDetail = (' (mid-run freeze: no completion for {0:N0}s with work in flight)' -f $longestFreeze)
+	} elseif ($unresolvedAtFinal -gt 0) {
+		$verdictState = 'WEDGE'
+		$verdictDetail = (' (unresolved tail: {0:N0} entries still in flight when the in-flight-tail budget expired)' -f $unresolvedAtFinal)
 	}
 
 	Add-Content -Path $logPath -Encoding utf8 -Value (Format-CohortVerdictLogBlock `

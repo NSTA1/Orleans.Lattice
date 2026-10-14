@@ -54,6 +54,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Leaf - Starvation drives no longer hold the leaf turn.** The coverage-lag timer dispatches starved and stalled replay drives onto an interleaving one-shot timer, so a long drive no longer blocks shard reads and wedges MV point writes. ([#4949](https://github.com/NSTA1/Orleans.Lattice/issues/4949)) (`Orleans.Lattice`)
+
+- **Tests - Layer 3 rig lifecycle and evidence.** Superseded revisions can no longer resurrect against deleted tables; unresolved tails, cross-process MV lag and provider exceptions are reported; opt-in await and grain-turn diagnostics localise stalls. ([#4949](https://github.com/NSTA1/Orleans.Lattice/issues/4949)) (`repository-wide`)
+
 - **Leaf - Stale compaction nominations.** Retirement clears nominations; existing rowless hints are discarded only after a complete routing proof. Missing routed rows still fail closed. See [troubleshooting](docs/lattice/troubleshooting.md#repeated-row-loss-exceptions-during-compaction). ([#4927](https://github.com/NSTA1/Orleans.Lattice/pull/4927)) (`Orleans.Lattice`)
 
 - **WAL - Cold-replay recovery.** Deletes survive replay and reseeding; refusals no longer amplify retries. Historical data needs [evidence-preserving recovery](docs/lattice/troubleshooting.md#acknowledged-deletes-reappear-after-cold-replay), not automatic repair. ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4930](https://github.com/NSTA1/Orleans.Lattice/issues/4930), [#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)

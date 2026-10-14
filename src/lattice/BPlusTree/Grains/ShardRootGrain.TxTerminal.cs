@@ -566,7 +566,11 @@ internal sealed partial class ShardRootGrain
 
         var clockTasks = new Task<HybridLogicalClock>[leaves.Count];
         for (var i = 0; i < leaves.Count; i++)
-            clockTasks[i] = leaves[i].GetClockAsync();
+            clockTasks[i] = AwaitDiagnostics.Time(
+                leaves[i].GetClockAsync(),
+                "tx.terminal-hlc-leaf",
+                AwaitDiagnostics.Enabled ? leaves[i].GetGrainId() : default,
+                AwaitDiagnostics.Enabled ? $"leaves={leaves.Count}" : null);
         var clocks = await Task.WhenAll(clockTasks);
 
         var max = HybridLogicalClock.Zero;

@@ -552,12 +552,17 @@ if (-not (Test-AzResourceExists -Kind 'acaapp' -Name $names.SiloApp -ResourceGro
 	# publishes to the clustering table, not through the environment's HTTP
 	# front door. The reachability spike confirmed an app with no ingress
 	# block is still addressable on its replica pod IPs.
+	#
+	# Multiple revision mode: in Single mode an update on a parked app
+	# reactivates the parked revision against the previous cohort's deleted
+	# tables (see Set-AcaSiloMultipleRevisionMode in aca-common.ps1).
 	Invoke-Az (@(
 		'containerapp', 'create',
 		'--name', $names.SiloApp,
 		'--resource-group', $names.Rg,
 		'--environment', $names.Env,
-		'--image', $siloImage
+		'--image', $siloImage,
+		'--revisions-mode', 'multiple'
 	) + $registryArgs + $siloAuthArgs + @(
 		'--cpu', "$SiloCpu",
 		'--memory', "${SiloMemoryGi}Gi",
