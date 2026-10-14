@@ -46,7 +46,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **Explorer - Cluster follow and survey resilience.** A denied operation no longer stops other progress updates, failed post-operation statistics and alias reads retry, and stopped orphan surveys discard late replies and faults. (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Cluster follow and survey resilience.** A denied operation no longer stops other progress updates, failed post-operation statistics and alias reads retry, and stopped orphan surveys discard late replies and faults. ([#4955](https://github.com/NSTA1/Orleans.Lattice/pull/4955)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Container - Calibrated shutdown forecast.** A bounded history of clean drains calibrates fixed overhead and aggregate service rate; thin or extrapolated evidence reports unknown instead of a false abandoned-stop prediction. ([#3484](https://github.com/NSTA1/Orleans.Lattice/issues/3484)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
