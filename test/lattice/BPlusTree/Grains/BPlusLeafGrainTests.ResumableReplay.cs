@@ -124,7 +124,8 @@ public partial class BPlusLeafGrainTests
         int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
         ITxRegistryGrain? registry = null,
         int? registryShardCount = null,
-        string? registryKey = null)
+        string? registryKey = null,
+        ShardMap? registryShardMap = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
@@ -177,7 +178,8 @@ public partial class BPlusLeafGrainTests
             baseOptions: baseOptions,
             maxLeafKeys: 128,
             shardCount: 1,
-            factory: grainFactory);
+            factory: grainFactory,
+            shardMap: registryShardMap);
 
         var grain = new BPlusLeafGrain(
             context, state, grainFactory, optionsResolver,

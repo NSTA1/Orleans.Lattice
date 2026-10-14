@@ -3598,11 +3598,11 @@ public static class LatticeMetrics
     /// Counter of adaptations to the per-silo WAL replay concurrency gate, tagged
     /// with <see cref="TagOutcome"/> (<see cref="PermitAdaptationWithheld"/> when a
     /// permit was withheld from circulation, <see cref="PermitAdaptationRestored"/>
-    /// when one was returned after a replay completed cleanly). Issues #2781 and
+    /// when one was returned after heap relief or a service-rate decision). Issues #2781 and
     /// #2883.
     /// <para>
     /// <b>The withheld arm carries <see cref="TagTrigger"/>, and that dimension is
-    /// the whole of issue #2883.</b> Two independent mechanisms withhold:
+    /// the whole of issue #2883.</b> Two memory mechanisms withhold:
     /// <see cref="PermitAdaptationTriggerFault"/> (a replay escaped its guarded
     /// region with a memory verdict, #2781) and
     /// <see cref="PermitAdaptationTriggerOccupancy"/> (occupancy had reached the
@@ -3620,16 +3620,23 @@ public static class LatticeMetrics
     /// fix; minting a second counter would not have been.
     /// </para>
     /// <para>
-    /// <b>The restored arm is deliberately untagged, and a per-trigger level is
-    /// therefore NOT derivable.</b> Withheld permits are <i>fungible</i> - the
-    /// accounting is a single process-wide count, not a per-trigger ledger - so a
+    /// <b>Memory restores are deliberately untagged, and a per-memory-trigger
+    /// level is therefore NOT derivable.</b> Memory permits are <i>fungible</i> - so a
     /// restore cannot know which trigger withheld the permit it is handing back,
     /// and tagging it would only manufacture a number that looks attributable and
     /// is not. Consequently
     /// <c>withheld{trigger="fault"} - restored</c> is <b>meaningless</b>: the only
-    /// valid level is the total <c>withheld - restored</c>, summed over triggers.
-    /// Read the trigger split as <i>which mechanism is doing the work</i>, never
-    /// as <i>how much each mechanism is currently holding</i>.
+    /// valid memory level is <c>withheld</c> summed over fault and occupancy
+    /// minus the untagged memory <c>restored</c> arm. Read the memory-trigger
+    /// split as <i>which mechanism is doing the work</i>, never as
+    /// <i>how much each memory trigger is currently holding</i>.
+    /// </para>
+    /// <para>
+    /// The opt-in service-rate controller (#3933) uses a separate ledger and
+    /// tags both its withheld and restored arms <c>trigger=service_time</c>.
+    /// Their difference is the service-owned level; memory recovery cannot
+    /// restore that capacity. Sum all triggers for the combined withheld level.
+    /// Service-time arms are zero-primed only when the controller is enabled.
     /// </para>
     /// <para>
     /// <b>Deliberately not tagged by tree.</b> The gate is process-wide, so a
@@ -3639,8 +3646,8 @@ public static class LatticeMetrics
     /// <para>
     /// The difference <c>withheld - restored</c> is the number of permits currently
     /// withheld, so the effective ceiling is
-    /// <c>configured - (withheld - restored)</c>. <b>All three arms</b> - withheld
-    /// under each trigger, and restored - are <b>zero-primed</b> when the gate is
+    /// <c>configured - (withheld - restored)</c>. <b>All memory arms</b> - withheld
+    /// under fault and occupancy, and the untagged restored arm - are <b>zero-primed</b> when the gate is
     /// sized, which is the one site that proves the gate was actually created:
     /// without priming, "this trigger never engaged" and "this build does not have
     /// that trigger" would both read as an absent series.
@@ -3651,13 +3658,13 @@ public static class LatticeMetrics
     /// arms two values and trigger arms two - so no single tag arms three, and a
     /// bare "all three arms" in the HELP text is a completeness claim the arity
     /// gate cannot pin to any tag (issue #3202). Enumerating the arms, as the
-    /// paragraph above does, says the same thing and stays checkable. Do not
+    /// memory-arm paragraph above does, says the same thing and stays checkable. Do not
     /// reintroduce the numeral into the description.
     /// </para>
     /// </summary>
     public static readonly Counter<long> WalReplayPermitAdaptations =
         Meter.CreateCounter<long>("orleans.lattice.wal.replay.permit_adaptations", unit: "{permit}",
-            description: "Adaptations to the per-silo WAL replay concurrency gate under memory pressure, tagged by outcome, and on the withheld arm by the trigger (fault or occupancy) that withheld. Zero-primed when the gate is sized, on the withheld arm under each trigger and on the restored arm. The restored arm carries no trigger because withheld permits are fungible, so a per-trigger level is not derivable.");
+            description: "Adaptations to the per-silo WAL replay concurrency gate, tagged by outcome. Memory withholding carries trigger=fault or occupancy; memory restores are untagged because those permits are fungible. The opt-in service controller tags both outcomes trigger=service_time. Memory arms are zero-primed when the gate is sized; service_time arms only when enabled. Sum all triggers for the combined level.");
 
     /// <summary>
     /// The name of the observable gauge reporting the number of replay permits

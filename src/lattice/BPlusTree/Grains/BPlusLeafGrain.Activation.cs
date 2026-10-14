@@ -354,8 +354,8 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Count of permits currently <b>withheld</b> from
-    /// <see cref="_replayConcurrencyGate"/> by the memory-adaptive backpressure of
-    /// issue #2781, so the effective ceiling is
+    /// <see cref="_replayConcurrencyGate"/> by memory or opt-in service-rate
+    /// backpressure, so the effective ceiling is
     /// <c>_replayConcurrencyCeiling - _withheldReplayPermits</c>.
     /// <para>
     /// Withholding is not a resize. The gate is sized once and never re-created,
@@ -373,8 +373,8 @@ internal sealed partial class BPlusLeafGrain
     /// <c>DOTNET_PROCESSOR_COUNT</c>, and a reviewer who remembers that will reach
     /// for the objection on sight. A dynamic floor <b>beneath</b> the configured
     /// ceiling is not an override of it: the operator sets the headroom this
-    /// process may take, and this mechanism declines headroom the heap cannot
-    /// currently afford. It never takes headroom the operator did not grant.
+    /// process may take, and this mechanism declines headroom the heap or store
+    /// cannot currently afford. It never takes headroom the operator did not grant.
     /// (Issue #2816 later narrowed the <c>DOTNET_PROCESSOR_COUNT</c> half of that
     /// disposition on the same reasoning - the default ceiling is now the lesser
     /// of that figure and the enforced container CPU grant, which can only lower
@@ -385,6 +385,11 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     private static int _withheldReplayPermits;
+    private static int _serviceWithheldReplayPermits;
+    private static long _replayPermitsServed;
+    private static ReplayServiceRateController? _replayServiceRateController;
+    private static readonly KeyValuePair<string, object?> ServiceTimeTrigger =
+        new(LatticeMetrics.TagTrigger, "service_time");
 
     /// <summary>
     /// Publishes the <b>live</b> withheld-permit level - the running value of
@@ -438,7 +443,7 @@ internal sealed partial class BPlusLeafGrain
                 LatticeTenantLabel.Platform),
             unit: "{permit}",
             description:
-                "Replay permits currently withheld from the WAL replay concurrency gate by memory "
+                "Replay permits currently withheld from the WAL replay concurrency gate by memory or service-rate "
                 + "backpressure. Equal to the live difference between the withheld and restored arms of "
                 + "orleans.lattice.wal.replay.permit_adaptations_total, published directly so that the "
                 + "step to zero across a process restart marks adaptation the restart discarded (issue "
@@ -594,6 +599,9 @@ internal sealed partial class BPlusLeafGrain
             Volatile.Write(ref _starvationReplayPermits, 0);
             Volatile.Write(ref _sweepDriveRefusedAt, 0);
             Volatile.Write(ref _withheldReplayPermits, 0);
+            _serviceWithheldReplayPermits = 0;
+            _replayPermitsServed = 0;
+            _replayServiceRateController = null;
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
             Volatile.Write(ref _replayPermitWaitSample, 0);
@@ -664,27 +672,16 @@ internal sealed partial class BPlusLeafGrain
     /// </param>
     internal static bool TryWithholdReplayPermitOnPressure(KeyValuePair<string, object?> trigger)
     {
-        var ceiling = Volatile.Read(ref _replayConcurrencyCeiling);
-        while (true)
+        lock (_replayConcurrencyGateLock)
         {
-            var withheld = Volatile.Read(ref _withheldReplayPermits);
-
-            // The floor. `ceiling - 1` is the most that may ever be withheld, so
-            // this comparison - not the caller, and not the configuration - is
-            // what makes over-withholding unreachable.
-            if (withheld >= ceiling - 1)
+            if (_withheldReplayPermits >= _replayConcurrencyCeiling - 1)
                 return false;
 
-            if (Interlocked.CompareExchange(ref _withheldReplayPermits, withheld + 1, withheld) == withheld)
-            {
-                LatticeMetrics.WalReplayPermitAdaptations.Add(
-                    1,
-                    LatticeMetrics.PermitAdaptationWithheld,
-                    trigger,
-                    LatticeTenantLabel.Platform);
-                return true;
-            }
+            Volatile.Write(ref _withheldReplayPermits, _withheldReplayPermits + 1);
+            _replayServiceRateController?.Reset();
         }
+        RecordReplayPermitAdaptation(LatticeMetrics.PermitAdaptationWithheld, trigger);
+        return true;
     }
 
     /// <summary>
@@ -723,20 +720,20 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Records no trigger tag, unlike its withholding counterpart</b> (issue
-    /// #2883). Withheld permits are fungible: the accounting below is a single
-    /// count, not a per-trigger ledger, so this method cannot know whether the
+    /// <b>Records no trigger tag for memory restores</b> (issue
+    /// #2883). Memory permits are fungible, so this method cannot know whether the
     /// permit it is handing back was withheld by the fault trigger or the
     /// occupancy one. Tagging it would fabricate an attribution that does not
     /// exist, and would invite the invalid reading
     /// <c>withheld{trigger="fault"} - restored</c>. The only meaningful level is
-    /// the total, summed over triggers.
+    /// the memory total, summed over fault and occupancy. Service-time permits
+    /// have their own ledger and can only be restored by the service controller.
     /// </para>
     /// <para>
-    /// The guard is <c>withheld &gt; 0</c>, and it is the invariant rather than a
+    /// The guard is <c>withheld &gt; serviceWithheld</c>, and it is the invariant rather than a
     /// nicety. Each withheld permit is one the gate never got back, so the gate's
     /// count is at most <c>ceiling - withheld</c> and returning exactly
-    /// <c>withheld</c> extras restores it to <c>ceiling</c> and no further. Should
+    /// memory-owned extras restores it to <c>ceiling - serviceWithheld</c> and no further. Should
     /// that accounting ever be wrong in the dangerous direction, the
     /// <see cref="SemaphoreSlim"/> was constructed with a maximum and throws
     /// <see cref="SemaphoreFullException"/> rather than silently over-admitting -
@@ -746,21 +743,16 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     internal static bool TryRestoreWithheldReplayPermit()
     {
-        while (true)
+        lock (_replayConcurrencyGateLock)
         {
-            var withheld = Volatile.Read(ref _withheldReplayPermits);
-            if (withheld <= 0)
+            if (_withheldReplayPermits <= _serviceWithheldReplayPermits)
                 return false;
 
-            if (Interlocked.CompareExchange(ref _withheldReplayPermits, withheld - 1, withheld) == withheld)
-            {
-                LatticeMetrics.WalReplayPermitAdaptations.Add(
-                    1,
-                    LatticeMetrics.PermitAdaptationRestored,
-                    LatticeTenantLabel.Platform);
-                return true;
-            }
+            Volatile.Write(ref _withheldReplayPermits, _withheldReplayPermits - 1);
+            _replayServiceRateController?.Reset();
         }
+        RecordReplayPermitAdaptation(LatticeMetrics.PermitAdaptationRestored);
+        return true;
     }
 
     /// <summary>
@@ -936,6 +928,11 @@ internal sealed partial class BPlusLeafGrain
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
                 _replayConcurrencyCeiling = max;
                 Volatile.Write(ref _withheldReplayPermits, 0);
+                _serviceWithheldReplayPermits = 0;
+                _replayPermitsServed = 0;
+                _replayServiceRateController = options.WalReplayServiceRateControllerEnabled
+                    ? new ReplayServiceRateController(ReplayServiceRateController.DefaultWindowTicks)
+                    : null;
                 sizedHere = true;
             }
             else
@@ -979,6 +976,13 @@ internal sealed partial class BPlusLeafGrain
                 0,
                 LatticeMetrics.PermitAdaptationRestored,
                 LatticeTenantLabel.Platform);
+            if (options.WalReplayServiceRateControllerEnabled)
+            {
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    0, LatticeMetrics.PermitAdaptationWithheld, ServiceTimeTrigger, LatticeTenantLabel.Platform);
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    0, LatticeMetrics.PermitAdaptationRestored, ServiceTimeTrigger, LatticeTenantLabel.Platform);
+            }
 
             // The gate's service count (issue #3921), primed here for the same
             // reason: a flat served series on a sized gate is the no-progress
@@ -1267,7 +1271,10 @@ internal sealed partial class BPlusLeafGrain
     private static void NoteReplayPermitArrival()
     {
         if (Interlocked.Increment(ref _queuedReplayPermitWaiters) == 1)
+        {
             Volatile.Write(ref _lastReplayPermitProgress, Stopwatch.GetTimestamp());
+            InvalidateReplayServiceRateWindow();
+        }
     }
 
     /// <summary>
@@ -2361,6 +2368,7 @@ internal sealed partial class BPlusLeafGrain
         var startedAt = Stopwatch.GetTimestamp();
         var acquiredAt = startedAt;
         var permitAcquired = false;
+        long serviceHold = -1;
 
         // Issue #3479. Sampled so that an abandoned drive can report whether its
         // replay banked anything. Summed across partitions because the log reports
@@ -2395,6 +2403,7 @@ internal sealed partial class BPlusLeafGrain
             }
 
             acquiredAt = Stopwatch.GetTimestamp();
+            serviceHold = BeginReplayServiceRateHold();
             permitAcquired = true;
 
             // The permit is acquired and released in THIS frame, and the work
@@ -2504,6 +2513,7 @@ internal sealed partial class BPlusLeafGrain
         {
             if (replayPermit is not null)
             {
+                CompleteReplayServiceRateHold(serviceHold);
                 ReleaseStarvationReplayPermit(replayPermit);
                 if (permitAcquired)
                     RecordReplayPermitHold(acquiredAt);
@@ -3090,6 +3100,7 @@ internal sealed partial class BPlusLeafGrain
         bool advanced;
         SemaphoreSlim? replayPermit = null;
         long replayPermitAcquiredAt = 0;
+        long replayServiceHold = -1;
 
         // Memory-adaptive backpressure state for this activation (issue #2781).
         // Both are read only in the finally, and both default to the inert value
@@ -3184,6 +3195,7 @@ internal sealed partial class BPlusLeafGrain
                 // observation below, so the hold measures the replay and not
                 // the bookkeeping around it.
                 replayPermitAcquiredAt = Stopwatch.GetTimestamp();
+                replayServiceHold = BeginReplayServiceRateHold();
                 // The cold/warm discriminator is precisely the replay-start
                 // override computed at step 0.5: a -1 sentinel means neither the
                 // snapshot rehydrate nor a pre-populated cache supplied an anchor,
@@ -3467,49 +3479,9 @@ internal sealed partial class BPlusLeafGrain
                 // actually throws against - on a path every replay reaches
                 // whether it faults, recovers, or succeeds, so the reduction
                 // happens while there is still heap left to reduce into.
-                var heap = ReadReplayHeapPressure();
-
-                if (!withholdReplayPermitOnPressure && ReplayHeapPressure.IsPressured(heap))
-                    withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure(
-                        LatticeMetrics.PermitAdaptationTriggerOccupancy);
-
-                if (withholdReplayPermitOnPressure)
-                {
-                    // Not released, by design: this permit is now withheld, and
-                    // _withheldReplayPermits was incremented to account for it.
-                }
-                else
-                {
-                    replayPermit.Release();
-
-                    // Recovery. A replay that completed without memory pressure
-                    // is the evidence that the heap can afford more concurrency
-                    // again, so exactly one withheld permit returns per such
-                    // replay - gradually, so a single lucky replay cannot undo a
-                    // sustained reduction in one step.
-                    //
-                    // "Without memory pressure" now means BOTH that this replay
-                    // did not fault for it and that occupancy has receded below
-                    // the restore band. A clean replay is not on its own evidence
-                    // the heap recovered - under #2742's narrowing retry it is
-                    // exactly what an OOM-riddled replay looks like from here -
-                    // so restoring on it alone would walk the gate back up to the
-                    // ceiling while the process was still against its limit. The
-                    // restore band sits below the withholding band on purpose: a
-                    // single threshold would flap a permit in and out for as long
-                    // as occupancy sat on it, raising both arms of the counter
-                    // while the effective ceiling never moved.
-                    if (replayCompletedCleanly
-                        && ReplayHeapPressure.IsRelieved(heap)
-                        && TryRestoreWithheldReplayPermit())
-                    {
-                        replayPermit.Release();
-                    }
-                }
-
-                // Issue #3921. After the permit is returned or withheld, never
-                // before it, and never throwing - see RecordReplayPermitHold.
-                RecordReplayPermitHold(replayPermitAcquiredAt);
+                FinishReplayPermit(
+                    replayPermit, withholdReplayPermitOnPressure, replayCompletedCleanly,
+                    replayPermitAcquiredAt, MetricTreeId, state.State.TreeId, replayServiceHold);
             }
         }
 

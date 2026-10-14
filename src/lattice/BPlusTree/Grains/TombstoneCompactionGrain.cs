@@ -979,6 +979,26 @@ internal sealed class TombstoneCompactionGrain(
                     catch (Exception leafEx)
                     {
                         leafFaulted = true;
+                        if (leafEx is LeafStateRowLostException)
+                        {
+                            try
+                            {
+                                if (await shardRoot.DiscardUnroutedDirtyLeafAsync(dirtyLeafId))
+                                {
+                                    dirtyIndex++;
+                                    budget.RecordLeafVisited();
+                                    if (dirtyIndex < dirtyLeaves.Length && budget.ShouldYield()) break;
+                                    continue;
+                                }
+                            }
+                            catch (Exception routingEx)
+                            {
+                                logger.LogWarning(routingEx,
+                                    "Could not prove rowless leaf {LeafId} of shard {ShardKey} unrouted; its dirty mark will be retained.",
+                                    dirtyLeafId, shardKey);
+                            }
+                        }
+
                         // A leaf that will not compact is a LEAF-scoped fault and
                         // must not abort the shard's walk. Re-throwing here left
                         // dirtyIndex pinned on the blocker for the life of the

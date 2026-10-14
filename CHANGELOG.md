@@ -30,6 +30,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+- **WAL - Experimental replay controller.** An opt-in, default-off controller adjusts cold-replay concurrency using bounded service-time probes. Admission is unchanged when disabled; real-store convergence acceptance remains unproven. ([#4925](https://github.com/NSTA1/Orleans.Lattice/pull/4925)) (`Orleans.Lattice`)
+
 ### Changed
 
 - **Performance - Maintenance grain calls.** Snapshot copy budgets, orphan-pass budgets and compaction schedules skip redundant registry calls while retaining bounded progress, clamped scheduling and fresh topology and reap-ceiling reads. ([#4943](https://github.com/NSTA1/Orleans.Lattice/pull/4943)) (`Orleans.Lattice`)
@@ -49,6 +51,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Container - Runtime defaults.** The container runs under an init process, derives its resource knobs and ONNX intra-op threads from the host CPU grant and corpus, streams the Prometheus exposition, and offers opt-in CPU pinning. ([#2576](https://github.com/NSTA1/Orleans.Lattice/issues/2576), [#2606](https://github.com/NSTA1/Orleans.Lattice/issues/2606), [#2623](https://github.com/NSTA1/Orleans.Lattice/issues/2623), [#2763](https://github.com/NSTA1/Orleans.Lattice/pull/2763), [#2779](https://github.com/NSTA1/Orleans.Lattice/issues/2779), [#3136](https://github.com/NSTA1/Orleans.Lattice/issues/3136)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 ### Fixed
+
+- **Leaf - Stale compaction nominations.** Retirement clears nominations; existing rowless hints are discarded only after a complete routing proof. Missing routed rows still fail closed. See [troubleshooting](docs/lattice/troubleshooting.md#repeated-row-loss-exceptions-during-compaction). ([#4927](https://github.com/NSTA1/Orleans.Lattice/pull/4927)) (`Orleans.Lattice`)
+
+- **WAL - Cold-replay recovery.** Deletes survive replay and reseeding; refusals no longer amplify retries. Historical data needs [evidence-preserving recovery](docs/lattice/troubleshooting.md#acknowledged-deletes-reappear-after-cold-replay), not automatic repair. ([#4928](https://github.com/NSTA1/Orleans.Lattice/issues/4928), [#4930](https://github.com/NSTA1/Orleans.Lattice/issues/4930), [#4924](https://github.com/NSTA1/Orleans.Lattice/pull/4924)) (`Orleans.Lattice`)
 
 - **Explorer - Tenant page read ownership.** Quota and sharing pages discard late admission failures and redirects after navigation. My tenant keeps overview reads tied to their tenant, discarding old replies and stopping follow-on reads after a section change or disposal. ([#4944](https://github.com/NSTA1/Orleans.Lattice/issues/4944)) (`Orleans.Lattice.Explorer.UI`)
 
