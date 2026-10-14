@@ -83,6 +83,10 @@ public partial class DataMetricsPanel : IDisposable
             return;
         }
 
+        var token = _lifetime.Renew();
+        _metrics = null;
+        _measures = [];
+        _sampledAt = null;
         if (DataServices.Find<IMetricsReader>(Services) is not { } reader)
         {
             _error = "This Explorer has no state API to read metrics through.";
@@ -93,21 +97,33 @@ public partial class DataMetricsPanel : IDisposable
         _error = null;
         try
         {
-            _metrics = await reader.GetAsync(workspace.Tree.StateId, _lifetime.Token);
+            var metrics = await reader.GetAsync(workspace.Tree.StateId, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _metrics = metrics;
             _measures = _metrics is null ? [] : Measures(_metrics);
             _sampledAt = Time.GetUtcNow();
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            _metrics = null;
-            _error = DataErrors.Describe(exception, "read this tree's metrics");
+            if (!token.IsCancellationRequested)
+            {
+                _metrics = null;
+                _error = DataErrors.Describe(exception, "read this tree's metrics");
+            }
         }
         finally
         {
-            _loading = false;
+            if (!token.IsCancellationRequested)
+            {
+                _loading = false;
+            }
         }
     }
 }
