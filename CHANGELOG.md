@@ -34,7 +34,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
-- **Performance - Coordinator grain calls.** Merge admission and resize undo reuse complete registry entries, and materialiser-lag walks combine checkpoint and sibling metadata. Complete-pin calls fall from 4/2/2 to 2/1/1 without changing public APIs or replay/fence ordering. (`Orleans.Lattice`)
+- **Performance - Coordinator grain calls.** Merge admission and resize undo reuse complete registry entries, and materialiser-lag walks combine checkpoint and sibling metadata. Complete-pin calls fall from 4/2/2 to 2/1/1 without changing public APIs or replay/fence ordering. ([#4947](https://github.com/NSTA1/Orleans.Lattice/pull/4947)) (`Orleans.Lattice`)
 
 - **Performance - Maintenance grain calls.** Snapshot copy budgets, orphan-pass budgets and compaction schedules skip redundant registry calls while retaining bounded progress, clamped scheduling and fresh topology and reap-ceiling reads. ([#4943](https://github.com/NSTA1/Orleans.Lattice/pull/4943)) (`Orleans.Lattice`)
 
