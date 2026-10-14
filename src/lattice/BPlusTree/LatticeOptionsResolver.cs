@@ -958,6 +958,32 @@ internal sealed class LatticeOptionsResolver(
     }
 
     /// <summary>
+    /// <see cref="ResolveIfRegisteredAsync"/> that also hands back the registry
+    /// entry it read, so a per-tree loop that needs the tree's shard map or
+    /// physical id derives them from that one read instead of paying a further
+    /// <see cref="RegistryFanInGate.GetShardMapAsync"/> or
+    /// <see cref="RegistryFanInGate.ResolveAsync"/> round trip - both are pure
+    /// projections of the same entry. Returns <see langword="null"/> for a user
+    /// tree that has no row. A system tree resolves without consulting the
+    /// entry, exactly as <see cref="ResolveIfRegisteredAsync"/> does, but its row
+    /// is still read once (through the bounded path) so the returned entry is
+    /// what those projections would have observed.
+    /// </summary>
+    internal async Task<(ResolvedLatticeOptions Options, State.TreeRegistryEntry? Entry)?> ResolveWithEntryIfRegisteredAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            return (BuildResolved(treeId, entry: null), entry);
+
+        if (entry is null)
+            return null;
+
+        CacheMetricTreeId(treeId, entry);
+        return (BuildResolved(treeId, entry), entry);
+    }
+
+    /// <summary>
     /// The configured, non-structural options for <paramref name="treeId"/>,
     /// read without any registry call. For a caller that needs only a
     /// configured value, such as a timeout, before the tree may be registered.

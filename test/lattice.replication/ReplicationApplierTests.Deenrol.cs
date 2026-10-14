@@ -1,6 +1,7 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -42,9 +43,8 @@ public partial class ReplicationApplierTests
         factory.GetGrain<ILatticeCrossTreeReceiverGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(barrier);
 
         var registry = Substitute.For<ILatticeRegistry>();
-        registry.ExistsAsync(DeenrolledTree).Returns(treeRegistered);
-        registry.ResolveAsync(DeenrolledTree).Returns(DeenrolledTree);
-        registry.GetShardMapAsync(DeenrolledTree).Returns((ShardMap?)null);
+        registry.GetEntryAsync(DeenrolledTree).Returns(Task.FromResult<TreeRegistryEntry?>(
+            treeRegistered ? new TreeRegistryEntry() : null));
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
 
         var shard = Substitute.For<IShardRootGrain>();
@@ -89,7 +89,7 @@ public partial class ReplicationApplierTests
 
         await barrier.DidNotReceiveWithAnyArgs().NotifyParticipantAbsentAsync(default!);
         factory.DidNotReceiveWithAnyArgs().GetGrain<ILatticeCrossTreeReceiverGrain>(default!, default!);
-        await registry.DidNotReceiveWithAnyArgs().ExistsAsync(default!);
+        await registry.DidNotReceiveWithAnyArgs().GetEntryAsync(default!);
     }
 
     [Test]
@@ -111,7 +111,11 @@ public partial class ReplicationApplierTests
 
         await applier.ApplyAsync(DeenrolledTerminal());
 
-        await registry.Received(1).ResolveAsync(DeenrolledTree);
+        // Existence, the physical id and the shard map come from one entry read.
+        await registry.Received(1).GetEntryAsync(DeenrolledTree);
+        await registry.DidNotReceiveWithAnyArgs().ExistsAsync(default!);
+        await registry.DidNotReceiveWithAnyArgs().ResolveAsync(default!);
+        await registry.DidNotReceiveWithAnyArgs().GetShardMapAsync(default!);
         factory.ReceivedWithAnyArgs().GetGrain<IShardRootGrain>(default!, default!);
     }
 

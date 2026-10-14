@@ -78,6 +78,16 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <item><see cref="Site.ResizeUndoFence"/> - an unaliased complete-pin resize
 /// undo resolves its bootstrap-fence topology and options from one entry:
 /// 2 calls -> 1. Aliased owners and incomplete pins retain their reads.</item>
+/// <item><see cref="Site.HotShardTick"/> - one <c>HotShardMonitorGrain</c>
+/// sampling tick: the start-of-tick registration GetEntry, then Resolve +
+/// GetShardMap -> the registration GetEntry plus one GetEntry, 3 serial reads
+/// -> 2, paid on every tick of every autonomic tree.</item>
+/// <item><see cref="Site.HealingSweep"/> - one <c>ShardHealingOrchestratorGrain</c>
+/// sweep: options GetEntry + GetShardMap + Resolve -> one GetEntry, 3 serial
+/// reads -> 1, paid on every sweep of every autonomic tree.</item>
+/// <item><see cref="Site.AbsentParticipantDiscard"/> - a replicated cross-tree
+/// terminal dropped for a de-enrolled tree discarding its pending bucket:
+/// Exists + Resolve + GetShardMap -> one GetEntry, 3 serial reads -> 1.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -93,6 +103,8 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// Orleans silo dependency. <c>--suite registryoptions</c> selects just the
 /// three complete-pin resize/deletion lanes; missing or incomplete pins retain
 /// the seeding fallback and are not represented by these timing lanes.
+/// <c>--suite registrymaintenance</c> selects just the hot-shard tick, healing
+/// sweep and absent-participant discard lanes.
 /// </para>
 /// </summary>
 [MemoryDiagnoser]
@@ -105,7 +117,7 @@ public class RegistryProjectionElisionBenchmarks
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss, Site.MergeFrontDoor, Site.ResizeUndoFence)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss, Site.MergeFrontDoor, Site.ResizeUndoFence, Site.HotShardTick, Site.HealingSweep, Site.AbsentParticipantDiscard)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -129,6 +141,34 @@ public class RegistryProjectionElisionBenchmarks
     {
         switch (Path)
         {
+            case Site.HotShardTick:
+            {
+                var registered = await _registry.GetEntryAsync(TreeId);
+                var physical = await _registry.ResolveAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                return Fold(physical, (map ?? registered?.ShardMapVersion) ?? 0);
+            }
+
+            case Site.HealingSweep:
+            {
+                var options = await _registry.GetEntryAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                var physical = await _registry.ResolveAsync(TreeId);
+                return Fold(physical, (map ?? options?.ShardMapVersion) ?? 0);
+            }
+
+            case Site.AbsentParticipantDiscard:
+            {
+                if (!await _registry.ExistsAsync(TreeId))
+                {
+                    return 0;
+                }
+
+                var physical = await _registry.ResolveAsync(TreeId);
+                var map = await _registry.GetShardMapAsync(TreeId);
+                return Fold(physical, map ?? 0);
+            }
+
             case Site.MergeFrontDoor:
             {
                 await _registry.GetEntryAsync(TreeId); // existence
@@ -290,6 +330,24 @@ public class RegistryProjectionElisionBenchmarks
             case Site.StatsCacheHit:
                 return Fold("cached-report", 7);
 
+            case Site.HotShardTick:
+            {
+                await _registry.GetEntryAsync(TreeId); // registration
+                var entry = await _registry.GetEntryAsync(TreeId);
+                return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0);
+            }
+
+            case Site.AbsentParticipantDiscard:
+            {
+                var entry = await _registry.GetEntryAsync(TreeId);
+                if (entry is null)
+                {
+                    return 0;
+                }
+
+                return Fold(entry.PhysicalTreeId ?? TreeId, entry.ShardMapVersion);
+            }
+
             case Site.WalByteSizes:
             {
                 var sizes = await _registry.GetEntryAsync(TreeId);
@@ -314,6 +372,7 @@ public class RegistryProjectionElisionBenchmarks
             case Site.ResizeIntentOptions:
             case Site.DeletionShardCensus:
             case Site.ResizeUndoFence:
+            case Site.HealingSweep:
             {
                 var entry = await _registry.GetEntryAsync(TreeId);
                 return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0);
@@ -448,6 +507,15 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>A resize undo bootstrap-fence topology read on a complete unaliased owner.</summary>
         ResizeUndoFence,
+
+        /// <summary>One hot-shard monitor sampling tick reading registration, physical tree and map.</summary>
+        HotShardTick,
+
+        /// <summary>One shard-healing sweep reading options, map and physical tree.</summary>
+        HealingSweep,
+
+        /// <summary>A de-enrolled tree's dropped cross-tree terminal discarding its pending bucket.</summary>
+        AbsentParticipantDiscard,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
@@ -473,6 +541,12 @@ public class RegistryProjectionElisionBenchmarks
         {
             await HopAsync();
             return entry;
+        }
+
+        public async Task<bool> ExistsAsync(string id)
+        {
+            await HopAsync();
+            return entry is not null;
         }
 
         public async Task<string> ResolveAsync(string id)
