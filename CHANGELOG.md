@@ -34,6 +34,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Maintenance grain calls.** Snapshot copy budgets, orphan-pass budgets and compaction schedules skip redundant registry calls while retaining bounded progress, clamped scheduling and fresh topology and reap-ceiling reads. ([#4943](https://github.com/NSTA1/Orleans.Lattice/pull/4943)) (`Orleans.Lattice`)
+
 - **Performance - Diagnostic grain calls.** Cached tree stats skip registry calls, WAL report misses reuse their topology read, and WAL byte accounting combines two shard calls into one. Public APIs and fresh runtime ceiling reads are unchanged. ([#4940](https://github.com/NSTA1/Orleans.Lattice/pull/4940)) (`Orleans.Lattice`)
 
 - **Performance - Lifecycle registry reads.** Resize emptiness routing, resize undo capture and deletion shard census reuse one fresh registry entry, reducing complete-pin registry calls from 3/2/2 to 1/1/1 without changing the public API. ([#4937](https://github.com/NSTA1/Orleans.Lattice/pull/4937)) (`Orleans.Lattice`)
