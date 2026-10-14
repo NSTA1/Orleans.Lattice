@@ -813,7 +813,15 @@ internal sealed class TreeResizeGrain(
         var registry = grainFactory.GetLatticeRegistry();
         var entry = await registry.GetEntryAsync(TreeId);
         var physical = entry?.PhysicalTreeId ?? TreeId;
-        var shardCount = (await optionsResolver.ResolveAsync(physical)).ShardCount;
+        // An aliased copy owns its own pins; only reuse the logical row when
+        // it is also the physical owner and has no lazy-seeding work left.
+        var resolved = physical == TreeId
+            && entry?.MaxLeafKeys is not null
+            && entry.MaxInternalChildren is not null
+            && entry.ShardCount is not null
+                ? optionsResolver.Resolve(TreeId, entry)
+                : await optionsResolver.ResolveAsync(physical);
+        var shardCount = resolved.ShardCount;
         var shardIndices = RoutedShardIndices.Resolve(shardCount, entry?.ShardMap);
         return await TreeBootstrapReadFence.FindFencedShardAsync(grainFactory, physical, shardIndices);
     }

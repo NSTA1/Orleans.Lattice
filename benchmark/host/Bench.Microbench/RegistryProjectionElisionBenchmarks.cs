@@ -73,6 +73,11 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <item><see cref="Site.WalUsageMiss"/> - a complete-pin WAL report miss:
 /// initial options + topology + final policy -> topology/options + final
 /// policy, 3 serial reads -> 2. The final fresh policy read stays.</item>
+/// <item><see cref="Site.MergeFrontDoor"/> - merge existence, options and intent
+/// reuse one source entry, plus the unchanged target read: 4 calls -> 2.</item>
+/// <item><see cref="Site.ResizeUndoFence"/> - an unaliased complete-pin resize
+/// undo resolves its bootstrap-fence topology and options from one entry:
+/// 2 calls -> 1. Aliased owners and incomplete pins retain their reads.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -100,7 +105,7 @@ public class RegistryProjectionElisionBenchmarks
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss, Site.MergeFrontDoor, Site.ResizeUndoFence)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -124,6 +129,22 @@ public class RegistryProjectionElisionBenchmarks
     {
         switch (Path)
         {
+            case Site.MergeFrontDoor:
+            {
+                await _registry.GetEntryAsync(TreeId); // existence
+                var options = await _registry.GetEntryAsync(TreeId);
+                var source = await _registry.GetEntryAsync(TreeId);
+                var target = await _registry.ResolveAsync(TargetTreeId);
+                return Fold(source?.PhysicalTreeId ?? TreeId, source?.ShardMapVersion ?? options?.ShardMapVersion ?? 0) + target.Length;
+            }
+
+            case Site.ResizeUndoFence:
+            {
+                var entry = await _registry.GetEntryAsync(TreeId);
+                var options = await _registry.GetEntryAsync(TreeId);
+                return Fold(entry?.PhysicalTreeId ?? TreeId, options?.ShardMapVersion ?? 0);
+            }
+
             case Site.StatsCacheHit:
             {
                 await _registry.GetEntryAsync(TreeId);
@@ -292,12 +313,14 @@ public class RegistryProjectionElisionBenchmarks
             case Site.ResizeEmptyProbe:
             case Site.ResizeIntentOptions:
             case Site.DeletionShardCensus:
+            case Site.ResizeUndoFence:
             {
                 var entry = await _registry.GetEntryAsync(TreeId);
                 return Fold(entry?.PhysicalTreeId ?? TreeId, entry?.ShardMapVersion ?? 0);
             }
 
             case Site.MergeInitiate:
+            case Site.MergeFrontDoor:
             {
                 var entry = await _registry.GetEntryAsync(TreeId);
                 var target = await _registry.ResolveAsync(TargetTreeId);
@@ -419,6 +442,12 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>A complete-pin WAL report refresh, including final policy.</summary>
         WalUsageMiss,
+
+        /// <summary>A merge front-door existence/options/intent pipeline.</summary>
+        MergeFrontDoor,
+
+        /// <summary>A resize undo bootstrap-fence topology read on a complete unaliased owner.</summary>
+        ResizeUndoFence,
     }
 
     /// <summary>How a simulated grain call completes.</summary>

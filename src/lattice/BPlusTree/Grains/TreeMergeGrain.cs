@@ -87,13 +87,23 @@ internal sealed class TreeMergeGrain(
 
         // Validate source tree exists.
         var registry = grainFactory.GetLatticeRegistry();
-        if (!await registry.ExistsAsync(sourceTreeId))
+        var sourceEntry = await registry.GetEntryAsync(sourceTreeId);
+        if (sourceEntry is null)
             throw new InvalidOperationException(
                 $"Source tree '{sourceTreeId}' does not exist.");
 
-        var sourceResolvedOpts = await optionsResolver.ResolveAsync(sourceTreeId);
+        ResolvedLatticeOptions sourceResolvedOpts;
+        if (sourceEntry.MaxLeafKeys is not null && sourceEntry.MaxInternalChildren is not null && sourceEntry.ShardCount is not null)
+        {
+            sourceResolvedOpts = optionsResolver.Resolve(sourceTreeId, sourceEntry);
+        }
+        else
+        {
+            sourceResolvedOpts = await optionsResolver.ResolveAsync(sourceTreeId);
+            sourceEntry = await registry.GetEntryAsync(sourceTreeId);
+        }
 
-        await InitiateMergeStateAsync(sourceTreeId, sourceResolvedOpts.ShardCount);
+        await InitiateMergeStateAsync(sourceTreeId, sourceResolvedOpts.ShardCount, sourceEntry);
         await StartMergeAsync();
     }
 
@@ -102,13 +112,18 @@ internal sealed class TreeMergeGrain(
     /// </summary>
     internal async Task InitiateMergeStateAsync(string sourceTreeId, int sourceShardCount)
     {
+        var registry = grainFactory.GetLatticeRegistry();
+        await InitiateMergeStateAsync(sourceTreeId, sourceShardCount, await registry.GetEntryAsync(sourceTreeId));
+    }
+
+    private async Task InitiateMergeStateAsync(string sourceTreeId, int sourceShardCount, TreeRegistryEntry? sourceEntry)
+    {
         // Resolve both aliases and the source's current physical shard list
         // from the registry so that mid-merge map mutations (e.g. adaptive
         // splits on either side) can't mis-route subsequent ticks (audit bug #5).
         var registry = grainFactory.GetLatticeRegistry();
         // ResolveAsync and GetShardMapAsync are projections of the registry
         // entry, so one entry read per tree serves the alias and the map.
-        var sourceEntry = await registry.GetEntryAsync(sourceTreeId);
         var targetResolved = await registry.ResolveAsync(TargetTreeId);
         var sourcePhysicalTreeId = sourceEntry?.PhysicalTreeId is { Length: > 0 } sourcePhysical ? sourcePhysical : sourceTreeId;
         var targetPhysicalTreeId = string.IsNullOrEmpty(targetResolved) ? TargetTreeId : targetResolved;

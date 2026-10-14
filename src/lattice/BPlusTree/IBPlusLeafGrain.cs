@@ -1281,6 +1281,12 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<long> GetProjectionCheckpointOffsetAsync();
 
     /// <summary>
+    /// Returns the current checkpoint together with the chain link in one
+    /// metadata read. Does not wait for replay, just like the separate reads.
+    /// </summary>
+    Task<LeafCheckpointPage> GetProjectionCheckpointAndNextSiblingAsync();
+
+    /// <summary>
     /// Operator-facing projection rebuild seam. Resets this leaf's
     /// materialised projection (<c>Entries</c>,
     /// the incremental <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionHash"/>,

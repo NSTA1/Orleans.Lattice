@@ -73,6 +73,9 @@ public partial class BPlusLeafGrainTests
                 "Reports how far the replay HAS got. Waiting for the replay before answering would "
                 + "make the accessor unable to observe a replay in progress, which is the only state "
                 + "in which its answer is interesting.",
+            ["GetProjectionCheckpointAndNextSiblingAsync"] =
+                "Combines the checkpoint progress probe with persisted topology; neither read "
+                + "waits for replay, so an in-flight replay remains observable.",
             ["AbandonRetirementAsync"] =
                 "Releases a retirement reservation. It must stay callable on a leaf whose replay is "
                 + "failing, or a failed replay would strand the reservation permanently.",
