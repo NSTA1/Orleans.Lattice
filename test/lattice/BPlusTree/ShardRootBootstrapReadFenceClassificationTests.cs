@@ -94,6 +94,9 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
         // delete, which is a write, and exposes no stored value.
         nameof(IShardRootGrain.GetRangeClockBoundedAsync),
         nameof(IShardRootGrain.GetRootNodeRefAsync),
+        // Autonomic sampling probe (hotness, split and bulk-op flags): exposes
+        // no stored value, like GetHotnessAsync and IsSplittingAsync.
+        nameof(IShardRootGrain.GetSamplingStatusAsync),
         nameof(IShardRootGrain.GetShardMaterialiserLagAsync),
         nameof(IShardRootGrain.GetShardMaterialiserLagBoundedAsync),
         nameof(IShardRootGrain.GetShardProjectionDigestAsync),
