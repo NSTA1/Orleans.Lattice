@@ -137,7 +137,11 @@ completion only after the terminal write succeeds. Incomplete required reads
 could also certify an unchanged fingerprint and suppress later repair (#4977);
 those reads now fail explicitly. A failed initial keepalive registration could
 strand a durably in-progress sweep (#4985), so a later schedule retries
-coordinator startup without resetting its progress. These production defects are
+coordinator startup without resetting its progress. Separately, cancellation of
+a tracked demand could abandon an already-active scheduled sweep before the
+demand started its own work (#4992). Cancellation cleanup now requires ownership
+of the new sweep, preserving the earlier sweep's phase, cursor and pending
+baseline when ownership has not transferred. These production defects are
 distinct from the already-fixed historical mechanisms retained as
 [paired scheduling controls](formal-coverage.md#scheduling-foundation-and-historical-controls).
 
