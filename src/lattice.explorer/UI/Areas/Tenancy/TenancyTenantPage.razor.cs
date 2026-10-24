@@ -77,6 +77,9 @@ public partial class TenancyTenantPage : IDisposable
         _failure = null;
         _view = null;
         _apps = null;
+        _busy = false;
+        _confirmSuspend = false;
+        _confirmDelete = false;
         var tenantId = TenantId;
         if (!global::Orleans.Lattice.TenantId.TryParse(tenantId, out _))
         {
@@ -151,23 +154,33 @@ public partial class TenancyTenantPage : IDisposable
 
     private async Task ChangeStatusAsync(bool suspend)
     {
-        if (_busy || _view is null)
+        if (_busy || _view is not { } view)
         {
             return;
         }
 
         _busy = true;
+        var tenant = TenantId;
+        var token = _lifetime.Token;
         try
         {
             var admin = Catalog.Admin ?? throw new NotSupportedException();
             var result = suspend
-                ? await admin.SuspendTenantAsync(TenantId).ConfigureAwait(true)
-                : await admin.ResumeTenantAsync(TenantId).ConfigureAwait(true);
-            _view = _view with { Status = result.NewStatus };
+                ? await admin.SuspendTenantAsync(tenant).ConfigureAwait(true)
+                : await admin.ResumeTenantAsync(tenant).ConfigureAwait(true);
             Catalog.Invalidate();
             Suggestions.InvalidateTenants();
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _view = view with { Status = result.NewStatus };
             var state = TenancyFormat.TenantStateLabel(result.NewStatus).ToLowerInvariant();
-            Toasts.Show(result.Changed ? $"Tenant {TenantId} is {state}." : $"Tenant {TenantId} was already {state}.", LtToastTone.Success);
+            Toasts.Show(result.Changed ? $"Tenant {tenant} is {state}." : $"Tenant {tenant} was already {state}.", LtToastTone.Success);
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
@@ -175,7 +188,10 @@ public partial class TenancyTenantPage : IDisposable
         }
         finally
         {
-            _busy = false;
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+            }
         }
     }
 
@@ -188,11 +204,17 @@ public partial class TenancyTenantPage : IDisposable
         }
 
         _busy = true;
+        var tenant = TenantId;
+        var token = _lifetime.Token;
         TenantDeletionResult result;
         try
         {
             var admin = Catalog.Admin ?? throw new NotSupportedException();
-            result = await admin.DeleteTenantAsync(TenantId).ConfigureAwait(true);
+            result = await admin.DeleteTenantAsync(tenant).ConfigureAwait(true);
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
+            return;
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
@@ -201,7 +223,10 @@ public partial class TenancyTenantPage : IDisposable
         }
         finally
         {
-            _busy = false;
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+            }
         }
 
         // The tenant is gone from the tenant pickers, and its trees - soft-deleted
@@ -209,8 +234,13 @@ public partial class TenancyTenantPage : IDisposable
         Catalog.Invalidate();
         Suggestions.InvalidateTenants();
         TreeChanges.Changed();
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
         var trees = result.CascadedTreeCount == 1 ? "1 tree" : $"{TenancyFormat.Count(result.CascadedTreeCount)} trees";
-        Toasts.Show($"Tenant {TenantId} deleted; {trees} soft-deleted.", LtToastTone.Success);
+        Toasts.Show($"Tenant {tenant} deleted; {trees} soft-deleted.", LtToastTone.Success);
         Navigator.NavigateTo(TenancyRoutes.Directory);
     }
 }
