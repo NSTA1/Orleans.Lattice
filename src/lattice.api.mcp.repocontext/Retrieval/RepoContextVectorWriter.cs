@@ -199,6 +199,7 @@ internal sealed class RepoContextVectorWriter
     /// </para>
     /// </summary>
     private readonly ConcurrentDictionary<string, EmbeddedCountMemo> _countMemo = new();
+    private long _countScanSequence;
 
     /// <summary>
     /// The single-flight guard for the out-of-band embedded-count refresh: at most one
@@ -2085,6 +2086,7 @@ internal sealed class RepoContextVectorWriter
             // does, so a membership write that lands mid-scan supersedes this result
             // instead of memoising a count it never reflected.
             var generation = _cache.CaptureGeneration(repoId);
+            var scanSequence = Interlocked.Increment(ref _countScanSequence);
             var asOf = DateTimeOffset.UtcNow;
 
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
@@ -2113,7 +2115,15 @@ internal sealed class RepoContextVectorWriter
             // capture: the next read misses, serves this count as PENDING rather than
             // exact, and schedules a refresh. Staleness is therefore represented in the
             // answer instead of being silently served as exact (issue 1992).
-            _countMemo[repoId] = new EmbeddedCountMemo(generation, enabled, asOf);
+            // An explicit scan can overtake an out-of-band refresh. Never let the
+            // late older walk roll back a newer generation or its served timestamp;
+            // scan order, not the adjustable UTC clock, breaks same-generation ties.
+            var candidate = new EmbeddedCountMemo(generation, enabled, asOf, scanSequence);
+            _countMemo.AddOrUpdate(repoId, candidate, (_, current) =>
+                candidate.Generation > current.Generation
+                || (candidate.Generation == current.Generation && candidate.ScanSequence > current.ScanSequence)
+                    ? candidate
+                    : current);
             return enabled;
         }, cancellationToken);
     }
@@ -2124,7 +2134,9 @@ internal sealed class RepoContextVectorWriter
     /// <param name="Generation">The <see cref="RepoContextVectorCache"/> generation the count was scanned at.</param>
     /// <param name="Count">The counted live embedded sources.</param>
     /// <param name="AsOf">The UTC start of the completed scan.</param>
-    private readonly record struct EmbeddedCountMemo(long Generation, long Count, DateTimeOffset AsOf);
+    /// <param name="ScanSequence">The monotonic scan order used to reject late older walks.</param>
+    private readonly record struct EmbeddedCountMemo(
+        long Generation, long Count, DateTimeOffset AsOf, long ScanSequence);
 
     /// <summary>
     /// The dot-authoring replica identity for a membership flag enable. When the host
