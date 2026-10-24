@@ -34,7 +34,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Maintenance and sampling probes.** Autonomic probes cut serial calls from 8 to 4; shrink planning and donor retirement cut snapshot/merge probes from 4 to 2. Shard sampling uses one status call instead of three. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960)) (`Orleans.Lattice`)
 
-- **Performance - Registration and options seeding.** `CreateTreeAsync` registers a tree and returns its entry in one registry call instead of three. Lazy options seeding reuses the registration result, cutting registry calls from 3 to 2. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+- **Performance - Registration and options seeding.** Tree creation registers and returns its entry in one registry call instead of three; app tree provisioning cuts two calls to one. Lazy options seeding reuses the registration result, cutting calls from three to two. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960), [#4965](https://github.com/NSTA1/Orleans.Lattice/pull/4965)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Apps`)
+
+- **Performance - Replication head capture.** Replay horizons and source-lineage boundaries read independent WAL partition heads with bounded overlap, reducing serial round trips while preserving retention holds and reseed ordering. ([#4965](https://github.com/NSTA1/Orleans.Lattice/pull/4965)) (`Orleans.Lattice.Replication`)
 
 - **Performance - Autonomic registry reads.** Hot-shard ticks, shard-healing sweeps and the replication applier's de-enrolled-tree discard read the physical tree and shard map from one registry entry, cutting registry calls from 3/3/3 to 2/1/1 without changing public APIs. ([#4952](https://github.com/NSTA1/Orleans.Lattice/pull/4952)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
