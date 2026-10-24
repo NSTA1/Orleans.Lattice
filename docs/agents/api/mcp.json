@@ -12119,7 +12119,7 @@
         "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
       },
       "concurrency": {
-        "rule": "Flags are advisory; every real operation is still authorized on attempt.",
+        "rule": "CanView/CanManage/CanScanCompliance/CanRemediate remain permission-only; Supports* report installed support; CanStart* and unavailable reasons report current readiness. Every real operation rechecks authority and prerequisites.",
         "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
       },
       "sources": [
@@ -19365,17 +19365,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry an identical registration; conflicts require a new version, not overwrite.",
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#GetRegistryAsync"
+        "policy": "Identical registration is idempotent; changed definitions conflict. Reads have no writes.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Append-only effective-tree catalog with identical-definition deduplication.",
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#GetRegistryAsync"
+        "basis": "Immutable descriptors and hops are appended; matching definitions do not change them.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
       },
       "concurrency": {
-        "rule": "Selected region and effective tenant tree. Definitions persist across silo restart; each serving region must be provisioned independently.",
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#GetRegistryAsync"
+        "rule": "Durable effective-tree catalog in the selected region, shared by silos. Not automatically replicated; provision matching definitions and host transforms in each serving region.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#GetRegistryAsync",
@@ -19440,17 +19440,17 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry an identical registration; conflicts require a new version, not overwrite.",
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#RegisterSchemaAsync"
+        "policy": "Identical registration is idempotent; changed definitions conflict. Reads have no writes.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "Append-only effective-tree catalog with identical-definition deduplication.",
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#RegisterSchemaAsync"
+        "basis": "Immutable descriptors and hops are appended; matching definitions do not change them.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
       },
       "concurrency": {
-        "rule": "Selected region and effective tenant tree. Definitions persist across silo restart; each serving region must be provisioned independently.",
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#RegisterSchemaAsync"
+        "rule": "Durable effective-tree catalog in the selected region, shared by silos. Not automatically replicated; provision matching definitions and host transforms in each serving region.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#RegisterSchemaAsync",
