@@ -136,6 +136,7 @@ internal sealed class TagIndexReconcileGrain(
 
     public async Task<TagReconcileReport> RunSweepAsync()
     {
+        await DrainActiveSweepAsync();
         await InitSweepStateAsync();
         while (state.State.InProgress)
         {
@@ -150,8 +151,12 @@ internal sealed class TagIndexReconcileGrain(
     {
         ArgumentNullException.ThrowIfNull(ticket);
         using var relay = LatticeOperationRelay.Open(grainFactory, ticket, cancellationToken);
+        var ownsSweep = false;
         try
         {
+            await DrainActiveSweepAsync(relay.Token);
+            relay.Token.ThrowIfCancellationRequested();
+            ownsSweep = true;
             await InitSweepStateAsync();
             while (state.State.InProgress)
             {
@@ -167,13 +172,25 @@ internal sealed class TagIndexReconcileGrain(
         catch (OperationCanceledException) when (relay.Token.IsCancellationRequested)
         {
             await BankRelayedProgressAsync(relay);
-            await AbandonSweepAsync();
+            if (ownsSweep)
+                await AbandonSweepAsync();
             throw;
         }
         catch
         {
             await BankRelayedProgressAsync(relay);
             throw;
+        }
+    }
+
+    private async Task DrainActiveSweepAsync(CancellationToken cancellationToken = default)
+    {
+        // An on-demand request needs a fresh probe, but must not reset the
+        // durable cursor of a scheduled sweep it arrived behind.
+        while (state.State.InProgress)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await ProcessNextPhaseAsync();
         }
     }
 
@@ -295,6 +312,12 @@ internal sealed class TagIndexReconcileGrain(
             if (!state.State.InProgress)
             {
                 await BeginSweepAsync();
+            }
+            else
+            {
+                // Initialization may have persisted before keepalive
+                // registration failed. Recover the anchor and the pump.
+                await StartCoordinatorAsync();
             }
             return;
         }

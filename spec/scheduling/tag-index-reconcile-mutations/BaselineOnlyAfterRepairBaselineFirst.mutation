@@ -1,0 +1,16 @@
+MODULE: BaselineOnlyAfterRepairBaselineFirst
+TARGET: BaselineOnlyAfterRepair
+CLASS: Action
+SUMMARY: A probe certifies a fingerprint without completing repair.
+PERTURBS: ProbeChunk
+--- FIND
+    /\ UNCHANGED <<phase, baseline, fingerprint, repaired, probeOnly, pending,
+                   demand, servingDemand, sweeps, pump, armNeeded, busy,
+                   selected, failureUsed>>
+--- REPLACE
+    \* MUTATION: bank the probe instead of the completed repair.
+    /\ baseline' = fingerprint
+    /\ UNCHANGED <<phase, fingerprint, repaired, probeOnly, pending,
+                   demand, servingDemand, sweeps, pump, armNeeded, busy,
+                   selected, failureUsed>>
+--- END
