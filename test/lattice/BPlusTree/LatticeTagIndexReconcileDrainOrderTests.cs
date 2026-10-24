@@ -43,6 +43,7 @@ public sealed class LatticeTagIndexReconcileDrainOrderTests
             index.Data[PostingRow(tag, subjectTreeId, k)] = [1];
             index.Data[MirrorRow(tag, subjectTreeId, k)] = [1];
         }
+        index.Data.Remove(MirrorRow(tag, subjectTreeId, kept[0]));
 
         // The restored subject retains only the kept keys; every 'gone' posting
         // row is therefore an orphan the reconcile must drop.
@@ -83,6 +84,8 @@ public sealed class LatticeTagIndexReconcileDrainOrderTests
             Assert.That(index.DeleteDuringScanObserved, Is.False,
                 "The reconcile issued an index-tree delete while the scan enumerator was still open; "
                 + "mutating the tree mid-scan is the issue-1351 race that strands a contiguous tail of rows.");
+            Assert.That(index.SetDuringScanObserved, Is.False, "mirror repairs must also wait for the scan to drain");
+            Assert.That(index.Data.ContainsKey(MirrorRow(tag, subjectTreeId, kept[0])), Is.True);
 
             // Every orphan was dropped - none skipped.
             Assert.That(report.OrphanRowsRemoved, Is.EqualTo(gone.Length));
@@ -129,6 +132,7 @@ public sealed class LatticeTagIndexReconcileDrainOrderTests
         public SortedDictionary<string, byte[]> Data { get; } = new(StringComparer.Ordinal);
         public List<string> Deleted { get; } = [];
         public bool DeleteDuringScanObserved { get; private set; }
+        public bool SetDuringScanObserved { get; private set; }
         public ILattice Lattice { get; }
 
         public InstrumentedIndexTree()
@@ -147,6 +151,20 @@ public sealed class LatticeTagIndexReconcileDrainOrderTests
                     Deleted.Add(key);
                     return Task.FromResult(Data.Remove(key));
                 });
+            sub.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    SetDuringScanObserved |= Volatile.Read(ref _scanDepth) > 0;
+                    Data[ci.Arg<string>()] = ci.Arg<byte[]>();
+                    return Task.CompletedTask;
+                });
+            sub.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+                .Returns(ci => Task.FromResult(new GatedMultiReadResult
+                {
+                    Values = ci.Arg<List<string>>()
+                        .Where(Data.ContainsKey)
+                        .ToDictionary(key => key, key => Data[key], StringComparer.Ordinal),
+                }));
             Lattice = sub;
         }
 
