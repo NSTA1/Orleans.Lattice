@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Api.Schema;
 
 namespace Orleans.Lattice.Api.Mcp;
 
@@ -241,6 +242,8 @@ internal sealed class LatticeApiMcpSessionConfigurator
         HttpContext httpContext,
         CancellationToken cancellationToken)
     {
+        LatticeSchemaCapabilities? schemaCapabilities = null;
+        var schemaProbed = false;
         for (var i = 0; i < _toolGroups.Count; i++)
         {
             var group = _toolGroups[i];
@@ -280,6 +283,25 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 if (_unsupportedToolSource?.IsUnsupported(toolName) == true)
                 {
                     continue;
+                }
+
+                if (toolName.StartsWith("lattice_treeadmin_schema_", StringComparison.Ordinal))
+                {
+                    if (!schemaProbed)
+                    {
+                        schemaProbed = true;
+                        var schema = httpContext.RequestServices.GetService<ILatticeSchemaControl>()
+                            ?? _services.GetService<ILatticeSchemaControl>();
+                        if (schema is not null)
+                        {
+                            using var credentialScope = McpToolCredentialScope.Stamp(httpContext.RequestServices);
+                            using var tenantScope = McpToolActiveTenantScope.Stamp(httpContext.RequestServices);
+                            schemaCapabilities = await schema.ProbeCapabilitiesAsync(
+                                "__schema_capability_probe__", cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+                    if (schemaCapabilities is null || !SchemaToolSupport.IsSupported(toolName, schemaCapabilities))
+                        continue;
                 }
 
                 // Coarse transport gate: only advertise a tool the registered

@@ -6,7 +6,13 @@
 
 @if (Workspace is not null)
 {
-    @if (!Workspace.Grants.ViewPolicy)
+    @if (!Workspace.Grants.SupportsEnforcement)
+    {
+        <LtEmptyState Title="Enforcement is not available" HeadingLevel="2">
+            This cluster does not install schema enforcement. A host operator must register AddLatticeSchemaEnforcement before policies can validate writes.
+        </LtEmptyState>
+    }
+    else if (!Workspace.Grants.ViewPolicy)
     {
         <LtEmptyState Title="You may not read this tree's policy" HeadingLevel="2">
             Reading a policy needs read authority on the tree.

@@ -24,6 +24,8 @@ public sealed class SchemaGrpcInterceptorMappingTests
     {
         Assert.Multiple(() =>
         {
+            AssertOp(LatticeSchemaGrpcMethods.GetRegistryMethodName, LatticeSchemaApiOperation.GetRegistry);
+            AssertOp(LatticeSchemaGrpcMethods.RegisterSchemaMethodName, LatticeSchemaApiOperation.RegisterSchema);
             AssertOp(LatticeSchemaGrpcMethods.SetPolicyMethodName, LatticeSchemaApiOperation.SetPolicy);
             AssertOp(LatticeSchemaGrpcMethods.ClearPolicyMethodName, LatticeSchemaApiOperation.ClearPolicy);
             AssertOp(LatticeSchemaGrpcMethods.GetPolicyMethodName, LatticeSchemaApiOperation.GetPolicy);
@@ -66,6 +68,7 @@ public sealed class SchemaGrpcInterceptorMappingTests
         Assert.Multiple(() =>
         {
             AssertTarget(new SchemaTreeRequest { TreeId = "t1" }, "t1");
+            AssertTarget(new SchemaRegistryRequest { TreeId = "registry", Registration = new() }, "registry");
             AssertTarget(new SetPolicyRequest { TreeId = "t2", Policy = new LatticeSchemaPolicy(Array.Empty<LatticeSchemaRule>()) }, "t2");
             AssertTarget(new SetVersionConfigRequest { TreeId = "t3", Config = new LatticeSchemaVersionConfig(1, 2) }, "t3");
             AssertTarget(new AdvanceVersionRequest { TreeId = "t4", NewTargetVersion = 5 }, "t4");

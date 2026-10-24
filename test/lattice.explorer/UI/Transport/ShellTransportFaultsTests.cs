@@ -93,6 +93,33 @@ public sealed class ShellTransportFaultsTests
     }
 
     [Test]
+    public void A_schema_rejected_write_is_an_expected_argument_error_with_actionable_detail()
+    {
+        const string detail = "The value was rejected by the tree's schema policy. Expected a JSON document. Correct the value or update the policy before retrying.";
+        var fault = new RpcException(new Status(StatusCode.InvalidArgument, detail), new global::Grpc.Core.Metadata
+        {
+            { "lattice-validation-code", "schema-policy" },
+            { "lattice-validation-tree", "t/acme/orders" },
+            { "lattice-validation-key", "order-1" },
+            { "lattice-validation-reason", "Expected a JSON document." },
+        });
+
+        var mapped = ShellTransportFaults.Map(fault, default);
+
+        Assert.That(mapped, Is.InstanceOf<ArgumentException>());
+        Assert.That(mapped.Message, Is.EqualTo(detail));
+        Assert.That(mapped, Is.Not.InstanceOf<ShellTransportException>());
+        var validation = (ILatticeValueValidationFault)mapped;
+        Assert.That(validation.Code, Is.EqualTo("schema-policy"));
+        Assert.That(validation.TreeId, Is.EqualTo("t/acme/orders"));
+        Assert.That(validation.Key, Is.EqualTo("order-1"));
+        Assert.That(validation.Reason, Is.EqualTo("Expected a JSON document."));
+        var shown = Orleans.Lattice.Explorer.UI.Areas.Data.DataErrors.Describe(mapped, "save the value");
+        Assert.That(shown, Does.Contain("Expected a JSON document.").And.Contain("Correct the value"));
+        Assert.That(shown, Does.Not.Contain("t/acme/orders"));
+    }
+
+    [Test]
     public void A_missing_fault_is_rejected()
     {
         Assert.Multiple(() =>

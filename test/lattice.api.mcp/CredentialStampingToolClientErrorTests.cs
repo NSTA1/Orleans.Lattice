@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// stack (issue #3761). Server faults and authorization denials must still throw.
 /// </summary>
 [TestFixture]
-public sealed class CredentialStampingToolClientErrorTests
+public sealed partial class CredentialStampingToolClientErrorTests
 {
     [Test]
     public async Task A_marked_inner_fault_is_answered_as_an_error_result_not_thrown()

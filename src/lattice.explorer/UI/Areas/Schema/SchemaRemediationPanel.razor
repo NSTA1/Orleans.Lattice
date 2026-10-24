@@ -5,13 +5,21 @@
     checks each against the tree's current policy, and cuts the tree over only
     when every value passes; otherwise it stops at the first value that still
     fails and changes nothing. Only member set, remove and rename steps can be
-    written here; conditional and computed transforms are registered in code,
-    and this tab says so rather than guessing (#1257).
+    written here; conditional and computed transforms use the API's declarative IR.
 *@
 
 @if (Workspace is not null)
 {
-    <SchemaOperationStatus />
+    @if (Workspace.Grants.SupportsRemediation)
+    {
+        <SchemaOperationStatus />
+    }
+    else
+    {
+        <LtEmptyState Title="Remediation is not available" HeadingLevel="2">
+            This cluster does not install the remediation engine. Existing policy and versioning features remain usable where installed.
+        </LtEmptyState>
+    }
 
     @if (Workspace.Grants.Remediate)
     {
@@ -24,7 +32,7 @@
             }
             else
             {
-                <p class="lt-schema-note">Every value is rewritten through these steps, in order, and checked against the tree's policy (@SchemaFormat.Policy(policy)). Members a step does not name are kept. Only set, remove and rename steps on top-level members can be written here; conditional or computed transforms are registered in code on the silos.</p>
+                <p class="lt-schema-note">Every value is rewritten through these steps, in order, and checked against the tree's policy (@SchemaFormat.Policy(policy)). Members a step does not name are kept. Only set, remove and rename steps on top-level members can be written here; use the API's declarative IR for conditional or computed transforms.</p>
 
                 @if (_draft.Steps.Count == 0)
                 {
@@ -74,8 +82,12 @@
                 }
 
                 <div class="lt-toolbar lt-schema-actions">
-                    <LtButton OnClick="Review" Disabled="@Busy">Review and start...</LtButton>
+                    <LtButton OnClick="Review" Disabled="@(Busy || !Workspace.Grants.CanStartRemediation)">Review and start...</LtButton>
                 </div>
+                @if (!Workspace.Grants.CanStartRemediation && Workspace.Grants.RemediationUnavailableReason is { } reason)
+                {
+                    <p class="lt-schema-note">@reason</p>
+                }
 
                 <LtConfirmDestructive Open="@_confirm"
                                       OpenChanged="value => _confirm = value"

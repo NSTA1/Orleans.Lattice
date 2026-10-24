@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 /// <summary>
 /// The Versions tab: get, set, clear, advance, migrate, and advance and migrate;
 /// the irreversible verbs are confirmed by naming the tree; migrations are staged
-/// operations that move to their status page; the #1257 limitation is stated;
+/// operations that move to their status page; version metadata is distinguished from policy;
 /// versioning that is not registered, a reader, and a running operation.
 /// </summary>
 [TestFixture]
@@ -41,7 +41,7 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
     }
 
     [Test]
-    public void It_shows_the_family_target_and_strict_ingest_and_says_what_it_cannot_show()
+    public void It_shows_the_family_target_and_strict_ingest_and_explains_version_metadata()
     {
         UseEstate();
 
@@ -52,7 +52,7 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
             var terms = cut.FindAll("[role=tabpanel] dl.lt-dl dd").Select(value => value.TextContent.Trim()).ToArray();
             Assert.That(terms[..2], Is.EqualTo(new[] { "7", "3" }));
             Assert.That(terms[2], Does.StartWith("On: a replicated CRDT or atomic-batch entry"));
-            Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("cannot show what differs between two versions"));
+            Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("Descriptors name versions"));
             Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("Advancing the target cannot be undone"));
             Assert.That(cut.FindAll("[role=tabpanel] button").Select(button => button.TextContent.Trim()), Is.EqualTo(new[]
             {

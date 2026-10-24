@@ -63,13 +63,22 @@ else
 
     @if (!_workspace.Grants.HasAny)
     {
-        <LtEmptyState Title="You may not manage this tree's schema" HeadingLevel="2">
-            Your account holds no schema authority on this tree. Ask an administrator for read or schema-admin access to it.
-        </LtEmptyState>
+        @if (_workspace.Grants.HasAuthority)
+        {
+            <LtEmptyState Title="Schema features are not installed" HeadingLevel="2">
+                Your account has schema authority, but this cluster installs none of the schema features it permits. Ask a host operator to install enforcement or versioning.
+            </LtEmptyState>
+        }
+        else
+        {
+            <LtEmptyState Title="You may not manage this tree's schema" HeadingLevel="2">
+                Your account holds no schema authority on this tree. Ask an administrator for read or schema-admin access to it.
+            </LtEmptyState>
+        }
     }
     else
     {
-        <CascadingValue Value="_workspace">
+        <CascadingValue @key="_loadedCaller" Value="_workspace">
             <LtTabs Label="@($"{TreeId} schema")" ActiveId="@_workspace.Tab" ActiveIdChanged="OnTabChanged">
                 <LtTab Id="@SchemaTabs.Policy" Title="Policy"><SchemaPolicyPanel /></LtTab>
                 <LtTab Id="@SchemaTabs.Versions" Title="Versions"><SchemaVersionsPanel /></LtTab>

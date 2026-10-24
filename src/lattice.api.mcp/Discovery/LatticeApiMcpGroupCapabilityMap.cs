@@ -69,7 +69,9 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.TreeAdmin => LatticeOperation.Admin
             | LatticeOperation.TreeLifecycle
             | LatticeOperation.BulkLoad
-            | LatticeOperation.Restore,
+            | LatticeOperation.Restore
+            | LatticeOperation.Read
+            | LatticeOperation.SchemaAdmin,
 
         // Repository-context store: a data-plane surface over dedicated Lattice
         // trees, so it shares the data group's read/write capability mask.

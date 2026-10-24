@@ -95,6 +95,7 @@ internal sealed class LatticeSchemaComplianceAdmin(
         {
             TreeId = treeId,
             HasPolicy = true,
+            RuleCount = policy.RuleCount,
             CompliantCount = compliant,
             NonCompliantCount = nonCompliant,
             ScannedCount = compliant + nonCompliant,

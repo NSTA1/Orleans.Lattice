@@ -15,6 +15,8 @@ namespace Orleans.Lattice.Api.Schema.Grpc;
 /// </remarks>
 public static class GrpcSchemaTypeAliases
 {
+    /// <summary>Alias for <see cref="SchemaRegistryRequest"/>.</summary>
+    public const string SchemaRegistryRequest = "oisg.r";
     /// <summary>
     /// The reserved alias prefix owned by the schema gRPC binding. Every alias
     /// constant added here starts with this value.

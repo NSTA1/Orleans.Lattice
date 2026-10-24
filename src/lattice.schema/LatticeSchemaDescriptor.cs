@@ -5,8 +5,11 @@ namespace Orleans.Lattice.Schema;
 /// version number, and a human-readable name for diagnostics. Held in the
 /// host-supplied <see cref="ILatticeSchemaRegistry"/> so a reader can confirm a
 /// stamped <c>(schemaId, version)</c> is recognized before deciphering the body.
-/// This is an in-process descriptor; it is never persisted or sent on the wire.
+/// Runtime registrations persist this descriptor and expose it through control APIs.
 /// </summary>
+[GenerateSerializer]
+[Alias(SchemaTypeAliases.LatticeSchemaDescriptor)]
+[Immutable]
 public readonly record struct LatticeSchemaDescriptor
 {
     /// <summary>Initializes a new <see cref="LatticeSchemaDescriptor"/>.</summary>
@@ -14,6 +17,7 @@ public readonly record struct LatticeSchemaDescriptor
     /// <param name="version">The schema version.</param>
     /// <param name="name">A human-readable name for diagnostics. Must not be <c>null</c> or empty.</param>
     /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
+    [System.Text.Json.Serialization.JsonConstructor]
     public LatticeSchemaDescriptor(uint schemaId, uint version, string name)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
@@ -23,11 +27,11 @@ public readonly record struct LatticeSchemaDescriptor
     }
 
     /// <summary>The schema-family id.</summary>
-    public uint SchemaId { get; }
+    [Id(0)] public uint SchemaId { get; }
 
     /// <summary>The schema version.</summary>
-    public uint Version { get; }
+    [Id(1)] public uint Version { get; }
 
     /// <summary>A human-readable name for diagnostics.</summary>
-    public string Name { get; }
+    [Id(2)] public string Name { get; }
 }

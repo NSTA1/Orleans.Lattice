@@ -37,6 +37,10 @@ internal sealed class LatticeSchemaGrpcMethods
 {
     /// <summary>The fully-qualified gRPC service name.</summary>
     public const string ServiceName = "orleans.lattice.api.schema";
+    /// <summary>The unary runtime-registry discovery RPC method name.</summary>
+    public const string GetRegistryMethodName = "GetRegistry";
+    /// <summary>The unary runtime-registration RPC method name.</summary>
+    public const string RegisterSchemaMethodName = "RegisterSchema";
 
     /// <summary>The unary set-policy RPC method name.</summary>
     public const string SetPolicyMethodName = "SetPolicy";
@@ -131,8 +135,19 @@ internal sealed class LatticeSchemaGrpcMethods
         Serializer<SchemaOperationRequest> operationRequestSerializer,
         Serializer<SchemaOperationStatusResponse> operationStatusResponseSerializer,
         Serializer<LatticeOperationListRequest> operationListRequestSerializer,
-        Serializer<LatticeOperationPage> operationPageSerializer)
+        Serializer<LatticeOperationPage> operationPageSerializer,
+        Serializer<SchemaRegistryRequest>? registryRequestSerializer = null,
+        Serializer<LatticeSchemaRuntimeRegistration>? registrySerializer = null)
     {
+        if (registryRequestSerializer is not null && registrySerializer is not null)
+        {
+            GetRegistry = new(MethodType.Unary, ServiceName, GetRegistryMethodName,
+                LatticeSchemaGrpcMarshallers.Create(treeRequestSerializer),
+                LatticeSchemaGrpcMarshallers.Create(registrySerializer));
+            RegisterSchema = new(MethodType.Unary, ServiceName, RegisterSchemaMethodName,
+                LatticeSchemaGrpcMarshallers.Create(registryRequestSerializer),
+                LatticeSchemaGrpcMarshallers.Create(ackResponseSerializer));
+        }
         ArgumentNullException.ThrowIfNull(setPolicyRequestSerializer);
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(ackResponseSerializer);
@@ -331,6 +346,10 @@ internal sealed class LatticeSchemaGrpcMethods
 
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
     public Method<SchemaTreeRequest, LatticeSchemaCapabilities> ProbeCapabilities { get; }
+    /// <summary>The unary effective-catalog discovery RPC.</summary>
+    public Method<SchemaTreeRequest, LatticeSchemaRuntimeRegistration> GetRegistry { get; } = null!;
+    /// <summary>The unary append-only runtime-registration RPC.</summary>
+    public Method<SchemaRegistryRequest, SchemaAckResponse> RegisterSchema { get; } = null!;
 
     /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
@@ -400,7 +419,9 @@ internal sealed class LatticeSchemaGrpcMethods
             serializerProvider.GetRequiredService<Serializer<SchemaOperationRequest>>(),
             serializerProvider.GetRequiredService<Serializer<SchemaOperationStatusResponse>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeOperationListRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>());
+            serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>(),
+            serializerProvider.GetRequiredService<Serializer<SchemaRegistryRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<LatticeSchemaRuntimeRegistration>>());
     }
 }
 

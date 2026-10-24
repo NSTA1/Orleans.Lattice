@@ -97,7 +97,7 @@ else
             </CompactRow>
             <DetailActions Context="row">
                 <a class="lt-schema-action" href="@Href(SchemaAddresses.Tree(row.TreeId))">Open schema</a>
-                @if (row.Policy is not null)
+                @if (row.Policy is not null && row.CanScanCompliance)
                 {
                     <a class="lt-schema-action" href="@Href(SchemaAddresses.StartScan(row.TreeId))">Scan compliance</a>
                 }

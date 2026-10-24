@@ -30,6 +30,39 @@ internal sealed record SchemaGrants(
     /// <summary>The grants of a caller who may do nothing.</summary>
     public static SchemaGrants None { get; } = new(false, false, false, false, false, false, false, false);
 
+    /// <summary>Whether the server granted any schema authority before installed-support filtering.</summary>
+    public bool HasAuthority { get; init; }
+
+    /// <summary>Whether policy enforcement is installed, not whether the caller is authorized.</summary>
+    public bool SupportsEnforcement { get; init; }
+
+    /// <summary>Whether versioning is installed.</summary>
+    public bool SupportsVersioning { get; init; }
+
+    /// <summary>Whether remediation is installed.</summary>
+    public bool SupportsRemediation { get; init; }
+
+    /// <summary>Whether compliance scans are installed.</summary>
+    public bool SupportsCompliance { get; init; }
+
+    /// <summary>Whether dead-letter inspection is installed.</summary>
+    public bool SupportsDeadLetters { get; init; }
+
+    /// <summary>Whether a durable runtime version catalog can be administered.</summary>
+    public bool SupportsRuntimeRegistration { get; init; }
+
+    /// <summary>Whether migration prerequisites and authority currently admit a start.</summary>
+    public bool CanStartMigration { get; init; }
+
+    /// <summary>The reason migration is not currently ready.</summary>
+    public string? MigrationUnavailableReason { get; init; }
+
+    /// <summary>Whether remediation prerequisites and authority currently admit a start.</summary>
+    public bool CanStartRemediation { get; init; }
+
+    /// <summary>The reason remediation is not currently ready.</summary>
+    public string? RemediationUnavailableReason { get; init; }
+
     /// <summary>Whether any capability is granted.</summary>
     public bool HasAny =>
         ViewPolicy || ManagePolicy || ViewVersion || ManageVersion || ViewRemediation || Remediate || ScanCompliance || ViewDeadLetters;
@@ -43,12 +76,28 @@ internal sealed record SchemaGrants(
     public static SchemaGrants From(LatticeSchemaCapabilities? capabilities) => capabilities is null
         ? None
         : new(
-            capabilities.CanViewPolicy,
-            capabilities.CanManagePolicy,
-            capabilities.CanViewVersionConfig,
-            capabilities.CanManageVersion,
-            capabilities.CanViewRemediationStatus,
-            capabilities.CanRemediate,
-            capabilities.CanScanCompliance,
-            capabilities.CanViewDeadLetters);
+            capabilities.CanViewPolicy && capabilities.SupportsEnforcement,
+            capabilities.CanManagePolicy && capabilities.SupportsEnforcement,
+            capabilities.CanViewVersionConfig && capabilities.SupportsVersioning,
+            capabilities.CanManageVersion && capabilities.SupportsVersioning,
+            capabilities.CanViewRemediationStatus && capabilities.SupportsRemediation,
+            capabilities.CanRemediate && capabilities.SupportsRemediation,
+            capabilities.CanScanCompliance && capabilities.SupportsCompliance,
+            capabilities.CanViewDeadLetters && capabilities.SupportsDeadLetters)
+        {
+            HasAuthority = capabilities.CanViewPolicy || capabilities.CanManagePolicy
+                || capabilities.CanViewVersionConfig || capabilities.CanManageVersion
+                || capabilities.CanViewRemediationStatus || capabilities.CanRemediate
+                || capabilities.CanScanCompliance || capabilities.CanViewDeadLetters,
+            SupportsEnforcement = capabilities.SupportsEnforcement,
+            SupportsVersioning = capabilities.SupportsVersioning,
+            SupportsRemediation = capabilities.SupportsRemediation,
+            SupportsCompliance = capabilities.SupportsCompliance,
+            SupportsDeadLetters = capabilities.SupportsDeadLetters,
+            SupportsRuntimeRegistration = capabilities.SupportsRuntimeRegistration,
+            CanStartMigration = capabilities.CanStartMigration,
+            MigrationUnavailableReason = capabilities.MigrationUnavailableReason,
+            CanStartRemediation = capabilities.CanStartRemediation,
+            RemediationUnavailableReason = capabilities.RemediationUnavailableReason,
+        };
 }

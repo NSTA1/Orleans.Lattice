@@ -12096,7 +12096,7 @@
       ],
       "response": {
         "type": "LatticeSchemaCapabilities",
-        "shape": "Structured JSON projection of LatticeSchemaCapabilities returned by the handler."
+        "shape": "Structured capability JSON: permission-only Can* grants, separate installed Supports* flags, and CanStart* readiness with unavailable reasons."
       },
       "errors": [
         {
@@ -12119,7 +12119,7 @@
         "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
       },
       "concurrency": {
-        "rule": "Flags are advisory; every real operation is still authorized on attempt.",
+        "rule": "CanView/CanManage/CanScanCompliance/CanRemediate remain permission-only; Supports* report installed support; CanStart* and unavailable reasons report current readiness. Every real operation rechecks authority and prerequisites.",
         "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
       },
       "sources": [
@@ -19315,6 +19315,147 @@
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build",
         "docs/lattice.api.treeadmin/operations.md"
       ]
+    },
+    {
+      "id": "lattice_treeadmin_schema_get_registry",
+      "in_process": "TreeAdminSchemaToolHandlers.GetRegistryAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#get-registry",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
+      "request": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "LatticeSchemaRuntimeRegistration",
+        "shape": "Descriptors, immutable migration hops and advertised stable host transform ids. No CLR names, code or assemblies."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Identical registration is idempotent; changed definitions conflict. Reads have no writes.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Immutable descriptors and hops are appended; matching definitions do not change them.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
+      },
+      "concurrency": {
+        "rule": "Durable effective-tree catalog in the selected region, shared by silos. Not automatically replicated; provision matching definitions and host transforms in each serving region.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#GetRegistryAsync",
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_treeadmin_schema_register",
+      "in_process": "TreeAdminSchemaToolHandlers.RegisterSchemaAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/schema.json#register-schema",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
+      "request": [
+        {
+          "name": "treeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "registration",
+          "type": "LatticeSchemaRuntimeRegistration",
+          "required": true
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "LatticeSchemaRuntimeRegistration",
+        "shape": "Descriptors, immutable migration hops and advertised stable host transform ids. No CLR names, code or assemblies."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Identical registration is idempotent; changed definitions conflict. Reads have no writes.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Immutable descriptors and hops are appended; matching definitions do not change them.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
+      },
+      "concurrency": {
+        "rule": "Durable effective-tree catalog in the selected region, shared by silos. Not automatically replicated; provision matching definitions and host transforms in each serving region.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaToolHandlers.cs#RegisterSchemaAsync",
+        "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      ]
     }
   ],
   "error_taxonomy": [
@@ -19365,6 +19506,14 @@
       "retryable": false,
       "meaning": "The caller lacks the cluster-wide LatticeOperation.Telemetry capability; the tool returns a fixed message in the result Error field before any backend call.",
       "source": "src/lattice.api.mcp.telemetry/TelemetryToolHandlers.cs#TelemetryToolHandlers.CapabilityDeniedMessage"
+    },
+    {
+      "id": "schema-policy",
+      "type": "result-error",
+      "grpc_status": null,
+      "retryable": false,
+      "meaning": "A schema-rejected write returns isError=true with structuredContent {code, treeId, key, reason}; code is schema-policy and classification is rejected_content. Only capped policy-derived diagnostics are returned, never submitted values or raw exception text. Correct input or policy before retrying.",
+      "source": "src/lattice.api.mcp/Tools/McpValueValidationErrors.cs#McpValueValidationErrors"
     }
   ]
 }

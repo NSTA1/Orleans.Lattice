@@ -11,6 +11,7 @@ public sealed class SchemaComplianceScanResultsTests
     {
         TreeId = "orders",
         HasPolicy = true,
+        RuleCount = 3,
         CompliantCount = 7,
         NonCompliantCount = 3,
         ScannedCount = 10,
@@ -31,6 +32,8 @@ public sealed class SchemaComplianceScanResultsTests
         {
             Assert.That(read.TreeId, Is.EqualTo("orders"));
             Assert.That(read.HasPolicy, Is.True);
+            Assert.That(read.RuleCount, Is.EqualTo(3));
+            Assert.That(map[SchemaComplianceScanResults.FailureReasonCountKey], Is.EqualTo("2"));
             Assert.That(read.CompliantCount, Is.EqualTo(7));
             Assert.That(read.NonCompliantCount, Is.EqualTo(3));
             Assert.That(read.ScannedCount, Is.EqualTo(10));
@@ -59,7 +62,7 @@ public sealed class SchemaComplianceScanResultsTests
         map.Remove(SchemaComplianceScanResults.CompliantCountKey);
         var broken = new Dictionary<string, string>(SchemaComplianceScanResults.ToResultMap(Report()))
         {
-            [SchemaComplianceScanResults.RuleCountKey] = "5",
+            [SchemaComplianceScanResults.FailureReasonCountKey] = "5",
         };
 
         Assert.Multiple(() =>
@@ -68,6 +71,33 @@ public sealed class SchemaComplianceScanResultsTests
             Assert.That(SchemaComplianceScanResults.TryReadReport(map, out _), Is.False);
             Assert.That(SchemaComplianceScanResults.TryReadReport(broken, out _), Is.False, "A breakdown row the count promises but the map lacks.");
         });
+    }
+
+    [Test]
+    public void TryReadReport_legacy_maps_keep_breakdown_readable_without_inventing_policy_count()
+    {
+        var legacy = new Dictionary<string, string>(SchemaComplianceScanResults.ToResultMap(Report()));
+        legacy.Remove(SchemaComplianceScanResults.FailureReasonCountKey);
+        legacy[SchemaComplianceScanResults.RuleCountKey] = "2";
+
+        Assert.That(SchemaComplianceScanResults.TryReadReport(legacy, out var report), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.RuleCount, Is.Zero);
+            Assert.That(report.RuleBreakdown, Is.EqualTo(Report().RuleBreakdown));
+        });
+    }
+
+    [TestCase("-1")]
+    [TestCase("2147483647")]
+    [TestCase("invalid")]
+    public void TryReadReport_invalid_breakdown_count_is_rejected_without_allocating(string count)
+    {
+        var map = new Dictionary<string, string>(SchemaComplianceScanResults.ToResultMap(Report()))
+        {
+            [SchemaComplianceScanResults.FailureReasonCountKey] = count,
+        };
+        Assert.That(SchemaComplianceScanResults.TryReadReport(map, out _), Is.False);
     }
 
     [Test]

@@ -26,8 +26,11 @@ namespace Orleans.Lattice.Schema;
 /// </remarks>
 [GenerateSerializer]
 [Alias(SchemaTypeAliases.LatticeSchemaViolationException)]
-public sealed class LatticeSchemaViolationException : InvalidOperationException, ILatticeDomainFault
+public sealed class LatticeSchemaViolationException : InvalidOperationException, ILatticeValueValidationFault
 {
+    /// <inheritdoc />
+    public string Code => "schema-policy";
+
     /// <summary>The logical tree id the rejected write targeted. Empty on the message-only constructors.</summary>
     [Id(0)]
     public string TreeId { get; }

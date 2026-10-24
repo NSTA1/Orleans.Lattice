@@ -43,6 +43,12 @@ internal static class ShellTransportFaults
             StatusCode.Cancelled => new OperationCanceledException(detail, exception, cancellationToken),
             StatusCode.PermissionDenied or StatusCode.Unauthenticated =>
                 new LatticeAuthorizationDeniedException(detail, exception),
+            StatusCode.InvalidArgument when exception.Trailers.GetValue("lattice-validation-code") == "schema-policy" =>
+                new ShellValueValidationException(detail,
+                    exception.Trailers.GetValue("lattice-validation-tree") ?? string.Empty,
+                    exception.Trailers.GetValue("lattice-validation-key") ?? string.Empty,
+                    exception.Trailers.GetValue("lattice-validation-reason") ?? "The value does not satisfy the schema policy.",
+                    exception),
             StatusCode.InvalidArgument => new ArgumentException(detail, exception),
             StatusCode.OutOfRange => new ArgumentOutOfRangeException(detail, exception),
             StatusCode.NotFound => new KeyNotFoundException(detail, exception),

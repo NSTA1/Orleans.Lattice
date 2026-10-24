@@ -25,6 +25,22 @@ namespace Orleans.Lattice.Api.Schema.Grpc;
 /// </remarks>
 public sealed class LatticeSchemaApiGrpcClient
 {
+    /// <summary>Discovers the tree's durable and host-provisioned schema definitions.</summary>
+    public Task<LatticeSchemaRuntimeRegistration> GetRegistryAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return UnaryAsync(_methods.GetRegistry, new SchemaTreeRequest { TreeId = treeId }, cancellationToken);
+    }
+
+    /// <summary>Registers immutable descriptors and migration hops without installing code.</summary>
+    public async Task RegisterSchemaAsync(string treeId, LatticeSchemaRuntimeRegistration registration, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(registration);
+        await UnaryAsync(_methods.RegisterSchema,
+            new SchemaRegistryRequest { TreeId = treeId, Registration = registration }, cancellationToken).ConfigureAwait(false);
+    }
+
     private readonly CallInvoker _invoker;
     private readonly LatticeSchemaGrpcMethods _methods;
 

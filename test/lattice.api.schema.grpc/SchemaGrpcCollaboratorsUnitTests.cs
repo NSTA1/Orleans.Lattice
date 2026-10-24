@@ -200,10 +200,10 @@ public sealed class SchemaGrpcCollaboratorsUnitTests
 [TestFixture]
 public sealed class LatticeSchemaGrpcServiceBaseBindServiceTests
 {
-    // 25 unary RPCs (including the four compliance-scan operation RPCs, #4126, and the
-    // six remediation and migration operation RPCs, #4123) + 1 server-streaming
-    // (StreamDeadLetters) = 26 total.
-    private const int ExpectedMethodCount = 22;
+    // 23 unary RPCs (including the compliance-scan and schema operation RPCs, and the
+    // runtime registry pair GetRegistry/RegisterSchema, #4799) + 1 server-streaming
+    // (StreamDeadLetters) = 24 total.
+    private const int ExpectedMethodCount = 24;
 
     private ServiceProvider _serializerProvider = null!;
     private LatticeSchemaGrpcMethods _methods = null!;

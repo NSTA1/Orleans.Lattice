@@ -84,6 +84,10 @@ public enum LatticeSchemaApiOperation
 
     /// <summary>The <c>CancelSchemaOperation</c> RPC. Carries no target tree: the facade scopes and authorizes the cancel.</summary>
     CancelSchemaOperation,
+    /// <summary>Discovers registered schemas and supported migration descriptors.</summary>
+    GetRegistry,
+    /// <summary>Registers durable runtime descriptors and migration paths.</summary>
+    RegisterSchema,
 }
 
 /// <summary>

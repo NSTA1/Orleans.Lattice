@@ -166,7 +166,8 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
         // makes the group usable.
         Assert.That(
             LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.TreeAdmin),
-            Is.EqualTo(LatticeOperation.Admin | LatticeOperation.TreeLifecycle | LatticeOperation.BulkLoad | LatticeOperation.Restore));
+            Is.EqualTo(LatticeOperation.Admin | LatticeOperation.TreeLifecycle | LatticeOperation.BulkLoad | LatticeOperation.Restore
+                | LatticeOperation.Read | LatticeOperation.SchemaAdmin));
     }
 
     [Test]

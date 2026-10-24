@@ -404,6 +404,11 @@ builder.Host.UseOrleans(silo =>
     // the ILatticeSchemaAdmin registered by enforcement, and AddLatticeTreeAdminApi
     // consumes the ILatticeSchemaControl registered by the schema API.
     silo.AddLatticeSchemaEnforcement();
+    if (config.GetValue("Schema:EnableVersioning", false))
+    {
+        silo.AddLatticeSchemaVersioning();
+    }
+
     silo.AddLatticeSchemaApi();
     silo.AddLatticeTreeAdminApi();
 

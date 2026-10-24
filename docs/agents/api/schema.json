@@ -367,6 +367,56 @@
           "name": "CanRemediate",
           "type": "bool",
           "required": false
+        },
+        {
+          "name": "SupportsEnforcement",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "SupportsVersioning",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "SupportsRemediation",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "SupportsCompliance",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "SupportsDeadLetters",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "SupportsRuntimeRegistration",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanStartMigration",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanStartRemediation",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "MigrationUnavailableReason",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "RemediationUnavailableReason",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Schema/Model/LatticeSchemaCapabilities.cs#LatticeSchemaCapabilities"
@@ -403,6 +453,11 @@
           "name": "RuleBreakdown",
           "type": "IReadOnlyList<LatticeSchemaComplianceRuleCount>",
           "required": true
+        },
+        {
+          "name": "RuleCount",
+          "type": "int",
+          "required": false
         }
       ],
       "source": "src/lattice.schema/LatticeSchemaComplianceReport.cs#LatticeSchemaComplianceReport"
@@ -908,6 +963,95 @@
         }
       ],
       "source": "src/lattice.api.schema.grpc/Model/VersionConfigResponse.cs#VersionConfigResponse"
+    },
+    "LatticeSchemaRuntimeRegistration": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Descriptors",
+          "type": "LatticeSchemaDescriptor[]",
+          "required": false
+        },
+        {
+          "name": "Upcasters",
+          "type": "LatticeSchemaRuntimeUpcaster[]",
+          "required": false
+        },
+        {
+          "name": "SupportedTransformIds",
+          "type": "string[]",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaRuntimeRegistration.cs#LatticeSchemaRuntimeRegistration"
+    },
+    "LatticeSchemaRuntimeUpcaster": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "SchemaId",
+          "type": "uint",
+          "required": false
+        },
+        {
+          "name": "FromVersion",
+          "type": "uint",
+          "required": false
+        },
+        {
+          "name": "ToVersion",
+          "type": "uint",
+          "required": false
+        },
+        {
+          "name": "Transform",
+          "type": "LatticeValueTransform?",
+          "required": false
+        },
+        {
+          "name": "TransformId",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaRuntimeUpcaster.cs#LatticeSchemaRuntimeUpcaster"
+    },
+    "LatticeSchemaDescriptor": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "SchemaId",
+          "type": "uint",
+          "required": true
+        },
+        {
+          "name": "Version",
+          "type": "uint",
+          "required": true
+        },
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.schema/LatticeSchemaDescriptor.cs#LatticeSchemaDescriptor"
+    },
+    "SchemaRegistryRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Registration",
+          "type": "LatticeSchemaRuntimeRegistration",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.schema.grpc/Model/SchemaRegistryRequest.cs#SchemaRegistryRequest"
     }
   },
   "operations": [
@@ -1505,7 +1649,7 @@
         "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
       },
       "concurrency": {
-        "rule": "Flags are advisory; every real operation is still authorized on attempt.",
+        "rule": "CanView/CanManage/CanScanCompliance/CanRemediate remain permission-only; Supports* report installed support; CanStart* and unavailable reasons report current readiness. Every real operation rechecks authority and prerequisites.",
         "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
       },
       "sources": [
@@ -1839,6 +1983,88 @@
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ListDeadLettersAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#StreamDeadLettersMethodName",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#StreamDeadLetters"
+      ]
+    },
+    {
+      "id": "get-registry",
+      "in_process": "ILatticeSchemaControl.GetRegistryAsync",
+      "grpc_method": "/orleans.lattice.api.schema/GetRegistry",
+      "transport_scope": "both",
+      "request": "SchemaTreeRequest",
+      "response": "LatticeSchemaRuntimeRegistration",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Invalid tree, descriptor, transform, unknown host transform id, or conflicting immutable registration."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks Read over the effective tenant tree."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Versioning or runtime registration is not installed."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Identical registration is idempotent; changed definitions conflict. Reads have no writes.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Immutable descriptors and hops are appended; matching definitions do not change them.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
+      },
+      "concurrency": {
+        "rule": "Durable effective-tree catalog in the selected region, shared by silos. Not automatically replicated; provision matching definitions and host transforms in each serving region.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#GetRegistryMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#GetRegistry"
+      ]
+    },
+    {
+      "id": "register-schema",
+      "in_process": "ILatticeSchemaControl.RegisterSchemaAsync",
+      "grpc_method": "/orleans.lattice.api.schema/RegisterSchema",
+      "transport_scope": "both",
+      "request": "SchemaRegistryRequest",
+      "response": "SchemaAckResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Invalid tree, descriptor, transform, unknown host transform id, or conflicting immutable registration."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks SchemaAdmin over the effective tenant tree."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Versioning or runtime registration is not installed."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Identical registration is idempotent; changed definitions conflict. Reads have no writes.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Immutable descriptors and hops are appended; matching definitions do not change them.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
+      },
+      "concurrency": {
+        "rule": "Durable effective-tree catalog in the selected region, shared by silos. Not automatically replicated; provision matching definitions and host transforms in each serving region.",
+        "source": "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#RegisterSchemaAsync",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#RegisterSchemaMethodName",
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#RegisterSchema"
       ]
     }
   ],

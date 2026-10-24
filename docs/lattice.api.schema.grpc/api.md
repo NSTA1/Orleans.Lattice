@@ -34,6 +34,8 @@ Methods (one per RPC):
 
 | Method | Signature |
 |---|---|
+| `GetRegistryAsync` | `Task<LatticeSchemaRuntimeRegistration> GetRegistryAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `RegisterSchemaAsync` | `Task RegisterSchemaAsync(string treeId, LatticeSchemaRuntimeRegistration registration, CancellationToken cancellationToken = default)` |
 | `SetPolicyAsync` | `Task SetPolicyAsync(string treeId, LatticeSchemaPolicy policy, CancellationToken cancellationToken = default)` |
 | `ClearPolicyAsync` | `Task<bool> ClearPolicyAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `GetPolicyAsync` | `Task<LatticeSchemaPolicy?> GetPolicyAsync(string treeId, CancellationToken cancellationToken = default)` |
@@ -60,6 +62,10 @@ Methods (one per RPC):
 Methods that take a tree id throw `ArgumentException` on a null or empty id. `SetPolicyAsync` throws `ArgumentNullException` on a null policy (the version config and value transform are value types). `ListDeadLettersAsync` is server-streaming and re-exposes the server stream as an `IAsyncEnumerable<LatticeSchemaDeadLetterEntry>`. `ProbeCapabilitiesAsync` reports the caller's allowed-operation set (`LatticeSchemaCapabilities`) with no side effects; it never replaces the fail-closed authorization each real RPC still performs. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired. `StartComplianceScanAsync` starts the compliance scan as a tracked operation over the `StartComplianceScan` RPC and returns at once, and the `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan` RPCs follow it (status and cancel return `null` for an operation the caller may not see). The server answers `Unimplemented` when its host registers no `ILatticeSchemaComplianceOperations`.
 
 The start methods call the accept-then-poll `StartRemediation`, `StartMigration` and `StartAdvanceAndMigrate` RPCs, which return a `LatticeOperationHandle` as soon as the run is accepted; `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation` read, page and cancel the operation. A status read or cancel of an operation the caller may not see returns `null`. The blocking `LATTICE0002` RPCs were removed in this major version; see [Schema operations](../lattice.api.schema/operations.md#migrating-from-the-removed-blocking-verbs).
+
+`GetRegistry` takes `SchemaTreeRequest` and returns `LatticeSchemaRuntimeRegistration` directly. `RegisterSchema` takes `SchemaRegistryRequest` and returns `SchemaAckResponse`. They require Read and SchemaAdmin respectively over the effective tenant tree. Discovery lists version descriptors, immutable migration hops and stable host transform ids; registration accepts validated declarative IR or those ids, never executable code. See [runtime catalog semantics](../lattice.api.schema/api.md#runtime-version-catalog).
+
+Capability responses keep permission-only grants separate from installed `Supports*` fields and operation readiness. Old clients can ignore these appended fields; new clients default missing support fields to false rather than assuming a capability exists.
 
 ## Server-side options
 
@@ -97,7 +103,7 @@ Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns.
 
 ### `LatticeSchemaApiOperation`
 
-Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `SetPolicy`, `ClearPolicy`, `GetPolicy`, `StreamDeadLetters`, `CountDeadLetters`, `SetVersionConfig`, `GetVersionConfig`, `AdvanceTargetVersion`, `AdvanceAndMigrate`, `MigrateToTargetVersion`, `ClearVersionConfig`, `Remediate`, `GetRemediationStatus`, `ScanCompliance`, `ProbeCapabilities`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as a benign read), followed - appended after `Unknown` so the shipped numeric values stay stable - by `StartComplianceScan`, `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan` (#4126), then `StartRemediation`, `StartMigration`, `StartAdvanceAndMigrate`, `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation`. A start targets its tree; a status, list or cancel names an operation rather than a tree, so its `TargetId` is `null` and the facade scopes it to the caller.
+Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `SetPolicy`, `ClearPolicy`, `GetPolicy`, `StreamDeadLetters`, `CountDeadLetters`, `SetVersionConfig`, `GetVersionConfig`, `AdvanceTargetVersion`, `AdvanceAndMigrate`, `MigrateToTargetVersion`, `ClearVersionConfig`, `Remediate`, `GetRemediationStatus`, `ScanCompliance`, `ProbeCapabilities`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as a benign read), followed - appended after `Unknown` so the shipped numeric values stay stable - by `StartComplianceScan`, `GetComplianceScanStatus`, `ListComplianceScans` and `CancelComplianceScan` (#4126), then `StartRemediation`, `StartMigration`, `StartAdvanceAndMigrate`, `GetSchemaOperationStatus`, `ListSchemaOperations` and `CancelSchemaOperation`, followed by `GetRegistry` and `RegisterSchema`. A start targets its tree; a status, list or cancel names an operation rather than a tree, so its `TargetId` is `null` and the facade scopes it to the caller.
 
 ### `LatticeSchemaApiAuthorizationContext`
 
@@ -121,6 +127,7 @@ Each RPC's request and response is one of these Orleans-serialized records, exce
 | Record | Members |
 |---|---|
 | `SchemaTreeRequest` | `required string TreeId`. |
+| `SchemaRegistryRequest` | `required string TreeId`, `required LatticeSchemaRuntimeRegistration Registration`. |
 | `SetPolicyRequest` | `required string TreeId`, `required LatticeSchemaPolicy Policy`. |
 | `SetVersionConfigRequest` | `required string TreeId`, `required LatticeSchemaVersionConfig Config`. |
 | `AdvanceVersionRequest` | `required string TreeId`, `required uint NewTargetVersion`, `string? OperationId` (used by `StartAdvanceAndMigrate`). |

@@ -76,24 +76,26 @@ public sealed class LatticeSchemaGrpcOperationsE2ETests
     }
 
     [Test]
-    public async Task A_migration_of_an_unversioned_tree_is_accepted_and_fails_in_band()
+    public async Task A_migration_of_an_unversioned_tree_rejects_before_creating_a_handle()
     {
-        var handle = await _host.Client.StartMigrationAsync("grpc-ops-unversioned");
-
-        var status = await UntilTerminalAsync(handle.OperationId);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(handle.Kind, Is.EqualTo(SchemaOperationKinds.Migration));
-            Assert.That(status.State, Is.EqualTo(LatticeOperationState.Failed));
-            Assert.That(status.FailureReason, Does.Contain("not versioned"));
-        });
+        var error = Assert.ThrowsAsync<global::Grpc.Core.RpcException>(async () =>
+            await _host.Client.StartMigrationAsync("grpc-ops-unversioned", "grpc-no-handle"));
+        Assert.That(error!.StatusCode, Is.EqualTo(global::Grpc.Core.StatusCode.FailedPrecondition));
+        Assert.That(await _host.Client.GetSchemaOperationStatusAsync("grpc-no-handle"), Is.Null);
     }
 
     [Test]
     public async Task An_advance_and_migrate_started_over_the_wire_carries_its_operation_id()
     {
         const string treeId = "grpc-ops-advance";
+        await _host.Client.RegisterSchemaAsync(treeId, new()
+        {
+            Descriptors = [new(9, 1, "wire-v1"), new(9, 2, "wire-v2")],
+            Upcasters = [new()
+            {
+                SchemaId = 9, FromVersion = 1, ToVersion = 2, Transform = LatticeValueTransform.Passthrough(),
+            }],
+        });
         await _host.Client.SetVersionConfigAsync(treeId, new LatticeSchemaVersionConfig(9, 1));
 
         var handle = await _host.Client.StartAdvanceAndMigrateAsync(treeId, 2, "grpc-advance-1");
@@ -105,6 +107,38 @@ public sealed class LatticeSchemaGrpcOperationsE2ETests
             Assert.That(handle.Kind, Is.EqualTo(SchemaOperationKinds.AdvanceAndMigrate));
             Assert.That(status.IsTerminal, Is.True);
         });
+    }
+
+    [Test]
+    public async Task Runtime_registry_round_trips_over_gRPC_with_conflicts_rejected_and_capability_parity()
+    {
+        const string treeId = "wire-runtime-registry";
+        var registration = new LatticeSchemaRuntimeRegistration
+        {
+            Descriptors = [new(90, 1, "wire-v1"), new(90, 2, "wire-v2")],
+            Upcasters = [new()
+            {
+                SchemaId = 90, FromVersion = 1, ToVersion = 2,
+                Transform = LatticeValueTransform.Passthrough(),
+            }],
+        };
+        await _host.Client.RegisterSchemaAsync(treeId, registration);
+        await _host.Client.RegisterSchemaAsync(treeId, registration);
+        var actual = await _host.Client.GetRegistryAsync(treeId);
+        var remoteCaps = await _host.Client.ProbeCapabilitiesAsync(treeId);
+        var localCaps = await _fixture.Control.ProbeCapabilitiesAsync(treeId);
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual.Descriptors, Is.EqualTo(registration.Descriptors));
+            Assert.That(actual.Upcasters, Is.EqualTo(registration.Upcasters));
+            Assert.That(remoteCaps, Is.EqualTo(localCaps));
+            Assert.That(remoteCaps.SupportsRuntimeRegistration, Is.True);
+            Assert.That(remoteCaps.CanManageVersion, Is.True);
+            Assert.That(remoteCaps.CanStartMigration, Is.False, "the tree is still unconfigured");
+        });
+        var error = Assert.ThrowsAsync<global::Grpc.Core.RpcException>(async () => await _host.Client.RegisterSchemaAsync(treeId,
+            new() { Descriptors = [new(90, 1, "conflict")] }));
+        Assert.That(error!.StatusCode, Is.EqualTo(global::Grpc.Core.StatusCode.InvalidArgument));
     }
 
     [Test]

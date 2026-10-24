@@ -51,6 +51,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
     private readonly ILatticeSchemaDeadLetterStore _deadLetters;
     private readonly TimeProvider _timeProvider;
     private readonly int _previewMaxBytes;
+    private readonly SchemaRuntimeRegistry? _runtimeRegistry;
 
     /// <summary>Initializes a new <see cref="LatticeSchemaVersionWriteInterceptor"/>.</summary>
     /// <param name="provider">Resolves the cached per-tree version config.</param>
@@ -64,7 +65,8 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         ILatticeSchemaRegistry registry,
         ILatticeSchemaDeadLetterStore deadLetters,
         IOptions<LatticeSchemaVersioningOptions> options,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        SchemaRuntimeRegistry? runtimeRegistry = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(registry);
@@ -76,6 +78,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         _deadLetters = deadLetters;
         _timeProvider = timeProvider;
         _previewMaxBytes = Math.Max(1, options.Value.DeadLetterPreviewMaxBytes);
+        _runtimeRegistry = runtimeRegistry;
     }
 
     /// <inheritdoc />
@@ -170,12 +173,14 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         // element payloads while preserving dots / HLC / tombstones - and re-enveloped
         // at target. A newer-than-target or un-upcastable delta is dead-lettered
         // rather than applied, so the intercepted write never blocks.
+        var registry = _runtimeRegistry is null ? _registry
+            : await _runtimeRegistry.ResolveAsync(treeId).ConfigureAwait(false);
         if (schemaId == version.SchemaId
             && storedVersion < version.TargetVersion
-            && _registry.CanUpcast(version.SchemaId, storedVersion, version.TargetVersion))
+            && registry.CanUpcast(version.SchemaId, storedVersion, version.TargetVersion))
         {
             var body = LatticeSchemaEnvelope.StripToBody(delta);
-            var upcast = _registry.Upcast(version.SchemaId, storedVersion, version.TargetVersion, body);
+            var upcast = registry.Upcast(version.SchemaId, storedVersion, version.TargetVersion, body);
             return LatticeWriteDecision.AcceptTransformed(
                 LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, upcast));
         }
@@ -207,9 +212,11 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         // Trusted, upcastable ingest is stored with its own tag; read-time upcasting
         // brings it to the target when it is later read. Only an item newer than the
         // target, or one whose version cannot be upcast, is dead-lettered.
+        var registry = _runtimeRegistry is null ? _registry
+            : await _runtimeRegistry.ResolveAsync(treeId).ConfigureAwait(false);
         if (schemaId == version.SchemaId
             && storedVersion <= version.TargetVersion
-            && _registry.CanUpcast(version.SchemaId, storedVersion, version.TargetVersion))
+            && registry.CanUpcast(version.SchemaId, storedVersion, version.TargetVersion))
         {
             return LatticeWriteDecision.Accept();
         }

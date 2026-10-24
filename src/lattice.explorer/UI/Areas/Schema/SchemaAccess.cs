@@ -39,7 +39,8 @@ internal sealed class SchemaAccess : IDisposable
     private readonly SchemaFacades _facades;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, (SchemaGrants Grants, DateTimeOffset ReadAt, ShellCallerKey Caller)> _trees = new(StringComparer.Ordinal);
-    private Tuple<AreaAvailability, ShellCallerKey>? _availability;
+    private Tuple<AreaAvailability, ShellCallerKey, DateTimeOffset>? _availability;
+    private long _generation;
 
     /// <summary>Creates the access answer over the circuit's facades.</summary>
     /// <param name="facades">The area's facades.</param>
@@ -67,7 +68,10 @@ internal sealed class SchemaAccess : IDisposable
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
         var caller = _facades.Caller;
-        if (Volatile.Read(ref _availability) is { } remembered && remembered.Item2 == caller)
+        var generation = Volatile.Read(ref _generation);
+        if (Volatile.Read(ref _availability) is { } remembered
+            && remembered.Item2 == caller
+            && _time.GetUtcNow() - remembered.Item3 < GrantFreshness)
         {
             return remembered.Item1;
         }
@@ -103,11 +107,12 @@ internal sealed class SchemaAccess : IDisposable
                 : AreaAvailability.Hidden;
         // Remembered only for the caller it was read for, and only while that is
         // still the caller.
-        if (_facades.Caller == caller)
+        if (_facades.Caller != caller || Volatile.Read(ref _generation) != generation)
         {
-            Volatile.Write(ref _availability, Tuple.Create(answer, caller));
+            return AreaAvailability.Hidden;
         }
 
+        Volatile.Write(ref _availability, Tuple.Create(answer, caller, _time.GetUtcNow()));
         return answer;
     }
 
@@ -120,6 +125,7 @@ internal sealed class SchemaAccess : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         var caller = _facades.Caller;
+        var generation = Volatile.Read(ref _generation);
         if (!refresh
             && _trees.TryGetValue(treeId, out var remembered)
             && remembered.Caller == caller
@@ -147,17 +153,19 @@ internal sealed class SchemaAccess : IDisposable
             return SchemaGrants.None;
         }
 
-        if (_facades.Caller == caller)
+        if (_facades.Caller != caller || Volatile.Read(ref _generation) != generation)
         {
-            _trees[treeId] = (grants, _time.GetUtcNow(), caller);
+            return SchemaGrants.None;
         }
 
+        _trees[treeId] = (grants, _time.GetUtcNow(), caller);
         return grants;
     }
 
     /// <summary>Forgets every remembered answer, so the next read probes again.</summary>
     public void Forget()
     {
+        Interlocked.Increment(ref _generation);
         Volatile.Write(ref _availability, null);
         _trees.Clear();
     }

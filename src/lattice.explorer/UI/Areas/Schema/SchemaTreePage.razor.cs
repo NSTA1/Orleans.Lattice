@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -13,6 +14,8 @@ public partial class SchemaTreePage : IDisposable
 {
     private readonly ComponentLifetime _lifetime = new();
     private string? _loadedTree;
+    private ShellCallerKey _loadedCaller;
+    private long _generation;
     private SchemaGrants? _grants;
     private SchemaTreeRow? _row;
     private SchemaWorkspace? _workspace;
@@ -26,6 +29,9 @@ public partial class SchemaTreePage : IDisposable
     internal SchemaAccess Access { get; set; } = default!;
 
     [Inject]
+    internal SchemaFacades Facades { get; set; } = default!;
+
+    [Inject]
     internal NavigationManager Navigation { get; set; } = default!;
 
     /// <summary>The logical tree id the address names; empty when it names none.</summary>
@@ -37,17 +43,42 @@ public partial class SchemaTreePage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        if (Facades.Auth is { } auth)
+        {
+            auth.AuthenticationChanged -= OnCallerChanged;
+        }
+
+        if (Facades.Session is { } session)
+        {
+            session.ConfigurationChanged -= OnCallerChanged;
+        }
+
         _lifetime.Leave();
         GC.SuppressFinalize(this);
+    }
+
+    /// <inheritdoc />
+    protected override void OnInitialized()
+    {
+        if (Facades.Auth is { } auth)
+        {
+            auth.AuthenticationChanged += OnCallerChanged;
+        }
+
+        if (Facades.Session is { } session)
+        {
+            session.ConfigurationChanged += OnCallerChanged;
+        }
     }
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
         var tree = TreeId;
-        if (!string.Equals(tree, _loadedTree, StringComparison.Ordinal))
+        if (!string.Equals(tree, _loadedTree, StringComparison.Ordinal) || _loadedCaller != Facades.Caller)
         {
             _loadedTree = tree;
+            _loadedCaller = Facades.Caller;
             await LoadAsync(tree);
         }
 
@@ -56,6 +87,8 @@ public partial class SchemaTreePage : IDisposable
 
     private async Task LoadAsync(string tree)
     {
+        var generation = ++_generation;
+        var caller = Facades.Caller;
         _grants = null;
         _row = null;
         _workspace = null;
@@ -71,7 +104,7 @@ public partial class SchemaTreePage : IDisposable
         try
         {
             var exists = await Directory.ExistsAsync(tree, _lifetime.Token);
-            if (_lifetime.IsLeft)
+            if (!IsCurrent(tree, caller, generation))
             {
                 // Another page may be on screen: it is not declared not found.
                 return;
@@ -84,14 +117,29 @@ public partial class SchemaTreePage : IDisposable
                 return;
             }
 
-            _grants = await Access.GetGrantsAsync(tree, refresh: false, _lifetime.Token);
-            _row = await Directory.ReadTreeAsync(tree, _lifetime.Token);
+            var grants = await Access.GetGrantsAsync(tree, refresh: false, _lifetime.Token);
+            if (!IsCurrent(tree, caller, generation))
+            {
+                return;
+            }
+
+            var row = await Directory.ReadTreeAsync(tree, _lifetime.Token);
+            if (IsCurrent(tree, caller, generation))
+            {
+                _grants = grants;
+                _row = row;
+            }
         }
         catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
         {
+            if (!IsCurrent(tree, caller, generation))
+            {
+                return;
+            }
+
             _error = exception switch
             {
                 InvalidOperationException => exception.Message,
@@ -101,18 +149,20 @@ public partial class SchemaTreePage : IDisposable
     }
 
     private void Build() =>
-        _workspace = _grants is not null && _row is not null && _row.TreeId == TreeId
+        _workspace = _loadedCaller == Facades.Caller && _grants is not null && _row is not null && _row.TreeId == TreeId
             ? new SchemaWorkspace(Address, TreeId, _grants, _row, Navigator, RefreshRowAsync)
             : null;
 
     private async Task RefreshRowAsync()
     {
         var tree = TreeId;
+        var caller = Facades.Caller;
+        var generation = _generation;
         try
         {
             var grants = await Access.GetGrantsAsync(tree, refresh: true, _lifetime.Token);
             var row = await Directory.ReadTreeAsync(tree, _lifetime.Token);
-            if (string.Equals(tree, TreeId, StringComparison.Ordinal))
+            if (IsCurrent(tree, caller, generation))
             {
                 _grants = grants;
                 _row = row;
@@ -134,6 +184,26 @@ public partial class SchemaTreePage : IDisposable
     {
         _loadedTree = null;
         await OnParametersSetAsync();
+    }
+
+    private bool IsCurrent(string tree, ShellCallerKey caller, long generation) =>
+        !_lifetime.IsLeft && generation == _generation && caller == Facades.Caller
+        && string.Equals(tree, TreeId, StringComparison.Ordinal);
+
+    private void OnCallerChanged()
+    {
+        _workspace = null;
+        _ = InvokeAsync(async () =>
+        {
+            if (_lifetime.IsLeft)
+            {
+                return;
+            }
+
+            _loadedTree = null;
+            await OnParametersSetAsync();
+            StateHasChanged();
+        });
     }
 
     private void OnTabChanged(string tab)

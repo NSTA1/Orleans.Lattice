@@ -29,6 +29,29 @@ public sealed class GrpcLatticeSchemaControlTests
         => Assert.That(() => new GrpcLatticeSchemaControl(null!), Throws.ArgumentNullException);
 
     [Test]
+    public async Task GetRegistryAsync_forwards_tree_id_and_returns_the_catalog()
+    {
+        var catalog = new LatticeSchemaRuntimeRegistration { Descriptors = [new(1, 1, "v1")] };
+        var invoker = new FakeCallInvoker(_ => catalog);
+        Assert.That(await Adapter(invoker).GetRegistryAsync("orders"), Is.SameAs(catalog));
+        Assert.That(((SchemaTreeRequest)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+    }
+
+    [Test]
+    public async Task RegisterSchemaAsync_forwards_tree_id_and_registration()
+    {
+        var catalog = new LatticeSchemaRuntimeRegistration { Descriptors = [new(1, 1, "v1")] };
+        var invoker = new FakeCallInvoker(_ => new SchemaAckResponse());
+        await Adapter(invoker).RegisterSchemaAsync("orders", catalog);
+        var request = (SchemaRegistryRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(request.TreeId, Is.EqualTo("orders"));
+            Assert.That(request.Registration, Is.SameAs(catalog));
+        });
+    }
+
+    [Test]
     public async Task SetPolicyAsync_forwards_the_tree_id_and_policy()
     {
         var policy = new LatticeSchemaPolicy(new[] { LatticeSchemaRule.Json() });

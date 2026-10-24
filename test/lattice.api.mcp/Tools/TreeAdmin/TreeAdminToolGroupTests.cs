@@ -24,6 +24,7 @@ public sealed class TreeAdminToolGroupTests
 {
     private static readonly string[] InspectionToolNames =
     {
+        "lattice_treeadmin_schema_get_registry",
         "lattice_treeadmin_schema_get_policy",
         "lattice_treeadmin_schema_list_dead_letters",
         "lattice_treeadmin_schema_count_dead_letters",
@@ -34,6 +35,7 @@ public sealed class TreeAdminToolGroupTests
 
     private static readonly string[] ManagementToolNames =
     {
+        "lattice_treeadmin_schema_register",
         "lattice_treeadmin_schema_set_policy",
         "lattice_treeadmin_schema_clear_policy",
         "lattice_treeadmin_schema_set_version_config",

@@ -25,6 +25,11 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </remarks>
 internal sealed class GrpcLatticeSchemaControl : ILatticeSchemaControl, ILatticeSchemaOperations
 {
+    public Task<LatticeSchemaRuntimeRegistration> GetRegistryAsync(string treeId, CancellationToken cancellationToken = default) =>
+        _client.GetRegistryAsync(treeId, cancellationToken);
+
+    public Task RegisterSchemaAsync(string treeId, LatticeSchemaRuntimeRegistration registration, CancellationToken cancellationToken = default) =>
+        _client.RegisterSchemaAsync(treeId, registration, cancellationToken);
     private readonly LatticeSchemaApiGrpcClient _client;
 
     /// <summary>Initialises the adapter over the supplied schema-API gRPC client.</summary>

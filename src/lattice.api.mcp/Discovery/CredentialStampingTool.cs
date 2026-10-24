@@ -270,6 +270,11 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
         }
         catch (Exception ex)
         {
+            if (McpValueValidationErrors.TryReport(ex, request.Services!, ProtocolTool.Name) is { } validation)
+            {
+                return validation;
+            }
+
             // The single narrowest seam every facade tool funnels through: no
             // unclassified fault reaches the SDK's generic mask. An already
             // actionable McpException is surfaced unchanged; everything else -

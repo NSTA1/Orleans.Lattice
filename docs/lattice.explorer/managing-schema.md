@@ -4,13 +4,13 @@ agent_spec: "docs/agents/api/schema.json"
 
 # Managing schema from the Explorer
 
-The **Schema** area is a native compiled-in Explorer area. No extra registration is needed. It appears when the schema control facade's capability probe grants the caller at least one schema capability.
+The **Schema** area is a native compiled-in Explorer area. No extra registration is needed. It appears when the schema control facade's capability probe grants the caller at least one installed schema capability.
 
 Schema is tenant-scoped. In a tenant-rooted Explorer, the same address under `/t/{tenant}` scopes the caller-supplied tree name through the active tenant before the cluster authorizes or acts on it.
 
 ## Availability
 
-Schema is visible when its fail-closed capability probe returns any schema grant. The probe names a reserved sentinel tree and has no side effects. A definite visible or refused answer is remembered until the sign-in state or connection changes. A transport fault is not remembered, so the next navigation asks again.
+Schema is visible when its fail-closed capability probe returns a grant for an installed feature. The probe names a reserved sentinel tree and does not change schema or data. Definite answers expire after 30 seconds and are invalidated by sign-in, endpoint or tenant changes. A transport fault is not remembered, so the next navigation asks again. Replies from a previous caller cannot restore old grants or open editors.
 
 The area is hidden when the schema facade is absent, when a signed-in identity receives no grant or is refused by the probe, when the cluster does not serve schema administration, or when the connection is unavailable.
 
@@ -22,7 +22,16 @@ Per-tree grants are probed separately and reused briefly. If the caller has no g
 
 > You may not manage this tree's schema
 
-Panel-level denials are shown beside the panel, for example **You may not read this tree's policy**, **You may not scan this tree**, or **You may not read this tree's dead letters**.
+Panel-level denials are shown beside the panel, for example **You may not read this tree's policy**, **You may not scan this tree**, or **You may not read this tree's dead letters**. Installed support is separate from permission: an enforcement-only cluster keeps policy and compliance useful while Versions explains the missing host capability. Unsupported panels do not offer their mutation controls. A host with no installed schema features is hidden; an unreachable host does not imply authorization denial. The display policy is:
+
+| Backend / caller | Schema area and controls |
+| --- | --- |
+| No installed schema features | Hidden; a direct route explains missing support when the caller has authority. |
+| Enforcement only | Visible for a permitted installed feature; policy and compliance remain usable. Versions explains missing versioning. |
+| Versioning only | The engine supports this, but the stock schema API registration still requires enforcement. This facade combination is not supported. |
+| Full registration | Visible for permitted features; installed support and per-tree readiness gate each action separately. |
+| Unauthorized | Hidden for a signed-in caller with no grant; anonymous callers see the sign-in unavailable state. Direct routes still require per-tree grants. |
+| Unreachable | Hidden without caching the failure. Direct routes show a retryable load error, not an authorization claim. |
 
 ## Addresses
 
@@ -125,7 +134,7 @@ Clearing a policy uses a destructive confirmation named **Clear this tree's poli
 
 ### Versions
 
-The Versions tab manages the tree's envelope-version config. A version is a stamp, not a shape: new writes are stamped with the schema family and target version, and older values are upgraded when they are read or migrated. The Explorer does not show the shape difference between versions because those registrations live in code on the silos.
+The Versions tab manages the tree's envelope-version config. A version is a stamp, not a shape: new writes are stamped with the schema family and target version, and older values are upgraded when they are read or migrated. When runtime registration is installed, the tab lists named versions, migration hops and the host's supported transform ids. Descriptors name versions rather than validation shapes.
 
 When versioning is off, **Turn on versioning** asks for a schema family, a target version of 1 or more, and strict ingest. When versioning is on, the tab can:
 
@@ -137,7 +146,9 @@ When versioning is off, **Turn on versioning** asks for a schema family, a targe
 
 Advancing can only move the target version up, so at the highest target version, 4,294,967,295, **Advance target version...** is turned off and the tab says no higher version exists. Migration and advance-and-migrate start cluster-tracked background operations. The tab links to the Remediation tab while one is running.
 
-If the cluster has not registered schema versioning, the tab says **Versioning is not available** instead of failing opaquely.
+If the cluster has not registered schema versioning, the tab says **Versioning is not available** instead of failing opaquely. A migration that is not ready is disabled with the server's explanation.
+
+**Register versions and migration paths** opens an advanced JSON definition editor for schema administrators. It starts with a declarative rename example; supply `descriptors` and `upcasters`, with each hop carrying either `transform` IR or one advertised `transformId`. Malformed JSON is explained without sending it. Conflicts are reported rather than replacing existing definitions. Readers can inspect the catalog but cannot register. Registrations survive silo restart in this region and tenant tree; provision matching catalogs in every serving region before advancing replicated data. Registration never uploads executable code.
 
 ### Compliance
 
@@ -151,7 +162,7 @@ If the tree has no policy, the tab says there is nothing to scan against and lin
 
 The Remediation tab is the status page for a tree's background migration or remediation, and the place to start a remediation when the caller may manage schema.
 
-A remediation rewrites every value through ordered transform steps, checks each rewritten value against the current policy, and cuts over only when every value passes. If a value still fails, nothing is cut over. The editor can add only top-level member steps: set, remove, and rename. A step's member is a [picker](navigation-model.md#pickers) that suggests the member paths the tree's policy already names and accepts any path. A rename's new name is a plain name box: it accepts any path, and flags one the policy already names ("The policy already names a member with this name.") without refusing it. Conditional or computed transforms are registered in code on the silos and are not authored here.
+A remediation rewrites every value through ordered transform steps, checks each rewritten value against the current policy, and cuts over only when every value passes. If a value still fails, nothing is cut over. The editor can add only top-level member steps: set, remove, and rename. A step's member is a [picker](navigation-model.md#pickers) that suggests the member paths the tree's policy already names and accepts any path. A rename's new name is a plain name box: it accepts any path, and flags one the policy already names ("The policy already names a member with this name.") without refusing it. Conditional or computed transforms can be supplied through the API's validated declarative IR and are not authored by this step editor.
 
 Starting a remediation opens a destructive confirmation named **Remediate this tree**. It says every value is rewritten and checked, that a successful run cuts over to the rewritten values, and that a failed value leaves the tree unchanged. The operation runs in the background and the page can be left while it runs.
 

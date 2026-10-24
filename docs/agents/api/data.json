@@ -75,6 +75,26 @@
         "name": "lattice-quota-tree",
         "purpose": "Response trailer carrying the tree whose admission quota was breached.",
         "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#QuotaTreeTrailer"
+      },
+      {
+        "name": "lattice-validation-code",
+        "purpose": "InvalidArgument schema-policy diagnostic: code. Capped ASCII; never the rejected payload.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+      },
+      {
+        "name": "lattice-validation-tree",
+        "purpose": "InvalidArgument schema-policy diagnostic: tree. Capped ASCII; never the rejected payload.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+      },
+      {
+        "name": "lattice-validation-key",
+        "purpose": "InvalidArgument schema-policy diagnostic: key. Capped ASCII; never the rejected payload.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+      },
+      {
+        "name": "lattice-validation-reason",
+        "purpose": "InvalidArgument schema-policy diagnostic: reason. Capped ASCII; never the rejected payload.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
       }
     ],
     "auth": {
@@ -878,6 +898,10 @@
         {
           "error_id": "transport-authorization-denied",
           "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "schema-policy",
+          "condition": "The installed schema policy rejects the mutation. Invalid JSON is a validation outcome, not an internal server fault."
         }
       ],
       "retry": {
@@ -1263,6 +1287,10 @@
         {
           "error_id": "transport-authorization-denied",
           "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "schema-policy",
+          "condition": "The installed schema policy rejects the mutation. Invalid JSON is a validation outcome, not an internal server fault."
         }
       ],
       "retry": {
@@ -1340,6 +1368,10 @@
         {
           "error_id": "transport-authorization-denied",
           "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "schema-policy",
+          "condition": "The installed schema policy rejects the mutation. Invalid JSON is a validation outcome, not an internal server fault."
         }
       ],
       "retry": {
@@ -1417,6 +1449,10 @@
         {
           "error_id": "transport-authorization-denied",
           "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "schema-policy",
+          "condition": "The installed schema policy rejects the mutation. Invalid JSON is a validation outcome, not an internal server fault."
         }
       ],
       "retry": {
@@ -1494,6 +1530,10 @@
         {
           "error_id": "transport-authorization-denied",
           "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "schema-policy",
+          "condition": "The installed schema policy rejects the mutation. Invalid JSON is a validation outcome, not an internal server fault."
         }
       ],
       "retry": {
@@ -1613,6 +1653,14 @@
       "retryable": false,
       "meaning": "The coarse gRPC authorizer denied the call before it reached the facade.",
       "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
+    },
+    {
+      "id": "schema-policy",
+      "type": "ILatticeValueValidationFault",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "Write rejected by the tree's schema policy. Correct the value or policy; no invalid mutation is committed. Trailers carry code=schema-policy, tree, key and policy-derived reason, never the submitted value.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
     }
   ]
 }

@@ -17,6 +17,9 @@ internal sealed record SchemaTreeRow(
     SchemaReadState VersionState,
     SchemaAppDeclaration? Declaration)
 {
+    /// <summary>Whether this caller can scan this tree on the installed backend.</summary>
+    public bool CanScanCompliance { get; init; }
+
     /// <summary>Whether the tree is under schema: a policy, a version config, or an app declaration.</summary>
     public bool IsGoverned => Policy is not null || Version is not null || Declaration is not null;
 }

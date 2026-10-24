@@ -205,6 +205,11 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// default-on read, not a lifecycle verb, so the opt-in's set is unchanged and the
     /// total remains 94.
     /// </para>
+    /// <para>
+    /// The durable runtime schema catalog (#4799) adds the default-on registry read,
+    /// <c>lattice_treeadmin_schema_get_registry</c>; registration is schema-control
+    /// gated, so the total is 95.
+    /// </para>
     /// </remarks>
     [Test]
     public void The_advertised_surface_is_the_measured_size()
@@ -223,10 +228,11 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         {
             Assert.That(admitted, Is.Unique, "A duplicate tool name would make the count meaningless.");
             Assert.That(
-                admitted, Has.Count.EqualTo(94),
+                admitted, Has.Count.EqualTo(95),
                 "53 before the lifecycle opt-in plus the 29 verbs it contributes, plus the 8 #4126 operation tools, "
-                + "the 2 #4124 operation reads, the 2 #4209 schema operation reads and the #4237 WAL reclamation "
-                + "read. Add the two meta tools for the 96 a client sees, against 55 before.");
+                + "the 2 #4124 operation reads, the 2 #4209 schema operation reads, the #4237 WAL reclamation "
+                + "read and the #4799 schema registry read. Add the two meta tools for the 97 a client sees, "
+                + "against 55 before.");
         });
     }
 

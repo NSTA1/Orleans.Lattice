@@ -1,0 +1,175 @@
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@implements IDisposable
+
+@if (Workspace is { Grants.SupportsRuntimeRegistration: true, Grants.ViewVersion: true })
+{
+    <section class="lt-schema-editor" aria-labelledby="lt-schema-registry-title">
+        <h2 id="lt-schema-registry-title" class="lt-schema-section-title">Registered versions and migration paths</h2>
+        <p class="lt-schema-note">These definitions belong to this tree in the selected region. They survive silo restarts. Existing versions and migration hops are immutable; repeat the same registration safely, but use a new version for a changed definition.</p>
+        @if (_catalog is { } catalog)
+        {
+            <LtTable TItem="LatticeSchemaDescriptor" Items="@catalog.Descriptors" Caption="Registered schema versions">
+                <ChildContent>
+                    <LtColumn TItem="LatticeSchemaDescriptor" Title="Family" Value="@(row => row.SchemaId)" />
+                    <LtColumn TItem="LatticeSchemaDescriptor" Title="Version" Value="@(row => row.Version)" />
+                    <LtColumn TItem="LatticeSchemaDescriptor" Title="Name" Value="@(row => row.Name)" />
+                </ChildContent>
+            </LtTable>
+            <LtTable TItem="LatticeSchemaRuntimeUpcaster" Items="@catalog.Upcasters" Caption="Registered migration hops">
+                <ChildContent>
+                    <LtColumn TItem="LatticeSchemaRuntimeUpcaster" Title="Family" Value="@(row => row.SchemaId)" />
+                    <LtColumn TItem="LatticeSchemaRuntimeUpcaster" Title="From" Value="@(row => row.FromVersion)" />
+                    <LtColumn TItem="LatticeSchemaRuntimeUpcaster" Title="To" Value="@(row => row.ToVersion)" />
+                    <LtColumn TItem="LatticeSchemaRuntimeUpcaster" Title="Transform" Value="@(row => row.TransformId ?? "Declarative JSON transform")" />
+                </ChildContent>
+            </LtTable>
+            <p class="lt-schema-note">Host-supported transform ids: @(catalog.SupportedTransformIds.Length == 0 ? "none; use a declarative transform" : string.Join(", ", catalog.SupportedTransformIds)). An id references installed code; registration never uploads code or assemblies.</p>
+        }
+        @if (Workspace.Grants.ManageVersion)
+        {
+            <details>
+                <summary>Register versions and migration paths</summary>
+                <p id="lt-schema-registry-hint" class="lt-schema-note">Append a JSON definition. Descriptors name versions, not JSON shapes; use the Policy tab for validation. A hop must specify either a declarative transform or one advertised transformId. Register prerequisites in every serving region before advancing a replicated tree.</p>
+                <div class="lt-field">
+                    <label class="lt-field__label" for="lt-schema-registry-json">Registration JSON</label>
+                    <textarea id="lt-schema-registry-json" class="lt-input lt-shell-mono" rows="10" spellcheck="false"
+                              aria-describedby="lt-schema-registry-hint" disabled="@_busy" @bind="_json"></textarea>
+                </div>
+                <LtButton OnClick="RegisterAsync" Disabled="@_busy">Register definitions</LtButton>
+            </details>
+        }
+        @if (_error is not null)
+        {
+            <p class="lt-schema-error" role="alert">@_error</p>
+        }
+        <LtButton Variant="LtButtonVariant.Quiet" OnClick="ReloadAsync" Disabled="@_busy">Refresh definitions</LtButton>
+    </section>
+}
+
+@code {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+    };
+
+    private const string Example = """
+        {
+          "descriptors": [
+            { "schemaId": 1, "version": 1, "name": "Initial" },
+            { "schemaId": 1, "version": 2, "name": "Renamed quantity" }
+          ],
+          "upcasters": [
+            { "schemaId": 1, "fromVersion": 1, "toVersion": 2,
+              "transform": { "kind": "Passthrough", "children": [
+                { "kind": "RenameMember", "memberPath": "qty", "toPath": "quantity" }
+              ] } }
+          ]
+        }
+        """;
+
+    private readonly ComponentLifetime _lifetime = new();
+    private LatticeSchemaRuntimeRegistration? _catalog;
+    private string? _loadedTree;
+    private string _json = Example;
+    private string? _error;
+    private bool _busy;
+
+    [CascadingParameter]
+    internal SchemaWorkspace? Workspace { get; set; }
+
+    [Inject]
+    internal SchemaFacades Facades { get; set; } = default!;
+
+    [Inject]
+    internal LtToastService Toasts { get; set; } = default!;
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _lifetime.Leave();
+        GC.SuppressFinalize(this);
+    }
+
+    /// <inheritdoc />
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Workspace is { } workspace && workspace.TreeId != _loadedTree)
+        {
+            _loadedTree = workspace.TreeId;
+            _json = Example;
+            await ReloadAsync();
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (Workspace is not { Grants.SupportsRuntimeRegistration: true, Grants.ViewVersion: true } workspace)
+        {
+            return;
+        }
+
+        _error = null;
+        try
+        {
+            var catalog = await Facades.RequireSchema().GetRegistryAsync(workspace.TreeId, _lifetime.Token);
+            if (!_lifetime.IsLeft)
+            {
+                _catalog = catalog;
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        {
+        }
+        catch (Exception exception)
+        {
+            _error = SchemaFailure.Describe(exception, "read the schema definitions");
+        }
+    }
+
+    private async Task RegisterAsync()
+    {
+        if (Workspace is not { Grants.ManageVersion: true } workspace)
+        {
+            return;
+        }
+
+        LatticeSchemaRuntimeRegistration registration;
+        try
+        {
+            registration = JsonSerializer.Deserialize<LatticeSchemaRuntimeRegistration>(_json, JsonOptions)
+                ?? throw new JsonException();
+        }
+        catch (JsonException)
+        {
+            _error = "Enter a registration JSON object with descriptors and upcasters. Use the documented field names and transform kinds.";
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Facades.RequireSchema().RegisterSchemaAsync(workspace.TreeId, registration, _lifetime.Token);
+            if (_lifetime.IsLeft)
+            {
+                return;
+            }
+            Toasts.Show("Schema definitions are registered.", LtToastTone.Success);
+            await ReloadAsync();
+            await workspace.RefreshAsync();
+        }
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        {
+        }
+        catch (Exception exception)
+        {
+            _error = SchemaFailure.Describe(exception, "register the schema definitions");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

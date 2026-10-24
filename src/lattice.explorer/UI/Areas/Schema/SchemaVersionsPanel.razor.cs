@@ -23,7 +23,6 @@ public partial class SchemaVersionsPanel : IDisposable
     private uint _advanceTarget;
     private bool _strict;
     private bool _loaded;
-    private bool _versioningMissing;
     private bool _busy;
     private Editor _editor;
     private Confirm _confirm;
@@ -121,7 +120,6 @@ public partial class SchemaVersionsPanel : IDisposable
 
         _error = null;
         _loaded = false;
-        _versioningMissing = false;
         try
         {
             _config = SchemaVersioning.Effective(await Facades.RequireSchema().GetVersionConfigAsync(workspace.TreeId, _lifetime.Token));
@@ -129,11 +127,6 @@ public partial class SchemaVersionsPanel : IDisposable
         }
         catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
-        }
-        catch (InvalidOperationException exception) when (exception is not ILatticeDomainFault)
-        {
-            // The facade throws this, and only this, when versioning is not registered.
-            _versioningMissing = true;
         }
         catch (Exception exception)
         {

@@ -50,6 +50,13 @@ public sealed class LatticeSchemaControlCapabilityTests
             Assert.That(caps.CanManagePolicy, Is.True);
             Assert.That(caps.CanManageVersion, Is.True);
             Assert.That(caps.CanRemediate, Is.True);
+            Assert.That(caps.SupportsEnforcement, Is.True);
+            Assert.That(caps.SupportsVersioning, Is.False, "a grant is not an installed feature");
+            Assert.That(caps.SupportsCompliance, Is.True);
+            Assert.That(caps.SupportsDeadLetters, Is.True);
+            Assert.That(caps.SupportsRuntimeRegistration, Is.False);
+            Assert.That(caps.CanStartMigration, Is.False);
+            Assert.That(caps.MigrationUnavailableReason, Does.Contain("not installed"));
         });
     }
 

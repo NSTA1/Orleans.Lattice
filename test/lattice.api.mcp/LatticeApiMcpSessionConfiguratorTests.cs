@@ -202,8 +202,11 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
         // the group must report Available - proving the capability wiring end to end -
         // and contribute its always-on read-only schema-inspection tools. The mutating
         // schema-management tools stay hidden until schema control is opted in.
+        var schema = Substitute.For<Orleans.Lattice.Api.Schema.ILatticeSchemaControl>();
+        schema.ProbeCapabilitiesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new Orleans.Lattice.Api.Schema.LatticeSchemaCapabilities { TreeId = "probe", SupportsEnforcement = true });
         var provider = new ServiceCollection()
-            .AddSingleton(Substitute.For<Orleans.Lattice.Api.Schema.ILatticeSchemaControl>())
+            .AddSingleton(schema)
             .BuildServiceProvider();
         var group = new TreeAdminToolGroup(
             provider,
@@ -213,7 +216,8 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
             TestAccessSets.Granting(LatticeApiMcpGroup.TreeAdmin),
             group);
 
-        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+        var plan = await configurator.BuildSessionPlanAsync(
+            new DefaultHttpContext { RequestServices = provider }, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
