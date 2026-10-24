@@ -47,6 +47,8 @@ public sealed class LatticeSchemaUpcaster
     /// </summary>
     public string? TransformId => _transformId;
 
+    internal LatticeValueTransform? Transform => _transform;
+
     /// <summary>
     /// Creates an upcaster backed by a declarative <see cref="LatticeValueTransform"/>
     /// IR.

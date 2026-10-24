@@ -73,11 +73,31 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
     /// <inheritdoc />
     public IReadOnlyList<McpServerTool> Tools { get; }
 
+    public LatticeOperation RequiredOperationsFor(string toolName)
+    {
+        const string Prefix = "lattice_treeadmin_schema_";
+        if (!toolName.StartsWith(Prefix, StringComparison.Ordinal))
+            return LatticeOperation.Admin | LatticeOperation.TreeLifecycle | LatticeOperation.BulkLoad | LatticeOperation.Restore;
+        return toolName[Prefix.Length..] switch
+        {
+            "get_policy" or "list_dead_letters" or "count_dead_letters" or "get_version_config"
+                or "get_remediation_status" or "get_registry" or "operation_status" or "operation_list"
+                or "compliance_scan_start" or "compliance_scan_status" or "compliance_scan_list"
+                or "compliance_scan_cancel" => LatticeOperation.Read,
+            "probe_capabilities" => LatticeOperation.Read | LatticeOperation.SchemaAdmin,
+            _ => LatticeOperation.SchemaAdmin,
+        };
+    }
+
     private static IReadOnlyList<McpServerTool> Build(IServiceProvider services, bool enableSchemaControl, bool enableLifecycle)
     {
         var tools = new List<McpServerTool>
         {
             // ----- Schema inspection (read-only) -----
+            ReadOnlyTool(services, TreeAdminSchemaToolHandlers.GetRegistryAsync, "lattice_treeadmin_schema_get_registry",
+                "Discover registered schema versions and migration paths",
+                "Returns the effective tree-scoped durable schema catalog, host descriptors and installed stable transform ids. "
+                + "Requires installed versioning and read permission. Runtime registrations never install executable code."),
             ReadOnlyTool(services, TreeAdminSchemaToolHandlers.GetPolicyAsync, "lattice_treeadmin_schema_get_policy",
                 "Get a tree's schema policy",
                 "Reads the schema-enforcement policy for a tree - the ordered rule set an incoming value must "
@@ -343,6 +363,11 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "Clear a tree's schema policy",
                 "Clears the schema-enforcement policy for a tree, returning true when a policy was removed and false "
                 + "when the tree already had none. Schema-admin-gated and destructive."));
+            tools.Add(DestructiveTool(services, TreeAdminSchemaToolHandlers.RegisterSchemaAsync, "lattice_treeadmin_schema_register",
+                "Register durable schema versions and migration paths",
+                "Appends immutable schema descriptors and migration hops scoped to this tenant tree. Identical retries are safe; "
+                + "conflicting definitions are rejected. Hops use declarative transform IR or a discovered stable host transform id. "
+                + "Provision host code on every serving silo and region before referencing it; requires versioning and schema-admin permission."));
             tools.Add(DestructiveTool(services, TreeAdminSchemaToolHandlers.SetVersionConfigAsync, "lattice_treeadmin_schema_set_version_config",
                 "Set a tree's schema version config",
                 "Opts a tree in to envelope versioning (or replaces its existing config) from a schema-family id, a "

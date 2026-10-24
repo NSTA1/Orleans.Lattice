@@ -68,6 +68,7 @@ public sealed class LatticeSchemaComplianceAdminTests
         {
             Assert.That(report.TreeId, Is.EqualTo(Tree));
             Assert.That(report.HasPolicy, Is.False);
+            Assert.That(report.RuleCount, Is.Zero);
             Assert.That(report.CompliantCount, Is.Zero);
             Assert.That(report.NonCompliantCount, Is.Zero);
             Assert.That(report.ScannedCount, Is.Zero);
@@ -93,6 +94,7 @@ public sealed class LatticeSchemaComplianceAdminTests
         Assert.Multiple(() =>
         {
             Assert.That(report.HasPolicy, Is.True);
+            Assert.That(report.RuleCount, Is.EqualTo(1));
             Assert.That(report.ScannedCount, Is.Zero);
             Assert.That(report.CompliantCount, Is.Zero);
             Assert.That(report.NonCompliantCount, Is.Zero);
@@ -115,6 +117,7 @@ public sealed class LatticeSchemaComplianceAdminTests
         {
             Assert.That(report.HasPolicy, Is.True);
             Assert.That(report.CompliantCount, Is.EqualTo(3));
+            Assert.That(report.RuleCount, Is.EqualTo(1));
             Assert.That(report.NonCompliantCount, Is.Zero);
             Assert.That(report.ScannedCount, Is.EqualTo(3));
             Assert.That(report.RuleBreakdown, Is.Empty);
@@ -146,6 +149,7 @@ public sealed class LatticeSchemaComplianceAdminTests
         Assert.Multiple(() =>
         {
             Assert.That(report.CompliantCount, Is.EqualTo(1));
+            Assert.That(report.RuleCount, Is.EqualTo(2));
             Assert.That(report.NonCompliantCount, Is.EqualTo(3));
             Assert.That(report.ScannedCount, Is.EqualTo(4));
             Assert.That(breakdown["must be json"], Is.EqualTo(2));
@@ -154,6 +158,36 @@ public sealed class LatticeSchemaComplianceAdminTests
     }
 
     // ---- Parameter guards -----------------------------------------------
+
+    [TestCase(0, "{}")]
+    [TestCase(1, "{}")]
+    [TestCase(1, "not JSON")]
+    [TestCase(2, "{}")]
+    [TestCase(2, "not JSON")]
+    public async Task ScanCompliance_rule_count_matches_policy_not_failure_population(int ruleCount, string value)
+    {
+        var (admin, grain, provider) = Create();
+        var rules = ruleCount switch
+        {
+            0 => Array.Empty<LatticeSchemaRule>(),
+            1 => [LatticeSchemaRule.Json()],
+            _ => new[] { LatticeSchemaRule.Json(), LatticeSchemaRule.MaxLength(100) },
+        };
+        SetPolicy(provider, CompiledSchemaPolicy.Compile(new LatticeSchemaPolicy(rules)));
+        SetEntries(grain, Kv("value", value));
+
+        var report = await admin.ScanComplianceAsync(Tree);
+        var map = SchemaComplianceScanResults.ToResultMap(report);
+        Assert.That(SchemaComplianceScanResults.TryReadReport(map, out var rebuilt), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.RuleCount, Is.EqualTo(ruleCount));
+            Assert.That(rebuilt.RuleCount, Is.EqualTo(ruleCount));
+            Assert.That(map[SchemaComplianceScanResults.RuleCountKey], Is.EqualTo(ruleCount.ToString()));
+            Assert.That(report.ScannedCount, Is.EqualTo(1));
+            Assert.That(report.NonCompliantCount, Is.EqualTo(ruleCount > 0 && value == "not JSON" ? 1 : 0));
+        });
+    }
 
     [Test]
     public void ScanCompliance_null_or_empty_tree_id_throws()

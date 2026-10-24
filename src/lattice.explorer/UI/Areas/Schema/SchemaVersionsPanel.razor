@@ -1,18 +1,13 @@
 @*
     Versions: the tree's envelope-version config - schema family, target version
-    and strict ingest - with set, clear, advance, migrate, and advance and
-    migrate. Advancing is irreversible, so it is confirmed by naming the tree;
-    a migration is a staged, long-running operation whose status page is the
-    Remediation tab. What differs between two versions is registered in code
-    on the silos and is not shown here (#1257); the tab says so rather than
-    guessing.
+    and strict ingest - with configuration, durable definitions and migrations.
 *@
 
 @if (Workspace is not null)
 {
     <aside class="lt-schema-note" aria-label="What a version is here">
         <p>A version is a stamp, not a shape. New writes are stamped with the tree's family and target version, and older values are upgraded when they are read or migrated. Advancing the target cannot be undone.</p>
-        <p>This Explorer cannot show what differs between two versions: each version's shape and its upgraders are registered in code on the silos and are not sent here.</p>
+        <p>Registered version names and migration paths are listed below when runtime registration is installed. Descriptors name versions; the Policy tab defines the validation rules.</p>
     </aside>
 
     @if (Operations.Find(Workspace.TreeId) is { IsActive: true } running)
@@ -23,7 +18,13 @@
         </p>
     }
 
-    @if (!Workspace.Grants.ViewVersion)
+    @if (!Workspace.Grants.SupportsVersioning)
+    {
+        <LtEmptyState Title="Versioning is not available" HeadingLevel="2">
+            This cluster's silos do not register schema versioning. A host operator must enable AddLatticeSchemaVersioning; policy enforcement can still be used independently.
+        </LtEmptyState>
+    }
+    else if (!Workspace.Grants.ViewVersion)
     {
         <LtEmptyState Title="You may not read this tree's versioning" HeadingLevel="2">
             Reading the version config needs read authority on the tree.
@@ -34,12 +35,6 @@
         <LtEmptyState Title="The version config did not load" HeadingLevel="2">
             <ChildContent>@_error</ChildContent>
             <Actions><LtButton OnClick="ReloadAsync">Try again</LtButton></Actions>
-        </LtEmptyState>
-    }
-    else if (_versioningMissing)
-    {
-        <LtEmptyState Title="Versioning is not available" HeadingLevel="2">
-            This cluster's silos do not register schema versioning, so no tree on it can be versioned.
         </LtEmptyState>
     }
     else if (!_loaded)
@@ -61,6 +56,8 @@
                 break;
         }
     }
+
+    <SchemaRegistryPanel />
 
     <LtConfirmDestructive Open="@(_confirm == Confirm.Clear)"
                           OpenChanged="OnConfirmOpenChanged"
@@ -134,10 +131,14 @@
         {
             <div class="lt-toolbar lt-schema-actions">
                 <LtButton OnClick="OpenAdvance" Disabled="@(Busy || !CanAdvance)">Advance target version...</LtButton>
-                <LtButton OnClick="() => _confirm = Confirm.Migrate" Disabled="@Busy">Migrate stored values...</LtButton>
+                <LtButton OnClick="() => _confirm = Confirm.Migrate" Disabled="@(Busy || !Workspace.Grants.CanStartMigration)">Migrate stored values...</LtButton>
                 <LtButton Variant="LtButtonVariant.Quiet" OnClick="OpenConfigure" Disabled="@Busy">Change config</LtButton>
                 <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => _confirm = Confirm.Clear" Disabled="@Busy">Turn off versioning</LtButton>
             </div>
+            @if (!Workspace.Grants.CanStartMigration && Workspace.Grants.MigrationUnavailableReason is { } reason)
+            {
+                <p class="lt-schema-note">@reason</p>
+            }
             @if (!CanAdvance)
             {
                 <p class="lt-schema-note">The target is the highest version there is, so it cannot be advanced.</p>
@@ -178,7 +179,7 @@
             <LtTextInput Label="New target version" Mono="true" Value="@_versionText" ValueChanged="value => _versionText = value" inputmode="numeric" Error="@_formError" />
             <div class="lt-toolbar lt-schema-actions">
                 <LtButton OnClick="() => ReviewAdvance(migrate: false)" Disabled="@Busy">Advance...</LtButton>
-                <LtButton OnClick="() => ReviewAdvance(migrate: true)" Disabled="@Busy">Advance and migrate...</LtButton>
+                <LtButton OnClick="() => ReviewAdvance(migrate: true)" Disabled="@(Busy || Workspace?.Grants.SupportsRemediation != true)">Advance and migrate...</LtButton>
                 <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseEditor">Cancel</LtButton>
             </div>
         </section>

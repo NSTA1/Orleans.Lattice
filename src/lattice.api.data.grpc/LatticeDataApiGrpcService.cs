@@ -407,6 +407,21 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.Cancelled, "The data-API request was cancelled."));
         }
+        catch (Exception ex) when (ex is ILatticeValueValidationFault)
+        {
+            var validation = (ILatticeValueValidationFault)ex;
+            var reason = SafeValidationField(validation.Reason);
+            throw new RpcException(
+                new Status(StatusCode.InvalidArgument,
+                    $"The value was rejected by the tree's schema policy. {reason} Correct the value or update the policy before retrying."),
+                new global::Grpc.Core.Metadata
+                {
+                    { "lattice-validation-code", SafeValidationField(validation.Code) },
+                    { "lattice-validation-tree", SafeValidationField(validation.TreeId) },
+                    { "lattice-validation-key", SafeValidationField(validation.Key) },
+                    { "lattice-validation-reason", reason },
+                });
+        }
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
@@ -488,6 +503,19 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
             _logger.LogError(ex, "Api.Data: gRPC call to {Method} failed.", context.Method);
             throw new RpcException(new Status(StatusCode.Internal, "The data-API request failed."));
         }
+    }
+
+    private static string SafeValidationField(string value)
+    {
+        var length = Math.Min(value.Length, 1024);
+        return string.Create(length, value, static (span, text) =>
+        {
+            for (var i = 0; i < span.Length; i++)
+            {
+                var c = text[i];
+                span[i] = c is >= ' ' and <= '~' ? c : '?';
+            }
+        });
     }
 
     private static RpcException ToPermissionDenied(LatticeAuthorizationDeniedException ex)

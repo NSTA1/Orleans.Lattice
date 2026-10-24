@@ -9,6 +9,11 @@ namespace Orleans.Lattice.Schema;
 /// </summary>
 internal static class SchemaTypeAliases
 {
+    internal const string LatticeSchemaDescriptor = "ols.sd";
+    internal const string LatticeSchemaRuntimeUpcaster = "ols.ru";
+    internal const string LatticeSchemaRuntimeRegistration = "ols.rc";
+    internal const string ILatticeSchemaRuntimeRegistryGrain = "ols.ri";
+    internal const string SchemaRuntimeRegistryState = "ols.rt";
     /// <summary>Alias for <see cref="LatticeValueTransform"/>.</summary>
     internal const string LatticeValueTransform = "ols.vt";
 

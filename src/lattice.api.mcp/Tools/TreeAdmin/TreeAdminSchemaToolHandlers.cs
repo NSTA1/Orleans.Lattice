@@ -26,6 +26,18 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </remarks>
 internal static class TreeAdminSchemaToolHandlers
 {
+    public static Task<LatticeSchemaRuntimeRegistration> GetRegistryAsync(
+        ILatticeSchemaControl schema, string treeId, CancellationToken cancellationToken = default) =>
+        schema.GetRegistryAsync(treeId, cancellationToken);
+
+    public static async Task<LatticeSchemaRuntimeRegistration> RegisterSchemaAsync(
+        ILatticeSchemaControl schema, string treeId, LatticeSchemaRuntimeRegistration registration,
+        CancellationToken cancellationToken = default)
+    {
+        await schema.RegisterSchemaAsync(treeId, registration, cancellationToken).ConfigureAwait(false);
+        return registration;
+    }
+
     // ----- Inspection (read-only) -----
 
     /// <summary>Reads the enforcement policy for a tree, or <c>null</c> when none exists.</summary>

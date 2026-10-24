@@ -56,6 +56,16 @@ Declare the whole registry in one `AddLatticeSchemaVersioning` call: a repeat ca
 still layers its `configureOptions` delegate, but its `configureRegistry` delegate
 is ignored.
 
+### Runtime registration
+
+After the host installs versioning and the schema API, operators can use `ILatticeSchemaControl.GetRegistryAsync` and `RegisterSchemaAsync`, the gRPC `GetRegistry` and `RegisterSchema` methods, or MCP `lattice_treeadmin_schema_get_registry` and `lattice_treeadmin_schema_register`. Runtime registration does not install the capability itself.
+
+The durable catalog appends named schema descriptors and migration hops per effective tenant tree. Identical registrations are safe to retry. A changed descriptor or a different hop from an already-registered source is a conflict, not an overwrite. Read-time decoding, strict ingest and eager migrations resolve the same catalog alongside startup declarations, so deactivation, restart and another silo do not lose the definitions.
+
+Each hop uses validated declarative value-transform IR, or a stable transform id that the host explicitly installed and advertises. It cannot load CLR type names, assemblies or executable code. Descriptors identify versions; enforcement policies define validation shapes. Install identical host transforms on every silo before registering a hop that references one.
+
+Catalog scope is the selected region and effective tenant tree, not a process-global registry or a cross-region deployment mechanism. For a replicated tree, register the same definitions in every serving region before advancing its target or shipping values at that version. A missing descriptor or migration path remains an explicit refusal; discovery cannot prove that unknown external values will be readable.
+
 ### Versioning options
 
 See [configuration](configuration.md) for every silo-wide option, its default, registration-only switches and the composition order.

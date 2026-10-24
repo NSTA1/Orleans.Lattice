@@ -23,9 +23,9 @@ internal sealed partial class LatticeSchemaControl
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(targetPolicy);
         var id = LatticeOperationKey.ValidateOrGenerate(operationId);
-        var operations = RequireOperations();
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var operations = RequireOperations();
         var tenantId = await ResolveActiveTenantIdAsync(cancellationToken).ConfigureAwait(false);
         var launch = await operations.StartRemediationAsync(tenantId, id, treeId, transform, targetPolicy)
             .ConfigureAwait(false);
@@ -40,10 +40,10 @@ internal sealed partial class LatticeSchemaControl
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         var id = LatticeOperationKey.ValidateOrGenerate(operationId);
-        var operations = RequireOperations();
-        RequireVersionAdmin();
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var operations = RequireOperations();
+        RequireVersionAdmin();
         var tenantId = await ResolveActiveTenantIdAsync(cancellationToken).ConfigureAwait(false);
         var launch = await operations.StartMigrationAsync(tenantId, id, treeId).ConfigureAwait(false);
         return LatticeOperationMapping.ToHandle(launch);
@@ -58,10 +58,10 @@ internal sealed partial class LatticeSchemaControl
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         var id = LatticeOperationKey.ValidateOrGenerate(operationId);
-        var operations = RequireOperations();
-        RequireVersionAdmin();
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var operations = RequireOperations();
+        RequireVersionAdmin();
         var tenantId = await ResolveActiveTenantIdAsync(cancellationToken).ConfigureAwait(false);
         var launch = await operations.StartAdvanceAndMigrateAsync(tenantId, id, treeId, newTargetVersion)
             .ConfigureAwait(false);

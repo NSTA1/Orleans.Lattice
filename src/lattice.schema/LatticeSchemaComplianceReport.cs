@@ -49,6 +49,12 @@ public readonly record struct LatticeSchemaComplianceReport
     /// </summary>
     [Id(5)] public required IReadOnlyList<LatticeSchemaComplianceRuleCount> RuleBreakdown { get; init; }
 
+    /// <summary>
+    /// The number of rules in the policy used for this scan, independent of the
+    /// number of values or distinct failure reasons. Zero for an ungoverned tree.
+    /// </summary>
+    [Id(6)] public int RuleCount { get; init; }
+
     /// <summary>The report for an ungoverned tree: no policy, nothing scanned.</summary>
     /// <param name="treeId">The audited tree id.</param>
     /// <returns>An ungoverned, all-zero report.</returns>

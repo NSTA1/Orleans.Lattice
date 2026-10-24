@@ -27,6 +27,15 @@ public sealed class LatticeApiSchemaServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void Versioning_without_enforcement_does_not_install_the_schema_control_facade()
+    {
+        var builder = new FakeSiloBuilder();
+        builder.AddLattice((_, _) => { });
+        builder.AddLatticeSchemaVersioning(registry => registry.AddSchema(1, 1, "host-v1"));
+        Assert.That(() => builder.AddLatticeSchemaApi(), Throws.InvalidOperationException);
+    }
+
+    [Test]
     public void AddLatticeSchemaApi_with_null_builder_throws()
     {
         Assert.That(() => ((ISiloBuilder)null!).AddLatticeSchemaApi(), Throws.ArgumentNullException);

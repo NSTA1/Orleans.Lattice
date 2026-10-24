@@ -10,7 +10,13 @@
 
 @if (Workspace is not null)
 {
-    @if (!Workspace.Grants.ScanCompliance)
+    @if (!Workspace.Grants.SupportsCompliance)
+    {
+        <LtEmptyState Title="Compliance scans are not available" HeadingLevel="2">
+            This cluster does not install schema compliance scanning. A host operator must install enforcement and the schema API first.
+        </LtEmptyState>
+    }
+    else if (!Workspace.Grants.ScanCompliance)
     {
         <LtEmptyState Title="You may not scan this tree" HeadingLevel="2">
             A compliance scan needs read authority on the tree.

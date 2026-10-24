@@ -14,6 +14,17 @@ internal sealed class LatticeSchemaRegistry : ILatticeSchemaRegistry
     private readonly IReadOnlyDictionary<(uint SchemaId, uint FromVersion), LatticeSchemaUpcaster> _upcasters;
     private readonly ILatticeValueTransformRegistry? _transformRegistry;
 
+    internal LatticeSchemaRuntimeRegistration Describe() => new()
+    {
+        Descriptors = _descriptors.Values.OrderBy(d => d.SchemaId).ThenBy(d => d.Version).ToArray(),
+        Upcasters = _upcasters.Values.OrderBy(u => u.SchemaId).ThenBy(u => u.FromVersion)
+            .Select(u => new LatticeSchemaRuntimeUpcaster
+            {
+                SchemaId = u.SchemaId, FromVersion = u.FromVersion, ToVersion = u.ToVersion,
+                Transform = u.Transform, TransformId = u.TransformId,
+            }).ToArray(),
+    };
+
     internal LatticeSchemaRegistry(
         IReadOnlyDictionary<(uint, uint), LatticeSchemaDescriptor> descriptors,
         IReadOnlyDictionary<(uint, uint), LatticeSchemaUpcaster> upcasters,

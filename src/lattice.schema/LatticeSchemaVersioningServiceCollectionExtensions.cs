@@ -95,6 +95,7 @@ public static class LatticeSchemaVersioningServiceCollectionExtensions
             configureRegistry?.Invoke(registryBuilder);
             return registryBuilder.Build(sp.GetService<ILatticeValueTransformRegistry>());
         });
+        builder.Services.TryAddSingleton<SchemaRuntimeRegistry>();
 
         // Write path: stamp the envelope. Compose after the enforcement validation
         // stage when enforcement is also registered (its concrete type is resolved

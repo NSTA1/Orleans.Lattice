@@ -182,6 +182,8 @@ internal sealed class LatticeSchemaApiGrpcAuthInterceptor : Interceptor
         var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
         var operation = methodName switch
         {
+            LatticeSchemaGrpcMethods.GetRegistryMethodName => LatticeSchemaApiOperation.GetRegistry,
+            LatticeSchemaGrpcMethods.RegisterSchemaMethodName => LatticeSchemaApiOperation.RegisterSchema,
             LatticeSchemaGrpcMethods.SetPolicyMethodName => LatticeSchemaApiOperation.SetPolicy,
             LatticeSchemaGrpcMethods.ClearPolicyMethodName => LatticeSchemaApiOperation.ClearPolicy,
             LatticeSchemaGrpcMethods.GetPolicyMethodName => LatticeSchemaApiOperation.GetPolicy,
@@ -208,6 +210,7 @@ internal sealed class LatticeSchemaApiGrpcAuthInterceptor : Interceptor
 
         var targetId = request switch
         {
+            SchemaRegistryRequest r => r.TreeId,
             SetPolicyRequest p => p.TreeId,
             SetVersionConfigRequest v => v.TreeId,
             AdvanceVersionRequest a => a.TreeId,

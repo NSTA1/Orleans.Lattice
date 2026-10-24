@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -20,6 +21,11 @@ public partial class SchemaDirectoryPage
     private bool _loading;
     private bool _pickerOpen;
     private string? _pickedTree;
+    private ShellCallerKey _loadedCaller;
+    private long _generation;
+
+    [Inject]
+    internal SchemaFacades Facades { get; set; } = default!;
 
     [Inject]
     internal SchemaDirectory Directory { get; set; } = default!;
@@ -61,6 +67,14 @@ public partial class SchemaDirectoryPage
     {
         Signals.Requested -= OnCommandRequested;
         Ledger.Recorded -= OnComplianceRecorded;
+        if (Facades.Auth is { } auth)
+        {
+            auth.AuthenticationChanged -= OnCallerChanged;
+        }
+        if (Facades.Session is { } session)
+        {
+            session.ConfigurationChanged -= OnCallerChanged;
+        }
         _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
@@ -70,12 +84,20 @@ public partial class SchemaDirectoryPage
     {
         Signals.Requested += OnCommandRequested;
         Ledger.Recorded += OnComplianceRecorded;
+        if (Facades.Auth is { } auth)
+        {
+            auth.AuthenticationChanged += OnCallerChanged;
+        }
+        if (Facades.Session is { } session)
+        {
+            session.ConfigurationChanged += OnCallerChanged;
+        }
     }
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
-        if (_read is null && _error is null)
+        if (_loadedCaller != Facades.Caller || (_read is null && _error is null))
         {
             await LoadAsync(refresh: false);
         }
@@ -133,12 +155,19 @@ public partial class SchemaDirectoryPage
 
     private async Task LoadAsync(bool refresh)
     {
+        var caller = Facades.Caller;
+        var generation = ++_generation;
+        _loadedCaller = caller;
         _loading = true;
         _error = null;
         try
         {
-            _read = await Directory.GetAsync(refresh, _lifetime.Token);
-            Project();
+            var read = await Directory.GetAsync(refresh, _lifetime.Token);
+            if (IsCurrent(caller, generation))
+            {
+                _read = read;
+                Project();
+            }
         }
         catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
@@ -146,6 +175,10 @@ public partial class SchemaDirectoryPage
         }
         catch (Exception exception)
         {
+            if (!IsCurrent(caller, generation))
+            {
+                return;
+            }
             _read = null;
             _error = exception switch
             {
@@ -155,8 +188,32 @@ public partial class SchemaDirectoryPage
         }
         finally
         {
-            _loading = false;
+            if (IsCurrent(caller, generation))
+            {
+                _loading = false;
+            }
         }
+    }
+
+    private bool IsCurrent(ShellCallerKey caller, long generation) =>
+        !_lifetime.IsLeft && caller == Facades.Caller && generation == _generation;
+
+    private void OnCallerChanged()
+    {
+        _read = null;
+        _rows = [];
+        _scanTargets = [];
+        _pickerOpen = false;
+        _pickedTree = null;
+        _error = null;
+        _ = InvokeAsync(async () =>
+        {
+            if (!_lifetime.IsLeft)
+            {
+                await LoadAsync(refresh: true);
+                StateHasChanged();
+            }
+        });
     }
 
     private void Project()
@@ -174,7 +231,7 @@ public partial class SchemaDirectoryPage
                 && (filter.Length == 0 || row.TreeId.Contains(filter, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
         _scanTargets = _read.Rows
-            .Where(row => row.Policy is not null)
+            .Where(row => row.Policy is not null && row.CanScanCompliance)
             .Select(row => new LtSelectOption(row.TreeId, row.TreeId))
             .ToArray();
         if (_pickerOpen && string.IsNullOrEmpty(_pickedTree) && _scanTargets.Count > 0)

@@ -66,6 +66,13 @@ internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
         CanRemediate = true,
         CanScanCompliance = true,
         CanViewDeadLetters = true,
+        SupportsEnforcement = true,
+        SupportsVersioning = true,
+        SupportsRemediation = true,
+        SupportsCompliance = true,
+        SupportsDeadLetters = true,
+        CanStartMigration = true,
+        CanStartRemediation = true,
     };
 
     /// <summary>Read-only capabilities: every view and the scan, nothing that changes.</summary>
@@ -176,6 +183,9 @@ internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
     /// </summary>
     public TaskCompletionSource? StatusGate { get; set; }
 
+    /// <summary>Holds a capability response captured under the caller who started the probe.</summary>
+    public TaskCompletionSource? CapabilityGate { get; set; }
+
     private static async Task<LatticeSchemaRemediationReport> HoldAsync(
         TaskCompletionSource gate, LatticeSchemaRemediationReport report, CancellationToken cancellationToken)
     {
@@ -184,11 +194,22 @@ internal sealed partial class FakeSchemaControl : ILatticeSchemaControl
     }
 
     /// <inheritdoc />
-    public Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)
+    public async Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)
     {
         Record("ProbeCapabilities", treeId);
         var capabilities = Capabilities.TryGetValue(treeId, out var own) ? own : DefaultCapabilities;
-        return Task.FromResult(capabilities(treeId));
+        var result = capabilities(treeId);
+        if (!VersioningRegistered)
+        {
+            result = result with { SupportsVersioning = false, SupportsRuntimeRegistration = false, CanStartMigration = false };
+        }
+        if (CapabilityGate is { } gate)
+        {
+            CapabilityGate = null;
+            await gate.Task.WaitAsync(cancellationToken);
+        }
+
+        return result;
     }
 
     /// <summary>How many times <paramref name="verb"/> was called.</summary>

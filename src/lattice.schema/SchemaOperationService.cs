@@ -80,27 +80,29 @@ internal sealed class SchemaOperationService(
     /// <returns>The launch.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is reserved.</exception>
     /// <exception cref="InvalidOperationException">Schema versioning is not registered.</exception>
-    internal Task<LatticeOperationLaunch<LatticeSchemaRemediationReport>> StartMigrationAsync(
+    internal async Task<LatticeOperationLaunch<LatticeSchemaRemediationReport>> StartMigrationAsync(
         string tenantId,
         string operationId,
         string treeId)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         SchemaConstants.ThrowIfReservedTree(treeId, nameof(treeId));
+        if (await runner.GetAsync(tenantId, operationId).ConfigureAwait(false) is not null)
+            return await ReplayAsync(tenantId, operationId, SchemaOperationKinds.Migration, treeId, RemediationPhases).ConfigureAwait(false);
         var versions = RequireVersionAdmin();
+        var config = await versions.GetVersionConfigAsync(treeId).ConfigureAwait(false)
+            ?? throw LatticeSchemaVersionAdmin.NotVersioned(treeId);
         var grain = Remediation(treeId);
-        return runner.StartAsync(
+        return await runner.StartAsync(
             Start(tenantId, operationId, SchemaOperationKinds.Migration, treeId, RemediationPhases),
             async (progress, ct) =>
             {
-                var config = await versions.GetVersionConfigAsync(treeId, ct).ConfigureAwait(false)
-                    ?? throw LatticeSchemaVersionAdmin.NotVersioned(treeId);
                 var accepted = await grain
                     .AcceptVersionMigrationAsync(config.SchemaId, config.TargetVersion, operationId)
                     .ConfigureAwait(false);
                 return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress, ct).ConfigureAwait(false);
             },
-            ToCompletion);
+            ToCompletion).ConfigureAwait(false);
     }
 
     /// <summary>Starts an advance of <paramref name="treeId"/>'s target version, then an eager migration to it.</summary>
@@ -111,7 +113,7 @@ internal sealed class SchemaOperationService(
     /// <returns>The launch.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is reserved.</exception>
     /// <exception cref="InvalidOperationException">Schema versioning is not registered.</exception>
-    internal Task<LatticeOperationLaunch<LatticeSchemaRemediationReport>> StartAdvanceAndMigrateAsync(
+    internal async Task<LatticeOperationLaunch<LatticeSchemaRemediationReport>> StartAdvanceAndMigrateAsync(
         string tenantId,
         string operationId,
         string treeId,
@@ -119,9 +121,22 @@ internal sealed class SchemaOperationService(
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         SchemaConstants.ThrowIfReservedTree(treeId, nameof(treeId));
+        if (await runner.GetAsync(tenantId, operationId).ConfigureAwait(false) is not null)
+            return await ReplayAsync(tenantId, operationId, SchemaOperationKinds.AdvanceAndMigrate, treeId, AdvanceAndMigratePhases).ConfigureAwait(false);
         var versions = RequireVersionAdmin();
+        var current = await versions.GetVersionConfigAsync(treeId).ConfigureAwait(false)
+            ?? throw LatticeSchemaVersionAdmin.NotVersioned(treeId);
+        if (newTargetVersion <= current.TargetVersion)
+            throw new InvalidOperationException("The migration target must advance the tree's current version.");
+        if (services.GetService<SchemaRuntimeRegistry>() is { } runtime)
+        {
+            var registry = await runtime.ResolveAsync(treeId).ConfigureAwait(false);
+            if (!registry.TryGetDescriptor(current.SchemaId, newTargetVersion, out _)
+                || !registry.CanUpcast(current.SchemaId, current.TargetVersion, newTargetVersion))
+                throw new InvalidOperationException("Register the target schema descriptor and a contiguous migration path before starting.");
+        }
         var grain = Remediation(treeId);
-        return runner.StartAsync(
+        return await runner.StartAsync(
             Start(tenantId, operationId, SchemaOperationKinds.AdvanceAndMigrate, treeId, AdvanceAndMigratePhases),
             async (progress, ct) =>
             {
@@ -131,8 +146,15 @@ internal sealed class SchemaOperationService(
                     .ConfigureAwait(false);
                 return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress, ct).ConfigureAwait(false);
             },
-            ToCompletion);
+            ToCompletion).ConfigureAwait(false);
     }
+
+    private Task<LatticeOperationLaunch<LatticeSchemaRemediationReport>> ReplayAsync(
+        string tenantId, string operationId, string kind, string treeId, IReadOnlyList<string> phases) =>
+        runner.StartAsync<LatticeSchemaRemediationReport>(
+            Start(tenantId, operationId, kind, treeId, phases),
+            static (_, _) => throw new InvalidOperationException("An existing operation must not execute again."),
+            ToCompletion);
 
     /// <summary>
     /// Maps a terminal report to the recorded outcome: a completed remediation

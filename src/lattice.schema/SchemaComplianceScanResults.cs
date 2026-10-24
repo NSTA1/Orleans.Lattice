@@ -27,8 +27,11 @@ public static class SchemaComplianceScanResults
     /// <summary>Result key: the scanned value count.</summary>
     public const string ScannedCountKey = "scannedCount";
 
-    /// <summary>Result key: the number of rows in the failure-reason breakdown.</summary>
+    /// <summary>Result key: the number of rules in the scanned policy.</summary>
     public const string RuleCountKey = "ruleCount";
+
+    /// <summary>Result key: the number of distinct first-failure reasons in the breakdown.</summary>
+    public const string FailureReasonCountKey = "failureReasonCount";
 
     /// <summary>
     /// The prefix of the breakdown keys: row <c>i</c> is held under
@@ -45,14 +48,15 @@ public static class SchemaComplianceScanResults
     public static IReadOnlyDictionary<string, string> ToResultMap(LatticeSchemaComplianceReport report)
     {
         var breakdown = report.RuleBreakdown ?? ReadOnlyCollection<LatticeSchemaComplianceRuleCount>.Empty;
-        var map = new Dictionary<string, string>(6 + (breakdown.Count * 2), StringComparer.Ordinal)
+        var map = new Dictionary<string, string>(7 + (breakdown.Count * 2), StringComparer.Ordinal)
         {
             [TreeIdKey] = report.TreeId,
             [HasPolicyKey] = report.HasPolicy ? "true" : "false",
             [CompliantCountKey] = report.CompliantCount.ToString(CultureInfo.InvariantCulture),
             [NonCompliantCountKey] = report.NonCompliantCount.ToString(CultureInfo.InvariantCulture),
             [ScannedCountKey] = report.ScannedCount.ToString(CultureInfo.InvariantCulture),
-            [RuleCountKey] = breakdown.Count.ToString(CultureInfo.InvariantCulture),
+            [RuleCountKey] = report.RuleCount.ToString(CultureInfo.InvariantCulture),
+            [FailureReasonCountKey] = breakdown.Count.ToString(CultureInfo.InvariantCulture),
         };
 
         for (var i = 0; i < breakdown.Count; i++)
@@ -86,8 +90,24 @@ public static class SchemaComplianceScanResults
             return false;
         }
 
-        var rows = ruleCount == 0 ? Array.Empty<LatticeSchemaComplianceRuleCount>() : new LatticeSchemaComplianceRuleCount[ruleCount];
-        for (var i = 0; i < ruleCount; i++)
+        // Older operation maps used ruleCount for breakdown rows and did not
+        // retain the policy count. Keep those historical operations readable.
+        var hasPolicyCount = result.ContainsKey(FailureReasonCountKey);
+        var failureReasonCount = ruleCount;
+        if (hasPolicyCount && !TryReadInt(result, FailureReasonCountKey, out failureReasonCount))
+        {
+            return false;
+        }
+
+        // Each row requires two keys. Bound allocation by the supplied map,
+        // rather than trusting a count read from an external operation record.
+        if (failureReasonCount > result.Count / 2)
+        {
+            return false;
+        }
+
+        var rows = failureReasonCount == 0 ? Array.Empty<LatticeSchemaComplianceRuleCount>() : new LatticeSchemaComplianceRuleCount[failureReasonCount];
+        for (var i = 0; i < failureReasonCount; i++)
         {
             var index = i.ToString(CultureInfo.InvariantCulture);
             if (!result.TryGetValue(RulePrefix + index + ReasonSuffix, out var reason)
@@ -103,6 +123,7 @@ public static class SchemaComplianceScanResults
         {
             TreeId = treeId,
             HasPolicy = hasPolicy,
+            RuleCount = hasPolicyCount ? ruleCount : 0,
             CompliantCount = compliant,
             NonCompliantCount = nonCompliant,
             ScannedCount = scanned,

@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Api.Data.Grpc.Tests;
 /// failure into the right gRPC <see cref="StatusCode"/>.
 /// </summary>
 [TestFixture]
-public sealed class LatticeDataApiGrpcServiceUnitTests
+public sealed partial class LatticeDataApiGrpcServiceUnitTests
 {
     private ILatticeDataApi _api = null!;
     private ILatticeDataApiCredentialBridge _bridge = null!;

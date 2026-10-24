@@ -33,6 +33,7 @@ internal sealed class SchemaDirectory
     private readonly SchemaFacades _facades;
     private readonly SchemaTreeCatalog _catalog;
     private readonly TimeProvider _time;
+    private readonly SchemaAccess _access;
     private SchemaDirectoryRead? _read;
     private ShellCallerKey _readCaller;
     private IReadOnlyDictionary<string, SchemaAppDeclaration>? _declarations;
@@ -42,14 +43,17 @@ internal sealed class SchemaDirectory
     /// <param name="facades">The area's facades.</param>
     /// <param name="catalog">The circuit's tree catalogue.</param>
     /// <param name="time">The clock freshness is measured on.</param>
-    public SchemaDirectory(SchemaFacades facades, SchemaTreeCatalog catalog, TimeProvider time)
+    /// <param name="access">The per-tree installed support and grants.</param>
+    public SchemaDirectory(SchemaFacades facades, SchemaTreeCatalog catalog, TimeProvider time, SchemaAccess access)
     {
         ArgumentNullException.ThrowIfNull(facades);
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(time);
+        ArgumentNullException.ThrowIfNull(access);
         _facades = facades;
         _catalog = catalog;
         _time = time;
+        _access = access;
     }
 
     /// <summary>
@@ -115,10 +119,16 @@ internal sealed class SchemaDirectory
     public async Task<SchemaTreeRow> ReadTreeAsync(string treeId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
+        var caller = _facades.Caller;
         var schema = _facades.RequireSchema();
         var declarations = await GetDeclarationsAsync(refresh: false, cancellationToken).ConfigureAwait(false);
         var row = await ReadRowAsync(schema, treeId, declarations, cancellationToken).ConfigureAwait(false);
-        if (_read is { } read && _readCaller == _facades.Caller)
+        if (_facades.Caller != caller)
+        {
+            throw new OperationCanceledException("The schema caller changed while reading the tree.");
+        }
+
+        if (_read is { } read && _readCaller == caller)
         {
             _read = read.Replace(row);
         }
@@ -173,17 +183,22 @@ internal sealed class SchemaDirectory
         return false;
     }
 
-    private static async Task<SchemaTreeRow> ReadRowAsync(
+    private async Task<SchemaTreeRow> ReadRowAsync(
         ILatticeSchemaControl schema,
         string treeId,
         IReadOnlyDictionary<string, SchemaAppDeclaration> declarations,
         CancellationToken cancellationToken)
     {
+        var grants = await _access.GetGrantsAsync(treeId, refresh: false, cancellationToken).ConfigureAwait(false);
         LatticeSchemaPolicy? policy = null;
-        var policyState = SchemaReadState.Read;
+        var policyState = !grants.SupportsEnforcement ? SchemaReadState.Unavailable
+            : !grants.ViewPolicy ? SchemaReadState.Denied : SchemaReadState.Read;
         try
         {
-            policy = await schema.GetPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+            if (policyState == SchemaReadState.Read)
+            {
+                policy = await schema.GetPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -195,10 +210,14 @@ internal sealed class SchemaDirectory
         }
 
         LatticeSchemaVersionConfig? version = null;
-        var versionState = SchemaReadState.Read;
+        var versionState = !grants.SupportsVersioning ? SchemaReadState.Unavailable
+            : !grants.ViewVersion ? SchemaReadState.Denied : SchemaReadState.Read;
         try
         {
-            version = SchemaVersioning.Effective(await schema.GetVersionConfigAsync(treeId, cancellationToken).ConfigureAwait(false));
+            if (versionState == SchemaReadState.Read)
+            {
+                version = SchemaVersioning.Effective(await schema.GetVersionConfigAsync(treeId, cancellationToken).ConfigureAwait(false));
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -210,7 +229,10 @@ internal sealed class SchemaDirectory
         }
 
         declarations.TryGetValue(treeId, out var declaration);
-        return new SchemaTreeRow(treeId, policy, policyState, version, versionState, declaration);
+        return new SchemaTreeRow(treeId, policy, policyState, version, versionState, declaration)
+        {
+            CanScanCompliance = grants.ScanCompliance,
+        };
     }
 
     private static SchemaReadState Classify(Exception exception) => exception switch

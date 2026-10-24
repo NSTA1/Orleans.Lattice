@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Api.Schema.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class LatticeSchemaOperationsIntegrationTests
+public sealed partial class LatticeSchemaOperationsIntegrationTests
 {
     private ApiSchemaClusterFixture _fixture = null!;
 
@@ -212,14 +212,14 @@ public sealed class LatticeSchemaOperationsIntegrationTests
     }
 
     [Test]
-    public async Task An_advance_that_does_not_advance_fails_the_operation()
+    public async Task An_advance_that_does_not_advance_rejects_before_creating_an_operation()
     {
         var treeId = $"ops-no-advance-{Guid.NewGuid():N}";
         await _fixture.Control.SetVersionConfigAsync(treeId, new LatticeSchemaVersionConfig(ApiSchemaClusterFixture.SchemaId, 2));
 
-        var status = await UntilTerminalAsync(Operations, (await Operations.StartAdvanceAndMigrateAsync(treeId, 2)).OperationId);
-
-        Assert.That(status.State, Is.EqualTo(LatticeOperationState.Failed));
+        var id = $"invalid-{Guid.NewGuid():N}";
+        Assert.That(async () => await Operations.StartAdvanceAndMigrateAsync(treeId, 2, id), Throws.InvalidOperationException);
+        Assert.That(await Operations.GetOperationStatusAsync(id), Is.Null);
     }
 
     [Test]

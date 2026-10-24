@@ -7,7 +7,13 @@
 
 @if (Workspace is not null)
 {
-    @if (!Workspace.Grants.ViewDeadLetters)
+    @if (!Workspace.Grants.SupportsDeadLetters)
+    {
+        <LtEmptyState Title="Dead letters are not available" HeadingLevel="2">
+            This cluster does not install schema dead-letter inspection.
+        </LtEmptyState>
+    }
+    else if (!Workspace.Grants.ViewDeadLetters)
     {
         <LtEmptyState Title="You may not read this tree's dead letters" HeadingLevel="2">
             Reading the dead letters needs read authority on the tree.

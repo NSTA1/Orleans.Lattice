@@ -34,6 +34,8 @@ The control facade exposes these methods. Each method corresponds to one RPC in 
 
 | Method | Signature |
 |---|---|
+| `GetRegistryAsync` | `Task<LatticeSchemaRuntimeRegistration> GetRegistryAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `RegisterSchemaAsync` | `Task RegisterSchemaAsync(string treeId, LatticeSchemaRuntimeRegistration registration, CancellationToken cancellationToken = default)` |
 | `SetPolicyAsync` | `Task SetPolicyAsync(string treeId, LatticeSchemaPolicy policy, CancellationToken cancellationToken = default)` |
 | `ClearPolicyAsync` | `Task<bool> ClearPolicyAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `GetPolicyAsync` | `Task<LatticeSchemaPolicy?> GetPolicyAsync(string treeId, CancellationToken cancellationToken = default)` |
@@ -101,6 +103,27 @@ The allowed-operation set the read-only capability probe reports for one tree. E
 - `bool CanManagePolicy` - whether the caller may set or clear the tree policy.
 - `bool CanManageVersion` - whether the caller may set, advance, migrate, or clear the version config.
 - `bool CanRemediate` - whether the caller may run remediation for the tree.
+
+The existing `CanView*`, `CanManage*`, `CanScanCompliance` and `CanRemediate` fields remain **permission-only**, including `CanViewVersionConfig` and `CanManageVersion`. A grant does not claim that a capability is installed.
+
+| Additional field | Meaning |
+| --- | --- |
+| `SupportsEnforcement` | Policy enforcement is installed. |
+| `SupportsVersioning` | Envelope versioning is installed. |
+| `SupportsRemediation` | The remediation engine is installed. |
+| `SupportsCompliance` | Compliance scanning is installed. |
+| `SupportsDeadLetters` | Dead-letter inspection is installed. |
+| `SupportsRuntimeRegistration` | Durable runtime catalogs are installed. |
+| `CanStartMigration` / `MigrationUnavailableReason` | Current caller and tree prerequisites admit a migration, or explain why not. |
+| `CanStartRemediation` / `RemediationUnavailableReason` | Current caller and installed prerequisites admit a remediation with valid supplied inputs, or explain why not. |
+
+Readiness is advisory and rechecked on attempt. It cannot certify unregistered versions that may exist in externally supplied data.
+
+### Runtime version catalog
+
+`GetRegistryAsync` requires Read; `RegisterSchemaAsync` requires SchemaAdmin. Both resolve the effective tenant tree before authorization. `LatticeSchemaRuntimeRegistration` contains `Descriptors` (`LatticeSchemaDescriptor[]`), `Upcasters` (`LatticeSchemaRuntimeUpcaster[]`) and discovery-only `SupportedTransformIds` (`string[]`). A hop specifies its family, source and later destination version, and exactly one declarative `Transform` or host-installed `TransformId`. Names identify versions, not validation shapes.
+
+Registration is append-only and idempotent for identical definitions; incompatible definitions or hops are refused without replacing earlier registrations. The catalog is durable per effective tree in the selected region and merges with the host's startup registry. Host transform ids reference explicitly installed code, never CLR names or uploaded assemblies. All serving silos must advertise the same host transforms. For multiple regions, provision matching registrations independently before advancing a replicated tree; the catalog is not automatically replicated. See [Schema versioning](../lattice.schema/schema-versioning.md#runtime-registration).
 
 ### `ApiSchemaTypeAliases`
 

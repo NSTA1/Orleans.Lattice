@@ -65,7 +65,8 @@ internal sealed class LatticeSchemaRemediationGrain(
     IPersistentState<SchemaRemediationState> state,
     ILatticeSchemaPolicyStore? policyStore = null,
     ILatticeSchemaPolicyProvider? policyProvider = null,
-    ILatticeSchemaRegistry? schemaRegistry = null)
+    ILatticeSchemaRegistry? schemaRegistry = null,
+    SchemaRuntimeRegistry? runtimeRegistry = null)
     : IGrainBase, ILatticeSchemaRemediationGrain
 {
     private readonly int _previewMaxBytes = Math.Max(1, options.Value.DeadLetterPreviewMaxBytes);
@@ -511,7 +512,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     private async Task RunDryRunSliceAsync()
     {
         var source = grainFactory.GetGrain<ILattice>(TreeId);
-        var rewrite = CreateRewrite();
+        var rewrite = await CreateRewriteAsync();
         var policyView = PolicyViewOrNull();
         var compiled = CompiledPolicyOrNull();
         var sliceSize = Math.Max(1, SliceSize);
@@ -598,7 +599,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var destination = grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!);
         var compiled = CompiledPolicyOrNull();
         var policyView = PolicyViewOrNull();
-        var rewrite = CreateRewrite();
+        var rewrite = await CreateRewriteAsync();
         var sliceSize = Math.Max(1, SliceSize);
         var done = 0;
         string? lastKey = null;
@@ -795,11 +796,11 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// <see cref="InvalidOperationException"/> or <see cref="NotSupportedException"/> on
     /// a per-value failure, which the dry-run / build turns into an abort.
     /// </summary>
-    private Func<byte[], byte[]> CreateRewrite()
+    private async Task<Func<byte[], byte[]>> CreateRewriteAsync()
     {
         if (state.State.Mode == SchemaRemediationMode.SchemaVersionMigration)
         {
-            var registry = schemaRegistry
+            var registry = (runtimeRegistry is null ? schemaRegistry : await runtimeRegistry.ResolveAsync(TreeId))
                 ?? throw new InvalidOperationException(
                     $"Schema versioning is not registered on this silo; cannot resume the version migration of tree '{TreeId}'.");
             var schemaId = state.State.MigrationSchemaId;

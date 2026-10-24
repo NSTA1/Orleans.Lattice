@@ -27,6 +27,7 @@ internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILat
     private readonly ILatticeSchemaVersionAdmin? _versionAdmin;
     private readonly ITenantContextResolver _tenantResolver;
     private readonly SchemaOperationService? _operations;
+    private readonly SchemaRuntimeRegistry? _runtimeRegistry;
 
     /// <summary>Initializes a new <see cref="LatticeSchemaControl"/>.</summary>
     /// <param name="admin">The schema policy / dead-letter admin. Must not be <c>null</c>.</param>
@@ -65,6 +66,7 @@ internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILat
         _authorizer = authorizer;
         _versionAdmin = services.GetService<ILatticeSchemaVersionAdmin>();
         _operations = services.GetService<SchemaOperationService>();
+        _runtimeRegistry = services.GetService<SchemaRuntimeRegistry>();
         _tenantResolver = tenantResolver;
     }
 
@@ -156,6 +158,11 @@ internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILat
         // returns the bare name unchanged).
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (_runtimeRegistry is not null)
+        {
+            var current = await RequireVersionAdmin().GetVersionConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
+            await _runtimeRegistry.ValidateTargetAsync(treeId, config, current).ConfigureAwait(false);
+        }
         await RequireVersionAdmin().SetVersionConfigAsync(treeId, config, cancellationToken).ConfigureAwait(false);
     }
 
@@ -186,6 +193,12 @@ internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILat
         // returns the bare name unchanged).
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (_runtimeRegistry is not null)
+        {
+            var current = await RequireVersionAdmin().GetVersionConfigAsync(treeId, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The tree is not versioned; set its version configuration first.");
+            await _runtimeRegistry.ValidateTargetAsync(treeId, current with { TargetVersion = newTargetVersion }, current).ConfigureAwait(false);
+        }
         return await RequireVersionAdmin()
             .AdvanceTargetVersionAsync(treeId, newTargetVersion, cancellationToken)
             .ConfigureAwait(false);
@@ -238,10 +251,28 @@ internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILat
         // side effects, then map each control operation onto the grant it requires.
         var canRead = await _authorizer.IsReadAuthorizedAsync(treeId, cancellationToken).ConfigureAwait(false);
         var canManage = await _authorizer.IsManageAuthorizedAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var versionConfig = canRead && _versionAdmin is not null
+            ? await _versionAdmin.GetVersionConfigAsync(treeId, cancellationToken).ConfigureAwait(false) : null;
+        var migrationReason = !canManage ? "Schema-admin permission is required."
+            : _versionAdmin is null ? "Schema versioning is not installed; register AddLatticeSchemaVersioning on the host."
+            : _operations is null ? "Schema operations are not installed."
+            : !canRead ? "Read permission is required to discover migration readiness."
+            : versionConfig is null ? "The tree is not versioned; set its version configuration first." : null;
 
         return new LatticeSchemaCapabilities
         {
             TreeId = treeId,
+            SupportsEnforcement = true,
+            SupportsVersioning = _versionAdmin is not null,
+            SupportsRemediation = _operations is not null,
+            SupportsCompliance = true,
+            SupportsDeadLetters = true,
+            SupportsRuntimeRegistration = _runtimeRegistry?.IsSupported == true,
+            CanStartMigration = migrationReason is null,
+            MigrationUnavailableReason = migrationReason,
+            CanStartRemediation = canManage && _operations is not null,
+            RemediationUnavailableReason = !canManage ? "Schema-admin permission is required."
+                : _operations is null ? "Schema operations are not installed." : null,
             CanViewPolicy = canRead,
             CanViewDeadLetters = canRead,
             CanViewVersionConfig = canRead,

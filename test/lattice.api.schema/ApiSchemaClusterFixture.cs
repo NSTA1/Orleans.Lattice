@@ -33,13 +33,15 @@ public sealed class ApiSchemaClusterFixture
     /// <summary>The silo-side schema control facade under test.</summary>
     internal LatticeSchemaControl Control => SiloServices.GetRequiredService<LatticeSchemaControl>();
 
-    /// <summary>Deploys the single-silo cluster.</summary>
-    public async Task InitializeAsync()
+    /// <summary>Deploys the cluster with shared WAL storage.</summary>
+    public async Task InitializeAsync(short siloCount = 1)
     {
-        var builder = new TestClusterBuilder(1);
+        var builder = new TestClusterBuilder(siloCount);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        Orleans.Lattice.Tests.Fakes.SharedInMemoryWal.UseSharedInMemoryWal(builder);
         Cluster = builder.Build();
         await Cluster.DeployAsync();
+        await Orleans.Lattice.Tests.Fakes.SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);
     }
 
     /// <summary>

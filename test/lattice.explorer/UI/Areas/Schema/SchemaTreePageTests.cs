@@ -95,6 +95,25 @@ public sealed class SchemaTreePageTests : SchemaTestContext
     }
 
     [Test]
+    public async Task An_identity_change_on_the_same_route_removes_old_controls_and_open_editors()
+    {
+        UseEstate();
+        var cut = RenderAt<SchemaTreePage>("schema/orders");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("button").Any(button => button.TextContent == "Edit policy"), Is.True));
+        cut.FindAll("button").Single(button => button.TextContent == "Edit policy").Click();
+        Schema.Capabilities["orders"] = FakeSchemaControl.None;
+
+        await cut.InvokeAsync(() => Auth.SignIn("restricted"));
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("[role=tab]"), Is.Empty);
+            Assert.That(cut.FindAll(".lt-schema-editor"), Is.Empty);
+            Assert.That(cut.Find(".lt-empty__title").TextContent, Is.EqualTo("You may not manage this tree's schema"));
+        });
+    }
+
+    [Test]
     public void A_tree_that_does_not_load_can_be_tried_again()
     {
         UseEstate();

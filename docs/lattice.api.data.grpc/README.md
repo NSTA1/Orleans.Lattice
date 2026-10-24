@@ -76,7 +76,15 @@ A write refused by admission control - a per-tree ceiling ([`LatticeOptions.MaxL
 | `lattice-quota-current` | The observed value on the breached dimension. Omitted for a dimension with no numeric ceiling. |
 | `lattice-quota-limit` | The configured ceiling on the breached dimension. Omitted for a dimension with no numeric ceiling. |
 
-The dimension is what decides the client's next move: `ops-per-second` is **transient** (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds), while the footprint dimensions persist until usage drops or an operator raises the ceiling. No trailer of its own carries the tenant id - the caller asserted its own active tenant, so a separate server-side attribution adds nothing it did not already send - but the response does not withhold it either: a refusal of the tenant's own quota or rate budget names the tenant in its status message, and the `lattice-quota-tree` trailer of a tenant-scoped tree carries it as the tree id's `t/{tenant}` segment. As with every trailer this binding emits, a key and a value are never disclosed.
+The dimension is what decides the client's next move: `ops-per-second` is **transient** (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds), while the footprint dimensions persist until usage drops or an operator raises the ceiling. No trailer of its own carries the tenant id - the caller asserted its own active tenant, so a separate server-side attribution adds nothing it did not already send - but the response does not withhold it either: a refusal of the tenant's own quota or rate budget names the tenant in its status message, and the `lattice-quota-tree` trailer of a tenant-scoped tree carries it as the tree id's `t/{tenant}` segment. Quota trailers disclose neither a key nor a value.
+
+## Schema validation refusals
+
+A value rejected by an installed schema policy is an expected `InvalidArgument`, not `Internal`. The status detail explains that the caller must correct the value or policy before retrying. Response trailers `lattice-validation-code` (`schema-policy`), `lattice-validation-tree`, `lattice-validation-key` and `lattice-validation-reason` identify the rejected mutation and policy-derived reason. Fields are ASCII and length-capped; the rejected bytes, JSON body and raw exception text are never returned.
+
+In-process callers can classify the same outcome through core `ILatticeValueValidationFault`, implemented by `LatticeSchemaViolationException`, without depending on the optional schema package. The MCP binding returns `isError: true` and structured content `{code, treeId, key, reason}` classified as `rejected_content`, rather than an internal tool exception. Authorization refusals remain authorization errors, not content errors.
+
+Invalid single writes do not commit; invalid atomic batches commit none of their mutations. Non-atomic bulk writes retain their existing partial-progress semantics.
 
 ## Status mapping
 
@@ -86,6 +94,7 @@ The service maps every facade outcome onto an explicit gRPC status rather than l
 |---|---|---|
 | `LatticeAuthorizationDeniedException` | `PermissionDenied` | The core gate denied the call. The `lattice-denied-tree`, `lattice-denied-operation`, `lattice-denied-subject`, and `lattice-denied-reason` trailers carry the non-sensitive fields of the denial, never a value. A refusal by the transport authorizer is also `PermissionDenied`, without trailers. |
 | `LatticeTenantAccessDeniedException` | `PermissionDenied` | Fail-closed tenant resolution refused the call (see [Per-tenant selection](#per-tenant-selection)). |
+| `ILatticeValueValidationFault` | `InvalidArgument` | Expected schema-policy rejection; payload-free validation trailers describe the reason. |
 | `ArgumentException` | `InvalidArgument` | A malformed request, including a `ReadRange` continuation token that names an unknown, drained, or closed cursor. |
 | `LatticeReservedTreeNamespaceException` | `InvalidArgument` | The call named a tree in a reserved, internally-composed namespace (`_lattice_`, `sys-`, or `t/`). |
 | `LatticeCrdtShapeNotRegisteredException` | `FailedPrecondition` | A typed OR-Map verb targeted a tree whose host never registered the map shape. |

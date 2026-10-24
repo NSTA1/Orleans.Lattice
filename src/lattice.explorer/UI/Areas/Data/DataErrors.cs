@@ -8,8 +8,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// <summary>
 /// Reads a failure from a state-API reader or the tree-administration facade as
 /// one of the few outcomes the Data area acts on, and describes it in a fixed
-/// sentence. A server's own message is never rendered, because it can name the
-/// physical, tenant-composed tree id the area never shows.
+/// sentence. Raw server messages are never rendered, because they can name the
+/// physical, tenant-composed tree id. Structured validation carries only the
+/// sanitized policy reason, never the physical tree or rejected value.
 /// </summary>
 internal static class DataErrors
 {
@@ -74,6 +75,8 @@ internal static class DataErrors
 
         return exception switch
         {
+            ILatticeValueValidationFault validation =>
+                $"The value was rejected by this tree's schema policy. {validation.Reason} Correct the value or update the policy before retrying.",
             KeyNotFoundException => "It no longer exists, or you cannot see it.",
             LatticeStateApiException state when StatusOf(state) == StatusCode.NotFound => "It no longer exists, or you cannot see it.",
             LatticeStateApiException { IsTransient: true } or ShellTransportException { IsTransient: true } =>

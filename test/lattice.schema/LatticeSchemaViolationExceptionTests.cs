@@ -12,6 +12,7 @@ public class LatticeSchemaViolationExceptionTests
         var ex = new LatticeSchemaViolationException("orders", "k1", "not json");
 
         Assert.That(ex.TreeId, Is.EqualTo("orders"));
+        Assert.That(((ILatticeValueValidationFault)ex).Code, Is.EqualTo("schema-policy"));
         Assert.That(ex.Key, Is.EqualTo("k1"));
         Assert.That(ex.Reason, Is.EqualTo("not json"));
         Assert.That(ex.Message, Does.Contain("orders").And.Contain("k1").And.Contain("not json"));

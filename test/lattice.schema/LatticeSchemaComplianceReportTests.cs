@@ -37,6 +37,7 @@ public sealed class LatticeSchemaComplianceReportTests
         {
             Assert.That(report.TreeId, Is.EqualTo("orders"));
             Assert.That(report.HasPolicy, Is.False);
+            Assert.That(report.RuleCount, Is.Zero);
             Assert.That(report.CompliantCount, Is.Zero);
             Assert.That(report.NonCompliantCount, Is.Zero);
             Assert.That(report.ScannedCount, Is.Zero);
@@ -51,6 +52,7 @@ public sealed class LatticeSchemaComplianceReportTests
         {
             TreeId = "orders",
             HasPolicy = true,
+            RuleCount = 3,
             CompliantCount = 7,
             NonCompliantCount = 3,
             ScannedCount = 10,
@@ -67,6 +69,7 @@ public sealed class LatticeSchemaComplianceReportTests
         {
             Assert.That(copy.TreeId, Is.EqualTo("orders"));
             Assert.That(copy.HasPolicy, Is.True);
+            Assert.That(copy.RuleCount, Is.EqualTo(3));
             Assert.That(copy.CompliantCount, Is.EqualTo(7));
             Assert.That(copy.NonCompliantCount, Is.EqualTo(3));
             Assert.That(copy.ScannedCount, Is.EqualTo(10));

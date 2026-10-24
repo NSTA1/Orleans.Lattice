@@ -31,6 +31,8 @@ namespace Orleans.Lattice.Api.Schema.Grpc;
 [BindServiceMethod(typeof(LatticeSchemaGrpcServiceBase), nameof(BindService))]
 internal abstract class LatticeSchemaGrpcServiceBase
 {
+    public abstract Task<LatticeSchemaRuntimeRegistration> GetRegistry(SchemaTreeRequest request, ServerCallContext context);
+    public abstract Task<SchemaAckResponse> RegisterSchema(SchemaRegistryRequest request, ServerCallContext context);
     /// <summary>Sets or replaces a tree's schema policy. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<SchemaAckResponse> SetPolicy(SetPolicyRequest request, ServerCallContext context);
 
@@ -124,6 +126,8 @@ internal abstract class LatticeSchemaGrpcServiceBase
 
         if (serviceImpl is null)
         {
+            binder.AddMethod(methods.GetRegistry, (UnaryServerMethod<SchemaTreeRequest, LatticeSchemaRuntimeRegistration>?)null);
+            binder.AddMethod(methods.RegisterSchema, (UnaryServerMethod<SchemaRegistryRequest, SchemaAckResponse>?)null);
             binder.AddMethod(methods.SetPolicy, (UnaryServerMethod<SetPolicyRequest, SchemaAckResponse>?)null);
             binder.AddMethod(methods.ClearPolicy, (UnaryServerMethod<SchemaTreeRequest, SchemaRemovedResponse>?)null);
             binder.AddMethod(methods.GetPolicy, (UnaryServerMethod<SchemaTreeRequest, GetPolicyResponse>?)null);
@@ -149,6 +153,8 @@ internal abstract class LatticeSchemaGrpcServiceBase
             return;
         }
 
+        binder.AddMethod(methods.GetRegistry, new UnaryServerMethod<SchemaTreeRequest, LatticeSchemaRuntimeRegistration>(serviceImpl.GetRegistry));
+        binder.AddMethod(methods.RegisterSchema, new UnaryServerMethod<SchemaRegistryRequest, SchemaAckResponse>(serviceImpl.RegisterSchema));
         binder.AddMethod(methods.SetPolicy, new UnaryServerMethod<SetPolicyRequest, SchemaAckResponse>(serviceImpl.SetPolicy));
         binder.AddMethod(methods.ClearPolicy, new UnaryServerMethod<SchemaTreeRequest, SchemaRemovedResponse>(serviceImpl.ClearPolicy));
         binder.AddMethod(methods.GetPolicy, new UnaryServerMethod<SchemaTreeRequest, GetPolicyResponse>(serviceImpl.GetPolicy));
@@ -185,6 +191,16 @@ internal abstract class LatticeSchemaGrpcServiceBase
 /// </summary>
 internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
 {
+    public override Task<LatticeSchemaRuntimeRegistration> GetRegistry(SchemaTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.GetRegistryAsync(req.TreeId, ct));
+
+    public override Task<SchemaAckResponse> RegisterSchema(SchemaRegistryRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            await control.RegisterSchemaAsync(req.TreeId, req.Registration, ct).ConfigureAwait(false);
+            return new SchemaAckResponse();
+        });
+
     /// <summary>
     /// Trailer key carrying the breached quota dimension (<c>keys</c> or
     /// <c>bytes</c> for the per-tree admission caps a remediation build can

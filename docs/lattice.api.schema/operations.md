@@ -42,7 +42,7 @@ Progress is counted in entries, not shards: the scan reads through the tree's ro
 
 ### Results
 
-A succeeded operation's `ResultReference` is the scanned tree id (the effective, tenant-scoped id, as on the blocking report). Its `Result` map uses the `SchemaComplianceScanResults` keys: `treeId`, `hasPolicy`, `compliantCount`, `nonCompliantCount`, `scannedCount`, `ruleCount`, and one `rule.{i}.reason` / `rule.{i}.count` pair per failure reason. `SchemaComplianceScanResults.TryReadReport` rebuilds the `LatticeSchemaComplianceReport` the blocking scan returns.
+A succeeded operation's `ResultReference` is the scanned tree id (the effective, tenant-scoped id, as on the blocking report). Its `Result` map uses the `SchemaComplianceScanResults` keys: `treeId`, `hasPolicy`, `compliantCount`, `nonCompliantCount`, `scannedCount`, `ruleCount`, `failureReasonCount`, and one `rule.{i}.reason` / `rule.{i}.count` pair per failure reason. `ruleCount` is the number of configured policy rules, including on a fully compliant tree; it is zero when there is no policy or the policy is empty. `failureReasonCount` sizes the failure breakdown, not the policy. Legacy stored results without `failureReasonCount` retain their breakdown but report an unknown historical policy count as zero. `SchemaComplianceScanResults.TryReadReport` rebuilds the `LatticeSchemaComplianceReport` the blocking scan returns.
 
 ### Example
 
@@ -77,6 +77,12 @@ static async Task<LatticeSchemaComplianceReport?> ScanAsync(
     }
 }
 ```
+
+## Start admission and cancellation
+
+Initial start admission checks caller authority, installed support and supplied prerequisites before creating an operation. A rejected start returns an error, not a handle to poll. In particular, a missing version config or descriptor and an invalid remediation transform or target policy do not create a new tracked operation.
+
+After admission, failures are terminal operation outcomes with their reason on status. Cancellation is cooperative while a scan, dry run or build is active; cutover is not rolled back. Poll until a terminal outcome rather than treating a cancellation request as completion. Readiness flags are a current hint, not authorization or a promise about every value the later scan will encounter.
 
 ## Remediation and migration
 

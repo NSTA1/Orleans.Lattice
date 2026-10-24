@@ -35,7 +35,8 @@ namespace Orleans.Lattice.Schema;
 /// </remarks>
 internal sealed class LatticeSchemaVersionDecoder(
     ILatticeSchemaVersionProvider provider,
-    ILatticeSchemaRegistry registry) : ILatticeValueDecoder
+    ILatticeSchemaRegistry registry,
+    SchemaRuntimeRegistry? runtimeRegistry = null) : ILatticeValueDecoder
 {
     /// <inheritdoc />
     public bool IsActive(string treeId) => true;
@@ -81,6 +82,8 @@ internal sealed class LatticeSchemaVersionDecoder(
         }
 
         // Stale value: upcast the body to the target before returning it.
-        return registry.Upcast(schemaId, storedVersion, version.TargetVersion, body);
+        var effectiveRegistry = runtimeRegistry is null ? registry
+            : await runtimeRegistry.ResolveAsync(treeId).ConfigureAwait(false);
+        return effectiveRegistry.Upcast(schemaId, storedVersion, version.TargetVersion, body);
     }
 }

@@ -14,6 +14,22 @@ internal sealed partial class ShellSchemaControlTransport(ShellTransportChannel 
     : ShellTransportAdapter<LatticeSchemaApiGrpcClient>(channel, LatticeSchemaApiGrpcClient.Create), ILatticeSchemaControl
 {
     /// <inheritdoc />
+    public Task<LatticeSchemaRuntimeRegistration> GetRegistryAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return CallAsync(treeId, static (client, tree, ct) => client.GetRegistryAsync(tree, ct), null, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task RegisterSchemaAsync(string treeId, LatticeSchemaRuntimeRegistration registration, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(registration);
+        return CallAsync((Tree: treeId, Registration: registration),
+            static (client, state, ct) => client.RegisterSchemaAsync(state.Tree, state.Registration, ct), null, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task SetPolicyAsync(string treeId, LatticeSchemaPolicy policy, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);

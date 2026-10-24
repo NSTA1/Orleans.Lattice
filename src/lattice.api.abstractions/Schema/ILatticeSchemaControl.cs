@@ -27,6 +27,14 @@ namespace Orleans.Lattice.Api.Schema;
 /// </remarks>
 public interface ILatticeSchemaControl
 {
+    /// <summary>Discovers the effective tree-scoped catalog and stable host transform ids after read authorization.</summary>
+    Task<LatticeSchemaRuntimeRegistration> GetRegistryAsync(string treeId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Runtime schema registration requires an upgraded schema backend.");
+
+    /// <summary>Appends durable, immutable definitions and migration hops after schema-admin authorization. Conflicts are rejected.</summary>
+    Task RegisterSchemaAsync(string treeId, LatticeSchemaRuntimeRegistration registration, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Runtime schema registration requires an upgraded schema backend.");
+
     /// <summary>
     /// Sets or replaces the enforcement policy for <paramref name="treeId"/>, after
     /// authorizing schema-management on the tree fail-closed.
@@ -162,7 +170,7 @@ public interface ILatticeSchemaControl
     /// </summary>
     /// <param name="treeId">The tree to probe. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The caller's allowed schema-management operation set for <paramref name="treeId"/>.</returns>
+    /// <returns>Caller permissions, installed host support and advisory readiness for <paramref name="treeId"/>.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(
         string treeId, CancellationToken cancellationToken = default);

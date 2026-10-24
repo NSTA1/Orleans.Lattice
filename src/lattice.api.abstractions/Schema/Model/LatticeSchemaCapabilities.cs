@@ -3,13 +3,11 @@ using Orleans.Lattice;
 namespace Orleans.Lattice.Api.Schema;
 
 /// <summary>
-/// The read-only result of a schema-management capability probe: which
-/// schema-management operations the current caller may perform over a single tree,
-/// evaluated through the same fail-closed schema access gate the real operations use
-/// but with <b>no side effects</b> - no policy is read or written, no data is
-/// scanned. Every flag is default-deny: a flag is <see langword="true"/> only when
-/// the gate would authorize the corresponding operation for the probed tree, and
-/// <see langword="false"/> for any denial.
+/// The read-only result of a schema-management capability probe: caller permissions,
+/// independently installed host features, and advisory operation readiness for one
+/// tree. The probe does not mutate stored state or scan document values. When
+/// versioning is installed and the caller has read permission, it reads the tree's
+/// version configuration to determine migration readiness.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -29,6 +27,11 @@ namespace Orleans.Lattice.Api.Schema;
 /// <see cref="CanScanCompliance"/>) reflects the read grant; the manage-flag group
 /// (<see cref="CanManagePolicy"/>, <see cref="CanManageVersion"/>,
 /// <see cref="CanRemediate"/>) reflects the schema-admin grant.
+/// These existing flags describe permission only, not host support or readiness.
+/// The <c>Supports*</c> flags report installed support independently of grants;
+/// <see cref="CanStartMigration"/> and <see cref="CanStartRemediation"/> combine
+/// support, authorization and known prerequisites. Starts still validate their
+/// supplied arguments and current state before acceptance.
 /// </para>
 /// </remarks>
 [GenerateSerializer]
@@ -65,4 +68,25 @@ public sealed record LatticeSchemaCapabilities
 
     /// <summary><see langword="true"/> when the caller may start a background remediation of the tree.</summary>
     [Id(8)] public bool CanRemediate { get; init; }
+
+    /// <summary>Whether enforcement is installed, independently of caller grants.</summary>
+    [Id(9)] public bool SupportsEnforcement { get; init; }
+    /// <summary>Whether envelope versioning is installed.</summary>
+    [Id(10)] public bool SupportsVersioning { get; init; }
+    /// <summary>Whether the remediation engine is installed.</summary>
+    [Id(11)] public bool SupportsRemediation { get; init; }
+    /// <summary>Whether compliance scans are installed.</summary>
+    [Id(12)] public bool SupportsCompliance { get; init; }
+    /// <summary>Whether dead-letter inspection is installed.</summary>
+    [Id(13)] public bool SupportsDeadLetters { get; init; }
+    /// <summary>Whether durable runtime catalogs are installed.</summary>
+    [Id(14)] public bool SupportsRuntimeRegistration { get; init; }
+    /// <summary>Whether this caller can currently start a migration of this configured tree.</summary>
+    [Id(15)] public bool CanStartMigration { get; init; }
+    /// <summary>Whether this caller can start remediation with a supplied valid transform and policy.</summary>
+    [Id(16)] public bool CanStartRemediation { get; init; }
+    /// <summary>An actionable explanation when migration cannot currently start.</summary>
+    [Id(17)] public string? MigrationUnavailableReason { get; init; }
+    /// <summary>An actionable explanation when remediation cannot currently start.</summary>
+    [Id(18)] public string? RemediationUnavailableReason { get; init; }
 }
