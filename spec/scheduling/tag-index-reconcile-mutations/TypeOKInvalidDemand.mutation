@@ -1,0 +1,11 @@
+MODULE: TypeOKInvalidDemand
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: A request writes a value outside the finite request domain.
+PERTURBS: Demand
+--- FIND
+    /\ demand' = "pending" /\ pending' = TRUE /\ armNeeded' = TRUE
+--- REPLACE
+    \* MUTATION: invalid request state.
+    /\ demand' = "invalid" /\ pending' = TRUE /\ armNeeded' = TRUE
+--- END

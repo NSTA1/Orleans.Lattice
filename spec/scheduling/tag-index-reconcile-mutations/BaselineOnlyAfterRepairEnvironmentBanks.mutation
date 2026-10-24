@@ -1,0 +1,16 @@
+MODULE: BaselineOnlyAfterRepairEnvironmentBanks
+TARGET: BaselineOnlyAfterRepair
+CLASS: Action
+SUMMARY: A subject change is incorrectly treated as a repaired baseline.
+PERTURBS: Mutate
+--- FIND
+    /\ UNCHANGED <<phase, cursor, dirty, baseline, pendingBaseline, repaired,
+                   probeOnly, pending, demand, servingDemand, sweeps, pump,
+                   armNeeded, busy, selected, failureUsed, work>>
+--- REPLACE
+    \* MUTATION: subject writes cannot certify index reconciliation.
+    /\ baseline' = [baseline EXCEPT ![t] = 1]
+    /\ UNCHANGED <<phase, cursor, dirty, pendingBaseline, repaired,
+                   probeOnly, pending, demand, servingDemand, sweeps, pump,
+                   armNeeded, busy, selected, failureUsed, work>>
+--- END

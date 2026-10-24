@@ -59,7 +59,7 @@ its six checked modules.
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Scheduling and progress | 2 | 23 | 32 | 10 | [Verified Scheduling and Progress](verified-scheduling.md) |
+| Scheduling and progress | 3 | 38 | 51 | 18 | [Verified Scheduling and Progress](verified-scheduling.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
@@ -88,12 +88,13 @@ control instead of being erased by an earlier budget expiry.
 
 The historical experiments below retain already-fixed mechanisms as negative
 controls. They are not new discoveries of the original incidents and do not
-claim to reproduce every manifestation of either issue.
+claim to reproduce every manifestation of the original incidents.
 
 | Module | Historical repair | Mutation / target | Checked boundary |
 |--------|-------------------|-------------------|------------------|
 | `TurnOccupancy` | #4949, fixed by #4950 | `NoAwaitedDriveAwaitDriveOnExclusiveTurn` / `NoAwaitedDrive` | Awaiting the background drive can occupy the non-reentrant turn; dispatch must return the turn while storage remains pending. |
 | `WalAdmission` | #3402, fixed by #3404 | `PacedRecoveryReleaseRecoveryHerd` / `PacedRecoveryRelease` | A recovery sample caps saturation-gate releases; released callers still need partition capacity and storage progress. |
+| `TagIndexReconcile` | Merged member PR #4978; #4976 remains open until integration | `RepairCursorOnlyAfterCompletionCursorFirst` and `RepairCursorOnlyAfterCompletionFailedCheckpoint` / `RepairCursorOnlyAfterCompletion` | A failed repair RPC or checkpoint cannot consume the current tree or certify durable progress. |
 
 The classifier recovery window is tree-wide even though admission capacity and
 waiter queues are partition-scoped. An idle sibling receives the Healthy floor
@@ -102,6 +103,29 @@ bounded model are a conservative abstraction, not a claim that production
 provider counters or recovery windows are partition-local. The full mappings
 and explicit progress premises live in the
 [scheduling refinement notes](../../spec/scheduling/README.md).
+
+### Tag-index reconciliation scheduling
+
+`TagIndexReconcile` adds 15 mutations, 19 behaviour-asserting rows and eight
+distinct detector members to the scheduling foundation. Its manifest records
+three invariants, six properties and twelve `Next` actions, including stutter.
+The base has 2,784 states; the larger `ThreeTrees` safety instance has 11,930.
+`TypeOK` remains paired domain safety, outside the production behaviour census.
+
+The model separates an idle coordinator from probe and repair work, checks that
+only complete successful repair and checkpoint publication bank a baseline,
+and covers retrying the coordinator after failed keepalive registration.
+Progress assumes finite subject changes, continued runtime/reminder
+opportunities and eventually successful registry/storage/checkpoint operations.
+A phase callback probes at most the configured
+tree count, clamped to at least one, or repairs one whole tree. This is not a
+bound on rows, storage time, caller-turn occupancy or a synchronous full sweep:
+`RunSweepAsync` can drain several phase callbacks.
+
+The real cursor/checkpoint and incomplete-read repairs in #4976/#4977 remain
+part of the checked boundary. #4985 adds recovery after initial keepalive
+registration failure. The exact action/property/mutation and detector mappings
+live in [TagIndexReconcileRefinement](../../spec/scheduling/TagIndexReconcileRefinement.md).
 
 ## Focused materialised-view companions
 

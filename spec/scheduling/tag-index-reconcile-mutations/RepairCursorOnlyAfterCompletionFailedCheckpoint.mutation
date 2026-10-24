@@ -1,0 +1,14 @@
+MODULE: RepairCursorOnlyAfterCompletionFailedCheckpoint
+TARGET: RepairCursorOnlyAfterCompletion
+CLASS: Action
+SUMMARY: A failed repair or checkpoint retains an uncommitted cursor.
+PERTURBS: FailRepair
+--- FIND
+    /\ busy' = FALSE /\ selected' = 0 /\ failureUsed' = TRUE /\ work' = 0
+    /\ UNCHANGED <<phase, cursor, dirty, baseline, fingerprint, pendingBaseline,
+--- REPLACE
+    \* MUTATION: failed completion still consumes the tree.
+    /\ busy' = FALSE /\ selected' = 0 /\ failureUsed' = TRUE /\ work' = 0
+    /\ cursor' = cursor + 1
+    /\ UNCHANGED <<phase, dirty, baseline, fingerprint, pendingBaseline,
+--- END
