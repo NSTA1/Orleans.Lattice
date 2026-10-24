@@ -1,0 +1,38 @@
+MODULE: OldestFirstReleaseNewestFirst
+TARGET: OldestFirst
+CLASS: Action
+SUMMARY: recover the newest suffix rather than the oldest waiting prefix
+PERTURBS: ReleaseTick
+
+--- FIND
+ReleaseTick ==
+    /\ phase = "release"
+    /\ LET chosen == [p \in Partitions |->
+                IF Eligible(p) THEN SubSeq(parked[p], 1, Min(Len(parked[p]), ReleaseBatch))
+                ELSE <<>>]
+           all == UNION {Members(chosen[p]) : p \in Partitions}
+       IN /\ parked' = [p \in Partitions |->
+                    SubSeq(parked[p], Len(chosen[p]) + 1, Len(parked[p]))]
+          /\ outcome' = [c \in Callers |-> IF c \in all THEN "released" ELSE outcome[c]]
+          /\ waitLeft' = [c \in Callers |-> IF c \in all THEN 0 ELSE waitLeft[c]]
+          /\ callLeft' = [c \in Callers |-> IF c \in all THEN 0 ELSE callLeft[c]]
+    /\ phase' = "expire" /\ cursor' = 1
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery,
+        home, refusalState>>
+--- REPLACE
+\* MUTATION: recover the newest suffix rather than the oldest waiting prefix
+ReleaseTick ==
+    /\ phase = "release"
+    /\ LET chosen == [p \in Partitions |->
+                IF Eligible(p) THEN SubSeq(parked[p], Len(parked[p]) - Min(Len(parked[p]), ReleaseBatch) + 1, Len(parked[p]))
+                ELSE <<>>]
+           all == UNION {Members(chosen[p]) : p \in Partitions}
+       IN /\ parked' = [p \in Partitions |->
+                    SelectSeq(parked[p], LAMBDA c : c \notin all)]
+          /\ outcome' = [c \in Callers |-> IF c \in all THEN "released" ELSE outcome[c]]
+          /\ waitLeft' = [c \in Callers |-> IF c \in all THEN 0 ELSE waitLeft[c]]
+          /\ callLeft' = [c \in Callers |-> IF c \in all THEN 0 ELSE callLeft[c]]
+    /\ phase' = "expire" /\ cursor' = 1
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery,
+        home, refusalState>>
+--- END

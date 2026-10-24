@@ -44,6 +44,8 @@ be quiet about one.
 | [`view-joint-repair/`](view-joint-repair/README.md) | `MaterialisedViewJointRepair` | Immutable fresh participant capture, joint repair visibility, decided retry recovery, and durable checkpoint acknowledgement closure. |
 | [`wal/`](wal/README.md) | `WalDurability` | The leaf WAL durability lifecycle under crash-anywhere recovery: append, out-of-order flush, per-leaf read checkpoints whose persist can fail, snapshots, durable pins and the GC trim they bound. |
 | [`wal/`](wal/README.md) | `WalMove` | A WAL partition moving between storage providers: fence, quiesced copy, placement switch and shard crash. |
+| [`scheduling/`](scheduling/README.md) | `TurnOccupancy` | Non-reentrant grain turns, queued calls, and awaiting versus dispatching environment-controlled background work. |
+| [`scheduling/`](scheduling/README.md) | `WalAdmission` | Partition admission capacity, saturation waits, paced recovery release and budget outcomes under explicit progress premises. |
 | [`bplustree/`](bplustree/README.md) | `SplitLink` | A leaf split completing on the donor, the shard root recording and applying the child link, and a root crash between them. |
 | [`bplustree/`](bplustree/README.md) | `BPlusTopology` | Interleaved split/fold writes, sibling-chain publication, parent routing and unlinked-sibling recovery. |
 | [`bplustree/`](bplustree/README.md) | `BPlusCascade` | Rightmost leaf splits cascading through level-indexed internal nodes and repeated root promotions, checked through six tree levels. |

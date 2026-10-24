@@ -1,0 +1,20 @@
+MODULE: TurnServedWithinBoundLocalWorkExceedsBound
+TARGET: TurnServedWithinBound
+CLASS: Invariant
+SUMMARY: local admission work consumes more than the finite opportunity budget
+PERTURBS: AwaitInTurn
+
+--- FIND
+AwaitInTurn(g) ==
+    /\ timer[g] = "fired" /\ turn[g] = "timer"
+    /\ timer' = [timer EXCEPT ![g] = "dispatch"]
+    /\ age' = [age EXCEPT ![g] = IF queued[g] THEN @ + 1 ELSE @]
+    /\ UNCHANGED <<turn, queued, served, operation>>
+--- REPLACE
+\* MUTATION: local admission work consumes more than the finite opportunity budget
+AwaitInTurn(g) ==
+    /\ timer[g] = "fired" /\ turn[g] = "timer"
+    /\ timer' = [timer EXCEPT ![g] = "dispatch"]
+    /\ age' = [age EXCEPT ![g] = IF queued[g] THEN Bound + 1 ELSE @]
+    /\ UNCHANGED <<turn, queued, served, operation>>
+--- END

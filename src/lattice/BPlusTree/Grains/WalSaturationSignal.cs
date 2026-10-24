@@ -64,10 +64,39 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     /// path dispose the registration without a per-await
     /// <see cref="Task.ContinueWith(System.Action{Task})"/> chain.
     /// </summary>
-    private sealed class WaiterEntry
+    internal sealed class WaiterEntry
     {
         public required TaskCompletionSource Tcs;
-        public CancellationTokenRegistration Registration;
+        private CancellationTokenRegistration _registration;
+        private bool _registrationDisposed;
+
+        internal void SetRegistration(CancellationTokenRegistration registration)
+        {
+            lock (this)
+            {
+                if (!_registrationDisposed)
+                {
+                    _registration = registration;
+                    return;
+                }
+            }
+            // Completion may win before Register returns, including when the
+            // token invokes its callback synchronously during registration.
+            registration.Dispose();
+        }
+
+        internal void DisposeRegistration()
+        {
+            CancellationTokenRegistration registration;
+            lock (this)
+            {
+                _registrationDisposed = true;
+                registration = _registration;
+                _registration = default;
+            }
+            // Never wait for a callback while holding either entry or list lock.
+            registration.Dispose();
+        }
     }
 
     /// <summary>
@@ -277,7 +306,7 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
             // CompleteWaitersForRecovery, so the disposal cost is paid
             // exactly once whether the wait settled by recovery or by
             // cancellation.
-            entry.Registration = cancellationToken.Register(static state =>
+            entry.SetRegistration(cancellationToken.Register(static state =>
             {
                 var pair = ((WalSaturationSignal Signal, string WaitKey, WaiterEntry Entry))state!;
                 if (pair.Entry.Tcs.TrySetCanceled())
@@ -295,9 +324,9 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
                             }
                         }
                     }
-                    pair.Entry.Registration.Dispose();
+                    pair.Entry.DisposeRegistration();
                 }
-            }, (this, waitKey, entry));
+            }, (this, waitKey, entry)));
         }
 
         return tcs.Task;
@@ -402,11 +431,10 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     /// Shared by the tree-scoped and partition-scoped write paths.
     /// <para>
     /// (#3402) A value of zero or less releases every parked waiter, which
-    /// is the pre-fix behaviour. A positive value paces the release so a
-    /// recovered partition is not immediately re-saturated by the herd it
-    /// just admitted; the residue stays parked and is drained by
-    /// subsequent sampler ticks, which keep calling in while the
-    /// partition reads Healthy.
+    /// is the pre-fix behaviour. A positive value paces signal-wait
+    /// completions; each released caller must still acquire its separate
+    /// admission-semaphore slot. The residue stays parked and is drained by
+    /// subsequent qualifying sampler ticks.
     /// </para>
     /// <para>
     /// Release is oldest-first so a paced drain cannot starve the callers
@@ -445,7 +473,7 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
                 // hook before the TCS resolves; this prevents the
                 // cancellation callback from seeing a settled TCS
                 // and racing against the recovery completion.
-                entry.Registration.Dispose();
+                entry.DisposeRegistration();
                 entry.Tcs.TrySetResult();
             }
         }
@@ -517,7 +545,7 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
         }
         foreach (var entry in toCancel)
         {
-            entry.Registration.Dispose();
+            entry.DisposeRegistration();
             entry.Tcs.TrySetCanceled();
         }
     }
