@@ -1,0 +1,16 @@
+MODULE: SweepTerminatesResetCursorOnReminder
+TARGET: SweepTerminates
+CLASS: Temporal
+SUMMARY: Repeated reminders rewind a multi-chunk probe indefinitely.
+PERTURBS: Reminder
+--- FIND
+    /\ UNCHANGED <<phase, cursor, dirty, baseline, fingerprint, pendingBaseline,
+                   repaired, probeOnly, demand, servingDemand, sweeps, pump,
+                   busy, selected, failureUsed, work>>
+--- REPLACE
+    \* MUTATION: each reminder loses the accumulated probe prefix.
+    /\ cursor' = IF phase = "Probe" THEN 0 ELSE cursor
+    /\ UNCHANGED <<phase, dirty, baseline, fingerprint, pendingBaseline,
+                   repaired, probeOnly, demand, servingDemand, sweeps, pump,
+                   busy, selected, failureUsed, work>>
+--- END

@@ -1,0 +1,11 @@
+MODULE: TriggerNotLostTriggerOverwritten
+TARGET: TriggerNotLost
+CLASS: Temporal
+SUMMARY: Finishing an older sweep overwrites the queued on-demand trigger.
+PERTURBS: Finish
+--- FIND
+    /\ demand' = IF servingDemand THEN "served" ELSE demand
+--- REPLACE
+    \* MUTATION: discard the queued acknowledgement obligation.
+    /\ demand' = "new"
+--- END
