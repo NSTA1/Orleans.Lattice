@@ -35,6 +35,65 @@ public sealed class TenantAdminSubjectsTests
     }
 
     [Test]
+    public async Task ReadAsync_unresolvable_facade_answers_unknown()
+    {
+        var services = new ServiceCollection();
+        services.AddKeyedSingleton<ILatticeTenantAccessAdmin>(ShellFacades.Key,
+            (_, _) => throw new InvalidOperationException("Missing facade dependency"));
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(await new TenantAdminSubjects(provider).ReadAsync("acme", CancellationToken.None), Is.Null);
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task ReadAsync_missing_report_or_subjects_answers_unknown(bool missingReport)
+    {
+        var access = Substitute.For<ILatticeTenantAccessAdmin>();
+        access.ListAdminSubjectsAsync("acme", Arg.Any<CancellationToken>())
+            .Returns(missingReport ? null! : new TenantAdminSubjectReport { TenantId = "acme", Subjects = null! });
+
+        Assert.That(await Reader(access).ReadAsync("acme", CancellationToken.None), Is.Null);
+    }
+
+    [Test]
+    public async Task ReadAsync_empty_subjects_are_known_and_forward_the_requested_tenant_and_token()
+    {
+        var access = Substitute.For<ILatticeTenantAccessAdmin>();
+        using var cancellation = new CancellationTokenSource();
+        access.ListAdminSubjectsAsync("globex", cancellation.Token)
+            .Returns(new TenantAdminSubjectReport { TenantId = "globex", Subjects = [] });
+
+        var subjects = await Reader(access).ReadAsync("globex", cancellation.Token);
+
+        Assert.That(subjects, Is.Not.Null.And.Empty);
+        await access.Received(1).ListAdminSubjectsAsync("globex", cancellation.Token);
+    }
+
+    [Test]
+    public async Task ReadAsync_reads_again_and_sorts_a_copy_without_mutating_the_report()
+    {
+        var access = Substitute.For<ILatticeTenantAccessAdmin>();
+        string[] original = ["zed", "Ann", "bob"];
+        access.ListAdminSubjectsAsync("acme", Arg.Any<CancellationToken>()).Returns(
+            new TenantAdminSubjectReport { TenantId = "acme", Subjects = original },
+            new TenantAdminSubjectReport { TenantId = "acme", Subjects = ["new-admin"] });
+        var reader = Reader(access);
+
+        var first = await reader.ReadAsync("acme", CancellationToken.None);
+        var second = await reader.ReadAsync("acme", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(new[] { "Ann", "bob", "zed" }));
+            Assert.That(first, Is.Not.SameAs(original));
+            Assert.That(original, Is.EqualTo(new[] { "zed", "Ann", "bob" }));
+            Assert.That(second, Is.EqualTo(new[] { "new-admin" }));
+        });
+        await access.Received(2).ListAdminSubjectsAsync("acme", CancellationToken.None);
+    }
+
+    [Test]
     public async Task A_refused_read_answers_unknown()
     {
         var access = Substitute.For<ILatticeTenantAccessAdmin>();
