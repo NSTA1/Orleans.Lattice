@@ -560,6 +560,8 @@ public partial class TagIndexReconcileGrainTests
             .Returns(new ValueTask<RoutingInfo>(RoutingFor(shardCount: 1)));
         tree.GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new LeafProjectionDigest { Hash = digestHash, Version = 1 }));
+        tree.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new GatedMultiReadResult()));
         factory.GetGrain<ILattice>(treeId, Arg.Any<string?>()).Returns(tree);
     }
 }

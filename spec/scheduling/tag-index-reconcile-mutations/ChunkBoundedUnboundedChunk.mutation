@@ -1,0 +1,11 @@
+MODULE: ChunkBoundedUnboundedChunk
+TARGET: ChunkBounded
+CLASS: Invariant
+SUMMARY: A probe ignores the configured per-callback tree bound.
+PERTURBS: ProbeChunk
+--- FIND
+    /\ LET stop == Min(TreeCount, cursor + ChunkSize)
+--- REPLACE
+    \* MUTATION: probe the entire remainder in one callback.
+    /\ LET stop == TreeCount
+--- END

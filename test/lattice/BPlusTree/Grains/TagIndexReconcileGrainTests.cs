@@ -93,14 +93,14 @@ public partial class TagIndexReconcileGrainTests
     public async Task ReceiveReminder_schedule_drift_corrects_period_while_in_progress()
     {
         var state = new FakePersistentState<TagIndexReconcileState>();
-        state.State.InProgress = true; // a sweep is already running; only drift-correction should fire
-        var (grain, _, reminderRegistry, _) = CreateGrain(existingState: state);
+        state.State.InProgress = true;
+        var harness = CreateSweepGrain(existingState: state);
 
         // Default TickStatus reports a zero period, which differs from the
         // desired 1-hour cadence, so the handler re-registers the schedule.
-        await grain.ReceiveReminder("tag-index-reconcile-schedule", new TickStatus());
+        await harness.Grain.ReceiveReminder("tag-index-reconcile-schedule", new TickStatus());
 
-        await reminderRegistry.Received().RegisterOrUpdateReminder(
+        await harness.Reminders.Received().RegisterOrUpdateReminder(
             Arg.Any<GrainId>(),
             "tag-index-reconcile-schedule",
             TimeSpan.FromHours(1),
