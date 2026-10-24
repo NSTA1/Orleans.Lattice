@@ -167,6 +167,25 @@ Long-running or multi-step operations are managed by dedicated coordination grai
 
 The same pattern backs the rest of the library's multi-step features, each described with its feature: [atomic actions](atomic-action.md), cross-tree [atomic writes](atomic-writes.md) and their receiver-side visibility barrier, the [distributed lock](distributed-lock.md), [materialised-view](materialised-views.md) maintenance and its registry, and tag-index reconciliation.
 
+### Tag-index reconciliation
+
+The tag-index coordinator persists its active sweep, probe/repair phase and
+tree cursor. A probe can observe drift without repairing or publishing a
+successful-repair baseline. Repair advances the cursor only after its required
+RPCs succeed; a failed checkpoint restores uncommitted progress, and terminal
+completion is reported only after durable publication. Incomplete gated reads
+are not successful repairs, even when the subject fingerprint is unchanged.
+
+Scheduled phase callbacks bound tree units, not arbitrary row work: probe
+handles at most `max(1, ChunkSize)` trees and repair handles one whole tree.
+The synchronous full-sweep path can drain several callbacks. Reminder and
+on-demand triggers preserve the active cursor; failed initial keepalive
+registration remains recoverable through idempotent coordinator startup.
+The [scheduling assurance](verified-scheduling.md#tag-index-reconciliation-progress)
+and [refinement mapping](../../spec/scheduling/TagIndexReconcileRefinement.md)
+state the finite-subject and eventually successful-delivery premises separately from this
+per-callback work bound.
+
 ### Durability and transport grains
 
 These grains carry the partitioned write-ahead log, leaf-projection replay, cursor-paged enumeration, and ambient counters / metrics:
