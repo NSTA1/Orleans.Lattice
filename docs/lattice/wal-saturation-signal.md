@@ -34,7 +34,7 @@ The per-tick `max(depth_ratio)` across the tree's WAL partitions is structurally
 The classifier applies an **upgrade rule** to make `Throttled` observable across the burst cycle: when the current-tick classification is `Healthy` but the tree was observed at `Saturated` within the past `LatticeOptions.WalSaturationRecoveryWindow` (default 1 second), the classifier upgrades the tree to `Throttled` instead. The upgrade rule preserves three invariants:
 
 - **`Healthy -> Saturated` latency is unchanged.** `Saturated` still fires on the current tick's saturating condition, so the public saturation-signal surface's bound (transition latency under one `WalSaturationSampleInterval`) still holds.
-- **Recovery is bounded.** Once the recovery window elapses AND the current tick observes no saturation pressure, the tree drops to `Healthy` and pending `WaitForHealthyAsync` waiters start to complete, at most `WalSaturationRecoveryReleaseBatch` per tick (see [Paced recovery release](#paced-recovery-release)). The window only delays recovery by its own value.
+- **Recovery eligibility follows the window.** Once a finite recovery window elapses and the current sample would otherwise classify the tree `Healthy`, the upgrade no longer applies. Pending `WaitForHealthyAsync` waiters are then released on eligible sampling ticks, at most `WalSaturationRecoveryReleaseBatch` per tick (see [Paced recovery release](#paced-recovery-release)). This is not a wall-clock admission or append-completion bound: sampling must run, and other pressure inputs can keep the tree non-Healthy.
 - **Per-tree independence is preserved.** A tree that has never been observed `Saturated` is never upgraded, regardless of any other tree's regime.
 
 Two sentinels disable or invert the upgrade:
@@ -44,17 +44,19 @@ Two sentinels disable or invert the upgrade:
 
 ### Paced recovery release
 
-Recovery is not only a question of *when* a partition is declared `Healthy` but of *how many* parked callers that declaration admits. `WaitForHealthyAsync` parks one waiter per blocked WAL dispatch, and releasing all of them on a single recovery is self-defeating once the parked population exceeds the partition's admission capacity (`WalMaxPendingBatches`): the released herd refills the pipeline to its cap before any meaningful drain, the classifier flips straight back to `Saturated` (in this depth-driven form, when `WalSaturationAcuteOnly` is `false`, under which an at-cap partition reads `Saturated`), and the cycle repeats. Callers observe recovery after recovery while no caller makes progress, each losing a full `WalAdmissionSaturationWaitBudget` per cycle while holding a concurrency slot. The gate stops being a back-pressure valve and becomes an absorbing state.
+Recovery is not only a question of *when* a partition is declared `Healthy` but of *how many* parked callers that observation releases back to the admission path. `WaitForHealthyAsync` completes a saturation-signal wait; it does not reserve a slot in the writer's separate admission semaphore or complete a WAL append. Releasing every signal waiter at once can produce a herd that refills the pipeline and renews pressure. With `WalSaturationAcuteOnly = false`, an at-cap partition reads `Saturated`, so repeated recovery/re-saturation cycles can make the gate itself amplify contention. This historical failure mechanism motivates paced release; it is not a proof that every unpaced execution makes no progress.
 
-`WalSaturationRecoveryReleaseBatch` (default `16`) bounds that burst: a recovered partition admits at most this many parked waiters per sampler tick. Three properties make the pacing safe:
+`WalSaturationRecoveryReleaseBatch` (default `16`) bounds that release burst: a recovered partition releases at most this many parked signal waiters per sampler tick. Three properties define the pacing:
 
-- **Oldest-first.** The longest-parked callers are released first, so metering cannot starve the callers closest to exhausting their wait budget.
-- **Level-triggered.** Every tick that observes the partition `Healthy` releases a further batch, not just the tick that observes the `Saturated -> Healthy` transition. The residue therefore drains on subsequent ticks; an edge-triggered release would strand everything past the first batch until the next saturation episode, which is a worse failure than the herd it replaces.
+- **Oldest-first.** The longest-parked live signal waiters are released first. This orders that signal queue, not newcomers that bypass the queue or the separate admission semaphore; it does not guarantee service before a caller's wait budget expires.
+- **Level-triggered.** Every eligible sampling tick releases a further batch, not just the recovery transition. Under continued qualifying samples, a fixed finite backlog therefore drains; an edge-triggered release would leave the residue parked until another transition. A new saturation episode can suspend release again.
 - **Per partition.** Each partition meters its own backlog, so draining one does not consume another's quota.
 
 Under the default `WalSaturationAcuteOnly = true` the writer's parked callers wait only for their partition to leave `Saturated`, so the same metered release runs on every tick that reads the partition `Throttled` or `Healthy`. The public tree-scoped `WaitForHealthyAsync` is metered the same way, per tree, on every tick that reads the tree `Healthy`.
 
-The default equals `WalMaxPendingBatches`, admitting exactly one pipeline-fill per tick - about 80 admissions per second per partition at the default 200 ms sample interval. Set it to `0` to release every parked waiter at once (the original behaviour).
+The default release batch equals the default `WalMaxPendingBatches`: at most one default pipeline-fill's worth of signal waiters is released per eligible tick, or about 80 signal wait completions per second at an uninterrupted default 200 ms sample cadence and a nonempty queue. This is a release-rate calculation, not a throughput or admission guarantee. Set the batch to `0` to release every parked waiter at once (the original behaviour).
+
+Progress after release is conditional on semaphore capacity, storage completion and caller scheduling. Fairness alone supplies no finite latency bound, and an unbounded offered load does not imply an eventually permanent `Healthy` state. See [Verified scheduling and progress](verified-scheduling.md) for the separation between gate-release, capacity-conditioned admission and storage progress.
 
 ### Acute-only classification (on by default)
 
@@ -233,6 +235,17 @@ This is the right shape when:
 
 - The host already has an external back-pressure surface (a load balancer or service mesh observing the same workload) and does not want the per-silo signal duplicated.
 - A test fixture needs deterministic state (the library's own tests then drive the sampler one tick at a time through an internal seam).
+
+## Formal model
+
+[`WalAdmission`](../../spec/scheduling/README.md) separates the partition's
+parked saturation waits, paced release and admission capacity. A release from
+`WaitForHealthyAsync` completes a gate wait; it does not reserve an admission
+semaphore slot or acknowledge an append. Its bounded residue claim is therefore
+about recovery-release rounds under the module's stated premises, not a
+wall-clock latency or arbitrary offered-load guarantee. See
+[Verified Scheduling and Progress](verified-scheduling.md) for the production
+detector boundary and the limits of fairness assumptions.
 
 ## See also
 

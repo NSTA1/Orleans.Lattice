@@ -1,0 +1,20 @@
+{
+  "mutations": "wal-admission-mutations",
+  "refinement": "WalAdmissionRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 4,
+    "properties": 8,
+    "actions": 11,
+    "mutations": 16,
+    "behaviourRows": 21,
+    "distinctStates": 86496
+  },
+  "variants": {
+    "ThreeCallers": {
+      "distinctStates": 370345
+    }
+  }
+}

@@ -1,0 +1,22 @@
+MODULE: TypeOKFaultObservationOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: environment observation writes an unsupported acute-fault phase
+PERTURBS: AcuteOn
+
+--- FIND
+AcuteOn(p) ==
+    /\ faultPhase[p] = "new"
+    /\ acuteCause' = [acuteCause EXCEPT ![p] = TRUE]
+    /\ faultPhase' = [faultPhase EXCEPT ![p] = "on"]
+    /\ UNCHANGED <<inflight, parked, state, recovery, outcome, home,
+        waitLeft, callLeft, phase, cursor, refusalState>>
+--- REPLACE
+\* MUTATION: environment observation writes an unsupported acute-fault phase
+AcuteOn(p) ==
+    /\ faultPhase[p] = "new"
+    /\ acuteCause' = [acuteCause EXCEPT ![p] = TRUE]
+    /\ faultPhase' = [faultPhase EXCEPT ![p] = "unknown"]
+    /\ UNCHANGED <<inflight, parked, state, recovery, outcome, home,
+        waitLeft, callLeft, phase, cursor, refusalState>>
+--- END

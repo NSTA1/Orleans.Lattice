@@ -182,7 +182,9 @@ public sealed class TlcCiShardTests
                 }
                 else
                 {
-                    var expected = module.Name.StartsWith("Replication", StringComparison.Ordinal)
+                    var expected = Path.GetFileName(module.Directory) == "scheduling"
+                        ? TlcCiShard.Scheduling
+                        : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
                         : module.Name == "MaterialisedViewFence"
                         ? TlcCiShard.MaterialisedViewFence
@@ -237,6 +239,7 @@ public sealed class TlcCiShardTests
     [TestCase("view-joint-repair", TlcCiShard.MaterialisedViewJointRepair)]
     [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
     [TestCase("aliasing", TlcCiShard.Aliasing)]
+    [TestCase("scheduling", TlcCiShard.Scheduling)]
     public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)
     {
         var modules = SpecModuleCatalogue.Repository().Where(module =>

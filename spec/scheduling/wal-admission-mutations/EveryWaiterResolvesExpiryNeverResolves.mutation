@@ -1,0 +1,38 @@
+MODULE: EveryWaiterResolvesExpiryNeverResolves
+TARGET: EveryWaiterResolves
+CLASS: Temporal
+SUMMARY: expired waiters never resolve under a permanently saturated environment
+PERTURBS: BudgetExpire
+
+--- FIND
+BudgetExpire ==
+    /\ phase = "expire"
+    /\ LET c == cursor
+           expired == outcome[c] = "parked" /\ (waitLeft[c] = 0 \/ callLeft[c] = 0)
+           refuse == expired /\ state[home[c]] = "Saturated"
+       IN /\ outcome' = [outcome EXCEPT ![c] =
+                    IF expired THEN (IF refuse THEN "refused" ELSE "released") ELSE @]
+          /\ parked' = [p \in Partitions |-> IF expired THEN Remove(parked[p], c) ELSE parked[p]]
+          /\ refusalState' = [refusalState EXCEPT ![c] = IF refuse THEN state[home[c]] ELSE @]
+          /\ waitLeft' = [waitLeft EXCEPT ![c] = IF expired THEN 0 ELSE @]
+          /\ callLeft' = [callLeft EXCEPT ![c] = IF expired THEN 0 ELSE @]
+    /\ cursor' = IF cursor = Cardinality(Callers) THEN 1 ELSE cursor + 1
+    /\ phase' = IF cursor = Cardinality(Callers) THEN "sample" ELSE "expire"
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery, home>>
+--- REPLACE
+\* MUTATION: expired waiters never resolve under a permanently saturated environment
+BudgetExpire ==
+    /\ phase = "expire"
+    /\ LET c == cursor
+           expired == FALSE /\ outcome[c] = "parked" /\ (waitLeft[c] = 0 \/ callLeft[c] = 0)
+           refuse == expired /\ state[home[c]] = "Saturated"
+       IN /\ outcome' = [outcome EXCEPT ![c] =
+                    IF expired THEN (IF refuse THEN "refused" ELSE "released") ELSE @]
+          /\ parked' = [p \in Partitions |-> IF expired THEN Remove(parked[p], c) ELSE parked[p]]
+          /\ refusalState' = [refusalState EXCEPT ![c] = IF refuse THEN state[home[c]] ELSE @]
+          /\ waitLeft' = [waitLeft EXCEPT ![c] = IF expired THEN 0 ELSE @]
+          /\ callLeft' = [callLeft EXCEPT ![c] = IF expired THEN 0 ELSE @]
+    /\ cursor' = IF cursor = Cardinality(Callers) THEN 1 ELSE cursor + 1
+    /\ phase' = IF cursor = Cardinality(Callers) THEN "sample" ELSE "expire"
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery, home>>
+--- END
