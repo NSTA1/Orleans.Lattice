@@ -286,7 +286,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardScheduling"],
-        "note": "TurnOccupancy and WalAdmission bases, two larger-bound variants and 23 paired mutants: 27/27 cases, zero skips. Final two-CPU/1800MB single-TLC-slot run measured 2m22s including distinct mutation controls; standalone WAL base 18s and variant 7s. Scheduling-directory routing precedes the broad Wal prefix."
+        "note": "TurnOccupancy, WalAdmission, TagIndexReconcile and WalBackPressure: 11 configurations and 72 paired mutants (83 TLC cases). The 17.52-minute price composes independent two-CPU/1800MB single-slot certificates: foundation 144.684s, Tag 177s including structural-test overhead, and WalBackPressure 729.46094s. This is a conservative composed estimate, not a measured composite shard run. Scheduling-directory routing precedes the broad Wal prefix."
       },
       {
         "shard": "formal-tlc-smoke",
