@@ -1,0 +1,19 @@
+MODULE: NoFlappingNoHysteresis
+TARGET: NoFlapping
+CLASS: Invariant
+SUMMARY: bursty depth returns straight to Healthy inside the recovery window
+PERTURBS: Sample
+BOUNDS: AcuteOnly = FALSE, Bursts = 2
+
+--- FIND
+    /\ verdict' = [t \in Trees |-> [p \in Partitions |-> PartitionVerdict(t, p)]]
+--- REPLACE
+\* MUTATION: remove the recovery floor without changing the asserted window.
+    /\ verdict' = [t \in Trees |-> [p \in Partitions |-> Raw(t, p)]]
+--- END
+--- FIND
+    /\ treeVerdict' = [t \in Trees |-> TreeValue(t)]
+--- REPLACE
+\* MUTATION: publish the raw tree instead of the finite recovery floor.
+    /\ treeVerdict' = [t \in Trees |-> RawTree(t)]
+--- END

@@ -40,12 +40,15 @@ public partial class BPlusLeafGrainTests
         ILoggerProvider? loggerProvider = null,
         int? maxConcurrentReplays = null,
         ShardMap? registryShardMap = null,
-        Orleans.Timers.ITimerRegistry? timerRegistry = null)
+        Orleans.Timers.ITimerRegistry? timerRegistry = null,
+        IWalSaturationSignal? saturationSignal = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
+        if (saturationSignal is not null)
+            sc.AddSingleton(saturationSignal);
         if (detector is not null)
             sc.AddSingleton(detector);
         sc.AddSingleton(reporter);

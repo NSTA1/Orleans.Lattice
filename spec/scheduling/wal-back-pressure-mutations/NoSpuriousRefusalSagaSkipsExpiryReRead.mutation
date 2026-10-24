@@ -1,0 +1,14 @@
+MODULE: NoSpuriousRefusalSagaSkipsExpiryReRead
+TARGET: NoSpuriousRefusal
+CLASS: Action
+SUMMARY: a saga refuses after expiry even though the sampled scope recovered
+PERTURBS: SagaRefuse
+
+--- FIND
+    /\ saga' = [saga EXCEPT !.status =
+        IF saga.status = "waiting" /\ SagaValue = 2 THEN "refused" ELSE "ready"]
+--- REPLACE
+\* MUTATION: keep the pre-wait Saturated observation after expiry.
+    /\ saga' = [saga EXCEPT !.status =
+        IF saga.status = "waiting" THEN "refused" ELSE "ready"]
+--- END

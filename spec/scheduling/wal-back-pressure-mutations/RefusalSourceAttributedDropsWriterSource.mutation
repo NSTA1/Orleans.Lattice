@@ -1,0 +1,12 @@
+MODULE: RefusalSourceAttributedDropsWriterSource
+TARGET: RefusalSourceAttributed
+CLASS: Action
+SUMMARY: a writer saturation refusal loses its source
+PERTURBS: ReReadAfterExpiry
+
+--- FIND
+        !.source = IF consumer.expiry = 2 /\ GateValue = 2 THEN "WalAdmission" ELSE "None"]
+--- REPLACE
+\* MUTATION: lose refusal-source attribution.
+        !.source = "None"]
+--- END

@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// never depend on wall-clock timing.
 /// </summary>
 [TestFixture]
-public class WalSaturationSamplerTests
+public partial class WalSaturationSamplerTests
 {
     private static int _treeIdSeed;
     private string _treeId = null!;
