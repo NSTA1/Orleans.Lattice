@@ -260,7 +260,7 @@ public sealed class DataKeysPanelTests : DataTestContext
     }
 
     [Test]
-    public async Task Live_changes_do_not_restart_a_first_page_scan_during_failure_backoff()
+    public void Live_changes_do_not_restart_a_first_page_scan_during_failure_backoff()
     {
         Client.WithTree("orders", keys: 2);
         Client.Fault = call => call == nameof(ILatticeStateClient.ScanEntriesAsync)
@@ -278,10 +278,12 @@ public sealed class DataKeysPanelTests : DataTestContext
 
         for (var i = 0; i < 20; i++)
         {
-            Client.Feeds[^1].Writer.TryWrite(FakeStateClient.Change("orders", $"key/{i:D4}"));
+            Assert.That(
+                Client.Feeds[^1].Writer.TryWrite(FakeStateClient.Change("orders", $"key/{i:D4}")),
+                Is.True);
         }
 
-        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        cut.WaitUntil(() => Assert.That(Client.DeliveredChangeCount, Is.EqualTo(20)));
 
         Assert.That(Client.Calls.Count(call => call == "ScanEntriesAsync:first"), Is.EqualTo(initialScans));
     }

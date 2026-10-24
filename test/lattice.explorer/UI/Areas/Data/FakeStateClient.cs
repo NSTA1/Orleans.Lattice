@@ -17,6 +17,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 internal sealed class FakeStateClient : ILatticeStateClient
 {
     private int _observerCount;
+    private int _deliveredChangeCount;
 
     /// <summary>The tree catalogue, in the order the fake answers it.</summary>
     public List<TreeCatalogEntry> Trees { get; } = [];
@@ -95,6 +96,9 @@ internal sealed class FakeStateClient : ILatticeStateClient
 
     /// <summary>The number of open change feeds.</summary>
     public int OpenFeeds => Volatile.Read(ref _observerCount);
+
+    /// <summary>The number of changes fully consumed by the observer.</summary>
+    public int DeliveredChangeCount => Volatile.Read(ref _deliveredChangeCount);
 
     /// <summary>A tree catalogue entry.</summary>
     public static TreeCatalogEntry Tree(string id, int shards = 4, TreeLifecycleState lifecycle = TreeLifecycleState.Active, string? restoreShadowOf = null) =>
@@ -358,6 +362,7 @@ internal sealed class FakeStateClient : ILatticeStateClient
             await foreach (var change in feed.Reader.ReadAllAsync(IgnoreObserveCancellation ? CancellationToken.None : cancellationToken))
             {
                 yield return change;
+                Interlocked.Increment(ref _deliveredChangeCount);
             }
         }
         finally
