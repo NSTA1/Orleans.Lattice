@@ -1222,9 +1222,9 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         }
     }
 
-    // A membership row identified as an orphan candidate by the read-only scan
-    // pass of ReconcileSubjectAsync, buffered so deletes are deferred until the
-    // index-tree scan has fully drained (see issue 1351).
+    // A membership row buffered by the read-only scan of ReconcileSubjectAsync
+    // for orphan removal or missing-mirror repair. Both kinds of write wait
+    // until the index-tree scan has fully drained (see issue 1351).
     private readonly record struct OrphanCandidate(string RowKey, string Tree, string Key, string Tag);
 
     internal async Task<TagReconcileReport> ReconcileSubjectAsync(string treeId, string? startInclusive, string? endExclusive, CancellationToken cancellationToken)
@@ -1250,6 +1250,8 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         // readers.
         var rowsScanned = 0;
         List<OrphanCandidate>? candidates = null;
+        List<OrphanCandidate>? mirrorWindow = null;
+        List<OrphanCandidate>? missingMirrors = null;
         await foreach (var rowKey in ScanLiveKeysAsync(null, null, cancellationToken).ConfigureAwait(false))
         {
             if (rowKey.Length > 0 && rowKey[0] == Sep)
@@ -1277,13 +1279,26 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             }
             rowsScanned++;
             var key = RowKeySegment(rowKey, segments);
+            var candidate = new OrphanCandidate(rowKey, treeId, key, RowTag(rowKey, segments));
             if (!live.Contains(key))
             {
-                // The tree segment was just proven equal to treeId, so the
-                // candidate reuses that string rather than cutting an identical
-                // one, and only a genuine orphan pays for its tag.
-                (candidates ??= []).Add(new OrphanCandidate(rowKey, treeId, key, RowTag(rowKey, segments)));
+                (candidates ??= []).Add(candidate);
             }
+
+            // A prior partial removal can leave a posting without its mirror.
+            // Check the same posting stream in bounded read-only windows; defer
+            // repairs, like deletions, until the scan has fully drained.
+            (mirrorWindow ??= new List<OrphanCandidate>(OrphanVerifyWindow)).Add(candidate);
+            if (mirrorWindow.Count == OrphanVerifyWindow)
+            {
+                missingMirrors = await FindMissingMirrorsAsync(mirrorWindow, missingMirrors, cancellationToken).ConfigureAwait(false);
+                mirrorWindow.Clear();
+            }
+        }
+
+        if (mirrorWindow is { Count: > 0 })
+        {
+            missingMirrors = await FindMissingMirrorsAsync(mirrorWindow, missingMirrors, cancellationToken).ConfigureAwait(false);
         }
 
         var orphans = 0;
@@ -1292,7 +1307,93 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             orphans = await DeleteConfirmedOrphansAsync(subject, candidates, cancellationToken).ConfigureAwait(false);
         }
 
+        if (missingMirrors is not null)
+        {
+            await RepairMissingMirrorsAsync(subject, missingMirrors, cancellationToken).ConfigureAwait(false);
+        }
+
         return new TagReconcileReport(1, keysScanned, rowsScanned, orphans);
+    }
+
+    private async Task<List<OrphanCandidate>?> FindMissingMirrorsAsync(
+        List<OrphanCandidate> window,
+        List<OrphanCandidate>? missing,
+        CancellationToken cancellationToken)
+    {
+        var keys = new List<string>(window.Count);
+        foreach (var row in window)
+        {
+            keys.Add(KeyRowKey(row.Tree, row.Key, row.Tag));
+        }
+        var result = await _indexTree.GetManyWithGateAccountingAsync(keys, cancellationToken).ConfigureAwait(false);
+        RequireCompleteReconcileRead(result);
+        for (var i = 0; i < window.Count; i++)
+        {
+            if (!result.Values.TryGetValue(keys[i], out var bytes) || !IsRowLive(bytes))
+            {
+                (missing ??= []).Add(window[i]);
+            }
+        }
+        return missing;
+    }
+
+    private async Task RepairMissingMirrorsAsync(
+        ILattice subject,
+        List<OrphanCandidate> missing,
+        CancellationToken cancellationToken)
+    {
+        for (var start = 0; start < missing.Count; start += OrphanVerifyWindow)
+        {
+            var end = Math.Min(start + OrphanVerifyWindow, missing.Count);
+            var subjectKeys = new HashSet<string>(StringComparer.Ordinal);
+            var rowKeys = new List<string>((end - start) * 2);
+            for (var i = start; i < end; i++)
+            {
+                var row = missing[i];
+                subjectKeys.Add(row.Key);
+                rowKeys.Add(row.RowKey);
+                rowKeys.Add(KeyRowKey(row.Tree, row.Key, row.Tag));
+            }
+
+            // The subject may have reappeared after the failed delete, or the
+            // retained posting may since have been removed. Re-verify both;
+            // never recreate a mirror from a stale or gate-filtered absence.
+            var subjects = await subject.GetManyWithGateAccountingAsync([.. subjectKeys], cancellationToken).ConfigureAwait(false);
+            var rows = await _indexTree.GetManyWithGateAccountingAsync(rowKeys, cancellationToken).ConfigureAwait(false);
+            RequireCompleteReconcileRead(subjects);
+            RequireCompleteReconcileRead(rows);
+
+            List<Task>? wave = null;
+            for (var i = start; i < end; i++)
+            {
+                var row = missing[i];
+                var mirrorKey = rowKeys[(i - start) * 2 + 1];
+                if (!subjects.Values.ContainsKey(row.Key)
+                    || !rows.Values.TryGetValue(row.RowKey, out var posting) || !IsRowLive(posting)
+                    || (rows.Values.TryGetValue(mirrorKey, out var mirror) && IsRowLive(mirror)))
+                {
+                    continue;
+                }
+                (wave ??= new List<Task>(end - start)).Add(WriteRowAsync(mirrorKey, cancellationToken));
+            }
+            if (wave is not null)
+            {
+                await Task.WhenAll(wave).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static void RequireCompleteReconcileRead(GatedMultiReadResult result)
+    {
+        if (!result.IsComplete)
+        {
+            // A successful report certifies the subject fingerprint in the
+            // coordinator. Skipping a gated window would bank an incomplete
+            // repair that a later, unchanged fingerprint never revisits.
+            throw new InvalidOperationException(
+                "Tag-index reconciliation cannot complete because the access gate pruned a required verification read. "
+                + "Retry after the gate permits all required keys.");
+        }
     }
 
     /// <summary>
@@ -1332,9 +1433,9 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     /// access gate is indistinguishable from a genuinely missing key on the
     /// plain overload, so a gated reconcile could delete live membership rows
     /// for keys the gate merely hid. When a window reports any gate-pruned key
-    /// the whole window is treated as present and nothing in it is deleted,
-    /// which is the conservative direction: a missed orphan is reclaimed by the
-    /// next reconcile, a wrongly deleted row is not.
+    /// no key in the window is classified and reconciliation fails explicitly.
+    /// A completed report would let the coordinator bank the subject fingerprint
+    /// and skip the incomplete repair on later sweeps after the gate clears.
     /// </para>
     /// </remarks>
     private async Task<int> DeleteConfirmedOrphansAsync(
@@ -1359,13 +1460,10 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
             // In a flag membership mode this authors a disable delta (the scan
             // already filtered out already-disabled rows), never a plain delete
-            // - so orphan cleanup also ships a typed delta. The two rows are
-            // distinct keys, as are the rows of any other confirmed orphan, so
-            // the deletes overlap in a wave capped at the same limit and for the
-            // same reason as RemoveTagsForKeyAsync.
-            wave ??= new List<Task>(OrphanVerifyWindow);
-            wave.Add(RemoveRowAsync(candidate.RowKey, cancellationToken));
-            wave.Add(RemoveRowAsync(KeyRowKey(candidate.Tree, candidate.Key, candidate.Tag), cancellationToken));
+            // - so orphan cleanup also ships a typed delta. Independent orphan
+            // pairs overlap, with at most one row removal in flight per pair.
+            wave ??= new List<Task>(RemoveRowConcurrencyLimit);
+            wave.Add(RemoveOrphanRowsAsync(candidate, cancellationToken));
             orphans++;
 
             if (wave.Count >= RemoveRowConcurrencyLimit)
@@ -1381,6 +1479,15 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         }
 
         return orphans;
+    }
+
+    private async Task RemoveOrphanRowsAsync(OrphanCandidate candidate, CancellationToken cancellationToken)
+    {
+        // Reconcile discovers candidates through live postings, not reserved
+        // mirrors. Keep that retry anchor until the mirror removal succeeds;
+        // otherwise a partial failure strands an undiscoverable mirror.
+        await RemoveRowAsync(KeyRowKey(candidate.Tree, candidate.Key, candidate.Tag), cancellationToken).ConfigureAwait(false);
+        await RemoveRowAsync(candidate.RowKey, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<HashSet<string>> ConfirmAbsentKeysAsync(
@@ -1427,12 +1534,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             .GetManyWithGateAccountingAsync(window, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!result.IsComplete)
-        {
-            // An absence in this window may be the gate rather than the tree.
-            // Classify nothing.
-            return;
-        }
+        RequireCompleteReconcileRead(result);
 
         foreach (var key in window)
         {
