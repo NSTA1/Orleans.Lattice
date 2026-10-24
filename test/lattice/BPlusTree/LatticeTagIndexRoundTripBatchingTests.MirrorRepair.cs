@@ -45,13 +45,21 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         subject.PrunedByAccessGate = interference == "subject-gate" ? 1 : 0;
         var writesBefore = index.TotalWriteCalls;
 
-        var report = await ctx.ReconcileSubjectAsync(SubjectTreeId, null, null, CancellationToken.None);
+        if (interference.Contains("gate", StringComparison.Ordinal))
+        {
+            Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await ctx.ReconcileSubjectAsync(SubjectTreeId, null, null, CancellationToken.None));
+        }
+        else
+        {
+            var report = await ctx.ReconcileSubjectAsync(SubjectTreeId, null, null, CancellationToken.None);
+            Assert.That(report.OrphanRowsRemoved, Is.Zero);
+        }
 
         Assert.Multiple(() =>
         {
             Assert.That(index.Data.ContainsKey(mirror), Is.False, "unverified repair must not resurrect a mirror");
             Assert.That(index.TotalWriteCalls, Is.EqualTo(writesBefore));
-            Assert.That(report.OrphanRowsRemoved, Is.Zero);
         });
     }
 

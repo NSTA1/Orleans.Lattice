@@ -185,11 +185,12 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         // uninterpretable: it may be the gate rather than a missing key.
         subject.PrunedByAccessGate = 1;
 
-        var report = await ctx.ReconcileSubjectAsync(SubjectTreeId, null, null, CancellationToken.None);
+        var incomplete = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await ctx.ReconcileSubjectAsync(SubjectTreeId, null, null, CancellationToken.None));
 
         Assert.Multiple(() =>
         {
-            Assert.That(report.OrphanRowsRemoved, Is.Zero, "a gated window must not be classified");
+            Assert.That(incomplete!.Message, Does.Contain("access gate pruned"));
             Assert.That(index.Data, Has.Count.EqualTo(rowsBefore), "no membership row may be deleted");
             Assert.That(index.DeleteAsyncCalls, Is.Zero);
         });

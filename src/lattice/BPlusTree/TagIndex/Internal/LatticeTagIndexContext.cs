@@ -1326,10 +1326,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             keys.Add(KeyRowKey(row.Tree, row.Key, row.Tag));
         }
         var result = await _indexTree.GetManyWithGateAccountingAsync(keys, cancellationToken).ConfigureAwait(false);
-        if (!result.IsComplete)
-        {
-            return missing;
-        }
+        RequireCompleteReconcileRead(result);
         for (var i = 0; i < window.Count; i++)
         {
             if (!result.Values.TryGetValue(keys[i], out var bytes) || !IsRowLive(bytes))
@@ -1363,10 +1360,8 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             // never recreate a mirror from a stale or gate-filtered absence.
             var subjects = await subject.GetManyWithGateAccountingAsync([.. subjectKeys], cancellationToken).ConfigureAwait(false);
             var rows = await _indexTree.GetManyWithGateAccountingAsync(rowKeys, cancellationToken).ConfigureAwait(false);
-            if (!subjects.IsComplete || !rows.IsComplete)
-            {
-                continue;
-            }
+            RequireCompleteReconcileRead(subjects);
+            RequireCompleteReconcileRead(rows);
 
             List<Task>? wave = null;
             for (var i = start; i < end; i++)
@@ -1385,6 +1380,19 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             {
                 await Task.WhenAll(wave).ConfigureAwait(false);
             }
+        }
+    }
+
+    private static void RequireCompleteReconcileRead(GatedMultiReadResult result)
+    {
+        if (!result.IsComplete)
+        {
+            // A successful report certifies the subject fingerprint in the
+            // coordinator. Skipping a gated window would bank an incomplete
+            // repair that a later, unchanged fingerprint never revisits.
+            throw new InvalidOperationException(
+                "Tag-index reconciliation cannot complete because the access gate pruned a required verification read. "
+                + "Retry after the gate permits all required keys.");
         }
     }
 
@@ -1425,9 +1433,9 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     /// access gate is indistinguishable from a genuinely missing key on the
     /// plain overload, so a gated reconcile could delete live membership rows
     /// for keys the gate merely hid. When a window reports any gate-pruned key
-    /// the whole window is treated as present and nothing in it is deleted,
-    /// which is the conservative direction: a missed orphan is reclaimed by the
-    /// next reconcile, a wrongly deleted row is not.
+    /// no key in the window is classified and reconciliation fails explicitly.
+    /// A completed report would let the coordinator bank the subject fingerprint
+    /// and skip the incomplete repair on later sweeps after the gate clears.
     /// </para>
     /// </remarks>
     private async Task<int> DeleteConfirmedOrphansAsync(
@@ -1526,12 +1534,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             .GetManyWithGateAccountingAsync(window, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!result.IsComplete)
-        {
-            // An absence in this window may be the gate rather than the tree.
-            // Classify nothing.
-            return;
-        }
+        RequireCompleteReconcileRead(result);
 
         foreach (var key in window)
         {
