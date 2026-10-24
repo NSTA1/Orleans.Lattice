@@ -92,6 +92,46 @@ public sealed class SuggestionSourceTests
         Assert.That(async () => await source.SuggestAsync("eu", 5, cancelled.Token), Throws.InstanceOf<OperationCanceledException>());
     }
 
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public async Task Invalidating_during_a_read_prevents_its_late_answer_from_being_remembered(bool fails, bool reloadBeforeCompletion)
+    {
+        var status = Substitute.For<ILatticeReplicationStatus>();
+        var pending = new TaskCompletionSource<ReplicationPeerStatusPage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fresh = new ReplicationPeerStatusPage("new-region", [], null);
+        status.GetPeerStatusAsync(Arg.Any<ReplicationPeerStatusQuery>(), Arg.Any<CancellationToken>())
+            .Returns(_ => pending.Task, _ => Task.FromResult(fresh));
+        var source = new RegionSuggestionSource(status, null, new ManualTimeProvider());
+
+        var abandoned = source.SuggestAsync(string.Empty, 5, CancellationToken.None).AsTask();
+        source.Invalidate();
+        if (reloadBeforeCompletion)
+        {
+            await source.SuggestAsync(string.Empty, 5, CancellationToken.None);
+        }
+
+        if (fails)
+        {
+            pending.SetException(new InvalidOperationException("old failure"));
+        }
+        else
+        {
+            pending.SetResult(new ReplicationPeerStatusPage("old-region", [], null));
+        }
+
+        await abandoned;
+        var answer = await source.SuggestAsync(string.Empty, 5, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(answer.IsAvailable, Is.True);
+            Assert.That(answer.Items.Select(item => item.Value), Is.EqualTo(new[] { "new-region" }));
+            Assert.That(status.ReceivedCalls().Count(), Is.EqualTo(2), "the late read must neither restore the invalidated list nor replace the fresh one");
+        });
+    }
+
     [Test]
     public async Task Directory_matches_put_an_exact_id_first_and_show_the_display_name_as_detail()
     {

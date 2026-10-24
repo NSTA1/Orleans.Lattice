@@ -52,6 +52,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **WAL - Offset-based drain age.** Backdated reaps and merges no longer manufacture hours of materialiser lag. No-op reaps preserve the projection clock; offset reports and bounded append history retain time-based pacing without changing retention guards. ([#3606](https://github.com/NSTA1/Orleans.Lattice/issues/3606)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
+- **Explorer - Reliable suggestions.** Tenant backup id completions keep scanning past other tenants; late reads cannot restore invalidated suggestions or replace newer lists; key suggestions handle nonpositive and very large limits safely. ([#4963](https://github.com/NSTA1/Orleans.Lattice/issues/4963)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Tenant lifecycle ownership.** Switching tenants closes old confirmations and discards late suspend, resume and delete UI updates; completed changes still refresh shared lists. Leaving Regions cancels admission so it cannot redirect the next page. ([#4958](https://github.com/NSTA1/Orleans.Lattice/issues/4958)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Cluster follow and survey resilience.** A denied operation no longer stops other progress updates, failed post-operation statistics and alias reads retry, and stopped orphan surveys discard late replies and faults. ([#4955](https://github.com/NSTA1/Orleans.Lattice/pull/4955)) (`Orleans.Lattice.Explorer.UI`)

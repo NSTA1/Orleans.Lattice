@@ -73,12 +73,15 @@ internal sealed class BackupsCompletionSource : IAddressCompletionSource
         var listing = _tenant.ListingTenant;
         await foreach (var manifest in _control.StreamBackupsAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (manifest.Id.StartsWith(prefix, StringComparison.Ordinal) && BackupsAccess.Lists(listing, manifest))
+            if (manifest.Id.StartsWith(prefix, StringComparison.Ordinal))
             {
-                found.Add(Completion(manifest));
-                if (found.Count >= limit)
+                if (BackupsAccess.Lists(listing, manifest))
                 {
-                    break;
+                    found.Add(Completion(manifest));
+                    if (found.Count >= limit)
+                    {
+                        break;
+                    }
                 }
             }
             else if (prefix.Length > 0 && string.CompareOrdinal(manifest.Id, prefix) > 0)

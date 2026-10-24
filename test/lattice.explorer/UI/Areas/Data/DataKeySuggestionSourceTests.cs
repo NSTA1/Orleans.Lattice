@@ -173,7 +173,6 @@ public sealed class DataKeySuggestionSourceTests
 
     [TestCase(3, 4)]
     [TestCase(1, 2)]
-    [TestCase(0, 1)]
     [TestCase(400, DataPaging.MaxPageSize)]
     public async Task One_more_row_than_the_limit_is_asked_for_and_clamped_to_the_page_ceiling(int limit, int expected)
     {
@@ -197,6 +196,41 @@ public sealed class DataKeySuggestionSourceTests
         Assert.That(
             async () => await Source.SuggestAsync(null!, 5, CancellationToken.None),
             Throws.InstanceOf<ArgumentNullException>());
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    [TestCase(int.MinValue)]
+    public async Task A_nonpositive_limit_returns_no_keys_without_scanning(int limit)
+    {
+        Scan(continuation: null, "order/1");
+
+        var answer = await Source.SuggestAsync("order/", limit, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(answer.IsAvailable, Is.True);
+            Assert.That(answer.Items, Is.Empty);
+            Assert.That(_reader.ReceivedCalls(), Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task The_largest_limit_still_requests_a_full_bounded_page()
+    {
+        Scan(continuation: null, "order/1", "order/2");
+
+        var answer = await Source.SuggestAsync("order/", int.MaxValue, CancellationToken.None);
+
+        Assert.That(answer.Items, Has.Count.EqualTo(2));
+        await _reader.Received(1).ScanAsync(
+            Tree,
+            DataPaging.MaxPageSize,
+            Arg.Any<string?>(),
+            Arg.Any<TagFilter?>(),
+            "order/",
+            Arg.Any<EntryScanMode>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]

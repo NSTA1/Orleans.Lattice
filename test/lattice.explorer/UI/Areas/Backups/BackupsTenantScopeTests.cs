@@ -142,6 +142,24 @@ public sealed class BackupsTenantScopeTests : BackupsTestContext
         Assert.That(ListRequests, Is.Not.Empty.And.All.Matches<BackupCatalogRequest>(request => request.ActiveTenantOnly));
     }
 
+    [TestCase("backup:nightly-", false)]
+    [TestCase("/backups/nightly-", true)]
+    public async Task Id_completions_continue_past_another_tenants_matching_prefix(string text, bool addressMode)
+    {
+        UseTenant("acme");
+        Seed(
+            FakeBackupControl.Manifest("nightly-1", tree: "t/globex/orders"),
+            FakeBackupControl.Manifest("nightly-2", tree: "t/acme/orders"),
+            FakeBackupControl.Manifest("nightly-3", tree: "t/acme/orders"),
+            FakeBackupControl.Manifest("weekly-1", tree: "t/acme/orders"));
+        var source = Services.GetRequiredService<BackupsCompletionSource>();
+
+        var answer = await source.CompleteAsync(
+            new AddressQuery(text, addressMode ? AddressQueryMode.Address : AddressQueryMode.Search, ExplorerAddress.Home.WithTenant("acme")), CancellationToken.None);
+
+        Assert.That(answer.Select(completion => completion.Label), Is.EqualTo(new[] { "backup:nightly-2", "backup:nightly-3" }));
+    }
+
     [TestCase("orders", "default", true)]
     [TestCase("t/acme/orders", "default", false)]
     [TestCase("t/acme/orders", "acme", true)]
