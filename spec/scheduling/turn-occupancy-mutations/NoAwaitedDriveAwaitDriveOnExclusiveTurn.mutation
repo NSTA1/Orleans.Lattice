@@ -1,4 +1,4 @@
-MODULE: AwaitDriveOnExclusiveTurn
+MODULE: NoAwaitedDriveAwaitDriveOnExclusiveTurn
 TARGET: NoAwaitedDrive
 CLASS: Invariant
 SUMMARY: the coverage timer retains its exclusive turn while awaiting the drive

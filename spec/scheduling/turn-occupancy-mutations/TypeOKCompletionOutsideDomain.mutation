@@ -1,4 +1,4 @@
-MODULE: CompletionOutsideDomain
+MODULE: TypeOKCompletionOutsideDomain
 TARGET: TypeOK
 CLASS: Invariant
 SUMMARY: an external completion reports an unsupported operation state

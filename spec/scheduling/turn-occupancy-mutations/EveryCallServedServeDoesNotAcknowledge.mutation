@@ -1,4 +1,4 @@
-MODULE: ServeDoesNotAcknowledge
+MODULE: EveryCallServedServeDoesNotAcknowledge
 TARGET: EveryCallServed
 CLASS: Temporal
 SUMMARY: dequeue a call without serving it

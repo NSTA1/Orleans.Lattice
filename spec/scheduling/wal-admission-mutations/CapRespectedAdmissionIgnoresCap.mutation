@@ -1,4 +1,4 @@
-MODULE: AdmissionIgnoresCap
+MODULE: CapRespectedAdmissionIgnoresCap
 TARGET: CapRespected
 CLASS: Invariant
 SUMMARY: semaphore admission ignores the configured partition cap

@@ -1,4 +1,4 @@
-MODULE: LocalWorkExceedsBound
+MODULE: TurnServedWithinBoundLocalWorkExceedsBound
 TARGET: TurnServedWithinBound
 CLASS: Invariant
 SUMMARY: local admission work consumes more than the finite opportunity budget

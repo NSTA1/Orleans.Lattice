@@ -1,7 +1,7 @@
-MODULE: ReleaseSaturatedSibling
-TARGET: PerPartitionIsolation
+MODULE: PacedRecoveryReleaseRecoveryHerd
+TARGET: PacedRecoveryRelease
 CLASS: Action
-SUMMARY: a healthy sibling tick also releases a saturated partition
+SUMMARY: historical issue 3402 releases the entire parked herd on a recovery tick
 PERTURBS: ReleaseTick
 
 --- FIND
@@ -20,11 +20,11 @@ ReleaseTick ==
     /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery,
         home, refusalState>>
 --- REPLACE
-\* MUTATION: a healthy sibling tick also releases a saturated partition
+\* MUTATION: historical issue 3402 releases the entire parked herd on a recovery tick
 ReleaseTick ==
     /\ phase = "release"
     /\ LET chosen == [p \in Partitions |->
-                IF TRUE THEN SubSeq(parked[p], 1, Min(Len(parked[p]), ReleaseBatch))
+                IF Eligible(p) THEN SubSeq(parked[p], 1, Len(parked[p]))
                 ELSE <<>>]
            all == UNION {Members(chosen[p]) : p \in Partitions}
        IN /\ parked' = [p \in Partitions |->

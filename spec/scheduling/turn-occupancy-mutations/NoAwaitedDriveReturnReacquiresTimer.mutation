@@ -1,4 +1,4 @@
-MODULE: ReturnReacquiresTimer
+MODULE: NoAwaitedDriveReturnReacquiresTimer
 TARGET: NoAwaitedDrive
 CLASS: Invariant
 SUMMARY: returning a foreground call reacquires the exclusive timer turn during a drive

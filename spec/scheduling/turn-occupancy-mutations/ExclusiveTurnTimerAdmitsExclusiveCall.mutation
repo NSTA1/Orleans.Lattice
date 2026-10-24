@@ -1,4 +1,4 @@
-MODULE: TimerAdmitsExclusiveCall
+MODULE: ExclusiveTurnTimerAdmitsExclusiveCall
 TARGET: ExclusiveTurn
 CLASS: Invariant
 SUMMARY: a timer takes a call turn without dequeuing the waiting call

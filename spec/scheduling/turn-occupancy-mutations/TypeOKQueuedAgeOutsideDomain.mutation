@@ -1,4 +1,4 @@
-MODULE: QueuedAgeOutsideDomain
+MODULE: TypeOKQueuedAgeOutsideDomain
 TARGET: TypeOK
 CLASS: Invariant
 SUMMARY: queue bookkeeping writes an out-of-domain local age

@@ -1,4 +1,4 @@
-MODULE: FlushLeaksCapacity
+MODULE: CapRespectedFlushLeaksCapacity
 TARGET: CapRespected
 CLASS: Invariant
 SUMMARY: completion increments rather than returns the admission slot

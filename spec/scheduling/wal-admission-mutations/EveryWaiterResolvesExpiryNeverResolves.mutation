@@ -1,4 +1,4 @@
-MODULE: ExpiryNeverResolves
+MODULE: EveryWaiterResolvesExpiryNeverResolves
 TARGET: EveryWaiterResolves
 CLASS: Temporal
 SUMMARY: expired waiters never resolve under a permanently saturated environment

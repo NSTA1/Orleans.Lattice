@@ -1,7 +1,7 @@
-MODULE: RecoveryHerd
-TARGET: PacedRecoveryRelease
+MODULE: ProgressWhenCapacityFreeRecoveryNeverReleases
+TARGET: ProgressWhenCapacityFree
 CLASS: Action
-SUMMARY: historical issue 3402 releases the entire parked herd on a recovery tick
+SUMMARY: eligible ticks make no signal-release progress even with free capacity
 PERTURBS: ReleaseTick
 
 --- FIND
@@ -20,11 +20,11 @@ ReleaseTick ==
     /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery,
         home, refusalState>>
 --- REPLACE
-\* MUTATION: historical issue 3402 releases the entire parked herd on a recovery tick
+\* MUTATION: eligible ticks make no signal-release progress even with free capacity
 ReleaseTick ==
     /\ phase = "release"
     /\ LET chosen == [p \in Partitions |->
-                IF Eligible(p) THEN SubSeq(parked[p], 1, Len(parked[p]))
+                IF FALSE /\ Eligible(p) THEN SubSeq(parked[p], 1, Min(Len(parked[p]), ReleaseBatch))
                 ELSE <<>>]
            all == UNION {Members(chosen[p]) : p \in Partitions}
        IN /\ parked' = [p \in Partitions |->

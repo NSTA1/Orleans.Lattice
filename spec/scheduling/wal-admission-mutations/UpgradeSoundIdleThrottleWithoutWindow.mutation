@@ -1,4 +1,4 @@
-MODULE: IdleThrottleWithoutWindow
+MODULE: UpgradeSoundIdleThrottleWithoutWindow
 TARGET: UpgradeSound
 CLASS: Action
 SUMMARY: sampling upgrades an idle partition without a recovery window

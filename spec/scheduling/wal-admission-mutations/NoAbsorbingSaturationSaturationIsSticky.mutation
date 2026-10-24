@@ -1,4 +1,4 @@
-MODULE: SaturationIsSticky
+MODULE: NoAbsorbingSaturationSaturationIsSticky
 TARGET: NoAbsorbingSaturation
 CLASS: Temporal
 SUMMARY: sampling retains saturation after faults clear and the partition drains

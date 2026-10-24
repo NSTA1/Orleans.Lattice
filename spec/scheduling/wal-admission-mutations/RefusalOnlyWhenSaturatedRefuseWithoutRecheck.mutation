@@ -1,4 +1,4 @@
-MODULE: RefuseWithoutRecheck
+MODULE: RefusalOnlyWhenSaturatedRefuseWithoutRecheck
 TARGET: RefusalOnlyWhenSaturated
 CLASS: Invariant
 SUMMARY: budget expiry refuses even when the current verdict has already recovered

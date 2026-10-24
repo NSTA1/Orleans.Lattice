@@ -1,4 +1,4 @@
-MODULE: ArrivalOutsideDomain
+MODULE: TypeOKArrivalOutsideDomain
 TARGET: TypeOK
 CLASS: Invariant
 SUMMARY: arrival installs an invalid caller lifecycle state

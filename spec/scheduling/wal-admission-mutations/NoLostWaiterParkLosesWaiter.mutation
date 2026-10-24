@@ -1,4 +1,4 @@
-MODULE: ParkLosesWaiter
+MODULE: NoLostWaiterParkLosesWaiter
 TARGET: NoLostWaiter
 CLASS: Invariant
 SUMMARY: park records the outcome but loses its queue registration

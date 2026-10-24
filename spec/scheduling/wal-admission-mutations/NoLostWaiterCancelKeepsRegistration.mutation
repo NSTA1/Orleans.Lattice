@@ -1,4 +1,4 @@
-MODULE: CancelKeepsRegistration
+MODULE: NoLostWaiterCancelKeepsRegistration
 TARGET: NoLostWaiter
 CLASS: Invariant
 SUMMARY: cancel settles the caller but leaves its registration queued

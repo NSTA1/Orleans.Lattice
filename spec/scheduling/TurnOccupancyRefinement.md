@@ -53,6 +53,19 @@ weak fairness of activation-local runtime opportunities. External completion
 has no fairness assumption. ThreeGrains keeps every invariant and bounds out
 only temporal liveness; the base checks it.
 
+### Mutation classification
+
+Every mutation below is an **action perturbation**: an anchored edit of its
+`PERTURBS` action in `Next`. None is a transition splice.
+
+- `EveryCallServedServeDoesNotAcknowledge`
+- `ExclusiveTurnTimerAdmitsExclusiveCall`
+- `NoAwaitedDriveAwaitDriveOnExclusiveTurn`
+- `NoAwaitedDriveReturnReacquiresTimer`
+- `TurnServedWithinBoundLocalWorkExceedsBound`
+- `TypeOKCompletionOutsideDomain`
+- `TypeOKQueuedAgeOutsideDomain`
+
 ## Detectors
 
 The cooperative detector calls the real dispatcher, captures its real timer
@@ -66,7 +79,8 @@ scheduler; the real Interleave registration is the runtime refinement boundary.
 
 ## Defect mutations whose fixes have landed
 
-AwaitDriveOnExclusiveTurn reinstates the turn-retention mechanism fixed by
+NoAwaitedDriveAwaitDriveOnExclusiveTurn reinstates the turn-retention mechanism
+from [#4949](https://github.com/NSTA1/Orleans.Lattice/issues/4949), fixed by
 [#4950](https://github.com/NSTA1/Orleans.Lattice/pull/4950). Its one-target
 NoAwaitedDrive experiment fails when Dispatch leaves the timer turn held.
 The production negative control changes the same timer registration's Interleave
@@ -78,8 +92,9 @@ The draft's bounded foreground-service assertion cannot follow from fairness:
 an arbitrarily long finite stutter is fair. TurnServedWithinBound therefore
 states the concrete local opportunity bound, not a bound on arbitrary Next
 steps, wall time, other grains, or delivery of storage replies. The explicit
-LocalWorkExceedsBound mutation violates that local bound. AwaitDriveOnExclusiveTurn
-separately rejects holding the turn over external work. EveryCallServed retains
+TurnServedWithinBoundLocalWorkExceedsBound mutation violates that local bound.
+NoAwaitedDriveAwaitDriveOnExclusiveTurn separately rejects holding the turn over
+external work. EveryCallServed retains
 the eventual-service obligation under its stated runtime premise; no temporal
 guarantee was silently substituted for a latency bound.
 

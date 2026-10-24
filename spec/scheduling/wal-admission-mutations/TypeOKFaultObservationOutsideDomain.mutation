@@ -1,4 +1,4 @@
-MODULE: FaultObservationOutsideDomain
+MODULE: TypeOKFaultObservationOutsideDomain
 TARGET: TypeOK
 CLASS: Invariant
 SUMMARY: environment observation writes an unsupported acute-fault phase

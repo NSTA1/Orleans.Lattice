@@ -1,4 +1,4 @@
-MODULE: RecoveryEdgeOnly
+MODULE: BoundedResidueDrainRecoveryEdgeOnly
 TARGET: BoundedResidueDrain
 CLASS: Action
 SUMMARY: only the recovery-window edge releases waiters and later eligible ticks strand residue

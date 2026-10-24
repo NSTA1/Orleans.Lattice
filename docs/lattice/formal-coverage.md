@@ -92,8 +92,8 @@ claim to reproduce every manifestation of either issue.
 
 | Module | Historical repair | Mutation / target | Checked boundary |
 |--------|-------------------|-------------------|------------------|
-| `TurnOccupancy` | #4949, fixed by #4950 | `AwaitDriveOnExclusiveTurn` / `NoAwaitedDrive` | Awaiting the background drive can occupy the non-reentrant turn; dispatch must return the turn while storage remains pending. |
-| `WalAdmission` | #3402, fixed by #3404 | `RecoveryHerd` / `PacedRecoveryRelease` | A recovery sample caps saturation-gate releases; released callers still need partition capacity and storage progress. |
+| `TurnOccupancy` | #4949, fixed by #4950 | `NoAwaitedDriveAwaitDriveOnExclusiveTurn` / `NoAwaitedDrive` | Awaiting the background drive can occupy the non-reentrant turn; dispatch must return the turn while storage remains pending. |
+| `WalAdmission` | #3402, fixed by #3404 | `PacedRecoveryReleaseRecoveryHerd` / `PacedRecoveryRelease` | A recovery sample caps saturation-gate releases; released callers still need partition capacity and storage progress. |
 
 The classifier recovery window is tree-wide even though admission capacity and
 waiter queues are partition-scoped. An idle sibling receives the Healthy floor

@@ -1,4 +1,4 @@
-MODULE: FaultClearOutsideDomain
+MODULE: TypeOKFaultClearOutsideDomain
 TARGET: TypeOK
 CLASS: Invariant
 SUMMARY: environment clearance writes an unsupported acute-fault phase

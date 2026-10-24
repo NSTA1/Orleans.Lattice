@@ -67,3 +67,13 @@ Module-local refinement notes classify every property, identify real production
 detectors, and record the replaced draft assertions and their limitations.
 The cooperative Coyote harness explores explicit choices over production seams;
 it does not rewrite tasks or enumerate CLR/Orleans thread schedules.
+
+## How to run
+
+From the repository root, configure Java and the pinned TLC jar as described in
+the authoritative [TLC running instructions](../README.md#how-to-run-tlc), then
+run only this area's bases, variants and paired mutation experiments:
+
+```powershell
+dotnet test test\lattice\Orleans.Lattice.Tests.csproj -c Release --filter "TestCategory=TlcShardScheduling"
+```

@@ -72,6 +72,28 @@ partition. Flush fairness states the storage progress premise explicitly.
 The larger cohort bounds out these two temporal properties, not any safety
 check. Its TypeOK check is retained.
 
+### Mutation classification
+
+Every mutation below is an **action perturbation**: an anchored edit of its
+`PERTURBS` action in `Next`. None is a transition splice.
+
+- `BoundedResidueDrainRecoveryEdgeOnly`
+- `CapRespectedAdmissionIgnoresCap`
+- `CapRespectedFlushLeaksCapacity`
+- `EveryWaiterResolvesExpiryNeverResolves`
+- `NoAbsorbingSaturationSaturationIsSticky`
+- `NoLostWaiterCancelKeepsRegistration`
+- `NoLostWaiterParkLosesWaiter`
+- `OldestFirstReleaseNewestFirst`
+- `PacedRecoveryReleaseRecoveryHerd`
+- `PerPartitionIsolationReleaseSaturatedSibling`
+- `ProgressWhenCapacityFreeRecoveryNeverReleases`
+- `RefusalOnlyWhenSaturatedRefuseWithoutRecheck`
+- `TypeOKArrivalOutsideDomain`
+- `TypeOKFaultClearOutsideDomain`
+- `TypeOKFaultObservationOutsideDomain`
+- `UpgradeSoundIdleThrottleWithoutWindow`
+
 ## Detectors
 
 The Coyote recovery model drives real WalSaturationSignal queues, varying
@@ -101,11 +123,11 @@ disposes outside locks; the model abstracts that handshake into Park/Cancel.
 
 ## Defect mutations whose fixes have landed
 
-RecoveryHerd reinstates the mechanism from
+PacedRecoveryReleaseRecoveryHerd reinstates the mechanism from
 [#3402](https://github.com/NSTA1/Orleans.Lattice/issues/3402), fixed in
 [#3404](https://github.com/NSTA1/Orleans.Lattice/pull/3404). Its one-target
 PacedRecoveryRelease experiment releases two waits against a positive batch
-of one. RecoveryEdgeOnly separately rejects leaving residue on later eligible
+of one. BoundedResidueDrainRecoveryEdgeOnly separately rejects leaving residue on later eligible
 ticks. The production perturbation forces CompleteWaiters' release-all branch;
 the mapped production Coyote detector rejects its first oversized batch.
 These are mechanism counterexamples, not a fabricated temporal congestion proof.
@@ -129,7 +151,7 @@ as deterministic fairness. No permanent Healthy verdict is asserted.
 An initial UpgradeSound snapshot invariant failed because another admission
 can change depth after a sample while the cached verdict legitimately persists.
 The action formulation checks the exact sample boundary instead. Its dedicated
-IdleThrottleWithoutWindow mutation rejects a genuinely unsupported idle upgrade.
+UpgradeSoundIdleThrottleWithoutWindow mutation rejects a genuinely unsupported idle upgrade.
 The recovery age is tree-wide, as in production, not a separate timestamp for
 each partition. Its floor propagates to idle siblings only when the raw tree
 classification is Healthy; another partition's raw depth throttle is not itself
