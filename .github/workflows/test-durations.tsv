@@ -137,6 +137,9 @@ lattice	formal-tlc-anti-entropy-2	deterministic	10.0
 lattice	formal-tlc-anti-entropy-3	deterministic	9.2
 lattice	formal-tlc-aliasing	deterministic	1.8
 lattice	formal-tlc-split-gate	deterministic	8.6
+# Scheduling: 27/27 cases, 144.684s TRX elapsed including startup (2m22s test duration).
+# Java17, 1 TLC slot, 2 visible CPUs, Xmx1800MB; includes all 23 mutation controls.
+lattice	formal-tlc-scheduling	deterministic	2.41
 lattice	formal-tlc-shard-ownership	deterministic	15.3
 lattice	formal-tlc-convergence	deterministic	14.1
 lattice	formal-tlc-replication-wal	deterministic	18.4
