@@ -34,14 +34,16 @@ public partial class LatticeTagIndexRoundTripBatchingTests
     /// separate counting subject tree, so the reads the reconcile issues
     /// against the subject are counted apart from the index's own row traffic.
     /// </summary>
-    private static (CountingTree index, CountingTree subject, LatticeTagIndexContext ctx) CreateWithSubject()
+    private static (CountingTree index, CountingTree subject, LatticeTagIndexContext ctx) CreateWithSubject(
+        LatticeMergeMode membershipMode = LatticeMergeMode.LwwRegister)
     {
         var indexTree = new CountingTree();
         var subjectTree = new CountingTree();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILattice>(Arg.Any<string>())
             .Returns(ci => ci.ArgAt<string>(0) == SubjectTreeId ? subjectTree.Lattice : indexTree.Lattice);
-        return (indexTree, subjectTree, LatticeTagIndexContext.CreateForCoordinator(grainFactory, IndexName));
+        return (indexTree, subjectTree, LatticeTagIndexContext.CreateForCoordinator(
+            grainFactory, IndexName, membershipMode, replicaId: "r1"));
     }
 
     /// <summary>
@@ -183,11 +185,12 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         // uninterpretable: it may be the gate rather than a missing key.
         subject.PrunedByAccessGate = 1;
 
-        var report = await ctx.ReconcileSubjectAsync(SubjectTreeId, null, null, CancellationToken.None);
+        var incomplete = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await ctx.ReconcileSubjectAsync(SubjectTreeId, null, null, CancellationToken.None));
 
         Assert.Multiple(() =>
         {
-            Assert.That(report.OrphanRowsRemoved, Is.Zero, "a gated window must not be classified");
+            Assert.That(incomplete!.Message, Does.Contain("access gate pruned"));
             Assert.That(index.Data, Has.Count.EqualTo(rowsBefore), "no membership row may be deleted");
             Assert.That(index.DeleteAsyncCalls, Is.Zero);
         });
@@ -203,13 +206,10 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         const int tags = 2;
         await SeedOrphansAsync(ctx, subject, keys, tags);
 
-        // Two rows per orphan candidate, and every candidate is confirmed. The
-        // gate does not release until all sixteen deletes are simultaneously in
-        // flight, so a serial implementation cannot finish: its first delete
-        // would wait forever on a sixteenth that is never issued. Completing at
-        // all is the proof of overlap, and the peak assertion states it
-        // explicitly.
-        const int expected = keys * tags * 2;
+        // Each pair removes its mirror before its posting, but independent
+        // pairs must overlap. The gate waits for all eight mirrors at once,
+        // so serialising the pairs cannot finish.
+        const int expected = keys * tags;
         var arrived = 0;
         var peak = 0;
         var inFlight = 0;
@@ -246,11 +246,11 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         Assert.Multiple(() =>
         {
             Assert.That(report.OrphanRowsRemoved, Is.EqualTo(keys * tags));
-            Assert.That(index.DeleteAsyncCalls, Is.EqualTo(expected));
+            Assert.That(index.DeleteAsyncCalls, Is.EqualTo(expected * 2));
             // Equality, not a ceiling: a ceiling passes under the serial
             // implementation too, which peaks at one.
             Assert.That(Volatile.Read(ref peak), Is.EqualTo(expected),
-                "peak simultaneous deletes must reach the whole confirmed set below the wave cap");
+                "peak simultaneous deletes must reach the independent pair count below the wave cap");
         });
     }
 
