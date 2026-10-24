@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
@@ -6,8 +7,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 /// <summary>
 /// A tenant's regions (<c>/tenancy/{tenant}/regions</c>) for a platform operator: its residency and the allowed-region set only an operator may change. Anyone else is sent to the same section of their tenant's workspace.
 /// </summary>
-public partial class TenancyRegionsPage
+public partial class TenancyRegionsPage : IDisposable
 {
+    private readonly ComponentLifetime _lifetime = new();
     private ExplorerAddress? _loaded;
     private bool _admitted;
     private TenancyFailure? _failure;
@@ -32,6 +34,7 @@ public partial class TenancyRegionsPage
         }
 
         _loaded = Address;
+        var token = _lifetime.Renew();
         _admitted = false;
         _failure = null;
         if (!global::Orleans.Lattice.TenantId.TryParse(TenantId, out _))
@@ -42,11 +45,21 @@ public partial class TenancyRegionsPage
 
         try
         {
-            _admitted = await TenancyAdministrationGate.AdmitAsync(Catalog, Navigator, TenantId, TenancyRoutes.RegionsSegment).ConfigureAwait(true);
+            var admitted = await TenancyAdministrationGate.AdmitAsync(Catalog, Navigator, TenantId, TenancyRoutes.RegionsSegment, token).ConfigureAwait(true);
+            if (!token.IsCancellationRequested)
+            {
+                _admitted = admitted;
+            }
+        }
+        catch (Exception) when (token.IsCancellationRequested)
+        {
         }
         catch (Exception exception) when (TenancyFailure.From(exception) is { } failure)
         {
             _failure = failure;
         }
     }
+
+    /// <summary>Cancels admission and redirects when the page is left.</summary>
+    public void Dispose() => _lifetime.Leave();
 }
