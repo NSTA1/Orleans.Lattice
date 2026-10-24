@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Capture;
 /// </remarks>
 [TestFixture]
 [Category("Integration")]
-public sealed class RepoContextStoreVectorCountTests
+public sealed partial class RepoContextStoreVectorCountTests
 {
     private const string RepoId = "acme";
 
@@ -38,7 +38,9 @@ public sealed class RepoContextStoreVectorCountTests
     {
         await using var harness = await RepoContextMcpHarness.StartAsync(
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
-        var (store, writer) = Resolve(harness);
+        using var gate = new MembershipScanGate(harness.GrainFactory);
+        var writer = CreateWriter(harness, gate.Factory);
+        var store = ActivatorUtilities.CreateInstance<RepoContextStore>(harness.Services, writer);
         await SeedRepoMarkerAsync(harness, RepoId, Ct);
         await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
         await writer.ScanEmbeddedAsync(RepoId, Ct);
@@ -46,7 +48,13 @@ public sealed class RepoContextStoreVectorCountTests
 
         var original = (await store.ListReposAsync(Ct)).Repos.Single(r => r.RepoId == RepoId);
         await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/B.cs") }, Ct);
-        var stale = (await store.ListReposAsync(Ct)).Repos.Single(r => r.RepoId == RepoId);
+        gate.Arm();
+        var stale = (await store.ListReposAsync(Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct))
+            .Repos.Single(r => r.RepoId == RepoId);
+        await gate.Entered.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        var pending = writer.PendingEmbeddedCountRefresh(RepoId);
+        Assert.That(pending, Is.Not.Null.And.Property(nameof(Task.IsCompleted)).False,
+            "The listing returned while the real membership scan was held, not after an inline scan.");
 
         var originalStamp = original.EmbeddedVectorCountAsOf;
         Assert.Multiple(() =>
@@ -63,15 +71,25 @@ public sealed class RepoContextStoreVectorCountTests
             Assert.That(stale.EmbeddedVectorCountPending, Is.True);
         });
 
-        Assert.That(await SettledEmbeddedVectorCountAsync(store, writer, RepoId, Ct), Is.EqualTo(2));
+        gate.Release();
+        await pending!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
         var refreshed = (await store.ListReposAsync(Ct)).Repos.Single(r => r.RepoId == RepoId);
-        Assert.That(refreshed.EmbeddedVectorCountAsOf, Is.EqualTo(writer.ReadEmbeddedCount(RepoId).AsOf),
-            "Once the refresh settles, the listing exposes the replacement snapshot's timestamp.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(refreshed.EmbeddedVectorCount, Is.EqualTo(2));
+            Assert.That(refreshed.EmbeddedVectorCountPending, Is.False);
+            Assert.That(refreshed.EmbeddedVectorCountAsOf, Is.EqualTo(writer.ReadEmbeddedCount(RepoId).AsOf),
+                "Once the refresh settles, the listing exposes the replacement snapshot's timestamp.");
+        });
     }
 
     private static (RepoContextStore Store, RepoContextVectorWriter Writer) Resolve(RepoContextMcpHarness harness)
-        => (harness.Services.GetRequiredService<RepoContextStore>(),
-            harness.Services.GetRequiredService<RepoContextVectorWriter>());
+    {
+        // The startup indexed-root reporter also lists repositories and can start a
+        // count scan. Give this fixture its own memo/refresh owner, not its own data.
+        var writer = CreateWriter(harness, harness.GrainFactory);
+        return (ActivatorUtilities.CreateInstance<RepoContextStore>(harness.Services, writer), writer);
+    }
 
     private static async Task SeedRepoMarkerAsync(RepoContextMcpHarness harness, string repoId, CancellationToken ct)
     {
