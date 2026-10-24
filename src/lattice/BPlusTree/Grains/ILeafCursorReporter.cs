@@ -58,6 +58,11 @@ internal interface ILeafCursorReporter
         HybridLogicalClock cursor,
         CancellationToken cancellationToken);
 
+    /// <summary>Reports the inclusive persisted checkpoint independently of the applied HLC.</summary>
+    Task ReportCheckpointAsync(
+        string treeName, string consumerId, HybridLogicalClock cursor,
+        int walPartition, long checkpointOffset, CancellationToken cancellationToken);
+
     /// <summary>
     /// Removes <paramref name="consumerId"/>'s registration for
     /// <paramref name="treeName"/>. Idempotent: unregistering a consumer

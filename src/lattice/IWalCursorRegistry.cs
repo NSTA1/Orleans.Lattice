@@ -30,6 +30,31 @@ namespace Orleans.Lattice;
 public interface IWalCursorRegistry
 {
     /// <summary>
+    /// Lists trees with registered consumers, including trees without a local
+    /// post-start append. Returns null when a legacy implementation cannot
+    /// enumerate trees; an empty list means there are no registered trees.
+    /// Enables explicit unknown-history reporting after restart.
+    /// </summary>
+    Task<IReadOnlyList<string>?> GetRegisteredTreeNamesAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<string>?>(null);
+
+    /// <summary>
+    /// Reports an HLC and a partition's inclusive durable checkpoint offset.
+    /// Offsets advance independently of HLCs and affect only advisory drain age;
+    /// existing causal vectors and blocked-floor pins are preserved. A checkpoint
+    /// of -1 has consumed no entries. Legacy implementations may forward only the
+    /// HLC, in which case offset-based drain age is explicitly unavailable.
+    /// </summary>
+    Task ReportCheckpointAsync(
+        string treeName,
+        string consumerId,
+        HybridLogicalClock cursor,
+        int walPartition,
+        long checkpointOffset,
+        CancellationToken cancellationToken = default)
+        => ReportCursorAsync(treeName, consumerId, cursor, cancellationToken);
+
+    /// <summary>
     /// Reports the current cursor position for <paramref name="consumerId"/>
     /// against <paramref name="treeName"/>. The reported cursor is the
     /// highest <see cref="HybridLogicalClock"/> the consumer has fully
@@ -193,9 +218,9 @@ public interface IWalCursorRegistry
     /// <paramref name="treeName"/> at or after
     /// <paramref name="reportedAtOrAfterTicks"/>, or
     /// <see langword="null"/> when no consumer has a fresh, positive cursor.
-    /// This query belongs to the materialiser drain-lag <b>lag plane only</b>:
-    /// it is the input consumed by the saturation classifier's pure back-off
-    /// signal and must never feed the WAL GC trim floor.
+    /// This legacy HLC query belongs to the <b>lag plane only</b> and must
+    /// never feed the WAL GC trim floor. The saturation sampler instead reads
+    /// per-partition checkpoints from <see cref="SnapshotAsync"/>.
     /// <para>
     /// The trim floor must stay conservative because a routinely deactivated
     /// leaf remains registered so a later activation can replay entries the

@@ -270,18 +270,15 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Apply_tombstone_reap_advances_the_projection_clock()
+    public void Apply_tombstone_reap_advances_the_projection_clock()
     {
-        var grain = CreateGrain();
+        var (grain, _, state) = CreateGrainWithReporter();
         var projection = AsProjection(grain);
 
+        projection.Apply(BuildDelete("k1", hlcPhysical: 100));
         projection.Apply(BuildTombstoneReap("k1", hlcPhysical: 9_500));
 
-        await grain.SetAsync("k2", Encoding.UTF8.GetBytes("v2"));
-        var raw = await grain.GetRawEntryAsync("k2");
-
-        Assert.That(raw, Is.Not.Null);
-        Assert.That(raw!.Value.Timestamp.WallClockTicks, Is.GreaterThanOrEqualTo(9_500L));
+        Assert.That(state.State.Clock.WallClockTicks, Is.EqualTo(9_500L));
     }
 
     // ---- Predicate-filtered range delete ---------------------------------

@@ -19,6 +19,13 @@ public readonly record struct WalCursorSnapshot(
     HybridLogicalClock? BlockedAtHlc = null)
 {
     /// <summary>
+    /// Highest durably scanned WAL offset per partition, inclusive, or null when unavailable.
+    /// Used only for advisory drain age, never for causal or blocked GC floors.
+    /// Registry implementations must return an immutable or defensive copy.
+    /// </summary>
+    public IReadOnlyDictionary<int, long>? CheckpointOffsets { get; init; }
+
+    /// <summary>
     /// UTC tick count (<see cref="DateTime.Ticks"/>) of the most recent report that
     /// strictly <b>advanced</b> <see cref="Cursor"/>, as opposed to
     /// <see cref="LastReportedAtTicks"/>, which moves on every report including a

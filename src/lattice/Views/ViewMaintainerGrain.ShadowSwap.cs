@@ -464,6 +464,7 @@ internal sealed partial class ViewMaintainerGrain
         if (highest > HybridLogicalClock.Zero)
         {
             await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, cancellationToken);
+            await ReportDrainCheckpointsAsync(walTreeId, highest, cancellationToken);
         }
 
         if (!string.IsNullOrEmpty(retiredPhysical)
@@ -686,6 +687,7 @@ internal sealed partial class ViewMaintainerGrain
         if (built.Highest > HybridLogicalClock.Zero)
         {
             await cursorRegistry.ReportCursorAsync(built.WalTreeId, ConsumerId, built.Highest, cancellationToken);
+            await ReportDrainCheckpointsAsync(built.WalTreeId, built.Highest, cancellationToken);
         }
 
         if (!string.IsNullOrEmpty(retiredPhysical)

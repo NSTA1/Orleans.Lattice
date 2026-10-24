@@ -789,6 +789,7 @@ internal sealed partial class ViewMaintainerGrain(
         {
             await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken)
                 ;
+            await ReportDrainCheckpointsAsync(walTreeId, highest, cancellationToken);
         }
 
         ApplyLag.Record(await ComputeLagAsync(walTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
@@ -804,6 +805,16 @@ internal sealed partial class ViewMaintainerGrain(
         await RunPendingCrossTreeReconcileAsync(cancellationToken);
 
         return appliedCount;
+    }
+
+    private async Task ReportDrainCheckpointsAsync(
+        string walTreeId, HybridLogicalClock highest, CancellationToken cancellationToken)
+    {
+        if (highest <= HybridLogicalClock.Zero)
+            return;
+        foreach (var checkpoint in state.State.AppliedOffsets)
+            await cursorRegistry.ReportCheckpointAsync(
+                walTreeId, ConsumerId, highest, checkpoint.Key, checkpoint.Value, cancellationToken);
     }
 
     /// <inheritdoc />

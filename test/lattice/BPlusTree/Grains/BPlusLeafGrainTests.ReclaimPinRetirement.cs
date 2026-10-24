@@ -39,8 +39,9 @@ public partial class BPlusLeafGrainTests
         projection.Apply(BuildSet("k1", Encoding.UTF8.GetBytes("v1"), hlcPhysical: 100));
         await projection.SetCheckpointOffsetAsync(1, default);
         await projection.FlushCheckpointAsync(default);
-        await reporter.Received().ReportAsync(
-            CursorTreeId, Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await reporter.Received().ReportCheckpointAsync(
+            CursorTreeId, Arg.Any<string>(), Arg.Any<HybridLogicalClock>(),
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
 
         await grain.ClearGrainStateAsync();
 

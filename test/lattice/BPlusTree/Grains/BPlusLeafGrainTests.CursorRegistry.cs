@@ -71,8 +71,8 @@ public partial class BPlusLeafGrainTests
         await projection.SetCheckpointOffsetAsync(1, default);
         await projection.FlushCheckpointAsync(default);
 
-        await reporter.DidNotReceive().ReportAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await reporter.DidNotReceive().ReportCheckpointAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -85,11 +85,31 @@ public partial class BPlusLeafGrainTests
         await projection.SetCheckpointOffsetAsync(1, default);
         await projection.FlushCheckpointAsync(default);
 
-        await reporter.Received(1).ReportAsync(
+        await reporter.Received(1).ReportCheckpointAsync(
             CursorTreeId,
             Arg.Any<string>(),
             state.State.Clock,
-            Arg.Any<CancellationToken>());
+            0, 1, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ReportCursor_reports_each_partition_checkpoint_without_an_HLC_advance()
+    {
+        var (grain, reporter, state) = CreateGrainWithReporter(walPartitions: 2);
+        var projection = AsProjection(grain);
+        projection.Apply(BuildSet("k", new byte[] { 1 }, hlcPhysical: 100));
+        var clock = state.State.Clock;
+        using (LatticeApplyOffsetContext.BeginScope(0, 11))
+            await projection.SetCheckpointOffsetAsync(11, default);
+        using (LatticeApplyOffsetContext.BeginScope(1, 21))
+            await projection.SetCheckpointOffsetAsync(21, default);
+        await projection.FlushCheckpointAsync(default);
+
+        Assert.That(state.State.Clock, Is.EqualTo(clock));
+        await reporter.Received().ReportCheckpointAsync(
+            CursorTreeId, Arg.Any<string>(), clock, 0, 11, Arg.Any<CancellationToken>());
+        await reporter.Received().ReportCheckpointAsync(
+            CursorTreeId, Arg.Any<string>(), clock, 1, 21, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -102,11 +122,11 @@ public partial class BPlusLeafGrainTests
         await projection.SetCheckpointOffsetAsync(1, default);
         await projection.FlushCheckpointAsync(default);
 
-        await reporter.Received().ReportAsync(
+        await reporter.Received().ReportCheckpointAsync(
             CursorTreeId,
             Arg.Is<string>(s => s.StartsWith("_lattice_materialiser_") && s.Contains(CursorTreeId)),
             Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -126,10 +146,10 @@ public partial class BPlusLeafGrainTests
         var secondClock = state.State.Clock;
 
         Assert.That(secondClock, Is.GreaterThan(firstClock));
-        await reporter.Received().ReportAsync(
-            CursorTreeId, Arg.Any<string>(), firstClock, Arg.Any<CancellationToken>());
-        await reporter.Received().ReportAsync(
-            CursorTreeId, Arg.Any<string>(), secondClock, Arg.Any<CancellationToken>());
+        await reporter.Received().ReportCheckpointAsync(
+            CursorTreeId, Arg.Any<string>(), firstClock, Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
+        await reporter.Received().ReportCheckpointAsync(
+            CursorTreeId, Arg.Any<string>(), secondClock, Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -144,8 +164,8 @@ public partial class BPlusLeafGrainTests
         await projection.SetCheckpointOffsetAsync(1, default);
         Assert.DoesNotThrowAsync(async () => await projection.FlushCheckpointAsync(default));
 
-        await reporter.DidNotReceive().ReportAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await reporter.DidNotReceive().ReportCheckpointAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -168,15 +188,15 @@ public partial class BPlusLeafGrainTests
         await projection.SetCheckpointOffsetAsync(1, default);
         Assert.DoesNotThrowAsync(async () => await projection.FlushCheckpointAsync(default));
 
-        await reporter.DidNotReceive().ReportAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await reporter.DidNotReceive().ReportCheckpointAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task ReportCursor_swallows_reporter_exceptions_and_completes_flush()
     {
         var reporter = Substitute.For<ILeafCursorReporter>();
-        reporter.ReportAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+        reporter.ReportCheckpointAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromException(new InvalidOperationException("transient")));
 
         var (grain, _, state) = CreateGrainWithReporter(reporter: reporter);
@@ -201,8 +221,8 @@ public partial class BPlusLeafGrainTests
         await projection.SetCheckpointOffsetAsync(1, default);
         Assert.DoesNotThrowAsync(async () => await projection.FlushCheckpointAsync(default));
 
-        await reporter.DidNotReceive().ReportAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await reporter.DidNotReceive().ReportCheckpointAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -217,11 +237,11 @@ public partial class BPlusLeafGrainTests
 
         // Consumer id must include the grain's identity so each leaf
         // advances its own cursor independently.
-        await reporter.Received().ReportAsync(
+        await reporter.Received().ReportCheckpointAsync(
             CursorTreeId,
             Arg.Is<string>(s => s.Contains(CursorReplicaId)),
             Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -255,8 +275,8 @@ public partial class BPlusLeafGrainTests
         // ReportCursorIfActiveAsync is reachable only from the
         // projection-seam persist (FlushPendingCheckpointAsync), which
         // is dormant in pre-promotion hosts.
-        await reporter.DidNotReceive().ReportAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await reporter.DidNotReceive().ReportCheckpointAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
         await reporter.DidNotReceive().UnregisterAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }

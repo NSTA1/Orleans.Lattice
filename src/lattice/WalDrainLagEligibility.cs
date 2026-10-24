@@ -68,6 +68,11 @@ internal static class WalDrainLagEligibility
             return false;
         }
 
+        // Unlike an applied HLC, a scanned-through offset covers the entire
+        // partition, including entries outside a leaf's key range.
+        if (snapshot.CheckpointOffsets is { Count: > 0 })
+            return true;
+
         if (snapshot.CursorAdvancedAtTicks is not { } advancedAtTicks
             || !IsRangeScoped(snapshot.ConsumerId))
         {

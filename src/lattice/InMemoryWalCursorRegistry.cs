@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -32,6 +33,17 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, TreeState> _byTree = new(StringComparer.Ordinal);
+
+    /// <inheritdoc />
+    public Task ReportCheckpointAsync(
+        string treeName, string consumerId, HybridLogicalClock cursor,
+        int walPartition, long checkpointOffset, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(walPartition);
+        ArgumentOutOfRangeException.ThrowIfLessThan(checkpointOffset, -1);
+        return ReportCursorCoreAsync(treeName, consumerId, cursor, null, null, false,
+            cancellationToken, walPartition, checkpointOffset);
+    }
 
     /// <inheritdoc />
     public Task ReportCursorAsync(
@@ -90,7 +102,9 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
         VersionVector? vector,
         HybridLogicalClock? blockedAtHlc,
         bool blockedAtHlcSpecified,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? walPartition = null,
+        long? checkpointOffset = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
@@ -211,6 +225,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     nextBlockedAtHlc)
                 {
                     CursorAdvancedAtTicks = cursorAdvancedAtTicks,
+                    CheckpointOffsets = MergeCheckpoint(existing.CheckpointOffsets, walPartition, checkpointOffset),
                 };
 
                 if (shouldInvalidate)
@@ -230,6 +245,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     // The registering report asserts a position; it does not
                     // show the consumer draining, so position age starts unknown.
                     CursorAdvancedAtTicks = 0,
+                    CheckpointOffsets = MergeCheckpoint(null, walPartition, checkpointOffset),
                 };
 
                 // A new consumer always affects the meet - its absence
@@ -239,6 +255,25 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<string>?> GetRegisteredTreeNamesAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+            return Task.FromResult<IReadOnlyList<string>?>(_byTree.Keys.ToArray());
+    }
+
+    private static IReadOnlyDictionary<int, long>? MergeCheckpoint(
+        IReadOnlyDictionary<int, long>? existing, int? partition, long? offset)
+    {
+        if (partition is not { } p || offset is not { } value)
+            return existing;
+        var offsets = existing is null
+            ? ImmutableDictionary<int, long>.Empty
+            : (ImmutableDictionary<int, long>)existing;
+        return offsets.SetItem(p, Math.Max(value, offsets.GetValueOrDefault(p, -1)));
     }
 
     /// <inheritdoc />

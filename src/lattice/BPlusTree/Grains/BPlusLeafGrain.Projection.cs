@@ -239,7 +239,6 @@ internal sealed partial class BPlusLeafGrain
                 break;
             case MutationKind.Tombstone:
                 ApplyTombstoneReap(mutation);
-                AdvanceProjectionClock(mutation.Timestamp);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(
@@ -1450,6 +1449,7 @@ internal sealed partial class BPlusLeafGrain
         if (!existing.IsTombstone && !existing.IsExpired(nowTicks))
             return;
         RemoveEntry(mutation.Key);
+        AdvanceProjectionClock(mutation.Timestamp);
     }
 
     private void AdvanceProjectionClock(HybridLogicalClock incoming)

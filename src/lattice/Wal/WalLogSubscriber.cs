@@ -170,6 +170,17 @@ internal sealed class WalLogSubscriber(
                 await cursorRegistry
                     .ReportCursorAsync(sourceTreeId, context.ConsumerId, highest, blockedAtHlc, cancellationToken)
                     .ConfigureAwait(false);
+                if (highest > HybridLogicalClock.Zero)
+                {
+                    for (var partition = 0; partition < partitions; partition++)
+                    {
+                        var checkpoint = advancedOffsets.TryGetValue(partition, out var advanced)
+                            ? advanced : checkpoints.GetValueOrDefault(partition, -1);
+                        await cursorRegistry.ReportCheckpointAsync(
+                            sourceTreeId, context.ConsumerId, highest, partition, checkpoint, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
             }
         }
 

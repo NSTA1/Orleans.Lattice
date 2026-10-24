@@ -128,22 +128,17 @@ internal sealed class WalCommitLogWriter(
     internal static readonly ConcurrentDictionary<(string TreeId, int Shard), long> _flushLatencyTripCounts
         = new();
 
-    // Per-tree in-memory WAL head wall-clock, the larger half of the live
-    // leaf-materialiser drain-lag measure. Updated on every routed append with
-    // the wall clock of the entry's HLC (the producer stamps the HLC upstream;
-    // the writer only ever advances this monotonically via a max). This is the
-    // freshest possible "newest offered WAL entry" reading - more timely than a
-    // storage head read because it reflects the write the instant it is routed,
-    // before admission and dispatch. The 200 ms saturation sampler subtracts
-    // the slowest in-memory materialiser cursor (the IWalCursorRegistry min)
-    // from this head every tick to derive the standing drain lag live, so the
-    // signal engages immediately on a write spike rather than waiting for a WAL
-    // GC pass. Keyed by tree (drain lag is a per-tree property). Same
-    // static-singleton shape as _flushLatencyTripCounts so the sampler reads
-    // every classifier-input source off a fixed root regardless of grain /
-    // writer activation lifetime in tests.
+    // Legacy routed HLC high-water mark. Never use it for drain age: mutation
+    // stamps and append offsets are independent (compaction and replication).
     internal static readonly ConcurrentDictionary<string, long> _walHeadWallClockTicks
         = new(StringComparer.Ordinal);
+
+    internal static readonly ConcurrentDictionary<string, ConcurrentDictionary<int, WalAppendTimeline>> _walAppendTimes
+        = new(StringComparer.Ordinal);
+
+    internal static void RecordAppend(string treeId, int partition, long offset, long utcTicks)
+        => _walAppendTimes.GetOrAdd(treeId, static _ => new())
+            .GetOrAdd(partition, static _ => new()).Record(offset, utcTicks);
 
     // Advances the per-tree WAL head wall clock to <paramref name="wallClockTicks"/>
     // when it is newer than the current reading. A non-positive tick (e.g. a
@@ -809,6 +804,7 @@ internal sealed class WalCommitLogWriter(
                     // See WalAppendStage / StallWatchdog for the lifecycle.
                     var offsetInf = await DispatchPointAppendAsync(grain, stamped, batched, cancellationToken).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
+                    RecordAppend(stamped.TreeId, partition, offsetInf, DateTime.UtcNow.Ticks);
                     return offsetInf;
                 }
                 catch (Exception ex)
@@ -844,6 +840,7 @@ internal sealed class WalCommitLogWriter(
                 // even when the caller's grain context is wedged.
                 var offset = await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false);
                 pending.AdvanceTo(WalAppendStage.Acked);
+                RecordAppend(stamped.TreeId, partition, offset, DateTime.UtcNow.Ticks);
                 return offset;
             }
             catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -1240,6 +1237,9 @@ internal sealed class WalCommitLogWriter(
                     throw;
                 }
             }
+            var appendedAt = DateTime.UtcNow.Ticks;
+            for (var i = 0; i < offsets.Count; i++)
+                RecordAppend(treeId, partition, offsets[i], appendedAt);
             return new KeyValuePair<string, IReadOnlyList<long>>(grainKey, offsets);
         }
         finally
