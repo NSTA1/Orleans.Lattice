@@ -30,6 +30,7 @@ The checked scheduling seams are:
 | --- | --- |
 | `TurnOccupancy` | A non-reentrant turn, queued calls, and the difference between awaiting an operation inside the turn and dispatching it outside the turn. |
 | `WalAdmission` | Partition-scoped admission capacity, parked saturation waiters, paced recovery release, sampling and wait-budget outcomes. |
+| `WalBackPressure` | Cached tree/partition classification, writer/saga/snapshot/receiver/view responses and signal-independent relief. |
 | `TagIndexReconcile` | A single durable probe/repair sweep, successful baseline publication, per-phase tree work and timer/reminder recovery. |
 
 `TurnOccupancy` uses the turn-holder, queued-call and awaited-completion
@@ -123,6 +124,43 @@ and checkpoint operations eventually succeed.
 An unsuccessful keepalive registration must remain retryable; an in-progress
 flag is not evidence that a timer or reminder is actually armed.
 
+## WAL back-pressure progress
+
+The classifier combines partition depth with tree-wide acute trip sums and
+sustained input windows. It publishes the worst tree state and an ordered cause.
+A recovery-only Throttled floor can legitimately carry cause None. A refusal
+instead identifies its writer, saga or snapshot-open seam. Zero recovery
+disables the floor; Infinite retains it. Writer, saga and view operations use
+their physical source identities; snapshot-open and receiver lookups retain
+the supplied logical identity, which may have no observed physical-copy signal.
+
+Plain writers wait only on their own partition and re-read after wait expiry.
+Throttled point/batch pacing does not imply saturation refusal. Sagas quiesce
+captured partitions, fall back to the tree when that capture is unusable,
+bound the effective wait by the dispatch budget and refresh changed routing
+before redispatch. A refusal preserves resumable Execute progress rather
+than compensating. Snapshot shedding, when enabled, is Saturated-only. Receivers
+and physical projection/aggregation views preserve Healthy batches, scale
+Throttled batches and drip-feed Saturated batches; receiver pauses are hints.
+
+Flush, materialiser drain, GC trim, checkpoint, durable-pin publication,
+saga terminals and terminal-tail resumption cannot depend on the signal they
+help relieve. The writer classifies a whole terminal-only operation before
+partition fan-out; a mixed-data batch is not relief. Bypassing signal admission
+and pacing does not bypass capacity, durable storage, caller cancellation,
+deadlines or shutdown. Terminal-tail resumption sends commit/abort without
+new data; resumed ordinary data is still a quiesced producer. Materialiser
+drain advances leaf replay/checkpoint work, not merely storage shutdown-drain.
+
+Finite offered work, stopped acute inputs (including sustained flush latency)
+and actual relief opportunities permit departure from Saturated. Reaching
+Healthy additionally requires stopped throttling inputs and finite recovery.
+A checkpoint or terminal cannot erase a sampled pin-write latency fault.
+These are explicit conditional progress claims, not bounded latency or
+deterministic fairness from jitter. See the
+[refinement mapping](../../spec/scheduling/WalBackPressureRefinement.md)
+for the shared-window episode abstraction and the real Coyote/detector boundary.
+
 ## Defects found during the bucket
 
 The production review found a saturation waiter's cancellation registration
@@ -144,6 +182,21 @@ of the new sweep, preserving the earlier sweep's phase, cursor and pending
 baseline when ownership has not transferred. These production defects are
 distinct from the already-fixed historical mechanisms retained as
 [paired scheduling controls](formal-coverage.md#scheduling-foundation-and-historical-controls).
+
+The back-pressure review found terminal-only commit/abort writes could wait
+on saturation or Throttled pacing while their prepares pinned the work needed
+for recovery (#4986). Four real point/batch terminal cases failed before the
+operation-wide bypass; mixed-data, capacity/storage and shutdown controls retain
+their contracts. Real reminder-driven terminal-tail controls separately reject
+quiesce at resumption, while ordinary resumed data remains gated.
+
+Two harness defects were repaired without weakening acceptance: ordered comment
+lexing preserves live declarations after XML paths containing comment delimiters
+(#4990), and the gap-citation gate reads the leading verdict rather than None
+or Partial embedded in a resolving detector identifier (#4994). Both have
+full-gate assertion-red/green controls. A missing Throttled view-model response
+and insufficient terminal-resumption and quiesce-call-site detectors were
+corrected with independent negative controls before the final certificate.
 
 ## Related
 

@@ -167,6 +167,24 @@ Long-running or multi-step operations are managed by dedicated coordination grai
 
 The same pattern backs the rest of the library's multi-step features, each described with its feature: [atomic actions](atomic-action.md), cross-tree [atomic writes](atomic-writes.md) and their receiver-side visibility barrier, the [distributed lock](distributed-lock.md), [materialised-view](materialised-views.md) maintenance and its registry, and tag-index reconciliation.
 
+### WAL back-pressure composition
+
+Cached saturation decisions, partition capacity admission and storage completion
+are separate boundaries. The classifier rolls partition depth up to the tree,
+sums acute trip deltas tree-wide and applies recovery hysteresis only over a raw
+Healthy verdict. Writer and saga decisions are scoped to physical captured work;
+snapshot/receiver logical-name lookups do not silently borrow a physical alias
+copy's signal. Physical view maintainers scale both Throttled and Saturated work.
+
+The relief path must not depend on that cached pressure: flush, leaf
+materialiser drain/checkpoint, GC/pin progress and saga commit/abort tails
+remain signal-independent. The terminal-only writer bypass is operation-wide,
+before fan-out, and retains downstream capacity/storage and shutdown checks.
+Terminal-tail resumption is not an exemption for ordinary resumed data.
+The [scheduling boundary](verified-scheduling.md#wal-back-pressure-progress)
+states the finite-work and stable-input progress premises separately from
+durability and from measured latency.
+
 ### Tag-index reconciliation
 
 The tag-index coordinator persists its active sweep, probe/repair phase and
