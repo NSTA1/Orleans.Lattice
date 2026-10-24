@@ -246,13 +246,7 @@ internal sealed partial class ShardRootGrain
         {
             var resolved = await optionsResolver.ResolveAsync(TreeId);
             var partitionCount = Math.Max(1, resolved.WalPartitions);
-            perPartitionHeads = new long[partitionCount];
-            for (var p = 0; p < partitionCount; p++)
-            {
-                var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
-                    $"{TreeId}/{p}");
-                perPartitionHeads[p] = await coordinator.GetHeadOffsetAsync(cancellationToken);
-            }
+            perPartitionHeads = await CapturePartitionHeadsAsync(partitionCount, cancellationToken);
         }
 
         scan.Phase = ScanPagePhase.Descent;
@@ -344,15 +338,33 @@ internal sealed partial class ShardRootGrain
         // scalar shape exactly.
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var partitionCount = Math.Max(1, resolved.WalPartitions);
-        var heads = new long[partitionCount];
-        for (var p = 0; p < partitionCount; p++)
+        return await CapturePartitionHeadsAsync(partitionCount, cancellationToken);
+    }
+
+    private Task<long[]> CapturePartitionHeadsAsync(int partitionCount, CancellationToken cancellationToken)
+    {
+        // Preserve the single-partition fast path; wider captures are independent
+        // reads, issued only after the caller's prepare (and baseline freezes).
+        if (partitionCount == 1)
+            return CaptureSinglePartitionAsync();
+
+        return BoundedFanOut.RunAsync(
+            partitionCount, BoundedFanOut.DefaultWidth,
+            async partition =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return await grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{TreeId}/{partition}")
+                    .GetHeadOffsetAsync(cancellationToken);
+            },
+            cancellationToken);
+
+        async Task<long[]> CaptureSinglePartitionAsync()
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
-                $"{TreeId}/{p}");
-            heads[p] = await coordinator.GetHeadOffsetAsync(cancellationToken);
+            var head = await grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{TreeId}/0")
+                .GetHeadOffsetAsync(cancellationToken);
+            return [head];
         }
-        return heads;
     }
 
     /// <inheritdoc />

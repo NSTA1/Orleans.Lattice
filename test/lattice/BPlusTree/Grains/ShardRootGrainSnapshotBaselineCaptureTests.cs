@@ -16,7 +16,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// resumable: the hard end-to-end stall ceiling added by issue 2003 is applied
 /// to the capture, and its fold pass is fanned out.
 /// <para>
-/// The fold pass is the only part that may be reordered. Point-in-time
+/// Leaf folds may overlap, as may independent partition-head reads after
+/// every leaf freeze has returned; the phases must remain ordered. Point-in-time
 /// consistency comes from <c>capturedHead</c> dominating every leaf's frozen
 /// frontier, not from the exclusive hold, so folding leaves concurrently
 /// against an already-captured head cannot change what is captured. What the

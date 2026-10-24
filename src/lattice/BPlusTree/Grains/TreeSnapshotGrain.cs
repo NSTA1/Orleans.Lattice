@@ -209,9 +209,9 @@ internal sealed class TreeSnapshotGrain(
             throw new InvalidOperationException(
                 $"Destination tree '{destinationTreeId}' already exists. Choose a new tree ID.");
 
-        await InitiateSnapshotStateAsync(destinationTreeId, mode, sourceResolved.ShardCount,
+        await InitiateSnapshotStateCoreAsync(destinationTreeId, mode, sourceResolved.ShardCount,
             maxLeafKeys, maxInternalChildren, operationId, logicalTreeId,
-            releasesShadowForwardOnCompletion);
+            releasesShadowForwardOnCompletion, sourceEntry);
         await StartCoordinatorAsync();
     }
 
@@ -240,16 +240,25 @@ internal sealed class TreeSnapshotGrain(
         bool releasesShadowForwardOnCompletion = false)
     {
         var registry = grainFactory.GetLatticeRegistry();
-
-        // Capture the source's routing. Splits and reshards write the routing
-        // map and the split allocation high-water mark to the LOGICAL tree's
-        // entry, never to the physical copy an alias points at, so the logical
-        // id is what is read. System trees never carry a custom map, and reading
-        // one would be a circular registry call.
         var routingTreeId = string.IsNullOrEmpty(logicalTreeId) ? SourceTreeId : logicalTreeId;
         var sourceEntry = routingTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
             ? null
             : await registry.GetEntryAsync(routingTreeId);
+        await InitiateSnapshotStateCoreAsync(destinationTreeId, mode, shardCount,
+            maxLeafKeys, maxInternalChildren, operationId, logicalTreeId,
+            releasesShadowForwardOnCompletion, sourceEntry);
+    }
+
+    private async Task InitiateSnapshotStateCoreAsync(
+        string destinationTreeId, SnapshotMode mode, int shardCount,
+        int? maxLeafKeys, int? maxInternalChildren, string? operationId,
+        string? logicalTreeId, bool releasesShadowForwardOnCompletion,
+        TreeRegistryEntry? sourceEntry)
+    {
+        var registry = grainFactory.GetLatticeRegistry();
+        var routingTreeId = string.IsNullOrEmpty(logicalTreeId) ? SourceTreeId : logicalTreeId;
+        // The front door already captured this row for sizing. Reuse the same
+        // alias/map/high-water snapshot when persisting the copy's intent.
         var sourceMap = sourceEntry?.ShardMap;
         var shardIndices = RoutedShardIndices.Resolve(shardCount, sourceMap);
 

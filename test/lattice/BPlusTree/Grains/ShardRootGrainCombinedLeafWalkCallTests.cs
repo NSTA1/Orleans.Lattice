@@ -182,12 +182,13 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
         }
     }
 
-    [Test]
-    public async Task Snapshot_baseline_freeze_pass_makes_one_leaf_call_per_hop()
+    [TestCase(1)]
+    [TestCase(3)]
+    public async Task Snapshot_baseline_freezes_every_leaf_before_capturing_any_partition_head(int partitions)
     {
         var (grain, leaves, factory, ids, _) = CreateShard(new LatticeOptions
         {
-            WalPartitions = 1,
+            WalPartitions = partitions,
             MaxScanPageDuration = TimeSpan.Zero,
             MaxScanPageStallDuration = Timeout.InfiniteTimeSpan,
         });
@@ -197,7 +198,7 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
             leaves[i].FreezeProjectionAndNextSiblingAsync(Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new LeafBaselineFreezePage
                 {
-                    Freeze = new LeafBaselineFreeze { Rows = [], FrontierPerPartition = [0], Pending = [] },
+                    Freeze = new LeafBaselineFreeze { Rows = [], FrontierPerPartition = new long[partitions], Pending = [] },
                     NextSibling = Next(ids, index),
                 }));
             leaves[i].FoldTailOntoFrozenAsync(
@@ -205,13 +206,31 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
                 .Returns(Task.FromResult<IReadOnlyList<LeafSnapshotRow>>([]));
         }
 
-        var coordinator = Substitute.For<ILeafReplayCoordinatorGrain>();
-        coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(0L));
-        factory.GetGrain<ILeafReplayCoordinatorGrain>($"{TreeId}/0").Returns(coordinator);
+        var coordinators = new ILeafReplayCoordinatorGrain[partitions];
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var coordinator = Substitute.For<ILeafReplayCoordinatorGrain>();
+            coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult((long)partition));
+            factory.GetGrain<ILeafReplayCoordinatorGrain>($"{TreeId}/{partition}").Returns(coordinator);
+            coordinators[partition] = coordinator;
+        }
         var snapshotLeaf = Substitute.For<ISnapshotLeafGrain>();
         factory.GetGrain<ISnapshotLeafGrain>(Arg.Any<string>()).Returns(snapshotLeaf);
+        var lastFreeze = new TaskCompletionSource<LeafBaselineFreezePage>();
+        leaves[^1].FreezeProjectionAndNextSiblingAsync(Arg.Any<CancellationToken>()).Returns(lastFreeze.Task);
 
-        await grain.CaptureSnapshotBaselineAsync(Guid.NewGuid(), CancellationToken.None);
+        var capture = grain.CaptureSnapshotBaselineAsync(Guid.NewGuid(), CancellationToken.None);
+        foreach (var coordinator in coordinators)
+            _ = coordinator.DidNotReceive().GetHeadOffsetAsync(Arg.Any<CancellationToken>());
+        Assert.That(capture.IsCompleted, Is.False);
+        lastFreeze.SetResult(new LeafBaselineFreezePage
+        {
+            Freeze = new LeafBaselineFreeze { Rows = [], FrontierPerPartition = new long[partitions], Pending = [] },
+        });
+        var result = await capture.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(result.CapturedHeadPerPartition, Is.EqualTo(Enumerable.Range(0, partitions).Select(p => (long)p)));
+        foreach (var coordinator in coordinators)
+            _ = coordinator.Received(1).GetHeadOffsetAsync(Arg.Any<CancellationToken>());
 
         foreach (var leaf in leaves)
         {
