@@ -1,0 +1,18 @@
+{
+  "mutations": "tag-index-reconcile-mutations",
+  "refinement": "TagIndexReconcileRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 3,
+    "properties": 6,
+    "actions": 12,
+    "mutations": 15,
+    "behaviourRows": 19,
+    "distinctStates": 2784
+  },
+  "variants": {
+    "ThreeTrees": {
+      "distinctStates": 11930
+    }
+  }
+}

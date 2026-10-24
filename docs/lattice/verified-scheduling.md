@@ -24,12 +24,13 @@ and admitting an append is not completing its storage flush. Likewise,
 dispatching background work is not awaiting that work inside a non-reentrant
 grain turn. A refinement mapping must preserve these distinctions.
 
-The initial scheduling seams are:
+The checked scheduling seams are:
 
 | Module | Boundary represented |
 | --- | --- |
 | `TurnOccupancy` | A non-reentrant turn, queued calls, and the difference between awaiting an operation inside the turn and dispatching it outside the turn. |
 | `WalAdmission` | Partition-scoped admission capacity, parked saturation waiters, paced recovery release, sampling and wait-budget outcomes. |
+| `TagIndexReconcile` | A single durable probe/repair sweep, successful baseline publication, per-phase tree work and timer/reminder recovery. |
 
 `TurnOccupancy` uses the turn-holder, queued-call and awaited-completion
 vocabulary of the existing
@@ -103,6 +104,25 @@ These models do not predict operations per second, latency percentiles, storage
 performance or appropriate default settings. The benchmark rig and deployed
 telemetry remain the evidence for those quantities.
 
+## Tag-index reconciliation progress
+
+The tag reconciler distinguishes an idle coordinator from probe and repair
+phases. Probe-only sweeps do not perform repairs or bank a successful-repair
+baseline. An active sweep keeps its progress across failures and overlapping
+triggers; an on-demand request does not reset its cursor to start a fresh sweep.
+Baseline publication requires complete successful repair RPCs and the durable
+checkpoint, not merely a matching subject fingerprint or an attempted repair.
+
+The chunk unit is a tree in a phase callback: a probe callback examines at most
+`max(1, ChunkSize)` trees, while a repair callback processes one whole tree.
+That tree can require multiple row scans and storage operations. A synchronous
+`RunSweepAsync` drains multiple callbacks, so the chunk setting does not bound
+its caller turn, total rows or elapsed time. Eventual repair assumes subjects
+stop changing, runtime/reminder opportunities continue, and registry, storage
+and checkpoint operations eventually succeed.
+An unsuccessful keepalive registration must remain retryable; an in-progress
+flag is not evidence that a timer or reminder is actually armed.
+
 ## Defects found during the bucket
 
 The production review found a saturation waiter's cancellation registration
@@ -113,7 +133,15 @@ ownership handshake and disposes outside the signal's locks.
 The same bucket found that a tag-repair cursor advanced before fallible work
 finished (#4976). The repair now advances only after success, restores
 uncommitted checkpoint and terminal state after persistence failure, and emits
-completion only after the terminal write succeeds. These production defects are
+completion only after the terminal write succeeds. Incomplete required reads
+could also certify an unchanged fingerprint and suppress later repair (#4977);
+those reads now fail explicitly. A failed initial keepalive registration could
+strand a durably in-progress sweep (#4985), so a later schedule retries
+coordinator startup without resetting its progress. Separately, cancellation of
+a tracked demand could abandon an already-active scheduled sweep before the
+demand started its own work (#4992). Cancellation cleanup now requires ownership
+of the new sweep, preserving the earlier sweep's phase, cursor and pending
+baseline when ownership has not transferred. These production defects are
 distinct from the already-fixed historical mechanisms retained as
 [paired scheduling controls](formal-coverage.md#scheduling-foundation-and-historical-controls).
 

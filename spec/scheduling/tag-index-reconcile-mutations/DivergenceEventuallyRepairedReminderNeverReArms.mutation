@@ -1,0 +1,13 @@
+MODULE: DivergenceEventuallyRepairedReminderNeverReArms
+TARGET: DivergenceEventuallyRepaired
+CLASS: Temporal
+SUMMARY: The recurring reminder never requests recovery of the work pump.
+PERTURBS: Reminder
+--- FIND
+    /\ pending' = IF phase = "Idle" THEN TRUE ELSE pending
+    /\ armNeeded' = TRUE
+--- REPLACE
+    \* MUTATION: a lost phase timer is never recovered by a reminder.
+    /\ pending' = IF phase = "Idle" THEN TRUE ELSE pending
+    /\ armNeeded' = FALSE
+--- END

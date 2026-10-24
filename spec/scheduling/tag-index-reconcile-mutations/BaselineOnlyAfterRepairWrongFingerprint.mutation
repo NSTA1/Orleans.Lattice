@@ -1,0 +1,11 @@
+MODULE: BaselineOnlyAfterRepairWrongFingerprint
+TARGET: BaselineOnlyAfterRepair
+CLASS: Action
+SUMMARY: Repair completion banks a fingerprint other than the probed snapshot.
+PERTURBS: CompleteRepair
+--- FIND
+    /\ baseline' = [baseline EXCEPT ![selected] = pendingBaseline[selected]]
+--- REPLACE
+    \* MUTATION: certify a version the completed repair never established.
+    /\ baseline' = [baseline EXCEPT ![selected] = 1 - pendingBaseline[selected]]
+--- END

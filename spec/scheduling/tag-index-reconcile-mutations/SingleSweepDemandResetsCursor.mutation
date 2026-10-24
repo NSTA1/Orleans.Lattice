@@ -1,0 +1,16 @@
+MODULE: SingleSweepDemandResetsCursor
+TARGET: SingleSweep
+CLASS: Action
+SUMMARY: On-demand arrival resets a live sweep rather than preserving its cursor.
+PERTURBS: Demand
+--- FIND
+    /\ UNCHANGED <<phase, cursor, dirty, baseline, fingerprint, pendingBaseline,
+                   repaired, probeOnly, servingDemand, sweeps, pump, busy,
+                   selected, failureUsed, work>>
+--- REPLACE
+    \* MUTATION: overwrite an in-progress cursor.
+    /\ cursor' = 0
+    /\ UNCHANGED <<phase, dirty, baseline, fingerprint, pendingBaseline,
+                   repaired, probeOnly, servingDemand, sweeps, pump, busy,
+                   selected, failureUsed, work>>
+--- END

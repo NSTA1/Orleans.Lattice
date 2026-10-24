@@ -1,0 +1,11 @@
+MODULE: ProbeOnlyNeverRepairsRepairsInProbe
+TARGET: ProbeOnlyNeverRepairs
+CLASS: Invariant
+SUMMARY: An audit-only sweep enters the repair phase.
+PERTURBS: BeginRepair
+--- FIND
+    /\ dirty # {} /\ ~probeOnly
+--- REPLACE
+    \* MUTATION: ignore the snapshotted audit-only option.
+    /\ dirty # {}
+--- END

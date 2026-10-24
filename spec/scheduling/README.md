@@ -11,6 +11,7 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | TurnOccupancy | 4 | 1 | 8 | 7 | 11 | 961 |
 | WalAdmission | 4 | 8 | 11 | 16 | 21 | 86496 |
+| TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
 
 ## Instances and progress premises
 
@@ -56,6 +57,18 @@ non-saturation additionally requires permanently cleared acute causes and an
 empty partition. No permanent Healthy verdict is promised under offered load.
 
 ## Routing and evidence
+
+TagIndexReconcile snapshots a finite covered set, probes in tree chunks and
+repairs one entire tree per phase callback. Its base explores both audit-only
+and repairing instances, one on-demand arrival, finite subject changes and
+one transient failed repair/checkpoint. ThreeTrees enlarges the covered set;
+all safety/action checks remain, while temporal liveness is bounded-out there
+for the TLC budget and retained at the base. Eventual convergence assumes
+continued runtime/reminder opportunities, eventual registry/storage success
+and a stable final subject version. Fairness never implies latency. ChunkSize
+does not bound a tree's row scan or the synchronous on-demand caller's turn.
+See [the refinement note](TagIndexReconcileRefinement.md) for the exact
+production units, paired counterexamples and cooperative Coyote boundary.
 
 All scheduling-directory bases, variants and mutations route to
 TlcShardScheduling before the broad Wal prefix, on the deterministic-only
