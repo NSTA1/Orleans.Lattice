@@ -128,14 +128,12 @@ internal sealed partial class ReplicationShipperGrain
     /// </summary>
     private async Task ForceSourceLineageGapAsync(int partitions)
     {
+        var next = await ReadNextSequencesAsync(partitions);
         var boundary = state.State.SourceLineageBoundary;
         boundary.Clear();
         for (var p = 0; p < partitions; p++)
         {
-            var grain = _partitionGrainCache.Length > p && _partitionGrainCache[p] is { } cached
-                ? cached
-                : _grainFactory.GetGrain<IWalShardGrain>($"{_walTreeId}/{p}");
-            boundary[p] = await grain.GetNextSequenceAsync(CancellationToken.None);
+            boundary[p] = next[p];
         }
 
         long epoch;
