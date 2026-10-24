@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Benchmark.Microbench;
 
@@ -27,6 +28,12 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// directly, instead of forwarding through two ILattice status calls.</item>
 /// <item><see cref="Site.OptionsSeeding"/> - resolving an incomplete existing
 /// row uses the registration result instead of reading the entry back.</item>
+/// <item><see cref="Site.AppTreeProvision"/> - creating an app tree fuses
+/// existence and registration into one registry call (two to one).</item>
+/// <item><see cref="Site.ReplayHorizon"/> and <see cref="Site.LineageBoundary"/>
+/// - independent WAL head reads overlap through the production bounded fan-out
+/// helper. Call counts stay unchanged; only serial round-trip depth falls.
+/// These lanes isolate the head capture, not the unchanged hold/marker work.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -40,6 +47,7 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <c>--suite autonomicprobes</c>); see <c>Program.cs</c>. The suite has no
 /// Orleans silo dependency. <c>--suite maintenanceelisions</c> selects only the
 /// reshard, consolidation and options-seeding lanes.
+/// <c>--suite provisioningheads</c> selects app creation and the two WAL head captures.
 /// </para>
 /// </summary>
 [MemoryDiagnoser]
@@ -51,7 +59,8 @@ public class AutonomicProbeElisionBenchmarks
 
     /// <summary>Which call site is measured; see the class summary.</summary>
     [Params(Site.CreateTree, Site.MaintenanceProbe, Site.ShardSampling,
-        Site.ReshardStandOff, Site.ConsolidationFinalise, Site.OptionsSeeding)]
+        Site.ReshardStandOff, Site.ConsolidationFinalise, Site.OptionsSeeding,
+        Site.AppTreeProvision, Site.ReplayHorizon, Site.LineageBoundary)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated grain call completes; see the class summary.</summary>
@@ -78,6 +87,8 @@ public class AutonomicProbeElisionBenchmarks
             Site.MaintenanceProbe => (8, 4),
             Site.ShardSampling => (3 * ShardCount, ShardCount),
             Site.OptionsSeeding => (3, 2),
+            Site.AppTreeProvision => (2, 1),
+            Site.ReplayHorizon or Site.LineageBoundary => (ShardCount, ShardCount),
             _ => (4, 2),
         };
         if (beforeCalls != expectedBefore || afterCalls != expectedAfter)
@@ -96,6 +107,9 @@ public class AutonomicProbeElisionBenchmarks
         Site.MaintenanceProbe => MaintenanceBeforeAsync(),
         Site.ShardSampling => SamplingBeforeAsync(),
         Site.OptionsSeeding => OptionsSeedingBeforeAsync(),
+        Site.AppTreeProvision => AppTreeBeforeAsync(),
+        Site.ReplayHorizon => HeadsBeforeAsync(),
+        Site.LineageBoundary => BoundaryBeforeAsync(),
         _ => SnapshotMergeBeforeAsync(),
     };
 
@@ -106,11 +120,58 @@ public class AutonomicProbeElisionBenchmarks
         Site.MaintenanceProbe => MaintenanceAfterAsync(),
         Site.ShardSampling => SamplingAfterAsync(),
         Site.OptionsSeeding => OptionsSeedingAfterAsync(),
+        Site.AppTreeProvision => CallAsync(1),
+        Site.ReplayHorizon => HeadsAfterAsync(),
+        Site.LineageBoundary => BoundaryAfterAsync(),
         _ => SnapshotMergeAfterAsync(),
     };
 
     private async Task<int> SnapshotMergeBeforeAsync()
         => await ForwardedAsync() + await ForwardedAsync();
+
+    private async Task<int> AppTreeBeforeAsync()
+    {
+        await CallAsync(0);
+        return await CallAsync(1);
+    }
+
+    private async Task<int> HeadsBeforeAsync()
+    {
+        var heads = new int[ShardCount];
+        for (var p = 0; p < heads.Length; p++)
+            heads[p] = await CallAsync(p);
+        return Sum(heads);
+    }
+
+    private async Task<int> HeadsAfterAsync() =>
+        Sum(await BoundedFanOut.RunAsync(ShardCount, BoundedFanOut.DefaultWidth, CallAsync));
+
+    private async Task<int> BoundaryBeforeAsync()
+    {
+        var boundary = new System.Collections.Generic.Dictionary<int, int>();
+        for (var p = 0; p < ShardCount; p++)
+            boundary[p] = await CallAsync(p);
+        var sum = 0;
+        foreach (var value in boundary.Values) sum += value;
+        return sum;
+    }
+
+    private async Task<int> BoundaryAfterAsync()
+    {
+        var heads = await BoundedFanOut.RunAsync(ShardCount, BoundedFanOut.DefaultWidth, CallAsync);
+        var boundary = new System.Collections.Generic.Dictionary<int, int>();
+        for (var p = 0; p < heads.Length; p++) boundary[p] = heads[p];
+        var sum = 0;
+        foreach (var value in boundary.Values) sum += value;
+        return sum;
+    }
+
+    private static int Sum(int[] values)
+    {
+        var sum = 0;
+        foreach (var value in values) sum += value;
+        return sum;
+    }
 
     private async Task<int> SnapshotMergeAfterAsync()
         => await CallAsync(0) + await CallAsync(0);
@@ -251,6 +312,15 @@ public class AutonomicProbeElisionBenchmarks
 
         /// <summary>Lazy options seeding of an incomplete row (three registry calls to two).</summary>
         OptionsSeeding,
+
+        /// <summary>App tree provisioning's existence/registration pair.</summary>
+        AppTreeProvision,
+
+        /// <summary>Replay horizon capture across eight independent WAL partitions.</summary>
+        ReplayHorizon,
+
+        /// <summary>Source-lineage boundary capture across eight independent WAL partitions.</summary>
+        LineageBoundary,
     }
 
     /// <summary>How a simulated grain call completes.</summary>

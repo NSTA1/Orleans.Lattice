@@ -27,7 +27,8 @@ internal sealed class LatticeAppTreeProvisioner : IAppTreeProvisioner
         using (LatticeSystemOrigin.Enter())
         {
             var registry = _grainFactory.GetLatticeRegistry();
-            if (await registry.ExistsAsync(treeId).ConfigureAwait(false))
+            var (created, _) = await registry.RegisterAndGetEntryAsync(treeId, BuildEntry(declaration)).ConfigureAwait(false);
+            if (!created)
             {
                 // An existing tree keeps its pinned structure; only a soft-deleted one (left by
                 // an earlier uninstall or a dropped tree) is brought back within its window.
@@ -38,8 +39,6 @@ internal sealed class LatticeAppTreeProvisioner : IAppTreeProvisioner
 
                 return;
             }
-
-            await registry.RegisterAsync(treeId, BuildEntry(declaration)).ConfigureAwait(false);
         }
     }
 

@@ -80,14 +80,11 @@ internal sealed partial class ReplicationShipperGrain
 
     private async Task<long[]> ReadNextSequencesAsync(int partitions)
     {
-        var next = new long[partitions];
-        for (var p = 0; p < partitions; p++)
-        {
-            next[p] = await _grainFactory.GetGrain<IWalShardGrain>($"{_walTreeId}/{p}")
-                .GetNextSequenceAsync(CancellationToken.None);
-        }
-
-        return next;
+        // Each head is observational and independent. Settle the whole bounded
+        // read before publishing a horizon or advancing the reseed protocol.
+        return await BoundedFanOut.RunAsync(partitions, BoundedFanOut.DefaultWidth,
+            async p => await _grainFactory.GetGrain<IWalShardGrain>($"{_walTreeId}/{p}")
+                .GetNextSequenceAsync(CancellationToken.None));
     }
 
     private string ReplayHoldKey => Context.GrainId.ToString() + "#replay";
