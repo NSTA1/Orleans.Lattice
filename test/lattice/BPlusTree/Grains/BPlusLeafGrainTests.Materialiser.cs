@@ -1146,11 +1146,11 @@ public partial class BPlusLeafGrainTests
         // Exactly one cursor publish: the materialiser-driven flush.
         // Without the elision the activation hook would publish a
         // second time after the materialiser returned.
-        await reporter.Received(1).ReportAsync(
+        await reporter.Received(1).ReportCheckpointAsync(
             MaterialiserTreeId,
             Arg.Any<string>(),
             Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -1172,11 +1172,11 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        await reporter.Received(1).ReportAsync(
+        await reporter.Received(1).ReportCheckpointAsync(
             MaterialiserTreeId,
             Arg.Any<string>(),
             Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     // -------------------------------------------------------------------

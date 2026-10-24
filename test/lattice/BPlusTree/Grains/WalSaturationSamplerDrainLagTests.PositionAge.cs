@@ -90,11 +90,12 @@ public partial class WalSaturationSamplerDrainLagTests
 
         // Activation re-asserts the persisted clock, then the checkpoint flush tail
         // re-asserts it again: two fresh reports, one unmoved position.
-        await registry.ReportCursorAsync(_treeId, LeafConsumerId("idle"), persistedClock, CancellationToken.None);
-        await registry.ReportCursorAsync(_treeId, LeafConsumerId("idle"), persistedClock, CancellationToken.None);
+        await registry.ReportCheckpointAsync(_treeId, LeafConsumerId("idle"), persistedClock, 0, 1, CancellationToken.None);
+        await registry.ReportCheckpointAsync(_treeId, LeafConsumerId("idle"), persistedClock, 0, 1, CancellationToken.None);
 
         var observedAt = DateTimeOffset.UtcNow;
         WalCommitLogWriter._walHeadWallClockTicks[_treeId] = observedAt.UtcTicks;
+        WalCommitLogWriter.RecordAppend(_treeId, 0, 1, observedAt.UtcTicks);
         var signal = NewSignal();
         var sampler = CreateRegistrySampler(registry, observedAt, signal, NullLogger<WalSaturationSampler>.Instance);
         var sink = new List<(double Value, string? Tree)>();
@@ -118,11 +119,12 @@ public partial class WalSaturationSamplerDrainLagTests
         var start = DateTimeOffset.UtcNow;
         var draining = LeafConsumerId("draining");
 
-        await registry.ReportCursorAsync(_treeId, draining, At(start - TimeSpan.FromHours(2)), CancellationToken.None);
-        await registry.ReportCursorAsync(_treeId, draining, At(start - TimeSpan.FromHours(1)), CancellationToken.None);
+        await registry.ReportCheckpointAsync(_treeId, draining, At(start - TimeSpan.FromHours(2)), 0, -1, CancellationToken.None);
+        await registry.ReportCheckpointAsync(_treeId, draining, At(start - TimeSpan.FromHours(1)), 0, 0, CancellationToken.None);
 
         var observedAt = DateTimeOffset.UtcNow;
         WalCommitLogWriter._walHeadWallClockTicks[_treeId] = observedAt.UtcTicks;
+        WalCommitLogWriter.RecordAppend(_treeId, 0, 1, start.UtcTicks - TimeSpan.FromHours(1).Ticks);
         var signal = NewSignal();
         var logger = new CapturingLogger();
         var sampler = CreateRegistrySampler(registry, observedAt, signal, logger);
@@ -150,11 +152,12 @@ public partial class WalSaturationSamplerDrainLagTests
         var registry = new InMemoryWalCursorRegistry();
         var stalled = At(DateTimeOffset.UtcNow - TimeSpan.FromHours(1));
 
-        await registry.ReportCursorAsync(_treeId, "view-maintainer", stalled, CancellationToken.None);
-        await registry.ReportCursorAsync(_treeId, "view-maintainer", stalled, CancellationToken.None);
+        await registry.ReportCheckpointAsync(_treeId, "view-maintainer", stalled, 0, 0, CancellationToken.None);
+        await registry.ReportCheckpointAsync(_treeId, "view-maintainer", stalled, 0, 0, CancellationToken.None);
 
         var observedAt = DateTimeOffset.UtcNow;
         WalCommitLogWriter._walHeadWallClockTicks[_treeId] = observedAt.UtcTicks;
+        WalCommitLogWriter.RecordAppend(_treeId, 0, 1, observedAt.UtcTicks - TimeSpan.FromHours(1).Ticks);
         var signal = NewSignal();
         var sampler = CreateRegistrySampler(registry, observedAt, signal, NullLogger<WalSaturationSampler>.Instance);
 
@@ -171,11 +174,12 @@ public partial class WalSaturationSamplerDrainLagTests
         var start = DateTimeOffset.UtcNow;
         var draining = LeafConsumerId("draining");
 
-        await registry.ReportCursorAsync(_treeId, draining, At(start - TimeSpan.FromHours(2)), CancellationToken.None);
-        await registry.ReportCursorAsync(_treeId, draining, At(start - TimeSpan.FromHours(1)), CancellationToken.None);
+        await registry.ReportCheckpointAsync(_treeId, draining, At(start - TimeSpan.FromHours(2)), 0, -1, CancellationToken.None);
+        await registry.ReportCheckpointAsync(_treeId, draining, At(start - TimeSpan.FromHours(1)), 0, 0, CancellationToken.None);
 
         var observedAt = DateTimeOffset.UtcNow;
         WalCommitLogWriter._walHeadWallClockTicks[_treeId] = observedAt.UtcTicks;
+        WalCommitLogWriter.RecordAppend(_treeId, 0, 1, start.UtcTicks - TimeSpan.FromHours(1).Ticks);
         var signal = NewSignal();
         var logger = new CapturingLogger();
         var sampler = CreateRegistrySampler(registry, observedAt, signal, logger, sampleWindows: 3);

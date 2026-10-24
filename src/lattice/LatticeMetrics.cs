@@ -3407,10 +3407,10 @@ public static class LatticeMetrics
     /// WAL saturation sampler on every tick
     /// (<see cref="LatticeOptions.WalSaturationSampleInterval"/>, default 200 ms)
     /// while the drain-lag input is enabled. Measured live from in-memory state as
-    /// the WAL head wall-clock timestamp minus the slowest fresh consumer cursor in
-    /// the in-memory WAL cursor registry - across leaf materialisers and tree-wide
-    /// tailers such as view maintainers, WAL subscribers and replication
-    /// shippers - clamped at zero. The freshness filter is
+    /// the age of the oldest unread WAL offset, using local append times and
+    /// fresh consumer checkpoints, never mutation HLCs. Missing history supplies
+    /// an explicitly logged lower bound; wholly unknown ages are not recorded.
+    /// The freshness filter is
     /// a lag-plane-only classifier input; cold consumers remain registered for the
     /// WAL GC trim floor. Recorded for every checked tree, not only the
     /// over-threshold ones, so the histogram carries the whole distribution leading
@@ -3437,25 +3437,25 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<double> MaterialiserDrainLag =
         Meter.CreateHistogram<double>("orleans.lattice.materialiser.drain_lag", unit: "ms",
-            description: "Materialiser drain lag (WAL head minus the slowest fresh consumer cursor, across leaf materialisers and tree-wide tailers) sampled by the WAL saturation sampler, tagged by tree.");
+            description: "Age of the oldest unread WAL offset from local append times and fresh consumer checkpoints; incomplete history supplies a logged lower bound. Tagged by tree.");
 
     /// <summary>
     /// Number of individually lagging WAL cursor consumers behind a tree's
     /// materialiser drain-lag, recorded by the WAL saturation sampler for a tree
     /// whose aggregate lag is <b>already over</b>
     /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> on that
-    /// tick. A consumer counts when its own reported cursor trails the WAL head
-    /// wall clock by more than that same threshold and it passes the lag-plane
+    /// tick. A consumer counts when its oldest observed unread append exceeds
+    /// that same age threshold and it passes the lag-plane
     /// eligibility the aggregate uses: its report is fresh under
     /// <see cref="LatticeOptions.WalDrainLagConsumerFreshness"/>, and a leaf
-    /// materialiser's position must not be stale either; consumers that
+    /// materialiser reports a partition checkpoint; consumers that
     /// have never reported a cursor (<see cref="HybridLogicalClock.Zero"/>) are
     /// excluded, as they are from the lag-plane meet that produces the aggregate.
     /// <para>
     /// <b>Why this exists (issue #2444).</b>
-    /// <see cref="MaterialiserDrainLag"/> is a minimum across consumers, so a
-    /// single value cannot distinguish <i>one</i> dormant consumer holding the
-    /// minimum down from <i>many</i> consumers genuinely falling behind. Those
+    /// <see cref="MaterialiserDrainLag"/> is a maximum unread age across consumers, so a
+    /// single value cannot distinguish <i>one</i> slow consumer from
+    /// <i>many</i> consumers genuinely falling behind. Those
     /// two conditions have opposite responses, and the aggregate reads
     /// identically for both. This count separates them.
     /// </para>
@@ -3469,9 +3469,8 @@ public static class LatticeMetrics
     /// identity.
     /// </para>
     /// <para>
-    /// <b>Cost.</b> Sampled only for trees already found over threshold, so a
-    /// healthy estate adds no per-tick work: a tree that never trips never
-    /// triggers the snapshot read that backs this instrument.
+    /// <b>Cost.</b> The count reuses the snapshot and offset-age traversal
+    /// that compute the aggregate, and is recorded only above threshold.
     /// </para>
     /// Tagged with <see cref="TagTree"/> and the derived tenant label.
     /// </summary>

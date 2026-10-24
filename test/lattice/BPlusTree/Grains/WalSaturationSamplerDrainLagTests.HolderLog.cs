@@ -67,7 +67,7 @@ public partial class WalSaturationSamplerDrainLagTests
     [TestCase(3, false)]
     [TestCase(4, false)]
     [TestCase(4, true)]
-    public async Task Holder_log_names_up_to_three_eligible_consumers_in_cursor_order(int eligibleCount, bool ascending)
+    public async Task Holder_log_names_up_to_three_eligible_consumers_in_unread_age_order(int eligibleCount, bool ascending)
     {
         var time = new ManualTimeProvider(new DateTimeOffset(_headTicks, TimeSpan.Zero));
         var logger = new CapturingLogger();
@@ -91,7 +91,9 @@ public partial class WalSaturationSamplerDrainLagTests
                 _headTicks - TimeSpan.FromSeconds(rank).Ticks)
             {
                 CursorAdvancedAtTicks = rank == 1 ? null : _headTicks - TimeSpan.FromSeconds(rank * 2).Ticks,
+                CheckpointOffsets = new Dictionary<int, long> { [rank] = 0 },
             });
+            WalCommitLogWriter.RecordAppend(_treeId, rank, 1, _headTicks - TimeSpan.FromHours(2).Ticks + rank);
         }
         _cursors.SnapshotAsync(_treeId, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<WalCursorSnapshot>>(snapshots));
@@ -147,7 +149,7 @@ public partial class WalSaturationSamplerDrainLagTests
     }
 
     [Test]
-    public async Task Holder_log_null_interval_does_not_log_a_late_snapshot_without_a_new_crossing()
+    public async Task Holder_log_uses_the_same_snapshot_for_aggregate_and_attribution()
     {
         var time = new ManualTimeProvider(new DateTimeOffset(_headTicks, TimeSpan.Zero));
         var logger = new CapturingLogger();
@@ -157,17 +159,18 @@ public partial class WalSaturationSamplerDrainLagTests
             WalDrainLagConsumerFreshness = TimeSpan.Zero,
         }, time, logger);
         SetLevel(TimeSpan.FromHours(1));
+        SetConsumers();
         await sampler.SampleOnceAsync(CancellationToken.None);
         Assert.That(logger.Lines, Is.Empty);
         SetConsumers(("late-holder", TimeSpan.FromHours(1)));
         time.Advance(TimeSpan.FromHours(1));
         await sampler.SampleOnceAsync(CancellationToken.None);
-        Assert.That(logger.Lines, Is.Empty, "null preserves the original crossing predicate, not merely the first successful log");
+        Assert.That(logger.Lines, Has.Count.EqualTo(1), "the newly available holder creates the crossing and its attribution together");
         SetLevel(TimeSpan.Zero);
         await sampler.SampleOnceAsync(CancellationToken.None);
         SetLevel(TimeSpan.FromHours(1));
         await sampler.SampleOnceAsync(CancellationToken.None);
-        Assert.That(logger.Lines, Has.Count.EqualTo(1));
+        Assert.That(logger.Lines, Has.Count.EqualTo(2));
     }
 
     [Test]
@@ -190,7 +193,10 @@ public partial class WalSaturationSamplerDrainLagTests
         _cursors.SnapshotAsync(otherTree, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<WalCursorSnapshot>>(new[]
             {
-                new WalCursorSnapshot("other-holder", At(time.GetUtcNow() - TimeSpan.FromHours(1)), _headTicks),
+                new WalCursorSnapshot("other-holder", At(time.GetUtcNow() - TimeSpan.FromHours(1)), _headTicks)
+                {
+                    CheckpointOffsets = new Dictionary<int, long> { [0] = 0 },
+                },
             }));
         await sampler.SampleOnceAsync(CancellationToken.None);
         Assert.That(logger.Lines.Select(l => l.Fields["TreeId"]), Is.EqualTo(new[] { _treeId, otherTree }));

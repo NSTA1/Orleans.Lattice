@@ -319,9 +319,9 @@ public partial class BPlusLeafGrainTests
         // are asserted to have actually executed. Awaited directly rather than
         // inside Assert.Multiple: an async lambda there binds to the Action
         // overload and the assertion would run unobserved.
-        await reporter.Received().ReportAsync(
+        await reporter.Received().ReportCheckpointAsync(
             Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+            Arg.Any<HybridLogicalClock>(), Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
         await parent.Received().OnChildDigestPublishedAsync(
             Arg.Any<GrainId>(), Arg.Any<ChildDigestSnapshot>());
     }

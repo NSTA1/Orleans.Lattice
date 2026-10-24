@@ -171,7 +171,8 @@ internal sealed partial class BPlusLeafGrain
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             try
             {
-                await reporter.ReportAsync(treeId, consumerId, clock, CancellationToken.None);
+                await reporter.ReportCheckpointAsync(treeId, consumerId, clock,
+                    partition, GetPersistedCheckpointForPartition(partition), CancellationToken.None);
             }
             catch (Exception ex)
             {

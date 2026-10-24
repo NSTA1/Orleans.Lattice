@@ -256,10 +256,13 @@ public sealed partial class WalLogSubscriberTests
         reader.Append(Tree, 0, Set(50));
         var handler = new CollectingHandler { BlockedAtHlc = Hlc(40) };
 
-        await subscriber.DrainAsync(Context(1), handler, CancellationToken.None);
+        await subscriber.DrainAsync(Context(2), handler, CancellationToken.None);
 
         var floor = await registry.GetBlockedFloorAsync(Tree, CancellationToken.None);
         Assert.That(floor, Is.EqualTo(Hlc(40)));
+        var snapshot = (await registry.SnapshotAsync(Tree)).Single();
+        Assert.That(snapshot.CheckpointOffsets, Is.EquivalentTo(
+            new Dictionary<int, long> { [0] = 0, [1] = -1 }));
     }
 
     [Test]

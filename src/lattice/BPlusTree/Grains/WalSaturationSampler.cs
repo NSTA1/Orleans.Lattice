@@ -118,6 +118,9 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     // Monotonic timestamps, bounded by currently over-threshold trees.
     private readonly Dictionary<string, long> _lastDrainLagHolderLogTimestamp
         = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _lastUnknownDrainLagLogTimestamp
+        = new(StringComparer.Ordinal);
+    private bool _warnedUnavailableCursorTreeDiscovery;
 
     // Per-(tree, shard) prior reading of the cumulative durable pin-write
     // latency-trip counter maintained caller-side by
@@ -176,7 +179,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     }
 
     // Each ranked holder gets a structured line under one timestamped observation.
-    private void LogDrainLagMinHolder(
+    private void LogDrainLagHolder(
         string treeId,
         long lagTicks,
         int laggingConsumers,
@@ -533,58 +536,94 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             ? long.MinValue
             : observedAt.UtcTicks - drainLagConsumerFreshness.Ticks;
 
-        // Drain-lag is computed live every tick from two in-memory sources, so
-        // the signal engages immediately on a write spike instead of waiting for
-        // a WAL GC pass (which runs only at WalGcInterval - an hour by default -
-        // on a non-replicated tree). For each tree that has accepted a write,
-        // the lag is the WAL head wall clock (the newest routed entry's HLC,
-        // tracked in WalCommitLogWriter._walHeadWallClockTicks) minus the slowest
-        // fresh in-memory materialiser cursor. The WAL GC trim floor deliberately
-        // reads all registered consumers, including cold leaves, because routine
-        // deactivation must not let GC trim entries the next activation may need
-        // to replay. The saturation classifier does not trim: it gates only a
-        // pacing delay, so it applies WalDrainLagConsumerFreshness and excludes a
-        // cold leaf from this lag-plane read while leaving GetMinCursorAsync
-        // unchanged for GC. A null / Zero frontier (no fresh consumer has
-        // reported a real checkpoint, or a block pin disabled the cursor branch)
-        // is treated as zero lag rather than the absolute head, so a
-        // never-checkpointed or all-cold tree never pins the regime. Every
-        // checked tree seeds a perTree accumulator (even at zero lag) so a
-        // recovered tree is reclassified back to Healthy even when it has no live
-        // tracker.
-        //
-        // The IWalCursorRegistry is always present: AddLattice registers the
-        // in-memory default as a guaranteed fallback (a host that opts into a
-        // materialiser/replication stack may replace it via AddWalCursorRegistry,
-        // which also wires the leaf cursor reporter). A core-only host with no
-        // materialiser reports a null frontier and therefore zero lag - the
-        // signal reads correctly idle rather than being silently disabled.
+        // Measure the oldest unread append, not a range-scoped applied HLC.
+        // These checkpoints are advisory only; GC's HLC, vector and block-pin
+        // meets remain independent. Missing local append history is reported
+        // explicitly, with only a known lower bound used for pacing.
         if (drainLagEnabled && drainLagThreshold is { } lagThreshold)
         {
-            foreach (var headEntry in WalCommitLogWriter._walHeadWallClockTicks)
+            var trees = new HashSet<string>(WalCommitLogWriter._walAppendTimes.Keys, StringComparer.Ordinal);
+            trees.UnionWith(WalCommitLogWriter._walHeadWallClockTicks.Keys);
+            var registeredTrees = await _cursors.GetRegisteredTreeNamesAsync(cancellationToken).ConfigureAwait(false);
+            if (registeredTrees is not null)
+                trees.UnionWith(registeredTrees);
+            else if (!_warnedUnavailableCursorTreeDiscovery)
             {
-                var treeId = headEntry.Key;
-                var headWallTicks = headEntry.Value;
+                _logger.LogWarning(
+                    "The WAL cursor registry cannot enumerate registered trees. Drain age is unavailable for trees without observed local WAL activity; mutation HLCs are never substituted.");
+                _warnedUnavailableCursorTreeDiscovery = true;
+            }
+            foreach (var treeId in trees)
+            {
+                WalCommitLogWriter._walAppendTimes.TryGetValue(treeId, out var appendTimes);
                 await _signal.InitializeMetricTreeAsync(treeId).ConfigureAwait(false);
-
+                var snapshot = await _cursors.SnapshotAsync(treeId, cancellationToken).ConfigureAwait(false);
                 long lagTicks = 0;
-                var frontier = await _cursors
-                    .GetMinCursorForDrainLagAsync(treeId, drainLagReportedAtOrAfterTicks, cancellationToken)
-                    .ConfigureAwait(false);
-                if (frontier is { } cursor && cursor > HybridLogicalClock.Zero
-                    && headWallTicks > cursor.WallClockTicks)
+                var lagging = 0;
+                var incomplete = false;
+                var measured = false;
+                var eligible = false;
+                (WalCursorSnapshot Entry, long Lag)? first = null, second = null, third = null;
+                for (var index = 0; index < snapshot.Count; index++)
                 {
-                    lagTicks = headWallTicks - cursor.WallClockTicks;
+                    var entry = snapshot[index];
+                    if (!WalDrainLagEligibility.IsEligible(entry, drainLagReportedAtOrAfterTicks))
+                        continue;
+                    eligible = true;
+                    if (entry.CheckpointOffsets is not { Count: > 0 } offsets)
+                    {
+                        incomplete = true;
+                        continue;
+                    }
+                    long? age = null;
+                    foreach (var offset in offsets)
+                    {
+                        if (appendTimes is null || !appendTimes.TryGetValue(offset.Key, out var timeline))
+                        {
+                            incomplete = true;
+                            continue;
+                        }
+                        var partitionAge = timeline.GetLagTicks(offset.Value, observedAt.UtcTicks, out var missingHistory);
+                        incomplete |= missingHistory;
+                        if (partitionAge is { } knownAge)
+                            age = Math.Max(age ?? 0, knownAge);
+                    }
+                    if (age is not { } consumerLag)
+                        continue;
+                    measured = true;
+                    lagTicks = Math.Max(lagTicks, consumerLag);
+                    if (consumerLag > lagThreshold.Ticks)
+                        lagging++;
+                    if (first is null || consumerLag > first.Value.Lag)
+                    {
+                        third = second;
+                        second = first;
+                        first = (entry, consumerLag);
+                    }
+                    else if (second is null || consumerLag > second.Value.Lag)
+                    {
+                        third = second;
+                        second = (entry, consumerLag);
+                    }
+                    else if (third is null || consumerLag > third.Value.Lag)
+                        third = (entry, consumerLag);
                 }
 
-                // Emit the drain-lag gauge for every checked tree, not only the
-                // over-threshold ones, so the metric reflects the full lag
-                // distribution leading up to a trip.
-                LatticeMetrics.MaterialiserDrainLag.Record(
-                    TimeSpan.FromTicks(lagTicks).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _signal.MetricTreeId(treeId)),
-                    LatticeTenantLabel.ForTree(treeId));
-
+                if (incomplete && (!_lastUnknownDrainLagLogTimestamp.TryGetValue(treeId, out var lastUnknown)
+                    || _time.GetElapsedTime(lastUnknown) >= TimeSpan.FromMinutes(10)))
+                {
+                    _logger.LogWarning(
+                        "Offset-based drain age for tree {TreeId} has incomplete local append history or checkpoint reports. Only observed unread append ages can contribute a lower bound; unknown ages are not recorded as zero and mutation HLCs are never substituted.",
+                        treeId);
+                    _lastUnknownDrainLagLogTimestamp[treeId] = _time.GetTimestamp();
+                }
+                if (measured || !eligible)
+                {
+                    LatticeMetrics.MaterialiserDrainLag.Record(
+                        TimeSpan.FromTicks(lagTicks).TotalMilliseconds,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _signal.MetricTreeId(treeId)),
+                        LatticeTenantLabel.ForTree(treeId));
+                }
                 if (!perTree.TryGetValue(treeId, out var acc))
                 {
                     acc = RentAccumulator(treeId);
@@ -593,86 +632,29 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 {
                     acc.MaterialiserDrainLagOverThreshold = true;
 
-                    // Decompose the aggregate for this tree only. The drain-lag
-                    // above is a min() across consumers, so it reads identically
-                    // for one dormant consumer and for many genuinely falling
-                    // behind - two conditions with opposite responses (issue
-                    // #2444). Counting the consumers individually past the same
-                    // threshold separates them without putting unbounded consumer
-                    // identity on a tag. Holder warnings reuse this snapshot
-                    // out of band without changing the instruments.
-                    //
-                    // Deliberately inside the over-threshold branch: a healthy
-                    // estate never reaches here, so steady-state per-tick cost is
-                    // unchanged. Consumers that never reported a cursor (Zero) are
-                    // excluded, matching the min() meet that produced the
-                    // aggregate, so a never-checkpointed consumer cannot inflate
-                    // the count any more than it can pin the regime.
-                    var snapshot = await _cursors
-                        .SnapshotAsync(treeId, cancellationToken)
-                        .ConfigureAwait(false);
-
-                    // Eligibility is the registry's own lag-plane predicate
-                    // (cold and position-stale consumers excluded, #2446 /
-                    // #3131), so the count decomposes exactly the population
-                    // the aggregate was computed over.
                     var logDue = _logger.IsEnabled(LogLevel.Warning)
                         && (!_consecutiveMaterialiserDrainLagWindows.TryGetValue(treeId, out var priorWindows)
                             || priorWindows == 0
                             || (opts.WalDrainLagHolderLogInterval is { } logInterval
                                 && (!_lastDrainLagHolderLogTimestamp.TryGetValue(treeId, out var lastLogged)
                                     || _time.GetElapsedTime(lastLogged) >= logInterval)));
-                    var lagging = 0;
-                    WalCursorSnapshot? first = null, second = null, third = null;
-                    for (var index = 0; index < snapshot.Count; index++)
-                    {
-                        var entry = snapshot[index];
-                        if (!WalDrainLagEligibility.IsEligible(entry, drainLagReportedAtOrAfterTicks))
-                        {
-                            continue;
-                        }
-                        if (headWallTicks - entry.Cursor.WallClockTicks > lagThreshold.Ticks)
-                        {
-                            lagging++;
-                        }
-                        if (!logDue)
-                        {
-                            continue;
-                        }
-                        if (first is null || entry.Cursor < first.Value.Cursor)
-                        {
-                            third = second;
-                            second = first;
-                            first = entry;
-                        }
-                        else if (second is null || entry.Cursor < second.Value.Cursor)
-                        {
-                            third = second;
-                            second = entry;
-                        }
-                        else if (third is null || entry.Cursor < third.Value.Cursor)
-                        {
-                            third = entry;
-                        }
-                    }
-
                     LatticeMetrics.MaterialiserLaggingConsumers.Record(
                         lagging,
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _signal.MetricTreeId(treeId)),
                         LatticeTenantLabel.ForTree(treeId));
 
-                    if (first is { } minimum)
+                    if (logDue && first is { } minimum)
                     {
                         var observationId = Guid.NewGuid();
                         var holderCount = third.HasValue ? 3 : second.HasValue ? 2 : 1;
-                        LogDrainLagMinHolder(treeId, lagTicks, lagging, minimum, observedAt, observationId, 1, holderCount);
+                        LogDrainLagHolder(treeId, lagTicks, lagging, minimum.Entry, observedAt, observationId, 1, holderCount);
                         if (second is { } runnerUp)
                         {
-                            LogDrainLagMinHolder(treeId, lagTicks, lagging, runnerUp, observedAt, observationId, 2, holderCount);
+                            LogDrainLagHolder(treeId, lagTicks, lagging, runnerUp.Entry, observedAt, observationId, 2, holderCount);
                         }
                         if (third is { } thirdHolder)
                         {
-                            LogDrainLagMinHolder(treeId, lagTicks, lagging, thirdHolder, observedAt, observationId, 3, holderCount);
+                            LogDrainLagHolder(treeId, lagTicks, lagging, thirdHolder.Entry, observedAt, observationId, 3, holderCount);
                         }
                         _lastDrainLagHolderLogTimestamp[treeId] = _time.GetTimestamp();
                     }

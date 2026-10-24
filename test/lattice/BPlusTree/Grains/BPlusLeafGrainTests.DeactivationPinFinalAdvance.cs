@@ -206,8 +206,9 @@ public partial class BPlusLeafGrainTests
             .When(r => r.NoteDurableMaterialiserFrontier(
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<long>()))
             .Do(call => Record(FinalAdvancePinChannel.Mirror, call.ArgAt<long>(3)));
-        reporter.ReportAsync(
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+        reporter.ReportCheckpointAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(),
+                Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 leaf.Calls.Add("cursor");

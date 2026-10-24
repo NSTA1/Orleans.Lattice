@@ -4106,15 +4106,13 @@ public class LatticeOptions
     /// WAL head - the direct "the materialiser is not keeping up with the
     /// write rate" surface that the indirect admission-depth and flush-latency
     /// inputs only approximate. The saturation sampler measures the lag each
-    /// tick as
-    /// <c>walHead.WallClockTicks - drainFrontier.WallClockTicks</c>
-    /// (clamped at zero): the age of the oldest WAL entry that the slowest
-    /// fresh eligible consumer cursor in the in-memory WAL cursor registry has
-    /// not yet drained. The consumers are every cursor reported to that
-    /// registry - leaf materialisers and tree-wide tailers such as view
-    /// maintainers, WAL subscribers and replication shippers - less those that
-    /// have never reported a cursor, cold ones, and leaf materialisers whose
-    /// position is stale. Because the measure is
+    /// tick as the age of the oldest unread offset, using local append times
+    /// and inclusive per-partition checkpoints in the in-memory cursor registry.
+    /// Mutation HLCs are never used, so old-stamped reaps and merges cannot
+    /// manufacture lag. Append history is bounded; gaps after restart, remote
+    /// appends or eviction produce a warning and only an observed lower bound,
+    /// with no metric sample for a wholly unknown age. Cold consumers and those
+    /// that have never reported a real cursor are excluded. Because the measure is
     /// a pure lag-plane classifier input, it applies
     /// <see cref="WalDrainLagConsumerFreshness"/> before reading the minimum so
     /// a cold leaf that remains registered for WAL GC safety cannot hold a live
@@ -4189,7 +4187,9 @@ public class LatticeOptions
     /// the tree permanently <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>.
     /// </para>
     /// <para>
-    /// The same window also judges a leaf materialiser's <b>position</b>
+    /// Offset-aware consumers are judged on report age: their checkpoints cover
+    /// the entire partition, including entries outside a leaf's key range.
+    /// For legacy HLC queries, the same window judges a leaf materialiser's <b>position</b>
     /// (issue #3131): a leaf whose cursor has not advanced within the window
     /// (<see cref="WalCursorSnapshot.CursorAdvancedAtTicks"/>) and whose cursor
     /// itself predates the window is excluded even when its report is fresh. A
@@ -4219,7 +4219,7 @@ public class LatticeOptions
     /// Minimum interval between repeat drain-lag holder warnings while a tree stays
     /// above <see cref="WalSaturationMaterialiserLagThreshold"/>. Defaults to ten
     /// minutes; <see langword="null"/> keeps edge-only logging. Each observation
-    /// names up to three eligible consumers with the lowest cursors, outside metrics.
+    /// names up to three eligible consumers with the oldest unread appends, outside metrics.
     /// Recovery clears the per-tree interval so a new crossing logs immediately.
     /// Read from the global (unnamed) options on each sampler tick; per-tree
     /// overrides do not apply. Must be positive when set.

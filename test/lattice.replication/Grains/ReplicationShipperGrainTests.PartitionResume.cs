@@ -58,7 +58,8 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_advances_partition_cursor_past_consumed_sequence_on_positive_ack()
     {
-        var (grain, state, feed, transport, _, _, _) = Create();
+        var options = new LatticeReplicationOptions { ClusterId = LocalCluster, ShipCursorWriteInterval = 1 };
+        var (grain, state, feed, transport, _, registry, _) = Create(options);
         // Three entries appended at sequence 0..2.
         feed.Append(MakeEntry("k0", ticks: 1));
         feed.Append(MakeEntry("k1", ticks: 2));
@@ -69,6 +70,7 @@ public partial class ReplicationShipperGrainTests
 
         await grain.PumpForTestingAsync(CancellationToken.None);
 
+        await registry.Received().ReportCheckpointAsync(Tree, Peer, ackHlc, 0, 2, Arg.Any<CancellationToken>());
         Assert.Multiple(() =>
         {
             Assert.That(state.State.PartitionCursors, Contains.Key(0));

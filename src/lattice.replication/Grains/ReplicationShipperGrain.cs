@@ -1815,13 +1815,6 @@ internal sealed partial class ReplicationShipperGrain(
         PublishDurableReadPositions();
 
         var durableCursor = state.State.Cursor;
-        if (durableCursor.CompareTo(_lastReportedCursor) <= 0)
-        {
-            // Only partition cursors changed since the last flush -
-            // nothing new for the GC.
-            return;
-        }
-
         // Best-effort registry report: a registry-side failure does
         // not unwind the durable cursor advance. We still update
         // _lastReportedCursor so a transient registry outage does not
@@ -1829,9 +1822,15 @@ internal sealed partial class ReplicationShipperGrain(
         // through the same suppression check on the next advance.
         try
         {
-            await _cursorRegistry
-                .ReportCursorAsync(_treeName, _peerClusterId, durableCursor, cancellationToken)
-                ;
+            if (durableCursor > _lastReportedCursor)
+                await _cursorRegistry.ReportCursorAsync(_treeName, _peerClusterId, durableCursor, cancellationToken);
+            if (durableCursor > HybridLogicalClock.Zero)
+            {
+                foreach (var checkpoint in state.State.PartitionCursors)
+                    await _cursorRegistry.ReportCheckpointAsync(
+                        _treeName, _peerClusterId, durableCursor, checkpoint.Key,
+                        checkpoint.Value - 1, cancellationToken);
+            }
             _lastReportedCursor = durableCursor;
         }
         catch (Exception ex)

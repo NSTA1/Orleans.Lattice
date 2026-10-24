@@ -121,6 +121,12 @@ internal sealed class LeafCursorReporter(
         => registry.ReportCursorAsync(treeName, consumerId, cursor, cancellationToken);
 
     /// <inheritdoc />
+    public Task ReportCheckpointAsync(
+        string treeName, string consumerId, HybridLogicalClock cursor,
+        int walPartition, long checkpointOffset, CancellationToken cancellationToken)
+        => registry.ReportCheckpointAsync(treeName, consumerId, cursor, walPartition, checkpointOffset, cancellationToken);
+
+    /// <inheritdoc />
     public async Task UnregisterAsync(
         string treeName,
         string consumerId,

@@ -223,6 +223,7 @@ internal sealed partial class ViewMaintainerGrain
         if (highest > HybridLogicalClock.Zero || blockedAtHlc is not null)
         {
             await cursorRegistry.ReportCursorAsync(walTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken);
+            await ReportDrainCheckpointsAsync(walTreeId, highest, cancellationToken);
         }
 
         ApplyLag.Record(await ComputeLagAsync(walTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
