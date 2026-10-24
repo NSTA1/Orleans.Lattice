@@ -282,6 +282,13 @@
         "note": "Six BPlusCascade parent-accounting, recovery, separator-range, and maximum-height mutations in the companion target-property group; measured costs include each mutation control."
       },
       {
+        "shard": "formal-tlc-scheduling",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardScheduling"],
+        "note": "TurnOccupancy and WalAdmission bases, two larger-bound variants and 23 paired mutants: 27/27 cases, zero skips. Final two-CPU/1800MB single-TLC-slot run measured 2m22s including distinct mutation controls; standalone WAL base 18s and variant 7s. Scheduling-directory routing precedes the broad Wal prefix."
+      },
+      {
         "shard": "formal-tlc-smoke",
         "tlcSmoke": true,
         "tiers": ["deterministic"],

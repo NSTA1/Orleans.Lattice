@@ -123,6 +123,9 @@ internal static class TlcCiShard
     /// <summary>The leaf split-gate and grain-turn wait-cycle runs.</summary>
     public const string SplitGate = "TlcShardSplitGate";
 
+    /// <summary>Every scheduling-area base, variant and mutation run.</summary>
+    public const string Scheduling = "TlcShardScheduling";
+
     /// <summary>The BPlusCascade base-model TLC run.</summary>
     public const string BPlusCascadeBase = "TlcShardBPlusCascadeBase";
 
@@ -140,7 +143,7 @@ internal static class TlcCiShard
          MaterialisedViewAggregation, MaterialisedViewRebind,
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair,
-         AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate];
+         AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate, Scheduling];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -156,6 +159,10 @@ internal static class TlcCiShard
         ArgumentNullException.ThrowIfNull(mutation);
 
         var name = module.Name;
+        if (IsScheduling(module))
+        {
+            return Scheduling;
+        }
         if (string.Equals(name, "AntiEntropy", StringComparison.Ordinal))
         {
             return mutation.Name switch
@@ -214,7 +221,7 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return LifecycleCategory(module.Name) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
+        return IsScheduling(module) ? Scheduling : LifecycleCategory(module.Name) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
             ? BPlusCascadeBase
             : null);
     }
@@ -228,6 +235,11 @@ internal static class TlcCiShard
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(variant);
+
+        if (IsScheduling(module))
+        {
+            return Scheduling;
+        }
 
         if (string.Equals(module.Name, "AntiEntropy", StringComparison.Ordinal)
             && string.Equals(variant, "Alias", StringComparison.Ordinal))
@@ -280,6 +292,9 @@ internal static class TlcCiShard
     private static bool IsReplicationCompanion(string name) =>
         name.StartsWith("Replication", StringComparison.Ordinal)
         && !string.Equals(name, "Replication", StringComparison.Ordinal);
+
+    private static bool IsScheduling(SpecModule module) =>
+        string.Equals(Path.GetFileName(module.Directory), "scheduling", StringComparison.Ordinal);
 
     private static string? LifecycleCategory(string name) =>
         name == "MaterialisedViewFence" ? MaterialisedViewFence

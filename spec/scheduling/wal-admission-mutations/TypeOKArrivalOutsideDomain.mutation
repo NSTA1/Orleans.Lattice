@@ -1,0 +1,20 @@
+MODULE: TypeOKArrivalOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: arrival installs an invalid caller lifecycle state
+PERTURBS: Arrive
+
+--- FIND
+Arrive(c, p) ==
+    /\ outcome[c] = "new" /\ home[c] = p
+    /\ outcome' = [outcome EXCEPT ![c] = "pending"]
+    /\ UNCHANGED <<inflight, parked, state, acuteCause, faultPhase, recovery,
+        home, waitLeft, callLeft, phase, cursor, refusalState>>
+--- REPLACE
+\* MUTATION: arrival installs an invalid caller lifecycle state
+Arrive(c, p) ==
+    /\ outcome[c] = "new" /\ home[c] = p
+    /\ outcome' = [outcome EXCEPT ![c] = "unknown"]
+    /\ UNCHANGED <<inflight, parked, state, acuteCause, faultPhase, recovery,
+        home, waitLeft, callLeft, phase, cursor, refusalState>>
+--- END

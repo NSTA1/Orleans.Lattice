@@ -39,7 +39,8 @@ public partial class BPlusLeafGrainTests
         TimeSpan? starvationDriveBudget = null,
         ILoggerProvider? loggerProvider = null,
         int? maxConcurrentReplays = null,
-        ShardMap? registryShardMap = null)
+        ShardMap? registryShardMap = null,
+        Orleans.Timers.ITimerRegistry? timerRegistry = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -48,6 +49,8 @@ public partial class BPlusLeafGrainTests
         if (detector is not null)
             sc.AddSingleton(detector);
         sc.AddSingleton(reporter);
+        if (timerRegistry is not null)
+            sc.AddSingleton(timerRegistry);
         if (loggerProvider is not null)
         {
             sc.AddLogging(builder => builder
