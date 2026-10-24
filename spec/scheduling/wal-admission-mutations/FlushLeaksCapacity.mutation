@@ -1,0 +1,22 @@
+MODULE: FlushLeaksCapacity
+TARGET: CapRespected
+CLASS: Invariant
+SUMMARY: completion increments rather than returns the admission slot
+PERTURBS: Flush
+
+--- FIND
+Flush(c, p) ==
+    /\ outcome[c] = "admitted" /\ home[c] = p
+    /\ inflight' = [inflight EXCEPT ![p] = @ - 1]
+    /\ outcome' = [outcome EXCEPT ![c] = "done"]
+    /\ UNCHANGED <<parked, state, acuteCause, faultPhase, recovery,
+        home, waitLeft, callLeft, phase, cursor, refusalState>>
+--- REPLACE
+\* MUTATION: completion increments rather than returns the admission slot
+Flush(c, p) ==
+    /\ outcome[c] = "admitted" /\ home[c] = p
+    /\ inflight' = [inflight EXCEPT ![p] = @ + 1]
+    /\ outcome' = [outcome EXCEPT ![c] = "done"]
+    /\ UNCHANGED <<parked, state, acuteCause, faultPhase, recovery,
+        home, waitLeft, callLeft, phase, cursor, refusalState>>
+--- END

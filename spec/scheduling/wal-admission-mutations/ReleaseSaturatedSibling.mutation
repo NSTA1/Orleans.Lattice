@@ -1,0 +1,38 @@
+MODULE: ReleaseSaturatedSibling
+TARGET: PerPartitionIsolation
+CLASS: Action
+SUMMARY: a healthy sibling tick also releases a saturated partition
+PERTURBS: ReleaseTick
+
+--- FIND
+ReleaseTick ==
+    /\ phase = "release"
+    /\ LET chosen == [p \in Partitions |->
+                IF Eligible(p) THEN SubSeq(parked[p], 1, Min(Len(parked[p]), ReleaseBatch))
+                ELSE <<>>]
+           all == UNION {Members(chosen[p]) : p \in Partitions}
+       IN /\ parked' = [p \in Partitions |->
+                    SubSeq(parked[p], Len(chosen[p]) + 1, Len(parked[p]))]
+          /\ outcome' = [c \in Callers |-> IF c \in all THEN "released" ELSE outcome[c]]
+          /\ waitLeft' = [c \in Callers |-> IF c \in all THEN 0 ELSE waitLeft[c]]
+          /\ callLeft' = [c \in Callers |-> IF c \in all THEN 0 ELSE callLeft[c]]
+    /\ phase' = "expire" /\ cursor' = 1
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery,
+        home, refusalState>>
+--- REPLACE
+\* MUTATION: a healthy sibling tick also releases a saturated partition
+ReleaseTick ==
+    /\ phase = "release"
+    /\ LET chosen == [p \in Partitions |->
+                IF TRUE THEN SubSeq(parked[p], 1, Min(Len(parked[p]), ReleaseBatch))
+                ELSE <<>>]
+           all == UNION {Members(chosen[p]) : p \in Partitions}
+       IN /\ parked' = [p \in Partitions |->
+                    SubSeq(parked[p], Len(chosen[p]) + 1, Len(parked[p]))]
+          /\ outcome' = [c \in Callers |-> IF c \in all THEN "released" ELSE outcome[c]]
+          /\ waitLeft' = [c \in Callers |-> IF c \in all THEN 0 ELSE waitLeft[c]]
+          /\ callLeft' = [c \in Callers |-> IF c \in all THEN 0 ELSE callLeft[c]]
+    /\ phase' = "expire" /\ cursor' = 1
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery,
+        home, refusalState>>
+--- END

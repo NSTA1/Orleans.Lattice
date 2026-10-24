@@ -1,0 +1,22 @@
+MODULE: ParkLosesWaiter
+TARGET: NoLostWaiter
+CLASS: Invariant
+SUMMARY: park records the outcome but loses its queue registration
+PERTURBS: Park
+
+--- FIND
+Park(c, p) ==
+    /\ outcome[c] = "pending" /\ home[c] = p /\ state[p] = "Saturated"
+    /\ parked' = [parked EXCEPT ![p] = Append(@, c)]
+    /\ outcome' = [outcome EXCEPT ![c] = "parked"]
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery,
+        home, waitLeft, callLeft, phase, cursor, refusalState>>
+--- REPLACE
+\* MUTATION: park records the outcome but loses its queue registration
+Park(c, p) ==
+    /\ outcome[c] = "pending" /\ home[c] = p /\ state[p] = "Saturated"
+    /\ parked' = [parked EXCEPT ![p] = @]
+    /\ outcome' = [outcome EXCEPT ![c] = "parked"]
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery,
+        home, waitLeft, callLeft, phase, cursor, refusalState>>
+--- END

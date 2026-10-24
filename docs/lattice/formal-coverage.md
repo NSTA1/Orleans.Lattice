@@ -59,10 +59,49 @@ its six checked modules.
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
+| Scheduling and progress | 2 | 23 | 32 | 10 | [Verified Scheduling and Progress](verified-scheduling.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
 rows cite.
+
+## Scheduling foundation and historical controls
+
+The scheduling foundation consists of two separately discovered modules, not an
+unchecked helper plus one module. Its checked census is 23 mutations, 32
+behaviour-asserting refinement rows and ten distinct production detector
+members. `TypeOK` remains a paired model-domain check; it is not counted as a
+production behaviour row.
+
+| Module | Base states | Variant states | Mutations | Behaviour rows | Detector tests |
+|--------|-------------|----------------|-----------|----------------|----------------|
+| `TurnOccupancy` | 961 | 29,791 (`ThreeGrains`) | 7 | 11 | 2 |
+| `WalAdmission` | 86,496 | 370,345 (`ThreeCallers`) | 16 | 21 | 8 |
+
+The two bases, two variants and 23 paired mutation experiments passed as 27 TLC
+harness cases in a measured two-CPU, one-TLC-at-a-time run of 2 minutes 22
+seconds. The WAL base took 18 seconds and its variant 7 seconds. These are
+observations of the checked instances, not CI deadlines or runtime latency
+claims. Base and mutant WAL configurations use the same three-unit wait
+deadlines; a later-tick recovery witness must remain possible in the clean
+control instead of being erased by an earlier budget expiry.
+
+The historical experiments below retain already-fixed mechanisms as negative
+controls. They are not new discoveries of the original incidents and do not
+claim to reproduce every manifestation of either issue.
+
+| Module | Historical repair | Mutation / target | Checked boundary |
+|--------|-------------------|-------------------|------------------|
+| `TurnOccupancy` | #4949, fixed by #4950 | `AwaitDriveOnExclusiveTurn` / `NoAwaitedDrive` | Awaiting the background drive can occupy the non-reentrant turn; dispatch must return the turn while storage remains pending. |
+| `WalAdmission` | #3402, fixed by #3404 | `RecoveryHerd` / `PacedRecoveryRelease` | A recovery sample caps saturation-gate releases; released callers still need partition capacity and storage progress. |
+
+The classifier recovery window is tree-wide even though admission capacity and
+waiter queues are partition-scoped. An idle sibling receives the Healthy floor
+only when the raw tree verdict is Healthy. Independent acute inputs in the
+bounded model are a conservative abstraction, not a claim that production
+provider counters or recovery windows are partition-local. The full mappings
+and explicit progress premises live in the
+[scheduling refinement notes](../../spec/scheduling/README.md).
 
 ## Focused materialised-view companions
 
@@ -278,6 +317,16 @@ gaps, states its full scope.
     Physical WAL consumers, atomic visibility and data movement retain the
     view, ownership, anti-entropy and lifecycle companion models' guarantees.
 
+- **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
+  - **Covers:** non-reentrant turn occupancy, partition admission capacity,
+    paced gate-release bursts, queue ordering and wait-budget outcomes in the
+    checked instances, with explicit environment-progress premises. Gate release
+    is distinct from semaphore admission and storage completion.
+  - **Does not cover:** throughput numbers, latency percentiles, default tuning,
+    arbitrary caller counts or a wall-clock service bound. Fairness does not
+    imply bounded latency, and unbounded offered load need not become permanently
+    Healthy. See [Verified Scheduling and Progress](verified-scheduling.md).
+
 Across every area, the instances are bounded: each module checks a small number
 of copies, shards, keys and faults exhaustively, and says which. A clean run is
 a statement about the design over that instance. The integration and
@@ -311,6 +360,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
 | Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
+| Scheduling and progress | #4976, #4979 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 
 ## CI partition and non-vacuity
 
@@ -323,6 +373,11 @@ discovery and refinement cases remain
 outside the TLC shards and run even when policy skips exhaustive model checking.
 The #4852 regression prevents a shard category from silently moving those
 structural checks into skipped work.
+
+Scheduling bases, variants and mutations route to the dedicated
+`formal-tlc-scheduling` shard before the WAL-name fallback. Structural scheduling
+discovery and refinement checks remain outside that shard, so a skipped TLC
+run does not skip the acceptance census.
 
 ## Related
 

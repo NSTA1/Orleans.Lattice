@@ -35,6 +35,21 @@ therefore `WalPartitions * WalMaxPendingBatches` - at the defaults,
 `8 * 16 = 128` concurrent provider appends. Each tree's WAL
 partitions carry their own caps, so concurrently written trees add up.
 
+## Formal model and tuning limits
+
+[`WalAdmission`](../../spec/scheduling/README.md) distinguishes the
+`WalMaxPendingBatches` capacity cap from the
+`WalSaturationRecoveryReleaseBatch` signal-release burst and the saturation
+wait/call budgets. Equal defaults do not make these the same resource: releasing
+a signal waiter does not reserve an admission slot. Recovery release depends on
+qualifying samples; admission and completion additionally depend on capacity and
+storage progress. See [Verified Scheduling and Progress](verified-scheduling.md)
+for the bounded-instance assumptions.
+
+These checks do not derive throughput, latency percentiles or appropriate knob
+values. The measurements below remain empirical sizing evidence, not a temporal
+guarantee supplied by fairness or by the release batch.
+
 ## Why 16 is the default
 
 The previous default of 8 was picked when the foreground commit path

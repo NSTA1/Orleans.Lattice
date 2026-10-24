@@ -1,0 +1,28 @@
+MODULE: AdmissionIgnoresCap
+TARGET: CapRespected
+CLASS: Invariant
+SUMMARY: semaphore admission ignores the configured partition cap
+PERTURBS: Admit
+
+--- FIND
+Admit(c, p) ==
+    /\ outcome[c] \in {"pending", "released"} /\ home[c] = p
+    /\ (outcome[c] = "released" \/ state[p] # "Saturated") /\ inflight[p] < Cap
+    /\ inflight' = [inflight EXCEPT ![p] = @ + 1]
+    /\ outcome' = [outcome EXCEPT ![c] = "admitted"]
+    /\ waitLeft' = [waitLeft EXCEPT ![c] = 0]
+    /\ callLeft' = [callLeft EXCEPT ![c] = 0]
+    /\ UNCHANGED <<parked, state, acuteCause, faultPhase, recovery,
+        home, phase, cursor, refusalState>>
+--- REPLACE
+\* MUTATION: semaphore admission ignores the configured partition cap
+Admit(c, p) ==
+    /\ outcome[c] \in {"pending", "released"} /\ home[c] = p
+    /\ (outcome[c] = "released" \/ state[p] # "Saturated")
+    /\ inflight' = [inflight EXCEPT ![p] = @ + 1]
+    /\ outcome' = [outcome EXCEPT ![c] = "admitted"]
+    /\ waitLeft' = [waitLeft EXCEPT ![c] = 0]
+    /\ callLeft' = [callLeft EXCEPT ![c] = 0]
+    /\ UNCHANGED <<parked, state, acuteCause, faultPhase, recovery,
+        home, phase, cursor, refusalState>>
+--- END

@@ -1,0 +1,22 @@
+MODULE: FaultClearOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: environment clearance writes an unsupported acute-fault phase
+PERTURBS: AcuteOff
+
+--- FIND
+AcuteOff(p) ==
+    /\ faultPhase[p] = "on"
+    /\ acuteCause' = [acuteCause EXCEPT ![p] = FALSE]
+    /\ faultPhase' = [faultPhase EXCEPT ![p] = "off"]
+    /\ UNCHANGED <<inflight, parked, state, recovery, outcome, home,
+        waitLeft, callLeft, phase, cursor, refusalState>>
+--- REPLACE
+\* MUTATION: environment clearance writes an unsupported acute-fault phase
+AcuteOff(p) ==
+    /\ faultPhase[p] = "on"
+    /\ acuteCause' = [acuteCause EXCEPT ![p] = FALSE]
+    /\ faultPhase' = [faultPhase EXCEPT ![p] = "unknown"]
+    /\ UNCHANGED <<inflight, parked, state, recovery, outcome, home,
+        waitLeft, callLeft, phase, cursor, refusalState>>
+--- END

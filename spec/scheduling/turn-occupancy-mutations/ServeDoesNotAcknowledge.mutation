@@ -1,0 +1,22 @@
+MODULE: ServeDoesNotAcknowledge
+TARGET: EveryCallServed
+CLASS: Temporal
+SUMMARY: dequeue a call without serving it
+PERTURBS: CallServe
+
+--- FIND
+CallServe(g) ==
+    /\ queued[g] /\ turn[g] = "idle"
+    /\ turn' = HoldTurn(g, "call")
+    /\ queued' = [queued EXCEPT ![g] = FALSE]
+    /\ served' = [served EXCEPT ![g] = TRUE]
+    /\ UNCHANGED <<operation, timer, age>>
+--- REPLACE
+\* MUTATION: dequeue a call without serving it
+CallServe(g) ==
+    /\ queued[g] /\ turn[g] = "idle"
+    /\ turn' = HoldTurn(g, "call")
+    /\ queued' = [queued EXCEPT ![g] = FALSE]
+    /\ served' = [served EXCEPT ![g] = FALSE]
+    /\ UNCHANGED <<operation, timer, age>>
+--- END

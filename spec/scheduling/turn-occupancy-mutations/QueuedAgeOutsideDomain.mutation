@@ -1,0 +1,19 @@
+MODULE: QueuedAgeOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: queue bookkeeping writes an out-of-domain local age
+PERTURBS: CallQueued
+
+--- FIND
+CallQueued(g) ==
+    /\ ~queued[g] /\ ~served[g] /\ turn[g] # "call"
+    /\ queued' = [queued EXCEPT ![g] = TRUE]
+    /\ UNCHANGED <<turn, served, operation, timer, age>>
+--- REPLACE
+\* MUTATION: queue bookkeeping writes an out-of-domain local age
+CallQueued(g) ==
+    /\ ~queued[g] /\ ~served[g] /\ turn[g] # "call"
+    /\ queued' = [queued EXCEPT ![g] = TRUE]
+    /\ age' = [age EXCEPT ![g] = Bound + 2]
+    /\ UNCHANGED <<turn, served, operation, timer>>
+--- END

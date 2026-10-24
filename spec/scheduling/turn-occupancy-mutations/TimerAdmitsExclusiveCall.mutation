@@ -1,0 +1,20 @@
+MODULE: TimerAdmitsExclusiveCall
+TARGET: ExclusiveTurn
+CLASS: Invariant
+SUMMARY: a timer takes a call turn without dequeuing the waiting call
+PERTURBS: TimerFire
+
+--- FIND
+TimerFire(g) ==
+    /\ timer[g] = "new" /\ turn[g] = "idle" /\ ~queued[g]
+    /\ turn' = HoldTurn(g, "timer")
+    /\ timer' = [timer EXCEPT ![g] = "fired"]
+    /\ UNCHANGED <<queued, served, operation, age>>
+--- REPLACE
+\* MUTATION: a timer takes a call turn without dequeuing the waiting call
+TimerFire(g) ==
+    /\ timer[g] = "new" /\ turn[g] = "idle"
+    /\ turn' = HoldTurn(g, "call")
+    /\ timer' = [timer EXCEPT ![g] = "fired"]
+    /\ UNCHANGED <<queued, served, operation, age>>
+--- END

@@ -1,0 +1,18 @@
+MODULE: CompletionOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an external completion reports an unsupported operation state
+PERTURBS: Complete
+
+--- FIND
+Complete(g) ==
+    /\ operation[g] = "running"
+    /\ operation' = [operation EXCEPT ![g] = "done"]
+    /\ UNCHANGED <<turn, queued, served, timer, age>>
+--- REPLACE
+\* MUTATION: an external completion reports an unsupported operation state
+Complete(g) ==
+    /\ operation[g] = "running"
+    /\ operation' = [operation EXCEPT ![g] = "unknown"]
+    /\ UNCHANGED <<turn, queued, served, timer, age>>
+--- END

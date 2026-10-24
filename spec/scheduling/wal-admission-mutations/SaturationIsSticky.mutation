@@ -1,0 +1,42 @@
+MODULE: SaturationIsSticky
+TARGET: NoAbsorbingSaturation
+CLASS: Temporal
+SUMMARY: sampling retains saturation after faults clear and the partition drains
+PERTURBS: Sample
+
+--- FIND
+Sample ==
+    /\ phase = "sample"
+    /\ recovery' =
+        IF \E p \in Partitions : Classify(p) = "Saturated" THEN RecoveryWindow
+        ELSE IF recovery > 0 THEN recovery - 1 ELSE 0
+    /\ state' = [p \in Partitions |->
+        IF Classify(p) = "Healthy" /\ recovery' > 0
+            /\ (\A q \in Partitions : Classify(q) = "Healthy")
+        THEN "Throttled" ELSE Classify(p)]
+    /\ waitLeft' = [c \in Callers |->
+        IF outcome[c] = "parked" /\ waitLeft[c] > 0 THEN waitLeft[c] - 1 ELSE waitLeft[c]]
+    /\ callLeft' = [c \in Callers |->
+        IF outcome[c] # "new" /\ callLeft[c] > 0 THEN callLeft[c] - 1 ELSE callLeft[c]]
+    /\ phase' = "release"
+    /\ UNCHANGED <<inflight, parked, acuteCause, faultPhase, outcome, home,
+        cursor, refusalState>>
+--- REPLACE
+\* MUTATION: sampling retains saturation after faults clear and the partition drains
+Sample ==
+    /\ phase = "sample"
+    /\ recovery' =
+        IF \E p \in Partitions : Classify(p) = "Saturated" THEN RecoveryWindow
+        ELSE IF recovery > 0 THEN recovery - 1 ELSE 0
+    /\ state' = [p \in Partitions |->
+        IF Classify(p) = "Healthy" /\ recovery' > 0
+            /\ (\A q \in Partitions : Classify(q) = "Healthy")
+        THEN "Throttled" ELSE IF state[p] = "Saturated" THEN "Saturated" ELSE Classify(p)]
+    /\ waitLeft' = [c \in Callers |->
+        IF outcome[c] = "parked" /\ waitLeft[c] > 0 THEN waitLeft[c] - 1 ELSE waitLeft[c]]
+    /\ callLeft' = [c \in Callers |->
+        IF outcome[c] # "new" /\ callLeft[c] > 0 THEN callLeft[c] - 1 ELSE callLeft[c]]
+    /\ phase' = "release"
+    /\ UNCHANGED <<inflight, parked, acuteCause, faultPhase, outcome, home,
+        cursor, refusalState>>
+--- END
