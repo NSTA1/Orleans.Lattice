@@ -90,18 +90,25 @@ public sealed partial class RepoContextStoreVectorCountTests
     {
         await using var harness = await RepoContextMcpHarness.StartAsync(cancellationToken: Ct);
         var scheduled = 0;
+        Action? observeReservation = null;
         var writer = CreateWriter(harness, harness.GrainFactory, work =>
         {
             if (++scheduled == 1)
             {
+                observeReservation!();
                 throw new InvalidOperationException("Controlled scheduling failure.");
             }
 
             return Task.Run(work);
         });
         await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
+        Task<bool>? observation = null;
+        observeReservation = () => observation = ObserveGuardRemoval(
+            writer, writer.PendingEmbeddedCountRefresh(RepoId)!);
 
         Assert.Throws<InvalidOperationException>(() => writer.CountEmbeddedAsync(RepoId, Ct));
+        Assert.That(await observation!.WaitAsync(TimeSpan.FromSeconds(30), Ct), Is.True,
+            "Even a scheduling failure must clear its ownership before making the reservation awaitable.");
         Assert.That(writer.PendingEmbeddedCountRefresh(RepoId), Is.Null);
         _ = await writer.CountEmbeddedAsync(RepoId, Ct);
         if (writer.PendingEmbeddedCountRefresh(RepoId) is { } refresh)
@@ -155,6 +162,71 @@ public sealed partial class RepoContextStoreVectorCountTests
             Assert.That(scheduled, Is.EqualTo(2));
             Assert.That(writer.ReadEmbeddedCount(RepoId).Count, Is.EqualTo(1));
         });
+    }
+
+    [TestCase(TaskStatus.RanToCompletion)]
+    [TestCase(TaskStatus.Faulted)]
+    [TestCase(TaskStatus.Canceled)]
+    public async Task A_reservation_continuation_observes_its_ownership_already_removed(TaskStatus outcome)
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(cancellationToken: Ct);
+        var completion = new TaskCompletionSource();
+        var writer = CreateWriter(harness, harness.GrainFactory, _ => completion.Task);
+        _ = await writer.CountEmbeddedAsync(RepoId, Ct);
+        var reservation = writer.PendingEmbeddedCountRefresh(RepoId);
+        Assert.That(reservation, Is.Not.Null);
+        var observation = ObserveGuardRemoval(writer, reservation!);
+
+        switch (outcome)
+        {
+            case TaskStatus.RanToCompletion:
+                completion.SetResult();
+                break;
+            case TaskStatus.Faulted:
+                completion.SetException(new InvalidOperationException("Controlled scheduled-task failure."));
+                Assert.ThrowsAsync<InvalidOperationException>(async () => await reservation!);
+                break;
+            case TaskStatus.Canceled:
+                completion.SetCanceled();
+                Assert.ThrowsAsync<TaskCanceledException>(async () => await reservation!);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(outcome));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observation.IsCompletedSuccessfully, Is.True,
+                "The controlled synchronization context observes completion before its publisher returns.");
+            Assert.That(reservation!.Status, Is.EqualTo(outcome));
+        });
+        Assert.That(await observation.WaitAsync(TimeSpan.FromSeconds(30), Ct), Is.True,
+            "A resumed reservation waiter must not race removal of the completed refresh's ownership.");
+    }
+
+    private static Task<bool> ObserveGuardRemoval(RepoContextVectorWriter writer, Task reservation)
+    {
+        var observation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var previous = SynchronizationContext.Current;
+        try
+        {
+            // Post observes the earliest continuation dispatch, even when the
+            // reservation forces asynchronous continuations on the default context.
+            SynchronizationContext.SetSynchronizationContext(new ImmediateCompletionContext());
+            reservation.GetAwaiter().OnCompleted(() =>
+                observation.SetResult(writer.PendingEmbeddedCountRefresh(RepoId) is null));
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+
+        return observation.Task;
+    }
+
+    private sealed class ImmediateCompletionContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback callback, object? state) => callback(state);
     }
 
     private sealed class CountRefreshScheduler

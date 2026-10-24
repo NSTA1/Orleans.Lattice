@@ -2004,11 +2004,9 @@ internal sealed class RepoContextVectorWriter
     /// walked a work-bounded page at a time) and single-flight, so it cannot accumulate.
     /// </para>
     /// <para>
-    /// Failures are swallowed: this type has no logger by design (see the field
-    /// declarations above), the count is a diagnostic, and a failed refresh simply
-    /// leaves the previous memo in place to be retried on the next call. What must not
-    /// be swallowed is the guard entry, so it is cleared from a continuation that runs
-    /// however the refresh ended.
+    /// The diagnostic scan is best-effort: a failed scan leaves the previous memo in
+    /// place, and a later generation miss can retry it. The reservation is released
+    /// regardless of how the scheduled task ends, before its waiters are resumed.
     /// </para>
     /// </remarks>
     /// <param name="repoId">The repository to refresh.</param>
@@ -2028,16 +2026,16 @@ internal sealed class RepoContextVectorWriter
         }
         catch (Exception ex)
         {
-            completion.TrySetException(ex);
             _countRefreshes.TryRemove(ownership);
+            completion.TrySetException(ex);
             throw;
         }
 
-        // Publish before scheduling, complete before removing, and remove only our
-        // reservation. Fast completion cannot insert a dead guard afterwards, and a
-        // contender's completion can never clear another scan's guard.
+        // The scheduled work has finished before this continuation runs. Remove only
+        // its reservation before releasing waiters, so awaiting it includes cleanup.
         _ = refresh.ContinueWith(completed =>
         {
+            _countRefreshes.TryRemove(ownership);
             if (completed.IsFaulted)
             {
                 completion.TrySetException(completed.Exception!.InnerExceptions);
@@ -2050,8 +2048,6 @@ internal sealed class RepoContextVectorWriter
             {
                 completion.TrySetResult();
             }
-
-            _countRefreshes.TryRemove(ownership);
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
@@ -2067,9 +2063,7 @@ internal sealed class RepoContextVectorWriter
         }
         catch (Exception)
         {
-            // The count is a diagnostic and this type carries no logger by design; a
-            // failed refresh leaves the previous memo in place and the next generation
-            // miss schedules another attempt.
+            // Retain the last completed diagnostic snapshot; a later generation miss retries.
         }
     }
 
