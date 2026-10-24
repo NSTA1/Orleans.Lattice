@@ -27,12 +27,17 @@ internal sealed class DataKeySuggestionSource(IDataReader reader, string stateId
     public async ValueTask<LtSuggestionSet> SuggestAsync(string text, int limit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(text);
+        if (limit <= 0)
+        {
+            return LtSuggestionSet.Empty;
+        }
+
         DataPage page;
         try
         {
             page = await reader.ScanAsync(
                 stateId,
-                Math.Clamp(limit + 1, 1, DataPaging.MaxPageSize),
+                Math.Min(limit, DataPaging.MaxPageSize - 1) + 1,
                 keyPrefix: text,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }

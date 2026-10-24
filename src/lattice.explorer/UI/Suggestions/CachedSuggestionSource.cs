@@ -25,7 +25,9 @@ internal abstract class CachedSuggestionSource(ShellCaller? caller, TimeProvider
 
     private readonly ShellCaller _caller = caller ?? new ShellCaller();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private readonly object _gate = new();
     private Remembered? _remembered;
+    private long _generation;
 
     /// <summary>The sentence shown when the list cannot be read.</summary>
     protected abstract string UnavailableReason { get; }
@@ -36,9 +38,21 @@ internal abstract class CachedSuggestionSource(ShellCaller? caller, TimeProvider
         ArgumentNullException.ThrowIfNull(text);
         var key = _caller.Current;
         var now = _time.GetUtcNow();
-        if (_remembered is not { } remembered
-            || remembered.Caller != key
-            || now - remembered.ReadAt >= Freshness)
+        Remembered? remembered;
+        long generation;
+        lock (_gate)
+        {
+            remembered = _remembered;
+            if (remembered is null || remembered.Caller != key || now - remembered.ReadAt >= Freshness)
+            {
+                remembered = null;
+                _generation++;
+            }
+
+            generation = _generation;
+        }
+
+        if (remembered is null)
         {
             IReadOnlyList<LtSuggestion>? values;
             try
@@ -55,9 +69,12 @@ internal abstract class CachedSuggestionSource(ShellCaller? caller, TimeProvider
             }
 
             remembered = new Remembered(key, now, values);
-            if (_caller.Current == key)
+            lock (_gate)
             {
-                _remembered = remembered;
+                if (_generation == generation && _caller.Current == key)
+                {
+                    _remembered = remembered;
+                }
             }
         }
 
@@ -66,8 +83,15 @@ internal abstract class CachedSuggestionSource(ShellCaller? caller, TimeProvider
             : LtSuggestionSet.Unavailable(UnavailableReason);
     }
 
-    /// <summary>Forgets the remembered list, so the next query reads it again.</summary>
-    public void Invalidate() => _remembered = null;
+    /// <summary>Forgets the list and fences outstanding reads, so the next query reads it again.</summary>
+    public void Invalidate()
+    {
+        lock (_gate)
+        {
+            _generation++;
+            _remembered = null;
+        }
+    }
 
     /// <summary>Reads every existing value, in display order.</summary>
     /// <param name="cancellationToken">Cancels the read.</param>
