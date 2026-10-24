@@ -199,6 +199,7 @@ internal sealed class RepoContextVectorWriter
     /// </para>
     /// </summary>
     private readonly ConcurrentDictionary<string, EmbeddedCountMemo> _countMemo = new();
+    private long _countScanSequence;
 
     /// <summary>
     /// The single-flight guard for the out-of-band embedded-count refresh: at most one
@@ -209,6 +210,7 @@ internal sealed class RepoContextVectorWriter
     /// which is strictly worse for the partition that was already the bottleneck.
     /// </summary>
     private readonly ConcurrentDictionary<string, Task> _countRefreshes = new();
+    private readonly Func<Func<Task>, Task> _scheduleCountRefresh;
 
     /// <summary>
     /// The resumable cursor of the embedded-memory-key marker scan, per repository.
@@ -254,6 +256,7 @@ internal sealed class RepoContextVectorWriter
     /// <param name="logger">Receives the membership probe's per-key accounting when a probe cannot account for every key it requested (issue #2287), or <see langword="null"/> to discard it.</param>
     /// <param name="coverageDigest">The digest of embedded coverage kept in step with membership, or <see langword="null"/> when the host does not maintain one.</param>
     /// <param name="markerScanReporter">Meters how each embedded-memory-key marker range walk ended, or <see langword="null"/> to leave the walk unmetered.</param>
+    /// <param name="scheduleCountRefresh">Schedules an out-of-band count refresh; defaults to <see cref="Task.Run(Func{Task})"/>. Tests control this boundary to exercise publication and completion order.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextVectorWriter(
         IGrainFactory grainFactory,
@@ -264,7 +267,8 @@ internal sealed class RepoContextVectorWriter
         IRepoContextAnnIndex? annIndex = null,
         ILogger<RepoContextVectorWriter>? logger = null,
         RepoContextCoverageDigestStore? coverageDigest = null,
-        RepoContextMemoryMarkerScanReporter? markerScanReporter = null)
+        RepoContextMemoryMarkerScanReporter? markerScanReporter = null,
+        Func<Func<Task>, Task>? scheduleCountRefresh = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -280,6 +284,7 @@ internal sealed class RepoContextVectorWriter
         _coverageDigest = coverageDigest;
         _markerScanReporter = markerScanReporter;
         _logger = logger ?? NullLogger<RepoContextVectorWriter>.Instance;
+        _scheduleCountRefresh = scheduleCountRefresh ?? (static work => Task.Run(work));
     }
 
     // ── Vector-plane self-heal guards ──────────────────────────────────────
@@ -1984,8 +1989,8 @@ internal sealed class RepoContextVectorWriter
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Single-flight by construction: the refresh task is published into
-    /// <see cref="_countRefreshes"/> with <c>GetOrAdd</c> before it is started, so a
+    /// Single-flight by construction: a completion task is reserved in
+    /// <see cref="_countRefreshes"/> with <c>TryAdd</c> before work is scheduled, so a
     /// burst of <c>list_repos</c> calls during a back-fill produces one scan, not one
     /// per call. The entry is cleared once the refresh settles, so the next generation
     /// miss after it completes starts a fresh one.
@@ -1999,32 +2004,51 @@ internal sealed class RepoContextVectorWriter
     /// walked a work-bounded page at a time) and single-flight, so it cannot accumulate.
     /// </para>
     /// <para>
-    /// Failures are swallowed: this type has no logger by design (see the field
-    /// declarations above), the count is a diagnostic, and a failed refresh simply
-    /// leaves the previous memo in place to be retried on the next call. What must not
-    /// be swallowed is the guard entry, so it is cleared from a continuation that runs
-    /// however the refresh ended.
+    /// The diagnostic scan is best-effort: a failed scan leaves the previous memo in
+    /// place, and a later generation miss can retry it. The reservation is released
+    /// regardless of how the scheduled task ends, before its waiters are resumed.
     /// </para>
     /// </remarks>
     /// <param name="repoId">The repository to refresh.</param>
     private void StartEmbeddedCountRefresh(string repoId)
     {
-        _ = _countRefreshes.GetOrAdd(repoId, static (id, self) =>
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ownership = new KeyValuePair<string, Task>(repoId, completion.Task);
+        if (!_countRefreshes.TryAdd(repoId, completion.Task))
         {
-            var refresh = Task.Run(() => self.RefreshEmbeddedCountAsync(id));
+            return;
+        }
 
-            // Clear the guard from a continuation rather than from inside the refresh,
-            // so an entry in the dictionary always denotes a scan that is genuinely
-            // still running: absence implies the previous scan completed, which is the
-            // property the single-flight guarantee rests on.
-            _ = refresh.ContinueWith(
-                completed => self._countRefreshes.TryRemove(id, out _),
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+        Task refresh;
+        try
+        {
+            refresh = _scheduleCountRefresh(() => RefreshEmbeddedCountAsync(repoId));
+        }
+        catch (Exception ex)
+        {
+            _countRefreshes.TryRemove(ownership);
+            completion.TrySetException(ex);
+            throw;
+        }
 
-            return refresh;
-        }, this);
+        // The scheduled work has finished before this continuation runs. Remove only
+        // its reservation before releasing waiters, so awaiting it includes cleanup.
+        _ = refresh.ContinueWith(completed =>
+        {
+            _countRefreshes.TryRemove(ownership);
+            if (completed.IsFaulted)
+            {
+                completion.TrySetException(completed.Exception!.InnerExceptions);
+            }
+            else if (completed.IsCanceled)
+            {
+                completion.TrySetCanceled();
+            }
+            else
+            {
+                completion.TrySetResult();
+            }
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     /// <summary>
@@ -2039,9 +2063,7 @@ internal sealed class RepoContextVectorWriter
         }
         catch (Exception)
         {
-            // The count is a diagnostic and this type carries no logger by design; a
-            // failed refresh leaves the previous memo in place and the next generation
-            // miss schedules another attempt.
+            // Retain the last completed diagnostic snapshot; a later generation miss retries.
         }
     }
 
@@ -2085,6 +2107,7 @@ internal sealed class RepoContextVectorWriter
             // does, so a membership write that lands mid-scan supersedes this result
             // instead of memoising a count it never reflected.
             var generation = _cache.CaptureGeneration(repoId);
+            var scanSequence = Interlocked.Increment(ref _countScanSequence);
             var asOf = DateTimeOffset.UtcNow;
 
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
@@ -2113,7 +2136,15 @@ internal sealed class RepoContextVectorWriter
             // capture: the next read misses, serves this count as PENDING rather than
             // exact, and schedules a refresh. Staleness is therefore represented in the
             // answer instead of being silently served as exact (issue 1992).
-            _countMemo[repoId] = new EmbeddedCountMemo(generation, enabled, asOf);
+            // An explicit scan can overtake an out-of-band refresh. Never let the
+            // late older walk roll back a newer generation or its served timestamp;
+            // scan order, not the adjustable UTC clock, breaks same-generation ties.
+            var candidate = new EmbeddedCountMemo(generation, enabled, asOf, scanSequence);
+            _countMemo.AddOrUpdate(repoId, candidate, (_, current) =>
+                candidate.Generation > current.Generation
+                || (candidate.Generation == current.Generation && candidate.ScanSequence > current.ScanSequence)
+                    ? candidate
+                    : current);
             return enabled;
         }, cancellationToken);
     }
@@ -2124,7 +2155,9 @@ internal sealed class RepoContextVectorWriter
     /// <param name="Generation">The <see cref="RepoContextVectorCache"/> generation the count was scanned at.</param>
     /// <param name="Count">The counted live embedded sources.</param>
     /// <param name="AsOf">The UTC start of the completed scan.</param>
-    private readonly record struct EmbeddedCountMemo(long Generation, long Count, DateTimeOffset AsOf);
+    /// <param name="ScanSequence">The monotonic scan order used to reject late older walks.</param>
+    private readonly record struct EmbeddedCountMemo(
+        long Generation, long Count, DateTimeOffset AsOf, long ScanSequence);
 
     /// <summary>
     /// The dot-authoring replica identity for a membership flag enable. When the host
