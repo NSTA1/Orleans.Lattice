@@ -440,10 +440,15 @@ internal sealed class TagIndexReconcileGrain(
         }
 
         var treeId = state.State.DirtyTrees[state.State.NextRepairIndex];
-        state.State.NextRepairIndex++;
-
         var ctx = CreateCoordinatorContext();
         var report = await ctx.ReconcileSubjectAsync(treeId, null, null, CancellationToken.None);
+        var repairIndex = state.State.NextRepairIndex;
+        var keysScanned = state.State.KeysScanned;
+        var membershipRowsScanned = state.State.MembershipRowsScanned;
+        var orphanRowsRemoved = state.State.OrphanRowsRemoved;
+        var hadBaseline = state.State.Baselines.TryGetValue(treeId, out var baseline);
+
+        state.State.NextRepairIndex++;
         state.State.KeysScanned += report.KeysScanned;
         state.State.MembershipRowsScanned += report.MembershipRowsScanned;
         state.State.OrphanRowsRemoved += report.OrphanRowsRemoved;
@@ -453,28 +458,67 @@ internal sealed class TagIndexReconcileGrain(
             state.State.Baselines[treeId] = fingerprint;
         }
 
-        if (state.State.NextRepairIndex >= state.State.DirtyTrees.Count)
+        try
         {
-            await FinishSweepAsync();
-            return;
+            if (state.State.NextRepairIndex >= state.State.DirtyTrees.Count)
+            {
+                await FinishSweepAsync();
+                return;
+            }
+            await state.WriteStateAsync();
         }
-        await state.WriteStateAsync();
+        catch when (state.State.InProgress)
+        {
+            // A failed checkpoint must leave the live activation at the same
+            // retry boundary as recovery from the last durable cursor.
+            state.State.NextRepairIndex = repairIndex;
+            state.State.KeysScanned = keysScanned;
+            state.State.MembershipRowsScanned = membershipRowsScanned;
+            state.State.OrphanRowsRemoved = orphanRowsRemoved;
+            if (hadBaseline)
+                state.State.Baselines[treeId] = baseline!;
+            else
+                state.State.Baselines.Remove(treeId);
+            throw;
+        }
     }
 
     private async Task FinishSweepAsync()
     {
         var report = CurrentReport();
-        EmitMetrics(report);
+        var inProgress = state.State.InProgress;
+        var phase = state.State.Phase;
+        var coveredTrees = state.State.CoveredTrees;
+        var dirtyTrees = state.State.DirtyTrees;
+        var pendingBaselines = state.State.PendingBaselines;
+        var probeIndex = state.State.NextProbeIndex;
+        var repairIndex = state.State.NextRepairIndex;
 
         state.State.InProgress = false;
         state.State.Phase = TagIndexReconcilePhase.Idle;
         state.State.CoveredTrees = [];
         state.State.DirtyTrees = [];
-        state.State.PendingBaselines.Clear();
+        if (pendingBaselines.Count > 0)
+            state.State.PendingBaselines = new(StringComparer.Ordinal);
         state.State.NextProbeIndex = 0;
         state.State.NextRepairIndex = 0;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = inProgress;
+            state.State.Phase = phase;
+            state.State.CoveredTrees = coveredTrees;
+            state.State.DirtyTrees = dirtyTrees;
+            state.State.PendingBaselines = pendingBaselines;
+            state.State.NextProbeIndex = probeIndex;
+            state.State.NextRepairIndex = repairIndex;
+            throw;
+        }
 
+        EmitMetrics(report);
         await CompleteCoordinatorAsync();
     }
 
