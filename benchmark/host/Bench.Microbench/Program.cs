@@ -871,8 +871,16 @@ if (string.Equals(suite, "leafchainwalk", StringComparison.OrdinalIgnoreCase))
 }
 
 if (string.Equals(suite, "autonomicprobes", StringComparison.OrdinalIgnoreCase)
-    || string.Equals(suite, "maintenanceelisions", StringComparison.OrdinalIgnoreCase))
+    || string.Equals(suite, "maintenanceelisions", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(suite, "provisioningheads", StringComparison.OrdinalIgnoreCase))
 {
+    if (string.Equals(suite, "provisioningheads", StringComparison.OrdinalIgnoreCase))
+    {
+        config = config.AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is AutonomicProbeElisionBenchmarks.Site.AppTreeProvision
+                or AutonomicProbeElisionBenchmarks.Site.ReplayHorizon
+                or AutonomicProbeElisionBenchmarks.Site.LineageBoundary));
+    }
     if (string.Equals(suite, "maintenanceelisions", StringComparison.OrdinalIgnoreCase))
     {
         config = config.AddFilter(new SimpleFilter(benchmark =>
