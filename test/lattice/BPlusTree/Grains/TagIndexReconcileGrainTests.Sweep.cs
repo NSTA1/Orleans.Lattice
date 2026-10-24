@@ -104,6 +104,13 @@ public partial class TagIndexReconcileGrainTests
                 .Returns(ci => Task.FromResult(Data.TryGetValue(ci.ArgAt<string>(0), out var v) ? v : null));
             sub.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(ci => Task.FromResult(Data.ContainsKey(ci.ArgAt<string>(0))));
+            sub.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+                .Returns(ci => Task.FromResult(new GatedMultiReadResult
+                {
+                    Values = ci.Arg<List<string>>()
+                        .Where(Data.ContainsKey)
+                        .ToDictionary(key => key, key => Data[key], StringComparer.Ordinal),
+                }));
             sub.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
                 .Returns(ci =>
                 {
