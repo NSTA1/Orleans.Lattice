@@ -126,7 +126,7 @@ audit and repair instances; their counterexamples retain the Coyote trace.
 | Rewind the cursor on a schedule reminder. | Phase bounds and Coyote. | Cursor regression; SingleSweep trace. |
 | Skip the whole-tree repair RPC but bank completion. | Re-probe and Coyote. | Orphan remains after final stable sweep; divergence trace. |
 
-An additional cancellation regression protects ownership of the old scheduled
+The separate #4992 cancellation regression protects ownership of the old scheduled
 sweep: a cancelled tracked request must not abandon work it has not started.
 It was red with an unconditional cancellation cleanup and green after cleanup
 was restricted to the new request's own sweep. It is separate from the
