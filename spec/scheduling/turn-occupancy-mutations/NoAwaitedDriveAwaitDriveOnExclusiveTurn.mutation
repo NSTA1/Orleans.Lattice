@@ -1,0 +1,24 @@
+MODULE: NoAwaitedDriveAwaitDriveOnExclusiveTurn
+TARGET: NoAwaitedDrive
+CLASS: Invariant
+SUMMARY: the coverage timer retains its exclusive turn while awaiting the drive
+PERTURBS: Dispatch
+
+--- FIND
+Dispatch(g) ==
+    /\ timer[g] = "dispatch" /\ turn[g] = "timer"
+    /\ operation' = [operation EXCEPT ![g] = "running"]
+    /\ turn' = ReleaseTurn(g)
+    /\ timer' = [timer EXCEPT ![g] = "done"]
+    /\ age' = [age EXCEPT ![g] = IF queued[g] THEN @ + 1 ELSE @]
+    /\ UNCHANGED <<queued, served>>
+--- REPLACE
+\* MUTATION: the coverage timer retains its exclusive turn while awaiting the drive
+Dispatch(g) ==
+    /\ timer[g] = "dispatch" /\ turn[g] = "timer"
+    /\ operation' = [operation EXCEPT ![g] = "running"]
+    /\ turn' = HoldTurn(g, "timer")
+    /\ timer' = [timer EXCEPT ![g] = "done"]
+    /\ age' = [age EXCEPT ![g] = IF queued[g] THEN @ + 1 ELSE @]
+    /\ UNCHANGED <<queued, served>>
+--- END

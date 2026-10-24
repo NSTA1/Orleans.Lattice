@@ -1,0 +1,26 @@
+MODULE: NoLostWaiterCancelKeepsRegistration
+TARGET: NoLostWaiter
+CLASS: Invariant
+SUMMARY: cancel settles the caller but leaves its registration queued
+PERTURBS: Cancel
+
+--- FIND
+Cancel(c) ==
+    /\ outcome[c] = "parked"
+    /\ parked' = [p \in Partitions |-> Remove(parked[p], c)]
+    /\ outcome' = [outcome EXCEPT ![c] = "cancelled"]
+    /\ waitLeft' = [waitLeft EXCEPT ![c] = 0]
+    /\ callLeft' = [callLeft EXCEPT ![c] = 0]
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery, home,
+        phase, cursor, refusalState>>
+--- REPLACE
+\* MUTATION: cancel settles the caller but leaves its registration queued
+Cancel(c) ==
+    /\ outcome[c] = "parked"
+    /\ parked' = [p \in Partitions |-> parked[p]]
+    /\ outcome' = [outcome EXCEPT ![c] = "cancelled"]
+    /\ waitLeft' = [waitLeft EXCEPT ![c] = 0]
+    /\ callLeft' = [callLeft EXCEPT ![c] = 0]
+    /\ UNCHANGED <<inflight, state, acuteCause, faultPhase, recovery, home,
+        phase, cursor, refusalState>>
+--- END

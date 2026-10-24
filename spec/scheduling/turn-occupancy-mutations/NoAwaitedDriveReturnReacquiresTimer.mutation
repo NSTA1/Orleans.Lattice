@@ -1,0 +1,18 @@
+MODULE: NoAwaitedDriveReturnReacquiresTimer
+TARGET: NoAwaitedDrive
+CLASS: Invariant
+SUMMARY: returning a foreground call reacquires the exclusive timer turn during a drive
+PERTURBS: CallReturn
+
+--- FIND
+CallReturn(g) ==
+    /\ turn[g] = "call"
+    /\ turn' = ReleaseTurn(g)
+    /\ UNCHANGED <<queued, served, operation, timer, age>>
+--- REPLACE
+\* MUTATION: returning a foreground call reacquires the exclusive timer turn during a drive
+CallReturn(g) ==
+    /\ turn[g] = "call"
+    /\ turn' = HoldTurn(g, "timer")
+    /\ UNCHANGED <<queued, served, operation, timer, age>>
+--- END

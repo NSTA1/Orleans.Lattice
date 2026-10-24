@@ -2296,7 +2296,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <param name="partitionCount">The tree's WAL partition count.</param>
     /// <param name="arm">The diagnostic label of the arm that requested the drive.</param>
-    private async Task DispatchTimerDriveAsync(int partitionCount, string arm)
+    internal async Task DispatchTimerDriveAsync(int partitionCount, string arm)
     {
         if (_interleavedTimerDrive is not null)
         {

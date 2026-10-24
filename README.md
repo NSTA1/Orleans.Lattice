@@ -393,6 +393,7 @@ For internals (the "how"):
 - [Verified Atomic Action](docs/lattice/verified-atomic-action.md) - the verified core and Coyote concurrency tier behind the atomic-action coordinator's step sequencing, reverse-order compensation, and crash resume.
 - [Verified Distributed Lock](docs/lattice/verified-lock.md) - the verified core and Coyote concurrency tier behind the distributed lock's fencing tokens, stale-token rejection, and expired-lease reclamation.
 - [Verified WAL](docs/lattice/verified-wal.md) - the proven-core pattern and Coyote concurrency tier behind the WAL shipping, GC-trim, cursor-registry, move-fence, shutdown-drain, offset-allocation, blocked-floor, and move-resume seams.
+- [Verified Scheduling and Progress](docs/lattice/verified-scheduling.md) - bounded resource and turn models, production detectors, and the distinction between environmental fairness and a service-time guarantee.
 - [WAL](docs/lattice/wal.md) - write-ahead log as the sole foreground-commit durability boundary.
 - [WAL Causal+](docs/lattice/wal-causal-plus.md) - causal+ entry-schema extension, dependency satisfaction, snapshot semantics.
 - [WAL Storage Providers](docs/lattice/wal-storage-providers.md) - `IWalStorageProvider` durability seam, in-memory default, optional Azure Table and local-file backends.
