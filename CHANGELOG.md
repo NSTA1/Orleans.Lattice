@@ -32,9 +32,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
-- **Performance - Autonomic maintenance and sampling probes.** Hot-shard ticks and shard-healing sweeps read the four maintenance coordinators directly instead of through the lattice grain (8 serial calls to 4) and sample each shard with one status call instead of three. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956)) (`Orleans.Lattice`)
+- **Performance - Maintenance and sampling probes.** Autonomic probes cut serial calls from 8 to 4; shrink planning and donor retirement cut snapshot/merge probes from 4 to 2. Shard sampling uses one status call instead of three. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960)) (`Orleans.Lattice`)
 
-- **Performance - Tree creation registry calls.** `CreateTreeAsync` registers a tree and reads its entry back in one registry call instead of three serial ones. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+- **Performance - Registration and options seeding.** `CreateTreeAsync` registers a tree and returns its entry in one registry call instead of three. Lazy options seeding reuses the registration result, cutting registry calls from 3 to 2. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
 
 - **Performance - Autonomic registry reads.** Hot-shard ticks, shard-healing sweeps and the replication applier's de-enrolled-tree discard read the physical tree and shard map from one registry entry, cutting registry calls from 3/3/3 to 2/1/1 without changing public APIs. ([#4952](https://github.com/NSTA1/Orleans.Lattice/pull/4952)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
