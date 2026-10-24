@@ -840,17 +840,15 @@ internal sealed class TreeShardConsolidationGrain(
 
     /// <summary>
     /// Whether a snapshot of, or a merge into, this fold's tree is running. Read
-    /// through the tree's own status verbs under a system-origin scope, exactly
-    /// as the healing orchestrator's stand-off reads them, because this
-    /// timer-driven step carries no caller identity for the access gate.
+    /// the coordinators directly under system origin, without forwarding
+    /// ILattice hops, because this timer-driven step carries no caller identity
+    /// for the access gate.
     /// </summary>
     private async Task<bool> IsTreeMaintenanceInFlightAsync()
     {
-        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            return !await lattice.IsSnapshotCompleteAsync()
-                || !await lattice.IsMergeCompleteAsync();
+            return await TreeMaintenanceProbe.IsSnapshotOrMergeInFlightAsync(grainFactory, TreeId);
         }
     }
 

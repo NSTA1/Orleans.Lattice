@@ -66,6 +66,22 @@ public partial class TreeReshardGrainTests
         => fold.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ITreeShardConsolidationGrain.StartAsync));
 
     [Test]
+    public async Task A_shrink_reads_maintenance_coordinators_without_lattice_forwarding_calls()
+    {
+        var h = CreateShrinkGrain(ShardMap.CreateDefault(16, 4), target: 2);
+        var lattice = h.Factory.GetGrain<ILattice>(TreeId);
+        lattice.ClearReceivedCalls();
+
+        await h.Grain.MigrateAsync();
+
+        await h.Factory.GetGrain<ITreeSnapshotGrain>(TreeId).Received(1).IsIdleAsync();
+        await h.Factory.GetGrain<ITreeMergeGrain>(TreeId).Received(1).IsCompleteAsync();
+        await lattice.DidNotReceive().IsSnapshotCompleteAsync();
+        await lattice.DidNotReceive().IsMergeCompleteAsync();
+        Assert.That(h.Folds.Values.Sum(StartCalls), Is.EqualTo(2));
+    }
+
+    [Test]
     public async Task A_shrink_starts_folds_on_the_cheapest_adjacent_pairs_up_to_the_shards_still_needed()
     {
         // Four equal shards, target two: two folds are needed. The cheapest pair
@@ -88,9 +104,8 @@ public partial class TreeReshardGrainTests
     public async Task A_shrink_starts_no_fold_while_a_snapshot_or_merge_reads_the_tree(string running)
     {
         var h = CreateShrinkGrain(ShardMap.CreateDefault(16, 4), target: 2);
-        var lattice = h.Factory.GetGrain<ILattice>(TreeId);
-        if (running == "snapshot") lattice.IsSnapshotCompleteAsync().Returns(false);
-        else lattice.IsMergeCompleteAsync().Returns(false);
+        if (running == "snapshot") h.Factory.GetGrain<ITreeSnapshotGrain>(TreeId).IsIdleAsync().Returns(false);
+        else h.Factory.GetGrain<ITreeMergeGrain>(TreeId).IsCompleteAsync().Returns(false);
 
         await h.Grain.MigrateAsync();
 

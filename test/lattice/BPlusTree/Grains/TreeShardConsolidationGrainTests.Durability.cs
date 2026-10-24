@@ -154,9 +154,10 @@ public partial class TreeShardConsolidationGrainTests
         // shard list it recorded when it started.
         var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Complete));
         h.PersistedMap = new ShardMap { Slots = new int[VirtualShardCount] };
-        var lattice = h.Factory.GetGrain<ILattice>(TreeId);
-        if (running == "snapshot") lattice.IsSnapshotCompleteAsync().Returns(false);
-        else lattice.IsMergeCompleteAsync().Returns(false);
+        var snapshot = h.Factory.GetGrain<ITreeSnapshotGrain>(TreeId);
+        var merge = h.Factory.GetGrain<ITreeMergeGrain>(TreeId);
+        if (running == "snapshot") snapshot.IsIdleAsync().Returns(false);
+        else merge.IsCompleteAsync().Returns(false);
 
         var finished = await h.Grain.FinaliseAsync();
 
@@ -165,10 +166,27 @@ public partial class TreeShardConsolidationGrainTests
         Assert.That(h.State.State.Phase, Is.EqualTo(ShardConsolidationPhase.Complete));
         await h.Donor.DidNotReceive().RetireAsync();
 
-        lattice.IsSnapshotCompleteAsync().Returns(true);
-        lattice.IsMergeCompleteAsync().Returns(true);
+        snapshot.IsIdleAsync().Returns(true);
+        merge.IsCompleteAsync().Returns(true);
 
         Assert.That(await h.Grain.FinaliseAsync(), Is.True, "the fold completes once the maintenance has finished");
+        await h.Donor.Received(1).RetireAsync();
+    }
+
+    [Test]
+    public async Task Finalise_probes_coordinators_without_lattice_forwarding_calls()
+    {
+        var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.Complete));
+        h.PersistedMap = new ShardMap { Slots = new int[VirtualShardCount] };
+        var lattice = h.Factory.GetGrain<ILattice>(TreeId);
+        lattice.ClearReceivedCalls();
+
+        Assert.That(await h.Grain.FinaliseAsync(), Is.True);
+
+        await h.Factory.GetGrain<ITreeSnapshotGrain>(TreeId).Received(1).IsIdleAsync();
+        await h.Factory.GetGrain<ITreeMergeGrain>(TreeId).Received(1).IsCompleteAsync();
+        await lattice.DidNotReceive().IsSnapshotCompleteAsync();
+        await lattice.DidNotReceive().IsMergeCompleteAsync();
         await h.Donor.Received(1).RetireAsync();
     }
 

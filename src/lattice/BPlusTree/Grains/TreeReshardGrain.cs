@@ -718,19 +718,17 @@ internal sealed class TreeReshardGrain(
     }
 
     /// <summary>
-    /// Whether a snapshot of, or a merge into, this tree is running. Read through
-    /// the tree's own status verbs under a system-origin scope, as the healing
-    /// orchestrator's stand-off reads them. Deliberately never asks
+    /// Whether a snapshot of, or a merge into, this tree is running. Read the
+    /// coordinators directly under system origin, without the forwarding
+    /// ILattice hops. Deliberately never asks
     /// <see cref="ILattice.IsReshardCompleteAsync"/>, which would call back into
     /// this coordinator.
     /// </summary>
     private async Task<bool> IsSnapshotOrMergeInFlightAsync()
     {
-        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            return !await lattice.IsSnapshotCompleteAsync()
-                || !await lattice.IsMergeCompleteAsync();
+            return await TreeMaintenanceProbe.IsSnapshotOrMergeInFlightAsync(grainFactory, TreeId);
         }
     }
 

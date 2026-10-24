@@ -74,6 +74,8 @@ if (!string.IsNullOrWhiteSpace(filterRaw))
 
 var config = (IConfig)new HarnessConfig(resultsPath);
 
+// The maintenanceelisions suite selects the reshard, consolidation and options
+// lanes of autonomicprobes.
 // Opt-in alternate suite: the producer-side commit-observer microbench
 // (ReplicationCommitObserverBenchmarks) runs only when explicitly selected
 // via BENCH_MICROBENCH_SUITE=observer (or --suite observer). The default
@@ -868,8 +870,16 @@ if (string.Equals(suite, "leafchainwalk", StringComparison.OrdinalIgnoreCase))
     return leafChainWalkSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
-if (string.Equals(suite, "autonomicprobes", StringComparison.OrdinalIgnoreCase))
+if (string.Equals(suite, "autonomicprobes", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(suite, "maintenanceelisions", StringComparison.OrdinalIgnoreCase))
 {
+    if (string.Equals(suite, "maintenanceelisions", StringComparison.OrdinalIgnoreCase))
+    {
+        config = config.AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is AutonomicProbeElisionBenchmarks.Site.ReshardStandOff
+                or AutonomicProbeElisionBenchmarks.Site.ConsolidationFinalise
+                or AutonomicProbeElisionBenchmarks.Site.OptionsSeeding));
+    }
     Console.WriteLine("[microbench] suite   -> autonomicprobes (AutonomicProbeElisionBenchmarks)");
     var autonomicProbesSummary = BenchmarkRunner.Run<AutonomicProbeElisionBenchmarks>(config);
     return autonomicProbesSummary.HasCriticalValidationErrors || autonomicProbesSummary.Reports.Any(report => !report.Success) ? 1 : 0;

@@ -43,14 +43,33 @@ internal static class TreeMaintenanceProbe
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(treeId);
 
-        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-            throw new LatticeReservedTreeNamespaceException(
-                treeId,
-                $"Tree ID '{treeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
+        ThrowIfSystemTree(treeId);
 
         return !await grainFactory.GetGrain<ITreeResizeGrain>(treeId).IsIdleAsync()
             || !await grainFactory.GetGrain<ITreeReshardGrain>(treeId).IsIdleAsync()
             || !await grainFactory.GetGrain<ITreeMergeGrain>(treeId).IsCompleteAsync()
             || !await grainFactory.GetGrain<ITreeSnapshotGrain>(treeId).IsIdleAsync();
+    }
+
+    /// <summary>
+    /// Probes snapshot first, then merge, without calling back into a reshard or
+    /// consolidation coordinator that is itself waiting on this probe.
+    /// </summary>
+    public static async Task<bool> IsSnapshotOrMergeInFlightAsync(IGrainFactory grainFactory, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(treeId);
+        ThrowIfSystemTree(treeId);
+
+        return !await grainFactory.GetGrain<ITreeSnapshotGrain>(treeId).IsIdleAsync()
+            || !await grainFactory.GetGrain<ITreeMergeGrain>(treeId).IsCompleteAsync();
+    }
+
+    private static void ThrowIfSystemTree(string treeId)
+    {
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            throw new LatticeReservedTreeNamespaceException(
+                treeId,
+                $"Tree ID '{treeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
     }
 }

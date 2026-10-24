@@ -78,4 +78,46 @@ public class TreeMaintenanceProbeTests
             () => TreeMaintenanceProbe.IsMaintenanceInFlightAsync(factory, systemTree));
         resize.DidNotReceive().IsIdleAsync();
     }
+
+    [TestCase(true, true, false)]
+    [TestCase(false, true, true)]
+    [TestCase(true, false, true)]
+    public async Task IsSnapshotOrMergeInFlightAsync_probes_only_snapshot_then_merge(
+        bool snapshotIdle, bool mergeComplete, bool expected)
+    {
+        var (factory, resize, reshard, merge, snapshot) = CreateFactory(
+            snapshotIdle: snapshotIdle, mergeComplete: mergeComplete);
+
+        Assert.That(await TreeMaintenanceProbe.IsSnapshotOrMergeInFlightAsync(factory, TreeId), Is.EqualTo(expected));
+
+        await snapshot.Received(1).IsIdleAsync();
+        await merge.Received(snapshotIdle ? 1 : 0).IsCompleteAsync();
+        await resize.DidNotReceive().IsIdleAsync();
+        await reshard.DidNotReceive().IsIdleAsync();
+        factory.DidNotReceive().GetGrain<ILattice>(Arg.Any<string>(), Arg.Any<string?>());
+    }
+
+    [Test]
+    public void IsSnapshotOrMergeInFlightAsync_rejects_system_trees_before_any_grain_call()
+    {
+        var (factory, _, _, merge, snapshot) = CreateFactory();
+
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(() =>
+            TreeMaintenanceProbe.IsSnapshotOrMergeInFlightAsync(factory, LatticeConstants.SystemTreePrefix + "probe"));
+
+        snapshot.DidNotReceive().IsIdleAsync();
+        merge.DidNotReceive().IsCompleteAsync();
+    }
+
+    [Test]
+    public void IsSnapshotOrMergeInFlightAsync_propagates_snapshot_failure_without_probing_merge()
+    {
+        var (factory, _, _, merge, snapshot) = CreateFactory();
+        snapshot.IsIdleAsync().Returns(Task.FromException<bool>(new InvalidOperationException("unavailable")));
+
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            TreeMaintenanceProbe.IsSnapshotOrMergeInFlightAsync(factory, TreeId));
+
+        merge.DidNotReceive().IsCompleteAsync();
+    }
 }
