@@ -5,7 +5,7 @@ using BenchmarkDotNet.Attributes;
 namespace Orleans.Lattice.Benchmark.Microbench;
 
 /// <summary>
-/// Isolates three grain-call elisions on control-plane and autonomic paths.
+/// Isolates grain-call elisions on control-plane and autonomic paths.
 /// Each simulated grain call completes per the hop model, and every lane counts
 /// the calls it issues so the shapes can be checked against each other.
 /// <list type="bullet">
@@ -22,6 +22,11 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// concurrent fan-outs; it now issues one <c>GetSamplingStatusAsync</c> per
 /// shard. Latency was already concurrent, so the evidence here is the message
 /// count and the <see cref="HopModel.Yield"/> dispatch overhead.</item>
+/// <item><see cref="Site.ReshardStandOff"/> and <see cref="Site.ConsolidationFinalise"/>
+/// - shrink planning and donor retirement each probe snapshot then merge
+/// directly, instead of forwarding through two ILattice status calls.</item>
+/// <item><see cref="Site.OptionsSeeding"/> - resolving an incomplete existing
+/// row uses the registration result instead of reading the entry back.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -33,7 +38,8 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <para>
 /// Run it via <c>BENCH_MICROBENCH_SUITE=autonomicprobes</c> (or
 /// <c>--suite autonomicprobes</c>); see <c>Program.cs</c>. The suite has no
-/// Orleans silo dependency.
+/// Orleans silo dependency. <c>--suite maintenanceelisions</c> selects only the
+/// reshard, consolidation and options-seeding lanes.
 /// </para>
 /// </summary>
 [MemoryDiagnoser]
@@ -44,7 +50,8 @@ public class AutonomicProbeElisionBenchmarks
     private int _calls;
 
     /// <summary>Which call site is measured; see the class summary.</summary>
-    [Params(Site.CreateTree, Site.MaintenanceProbe, Site.ShardSampling)]
+    [Params(Site.CreateTree, Site.MaintenanceProbe, Site.ShardSampling,
+        Site.ReshardStandOff, Site.ConsolidationFinalise, Site.OptionsSeeding)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated grain call completes; see the class summary.</summary>
@@ -69,7 +76,9 @@ public class AutonomicProbeElisionBenchmarks
         {
             Site.CreateTree => (3, 1),
             Site.MaintenanceProbe => (8, 4),
-            _ => (3 * ShardCount, ShardCount),
+            Site.ShardSampling => (3 * ShardCount, ShardCount),
+            Site.OptionsSeeding => (3, 2),
+            _ => (4, 2),
         };
         if (beforeCalls != expectedBefore || afterCalls != expectedAfter)
         {
@@ -85,7 +94,9 @@ public class AutonomicProbeElisionBenchmarks
     {
         Site.CreateTree => CreateTreeBeforeAsync(),
         Site.MaintenanceProbe => MaintenanceBeforeAsync(),
-        _ => SamplingBeforeAsync(),
+        Site.ShardSampling => SamplingBeforeAsync(),
+        Site.OptionsSeeding => OptionsSeedingBeforeAsync(),
+        _ => SnapshotMergeBeforeAsync(),
     };
 
     [Benchmark(Description = "after")]
@@ -93,8 +104,31 @@ public class AutonomicProbeElisionBenchmarks
     {
         Site.CreateTree => CreateTreeAfterAsync(),
         Site.MaintenanceProbe => MaintenanceAfterAsync(),
-        _ => SamplingAfterAsync(),
+        Site.ShardSampling => SamplingAfterAsync(),
+        Site.OptionsSeeding => OptionsSeedingAfterAsync(),
+        _ => SnapshotMergeAfterAsync(),
     };
+
+    private async Task<int> SnapshotMergeBeforeAsync()
+        => await ForwardedAsync() + await ForwardedAsync();
+
+    private async Task<int> SnapshotMergeAfterAsync()
+        => await CallAsync(0) + await CallAsync(0);
+
+    // An existing incomplete row needs no purge probe; registration is a
+    // no-op that returns the effective row without repairing its missing pins.
+    private async Task<int> OptionsSeedingBeforeAsync()
+    {
+        await CallAsync(0);
+        await CallAsync(0);
+        return await CallAsync(7);
+    }
+
+    private async Task<int> OptionsSeedingAfterAsync()
+    {
+        await CallAsync(0);
+        return await CallAsync(7);
+    }
 
     private async Task<int> CreateTreeBeforeAsync()
     {
@@ -208,6 +242,15 @@ public class AutonomicProbeElisionBenchmarks
 
         /// <summary>The per-shard status fan-out of a sampling pass.</summary>
         ShardSampling,
+
+        /// <summary>Reshard shrink's snapshot/merge stand-off (four calls to two).</summary>
+        ReshardStandOff,
+
+        /// <summary>Consolidation donor retirement's stand-off (four calls to two).</summary>
+        ConsolidationFinalise,
+
+        /// <summary>Lazy options seeding of an incomplete row (three registry calls to two).</summary>
+        OptionsSeeding,
     }
 
     /// <summary>How a simulated grain call completes.</summary>

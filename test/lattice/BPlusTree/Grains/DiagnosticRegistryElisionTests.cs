@@ -59,6 +59,7 @@ public sealed class DiagnosticRegistryElisionTests
         Assert.That(report.WalPhysicalBytes, Is.EqualTo(800));
         await registry.Received(2).GetEntryAsync(TreeId);
         await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!);
+        await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
         await wal.Received(1).GetByteSizesAsync(CancellationToken.None);
         await wal.DidNotReceiveWithAnyArgs().GetPhysicalByteSizeAsync(default);
         await wal.DidNotReceiveWithAnyArgs().GetRetainedByteSizeAsync(default);
@@ -150,7 +151,8 @@ public sealed class DiagnosticRegistryElisionTests
         var (factory, registry, _) = Arrange();
         using var metrics = new LatticeStorageUsageMetrics();
         var incomplete = absent ? null : new TreeRegistryEntry();
-        registry.GetEntryAsync(TreeId).Returns(incomplete, incomplete, Entry(), Entry(), Entry());
+        registry.GetEntryAsync(TreeId).Returns(incomplete, incomplete, Entry(), Entry());
+        registry.RegisterAndGetEntryAsync(TreeId, incomplete).Returns((absent, Entry()));
         var deletion = Substitute.For<ITreeDeletionGrain>();
         factory.GetGrain<ITreeDeletionGrain>(TreeId).Returns(deletion);
         var grain = Create(factory, metrics, new LatticeOptions());
@@ -158,6 +160,7 @@ public sealed class DiagnosticRegistryElisionTests
         var report = await grain.GetWalUsageAsync(CancellationToken.None);
 
         Assert.That(report.WalPhysicalBytes, Is.EqualTo(800));
-        await registry.Received(1).RegisterAsync(TreeId, incomplete);
+        await registry.Received(1).RegisterAndGetEntryAsync(TreeId, incomplete);
+        await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!);
     }
 }

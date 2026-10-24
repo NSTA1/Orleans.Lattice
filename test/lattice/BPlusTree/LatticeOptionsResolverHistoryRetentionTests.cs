@@ -149,7 +149,7 @@ public sealed class LatticeOptionsResolverHistoryRetentionTests
 
     /// <summary>
     /// The history-retention read must stay a <em>pure</em> read. The resolve
-    /// path's fetch lazily calls <c>RegisterAsync</c> when a structural pin is
+    /// path's fetch lazily calls <c>RegisterAndGetEntryAsync</c> when a structural pin is
     /// missing; routing this read through it would let a view maintainer
     /// draining an unregistered source tree silently register that tree as a
     /// side effect of reading its retention policy.
@@ -163,6 +163,7 @@ public sealed class LatticeOptionsResolverHistoryRetentionTests
         var policy = await resolver.GetHistoryRetentionAsync("never-registered", HybridWindow);
 
         await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!, default);
+        await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!, default);
         Assert.Multiple(() =>
         {
             Assert.That(policy.Mode, Is.EqualTo(HistoryRetentionMode.MetadataOnly),

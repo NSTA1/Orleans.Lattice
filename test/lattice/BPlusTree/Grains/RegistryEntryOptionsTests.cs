@@ -44,6 +44,7 @@ public class RegistryEntryOptionsTests
         });
         await registry.Received(1).GetEntryAsync(TreeId);
         await registry.DidNotReceive().RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
+        await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
     }
 
     [TestCase(false)]
@@ -59,18 +60,20 @@ public class RegistryEntryOptionsTests
             PhysicalTreeId = "fresh-copy", ShardMap = new ShardMap { Slots = [0, 4], Version = 9 },
         };
         registry.GetEntryAsync(TreeId).Returns(_ => registered ? fresh : initial);
-        registry.RegisterAsync(TreeId, Arg.Any<TreeRegistryEntry?>()).Returns(_ =>
+        registry.RegisterAndGetEntryAsync(TreeId, Arg.Any<TreeRegistryEntry?>()).Returns(_ =>
         {
             registered = true;
-            return Task.CompletedTask;
+            return Task.FromResult<(bool, TreeRegistryEntry?)>(
+                (missing, fresh with { PhysicalTreeId = "seeding-copy" }));
         });
 
         var result = await RegistryEntryOptions.ReadAsync(registry, resolver, TreeId);
 
         Assert.That(result.Entry, Is.SameAs(fresh));
         Assert.That(result.Options.ShardCount, Is.EqualTo(3));
-        await registry.Received(1).RegisterAsync(TreeId, Arg.Any<TreeRegistryEntry?>());
-        await registry.Received(4).GetEntryAsync(TreeId);
+        await registry.Received(1).RegisterAndGetEntryAsync(TreeId, initial);
+        await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!);
+        await registry.Received(3).GetEntryAsync(TreeId);
     }
 
     [Test]
@@ -85,6 +88,7 @@ public class RegistryEntryOptionsTests
         Assert.That(result.Options.ShardCount, Is.EqualTo(LatticeConstants.DefaultShardCount));
         await registry.Received(1).GetEntryAsync(systemId);
         await registry.DidNotReceive().RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
+        await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
     }
 
     [Test]
@@ -98,6 +102,7 @@ public class RegistryEntryOptionsTests
 
         Assert.That(registry.ReceivedCalls().Any(c =>
             c.GetMethodInfo().Name == nameof(ILatticeRegistry.RegisterAsync)), Is.False);
+        registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
     }
 
     [Test]

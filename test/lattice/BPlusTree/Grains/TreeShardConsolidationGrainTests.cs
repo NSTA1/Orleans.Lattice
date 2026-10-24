@@ -184,6 +184,12 @@ public partial class TreeShardConsolidationGrainTests
         lattice.IsSnapshotCompleteAsync().Returns(true);
         lattice.IsMergeCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        var snapshot = Substitute.For<ITreeSnapshotGrain>();
+        snapshot.IsIdleAsync().Returns(true);
+        grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId).Returns(snapshot);
+        var merge = Substitute.For<ITreeMergeGrain>();
+        merge.IsCompleteAsync().Returns(true);
+        grainFactory.GetGrain<ITreeMergeGrain>(TreeId).Returns(merge);
 
         var clock = new FakeTimeProvider();
         var state = existingState ?? new FakePersistentState<TreeShardConsolidationState>();

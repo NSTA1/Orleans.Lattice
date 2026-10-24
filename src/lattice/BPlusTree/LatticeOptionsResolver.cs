@@ -17,14 +17,14 @@ namespace Orleans.Lattice.BPlusTree;
 /// registry is the single source of truth for the fields it pins. A user tree
 /// without a complete pin does not fault the resolve. When the registry has no
 /// row for the tree, or its row lacks any of the three structural fields,
-/// <see cref="ResolveAsync"/> calls <see cref="ILatticeRegistry.RegisterAsync"/>
+/// <see cref="ResolveAsync"/> calls <see cref="ILatticeRegistry.RegisterAndGetEntryAsync"/>
 /// inside the registry read it shares with concurrent resolves of the same
-/// tree, then reads the entry again. Registration is idempotent: it seeds a
-/// <em>new</em> row with the <see cref="LatticeConstants"/> structural defaults
+/// tree, returning the effective entry in that same grain call. Registration
+/// is idempotent: it seeds a <em>new</em> row with the <see cref="LatticeConstants"/> structural defaults
 /// and the then-current <see cref="LatticeOptions.WalPartitions"/> as the WAL
 /// partition pin, but leaves an existing row untouched, so a field missing
 /// from an existing row is never written back. A structural field still
-/// missing after the second read resolves to its <see cref="LatticeConstants"/>
+/// missing after registration resolves to its <see cref="LatticeConstants"/>
 /// default for that call, and a missing WAL partition pin resolves to the live
 /// <see cref="LatticeOptions.WalPartitions"/> value. Only
 /// <see cref="ResolveAsync"/> registers; the single-field fast paths and
@@ -308,7 +308,7 @@ internal sealed class LatticeOptionsResolver(
         {
             // Lazy first-use seeding: every user tree must have a
             // structural pin, but callers should not have to register
-            // explicitly for simple scenarios. RegisterAsync is
+            // explicitly for simple scenarios. RegisterAndGetEntryAsync is
             // idempotent: it fills nulls with LatticeConstants defaults
             // only when it creates the row, and is a no-op for a row
             // that already exists, so an existing row missing a field
@@ -320,8 +320,8 @@ internal sealed class LatticeOptionsResolver(
             // tree here would silently undo the purge for every later caller.
             if (entry is null)
                 await PurgedTreeRegistrationGuard.ThrowIfPurgedAsync(grainFactory, treeId).ConfigureAwait(false);
-            await registry.RegisterAsync(treeId, entry).ConfigureAwait(false);
-            entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false) ?? entry;
+            var registration = await registry.RegisterAndGetEntryAsync(treeId, entry).ConfigureAwait(false);
+            entry = registration.Entry ?? entry;
 #if LATTICE_DIAG
             try
             {

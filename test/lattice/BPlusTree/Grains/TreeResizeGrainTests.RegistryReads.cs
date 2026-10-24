@@ -49,6 +49,7 @@ public partial class TreeResizeGrainTests
         var registry = factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var entry = new TreeRegistryEntry { ShardMap = new ShardMap { Slots = [0, 4] } };
         registry.GetEntryAsync(TreeId).Returns(entry);
+        registry.RegisterAndGetEntryAsync(TreeId, entry).Returns((false, entry));
         factory.GetGrain<IShardRootGrain>($"{TreeId}/0").IsBootstrapReadFencedAsync().Returns(false);
         factory.GetGrain<IShardRootGrain>($"{TreeId}/4").IsBootstrapReadFencedAsync().Returns(true);
         registry.ClearReceivedCalls();
@@ -56,7 +57,8 @@ public partial class TreeResizeGrainTests
         var refusal = Assert.ThrowsAsync<InvalidOperationException>(() => grain.UndoResizeAsync());
 
         Assert.That(refusal!.Message, Does.Contain("read-fenced"));
-        registry.Received(1).RegisterAsync(TreeId, entry);
+        registry.Received(1).RegisterAndGetEntryAsync(TreeId, entry);
+        registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!);
         Assert.That(registry.ReceivedCalls().Count(c =>
             c.GetMethodInfo().Name == nameof(ILatticeRegistry.GetEntryAsync)), Is.GreaterThan(1));
         factory.GetGrain<IShardRootGrain>($"{TreeId}/4").Received(1).IsBootstrapReadFencedAsync();

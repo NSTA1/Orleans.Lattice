@@ -75,6 +75,12 @@ public partial class TreeReshardGrainTests
         defaultLattice.IsSnapshotCompleteAsync().Returns(true);
         defaultLattice.IsMergeCompleteAsync().Returns(true);
         grainFactory.GetGrain<ILattice>(TreeId).Returns(defaultLattice);
+        var snapshot = Substitute.For<ITreeSnapshotGrain>();
+        snapshot.IsIdleAsync().Returns(true);
+        grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId).Returns(snapshot);
+        var merge = Substitute.For<ITreeMergeGrain>();
+        merge.IsCompleteAsync().Returns(true);
+        grainFactory.GetGrain<ITreeMergeGrain>(TreeId).Returns(merge);
 
         var defaultResize = Substitute.For<ITreeResizeGrain>();
         defaultResize.IsIdleAsync().Returns(Task.FromResult(true));

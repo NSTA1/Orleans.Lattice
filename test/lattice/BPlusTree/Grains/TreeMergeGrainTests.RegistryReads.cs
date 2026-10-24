@@ -38,6 +38,7 @@ public partial class TreeMergeGrainTests
         await registry.Received(1).GetEntryAsync(SourceTreeId);
         await registry.DidNotReceive().ExistsAsync(Arg.Any<string>());
         await registry.DidNotReceive().RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
+        await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
     }
 
     [Test]
@@ -51,6 +52,7 @@ public partial class TreeMergeGrainTests
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.MergeAsync(SourceTreeId));
 
         registry.DidNotReceive().RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
+        registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
         Assert.That(registry.ReceivedCalls().Count(), Is.EqualTo(1));
     }
 
@@ -64,12 +66,14 @@ public partial class TreeMergeGrainTests
         var registry = factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var entry = new TreeRegistryEntry { PhysicalTreeId = "source-copy", ShardMap = new ShardMap { Slots = [0, 4] } };
         registry.GetEntryAsync(SourceTreeId).Returns(Task.FromResult<TreeRegistryEntry?>(entry));
+        registry.RegisterAndGetEntryAsync(SourceTreeId, entry).Returns((false, entry));
         registry.ClearReceivedCalls();
 
         await grain.MergeAsync(SourceTreeId);
 
-        await registry.Received(1).RegisterAsync(SourceTreeId, entry);
-        await registry.Received(4).GetEntryAsync(SourceTreeId);
+        await registry.Received(1).RegisterAndGetEntryAsync(SourceTreeId, entry);
+        await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!);
+        await registry.Received(3).GetEntryAsync(SourceTreeId);
         Assert.That(state.State.SourcePhysicalShards, Is.EqualTo(new[] { 0, 4 }));
     }
 
