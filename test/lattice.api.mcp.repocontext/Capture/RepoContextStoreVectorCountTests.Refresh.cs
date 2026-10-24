@@ -52,13 +52,15 @@ public sealed partial class RepoContextStoreVectorCountTests
         });
     }
 
-    private static RepoContextVectorWriter CreateWriter(RepoContextMcpHarness harness, IGrainFactory factory)
+    private static RepoContextVectorWriter CreateWriter(
+        RepoContextMcpHarness harness, IGrainFactory factory, Func<Func<Task>, Task>? scheduleCountRefresh = null)
         => new(
             factory,
             harness.Services.GetRequiredService<Serializer>(),
             harness.Services.GetRequiredService<ILatticeReplicationContext>(),
             new RepoContextVectorCache(TimeProvider.System, new RepoContextIndexingOptions()),
-            harness.Services.GetRequiredService<RepoContextVectorPlaneReDeriver>());
+            harness.Services.GetRequiredService<RepoContextVectorPlaneReDeriver>(),
+            scheduleCountRefresh: scheduleCountRefresh);
 
     private sealed class MembershipScanGate : IDisposable
     {

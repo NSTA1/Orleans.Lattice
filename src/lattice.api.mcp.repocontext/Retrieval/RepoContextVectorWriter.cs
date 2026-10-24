@@ -210,6 +210,7 @@ internal sealed class RepoContextVectorWriter
     /// which is strictly worse for the partition that was already the bottleneck.
     /// </summary>
     private readonly ConcurrentDictionary<string, Task> _countRefreshes = new();
+    private readonly Func<Func<Task>, Task> _scheduleCountRefresh;
 
     /// <summary>
     /// The resumable cursor of the embedded-memory-key marker scan, per repository.
@@ -255,6 +256,7 @@ internal sealed class RepoContextVectorWriter
     /// <param name="logger">Receives the membership probe's per-key accounting when a probe cannot account for every key it requested (issue #2287), or <see langword="null"/> to discard it.</param>
     /// <param name="coverageDigest">The digest of embedded coverage kept in step with membership, or <see langword="null"/> when the host does not maintain one.</param>
     /// <param name="markerScanReporter">Meters how each embedded-memory-key marker range walk ended, or <see langword="null"/> to leave the walk unmetered.</param>
+    /// <param name="scheduleCountRefresh">Schedules an out-of-band count refresh; defaults to <see cref="Task.Run(Func{Task})"/>. Tests control this boundary to exercise publication and completion order.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextVectorWriter(
         IGrainFactory grainFactory,
@@ -265,7 +267,8 @@ internal sealed class RepoContextVectorWriter
         IRepoContextAnnIndex? annIndex = null,
         ILogger<RepoContextVectorWriter>? logger = null,
         RepoContextCoverageDigestStore? coverageDigest = null,
-        RepoContextMemoryMarkerScanReporter? markerScanReporter = null)
+        RepoContextMemoryMarkerScanReporter? markerScanReporter = null,
+        Func<Func<Task>, Task>? scheduleCountRefresh = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -281,6 +284,7 @@ internal sealed class RepoContextVectorWriter
         _coverageDigest = coverageDigest;
         _markerScanReporter = markerScanReporter;
         _logger = logger ?? NullLogger<RepoContextVectorWriter>.Instance;
+        _scheduleCountRefresh = scheduleCountRefresh ?? (static work => Task.Run(work));
     }
 
     // ── Vector-plane self-heal guards ──────────────────────────────────────
@@ -1985,8 +1989,8 @@ internal sealed class RepoContextVectorWriter
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Single-flight by construction: the refresh task is published into
-    /// <see cref="_countRefreshes"/> with <c>GetOrAdd</c> before it is started, so a
+    /// Single-flight by construction: a completion task is reserved in
+    /// <see cref="_countRefreshes"/> with <c>TryAdd</c> before work is scheduled, so a
     /// burst of <c>list_repos</c> calls during a back-fill produces one scan, not one
     /// per call. The entry is cleared once the refresh settles, so the next generation
     /// miss after it completes starts a fresh one.
@@ -2010,22 +2014,45 @@ internal sealed class RepoContextVectorWriter
     /// <param name="repoId">The repository to refresh.</param>
     private void StartEmbeddedCountRefresh(string repoId)
     {
-        _ = _countRefreshes.GetOrAdd(repoId, static (id, self) =>
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ownership = new KeyValuePair<string, Task>(repoId, completion.Task);
+        if (!_countRefreshes.TryAdd(repoId, completion.Task))
         {
-            var refresh = Task.Run(() => self.RefreshEmbeddedCountAsync(id));
+            return;
+        }
 
-            // Clear the guard from a continuation rather than from inside the refresh,
-            // so an entry in the dictionary always denotes a scan that is genuinely
-            // still running: absence implies the previous scan completed, which is the
-            // property the single-flight guarantee rests on.
-            _ = refresh.ContinueWith(
-                completed => self._countRefreshes.TryRemove(id, out _),
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+        Task refresh;
+        try
+        {
+            refresh = _scheduleCountRefresh(() => RefreshEmbeddedCountAsync(repoId));
+        }
+        catch (Exception ex)
+        {
+            completion.TrySetException(ex);
+            _countRefreshes.TryRemove(ownership);
+            throw;
+        }
 
-            return refresh;
-        }, this);
+        // Publish before scheduling, complete before removing, and remove only our
+        // reservation. Fast completion cannot insert a dead guard afterwards, and a
+        // contender's completion can never clear another scan's guard.
+        _ = refresh.ContinueWith(completed =>
+        {
+            if (completed.IsFaulted)
+            {
+                completion.TrySetException(completed.Exception!.InnerExceptions);
+            }
+            else if (completed.IsCanceled)
+            {
+                completion.TrySetCanceled();
+            }
+            else
+            {
+                completion.TrySetResult();
+            }
+
+            _countRefreshes.TryRemove(ownership);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     /// <summary>
