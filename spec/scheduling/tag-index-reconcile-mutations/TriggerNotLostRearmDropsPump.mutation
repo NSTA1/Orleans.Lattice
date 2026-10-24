@@ -1,0 +1,11 @@
+MODULE: TriggerNotLostRearmDropsPump
+TARGET: TriggerNotLost
+CLASS: Temporal
+SUMMARY: Registration completion fails to arm the phase pump.
+PERTURBS: Rearm
+--- FIND
+    /\ pump' = TRUE /\ armNeeded' = FALSE
+--- REPLACE
+    \* MUTATION: a completed registration leaves no processing timer.
+    /\ pump' = FALSE /\ armNeeded' = FALSE
+--- END

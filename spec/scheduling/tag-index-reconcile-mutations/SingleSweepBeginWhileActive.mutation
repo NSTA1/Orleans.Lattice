@@ -1,0 +1,11 @@
+MODULE: SingleSweepBeginWhileActive
+TARGET: SingleSweep
+CLASS: Action
+SUMMARY: Starting a queued request ignores the active sweep.
+PERTURBS: BeginSweep
+--- FIND
+    /\ phase = "Idle" /\ pending /\ pump
+--- REPLACE
+    \* MUTATION: a second begin is allowed during the first sweep.
+    /\ pending /\ pump
+--- END

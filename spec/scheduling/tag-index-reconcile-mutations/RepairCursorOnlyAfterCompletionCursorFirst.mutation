@@ -1,0 +1,13 @@
+MODULE: RepairCursorOnlyAfterCompletionCursorFirst
+TARGET: RepairCursorOnlyAfterCompletion
+CLASS: Action
+SUMMARY: The repair cursor advances before the fallible whole-tree RPC.
+PERTURBS: RepairStart
+--- FIND
+    /\ busy' = TRUE /\ work' = 0
+    /\ UNCHANGED <<phase, cursor, dirty, baseline, fingerprint, pendingBaseline,
+--- REPLACE
+    \* MUTATION: skip the failed tree on retry.
+    /\ busy' = TRUE /\ work' = 0 /\ cursor' = cursor + 1
+    /\ UNCHANGED <<phase, dirty, baseline, fingerprint, pendingBaseline,
+--- END
