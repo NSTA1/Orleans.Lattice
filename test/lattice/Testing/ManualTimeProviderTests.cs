@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Tests.Testing;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class ManualTimeProviderTests
+public sealed partial class ManualTimeProviderTests
 {
     private static readonly DateTimeOffset Start = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
