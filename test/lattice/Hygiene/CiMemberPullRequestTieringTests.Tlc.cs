@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Tests.Formal;
 
@@ -14,18 +15,77 @@ public sealed partial class CiMemberPullRequestTieringTests
 
     [TestCase(null)]
     [TestCase(MemberSkippedTiers)]
-    public void Scheduling_shard_prices_all_certified_modules_in_full_and_member_plans(string? skippedTiers)
+    public void Scheduling_shards_price_all_certified_modules_in_full_and_member_plans(string? skippedTiers)
     {
-        // Independent two-CPU, 1800MB, one-slot certificates; Tag includes structural-test overhead.
-        const double composedCertificateMinutes = (144.684 + 177 + 729.46094 + 62.8925529 + 54.083547 + 2745.4195361) / 60;
+        // Independent certificates and an allocation of the retained Shipping invocation, not new group clocks.
+        const double generalSeconds = 144.684 + 177 + 729.46094 + 62.8925529 + 54.083547;
+        const double shippingSeconds = 2745.4195361;
+        const double variantSeconds = 1901.2196480;
+        const double itemOverheadMinutes = 0.04;
+        var expected = new Dictionary<string, (double Minutes, double Seconds)>(StringComparer.Ordinal)
+        {
+            ["formal-tlc-scheduling"] = (19.47, generalSeconds),
+            ["formal-tlc-scheduling-shipping"] = (14.07, shippingSeconds - variantSeconds),
+            ["formal-tlc-scheduling-shipping-variants"] = (31.69, variantSeconds),
+        };
         var scheduling = Plan(["lattice"], skippedTiers)
-            .Single(item => item.Shard == "formal-tlc-scheduling" && item.Skip is null);
+            .Where(item => item.Shard.StartsWith("formal-tlc-scheduling", StringComparison.Ordinal)).ToArray();
 
-        Assert.That(
-            scheduling.EstimateMinutes,
-            Is.GreaterThanOrEqualTo(composedCertificateMinutes),
-            "the scheduling shard runs foundation, TagIndexReconcile, WalBackPressure, SagaReadProgress, MaterialiserDrain and ReplicationShipping together; "
-                + "pricing only the original foundation mispacks the expanded TLC population");
+        Assert.Multiple(() =>
+        {
+            Assert.That(scheduling.Select(item => item.Shard), Is.EquivalentTo(expected.Keys));
+            foreach (var item in scheduling)
+            {
+                Assert.That(item.Skip, Is.Null, item.Shard);
+                Assert.That(item.Tier, Is.EqualTo("deterministic"), item.Shard);
+                var price = expected[item.Shard];
+                Assert.That(item.EstimateMinutes, Is.EqualTo(price.Minutes + itemOverheadMinutes).Within(0.000001));
+                Assert.That(price.Minutes * 60, Is.GreaterThanOrEqualTo(price.Seconds), item.Shard);
+                Assert.That(price.Minutes * 60 - price.Seconds, Is.LessThan(0.6), "round once to hundredths of a minute");
+            }
+            Assert.That(scheduling.Sum(item => item.EstimateMinutes) - 3 * itemOverheadMinutes,
+                Is.EqualTo(65.23).Within(0.000001), "do not add the earlier standalone Shipping diagnostics again");
+        });
+    }
+
+    [TestCase(null)]
+    [TestCase(MemberSkippedTiers)]
+    public void Scheduling_partition_reaches_first_match_filters_and_independently_packed_items(string? skippedTiers)
+    {
+        var (exitCode, _, stderr) = RunPlanner(["lattice"], skippedTiers, out var matrix);
+        Assert.That(exitCode, Is.Zero, stderr);
+        using var document = JsonDocument.Parse(matrix);
+        var legs = document.RootElement.EnumerateArray().ToArray();
+        var scheduling = legs.SelectMany(leg => leg.GetProperty("items").EnumerateArray()
+                .Where(item => item.GetProperty("shard").GetString()!.StartsWith("formal-tlc-scheduling", StringComparison.Ordinal))
+                .Select(item => (Leg: leg.GetProperty("id").GetString(), Item: item)))
+            .ToArray();
+        string[] categories = ["TlcShardScheduling", "TlcShardSchedulingShipping", "TlcShardSchedulingShippingVariants"];
+        string[] shards = ["formal-tlc-scheduling", "formal-tlc-scheduling-shipping", "formal-tlc-scheduling-shipping-variants"];
+
+        Assert.That(scheduling, Has.Length.EqualTo(3), "three independently runnable work items, not one opaque 65.23-minute item");
+        Assert.Multiple(() =>
+        {
+            Assert.That(scheduling.Select(entry => entry.Leg), Is.Unique, "the retained lattice plan can pack these independently");
+            for (var index = 0; index < scheduling.Length; index++)
+            {
+                var filter = scheduling.Single(entry => entry.Item.GetProperty("shard").GetString() == shards[index])
+                    .Item.GetProperty("filter").GetString()!;
+                var terms = filter.Split('&').Select(term => term.Trim('(', ')')).ToArray();
+                Assert.That(terms, Does.Contain("TestCategory=" + categories[index]));
+                foreach (var earlier in categories.Take(index))
+                    Assert.That(terms, Does.Contain("TestCategory!=" + earlier));
+            }
+            var catchAll = legs.SelectMany(leg => leg.GetProperty("items").EnumerateArray())
+                .Single(item => item.GetProperty("shard").GetString() == "formal-tlc"
+                    && item.GetProperty("tier").GetString() == "deterministic");
+            foreach (var category in categories)
+                Assert.That(catchAll.GetProperty("filter").GetString(), Does.Contain("TestCategory!=" + category));
+            foreach (var leg in legs)
+                Assert.That(leg.GetProperty("estimate").GetDouble(),
+                    Is.EqualTo(leg.GetProperty("items").EnumerateArray().Sum(item => item.GetProperty("estimate").GetDouble()))
+                        .Within(0.001), "packing must retain the sum, including each new invocation's overhead");
+        });
     }
 
     [TestCase("src/lattice/BPlusTree/Grains/LatticeGrain.cs")]
