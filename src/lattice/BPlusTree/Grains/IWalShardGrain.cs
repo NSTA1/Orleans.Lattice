@@ -247,6 +247,17 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the retention tail for fall-off detection in one grain call.
+    /// Uses the trusted trim watermark, clamped to the next sequence; without
+    /// watermark support, uses the first readable entry or the next sequence
+    /// when no entry is readable. Provider reads retain their sequential order.
+    /// Interleaves like the fallback page read so polling cannot block appends.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    Task<long> GetTailOffsetAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the approximate number of retained on-wire payload bytes
     /// currently persisted in this WAL shard, or <c>-1</c> when the
     /// configured <see cref="IWalStorageProvider"/> does not support byte

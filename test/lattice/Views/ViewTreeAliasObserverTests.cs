@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.Views;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Tests.Views;
 
@@ -144,6 +145,49 @@ public class ViewTreeAliasObserverTests
         Assert.That(
             () => observer.OnTreeAliasChangedAsync(Change(), cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task OnTreeAliasChanged_bounds_and_settles_independent_notifications()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registrations = Enumerable.Range(0, BoundedFanOut.DefaultWidth + 3)
+            .Select(i => Reg($"view-{i}", "source")).ToArray();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var active = 0;
+        var peak = 0;
+        var calls = 0;
+        foreach (var registration in registrations)
+        {
+            var grain = Substitute.For<IViewMaintainerGrain>();
+            factory.GetGrain<IViewMaintainerGrain>(registration.ViewName).Returns(grain);
+            grain.NotifySourceIdentityChangedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(async _ =>
+                {
+                    calls++;
+                    var current = Interlocked.Increment(ref active);
+                    peak = Math.Max(peak, current);
+                    await release.Task;
+                    Interlocked.Decrement(ref active);
+                });
+        }
+
+        var pending = Create(factory, registrations)
+            .OnTreeAliasChangedAsync(Change(tree: "source"), CancellationToken.None);
+        try
+        {
+            Assert.That(peak, Is.EqualTo(BoundedFanOut.DefaultWidth));
+            Assert.That(calls, Is.EqualTo(BoundedFanOut.DefaultWidth));
+            Assert.That(pending.IsCompleted, Is.False, "notifications must settle before the observer returns");
+        }
+        finally
+        {
+            release.TrySetResult();
+            await pending;
+        }
+
+        Assert.That(calls, Is.EqualTo(registrations.Length));
+        Assert.That(active, Is.Zero);
     }
 
     [Test]

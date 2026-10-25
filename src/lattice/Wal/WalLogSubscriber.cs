@@ -27,6 +27,7 @@ internal sealed class WalLogSubscriber(
         var sourceTreeId = context.SourceTreeId;
         var partitions = context.Partitions;
         var checkpoints = context.Checkpoints;
+        var hasBacklog = new bool[partitions];
 
         // Fall-off-log guard: if any partition's oldest still-readable offset has
         // advanced past our next-to-read position, the entries we need were
@@ -34,6 +35,7 @@ internal sealed class WalLogSubscriber(
         // than tail-replay. Surface nothing and advance nothing on this pass.
         for (var partition = 0; partition < partitions; partition++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var checkpoint = checkpoints.GetValueOrDefault(partition, -1);
 
             // Idle fast-path: a consumer already caught up to the head can never
@@ -41,7 +43,7 @@ internal sealed class WalLogSubscriber(
             // at or below the head, so once checkpoint + 1 >= head the trailing
             // edge sits at or behind our cursor and the fall-off probe is provably
             // unnecessary. GetHeadOffsetAsync is served from the WAL grain's
-            // in-memory next-sequence cursor, whereas GetTailOffsetAsync is a
+            // durable readable prefix (not its allocator), whereas GetTailOffsetAsync is a
             // storage round-trip (a manifest range scan against Azure Table
             // Storage); skipping it here removes the per-partition read that
             // otherwise fires on every idle drain tick - the dominant idle load,
@@ -54,6 +56,7 @@ internal sealed class WalLogSubscriber(
                 continue;
             }
 
+            hasBacklog[partition] = true;
             var tail = await commitLogReader
                 .GetTailOffsetAsync(sourceTreeId, partition, cancellationToken)
                 .ConfigureAwait(false);
@@ -76,6 +79,14 @@ internal sealed class WalLogSubscriber(
 
         for (var partition = 0; partition < partitions; partition++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            // No cursor moves for an idle partition. Writes arriving after its
+            // head probe remain eligible on the next drain, including late flushes.
+            if (!hasBacklog[partition])
+            {
+                continue;
+            }
+
             var checkpoint = checkpoints.GetValueOrDefault(partition, -1);
             var lastOffset = checkpoint;
             var readThisPartition = 0;

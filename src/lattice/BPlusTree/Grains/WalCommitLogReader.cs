@@ -197,7 +197,7 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
     }
 
     /// <inheritdoc />
-    public async Task<long> GetTailOffsetAsync(
+    public Task<long> GetTailOffsetAsync(
         string treeId,
         int shardIndex,
         CancellationToken cancellationToken = default)
@@ -211,31 +211,6 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
         cancellationToken.ThrowIfCancellationRequested();
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
 
-        // A trusted trim watermark decides exactly (issue #4621): everything at or
-        // below it was trimmed, and a missing sequence above it is a hole that was
-        // never written, which no reader has fallen off. A trim may name an offset
-        // past everything ever written (a tree discard, or a trim through
-        // long.MaxValue); the tail then collapses to the next sequence, as it does
-        // for any fully trimmed log, and the addition never overflows.
-        if (await grain.GetTrimWatermarkAsync(cancellationToken).ConfigureAwait(false) is { } trimmedThrough)
-        {
-            var next = await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
-            return trimmedThrough >= next - 1 ? next : trimmedThrough + 1;
-        }
-
-        // Without one, the oldest readable entry is the tail: a conservative rule
-        // that reads a hole directly above a trim point as part of the trim.
-        // Probe for the oldest readable entry by asking for a single
-        // entry from sequence 0. If the WAL has been trimmed, the page
-        // will yield the first surviving entry whose sequence is > 0.
-        var page = await grain.ReadAsync(0, 1, cancellationToken).ConfigureAwait(false);
-        if (page.Entries.Count == 0)
-        {
-            // Empty (or fully trimmed) WAL - tail collapses to head so
-            // a checkpoint at head is not flagged as fallen-off.
-            return await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        return page.Entries[0].Sequence;
+        return grain.GetTailOffsetAsync(cancellationToken);
     }
 }

@@ -1740,6 +1740,27 @@ internal sealed partial class WalShardGrain(
         return await _provider.GetTrimWatermarkAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
     }
 
+    /// <inheritdoc />
+    public async Task<long> GetTailOffsetAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
+        EnsureInitialized();
+
+        // Keep the same capability check and provider-read order as the separate
+        // calls: a hole is not a trim when every silo maintains the watermark.
+        if (await GetTrimWatermarkAsync(cancellationToken) is { } trimmedThrough)
+        {
+            var next = await GetNextSequenceAsync(cancellationToken);
+            return trimmedThrough >= next - 1 ? next : trimmedThrough + 1;
+        }
+
+        var page = await ReadAsync(0, 1, cancellationToken);
+        return page.Entries.Count == 0
+            ? await GetNextSequenceAsync(cancellationToken)
+            : page.Entries[0].Sequence;
+    }
+
     /// <summary>Test seam: overrides the cluster-manifest check of <see cref="GetTrimWatermarkAsync"/>.</summary>
     internal Func<bool>? TrimWatermarkSupportForTesting { get; set; }
 
