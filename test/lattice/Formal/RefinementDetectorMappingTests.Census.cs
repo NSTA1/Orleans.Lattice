@@ -68,6 +68,14 @@ internal sealed partial class RefinementDetectorMappingTests
             "So the census is 9 detected and 4 gaps.",
             "Four gaps remain open.",
             "There are 3 partial detectors.",
+            "The detector census has four gaps.",
+            "Four coverage gaps remain.",
+            "There are four undetected gaps.",
+            "Four gaps are still open.",
+            "Four gaps remain unresolved.",
+            "There are four gaps.",
+            "Four gaps.",
+            "Four gaps remain.",
         ];
 
         Assert.Multiple(() =>
@@ -95,6 +103,11 @@ internal sealed partial class RefinementDetectorMappingTests
             // Real prose from the note's "The Detector column" section.
             "Three decisions shaped that column, recorded here because each was a real fork.",
             "Four options were weighed.",
+            "PartialPrefix requires multiple completed slices to finish one gap.",
+            "coverage. `PartialPrefix` requires multiple completed slices to finish one gap;",
+            "Two WAL gaps need replay before the checkpoint advances.",
+            "PartialPrefix requires multiple completed slices to finish one coverage gap.",
+            "Two WAL coverage gaps need replay before the checkpoint advances.",
             // The denominator is legal because it is derived and gated by
             // The_note_yields_the_expected_behaviour_asserting_denominator.
             "The note has 14 behaviour-asserting rows.",
@@ -119,5 +132,14 @@ internal sealed partial class RefinementDetectorMappingTests
                     $"The census-count detector fired on legitimate prose: '{line}'.");
             }
         });
+    }
+
+    [Test]
+    public void The_census_count_detector_classifies_each_gap_in_its_own_clause()
+    {
+        var claims = RefinementCensusProse.FindCountClaims(
+            "PartialPrefix finishes one gap; four gaps remain open.");
+
+        Assert.That(claims.Select(claim => claim.Text), Is.EqualTo(new[] { "four gaps" }));
     }
 }
