@@ -17,6 +17,41 @@ public sealed class TreeBootstrapReadFenceResolveTests
     private const string Physical = "fence-physical";
 
     [Test]
+    public async Task ResolveAsync_reuses_complete_physical_owner_pins()
+    {
+        var grains = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<ILatticeRegistry>();
+        grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Logical).Returns(new TreeRegistryEntry
+        {
+            MaxLeafKeys = 128,
+            MaxInternalChildren = 128,
+            ShardCount = 3,
+        });
+
+        var shards = await TreeBootstrapReadFence.ResolveAsync(grains, TestOptionsResolver.ForFactory(grains), Logical);
+
+        Assert.That(shards.ShardIndices, Is.EqualTo(new[] { 0, 1, 2 }));
+        await registry.Received(1).GetEntryAsync(Logical);
+        await registry.DidNotReceive().RegisterAndGetEntryAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
+    }
+
+    [Test]
+    public async Task ResolveAsync_keeps_the_legacy_row_options_read()
+    {
+        var grains = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<ILatticeRegistry>();
+        grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Logical).Returns(new TreeRegistryEntry { ShardCount = 3 });
+
+        var shards = await TreeBootstrapReadFence.ResolveAsync(grains, TestOptionsResolver.ForFactory(grains), Logical);
+
+        Assert.That(shards.ShardIndices, Is.EqualTo(new[] { 0, 1, 2 }));
+        await registry.Received(2).GetEntryAsync(Logical);
+        await registry.Received(1).RegisterAndGetEntryAsync(Logical, Arg.Any<TreeRegistryEntry?>());
+    }
+
+    [Test]
     public async Task ResolveAsync_reads_the_logical_entry_once_and_follows_its_alias()
     {
         var grains = Substitute.For<IGrainFactory>();
