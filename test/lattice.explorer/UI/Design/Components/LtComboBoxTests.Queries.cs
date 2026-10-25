@@ -37,7 +37,7 @@ public sealed partial class LtComboBoxTests
     [Test]
     public void Keys_typed_while_a_query_is_still_settling_collapse_into_one_query()
     {
-        var source = new FakeSuggestionSource(Trees) { Gated = true, IgnoresCancellation = true };
+        var source = new FakeSuggestionSource(Trees.Append("catalog").ToArray()) { Gated = true, IgnoresCancellation = true };
         var cut = RenderBox(source);
 
         cut.Find("input").Input("c");
@@ -55,8 +55,9 @@ public sealed partial class LtComboBoxTests
 
         Assert.That(SpinWait.SpinUntil(() => source.Queries.Count == 2, TimeSpan.FromSeconds(10)), Is.True);
         Assert.That(source.Queries[1].Text, Is.EqualTo("crm/"), "the burst costs one query, for the latest text");
+        Assert.That(Options(cut), Does.Not.Contain("catalog"), "the stale 'c' answer is not shown after the text changes");
         cut.InvokeAsync(() => source.Queries[1].Gate.SetResult(source.Answer("crm/", 8)));
-        cut.WaitUntil(() => Assert.That(Options(cut), Has.Length.EqualTo(3)));
+        cut.WaitUntil(() => Assert.That(Options(cut), Is.EqualTo(new[] { "crm/orders", "crm/customers", "crm/orders-archive" })));
         Assert.That(source.Queries, Has.Count.EqualTo(2));
     }
     [Test]
