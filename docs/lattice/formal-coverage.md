@@ -59,7 +59,7 @@ its six checked modules.
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Scheduling and progress | 5 | 83 | 101 | 60 | [Verified Scheduling and Progress](verified-scheduling.md) |
+| Scheduling and progress | 6 | 104 | 134 | 75 | [Verified Scheduling and Progress](verified-scheduling.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
@@ -187,6 +187,27 @@ ten source perturbations, fourteen assertion-red cases and restored controls.
 The cooperative Coyote cases execute production delivery choices; they do not
 prove CLR-thread fairness, arbitrary reader-queue admission or #3581's
 historical deployment root cause.
+
+### Materialiser drain scheduling
+
+`MaterialiserDrain` adds twenty-one mutations and thirty-three
+behaviour-asserting rows. Its sixteen detector methods share one existing
+WalBackPressure detector and no additional Saga detector, so the six-module
+aggregate has seventy-five distinct methods, not seventy-six.
+The base and Larger instances contain 1,076 and
+3,780 distinct states. The [area boundary](../../spec/scheduling/README.md#materialiser-drain)
+separates online-copy concurrency, admitted leaf durability, finite-budget WAL
+shutdown, service-opportunity backlog and stable-identity live routing.
+
+The Coyote companion executes real WalLogSubscriber/ViewBackpressure cores,
+not a duplicate scheduler. Grain controls cover checkpoint failure, pin
+publication, exclusive-head replay, bounded copy passes and both rebuild and
+reconcile entry points. The old slot-cap detector was false-green under a
+real cap-plus-one perturbation; its strengthened first-wave assertion rejects
+that same source change. The real online-slice entry-point detector also
+rejects an increased LeafWalkBudget that standalone copy/resume tests missed
+(#4999). Finite work and completing collaborators remain
+premises, not conclusions supplied by fairness.
 
 ## Focused materialised-view companions
 

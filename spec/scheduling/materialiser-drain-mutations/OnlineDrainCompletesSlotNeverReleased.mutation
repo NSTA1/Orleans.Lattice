@@ -1,0 +1,11 @@
+MODULE: OnlineDrainCompletesSlotNeverReleased
+TARGET: OnlineDrainCompletes
+CLASS: Temporal
+SUMMARY: completed copy retains its concurrency slot
+PERTURBS: CompleteDrain
+
+--- FIND
+    /\ active' = active \ {c}
+--- REPLACE
+    /\ active' = active \* MUTATION: completed slot never unlinks.
+--- END

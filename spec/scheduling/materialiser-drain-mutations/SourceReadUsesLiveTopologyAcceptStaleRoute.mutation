@@ -1,0 +1,12 @@
+MODULE: SourceReadUsesLiveTopologyAcceptStaleRoute
+TARGET: SourceReadUsesLiveTopology
+CLASS: Action
+SUMMARY: source read acknowledges a key without resolving its moved shard
+PERTURBS: ReadSource
+
+--- FIND
+    /\ mode = "Alias" /\ phase = "read" /\ route = split /\ key <= Keys
+--- REPLACE
+    /\ mode = "Alias" /\ phase = "read" /\ key <= Keys
+    \* MUTATION: stale route falsely acknowledges the source read.
+--- END

@@ -1,0 +1,11 @@
+MODULE: TypeOKBeginOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: callback starts an unrecognised phase
+PERTURBS: Begin
+
+--- FIND
+                 [] OTHER -> "route"
+--- REPLACE
+                 [] OTHER -> "invalid" \* MUTATION: invalid alias phase.
+--- END
