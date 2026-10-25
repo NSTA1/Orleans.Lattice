@@ -1064,6 +1064,9 @@ jobs:
       - name: Self-test the package selector
         run: .github/workflows/select-test-packages-selftest.sh
 
+      - name: Self-test package reporting and build density
+        run: python3 .github/workflows/package-reporting-selftest.py
+
       # The aggregate's vacuity guard is the single point at which a fan-out
       # reporting green over an EMPTY population is caught, and it had no test
       # at all until this self-test landed - an untested guard being
@@ -1449,7 +1452,13 @@ jobs:
             exit 1
           fi
 
-          total=$(find src -mindepth 1 -maxdepth 1 -type d | wc -l)
+          # Count the same validated universe the selector uses, including
+          # test-only packages with no src/ counterpart.
+          total=$(.github/workflows/select-test-packages.sh --list-packages | wc -l)
+          if [ "$total" -eq 0 ]; then
+            echo "::error::The package selector produced an empty universe; refusing to report a green run with no package denominator."
+            exit 1
+          fi
 
           # One whole-solution build beats looping project-by-project once the
           # selection is broad: each per-project `dotnet build` pays its own
