@@ -1,0 +1,12 @@
+MODULE: TypeOKExpiryCorruptsLease
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: An expiry callback corrupts the remaining lease.
+PERTURBS: Expire
+BOUNDS: MayExpire = TRUE
+--- FIND
+    /\ leaseLeft' = 0
+--- REPLACE
+    \* MUTATION: a lapsed lease leaves the finite domain.
+    /\ leaseLeft' = Lease + 1
+--- END

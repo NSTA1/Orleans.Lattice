@@ -1,0 +1,14 @@
+MODULE: ReaderEventuallyAnswersPureRetry
+TARGET: ReaderEventuallyAnswers
+CLASS: Temporal
+SUMMARY: Retry exhaustion starts another optimistic read instead of a bounded gate.
+PERTURBS: ReaderOpportunity
+--- FIND
+    /\ (Capture \/ Acquire \/ ReadLeaf \/ Validate \/ ReaderIdle)
+--- REPLACE
+    \* MUTATION: repeat optimistic reads indefinitely under sustained writers.
+    /\ (Capture \/ Acquire \/ ReadLeaf \/ ReaderIdle
+        \/ (reader = "validate" /\ reader' = (IF crossed THEN "capture" ELSE "done")
+            /\ held' = FALSE /\ leaseLeft' = 0
+            /\ UNCHANGED <<snapshot, observed, attempts, crossed>>))
+--- END

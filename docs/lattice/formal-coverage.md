@@ -59,7 +59,7 @@ its six checked modules.
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Scheduling and progress | 4 | 72 | 89 | 49 | [Verified Scheduling and Progress](verified-scheduling.md) |
+| Scheduling and progress | 5 | 83 | 101 | 60 | [Verified Scheduling and Progress](verified-scheduling.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
@@ -161,6 +161,32 @@ rejected an omitted Throttled view response before certification. The
 [refinement history](../../spec/scheduling/WalBackPressureRefinement.md#defect-mutations-whose-fixes-have-landed)
 records real assertion-red controls and restored source, not just model
 counterexamples or resolvable test identifiers.
+
+### Saga and reader scheduling
+
+`SagaReadProgress` adds eleven paired mutations and twelve behaviour rows.
+Its thirteen distinct production methods reuse two WalBackPressure methods,
+so the five-module aggregate contains sixty distinct methods, not sixty-two.
+The base, ThreeLeaves and LeaseLoss instances have 2,451, 14,076 and 3,585
+states. The larger instance retains every base safety and temporal check;
+lease loss retains explicit resolution and caller completion instead of
+claiming a successful answer after invalidation.
+
+The real LatticeGrain/registry/two-leaf harness retains #4758's shipped
+fallback and rejects historical retry exhaustion (#4563), mixed reads and
+lost coverage. Actual caller controls separately hold terminal delivery and
+the completion checkpoint, observing success or the precise provider fault.
+The original fixed delivery-round model let a mixed-snapshot mutant remain
+green; removing that ordering made the same invariant fail. Review also removed
+least-leaf-first terminals and separated durable checkpoint from caller return.
+These are corrected assurance defects, not newly discovered production bugs.
+
+See the [area boundary](../../spec/scheduling/README.md#saga-and-reader-progress)
+and [refinement](../../spec/scheduling/SagaReadProgressRefinement.md) for all
+ten source perturbations, fourteen assertion-red cases and restored controls.
+The cooperative Coyote cases execute production delivery choices; they do not
+prove CLR-thread fairness, arbitrary reader-queue admission or #3581's
+historical deployment root cause.
 
 ## Focused materialised-view companions
 

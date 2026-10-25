@@ -12,6 +12,7 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | TurnOccupancy | 4 | 1 | 8 | 7 | 11 | 961 |
 | WalAdmission | 4 | 8 | 11 | 16 | 21 | 86496 |
 | WalBackPressure | 6 | 16 | 18 | 34 | 38 | 135464 |
+| SagaReadProgress | 3 | 5 | 6 | 11 | 12 | 2451 |
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
 
 ## Instances and progress premises
@@ -129,6 +130,52 @@ Throttled, point/batch pacing, tree-trip sum, fresh-routing and actual
 quiesce-budget call-site controls reject the corresponding production edits.
 The refinement note retains these corrections and the terminal-resumption
 detector correction rather than certifying earlier candidate results.
+
+## Saga and reader progress
+
+[`SagaReadProgress`](SagaReadProgress.tla), its
+[manifest](SagaReadProgress.manifest.json) and
+[refinement](SagaReadProgressRefinement.md) compose AtomicCommit's acknowledged
+prepares and immutable decisions with WalBackPressure's cached scoped admission
+verdict. A continuous writer cannot force a reader into optimistic retry
+exhaustion: after bounded retries, the real fallback acquires an unrenewed
+decision gate, reads a whole batch and validates coverage. Successful answers
+need available collaborators, stable routing and a live lease; lost lease or
+coverage must resolve explicitly rather than certify mixed data.
+
+Terminals may reach any undrained leaf next, independent of pressure.
+All terminals, the durable completion checkpoint and original caller
+acknowledgement are separate steps. A recorded decision or an in-memory
+Completed phase is not caller success. Weak fairness applies to delivered
+continuation opportunities with production-selected disjoint branches, not
+to a policy choice, competing-reader admission or bounded wall-clock service.
+
+The Counts table records three state invariants, five properties, six Next
+actions, eleven one-target paired mutations and twelve behaviour rows.
+Stutter is non-behavioural; TypeOK is model-domain sanity. Thirteen distinct
+production detector methods cover the behavioural rows, including four Coyote
+methods; two of those methods are reused from WalBackPressure.
+
+| Instance | Distinct states | Generated states | Checked boundary |
+| --- | ---: | ---: | --- |
+| Base | 2,451 | 17,838 | Two leaves, one retry, all safety and temporal checks. |
+| ThreeLeaves | 14,076 | 106,179 | Three leaves, three retries, all base safety and temporal checks. |
+| LeaseLoss | 3,585 | 26,124 | Arbitrary lease loss; retains resolution and saga completion, not successful answer under an invalid lease. |
+
+Direct wall times including JVM startup were 1.627, 5.907 and 1.980 seconds
+in that order, configured Xmx1800m and two workers on two visible processors.
+All fourteen base/variant/paired TLC cases passed. Their individual test-case
+elapsed times sum to 62.892553 seconds, a measured contribution to CI pricing,
+not a whole-shard wall-clock measurement. The larger bound retains liveness.
+
+Real source perturbations reject historical retry exhaustion, mixed decisions,
+gate and expiry bypass, lost coverage, omitted terminals, a stranded original
+caller, early checkpoint acknowledgement, skipped quiesce and a lost reader
+deadline. Fourteen parameter-expanded detector cases cover thirteen method keys.
+No new production defect is claimed: these controls exercise already-correct
+production seams. The refinement retains the original mixed-snapshot
+mutant-green and its correction, arbitrary terminal order, and distinct
+checkpoint/acknowledgement steps instead of certifying the earlier model.
 
 ## Routing and evidence
 

@@ -1,0 +1,13 @@
+MODULE: SagaCompletionVisibleNoCallerAcknowledgement
+TARGET: SagaCompletionVisible
+CLASS: Temporal
+SUMMARY: Terminal storage and completion checkpoint finish but caller acknowledgement is lost.
+PERTURBS: TerminalOpportunity
+--- FIND
+    /\ (Terminal \/ Checkpoint \/ Complete \/ TerminalIdle)
+--- REPLACE
+    \* MUTATION: delivered terminals do not settle the caller.
+    /\ (Terminal \/ Checkpoint \/ TerminalIdle
+        \/ (saga = "acknowledging"
+            /\ UNCHANGED <<saga, drained, materialised, checkpointed, completed, terminalWitness>>))
+--- END

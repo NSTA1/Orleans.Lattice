@@ -185,6 +185,21 @@ The [scheduling boundary](verified-scheduling.md#wal-back-pressure-progress)
 states the finite-work and stable-input progress premises separately from
 durability and from measured latency.
 
+### Saga and reader completion boundaries
+
+Multi-key readers validate one decision cut and use a bounded optimistic-to-gated
+fallback under sustained writer deliveries. The gate is finite and unrenewed:
+lost lease or coverage must produce an explicit outcome, not a mixed batch.
+Available collaborators and stable routing remain progress premises.
+
+Saga decision durability, arbitrary-order terminal delivery, completion
+checkpoint durability and original caller acknowledgement are distinct
+boundaries. Terminal relief is pressure-independent; completing a decision
+alone cannot settle the caller. The
+[scheduling assurance](verified-scheduling.md#saga-and-reader-progress) and
+[refinement](../../spec/scheduling/SagaReadProgressRefinement.md) distinguish
+these obligations from latency and arbitrary competing-reader fairness.
+
 ### Tag-index reconciliation
 
 The tag-index coordinator persists its active sweep, probe/repair phase and

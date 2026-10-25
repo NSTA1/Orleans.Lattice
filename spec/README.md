@@ -47,6 +47,7 @@ be quiet about one.
 | [`scheduling/`](scheduling/README.md) | `TurnOccupancy` | Non-reentrant grain turns, queued calls, and awaiting versus dispatching environment-controlled background work. |
 | [`scheduling/`](scheduling/README.md) | `WalAdmission` | Partition admission capacity, saturation waits, paced recovery release and budget outcomes under explicit progress premises. |
 | [`scheduling/`](scheduling/README.md#wal-back-pressure) | `WalBackPressure` | Tree-wide cached classification, scoped consumer responses, recovery hysteresis and signal-independent relief under explicit progress premises. |
+| [`scheduling/`](scheduling/README.md#saga-and-reader-progress) | `SagaReadProgress` | Consistent decision cuts, bounded optimistic-to-gated fallback, pressure-independent terminal delivery and original-caller acknowledgement after durable completion. |
 | [`scheduling/`](scheduling/README.md) | `TagIndexReconcile` | Single-sweep probe/repair progress, successful completion and baseline banking, bounded phase callbacks and reminder recovery. |
 | [`bplustree/`](bplustree/README.md) | `SplitLink` | A leaf split completing on the donor, the shard root recording and applying the child link, and a root crash between them. |
 | [`bplustree/`](bplustree/README.md) | `BPlusTopology` | Interleaved split/fold writes, sibling-chain publication, parent routing and unlinked-sibling recovery. |
