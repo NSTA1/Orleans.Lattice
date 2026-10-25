@@ -59,7 +59,7 @@ its six checked modules.
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Scheduling and progress | 7 | 130 | 167 | 91 | [Verified Scheduling and Progress](verified-scheduling.md) |
+| Scheduling and progress | 8 | 159 | 205 | 107 | [Verified Scheduling and Progress](verified-scheduling.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
@@ -209,12 +209,23 @@ rejects an increased LeafWalkBudget that standalone copy/resume tests missed
 (#4999). Finite work and completing collaborators remain
 premises, not conclusions supplied by fairness.
 
+### Replay permit scheduling
+
+`ReplayPermits` adds twenty-nine paired mutations and thirty-eight behaviour
+rows. Its sixteen distinct detector methods do not overlap the prior six-module
+set, so the seven-module aggregate is 133 mutations/172 rows/91 methods.
+The three full configurations retain all temporal branches at 695064,
+2762408 and 1038664 distinct states. The
+[area description](../../spec/scheduling/README.md#replay-permits) states the
+physical-owner, warm-drive and earned-prefix progress premises without imposing
+an unconditional lifetime bound on shared cold work.
+
 ### Replication shipping scheduling
 
 `ReplicationShipping` adds 26 one-target mutations and 33 behaviour rows.
-Its 20 distinct detector names overlap the prior six-module census by four,
+Its 20 distinct detector names overlap the prior seven-module census by four,
 including the Healthy receiver method whose source-negative evidence is new.
-The exact seven-module union is 130 mutations/167 rows/91 methods, not a sum
+The exact eight-module union is 159 mutations/205 rows/107 methods, not a sum
 of per-source-evidence ownership counts. The base and FourRecords full
 configurations retain all four invariants and twelve properties at 527689 and
 3306850 distinct states. The

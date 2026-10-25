@@ -31,6 +31,7 @@ The checked scheduling seams are:
 | `TurnOccupancy` | A non-reentrant turn, queued calls, and the difference between awaiting an operation inside the turn and dispatching it outside the turn. |
 | `WalAdmission` | Partition-scoped admission capacity, parked saturation waiters, paced recovery release, sampling and wait-budget outcomes. |
 | `WalBackPressure` | Cached tree/partition classification, writer/saga/snapshot/receiver/view responses and signal-independent relief. |
+| `ReplayPermits` | Physical permit conservation, memory withholding, class-sensitive queue admission, bounded warm drives and intentionally shared cold-owner lifetimes. |
 | `ReplicationShipping` | FIFO physical-source windows, pump-local feedback, fail-closed receiver retention and conditional deferral progress. |
 | `MaterialiserDrain` | Online-copy slots, leaf replay/checkpoint/pin progress, finite-budget WAL shutdown, cooperative view service and stable-identity live routing. |
 | `SagaReadProgress` | Consistent multi-key decision cuts, bounded gated fallback, pressure-independent terminals and original caller acknowledgement after completion durability. |
@@ -204,6 +205,31 @@ topology without changing physical identity or restarting the cursor.
 See the [refinement](../../spec/scheduling/MaterialiserDrainRefinement.md)
 for the sum-of-scenarios boundary, real detectors and progress premises.
 
+## Replay permit ownership and progress
+
+Returning a caller wait, stopping a warm drive and releasing a physical replay
+permit are separate events. A client deadline cannot abandon a shared cold
+owner. Genuine cancellation of the owner's independent lifetime can end its
+read-only provider awaits; permit return still follows owner-frame unwind,
+including required prefix banking and durability writes. Detached provider
+results are not consumed and late faults are observed.
+
+Available, held and memory-withheld permits account for the physical ceiling.
+Memory pressure keeps at least one permit circulating; restoration returns only
+capacity actually withheld. Class priority uses observed depth and the floored
+Bulk margin, not a contractual FIFO guarantee from the admission semaphore.
+
+Conditional progress requires returned physical capacity, delivered runtime
+opportunities and durable banking of an earned replay prefix. PartialPrefix
+needs multiple successful slices to finish one coverage gap. The warm-drive
+budget does not guarantee cold-owner termination, provider cooperation or
+bounded elapsed time. The model deliberately retains permanently hung holders.
+
+The [area description](../../spec/scheduling/README.md#replay-permits) separates
+the full configurations, exact one-target model pairs and actual production
+regressions from the repaired temporal-equivalence probe. Its Coyote case calls
+the production memory/admission seams, rather than implementing a second ledger.
+
 ## Replication shipping and receiver progress
 
 Shipping keeps launch-window capacity, ordered acknowledgement folding and
@@ -232,8 +258,8 @@ separates the full state-space measurements, one-target pairs and real
 production/Coyote detector evidence. The revised complete harness passed
 both full configurations and all twenty-six pairs in 2745.4195361 monotonic
 seconds. Its accepted launcher-artifact completion is not a recovered CLI
-terminal event, loaded-DLL attestation or peak-RSS measurement. The seven-module
-65.23-minute routing estimate composes independent certificates and excludes
+terminal event, loaded-DLL attestation or peak-RSS measurement. The eight-module
+200.27-minute routing estimate composes independent certificates and excludes
 the earlier standalone Shipping diagnostics; it is not a measured shard run.
 
 ## Defects found during the bucket

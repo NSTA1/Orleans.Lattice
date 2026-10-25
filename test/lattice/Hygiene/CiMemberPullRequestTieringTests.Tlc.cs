@@ -17,14 +17,15 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase(MemberSkippedTiers)]
     public void Scheduling_shards_price_all_certified_modules_in_full_and_member_plans(string? skippedTiers)
     {
-        // Independent certificates and an allocation of the retained Shipping invocation, not new group clocks.
-        const double generalSeconds = 144.684 + 177 + 729.46094 + 62.8925529 + 54.083547;
+        // Mixed-scope conservative certificates and retained Shipping allocation, not new group clocks.
+        const double generalSeconds = 144.684 + 177 + 729.46094 + 62.8925529 + 54.083547
+            + 6562.8434051 + 1413.7458152 + 125.8571349;
         const double shippingSeconds = 2745.4195361;
         const double variantSeconds = 1901.2196480;
         const double itemOverheadMinutes = 0.04;
         var expected = new Dictionary<string, (double Minutes, double Seconds)>(StringComparer.Ordinal)
         {
-            ["formal-tlc-scheduling"] = (19.47, generalSeconds),
+            ["formal-tlc-scheduling"] = (154.51, generalSeconds),
             ["formal-tlc-scheduling-shipping"] = (14.07, shippingSeconds - variantSeconds),
             ["formal-tlc-scheduling-shipping-variants"] = (31.69, variantSeconds),
         };
@@ -44,7 +45,7 @@ public sealed partial class CiMemberPullRequestTieringTests
                 Assert.That(price.Minutes * 60 - price.Seconds, Is.LessThan(0.6), "round once to hundredths of a minute");
             }
             Assert.That(scheduling.Sum(item => item.EstimateMinutes) - 3 * itemOverheadMinutes,
-                Is.EqualTo(65.23).Within(0.000001), "do not add the earlier standalone Shipping diagnostics again");
+                Is.EqualTo(200.27).Within(0.000001), "do not add the earlier standalone Shipping diagnostics again");
         });
     }
 
@@ -63,7 +64,7 @@ public sealed partial class CiMemberPullRequestTieringTests
         string[] categories = ["TlcShardScheduling", "TlcShardSchedulingShipping", "TlcShardSchedulingShippingVariants"];
         string[] shards = ["formal-tlc-scheduling", "formal-tlc-scheduling-shipping", "formal-tlc-scheduling-shipping-variants"];
 
-        Assert.That(scheduling, Has.Length.EqualTo(3), "three independently runnable work items, not one opaque 65.23-minute item");
+        Assert.That(scheduling, Has.Length.EqualTo(3), "three independently runnable work items, not one opaque 200.27-minute item");
         Assert.Multiple(() =>
         {
             Assert.That(scheduling.Select(entry => entry.Leg), Is.Unique, "the retained lattice plan can pack these independently");
