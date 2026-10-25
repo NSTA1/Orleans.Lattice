@@ -174,7 +174,12 @@ public partial class DataHistoryPanel : IDisposable
         HistoryRowRenderMode.RangeTombstone => "Range deleted",
         HistoryRowRenderMode.CrdtMembers when row.IsSnapshot => "Full state",
         HistoryRowRenderMode.CrdtMembers => "CRDT change",
-        HistoryRowRenderMode.LiveTail => "Live " + (row.Kind == HistoryRowKind.Delete ? "delete" : "set"),
+        HistoryRowRenderMode.LiveTail => row.Kind switch
+        {
+            HistoryRowKind.Delete => "Live delete",
+            HistoryRowKind.RangeTombstone => "Live range delete",
+            _ => "Live set",
+        },
         HistoryRowRenderMode.MetadataOnly => ValueNotKeptKindText,
         _ => "Set",
     };
@@ -218,6 +223,7 @@ public partial class DataHistoryPanel : IDisposable
     {
         _durable.Clear();
         _liveRows.Clear();
+        _tail = null;
         _continuation = null;
         _timeline = null;
         await LoadPageAsync(token);
@@ -261,16 +267,19 @@ public partial class DataHistoryPanel : IDisposable
                 return;
             }
 
+            _tail ??= new HistoryLiveTail(key);
             foreach (var record in response.Revisions)
             {
                 _durable.Add(HistoryRevisionRow.From(record));
+                _tail.MarkSeen(record.Hlc);
             }
 
+            var loadedClocks = response.Revisions.Select(record => record.Hlc).ToHashSet();
+            _liveRows.RemoveAll(row => loadedClocks.Contains(row.Hlc));
             _status = response.Status;
             _bound = response.Bound;
             _earliest = response.EarliestAvailable;
             _continuation = string.IsNullOrEmpty(response.ContinuationToken) ? null : response.ContinuationToken;
-            _tail = new HistoryLiveTail(key, _durable);
             Build();
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -299,15 +308,12 @@ public partial class DataHistoryPanel : IDisposable
             return;
         }
 
-        // Pages arrive newest first; the timeline is built oldest first so each
-        // retained value diffs against the one before it, with the live tail last.
+        // WAL partitions and replicated writes can deliver live clocks out of order.
+        // Merge by revision time so delayed changes stay in their chronological place.
         var chronological = new List<HistoryRevisionRow>(_durable.Count + _liveRows.Count);
-        for (var i = _durable.Count - 1; i >= 0; i--)
-        {
-            chronological.Add(_durable[i]);
-        }
-
+        chronological.AddRange(_durable);
         chronological.AddRange(_liveRows);
+        chronological.Sort(static (left, right) => left.Hlc.CompareTo(right.Hlc));
         _timeline = HistoryTimeline.Build(
             workspace.Tree.StateId,
             key,
@@ -425,7 +431,8 @@ public partial class DataHistoryPanel : IDisposable
 
                     if (key is null)
                     {
-                        _prefixChanges.Insert(0, change);
+                        var index = _prefixChanges.FindIndex(existing => existing.Hlc < change.Hlc);
+                        _prefixChanges.Insert(index < 0 ? _prefixChanges.Count : index, change);
                         if (_prefixChanges.Count > PrefixChangeLimit)
                         {
                             _prefixChanges.RemoveAt(_prefixChanges.Count - 1);
