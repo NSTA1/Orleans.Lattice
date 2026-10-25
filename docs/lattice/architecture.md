@@ -200,6 +200,21 @@ alone cannot settle the caller. The
 [refinement](../../spec/scheduling/SagaReadProgressRefinement.md) distinguish
 these obligations from latency and arbitrary competing-reader fairness.
 
+### Replication shipping and receiver retention
+
+Physical-source shipping windows fold acknowledgements in launch order.
+Receiver feedback controls future offers; it cannot recall an in-flight batch.
+Observed shrink or pause remains effective through the current pump's
+held-terminal release even when a later acknowledgement is healthy.
+
+Receiver deferral keeps authoritative saga decisions and bounded retention
+fail-closed. A decided prepare may remain unacknowledged while application
+fails; timeout alone cannot safely discard it. Conditional retry progress
+requires elapsed-time opportunities, retention capacity and a sufficiently
+stable receiver lifetime, not jitter or a bounded scheduling delay. The
+[scheduling boundary](verified-scheduling.md#replication-shipping-and-receiver-progress)
+states the source-lineage, restart and retirement-history limits.
+
 ### Materialiser progress boundaries
 
 Online snapshot copying limits simultaneous shard-copy calls and source leaves

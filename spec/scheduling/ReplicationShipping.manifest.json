@@ -1,0 +1,20 @@
+{
+  "mutations": "shipping-mutations",
+  "refinement": "ReplicationShippingRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 4,
+    "properties": 12,
+    "actions": 19,
+    "mutations": 26,
+    "behaviourRows": 33,
+    "distinctStates": 527689
+  },
+  "variants": {
+    "FourRecords": {
+      "distinctStates": 3306850
+    }
+  }
+}

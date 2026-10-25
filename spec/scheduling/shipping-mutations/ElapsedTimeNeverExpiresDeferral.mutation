@@ -1,0 +1,12 @@
+MODULE: ElapsedTimeNeverExpiresDeferral
+TARGET: StreamProgresses
+CLASS: Temporal
+SUMMARY: elapsed time cannot reach the timeout despite retries in a stable lifetime
+PERTURBS: Elapse
+BOUNDS: Records = 2, Cap = 2
+
+--- FIND
+    /\ age' = [r \in Ids |-> IF age[r] \in 0..(Timeout - 1) THEN age[r] + 1 ELSE age[r]]
+--- REPLACE
+    /\ age' = age
+--- END

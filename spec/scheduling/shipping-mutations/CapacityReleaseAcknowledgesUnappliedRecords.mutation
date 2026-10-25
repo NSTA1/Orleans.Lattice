@@ -1,0 +1,14 @@
+MODULE: CapacityReleaseAcknowledgesUnappliedRecords
+TARGET: NoSkipWithoutDeadLetter
+CLASS: Invariant
+SUMMARY: freeing capacity itself acknowledges unapplied records
+PERTURBS: FreeCapacity
+
+--- FIND
+    /\ ~AllCapacity(space) /\ space' = [dlq |-> TRUE, poison |-> TRUE, quarantine |-> TRUE]
+    /\ UNCHANGED <<cursor, sent, queue, applied, parked, mode, age, bad,
+--- REPLACE
+    /\ ~AllCapacity(space) /\ space' = [dlq |-> TRUE, poison |-> TRUE, quarantine |-> TRUE]
+    /\ cursor' = Records
+    /\ UNCHANGED <<sent, queue, applied, parked, mode, age, bad,
+--- END

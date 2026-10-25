@@ -286,7 +286,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardScheduling"],
-        "note": "TurnOccupancy, WalAdmission, TagIndexReconcile, WalBackPressure, SagaReadProgress and MaterialiserDrain: 16 configurations and 104 paired mutants (120 TLC cases). The 19.47-minute price composes foundation 144.684s, Tag 177s including structural overhead, WalBackPressure 729.46094s, the sum of all 14 successful Saga TLC case durations (62.892553s), and the complete 23-case Drain TLC interval including case-to-case gaps (54.083547s). Saga source evidence retains its two historical shared-index/Counts failures, not as green evidence or TLC cases. Independent Java17/two-CPU/1800MB single-slot timings are a composed estimate, not a composite shard wall-clock measurement. Scheduling-directory routing precedes the broad Wal prefix."
+        "note": "Seven scheduling modules including ReplicationShipping, without unlanded ReplayPermits: 18 configurations and130 paired mutants (148 TLC cases). Conservative65.23-minute composed independent-certificate estimate, not a measured composite shard. The landed six-module components total1168.1210399s; Shipping's actual complete28 harness adds2745.4195361 monotonic seconds (2full+26pairs with fresh process-local controls). Earlier standalone Shipping diagnostics are excluded. Two visible CPUs/two workers/configured1800MB/one TLC process per experiment. Accepted launcher-artifact completion is not a recovered CLI terminal event, at-launch loaded-DLL attestation or peak-RSS measurement. Scheduling-directory routing precedes the broad Wal prefix."
       },
       {
         "shard": "formal-tlc-smoke",
