@@ -34,6 +34,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - WAL polling.** Idle subscribers skip empty page reads, and retention-tail reads combine metadata into one grain call while retaining trim and late-flush safeguards. ([#5038](https://github.com/NSTA1/Orleans.Lattice/pull/5038)) (`Orleans.Lattice`)
+
+- **Performance - View alias notifications.** Independent maintainers rebind in settled waves of up to 32 instead of serially, retaining best-effort failure isolation. ([#5038](https://github.com/NSTA1/Orleans.Lattice/pull/5038)) (`Orleans.Lattice`)
+
 - **Performance - Replication frontier origin waves.** Receiver replacements overlap independent origin caps; export pins overlap held-set installation and cap updates within a bounded window, retaining hold-before-watermark and cap-before-reset barriers. ([#5030](https://github.com/NSTA1/Orleans.Lattice/pull/5030)) (`Orleans.Lattice.Replication`)
 
 - **Performance - Leaf maintenance calls.** Counts (including split-aware ownership) and diagnostics fuse payload/topology reads; footprint refresh retains snapshot accounting. Projection rebuilds return pre-reset links, and bulk append batches leaf birth metadata and links. ([#5013](https://github.com/NSTA1/Orleans.Lattice/pull/5013), [#5024](https://github.com/NSTA1/Orleans.Lattice/issues/5024)) (`Orleans.Lattice`)
