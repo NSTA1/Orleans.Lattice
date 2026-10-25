@@ -284,6 +284,22 @@ public sealed partial class InternalOriginGuardIntegrationTests
             async () => await leaf.CountAsync());
     }
 
+    [Test]
+    public void Leaf_CountAndNextSiblingAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await leaf.CountAndNextSiblingAsync(null, null));
+    }
+
+    [Test]
+    public void Leaf_GetStatsAndNextSiblingAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await leaf.GetStatsAndNextSiblingAsync());
+    }
+
     // --- Finding 3: WalShardGrain (no guard on any entry point) -------------
     //
     // Strictly worse than the change feed, which does authorize: a single

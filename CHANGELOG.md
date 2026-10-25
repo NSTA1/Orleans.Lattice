@@ -34,6 +34,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Leaf summary walks.** Bounded counts and diagnostics return payload and topology in one leaf call instead of two; footprint refresh cuts three calls to two while retaining snapshot-storage accounting. (`Orleans.Lattice`)
+
 - **Performance - Snapshot control paths.** Bootstrap fencing and snapshot initiation reuse registry entries, removing a read each; independent WAL heads overlap within a bounded window while preserving freeze-before-head ordering. ([#4996](https://github.com/NSTA1/Orleans.Lattice/pull/4996)) (`Orleans.Lattice`)
 
 - **Performance - Maintenance and sampling probes.** Autonomic probes cut serial calls from 8 to 4; shrink planning and donor retirement cut snapshot/merge probes from 4 to 2. Shard sampling uses one status call instead of three. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960)) (`Orleans.Lattice`)

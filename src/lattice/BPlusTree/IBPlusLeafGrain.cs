@@ -285,6 +285,12 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<int> CountAsync(string? startInclusive, string? endExclusive);
 
     /// <summary>
+    /// Counts live keys in the range and reads the leaf bounds and successor
+    /// after the count in the same turn, without a second metadata round trip.
+    /// </summary>
+    Task<LeafCountPage> CountAndNextSiblingAsync(string? startInclusive, string? endExclusive);
+
+    /// <summary>
     /// Returns a point-in-time count of live and tombstoned-or-expired entries
     /// in this leaf in a single call. Used by the diagnostics aggregation path
     /// (<see cref="ILattice.DiagnoseAsync"/>) to compute tombstone ratios without
@@ -293,6 +299,12 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// compaction pass.
     /// </summary>
     Task<LeafStats> GetStatsAsync();
+
+    /// <summary>
+    /// Reads statistics and then the leaf bounds and successor in the same turn,
+    /// preserving the replay and pending-transaction gates of <see cref="GetStatsAsync"/>.
+    /// </summary>
+    Task<LeafStatsPage> GetStatsAndNextSiblingAsync();
 
     /// <summary>Returns the grain identity of the right sibling leaf, or <c>null</c>.</summary>
     Task<GrainId?> GetNextSiblingAsync();

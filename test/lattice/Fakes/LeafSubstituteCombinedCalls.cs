@@ -107,6 +107,16 @@ internal static class LeafSubstituteCombinedCalls
                 Link = await leaf.GetKeyRangeAndNextSiblingAsync(),
             };
         });
+        leaf.CountAndNextSiblingAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(async call =>
+        {
+            var count = await leaf.CountAsync(call.ArgAt<string?>(0), call.ArgAt<string?>(1));
+            return new LeafCountPage { Count = count, Link = await leaf.GetKeyRangeAndNextSiblingAsync() };
+        });
+        leaf.GetStatsAndNextSiblingAsync().Returns(async _ =>
+        {
+            var stats = await leaf.GetStatsAsync();
+            return new LeafStatsPage { Stats = stats, Link = await leaf.GetKeyRangeAndNextSiblingAsync() };
+        });
         leaf.FreezeProjectionAndNextSiblingAsync(Arg.Any<CancellationToken>()).Returns(async call =>
         {
             var freeze = await leaf.FreezeProjectionAsync(call.Arg<CancellationToken>());

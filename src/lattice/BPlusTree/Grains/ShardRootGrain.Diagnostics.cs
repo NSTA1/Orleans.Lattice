@@ -230,18 +230,22 @@ internal sealed partial class ShardRootGrain
             {
                 StandDownIfCeilingFired(scan, walk.CurrentLeafId!.Value);
                 var leaf = walk.CurrentLeaf;
+                LeafChainLink link;
                 if (deep)
                 {
-                    var stats = await leaf.GetStatsAsync();
-                    liveKeys += stats.LiveKeys;
-                    tombstones += stats.Tombstones;
+                    var page = await leaf.GetStatsAndNextSiblingAsync();
+                    liveKeys += page.Stats.LiveKeys;
+                    tombstones += page.Stats.Tombstones;
+                    link = page.Link;
                 }
                 else
                 {
-                    liveKeys += await leaf.CountAsync();
+                    var page = await leaf.CountAndNextSiblingAsync(null, null);
+                    liveKeys += page.Count;
+                    link = page.Link;
                 }
 
-                if (!await walk.MoveNextAsync()) break;
+                if (!walk.MoveNext(link)) break;
 
                 // Bankable checkpoint (issue 2807): the counts cover exactly
                 // the leaves up to this boundary and the next batch resumes at
@@ -450,10 +454,11 @@ internal sealed partial class ShardRootGrain
         {
             StandDownIfCeilingFired(scan, walk.CurrentLeafId!.Value);
             cancellationToken.ThrowIfCancellationRequested();
-            usage = Add(usage, await AccumulateLeafUsageAsync(
-                walk.CurrentLeafId!.Value.GetGuidKey(), cancellationToken));
+            var page = await walk.CurrentLeaf.GetStatsAndNextSiblingAsync();
+            usage = Add(usage, await ReadLeafUsageAsync(
+                walk.CurrentLeafId!.Value.GetGuidKey(), page.Stats, cancellationToken));
 
-            if (!await walk.MoveNextAsync()) break;
+            if (!walk.MoveNext(page.Link)) break;
 
             // Bankable checkpoint (issue 2807). A banked page always carries a
             // resume key, which is exactly what keeps the caller's re-anchor
@@ -488,7 +493,12 @@ internal sealed partial class ShardRootGrain
     {
         var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafKey);
         var stats = await leaf.GetStatsAsync();
+        return await ReadLeafUsageAsync(leafKey, stats, cancellationToken);
+    }
 
+    private async Task<ShardStorageUsage> ReadLeafUsageAsync(
+        Guid leafKey, LeafStats stats, CancellationToken cancellationToken)
+    {
         var snapshot = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey);
         var snapshotBytes = await snapshot.GetSnapshotByteSizeAsync(cancellationToken);
 

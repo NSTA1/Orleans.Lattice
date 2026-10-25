@@ -139,6 +139,11 @@ public class ShardRootGrainPartialWalkWorkBoundTests
                 lock (callLog) callLog.Add($"count:{index}");
                 return Task.FromResult(KeysPerLeaf);
             });
+            leaf.CountAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(_ =>
+            {
+                lock (callLog) callLog.Add($"count:{index}");
+                return Task.FromResult(KeysPerLeaf);
+            });
             leaf.GetProjectionCheckpointOffsetAsync().Returns(_ =>
             {
                 lock (callLog) callLog.Add($"checkpoint:{index}");
