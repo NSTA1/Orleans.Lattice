@@ -56,7 +56,7 @@ public sealed partial class LtComboBoxTests
         Assert.That(SpinWait.SpinUntil(() => source.Queries.Count == 2, TimeSpan.FromSeconds(10)), Is.True);
         Assert.That(source.Queries[1].Text, Is.EqualTo("crm/"), "the burst costs one query, for the latest text");
         cut.InvokeAsync(() => source.Queries[1].Gate.SetResult(source.Answer("crm/", 8)));
-        cut.WaitUntil(() => Assert.That(Options(cut), Has.Length.EqualTo(3)));
+        cut.WaitUntil(() => Assert.That(Options(cut), Is.EqualTo(new[] { "crm/orders", "crm/customers", "crm/orders-archive" })));
         Assert.That(source.Queries, Has.Count.EqualTo(2));
     }
     [Test]
