@@ -1,0 +1,14 @@
+MODULE: NoDecisionUnderReadGateGateIgnored
+TARGET: NoDecisionUnderReadGate
+CLASS: Action
+SUMMARY: The registry accepts a new decision while the read gate is live.
+PERTURBS: WriterOpportunity
+--- FIND
+    /\ (Prepare \/ Decide \/ WriterIdle)
+--- REPLACE
+    \* MUTATION: decision admission ignores a live reader.
+    /\ (Prepare \/ Decide \/ WriterIdle
+        \/ (saga = "prepared" /\ saga' = "decided" /\ registryVersion' = 1 - registryVersion
+            /\ crossed' = (IF reader \in {"read", "validate"} THEN TRUE ELSE crossed)
+            /\ UNCHANGED <<drained, checkpointed, completed, terminalWitness>>))
+--- END
