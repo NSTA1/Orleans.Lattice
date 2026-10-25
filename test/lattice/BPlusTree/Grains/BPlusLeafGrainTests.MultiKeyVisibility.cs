@@ -8,7 +8,7 @@ public partial class BPlusLeafGrainTests
 {
     [Test]
     public async Task MultiKeyReads_registry_outcome_matches_single_key_visibility(
-        [Values("GetMany", "GetKeys", "GetEntries", "GetLiveEntries", "GetLiveRawEntries", "Count", "RangedCount", "GetStats")] string reader,
+        [Values("GetMany", "GetKeys", "GetEntries", "GetLiveEntries", "GetLiveRawEntries", "Count", "RangedCount", "GetStats", "CountSummary", "StatsSummary")] string reader,
         [Values("Indeterminate", "Committed", "InFlight", "Aborted")] string outcome,
         [Values(false, true)] bool scoped,
         [Values(false, true)] bool alreadyTerminal)
@@ -49,6 +49,14 @@ public partial class BPlusLeafGrainTests
         {
             case "Count":
                 Assert.That(await grain.CountAsync(), Is.EqualTo(expected.Count));
+                break;
+            case "CountSummary":
+                Assert.That((await grain.CountAndNextSiblingAsync(null, null)).Count, Is.EqualTo(expected.Count));
+                break;
+            case "StatsSummary":
+                var summary = await grain.GetStatsAndNextSiblingAsync();
+                Assert.That(summary.Stats.LiveKeys, Is.EqualTo(expected.Count));
+                Assert.That(summary.Stats.Tombstones, Is.EqualTo(status == TxStatus.Committed && !alreadyTerminal ? 1 : 0));
                 break;
             case "RangedCount":
                 Assert.That(await grain.CountAsync("fresh", "stable"), Is.EqualTo(

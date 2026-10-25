@@ -107,7 +107,7 @@ public class ShardRootGrainAnyTests
         Assert.That(await harness.Grain.AnyAsync(), Is.True);
 
         await harness.Leaves[0].Received(1).CountAsync(Arg.Any<string?>(), Arg.Any<string?>());
-        await harness.Leaves[0].DidNotReceive().GetNextSiblingAsync();
+        await harness.Leaves[0].Received(1).CountAndNextSiblingAsync(null, null);
         await harness.Leaves[1].DidNotReceive().CountAsync(Arg.Any<string?>(), Arg.Any<string?>());
         await harness.Leaves[2].DidNotReceive().CountAsync(Arg.Any<string?>(), Arg.Any<string?>());
     }

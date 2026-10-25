@@ -2333,6 +2333,7 @@ internal sealed partial class ShardRootGrain(
             StandDownIfCeilingFired(scan, currentId);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             var leafCount = 0;
+            LeafChainLink link;
             if (hasMovedAway)
             {
                 var keys = await leaf.GetKeysAsync(startInclusive, endExclusive);
@@ -2340,23 +2341,19 @@ internal sealed partial class ShardRootGrain(
                 {
                     if (!IsSlotMovedAway(keys[i])) leafCount++;
                 }
+                link = await leaf.GetKeyRangeAndNextSiblingAsync();
             }
             else
             {
-                leafCount = await leaf.CountAsync(startInclusive, endExclusive);
+                var page = await leaf.CountAndNextSiblingAsync(startInclusive, endExclusive);
+                leafCount = page.Count;
+                link = page.Link;
             }
             total += leafCount;
             scan.Budget.RecordLeafVisited();
 
-            // This leaf's bounds, read unconditionally rather than only when
-            // something needs them. Three things want them - the past-range
-            // early exit, the yield point, and since issue 2807 the bankable
-            // checkpoint - and each used to pay its own round trip, so making
-            // the read unconditional costs nothing on a sterile or yielding
-            // leaf and one Task.FromResult-backed call on a productive one.
-            // The sibling pointer the walk needs next rides in the same turn,
-            // so a leaf costs one metadata call rather than two.
-            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            // Bounds and successor accompany the count. The moved-slot path
+            // still enumerates keys and reads metadata separately.
             var bounds = link.KeyRange;
 
             // Past-range early exit (issue 1971). Without this a narrow range
@@ -2490,11 +2487,12 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, currentId);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
-            if (await leaf.CountAsync(null, null) > 0)
+            var page = await leaf.CountAndNextSiblingAsync(null, null);
+            if (page.Count > 0)
                 return new ShardAnyPage { Found = true };
             scan.Budget.RecordLeafVisited();
 
-            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            var link = page.Link;
             var bounds = link.KeyRange;
             var next = link.NextSibling;
             if (next is null) return new ShardAnyPage { Found = false };
@@ -2597,6 +2595,7 @@ internal sealed partial class ShardRootGrain(
         {
             StandDownIfCeilingFired(scan, currentId);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
+            LeafChainLink link;
             if (hasActiveSplit || hasMovedAway)
             {
                 var keys = await leaf.GetKeysAsync(null, null);
@@ -2609,14 +2608,16 @@ internal sealed partial class ShardRootGrain(
                     }
                     total++;
                 }
+                link = await leaf.GetKeyRangeAndNextSiblingAsync();
             }
             else
             {
-                total += await leaf.CountAsync();
+                var page = await leaf.CountAndNextSiblingAsync(null, null);
+                total += page.Count;
+                link = page.Link;
             }
             scan.Budget.RecordLeafVisited();
 
-            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
             var bounds = link.KeyRange;
             var next = link.NextSibling;
             if (next is null) break;
@@ -2730,11 +2731,9 @@ internal sealed partial class ShardRootGrain(
             }
             scan.Budget.RecordLeafVisited();
 
-            // Read unconditionally, for the reason set out on
-            // CountBoundedCoreAsync: the past-range probe, the yield point and
-            // the bankable checkpoint (issue 2807) all want this leaf's bounds,
-            // and each used to pay its own round trip. The sibling pointer rides
-            // in the same turn.
+            // The past-range probe, yield point and bankable checkpoint all
+            // need bounds. This key-enumeration path keeps its topology read;
+            // a raw count cannot replace the per-slot ownership filter.
             var link = await leaf.GetKeyRangeAndNextSiblingAsync();
             var bounds = link.KeyRange;
 
