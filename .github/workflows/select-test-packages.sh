@@ -31,6 +31,7 @@
 # Usage:
 #   select-test-packages.sh [--changed-file FILE] [--report-file FILE]
 #   select-test-packages.sh --fanout-table
+#   select-test-packages.sh --list-packages
 #   select-test-packages.sh --sample-dependents [--changed-file FILE]
 #
 #   --changed-file  Newline-separated changed paths, repo-relative. Defaults to
@@ -41,6 +42,9 @@
 #                   "<package> <TAB> <selected count>" for a hypothetical
 #                   change to that package alone. Used by the self-test and to
 #                   quantify the cost of the closure.
+#   --list-packages Print the validated discovery universe, one name per line,
+#                   sorted, and exit without reading changed paths or building
+#                   the dependency graph. Includes source and test-only packages.
 #   --sample-dependents
 #                   Print only the packages whose test project reads a CHANGED
 #                   sample, one per line, and exit. Nothing is printed when no
@@ -59,6 +63,7 @@ set -euo pipefail
 changedFile=""
 reportFile=""
 fanoutTable=false
+listPackages=false
 sampleDependentsOnly=false
 
 while [ $# -gt 0 ]; do
@@ -66,6 +71,7 @@ while [ $# -gt 0 ]; do
     --changed-file) changedFile="$2"; shift 2 ;;
     --report-file)  reportFile="$2";  shift 2 ;;
     --fanout-table) fanoutTable=true; shift ;;
+    --list-packages) listPackages=true; shift ;;
     --sample-dependents) sampleDependentsOnly=true; shift ;;
     *) echo "select-test-packages.sh: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -151,6 +157,7 @@ normalize_path() {
 # ---------------------------------------------------------------------------
 packages=()
 for dir in src/*/; do
+  [ -d "$dir" ] || continue
   packages+=("$(basename "$dir")")
 done
 
@@ -166,6 +173,11 @@ done
 if [ ${#packages[@]} -eq 0 ]; then
   echo "select-test-packages.sh: no packages discovered under src/." >&2
   exit 2
+fi
+
+if [ "$listPackages" = true ]; then
+  printf '%s\n' "${packages[@]}" | LC_ALL=C sort
+  exit 0
 fi
 
 declare -A isPackage=()
