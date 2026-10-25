@@ -91,6 +91,7 @@ public partial class BackupHealthPage : IDisposable
         _loadedFor = address;
         var cancellationToken = _load.Renew();
         ReleaseCheck();
+        _starting = false;
 
         _ready = false;
         bool available;
@@ -149,11 +150,13 @@ public partial class BackupHealthPage : IDisposable
         _read.Clear();
         try
         {
-            _page = await Access.ListBackupsAsync(
+            var page = await Access.ListBackupsAsync(
                 new BackupCatalogRequest { PageSize = PageSize, OrderByCreatedDescending = true },
                 cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _page = page;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             return;
         }
@@ -181,13 +184,15 @@ public partial class BackupHealthPage : IDisposable
 
         try
         {
-            foreach (var (id, report) in await Task.WhenAll(reads))
+            var reports = await Task.WhenAll(reads);
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var (id, report) in reports)
             {
                 _reports[id] = report;
                 _read.Add(id);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             // A newer load replaced this one.
         }
@@ -213,11 +218,14 @@ public partial class BackupHealthPage : IDisposable
             }
 
             var capabilities = await Access.ProbeAsync(description.Manifest.Scope, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var report = await Control.GetBackupHealthAsync(backupId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             _focusAllowed = capabilities.CanList;
-            _focusReport = await Control.GetBackupHealthAsync(backupId, cancellationToken);
+            _focusReport = report;
             _focus = description.Manifest;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             // A newer load replaced this one.
             return;
@@ -283,8 +291,13 @@ public partial class BackupHealthPage : IDisposable
         {
             var operationId = BackupClusterOperation.HealthCheckId(manifest.Id, Time.GetUtcNow());
             var handle = await ClusterOperations.StartBackupHealthCheckAsync(manifest.Id, operationId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             List.Forget();
             await FollowCheckAsync(handle.OperationId, cancellationToken);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // The accepted check keeps running, but no longer belongs to this page.
         }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
         {
@@ -297,12 +310,16 @@ public partial class BackupHealthPage : IDisposable
         }
         finally
         {
-            _starting = false;
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _starting = false;
+            }
         }
     }
 
     private async Task FollowCheckAsync(string operationId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ReleaseCheck();
         var follower = new OperationFollower(Time);
         _check = follower;
@@ -318,23 +335,28 @@ public partial class BackupHealthPage : IDisposable
         {
             // The check persisted a fresh report: read it once, then redraw.
             _reportReadFor = status.OperationId;
-            _ = InvokeAsync(() => ReadReportAsync(manifest.Id));
+            var cancellationToken = _load.Token;
+            _ = InvokeAsync(() => ReadReportAsync(manifest.Id, cancellationToken));
             return;
         }
 
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private async Task ReadReportAsync(string backupId)
+    private async Task ReadReportAsync(string backupId, CancellationToken cancellationToken)
     {
-        var cancellationToken = _load.Token;
         try
         {
             var report = await Control.GetBackupHealthAsync(backupId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (_focus is { } manifest && string.Equals(manifest.Id, backupId, StringComparison.Ordinal))
             {
                 _focusReport = report;
             }
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
         }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
         {
@@ -369,24 +391,30 @@ public partial class BackupHealthPage : IDisposable
 
         _configureMessage = null;
         _configureError = null;
+        var cancellationToken = _load.Token;
         if (_intervalField is not null && !await _intervalField.ConfirmAsync())
         {
             return;
         }
 
-        if (_interval is not { } interval)
+        if (cancellationToken.IsCancellationRequested || _interval is not { } interval)
         {
             return;
         }
 
+        var monitor = _monitor;
         try
         {
-            await Control.ConfigureBackupHealthAsync(manifest.Id, new BackupHealthConfig(_monitor, interval), _load.Token);
-            _configureMessage = _monitor
+            await Control.ConfigureBackupHealthAsync(manifest.Id, new BackupHealthConfig(monitor, interval), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _configureMessage = monitor
                 ? "Monitoring on: this backup is verified every " + BackupsFormat.Interval(interval) + "."
                 : "Monitoring off for this backup.";
         }
-        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
         {
             _configureError = BackupsFaults.Describe(exception);
         }
