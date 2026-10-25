@@ -1,0 +1,12 @@
+MODULE: TypeOKReliefCompletionOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: relief completion escapes the callback lifecycle
+PERTURBS: ReliefComplete
+
+--- FIND
+    /\ phase = 12 /\ reliefDone = ReliefActors /\ phase' = 13
+--- REPLACE
+\* MUTATION: invalid completion phase.
+    /\ phase = 12 /\ reliefDone = ReliefActors /\ phase' = 16
+--- END

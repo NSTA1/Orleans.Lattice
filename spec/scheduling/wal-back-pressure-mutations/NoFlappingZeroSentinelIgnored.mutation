@@ -1,0 +1,19 @@
+MODULE: NoFlappingZeroSentinelIgnored
+TARGET: NoFlapping
+CLASS: Invariant
+SUMMARY: disabled recovery still manufactures a floor on a raw Healthy tree
+PERTURBS: Sample
+BOUNDS: RecoveryWindow = 0
+
+--- FIND
+    /\ verdict' = [t \in Trees |-> [p \in Partitions |-> PartitionVerdict(t, p)]]
+--- REPLACE
+\* MUTATION: impose a recovery floor even when it was explicitly disabled.
+    /\ verdict' = [t \in Trees |-> [p \in Partitions |-> Max(1, PartitionVerdict(t, p))]]
+--- END
+--- FIND
+    /\ treeVerdict' = [t \in Trees |-> TreeValue(t)]
+--- REPLACE
+\* MUTATION: publish the same spurious floor in the tree roll-up.
+    /\ treeVerdict' = [t \in Trees |-> Max(1, TreeValue(t))]
+--- END

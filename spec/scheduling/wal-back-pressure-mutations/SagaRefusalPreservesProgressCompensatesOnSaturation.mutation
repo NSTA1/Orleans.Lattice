@@ -1,0 +1,13 @@
+MODULE: SagaRefusalPreservesProgressCompensatesOnSaturation
+TARGET: SagaRefusalPreservesProgress
+CLASS: Action
+SUMMARY: quiesce refusal emits an abort instead of preserving Execute progress
+PERTURBS: SagaRefuse
+
+--- FIND
+        IF saga.status = "waiting" /\ SagaValue = 2 THEN "refused" ELSE "ready"]
+--- REPLACE
+\* MUTATION: compensate a retryable saturation refusal.
+        IF saga.status = "waiting" /\ SagaValue = 2 THEN "refused" ELSE "ready",
+        !.aborts = IF saga.status = "waiting" THEN 1 ELSE @]
+--- END

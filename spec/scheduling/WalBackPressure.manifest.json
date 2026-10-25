@@ -1,0 +1,19 @@
+{
+  "mutations": "wal-back-pressure-mutations",
+  "refinement": "WalBackPressureRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 6,
+    "properties": 16,
+    "actions": 18,
+    "mutations": 34,
+    "behaviourRows": 38,
+    "distinctStates": 135464
+  },
+  "variants": {
+    "Bursty": { "distinctStates": 262606 },
+    "BurstyFinite": { "distinctStates": 368446 },
+    "Sticky": { "distinctStates": 658316 },
+    "SagaReroute": { "distinctStates": 1593944 }
+  }
+}

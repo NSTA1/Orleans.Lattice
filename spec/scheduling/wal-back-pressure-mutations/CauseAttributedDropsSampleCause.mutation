@@ -1,0 +1,12 @@
+MODULE: CauseAttributedDropsSampleCause
+TARGET: CauseAttributed
+CLASS: Action
+SUMMARY: sampled transition telemetry loses classifier cause attribution
+PERTURBS: Sample
+
+--- FIND
+    /\ sampledCause' = [t \in Trees |-> Cause(t)]
+--- REPLACE
+\* MUTATION: drop the cause before publishing the sample.
+    /\ sampledCause' = [t \in Trees |-> "None"]
+--- END

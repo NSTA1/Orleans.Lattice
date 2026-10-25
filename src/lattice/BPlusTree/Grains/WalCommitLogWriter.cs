@@ -701,14 +701,19 @@ internal sealed class WalCommitLogWriter(
         // of parking on the admission semaphore for
         // WalAppendDispatchTimeout. No-op when no signal is registered
         // or the budget is Zero.
-        await GateOnSaturationAsync(stamped.TreeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, perTree.WalSaturationAcuteOnly, cancellationToken, _drainCts.Token);
+        // Terminal records release prepared writes and their durable floor.
+        // They must not wait on the saturation that those writes can cause.
+        if (stamped.Op is not (MutationKind.TxCommit or MutationKind.TxAbort))
+        {
+            await GateOnSaturationAsync(stamped.TreeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, perTree.WalSaturationAcuteOnly, cancellationToken, _drainCts.Token);
 
-        // Local-path Throttled pacing. Gives the drain-lag back-pressure
-        // teeth on the single-silo write path by applying a bounded
-        // per-append delay while this partition is Throttled. Pure
-        // back-off: never throws. No-op when no signal is registered, the
-        // pace is Zero, or the partition is not Throttled.
-        await PaceOnThrottleAsync(stamped.TreeId, partition, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
+            // Local-path Throttled pacing. Gives the drain-lag back-pressure
+            // teeth on the single-silo write path by applying a bounded
+            // per-append delay while this partition is Throttled. Pure
+            // back-off: never throws. No-op when no signal is registered, the
+            // pace is Zero, or the partition is not Throttled.
+            await PaceOnThrottleAsync(stamped.TreeId, partition, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
+        }
 
         // Writer-side admission: cap PartitionTracker._inFlight at
         // WalMaxPendingBatches so the writer back-pressures honestly
@@ -991,9 +996,11 @@ internal sealed class WalCommitLogWriter(
         string? lastTreeId = null;
         var lastPartition = -1;
         WalPartitionBatch? lastBatch = null;
+        var terminalsOnly = true;
         for (var i = 0; i < count; i++)
         {
             var (stamped, partition, walPartitions, perTree) = await RouteAsync(entries[i]);
+            terminalsOnly &= stamped.Op is MutationKind.TxCommit or MutationKind.TxAbort;
             WalPartitionBatch batch;
             if (lastBatch is not null
                 && lastPartition == partition
@@ -1039,7 +1046,7 @@ internal sealed class WalCommitLogWriter(
         foreach (var batch in partitions.Values)
         {
             var grain = grainFactory.GetGrain<IWalShardGrain>(batch.GrainKey);
-            tasks[t++] = AppendForPartitionAsync(batch.GrainKey, grain, batch.Records, batch.TreeId, batch.Partition, batch.WalPartitions, batch.PerTree, cancellationToken);
+            tasks[t++] = AppendForPartitionAsync(batch.GrainKey, grain, batch.Records, batch.TreeId, batch.Partition, batch.WalPartitions, batch.PerTree, terminalsOnly, cancellationToken);
         }
         var partitionResults = await Task.WhenAll(tasks);
 
@@ -1097,6 +1104,7 @@ internal sealed class WalCommitLogWriter(
         int partition,
         int walPartitions,
         LatticeOptions perTree,
+        bool terminalsOnly,
         CancellationToken cancellationToken)
     {
         // A2 cross-grain dispatch attribution on the batched path:
@@ -1114,11 +1122,16 @@ internal sealed class WalCommitLogWriter(
 
         // Pre-admission saturation gate (batched path).
         // Same shape as the single-entry overload above.
-        await GateOnSaturationAsync(treeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, perTree.WalSaturationAcuteOnly, cancellationToken, _drainCts.Token);
+        // Classify the caller's whole batch, not each partition bucket: a
+        // terminal beside ordinary data cannot make any part of it ungated.
+        if (!terminalsOnly)
+        {
+            await GateOnSaturationAsync(treeId, partition, perTree.WalAdmissionSaturationWaitBudget, perTree.WalAdmissionSaturationCallBudget, perTree.WalSaturationAcuteOnly, cancellationToken, _drainCts.Token);
 
-        // Local-path Throttled pacing (batched path); same shape as the
-        // single-entry overload above.
-        await PaceOnThrottleAsync(treeId, partition, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
+            // Local-path Throttled pacing (batched path); same shape as the
+            // single-entry overload above.
+            await PaceOnThrottleAsync(treeId, partition, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
+        }
 
         // Writer-side admission (batched path): same shape as the
         // single-entry overload above. The acquire bound is the same

@@ -1,0 +1,18 @@
+MODULE: SagaEventuallyCompletesOrRefusesExpiryNeverRuns
+TARGET: SagaEventuallyCompletesOrRefuses
+CLASS: Temporal
+SUMMARY: quiesce expiry and its shutdown alternative never settle a waiting saga
+PERTURBS: SagaRefuse, ShutdownDrain
+
+--- FIND
+    /\ phase = 7 /\ phase' = 8
+--- REPLACE
+\* MUTATION: leave a waiting saga parked after its deadline.
+    /\ phase = 7 /\ saga.status # "waiting" /\ phase' = 8
+--- END
+--- FIND
+    /\ phase \in {3, 7, 13} /\ phase' = 14
+--- REPLACE
+\* MUTATION: shutdown cannot rescue the stranded quiesce wait.
+    /\ phase \in {3, 13} /\ phase' = 14
+--- END

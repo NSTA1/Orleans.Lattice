@@ -20,7 +20,8 @@ public partial class LatticeGrainTests
         int maxLeafKeys = 128,
         int maxInternalChildren = 128,
         IHostApplicationLifetime? lifetime = null,
-        ILatticeMergeModeResolver? mergeModeResolver = null)
+        ILatticeMergeModeResolver? mergeModeResolver = null,
+        IWalSaturationSignal? saturationSignal = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
@@ -50,6 +51,10 @@ public partial class LatticeGrainTests
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var services = Substitute.For<IServiceProvider>();
+        if (saturationSignal is not null)
+        {
+            services.GetService(typeof(IWalSaturationSignal)).Returns(saturationSignal);
+        }
         // When a host lifetime is supplied, wire it through the activation
         // service provider so the grain's lazy ResolveLifetime() finds it
         // (drives the shutdown fast-fail guard).

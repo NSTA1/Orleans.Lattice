@@ -46,8 +46,8 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
         = new();
 
     // Per-tree wait registrations for WaitForHealthyAsync. The signal
-    // completes every TCS for a tree the moment it transitions back to
-    // Healthy. Keyed by tree id; the value is the list of pending
+    // releases eligible waiters on Healthy updates, in paced batches
+    // when configured. Keyed by tree id; the value is the list of pending
     // waiter entries (each registered by a single WaitForHealthyAsync
     // caller). Access is serialised under _waitGate so a tick observing
     // the recovery and a caller registering a wait cannot race.
@@ -335,10 +335,11 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     /// <summary>
     /// Sampler-side write path. Updates the per-tree state cache, and
     /// when the new state is <see cref="WalSaturationState.Healthy"/>
-    /// completes every pending <see cref="WaitForHealthyAsync(string, CancellationToken)"/>
-    /// caller registered for the tree. Returns the previous state so
-    /// the sampler can attribute a transition (or short-circuit when
-    /// the state is unchanged).
+    /// releases queued <see cref="WaitForHealthyAsync(string, CancellationToken)"/>
+    /// callers oldest-first, up to <paramref name="releaseBatch"/> per call
+    /// (non-positive releases all). Release is level-triggered: later Healthy
+    /// calls continue a paced residue without requiring another transition.
+    /// Returns the previous state for transition attribution.
     /// </summary>
     internal WalSaturationState UpdateState(string treeId, WalSaturationState newState, int releaseBatch = 0)
     {
@@ -378,9 +379,11 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal, IWalPartitionS
     /// (#3348) Sampler-side write path for a single WAL partition.
     /// Mirrors <see cref="UpdateState"/> but scoped to one
     /// <c>(tree, partition)</c> pair: updates the per-partition cache
-    /// and, on a transition back to
-    /// <see cref="WalSaturationState.Healthy"/>, completes every
-    /// partition-scoped waiter. Returns the previous state.
+    /// and releases Healthy waiters on each Healthy call, plus not-Saturated
+    /// waiters on each non-Saturated call. Each eligible queue releases
+    /// oldest-first, up to <paramref name="releaseBatch"/> waiters independently
+    /// (non-positive releases all). Later eligible calls continue any paced
+    /// residue without requiring another transition. Returns the previous state.
     /// </summary>
     internal WalSaturationState UpdatePartitionState(
         string treeId,

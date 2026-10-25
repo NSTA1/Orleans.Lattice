@@ -59,7 +59,7 @@ its six checked modules.
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Scheduling and progress | 3 | 38 | 51 | 18 | [Verified Scheduling and Progress](verified-scheduling.md) |
+| Scheduling and progress | 4 | 72 | 89 | 49 | [Verified Scheduling and Progress](verified-scheduling.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
@@ -126,6 +126,41 @@ The real cursor/checkpoint and incomplete-read repairs in #4976/#4977 remain
 part of the checked boundary. #4985 adds recovery after initial keepalive
 registration failure. The exact action/property/mutation and detector mappings
 live in [TagIndexReconcileRefinement](../../spec/scheduling/TagIndexReconcileRefinement.md).
+
+### WAL back-pressure scheduling
+
+`WalBackPressure` adds 34 mutations, 38 behaviour-asserting rows and 36
+distinct detector methods. Five methods are shared with WalAdmission, so the
+four-module scheduling aggregate has 49 distinct methods, not 54. TypeOK keeps
+its independent paired experiment without becoming a production behaviour row.
+The base has 135,464 states; Bursty, BurstyFinite, Sticky and SagaReroute have
+262,606, 368,446, 658,316 and 1,593,944. Every variant retains safety;
+the three temporal checks stay at the base bound.
+
+The cached classifier sums acute trip deltas across the tree, applies cause
+priority independently of refusal provenance, and floors a raw Healthy tree
+during recovery. Physical writer/saga/view consumers differ from supplied
+logical snapshot/receiver names. Healthy, Throttled and Saturated responses,
+captured saga scope, expiry re-reads, routing refresh and seven signal-independent
+relief actors have real production detectors. Coyote executes the actual
+coordinator and writer decision seams, including reminder-driven terminal tails.
+It does not enumerate CLR-thread schedules.
+
+Terminal-only operations bypass signal admission and pacing, not downstream
+capacity, storage acknowledgement, cancellation, deadlines or shutdown.
+Ordinary resumed data remains quiesced. Conditional progress requires finite
+offered work and stopped acute inputs; Healthy additionally needs stopped
+throttling inputs and finite recovery. Neither fairness nor pacing is a
+wall-time guarantee. The [area measurements and premises](../../spec/scheduling/README.md#wal-back-pressure)
+distinguish the 328.81-second five-config measurement from the complete
+39-case paired run's 729.46 seconds. Neither is the combined shard cost.
+
+This member repairs the terminal dependency cycle (#4986) and the refinement
+comment/verdict harness defects (#4990/#4994). Its source/model audit also
+rejected an omitted Throttled view response before certification. The
+[refinement history](../../spec/scheduling/WalBackPressureRefinement.md#defect-mutations-whose-fixes-have-landed)
+records real assertion-red controls and restored source, not just model
+counterexamples or resolvable test identifiers.
 
 ## Focused materialised-view companions
 
