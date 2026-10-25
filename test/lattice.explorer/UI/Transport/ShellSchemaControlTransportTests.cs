@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Transport;
@@ -13,6 +14,8 @@ public sealed class ShellSchemaControlTransportTests : ShellTransportAdapterCont
 
     internal override IEnumerable<ShellTransportCall<ILatticeSchemaControl>> Calls() =>
     [
+        new("GetRegistryAsync", Service + "GetRegistry", (f, ct) => f.GetRegistryAsync("orders", ct)),
+        new("RegisterSchemaAsync", Service + "RegisterSchema", (f, ct) => f.RegisterSchemaAsync("orders", new LatticeSchemaRuntimeRegistration(), ct)),
         new("SetPolicyAsync", Service + "SetPolicy", (f, ct) => f.SetPolicyAsync("orders", Policy, ct)),
         new("ClearPolicyAsync", Service + "ClearPolicy", (f, ct) => f.ClearPolicyAsync("orders", ct)),
         new("GetPolicyAsync", Service + "GetPolicy", (f, ct) => f.GetPolicyAsync("orders", ct)),
@@ -39,6 +42,9 @@ public sealed class ShellSchemaControlTransportTests : ShellTransportAdapterCont
 
         Assert.Multiple(() =>
         {
+            Assert.That(() => control.GetRegistryAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => control.RegisterSchemaAsync(string.Empty, new LatticeSchemaRuntimeRegistration()), Throws.ArgumentException);
+            Assert.That(() => control.RegisterSchemaAsync("orders", null!), Throws.ArgumentNullException);
             Assert.That(() => control.SetPolicyAsync("orders", null!), Throws.ArgumentNullException);
             Assert.That(() => control.SetPolicyAsync(string.Empty, Policy), Throws.ArgumentException);
             Assert.That(() => control.ClearPolicyAsync(string.Empty), Throws.ArgumentException);
@@ -52,6 +58,38 @@ public sealed class ShellSchemaControlTransportTests : ShellTransportAdapterCont
             Assert.That(() => control.GetRemediationStatusAsync(string.Empty), Throws.ArgumentException);
             Assert.That(() => control.ProbeCapabilitiesAsync(string.Empty), Throws.ArgumentException);
             Assert.That(circuit.Peer.Requests, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task Registry_round_trip_preserves_the_tree_descriptors_hops_and_host_transform_ids()
+    {
+        using var circuit = new ShellTransportCircuit();
+        var control = circuit.Resolve<ILatticeSchemaControl>();
+        var registration = new LatticeSchemaRuntimeRegistration
+        {
+            Descriptors = [new(7, 1, "Order v1"), new(7, 2, "Order v2")],
+            Upcasters = [new() { SchemaId = 7, FromVersion = 1, ToVersion = 2, TransformId = "order-upgrade" }],
+            SupportedTransformIds = ["order-upgrade"],
+        };
+        circuit.Peer.Respond(Service + "GetRegistry", registration);
+        circuit.Peer.AnswerWithSuccess();
+
+        await control.RegisterSchemaAsync("orders", registration);
+        var read = await control.GetRegistryAsync("orders");
+
+        var writeRequest = circuit.Peer.Decode<SchemaRegistryRequest>(circuit.Peer.Requests[0]);
+        var readRequest = circuit.Peer.Decode<SchemaTreeRequest>(circuit.Peer.Requests[1]);
+        Assert.Multiple(() =>
+        {
+            Assert.That(writeRequest.TreeId, Is.EqualTo("orders"));
+            Assert.That(writeRequest.Registration.Descriptors, Is.EqualTo(registration.Descriptors));
+            Assert.That(writeRequest.Registration.Upcasters, Is.EqualTo(registration.Upcasters));
+            Assert.That(writeRequest.Registration.SupportedTransformIds, Is.EqualTo(new[] { "order-upgrade" }));
+            Assert.That(readRequest.TreeId, Is.EqualTo("orders"));
+            Assert.That(read.Descriptors, Is.EqualTo(registration.Descriptors));
+            Assert.That(read.Upcasters, Is.EqualTo(registration.Upcasters));
+            Assert.That(read.SupportedTransformIds, Is.EqualTo(new[] { "order-upgrade" }));
         });
     }
 }
