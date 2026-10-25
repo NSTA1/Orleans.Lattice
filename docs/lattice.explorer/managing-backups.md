@@ -120,6 +120,8 @@ A health report shows status, checked time, explanation, whether the manifest is
 
 Periodic monitoring can be turned on or off per backup. Its **Verify every** field is a [duration field](theming-and-density.md#dates-times-and-durations) in hours and minutes, at least one minute; the monitor applies the config on its next sweep.
 
+Changing the Health address discards late catalogue, report, check-start and monitoring-save replies or errors from the previous address. A pending check does not disable the next backup's controls, and an accepted check still runs on the cluster after navigation.
+
 ## Maintenance
 
 Rebuild and check run on the cluster as tracked operations, so they are served over the gRPC binding too. A connection that does not serve backup operations at all shows:

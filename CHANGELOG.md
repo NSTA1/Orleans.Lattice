@@ -60,6 +60,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Backup health ownership.** Navigating discards stale catalogue and focused-report replies and errors. Pending checks no longer block the next backup or replace its progress, and monitoring-save results stay with their backup. ([#5036](https://github.com/NSTA1/Orleans.Lattice/issues/5036)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Operation ownership.** Cleared watches cannot be revived by delayed starts or searches; manual refreshes discard older status replies and stop terminal polls. WAL reclaim results, errors and busy state stay with their plan. ([#5028](https://github.com/NSTA1/Orleans.Lattice/issues/5028)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Live history fidelity.** Older pages preserve live revision identity and replace pending markers with durable values; delayed changes stay chronological and live range deletions are labeled correctly. ([#5017](https://github.com/NSTA1/Orleans.Lattice/issues/5017)) (`Orleans.Lattice.Explorer.UI`)
