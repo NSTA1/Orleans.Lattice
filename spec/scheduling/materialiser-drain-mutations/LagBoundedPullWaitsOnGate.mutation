@@ -1,0 +1,12 @@
+MODULE: LagBoundedPullWaitsOnGate
+TARGET: LagBounded
+CLASS: Temporal
+SUMMARY: relief stops draining while pressure remains high
+PERTURBS: ViewPull
+
+--- FIND
+    /\ lag' = lag - Min(lag, batch) /\ phase' = "offer"
+--- REPLACE
+    /\ lag' = IF pressure > 0 THEN lag ELSE lag - Min(lag, batch)
+    /\ phase' = "offer" \* MUTATION: relief is gated by its own pressure.
+--- END

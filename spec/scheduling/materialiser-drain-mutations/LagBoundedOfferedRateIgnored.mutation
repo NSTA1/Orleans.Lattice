@@ -1,0 +1,12 @@
+MODULE: LagBoundedOfferedRateIgnored
+TARGET: LagBounded
+CLASS: Temporal
+SUMMARY: offer more writes than the guaranteed saturated service rate
+PERTURBS: OfferWrites
+
+--- FIND
+    /\ lag' = Min(LagWitness, lag + n) /\ acute' = a /\ phase' = "sample"
+--- REPLACE
+    /\ lag' = Min(LagWitness, lag + n + 1) /\ acute' = a /\ phase' = "sample"
+    \* MUTATION: violate the documented stable offered-load premise.
+--- END

@@ -1,0 +1,11 @@
+MODULE: LeafDrainCompletesAdmissionNeverSettles
+TARGET: LeafDrainCompletes
+CLASS: Temporal
+SUMMARY: completed admission opportunity neither grants nor refuses the owner
+PERTURBS: ReplayAdmission
+
+--- FIND
+    /\ phase' \in {"replay", "refused"}
+--- REPLACE
+    /\ phase' = "admission" \* MUTATION: completed admission strands the owner.
+--- END
