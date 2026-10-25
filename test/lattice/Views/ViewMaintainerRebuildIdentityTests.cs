@@ -12,7 +12,7 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.Tests.Views;
 
 [TestFixture]
-public sealed class ViewMaintainerRebuildIdentityTests
+public sealed partial class ViewMaintainerRebuildIdentityTests
 {
     private const string Logical = "orders";
     private const string First = "orders-first";
@@ -27,6 +27,7 @@ public sealed class ViewMaintainerRebuildIdentityTests
         ICommitLogReader Reader,
         IWalOffsetConsumerRegistryGrain OffsetRegistry,
         ILatticeRegistry Registry,
+        IGrainFactory Factory,
         Func<FakePersistentState<ViewCheckpointState>, ViewMaintainerGrain> Reactivate);
 
     [TestCase(false)]
@@ -331,7 +332,7 @@ public sealed class ViewMaintainerRebuildIdentityTests
             TestOptionsResolver.ForFactory(factory, new LatticeOptions { WalPartitions = 1 }),
             options, null!, Substitute.For<ILatticeReplicationContext>(),
             null, null!, checkpoint);
-        return new Harness(Construct(state), state, cursors, tree, reader, offsetRegistry, registry, Construct);
+        return new Harness(Construct(state), state, cursors, tree, reader, offsetRegistry, registry, factory, Construct);
     }
 
     private static async IAsyncEnumerable<string> Keys(string? start)
