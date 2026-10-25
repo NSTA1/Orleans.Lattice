@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Replication.Grains;
 
@@ -163,20 +164,19 @@ internal sealed class ReplicationTreeFrontierGrain(
         // new export holds nothing for is cleared.
         var heldOrigins = new HashSet<string>(state.State.ExportHeldOrigins, StringComparer.Ordinal);
         heldOrigins.UnionWith(sourceHeld.Keys);
-        var stillHeld = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var origin in heldOrigins)
-        {
-            var held = sourceHeld.TryGetValue(origin, out var identities) ? identities : [];
-            await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
-                .SetHeldAsync(ReplicationOriginFrontierGrain.ExportSource(TreeId), held, cancellationToken)
-                .ConfigureAwait(true);
-            if (held.Length > 0)
+        // Settle every held set before raising any origin's cap.
+        await BoundedFanOut.ForEachAsync(
+            heldOrigins.ToArray(), BoundedFanOut.DefaultWidth, async origin =>
             {
-                stillHeld.Add(origin);
-            }
-        }
+                cancellationToken.ThrowIfCancellationRequested();
+                var held = sourceHeld.TryGetValue(origin, out var identities) ? identities : [];
+                await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
+                    .SetHeldAsync(ReplicationOriginFrontierGrain.ExportSource(TreeId), held, cancellationToken)
+                    .ConfigureAwait(true);
+            }).ConfigureAwait(true);
 
-        state.State.ExportHeldOrigins = stillHeld;
+        state.State.ExportHeldOrigins = new HashSet<string>(
+            sourceHeld.Where(pair => pair.Value.Length > 0).Select(pair => pair.Key), StringComparer.Ordinal);
 
         // Every origin is installed, not only those the export lists: the tree
         // now reflects the source's contents, and an origin the export carries
@@ -184,34 +184,36 @@ internal sealed class ReplicationTreeFrontierGrain(
         // awaiting.
         var origins = new HashSet<string>(state.State.Origins.Keys, StringComparer.Ordinal);
         origins.UnionWith(sourceLowWatermarks.Keys);
-        foreach (var origin in origins)
-        {
-            var lowWatermark = sourceLowWatermarks.TryGetValue(origin, out var exported) ? exported : HybridLogicalClock.Zero;
-            if (!state.State.Origins.TryGetValue(origin, out var entry))
+        await BoundedFanOut.ForEachAsync(
+            origins.ToArray(), BoundedFanOut.DefaultWidth, async origin =>
             {
-                entry = new ReplicationTreeOriginFrontier();
-                state.State.Origins[origin] = entry;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                var lowWatermark = sourceLowWatermarks.TryGetValue(origin, out var exported) ? exported : HybridLogicalClock.Zero;
+                if (!state.State.Origins.TryGetValue(origin, out var entry))
+                {
+                    entry = new ReplicationTreeOriginFrontier();
+                    state.State.Origins[origin] = entry;
+                }
 
-            if (entry.AwaitingPin)
-            {
-                entry.LowWatermark = lowWatermark;
-                entry.AwaitingPin = false;
-            }
-            else if (lowWatermark > entry.LowWatermark)
-            {
-                entry.LowWatermark = lowWatermark;
-            }
+                if (entry.AwaitingPin)
+                {
+                    entry.LowWatermark = lowWatermark;
+                    entry.AwaitingPin = false;
+                }
+                else if (lowWatermark > entry.LowWatermark)
+                {
+                    entry.LowWatermark = lowWatermark;
+                }
 
-            if (entry.Capped)
-            {
-                // The tree now reflects the origin's writes below the export's
-                // watermark; the cap holds there until the origin re-covers it.
-                await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
-                    .SetTreeCapAsync(TreeId, entry.LowWatermark, cancellationToken)
-                    .ConfigureAwait(true);
-            }
-        }
+                if (entry.Capped)
+                {
+                    // The tree now reflects the origin's writes below the export's
+                    // watermark; the cap holds there until the origin re-covers it.
+                    await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
+                        .SetTreeCapAsync(TreeId, entry.LowWatermark, cancellationToken)
+                        .ConfigureAwait(true);
+                }
+            }).ConfigureAwait(true);
 
         await WriteStateAsync().ConfigureAwait(true);
         PublishModes();
@@ -337,12 +339,15 @@ internal sealed class ReplicationTreeFrontierGrain(
     /// </summary>
     private async Task RestampAsync(Guid epoch, CancellationToken cancellationToken, bool preserveBootstrapFloor)
     {
-        foreach (var origin in state.State.Origins.Keys)
-        {
-            await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
-                .SetTreeCapAsync(TreeId, HybridLogicalClock.Zero, cancellationToken)
-                .ConfigureAwait(true);
-        }
+        // Origins are independent, but the reset and new epoch require every cap.
+        await BoundedFanOut.ForEachAsync(
+            state.State.Origins.Keys.ToArray(), BoundedFanOut.DefaultWidth, async origin =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
+                    .SetTreeCapAsync(TreeId, HybridLogicalClock.Zero, cancellationToken)
+                    .ConfigureAwait(true);
+            }).ConfigureAwait(true);
 
         await grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(TreeId)
             .ResetAppliedIdentitiesAsync(cancellationToken, preserveBootstrapFloor)

@@ -89,6 +89,12 @@ for (var i = 0; i < args.Length - 1; i++)
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
 }
 
+if (string.Equals(suite, "frontierwaves", StringComparison.OrdinalIgnoreCase))
+{
+    var frontierSummary = BenchmarkRunner.Run<FrontierOriginWaveBenchmarks>(config);
+    return frontierSummary.HasCriticalValidationErrors || frontierSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "leafmaintenance", StringComparison.OrdinalIgnoreCase))
 {
     var maintenanceSummary = BenchmarkRunner.Run<LeafMaintenanceCallBenchmarks>(config);
