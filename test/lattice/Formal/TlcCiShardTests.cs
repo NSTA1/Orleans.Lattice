@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// needs no JVM and runs in the <c>rest</c> shard, not a TLC one.
 /// </summary>
 [TestFixture]
-public sealed class TlcCiShardTests
+public sealed partial class TlcCiShardTests
 {
     private const string CatchAllShard = "formal-tlc";
 
@@ -183,7 +183,7 @@ public sealed class TlcCiShardTests
                 else
                 {
                     var expected = Path.GetFileName(module.Directory) == "scheduling"
-                        ? TlcCiShard.Scheduling
+                        ? module.Name == "ReplicationShipping" ? "TlcShardSchedulingShippingVariants" : TlcCiShard.Scheduling
                         : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
                         : module.Name == "MaterialisedViewFence"
@@ -239,7 +239,6 @@ public sealed class TlcCiShardTests
     [TestCase("view-joint-repair", TlcCiShard.MaterialisedViewJointRepair)]
     [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
     [TestCase("aliasing", TlcCiShard.Aliasing)]
-    [TestCase("scheduling", TlcCiShard.Scheduling)]
     public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)
     {
         var modules = SpecModuleCatalogue.Repository().Where(module =>
