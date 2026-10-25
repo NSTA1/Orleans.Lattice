@@ -93,6 +93,9 @@ public partial class BPlusLeafGrainTests
                 "Supersedes the replay outright and so RETIRES the barrier. It is the administrative "
                 + "remedy for a broken projection and must not require the broken replay to finish "
                 + "first.",
+            ["RebuildProjectionAndNextSiblingAsync"] =
+                "Captures topology before the same administrative reset as RebuildProjectionFromWalAsync; "
+                + "must retire the broken replay rather than wait for it.",
             ["CaptureSnapshotAsync"] =
                 "A CORRECTION to the proposal in #2871, which classified every non-metadata entry "
                 + "point as one that must wait. This one must not, for two independent reasons. "
@@ -133,7 +136,7 @@ public partial class BPlusLeafGrainTests
         "SetManyWherePredicateAsync", "ApplyCrdtDeltaAsync", "ApplyCrdtDeltaManyAsync",
         "DeleteAsync", "DeleteTrackedAsync", "DeleteRangeAsync", "DeleteRangeAndNextSiblingAsync",
         // Range and enumeration reads.
-        "CountAsync", "CountAndNextSiblingAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetEntriesAsync",
+        "CountAsync", "CountAndNextSiblingAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetKeysAndNextSiblingAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         // Replication and delta seams.
         "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
@@ -506,7 +509,7 @@ public partial class BPlusLeafGrainTests
             // barrier, which frees this fixture's wedge and would let every method
             // invoked after them pass for the wrong reason. They are covered by
             // their own assertions below.
-            .Where(m => m.Name is not "ClearGrainStateAsync" and not "ClearGrainStateForPurgeAsync" and not "RebuildProjectionFromWalAsync")
+            .Where(m => m.Name is not "ClearGrainStateAsync" and not "ClearGrainStateForPurgeAsync" and not "RebuildProjectionFromWalAsync" and not "RebuildProjectionAndNextSiblingAsync")
             .ToList();
 
         Assert.That(methods, Is.Not.Empty, "no metadata entry points were resolved, so this is vacuous");

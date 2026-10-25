@@ -26,7 +26,7 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
     private const int LeafCount = 4;
 
     private static (ShardRootGrain Grain, IBPlusLeafGrain[] Leaves, IGrainFactory Factory, GrainId[] Ids, Guid[] Keys)
-        CreateShard(LatticeOptions options)
+        CreateShard(LatticeOptions options, Action<ShardRootState>? configure = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
@@ -42,6 +42,7 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
 
         state.State.RootNodeId = ids[0];
         state.State.RootIsLeaf = true;
+        configure?.Invoke(state.State);
 
         var factory = Substitute.For<IGrainFactory>();
         var leaves = new IBPlusLeafGrain[LeafCount];
@@ -73,6 +74,77 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
         leaf.DidNotReceive().GetNextSiblingAsync();
         leaf.DidNotReceive().GetKeyRangeAsync();
         leaf.DidNotReceive().GetKeyRangeAndNextSiblingAsync();
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(2)]
+    public async Task Split_aware_counts_make_one_leaf_call_per_hop(int path)
+    {
+        const int virtualShards = 16;
+        var movedSlot = ShardMap.GetVirtualSlot("k0", virtualShards);
+        var (grain, leaves, _, ids, _) = CreateShard(new LatticeOptions
+        {
+            MaxLeavesPerScanPage = 1000,
+            MaxScanPageDuration = TimeSpan.Zero,
+        }, state =>
+        {
+            state.MovedAwaySlots.Add(movedSlot, 1);
+            state.MovedAwayVirtualShardCount = virtualShards;
+        });
+        for (var i = 0; i < LeafCount; i++)
+        {
+            leaves[i].GetKeysAndNextSiblingAsync(Arg.Any<string?>(), Arg.Any<string?>())
+                .Returns((new List<string> { $"k{i}" },
+                    new LeafChainLink { KeyRange = Bounds(i), NextSibling = Next(ids, i) }));
+        }
+
+        var expected = Enumerable.Range(0, LeafCount)
+            .Count(i => ShardMap.GetVirtualSlot($"k{i}", virtualShards) != movedSlot);
+        if (path == 0)
+            Assert.That((await grain.CountBoundedAsync(null, null)).Count, Is.EqualTo(expected));
+        else if (path == 1)
+        {
+            var page = await grain.CountWithMovedAwayBoundedAsync(null);
+            Assert.That(page.Count, Is.EqualTo(expected));
+            Assert.That(page.MovedAwaySlots, Is.EqualTo(new[] { movedSlot }));
+        }
+        else
+        {
+            var slots = Enumerable.Range(0, virtualShards).Where(s => s != movedSlot).ToArray();
+            Assert.That((await grain.CountForSlotsBoundedAsync(slots, virtualShards, null, null)).Count,
+                Is.EqualTo(expected));
+        }
+        foreach (var leaf in leaves)
+        {
+            await leaf.Received(1).GetKeysAndNextSiblingAsync(null, null);
+            await leaf.DidNotReceive().GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>());
+            AssertNoSeparateLinkReads(leaf);
+        }
+    }
+
+    [Test]
+    public async Task Projection_rebuild_makes_one_leaf_call_per_hop()
+    {
+        var (grain, leaves, _, ids, _) = CreateShard(new LatticeOptions
+        {
+            MaxLeavesPerScanPage = 1000,
+            MaxScanPageDuration = TimeSpan.Zero,
+        });
+        for (var i = 0; i < LeafCount; i++)
+            leaves[i].RebuildProjectionAndNextSiblingAsync().Returns(
+                new LeafChainLink { KeyRange = Bounds(i), NextSibling = Next(ids, i) });
+
+        var page = await grain.RebuildShardProjectionBoundedAsync(null, CancellationToken.None);
+
+        Assert.That(page.LeavesRebuilt, Is.EqualTo(LeafCount));
+        Assert.That(page.ResumeFromInclusive, Is.Null);
+        foreach (var leaf in leaves)
+        {
+            await leaf.Received(1).RebuildProjectionAndNextSiblingAsync();
+            await leaf.DidNotReceive().RebuildProjectionFromWalAsync();
+            AssertNoSeparateLinkReads(leaf);
+        }
     }
 
     [Test]

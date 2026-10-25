@@ -473,7 +473,13 @@ internal sealed partial class ShardRootGrain
         }
 
         var graftEntries = new List<GraftEntry>();
-        GrainId? prevNewLeafId = null;
+        var newLeafCount = 1 + (sortedEntries.Count - idx - 1) / maxLeafKeys;
+        var newLeafIds = new GrainId[newLeafCount];
+        for (var i = 0; i < newLeafCount; i++)
+        {
+            newLeafIds[i] = grainFactory.GetGrain<IBPlusLeafGrain>(
+                DeterministicGuid($"{shardKey}/append/{operationId}/leaf/{i}")).GetGrainId();
+        }
         int leafIndex = 0;
 
         while (idx < sortedEntries.Count)
@@ -488,29 +494,26 @@ internal sealed partial class ShardRootGrain
                 batch[sortedEntries[idx].Key] = LwwValue<byte[]>.Create(sortedEntries[idx].Value, clock);
             }
 
-            var deterministicId = DeterministicGuid($"{shardKey}/append/{operationId}/leaf/{leafIndex++}");
-            var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
-            var newId = newLeaf.GetGrainId();
+            var newId = newLeafIds[leafIndex];
+            var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(newId);
 
             // The append creates this leaf, so its first row write carries a
             // create intent naming it (issue #4654).
             using (LatticeNewLeafIntentContext.BeginScope(newId))
             {
-                await newLeaf.SetTreeIdAsync(TreeId);
-                await newLeaf.SetShardIndexAsync(MyShardIndex);
+                await newLeaf.InitializeSiblingAsync(new SiblingInitialization
+                {
+                    TreeId = TreeId,
+                    ShardIndex = MyShardIndex,
+                    PrevSibling = leafIndex > 0 ? newLeafIds[leafIndex - 1] : null,
+                    NextSibling = leafIndex + 1 < newLeafCount ? newLeafIds[leafIndex + 1] : null,
+                });
             }
             await newLeaf.MergeEntriesAsync(batch);
             CollectMirroredRows(mirrored, batch);
 
-            if (prevNewLeafId is not null)
-            {
-                var prevLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(prevNewLeafId.Value);
-                await prevLeaf.SetNextSiblingAsync(newId);
-                await newLeaf.SetPrevSiblingAsync(prevNewLeafId.Value);
-            }
-
             graftEntries.Add(new GraftEntry { SeparatorKey = separator, LeafId = newId });
-            prevNewLeafId = newId;
+            leafIndex++;
         }
 
         state.State.PendingBulkGraft = new PendingBulkGraft

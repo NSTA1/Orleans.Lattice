@@ -16,6 +16,78 @@ public partial class BPlusLeafGrainTests
 
     [TestCase(false)]
     [TestCase(true)]
+    public async Task GetKeysAndNextSiblingAsync_preserves_range_and_visibility(bool tail)
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.LowKeyInclusive = "a";
+        state.State.HighKeyExclusive = "k";
+        var grain = CreateGrain(state);
+        await grain.SetAsync("b", [1]);
+        await grain.SetAsync("c", [2]);
+        await grain.SetAsync("d", [3]);
+        await grain.DeleteAsync("c");
+        if (!tail) await grain.SetNextSiblingAsync(ShardWalkPageSibling);
+
+        var page = await grain.GetKeysAndNextSiblingAsync("b", "d");
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(page.Keys, Is.EqualTo(new[] { "b" }));
+            Assert.That(page.Keys, Is.EqualTo(await grain.GetKeysAsync("b", "d")));
+            Assert.That(page.Link.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(page.Link.NextSibling, Is.EqualTo(await grain.GetNextSiblingAsync()));
+        });
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task RebuildProjectionAndNextSiblingAsync_returns_pre_reset_topology(bool tail)
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.LowKeyInclusive = "a";
+        state.State.HighKeyExclusive = "k";
+        var grain = CreateGrain(state);
+        await grain.SetAsync("b", [1]);
+        if (!tail) await grain.SetNextSiblingAsync(ShardWalkPageSibling);
+        var bounds = await grain.GetKeyRangeAsync();
+        var next = await grain.GetNextSiblingAsync();
+
+        var link = await grain.RebuildProjectionAndNextSiblingAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(link.KeyRange, Is.EqualTo(bounds));
+            Assert.That(link.NextSibling, Is.EqualTo(next));
+            Assert.That(grain.EntriesForTest, Is.Empty);
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(-1));
+        });
+    }
+
+    [Test]
+    public void RebuildProjectionAndNextSiblingAsync_propagates_failed_reset()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        var failure = new IOException("reset persist failed");
+        state.ThrowOnWrite = failure;
+
+        Assert.That(async () => await grain.RebuildProjectionAndNextSiblingAsync(),
+            Throws.Exception.SameAs(failure));
+    }
+
+    [Test]
+    public async Task RebuildProjectionAndNextSiblingAsync_retires_a_wedged_replay_instead_of_waiting()
+    {
+        using var leaf = new WedgedReplayLeaf();
+        await leaf.ActivateAndParkAsync();
+
+        await leaf.Grain.RebuildProjectionAndNextSiblingAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(leaf.State.State.ProjectionCheckpointOffset, Is.EqualTo(-1));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
     public async Task GetProjectionCheckpointAndNextSiblingAsync_matches_metadata_reads(bool tail)
     {
         var state = new FakePersistentState<LeafNodeState>();

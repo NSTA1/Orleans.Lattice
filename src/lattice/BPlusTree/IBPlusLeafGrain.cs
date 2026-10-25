@@ -291,6 +291,12 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafCountPage> CountAndNextSiblingAsync(string? startInclusive, string? endExclusive);
 
     /// <summary>
+    /// Reads live keys in the range and then the leaf bounds and successor in
+    /// the same turn, preserving the read gates of <see cref="GetKeysAsync"/>.
+    /// </summary>
+    Task<(List<string> Keys, LeafChainLink Link)> GetKeysAndNextSiblingAsync(string? startInclusive, string? endExclusive);
+
+    /// <summary>
     /// Returns a point-in-time count of live and tombstoned-or-expired entries
     /// in this leaf in a single call. Used by the diagnostics aggregation path
     /// (<see cref="ILattice.DiagnoseAsync"/>) to compute tombstone ratios without
@@ -1340,6 +1346,14 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </para>
     /// </summary>
     Task RebuildProjectionFromWalAsync();
+
+    /// <summary>
+    /// Captures the leaf bounds and successor before rebuilding the projection,
+    /// returning them without reactivating the leaf the rebuild deactivates.
+    /// Like <see cref="RebuildProjectionFromWalAsync"/>, retires rather than
+    /// awaits the replay barrier.
+    /// </summary>
+    Task<LeafChainLink> RebuildProjectionAndNextSiblingAsync();
 
     /// <summary>
     /// Applies the saga terminal mark for <paramref name="transactionId"/>
