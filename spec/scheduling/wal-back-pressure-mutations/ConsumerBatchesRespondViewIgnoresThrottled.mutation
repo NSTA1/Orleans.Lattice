@@ -1,0 +1,12 @@
+MODULE: ConsumerBatchesRespondViewIgnoresThrottled
+TARGET: ConsumerBatchesRespond
+CLASS: Action
+SUMMARY: the view ignores only the throttled batch response
+PERTURBS: ViewShrinkBatch
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.view = ViewBatch(treeVerdict[1])]
+--- REPLACE
+\* MUTATION: retain full size only for a Throttled physical source.
+    /\ consumer' = [consumer EXCEPT !.view = IF treeVerdict[1] = 1 THEN FullBatch ELSE ViewBatch(treeVerdict[1])]
+--- END

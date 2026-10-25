@@ -1,0 +1,12 @@
+MODULE: ThrottledNeverRefusesShedOnThrottled
+TARGET: ThrottledNeverRefuses
+CLASS: Action
+SUMMARY: snapshot admission sheds a throttled tree
+PERTURBS: ShedOpen
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.shed = Shed(LogicalValue(1)),
+--- REPLACE
+\* MUTATION: shed Throttled as well as Saturated.
+    /\ consumer' = [consumer EXCEPT !.shed = LogicalValue(1) >= 1,
+--- END

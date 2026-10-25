@@ -1,0 +1,12 @@
+MODULE: NoSpuriousRefusalParkLosesVerdict
+TARGET: NoSpuriousRefusal
+CLASS: Action
+SUMMARY: the parked writer forgets whether it entered a saturation wait
+PERTURBS: ParkOrRefuse
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.expiry = GateValue]
+--- REPLACE
+\* MUTATION: lose the parked-wait witness.
+    /\ consumer' = [consumer EXCEPT !.expiry = 0]
+--- END

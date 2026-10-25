@@ -8,13 +8,13 @@ namespace Orleans.Lattice;
 /// push-style <see cref="IWalSaturationObserver"/> hook.
 /// <para>
 /// The signal is computed by an internal silo-scoped sampler that
-/// ticks at <see cref="LatticeOptions.WalSaturationSampleInterval"/>
-/// (default 200 ms) and reads the writer-side admission gate's per-
+/// waits <see cref="LatticeOptions.WalSaturationSampleInterval"/>
+/// (default 200 ms) between sampling passes and reads the writer-side admission gate's per-
 /// partition depth together with the sampler's other inputs (see
 /// <see cref="WalSaturationCause"/>).
-/// Subscribers therefore observe transitions with a worst-case latency
-/// of one sample interval after the underlying signal crosses the
-/// threshold.
+/// Runtime scheduling, sampling work and awaited observers can delay later
+/// passes. The configured interval is not a wall-time transition deadline;
+/// sustained-input windows and the recovery hold also affect classification.
 /// </para>
 /// <para>
 /// <b>Idle cost.</b> <see cref="GetCurrentState"/> costs one
@@ -25,7 +25,8 @@ namespace Orleans.Lattice;
 /// one; neither fans out to grains. The sampler runs on its own timer. The
 /// write path is not entirely free of it: every timestamped WAL append
 /// advances an in-memory per-tree WAL-head reading that the drain-lag input
-/// reads (one lock-free dictionary update), and consults its partition's
+/// reads (one lock-free dictionary update). Except for terminal-only relief,
+/// it also consults its partition's
 /// verdict before admission - a dictionary lookup each for the
 /// <see cref="WalSaturationState.Saturated"/> gate and the
 /// <see cref="WalSaturationState.Throttled"/> pace while those are enabled.
@@ -34,6 +35,9 @@ namespace Orleans.Lattice;
 /// Saturated partition waits for it to recover, up to
 /// <see cref="LatticeOptions.WalAdmissionSaturationWaitBudget"/>, before it
 /// is refused.
+/// A point append or entire caller batch containing only transaction terminal
+/// records bypasses those two signal checks, not admission capacity, storage
+/// acknowledgement, deadlines, cancellation or shutdown.
 /// </para>
 /// </summary>
 public interface IWalSaturationSignal
@@ -44,9 +48,9 @@ public interface IWalSaturationSignal
     /// when the sampler has not yet observed any signal for the tree
     /// (a freshly-started silo, or a tree whose WAL has not been
     /// exercised yet). The result reflects the state captured at the
-    /// last sample tick, so subscribers see transitions with a
-    /// worst-case latency of one
-    /// <see cref="LatticeOptions.WalSaturationSampleInterval"/>.
+    /// last sampling pass, not the instantaneous input. The configured
+    /// <see cref="LatticeOptions.WalSaturationSampleInterval"/> is an inter-pass
+    /// delay, not a worst-case observation latency.
     /// </summary>
     /// <param name="treeId">The WAL tree id to query.</param>
     /// <returns>The most recent observed saturation state for the tree.</returns>
@@ -69,12 +73,15 @@ public interface IWalSaturationSignal
     /// Asynchronously waits until <paramref name="treeId"/> returns to
     /// <see cref="WalSaturationState.Healthy"/>. Returns immediately
     /// when the tree is already <see cref="WalSaturationState.Healthy"/>
-    /// (cheap synchronous fast-path); otherwise the awaiter completes
-    /// on the next sample tick that observes the tree at
-    /// <see cref="WalSaturationState.Healthy"/>. The completion bound
-    /// is therefore one
-    /// <see cref="LatticeOptions.WalSaturationSampleInterval"/> beyond
-    /// the underlying recovery.
+    /// (cheap synchronous fast-path). Otherwise eligible sampling passes release
+    /// waiters oldest-first, subject to
+    /// <see cref="LatticeOptions.WalSaturationRecoveryReleaseBatch"/>.
+    /// A positive release batch can leave this waiter for a later Healthy pass.
+    /// The recovery window can delay Healthy classification, and awaited
+    /// observers and runtime scheduling can delay later passes. No unconditional
+    /// wall-time completion bound follows from
+    /// <see cref="LatticeOptions.WalSaturationSampleInterval"/>; use cancellation
+    /// to bound the caller's wait.
     /// </summary>
     /// <param name="treeId">The WAL tree id to wait on.</param>
     /// <param name="cancellationToken">Cancels the wait. A cancelled

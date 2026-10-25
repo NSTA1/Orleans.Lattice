@@ -1,0 +1,12 @@
+MODULE: AliasedTreeUnshieldedUsesPhysicalSignal
+TARGET: AliasedTreeUnshielded
+CLASS: Action
+SUMMARY: receiver policy is incorrectly claimed to resolve a logical alias
+PERTURBS: ReceiverShrinkBatch
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.receiver = ReceiverBatch(LogicalValue(1))]
+--- REPLACE
+\* MUTATION: pretend the receiver resolves the physical alias target.
+    /\ consumer' = [consumer EXCEPT !.receiver = ReceiverBatch(treeVerdict[1])]
+--- END

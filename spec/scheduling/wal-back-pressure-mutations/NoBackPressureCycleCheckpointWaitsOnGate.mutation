@@ -1,0 +1,15 @@
+MODULE: NoBackPressureCycleCheckpointWaitsOnGate
+TARGET: NoBackPressureCycle
+CLASS: Invariant
+SUMMARY: an admission waiter depends on a checkpoint which waits on admission
+PERTURBS: GateCheck
+
+--- FIND
+        THEN {<<"Writer", "Admission">>, <<"Admission", PartitionActor(1)>>,
+              <<PartitionActor(1), "Flush">>} ELSE {}
+--- REPLACE
+\* MUTATION: introduce the checkpoint/admission wait-for cycle.
+        THEN {<<"Writer", "Admission">>, <<"Admission", PartitionActor(1)>>,
+              <<PartitionActor(1), "Checkpoint">>,
+              <<"Checkpoint", "Admission">>} ELSE {}
+--- END

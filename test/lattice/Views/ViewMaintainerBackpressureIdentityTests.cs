@@ -55,7 +55,10 @@ public class ViewMaintainerBackpressureIdentityTests
 
     private sealed record Harness(ViewMaintainerGrain Grain, List<int> DrainBatchSizes);
 
-    private static Harness Create(bool aggregation, string saturatedTreeId)
+    private static Harness Create(
+        bool aggregation,
+        string saturatedTreeId,
+        WalSaturationState pressure = WalSaturationState.Saturated)
     {
         var registration = aggregation
             ? new ViewRegistration(ViewName, LogicalSource, Projection: null, AggregationProjection: new StubAggregationProjection())
@@ -99,6 +102,7 @@ public class ViewMaintainerBackpressureIdentityTests
         {
             BatchSize = FullBatch,
             ObeySourceBackpressure = true,
+            ThrottledBatchRatio = 0.5,
             SaturatedBatchSize = SaturatedBatch,
             SaturatedPauseMs = SaturatedPause,
         });
@@ -113,7 +117,7 @@ public class ViewMaintainerBackpressureIdentityTests
         // it has never observed, which the real signal reports as Healthy.
         var saturationSignal = Substitute.For<IWalSaturationSignal>();
         saturationSignal.GetCurrentState(Arg.Any<string>()).Returns(WalSaturationState.Healthy);
-        saturationSignal.GetCurrentState(saturatedTreeId).Returns(WalSaturationState.Saturated);
+        saturationSignal.GetCurrentState(saturatedTreeId).Returns(pressure);
 
         var batchSizes = new List<int>();
         var subscriber = Substitute.For<IWalSubscriber>();
@@ -148,16 +152,26 @@ public class ViewMaintainerBackpressureIdentityTests
         return new Harness(grain, batchSizes);
     }
 
-    [TestCase(false, TestName = "Projection_drain_after_an_identity_swap_obeys_saturation_of_the_bound_physical_log")]
-    [TestCase(true, TestName = "Aggregation_drain_after_an_identity_swap_obeys_saturation_of_the_bound_physical_log")]
-    public async Task Drain_obeys_saturation_of_the_bound_physical_log(bool aggregation)
+    [TestCase(false, WalSaturationState.Saturated, TestName = "Projection_drain_after_an_identity_swap_obeys_saturation_of_the_bound_physical_log")]
+    [TestCase(true, WalSaturationState.Saturated, TestName = "Aggregation_drain_after_an_identity_swap_obeys_saturation_of_the_bound_physical_log")]
+    [TestCase(false, WalSaturationState.Throttled, TestName = "Projection_drain_after_an_identity_swap_obeys_throttling_of_the_bound_physical_log")]
+    [TestCase(true, WalSaturationState.Throttled, TestName = "Aggregation_drain_after_an_identity_swap_obeys_throttling_of_the_bound_physical_log")]
+    [TestCase(false, WalSaturationState.Healthy, TestName = "Projection_drain_after_an_identity_swap_keeps_full_size_for_a_healthy_bound_physical_log")]
+    [TestCase(true, WalSaturationState.Healthy, TestName = "Aggregation_drain_after_an_identity_swap_keeps_full_size_for_a_healthy_bound_physical_log")]
+    public async Task Drain_obeys_saturation_of_the_bound_physical_log(bool aggregation, WalSaturationState pressure)
     {
-        var h = Create(aggregation, saturatedTreeId: PhysicalSource);
+        var h = Create(aggregation, saturatedTreeId: PhysicalSource, pressure);
 
         await h.Grain.DrainAsync();
 
-        Assert.That(h.DrainBatchSizes, Is.EqualTo(new[] { SaturatedBatch }),
-            "The drained log is saturated, so the pass must shrink to the drip-feed batch.");
+        var expected = pressure switch
+        {
+            WalSaturationState.Saturated => SaturatedBatch,
+            WalSaturationState.Throttled => FullBatch / 2,
+            _ => FullBatch,
+        };
+        Assert.That(h.DrainBatchSizes, Is.EqualTo(new[] { expected }),
+            "The pass must apply the bound physical log's full, Throttled or Saturated batch size.");
     }
 
     [TestCase(false, TestName = "Projection_drain_ignores_a_saturation_signal_published_under_the_logical_alias")]
