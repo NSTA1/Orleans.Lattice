@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 WORKFLOWS = Path(__file__).resolve().parent
+REPOSITORY = WORKFLOWS.parent.parent
 
 
 def load(name, filename):
@@ -28,6 +29,14 @@ runner = load("watchdog_runner", "run-test-leg.py")
 
 
 class TlcWatchdogTests(unittest.TestCase):
+    def legacy_deterministic_step(self):
+        workflow = (WORKFLOWS / "ci-serial-old.yml").read_text(encoding="utf-8")
+        marker = "      - name: Test changed packages (deterministic)\n"
+        self.assertEqual(1, workflow.count(marker), "the legacy deterministic step must be unique")
+        start = workflow.index(marker)
+        end = workflow.find("\n      - name:", start + len(marker))
+        return workflow[start:] if end < 0 else workflow[start:end]
+
     def config(self, cross_tiers=True):
         return {
             "fixture": {
@@ -115,6 +124,56 @@ class TlcWatchdogTests(unittest.TestCase):
                 self.assertEqual(flags, (item.get("tlc", False), item.get("tlcSmoke", False)))
                 command = self.execute(item)
                 (self.assert_job_watchdog if any(flags) else self.assert_hang_watchdog)(command)
+
+    def test_legacy_serial_workflow_routes_the_selected_packages_through_planner_and_runner(self):
+        step = self.legacy_deterministic_step()
+        self.assertIn("set -euo pipefail", step)
+        self.assertIn("for name in ${{ steps.discover.outputs.to_test }}; do", step)
+        self.assertIn("plan-test-matrix.py", step)
+        self.assertIn('--packages "$packages"', step)
+        self.assertIn("--output-matrix /tmp/legacy-test-matrix.json", step)
+        self.assertIn("run-test-leg.py", step)
+        self.assertIn("--leg /tmp/legacy-test-leg.json", step)
+        self.assertIn("--max-legs 1", step)
+        self.assertIn("--skip-tiers coyote,chaos", step)
+        self.assertNotIn("dotnet test", step)
+        self.assertNotIn("--blame-hang", step)
+
+    def test_legacy_deterministic_plan_separates_tlc_and_ordinary_watchdogs(self):
+        config = json.loads((WORKFLOWS / "test-shards.json").read_text(encoding="utf-8"))
+        items, skipped = planner.make_items(
+            ["lattice"], config, {}, set(), skip_tiers=["coyote", "chaos"],
+        )
+        legs = planner.pack(items, 1)
+
+        self.assertEqual(1, len(legs))
+        self.assertEqual({"deterministic"}, {item["tier"] for item in items})
+        self.assertEqual({"coyote", "chaos"}, {item["tier"] for item in skipped})
+        self.assertTrue(all("TestCategory!=Chaos" in item["filter"] for item in items))
+        self.assertTrue(all("TestCategory!=Coyote" in item["filter"] for item in items))
+        tlc = next(item for item in items if item["tlc"] or item["tlcSmoke"])
+        ordinary = next(item for item in items if not item["tlc"] and not item["tlcSmoke"])
+
+        self.assert_job_watchdog(self.execute(tlc))
+        self.assert_hang_watchdog(self.execute(ordinary))
+
+    def test_apps_and_benchmark_reference_paths_do_not_select_the_core_test_project(self):
+        core_project = REPOSITORY / "test" / "lattice" / "Orleans.Lattice.Tests.csproj"
+        core_text = core_project.read_text(encoding="utf-8")
+        selected_project_names = {
+            project.name
+            for directory in ("apps", "benchmark")
+            for project in (REPOSITORY / directory).rglob("*.csproj")
+        }
+
+        self.assertTrue(selected_project_names, "apps/benchmark project discovery found nothing to check")
+        referenced = sorted(name for name in selected_project_names if name in core_text)
+        self.assertEqual(
+            [],
+            referenced,
+            "the apps/benchmark lanes select covering test projects by ProjectReference basename, "
+            "and the core test project unexpectedly references: " + ", ".join(referenced),
+        )
 
     def test_declared_tlc_and_smoke_keep_sequence_and_crash_diagnostics(self):
         for flag in ("tlc", "tlcSmoke"):
