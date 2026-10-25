@@ -1,0 +1,12 @@
+MODULE: BudgetForceFaultAttributedWrongOwner
+TARGET: BudgetForceFaultAttributed
+CLASS: Invariant
+SUMMARY: budget fault is charged to another physical tree and shard
+PERTURBS: DrainFinish
+
+--- FIND
+       IN /\ faultOwner' = IF expired THEN Owner ELSE faultOwner
+--- REPLACE
+       IN /\ faultOwner' = IF expired THEN <<"tree-B", 2>> ELSE faultOwner
+          \* MUTATION: wrong budget-fault attribution.
+--- END

@@ -1,0 +1,11 @@
+MODULE: LeafDrainCompletesSnapshotNeverBanks
+TARGET: LeafDrainCompletes
+CLASS: Temporal
+SUMMARY: snapshot never covers the materialised checkpoint
+PERTURBS: SnapshotCapture
+
+--- FIND
+    /\ covered' = checkpoint /\ phase' = "pin"
+--- REPLACE
+    /\ covered' = covered /\ phase' = "pin" \* MUTATION: no coverage banked.
+--- END

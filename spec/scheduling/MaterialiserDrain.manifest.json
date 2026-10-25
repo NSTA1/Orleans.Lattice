@@ -1,0 +1,18 @@
+{
+  "mutations": "materialiser-drain-mutations",
+  "refinement": "MaterialiserDrainRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 6,
+    "properties": 8,
+    "actions": 21,
+    "mutations": 21,
+    "behaviourRows": 33,
+    "distinctStates": 1076
+  },
+  "variants": {
+    "Larger": {
+      "distinctStates": 3780
+    }
+  }
+}
