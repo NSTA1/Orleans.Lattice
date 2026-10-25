@@ -1,0 +1,12 @@
+MODULE: ConsumerBatchesRespondReceiverIgnoresThrottled
+TARGET: ConsumerBatchesRespond
+CLASS: Action
+SUMMARY: the receiver ignores only the throttled batch response
+PERTURBS: ReceiverShrinkBatch
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.receiver = ReceiverBatch(LogicalValue(1))]
+--- REPLACE
+\* MUTATION: retain full size only for a Throttled logical lookup.
+    /\ consumer' = [consumer EXCEPT !.receiver = IF LogicalValue(1) = 1 THEN FullBatch ELSE ReceiverBatch(LogicalValue(1))]
+--- END

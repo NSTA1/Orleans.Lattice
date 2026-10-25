@@ -1,0 +1,21 @@
+MODULE: StickyFloorInfiniteSentinelIgnored
+TARGET: StickyFloor
+CLASS: Invariant
+SUMMARY: the Infinite recovery sentinel loses its sticky Throttled floor
+PERTURBS: Sample
+BOUNDS: RecoveryWindow = 99
+
+--- FIND
+    /\ verdict' = [t \in Trees |-> [p \in Partitions |-> PartitionVerdict(t, p)]]
+--- REPLACE
+\* MUTATION: accidentally treat Infinite as a disabled recovery window.
+    /\ verdict' = [t \in Trees |-> [p \in Partitions |->
+        IF RecoveryWindow = 99 THEN Raw(t, p) ELSE PartitionVerdict(t, p)]]
+--- END
+--- FIND
+    /\ treeVerdict' = [t \in Trees |-> TreeValue(t)]
+--- REPLACE
+\* MUTATION: Infinite loses its tree-wide floor as well.
+    /\ treeVerdict' = [t \in Trees |->
+        IF RecoveryWindow = 99 THEN RawTree(t) ELSE TreeValue(t)]
+--- END

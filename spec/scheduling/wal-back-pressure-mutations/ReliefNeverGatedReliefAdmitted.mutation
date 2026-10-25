@@ -1,0 +1,12 @@
+MODULE: ReliefNeverGatedReliefAdmitted
+TARGET: ReliefNeverGated
+CLASS: Invariant
+SUMMARY: saturation blocks its own relief opportunity
+PERTURBS: Relief
+
+--- FIND
+    /\ phase = 12 /\ actor \in ReliefActors \ reliefDone
+--- REPLACE
+\* MUTATION: relief now requires a non-saturated admission gate.
+    /\ phase = 12 /\ actor \in ReliefActors \ reliefDone /\ treeVerdict[1] # 2
+--- END

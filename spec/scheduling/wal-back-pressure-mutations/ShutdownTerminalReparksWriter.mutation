@@ -1,0 +1,12 @@
+MODULE: ShutdownTerminalReparksWriter
+TARGET: ShutdownTerminal
+CLASS: Action
+SUMMARY: shutdown leaves the producer parked on saturation
+PERTURBS: ShutdownDrain
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.writer = IF shuttingDown' THEN "shutdown" ELSE @,
+--- REPLACE
+\* MUTATION: retain a saturation park after shutdown.
+    /\ consumer' = [consumer EXCEPT !.writer = @,
+--- END

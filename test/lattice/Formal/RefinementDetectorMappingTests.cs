@@ -140,8 +140,10 @@ internal sealed partial class RefinementDetectorMappingTests
         // exercise"). An admitted gap with no issue behind it is a finding that
         // will be forgotten, so the citation is mandatory.
         var uncited = BehaviourRows(module)
-            .Where(r => r.Detector.Contains("None", StringComparison.Ordinal)
-                     || r.Detector.Contains("Partial", StringComparison.Ordinal))
+            .Where(r => System.Text.RegularExpressions.Regex.IsMatch(
+                r.Detector, @"^\s*(?:None|Partial):",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                    | System.Text.RegularExpressions.RegexOptions.CultureInvariant))
             .Where(r => !System.Text.RegularExpressions.Regex.IsMatch(r.Detector, @"#\d{3,}"))
             .Select(r => $"line {r.Row.LineNumber}: row {r.Row.Label} reports a gap but cites no issue")
             .ToList();

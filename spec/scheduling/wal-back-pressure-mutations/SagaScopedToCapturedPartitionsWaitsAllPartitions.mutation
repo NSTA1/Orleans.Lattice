@@ -1,0 +1,13 @@
+MODULE: SagaScopedToCapturedPartitionsWaitsAllPartitions
+TARGET: SagaScopedToCapturedPartitions
+CLASS: Action
+SUMMARY: saga waits on saturation outside its captured routing snapshot
+PERTURBS: SagaQuiesce
+BOUNDS: AcuteOnly = FALSE
+
+--- FIND
+    /\ saga' = [saga EXCEPT !.status = IF SagaValue = 2 THEN "waiting" ELSE "ready",
+--- REPLACE
+\* MUTATION: discard captured partition scope.
+    /\ saga' = [saga EXCEPT !.status = IF treeVerdict[1] = 2 THEN "waiting" ELSE "ready",
+--- END

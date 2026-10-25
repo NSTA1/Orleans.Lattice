@@ -154,7 +154,8 @@ public partial class BPlusLeafGrainTests
         ILeafReplayCoordinatorGrain coordinator,
         int digestCoalescingWindowMs,
         int reclassifyEveryNCheckpoints = 1000,
-        ILeafCursorReporter? reporterOverride = null)
+        ILeafCursorReporter? reporterOverride = null,
+        IWalSaturationSignal? saturationSignal = null)
     {
         var leaf = new FinalAdvanceLeaf();
 
@@ -231,6 +232,8 @@ public partial class BPlusLeafGrainTests
         var registeredReporter = reporterOverride ?? reporter;
 
         var sc = new ServiceCollection();
+        if (saturationSignal is not null)
+            sc.AddSingleton(saturationSignal);
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(registeredReporter);
         sc.AddSingleton<ILoggerFactory>(new FinalAdvanceLoggerFactory(leaf.Warnings));

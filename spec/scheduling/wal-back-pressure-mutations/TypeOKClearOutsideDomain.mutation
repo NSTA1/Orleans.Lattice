@@ -1,0 +1,12 @@
+MODULE: TypeOKClearOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: environment clearance writes an impossible partition identity
+PERTURBS: CauseOff
+
+--- FIND
+    /\ input' = [input EXCEPT ![t] = EmptyInput]
+--- REPLACE
+\* MUTATION: clearance corrupts partition identity.
+    /\ input' = [input EXCEPT ![t] = [EmptyInput EXCEPT !.partition = 0]]
+--- END

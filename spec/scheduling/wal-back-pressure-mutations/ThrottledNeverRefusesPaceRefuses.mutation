@@ -1,0 +1,13 @@
+MODULE: ThrottledNeverRefusesPaceRefuses
+TARGET: ThrottledNeverRefuses
+CLASS: Action
+SUMMARY: throttled pacing is replaced with a refusal
+PERTURBS: Pace
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.pace = GateValue = 1]
+--- REPLACE
+\* MUTATION: throttling is refusal rather than pacing.
+    /\ consumer' = [consumer EXCEPT !.pace = FALSE,
+        !.writer = IF GateValue = 1 THEN "refused" ELSE @]
+--- END

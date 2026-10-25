@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Tests;
 /// in-memory cursor, and a Zero pin blocks the cursor trim entirely.
 /// </summary>
 [TestFixture]
-public sealed class LatticeWalGcDurablePinFloorTests
+public sealed partial class LatticeWalGcDurablePinFloorTests
 {
     private const string Tree = "tree";
     private const string LeafConsumer = "_lattice_materialiser_tree_leaf-1";
@@ -68,9 +68,12 @@ public sealed class LatticeWalGcDurablePinFloorTests
 
     private static IServiceProvider Services(
         IWalStorageProvider provider,
-        IReadOnlyDictionary<string, HybridLogicalClock>? durablePins)
+        IReadOnlyDictionary<string, HybridLogicalClock>? durablePins,
+        IWalSaturationSignal? saturationSignal = null)
     {
         var sc = new ServiceCollection();
+        if (saturationSignal is not null)
+            sc.AddSingleton(saturationSignal);
         sc.AddSingleton(provider);
 
         if (durablePins is not null)
