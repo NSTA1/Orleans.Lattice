@@ -1,0 +1,11 @@
+MODULE: DeadlineBoundedRetainsExpiredWait
+TARGET: DeadlineBounded
+CLASS: Invariant
+SUMMARY: deadline observation reaches zero without settling the client
+PERTURBS: ClientDeadline
+
+--- FIND
+    /\ clientActive' = [clientActive EXCEPT ![r] = deadline'[r] > 0]
+--- REPLACE
+    /\ clientActive' = clientActive
+--- END

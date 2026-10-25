@@ -1,0 +1,13 @@
+MODULE: TypeOKObserveUnknownDrain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the environment supplies an unclassified drain verdict
+PERTURBS: ObserveDrain
+
+--- FIND
+ObserveDrain(d) ==
+    /\ queue # <<>> /\ drain' = d
+--- REPLACE
+ObserveDrain(d) ==
+    /\ queue # <<>> /\ drain' = "Unknown"
+--- END

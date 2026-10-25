@@ -1,0 +1,11 @@
+MODULE: UnresolvedWorkDurableDeferWithoutLedger
+TARGET: UnresolvedWorkDurable
+CLASS: Invariant
+SUMMARY: a deferred terminal is skipped without its durable hole record
+PERTURBS: DeferTerminal
+
+--- FIND
+    /\ holes' = holes \cup {p} /\ ledger' = ledger \cup {p}
+--- REPLACE
+    /\ holes' = holes \cup {p} /\ ledger' = ledger
+--- END

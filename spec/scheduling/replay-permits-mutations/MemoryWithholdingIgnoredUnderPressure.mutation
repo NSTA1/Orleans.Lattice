@@ -1,0 +1,10 @@
+MODULE: MemoryWithholdingIgnoredUnderPressure
+TARGET: MemoryWithholding
+CLASS: Action
+SUMMARY: returning capacity ignores pressure while leaving the floor intact
+
+--- FIND
+    /\ LET reduce == pressure /\ withheld < Ceiling - 1
+--- REPLACE
+    /\ LET reduce == FALSE
+--- END

@@ -1,0 +1,13 @@
+MODULE: ClassNonStarvationCapacityOpportunityNeverGrants
+TARGET: ClassNonStarvation
+CLASS: Temporal
+SUMMARY: runtime opportunities continue but admission never grants an eligible waiter
+PERTURBS: CapacityOpportunity
+
+--- FIND
+       THEN \E r \in Members(queue) : Admit(r)
+--- REPLACE
+       THEN UNCHANGED <<holders, free, withheld, queue, status, role, observed, pressure,
+        pressurePhase, drain, hung, holdLeft, deadline, frontier, banked, checkpoint,
+        holes, ledger, opportunity, arrivalsClosed, clientActive, cancelled>>
+--- END

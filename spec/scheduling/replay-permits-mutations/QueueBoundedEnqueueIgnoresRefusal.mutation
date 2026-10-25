@@ -1,0 +1,11 @@
+MODULE: QueueBoundedEnqueueIgnoresRefusal
+TARGET: QueueBounded
+CLASS: Action
+SUMMARY: a queued request ignores the excessive-wait and stalled-depth observations
+PERTURBS: Enqueue
+
+--- FIND
+    /\ status[r] = "pending" /\ ~RefuseForWait(r) /\ ~RefuseForDepth(r)
+--- REPLACE
+    /\ status[r] = "pending"
+--- END

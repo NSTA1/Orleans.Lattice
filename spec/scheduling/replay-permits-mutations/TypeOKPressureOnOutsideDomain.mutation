@@ -1,0 +1,11 @@
+MODULE: TypeOKPressureOnOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: pressure observation leaves its finite phase domain
+PERTURBS: MemoryPressureOn
+
+--- FIND
+    /\ pressurePhase = "new" /\ pressure' = TRUE /\ pressurePhase' = "on"
+--- REPLACE
+    /\ pressurePhase = "new" /\ pressure' = TRUE /\ pressurePhase' = "unknown"
+--- END

@@ -1,0 +1,11 @@
+MODULE: ReplayConvergesDiscardsBanking
+TARGET: ReplayConverges
+CLASS: Temporal
+SUMMARY: completed slices absorb data but never bank a resumable prefix
+PERTURBS: ReplaySlice
+
+--- FIND
+    /\ banked' = [banked EXCEPT ![p] = frontier'[p]]
+--- REPLACE
+    /\ banked' = banked
+--- END

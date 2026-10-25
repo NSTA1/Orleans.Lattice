@@ -1,0 +1,10 @@
+MODULE: PriorityReservationBulkFloorRemoved
+TARGET: PriorityReservation
+CLASS: Invariant
+SUMMARY: the narrowest depth excludes bulk work entirely
+
+--- FIND
+            THEN Max(1, DepthPerPermit * Circulating - Circulating)
+--- REPLACE
+            THEN DepthPerPermit * Circulating - Circulating
+--- END
