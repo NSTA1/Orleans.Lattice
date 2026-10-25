@@ -69,6 +69,7 @@ public sealed class ShardRootGrainDiagnosticsTests
                 StateBytes = stateBytes,
             }));
             leaf.CountAsync().Returns(Task.FromResult(liveKeys));
+            leaf.CountAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(Task.FromResult(liveKeys));
             leaf.GetNextSiblingAsync().Returns(Task.FromResult(next));
             Leaves[key] = leaf;
 

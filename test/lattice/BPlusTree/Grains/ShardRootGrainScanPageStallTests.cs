@@ -522,7 +522,7 @@ public class ShardRootGrainScanPageStallTests
         factory.GetGrain<IBPlusInternalGrain>(rootId.GetGuidKey()).Returns(root);
 
         var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
-        leaf.CountAsync().Returns(_ => new TaskCompletionSource<int>(
+        leaf.CountAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(_ => new TaskCompletionSource<int>(
             TaskCreationOptions.RunContinuationsAsynchronously).Task);
         leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
