@@ -1,0 +1,12 @@
+MODULE: RefusalSourceAttributedDropsSnapshotSource
+TARGET: RefusalSourceAttributed
+CLASS: Action
+SUMMARY: snapshot shedding loses its own refusal source
+PERTURBS: ShedOpen
+
+--- FIND
+        !.source = IF Shed(LogicalValue(1)) THEN "SnapshotCursorOpen" ELSE @]
+--- REPLACE
+\* MUTATION: snapshot admission must not borrow a writer or saga source.
+        !.source = IF Shed(LogicalValue(1)) THEN "WalAdmission" ELSE @]
+--- END

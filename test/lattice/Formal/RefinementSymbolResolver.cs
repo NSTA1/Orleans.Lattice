@@ -70,10 +70,8 @@ internal enum RefinementSymbolResolution
 /// </summary>
 internal sealed class RefinementSymbolResolver
 {
-    private static readonly Regex BlockComment =
-        new(@"/\*.*?\*/", RegexOptions.Singleline | RegexOptions.Compiled);
-
-    private static readonly Regex LineComment = new(@"//[^\n]*", RegexOptions.Compiled);
+    private static readonly Regex Comment =
+        new(@"//[^\n]*|/\*.*?\*/", RegexOptions.Singleline | RegexOptions.Compiled);
 
     private readonly string _sourceRoot;
     private readonly Dictionary<string, List<string>> _filesByStem = new(StringComparer.Ordinal);
@@ -276,8 +274,7 @@ internal sealed class RefinementSymbolResolver
         }
 
         var text = File.ReadAllText(path).ReplaceLineEndings("\n");
-        text = BlockComment.Replace(text, string.Empty);
-        text = LineComment.Replace(text, string.Empty);
+        text = Comment.Replace(text, string.Empty);
 
         _strippedText[path] = text;
         return text;

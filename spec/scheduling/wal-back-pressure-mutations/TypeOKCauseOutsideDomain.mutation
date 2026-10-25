@@ -1,0 +1,12 @@
+MODULE: TypeOKCauseOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: environment injects a cause outside the classifier vocabulary
+PERTURBS: CauseOn
+
+--- FIND
+    /\ input' = [input EXCEPT ![t] = [causes |-> cs, partition |-> p,
+--- REPLACE
+\* MUTATION: corrupt the observed cause vocabulary.
+    /\ input' = [input EXCEPT ![t] = [causes |-> cs \cup {"Unknown"}, partition |-> p,
+--- END

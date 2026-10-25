@@ -1,0 +1,12 @@
+MODULE: SaturatedLatencyOneTickRecoveryWindowDelaysSaturate
+TARGET: SaturatedLatencyOneTick
+CLASS: Action
+SUMMARY: recovery hysteresis wrongly delays the rising acute edge
+PERTURBS: Sample
+
+--- FIND
+    /\ treeVerdict' = [t \in Trees |-> TreeValue(t)]
+--- REPLACE
+\* MUTATION: apply the recovery floor on the rising edge.
+    /\ treeVerdict' = [t \in Trees |-> IF Acute(t) /\ treeVerdict[t] = 0 THEN 1 ELSE TreeValue(t)]
+--- END

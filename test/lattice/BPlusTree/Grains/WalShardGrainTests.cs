@@ -29,10 +29,14 @@ public partial class WalShardGrainTests
         IWalRecordEncoder? encoder = null,
         long placementVersion = 0,
         IPersistentState<WalShardFloorState>? floorState = null,
-        IWalClockFloorGate? floorGate = null)
+        IWalClockFloorGate? floorGate = null,
+        IWalSaturationSignal? saturationSignal = null)
     {
         provider ??= new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
+        if (saturationSignal is not null)
+            grainContext.ActivationServices.Returns(new ServiceCollection()
+                .AddSingleton(saturationSignal).BuildServiceProvider());
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         // Per-tree options are now resolved through the monitor on every
         // grain call (matches the BPlusTree/Grains convention); wire the
