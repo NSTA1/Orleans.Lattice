@@ -157,6 +157,9 @@ public partial class ClusterWalPage : IDisposable
         _tree = TreeId;
         _receipt = null;
         _reclaimKey = null;
+        _busy = false;
+        _cancelling = false;
+        _confirm = Verb.None;
         _watch.Clear();
         var token = _load.Renew();
 
@@ -197,7 +200,7 @@ public partial class ClusterWalPage : IDisposable
             {
                 await _watch.ResumeAsync(operations, [(TreeAdminOperationKinds.WalMove, TreeAdminOperationIds.Target(tree, movePartition))], token);
             }
-            catch (OperationCanceledException) when (_load.IsLeft)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
             }
         }
@@ -288,6 +291,7 @@ public partial class ClusterWalPage : IDisposable
             return;
         }
 
+        var token = _load.Token;
         _busy = true;
         try
         {
@@ -296,69 +300,86 @@ public partial class ClusterWalPage : IDisposable
                 TreeAdminOperationKinds.WalMove,
                 TreeAdminOperationIds.Target(tree, partition),
                 (operationId, ct) => operations.StartWalMoveAsync(tree, partition, target, null, operationId, ct),
-                _load.Token);
+                token);
         }
-        catch (OperationCanceledException) when (_load.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            Toasts.Show(ClusterFaults.Describe(exception), LtToastTone.Danger);
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(ClusterFaults.Describe(exception), LtToastTone.Danger);
+            }
         }
         finally
         {
-            _busy = false;
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+            }
         }
     }
 
     private async Task StopMoveAsync()
     {
+        var token = _load.Token;
         _cancelling = true;
         try
         {
-            await _watch.CancelAsync(_load.Token);
+            await _watch.CancelAsync(token);
         }
-        catch (OperationCanceledException) when (_load.IsLeft)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            Toasts.Show(ClusterFaults.Describe(exception), LtToastTone.Danger);
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(ClusterFaults.Describe(exception), LtToastTone.Danger);
+            }
         }
         finally
         {
-            _cancelling = false;
+            if (!token.IsCancellationRequested)
+            {
+                _cancelling = false;
+            }
         }
     }
 
     private void OnWatchChanged() => _ = InvokeAsync(StateHasChanged);
 
-    private void OnWatchFinished(LatticeOperationStatus status) => _ = InvokeAsync(async () =>
+    private void OnWatchFinished(LatticeOperationStatus status)
     {
-        if (_load.IsLeft)
+        var token = _load.Token;
+        _ = InvokeAsync(async () =>
         {
-            return;
-        }
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
 
-        switch (status.State)
-        {
-            case LatticeOperationState.Succeeded:
-                _receipt = ReceiptFrom(status);
-                _watch.Clear();
-                Toasts.Show("WAL partition moved.", LtToastTone.Success);
-                StateHasChanged();
-                await RereadPlacementAsync();
-                break;
-            case LatticeOperationState.Cancelled:
-                Toasts.Show("The move was stopped before its flip: the partition stays on its source.", LtToastTone.Warning);
-                break;
-            default:
-                Toasts.Show("The WAL move failed. Audit the placement before trying again.", LtToastTone.Danger);
-                break;
-        }
+            switch (status.State)
+            {
+                case LatticeOperationState.Succeeded:
+                    _receipt = ReceiptFrom(status);
+                    _watch.Clear();
+                    Toasts.Show("WAL partition moved.", LtToastTone.Success);
+                    StateHasChanged();
+                    await RereadPlacementAsync();
+                    break;
+                case LatticeOperationState.Cancelled:
+                    Toasts.Show("The move was stopped before its flip: the partition stays on its source.", LtToastTone.Warning);
+                    break;
+                default:
+                    Toasts.Show("The WAL move failed. Audit the placement before trying again.", LtToastTone.Danger);
+                    break;
+            }
 
-        StateHasChanged();
-    });
+            StateHasChanged();
+        });
+    }
 
     // A finished move flips the partition to its target under a new placement
     // version, and a reclaim drops the retained source: the audit and the plan on
@@ -428,22 +449,39 @@ public partial class ClusterWalPage : IDisposable
             return;
         }
 
+        var token = _load.Token;
         _busy = true;
-        var receipt = await ClusterLoad<TreeWalMoveReceipt>.RunAsync(
-            ct => Facades.RequireTreeAdmin().ReclaimMovedWalSourceAsync(tree, partition, source, ct),
-            _load.Token);
-        _busy = false;
+        try
+        {
+            var receipt = await ClusterLoad<TreeWalMoveReceipt>.RunAsync(
+                ct => Facades.RequireTreeAdmin().ReclaimMovedWalSourceAsync(tree, partition, source, ct),
+                token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
 
-        if (receipt.Value is { } value)
-        {
-            _receipt = value;
-            _reclaimKey = null;
-            Toasts.Show("WAL source reclaimed.", LtToastTone.Success);
-            await RereadPlacementAsync();
+            if (receipt.Value is { } value)
+            {
+                _receipt = value;
+                _reclaimKey = null;
+                Toasts.Show("WAL source reclaimed.", LtToastTone.Success);
+                await RereadPlacementAsync();
+            }
+            else
+            {
+                Toasts.Show(receipt.Error!, LtToastTone.Danger);
+            }
         }
-        else
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            Toasts.Show(receipt.Error!, LtToastTone.Danger);
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+            }
         }
     }
 

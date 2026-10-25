@@ -2,6 +2,7 @@ using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Operations;
+using TestPoll = Orleans.Lattice.Testing.TestPoll;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Operations;
 
@@ -261,6 +262,90 @@ public sealed class OperationFollowerTests
 
     private static void ReadsReach(Func<int> reads, int expected) =>
         FollowBarriers.ReadsReach(reads, expected);
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Refresh_supersedes_an_in_flight_read_and_stops_after_a_terminal_answer(bool fail)
+    {
+        var time = new ManualTimeProvider();
+        using var follower = new OperationFollower(time);
+        var earlier = new TaskCompletionSource<LatticeOperationStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        var start = follower.StartAsync(_ => Interlocked.Increment(ref reads) == 1
+            ? earlier.Task
+            : Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(LatticeOperationState.Succeeded)),
+            CancellationToken.None);
+
+        await follower.RefreshAsync(CancellationToken.None);
+        var changes = 0;
+        follower.Changed += () => Interlocked.Increment(ref changes);
+        if (fail)
+        {
+            earlier.SetException(new TimeoutException("old status read"));
+        }
+        else
+        {
+            earlier.SetResult(OperationTestStatus.Of(LatticeOperationState.Running));
+        }
+
+        await start;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(follower.Status!.State, Is.EqualTo(LatticeOperationState.Succeeded));
+            Assert.That(follower.LastError, Is.Null);
+            Assert.That(follower.IsFollowing, Is.False);
+            Assert.That(time.ArmedTimers, Is.Zero);
+            Assert.That(Volatile.Read(ref changes), Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task Refresh_that_finds_a_terminal_status_disarms_an_existing_poll()
+    {
+        var time = new ManualTimeProvider();
+        using var follower = new OperationFollower(time);
+        var reads = 0;
+        await follower.StartAsync(_ => Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(
+            Interlocked.Increment(ref reads) == 1 ? LatticeOperationState.Running : LatticeOperationState.Cancelled)), CancellationToken.None);
+
+        await follower.RefreshAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(follower.IsFollowing, Is.False);
+            Assert.That(time.ArmedTimers, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task A_poll_answering_after_refresh_does_not_regress_the_status()
+    {
+        var time = new ManualTimeProvider();
+        using var follower = new OperationFollower(time);
+        var poll = new TaskCompletionSource<LatticeOperationStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        await follower.StartAsync(_ => Interlocked.Increment(ref reads) == 2
+            ? poll.Task
+            : Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(
+                Volatile.Read(ref reads) == 1 ? LatticeOperationState.Running : LatticeOperationState.Cancelled)),
+            CancellationToken.None);
+        Advance(time);
+        ReadsReach(() => Volatile.Read(ref reads), 2);
+
+        await follower.RefreshAsync(CancellationToken.None);
+        var changes = 0;
+        follower.Changed += () => Interlocked.Increment(ref changes);
+        poll.SetResult(OperationTestStatus.Of(LatticeOperationState.Running));
+
+        Assert.That(await TestPoll.TryUntilAsync(() => Volatile.Read(ref changes) != 0, TimeSpan.FromSeconds(1)), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(follower.Status!.State, Is.EqualTo(LatticeOperationState.Cancelled));
+            Assert.That(follower.IsFollowing, Is.False);
+            Assert.That(time.ArmedTimers, Is.Zero);
+        });
+    }
 
     // The next wait is armed on the follow's continuation once the read returns;
     // FollowBarriers.Advance waits for it before moving the clock again.

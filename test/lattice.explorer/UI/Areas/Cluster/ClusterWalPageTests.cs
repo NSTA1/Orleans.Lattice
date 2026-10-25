@@ -139,10 +139,10 @@ public sealed partial class ClusterWalPageTests : ClusterTestContext
             Assert.That(Button(cut, "Move partition...").HasAttribute("disabled"), Is.True);
         });
 
-        Time.Advance(ClusterStatusPoller.Interval);
+        FollowBarriers.Advance(Time, ClusterStatusPoller.Interval);
         cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-cluster='move-progress']").TextContent, Does.Contain("Verifying")));
 
-        Time.Advance(ClusterStatusPoller.Interval);
+        FollowBarriers.Advance(Time, ClusterStatusPoller.Interval);
         cut.WaitUntil(() =>
         {
             Assert.That(cut.Find(".lt-cluster-result").TextContent, Does.Contain("offsets 10 to 1,210 copied to blob-b").And.Contain("The source is retained until you reclaim it."));
