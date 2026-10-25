@@ -1,0 +1,13 @@
+MODULE: CallerOnlyAfterTerminalsEarlyCompletion
+TARGET: CallerOnlyAfterTerminals
+CLASS: Invariant
+SUMMARY: The decision is reported as caller completion before terminals.
+PERTURBS: TerminalOpportunity
+--- FIND
+    /\ (Terminal \/ Checkpoint \/ Complete \/ TerminalIdle)
+--- REPLACE
+    \* MUTATION: acknowledge a decided saga without delivery.
+    /\ (Terminal \/ Checkpoint \/ Complete \/ TerminalIdle
+        \/ (saga = "decided" /\ saga' = "idle" /\ completed' = TRUE
+            /\ UNCHANGED <<drained, materialised, checkpointed, terminalWitness>>))
+--- END

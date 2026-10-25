@@ -1,0 +1,13 @@
+MODULE: ReaderEventuallyResolvesNeverCaptures
+TARGET: ReaderEventuallyResolves
+CLASS: Temporal
+SUMMARY: A delivered reader opportunity does not initiate the capture.
+PERTURBS: ReaderOpportunity
+--- FIND
+    /\ (Capture \/ Acquire \/ ReadLeaf \/ Validate \/ ReaderIdle)
+--- REPLACE
+    \* MUTATION: the continuation loses the capture work.
+    /\ ((reader = "capture"
+            /\ UNCHANGED <<reader, snapshot, observed, attempts, crossed, held, leaseLeft>>)
+        \/ Acquire \/ ReadLeaf \/ Validate \/ ReaderIdle)
+--- END

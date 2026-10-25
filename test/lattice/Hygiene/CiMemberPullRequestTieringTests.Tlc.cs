@@ -17,14 +17,14 @@ public sealed partial class CiMemberPullRequestTieringTests
     public void Scheduling_shard_prices_all_certified_modules_in_full_and_member_plans(string? skippedTiers)
     {
         // Independent two-CPU, 1800MB, one-slot certificates; Tag includes structural-test overhead.
-        const double composedCertificateMinutes = (144.684 + 177 + 729.46094) / 60;
+        const double composedCertificateMinutes = (144.684 + 177 + 729.46094 + 62.8925529) / 60;
         var scheduling = Plan(["lattice"], skippedTiers)
             .Single(item => item.Shard == "formal-tlc-scheduling" && item.Skip is null);
 
         Assert.That(
             scheduling.EstimateMinutes,
             Is.GreaterThanOrEqualTo(composedCertificateMinutes),
-            "the scheduling shard runs foundation, TagIndexReconcile and WalBackPressure together; "
+            "the scheduling shard runs foundation, TagIndexReconcile, WalBackPressure and SagaReadProgress together; "
                 + "pricing only the original foundation mispacks the expanded TLC population");
     }
 

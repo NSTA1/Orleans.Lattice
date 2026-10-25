@@ -1,0 +1,17 @@
+{
+  "mutations": "saga-read-progress-mutations",
+  "refinement": "SagaReadProgressRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 3,
+    "properties": 5,
+    "actions": 6,
+    "mutations": 11,
+    "behaviourRows": 12,
+    "distinctStates": 2451
+  },
+  "variants": {
+    "ThreeLeaves": { "distinctStates": 14076 },
+    "LeaseLoss": { "distinctStates": 3585 }
+  }
+}
