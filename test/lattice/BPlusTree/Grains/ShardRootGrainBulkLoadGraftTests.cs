@@ -24,7 +24,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class ShardRootGrainBulkLoadGraftTests
+public sealed partial class ShardRootGrainBulkLoadGraftTests
 {
     private const string TreeId = "bulk-tree";
 

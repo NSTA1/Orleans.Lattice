@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public class ShardRootGrainCountWorkBoundTests
+public partial class ShardRootGrainCountWorkBoundTests
 {
     private const string TreeId = "count-tree";
     private const string ShardKey = TreeId + "/0";
@@ -44,7 +44,8 @@ public class ShardRootGrainCountWorkBoundTests
     /// one-leaf shard but would make a multi-leaf resume test meaningless.
     /// </para>
     /// </summary>
-    private static Harness CreateChain(int leafCount, int keysPerLeaf, int maxLeavesPerBatch, bool emptyLeaves = false)
+    private static Harness CreateChain(int leafCount, int keysPerLeaf, int maxLeavesPerBatch, bool emptyLeaves = false,
+        bool movedOwnership = false)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
@@ -57,6 +58,11 @@ public class ShardRootGrainCountWorkBoundTests
         var rootId = GrainId.Create("bplusinternal", "root");
         state.State.RootNodeId = rootId;
         state.State.RootIsLeaf = false;
+        if (movedOwnership)
+        {
+            state.State.MovedAwayVirtualShardCount = 16;
+            state.State.MovedAwaySlots[ShardMap.GetVirtualSlot("k000-000", 16)] = 1;
+        }
 
         var factory = Substitute.For<IGrainFactory>();
         var countCalls = 0;

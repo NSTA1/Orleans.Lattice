@@ -73,8 +73,9 @@ internal sealed partial class ShardRootGrain
         // RebuildProjectionFromWalAsync deactivates the leaf - so both reads
         // would land on a deactivated grain and force an immediate WAL replay
         // purely to obtain a cursor, turning the deliberately lazy rebuild into
-        // an inline one. Both reads therefore happen BEFORE the rebuild. The
-        // rules are otherwise the shared ones: the same LeafWalkBudget, a key
+        // an inline one. The combined call captures both BEFORE the rebuild
+        // and returns them afterward without reactivation. The rules are
+        // otherwise the shared ones: the same LeafWalkBudget, a key
         // cursor rather than a leaf id, and no stopping anywhere the walk
         // cannot name a resume position (issues 1955, 1972, 1973).
         scan.Phase = ScanPagePhase.LeafWalk;
@@ -88,36 +89,21 @@ internal sealed partial class ShardRootGrain
 
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
 
-            // Read the next-sibling pointer and this leaf's key range BEFORE
-            // driving the rebuild, because RebuildProjectionFromWalAsync
-            // deactivates the grain; any subsequent call on the same grain
-            // handle would simply reactivate it (wasting an activation) and we
-            // already have everything we need from the pre-rebuild state to
-            // continue the chain walk. The range is read on every leaf rather
-            // than only at a yield point, so that a walk the page-fill ceiling
-            // abandons still has a resume position to bank (issue 2807). Both
-            // ride in one grain turn.
-            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            // The leaf captures its link BEFORE retiring replay and resetting
+            // the projection, then returns it from the same call.
+            var link = await leaf.RebuildProjectionAndNextSiblingAsync();
+            rebuilt++;
             var next = link.NextSibling;
             var bounds = link.KeyRange;
 
             scan.Budget.RecordLeafVisited();
 
-            // Decide whether this is a yield point while the leaf is still
-            // activated, so the resume key can be read before the rebuild for
-            // the same reason the sibling pointer is. resultsCollected is 1
-            // because the unit of progress here is a leaf rebuilt: passing an
-            // aggregate count would disarm the bound on any run of leaves that
-            // reported nothing (issue 1992). The budget's duration component
-            // therefore excludes the current leaf's rebuild, which costs at
-            // most one extra leaf per batch.
+            // The duration budget now includes this leaf's reset. The captured
+            // bounds still bank a key cursor without reactivating that leaf.
             var boundary = next is null
                 ? null
                 : ResumeKeyFrom(bounds, resumeFromInclusive, null);
             var resumeFrom = boundary is not null && scan.Budget.ShouldYield() ? boundary : null;
-
-            await leaf.RebuildProjectionFromWalAsync();
-            rebuilt++;
 
             if (next is null)
             {

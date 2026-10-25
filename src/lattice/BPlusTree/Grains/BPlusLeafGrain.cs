@@ -3845,6 +3845,13 @@ internal sealed partial class BPlusLeafGrain(
         await PublishDigestUpwardInlineAsync();
     }
 
+    /// <inheritdoc />
+    public async Task<(List<string> Keys, LeafChainLink Link)> GetKeysAndNextSiblingAsync(string? startInclusive, string? endExclusive)
+    {
+        var keys = await GetKeysAsync(startInclusive, endExclusive);
+        return (keys, new LeafChainLink { KeyRange = CurrentKeyRange(), NextSibling = state.State.NextSibling });
+    }
+
     public async Task<List<string>> GetKeysAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
         // Fast-path eligibility is a property of the predicate tree alone, so it

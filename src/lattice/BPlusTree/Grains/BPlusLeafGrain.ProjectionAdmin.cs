@@ -43,6 +43,14 @@ internal sealed partial class BPlusLeafGrain
         });
 
     /// <inheritdoc />
+    public async Task<LeafChainLink> RebuildProjectionAndNextSiblingAsync()
+    {
+        var link = new LeafChainLink { KeyRange = CurrentKeyRange(), NextSibling = state.State.NextSibling };
+        await RebuildProjectionFromWalAsync();
+        return link;
+    }
+
+    /// <inheritdoc />
     public async Task RebuildProjectionFromWalAsync()
     {
         // Step 0 - an unreadable snapshot is discarded, accepting the loss

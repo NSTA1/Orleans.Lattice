@@ -2336,12 +2336,13 @@ internal sealed partial class ShardRootGrain(
             LeafChainLink link;
             if (hasMovedAway)
             {
-                var keys = await leaf.GetKeysAsync(startInclusive, endExclusive);
+                var page = await leaf.GetKeysAndNextSiblingAsync(startInclusive, endExclusive);
+                var keys = page.Keys;
                 for (int i = 0; i < keys.Count; i++)
                 {
                     if (!IsSlotMovedAway(keys[i])) leafCount++;
                 }
-                link = await leaf.GetKeyRangeAndNextSiblingAsync();
+                link = page.Link;
             }
             else
             {
@@ -2352,8 +2353,7 @@ internal sealed partial class ShardRootGrain(
             total += leafCount;
             scan.Budget.RecordLeafVisited();
 
-            // Bounds and successor accompany the count. The moved-slot path
-            // still enumerates keys and reads metadata separately.
+            // Bounds and successor accompany both the count and moved-slot keys.
             var bounds = link.KeyRange;
 
             // Past-range early exit (issue 1971). Without this a narrow range
@@ -2598,7 +2598,8 @@ internal sealed partial class ShardRootGrain(
             LeafChainLink link;
             if (hasActiveSplit || hasMovedAway)
             {
-                var keys = await leaf.GetKeysAsync(null, null);
+                var page = await leaf.GetKeysAndNextSiblingAsync(null, null);
+                var keys = page.Keys;
                 for (int i = 0; i < keys.Count; i++)
                 {
                     if (TryGetMovedAwaySlot(keys[i], out var movedSlot))
@@ -2608,7 +2609,7 @@ internal sealed partial class ShardRootGrain(
                     }
                     total++;
                 }
-                link = await leaf.GetKeyRangeAndNextSiblingAsync();
+                link = page.Link;
             }
             else
             {
@@ -2722,7 +2723,8 @@ internal sealed partial class ShardRootGrain(
             // then applied to that already-bounded set. Both constraints must
             // hold for a key to count, keeping the post-split ranged count
             // exact against the authoritative ShardMap.
-            var keys = await leaf.GetKeysAsync(startInclusive, endExclusive);
+            var page = await leaf.GetKeysAndNextSiblingAsync(startInclusive, endExclusive);
+            var keys = page.Keys;
             for (int i = 0; i < keys.Count; i++)
             {
                 var slot = ShardMap.GetVirtualSlot(keys[i], virtualShardCount);
@@ -2731,10 +2733,8 @@ internal sealed partial class ShardRootGrain(
             }
             scan.Budget.RecordLeafVisited();
 
-            // The past-range probe, yield point and bankable checkpoint all
-            // need bounds. This key-enumeration path keeps its topology read;
-            // a raw count cannot replace the per-slot ownership filter.
-            var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+            // Keep the per-slot filter; topology rides with the keys.
+            var link = page.Link;
             var bounds = link.KeyRange;
 
             // Past-range early exit (issue 1971): a bounded range must not cost
