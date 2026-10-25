@@ -54,6 +54,7 @@ BLAME_ARGS = [
     "--blame-hang-dump-type",
     "full",
 ]
+TLC_BLAME_ARGS = ["--blame", "--blame-crash", "--blame-crash-dump-type", "full"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -198,13 +199,24 @@ def run_item(item: dict, results_dir: str) -> dict:
     # nothing, so the argument has to be omitted rather than blanked.
     if item["filter"]:
         command += ["--filter", item["filter"]]
+    # TLC deliberately uses the enclosing job timeout. VSTest's inactivity
+    # collector observes test-case events, not progress inside a running JVM.
+    tlc_flags = [item.get(flag, False) for flag in ("tlc", "tlcSmoke")]
+    tlc_only = (
+        all(isinstance(flag, bool) for flag in tlc_flags)
+        and any(tlc_flags)
+        and isinstance(item["filter"], str)
+        and bool(item["filter"].strip())
+    )
     command += [
-        *BLAME_ARGS,
+        *(TLC_BLAME_ARGS if tlc_only else BLAME_ARGS),
         "--logger", f"trx;LogFileName={trx_name}",
     ]
 
     print(f"::group::{label}")
     print(f"filter: {item['filter'] or '(none - whole project)'}")
+    if tlc_only:
+        print("TLC diagnostics: sequence and crash dump; hang bound: enclosing CI job timeout.")
     started = time.monotonic()
     completed = subprocess.run(command, check=False)
     duration = time.monotonic() - started
