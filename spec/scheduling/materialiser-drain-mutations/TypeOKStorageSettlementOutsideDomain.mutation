@@ -1,0 +1,11 @@
+MODULE: TypeOKStorageSettlementOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: storage completion fabricates a foreign outstanding caller
+PERTURBS: StorageSettle
+
+--- FIND
+    /\ outstanding' = outstanding \ {c}
+--- REPLACE
+    /\ outstanding' = (outstanding \ {c}) \cup {99} \* MUTATION: foreign caller.
+--- END

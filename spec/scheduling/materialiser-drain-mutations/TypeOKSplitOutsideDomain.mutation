@@ -1,0 +1,11 @@
+MODULE: TypeOKSplitOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: split publishes an invalid topology epoch
+PERTURBS: SplitTopology
+
+--- FIND
+    /\ split' = 1
+--- REPLACE
+    /\ split' = 2 \* MUTATION: topology epoch outside the finite domain.
+--- END

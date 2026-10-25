@@ -1,0 +1,11 @@
+MODULE: DrainEventuallyCompletesInfiniteDrainBudget
+TARGET: DrainEventuallyCompletes
+CLASS: Temporal
+SUMMARY: hung storage never consumes the finite shutdown budget
+PERTURBS: BudgetTick
+
+--- FIND
+    /\ elapsed < DrainBudget /\ elapsed' = elapsed + 1
+--- REPLACE
+    /\ elapsed < DrainBudget /\ elapsed' = elapsed \* MUTATION: effectively infinite budget.
+--- END

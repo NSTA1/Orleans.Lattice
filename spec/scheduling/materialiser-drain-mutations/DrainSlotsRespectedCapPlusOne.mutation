@@ -1,0 +1,11 @@
+MODULE: DrainSlotsRespectedCapPlusOne
+TARGET: DrainSlotsRespected
+CLASS: Invariant
+SUMMARY: launch one more online shard than the cap permits
+PERTURBS: StartDrain
+
+--- FIND
+    /\ Cardinality(active) < DrainCap
+--- REPLACE
+    /\ Cardinality(active) <= DrainCap \* MUTATION: cap plus one.
+--- END

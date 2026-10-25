@@ -31,6 +31,7 @@ The checked scheduling seams are:
 | `TurnOccupancy` | A non-reentrant turn, queued calls, and the difference between awaiting an operation inside the turn and dispatching it outside the turn. |
 | `WalAdmission` | Partition-scoped admission capacity, parked saturation waiters, paced recovery release, sampling and wait-budget outcomes. |
 | `WalBackPressure` | Cached tree/partition classification, writer/saga/snapshot/receiver/view responses and signal-independent relief. |
+| `MaterialiserDrain` | Online-copy slots, leaf replay/checkpoint/pin progress, finite-budget WAL shutdown, cooperative view service and stable-identity live routing. |
 | `SagaReadProgress` | Consistent multi-key decision cuts, bounded gated fallback, pressure-independent terminals and original caller acknowledgement after completion durability. |
 | `TagIndexReconcile` | A single durable probe/repair sweep, successful baseline publication, per-phase tree work and timer/reminder recovery. |
 
@@ -179,6 +180,28 @@ in-memory phase. See the
 [refinement](../../spec/scheduling/SagaReadProgressRefinement.md) for the finite
 instances, all retained temporal checks, source-negative certificates and
 cooperative production Coyote boundary.
+
+## Materialiser drain progress
+
+Online snapshot shard-copy slots, admitted leaf replay and WAL-shard shutdown
+are different drain units. MaxConcurrentDrains bounds the first;
+BackgroundDrainLeavesPerPass bounds a copy pass. A WAL-shard shutdown drain
+has its own finite WalDrainBudget and may give a pending follow-on batch a
+fresh budget. That is not a deadline for every leaf teardown barrier.
+InfiniteTimeSpan is an explicit opt-out.
+
+Leaf replay respects the exclusive head. Checkpoint publication follows
+consumption; a durable pin cannot exceed either the persisted checkpoint or
+durable snapshot coverage. Admission completion and eventual storage success
+are separate premises. A cold owner is not assigned a new residency deadline.
+
+Views retain positive service under all supplied pressure arms. Offered load
+is bounded between successful service opportunities, not sampler ticks.
+Backlog rows are not the classifier's oldest-unread-age/window unit.
+Rebuild/reconcile refresh a split source's live logical
+topology without changing physical identity or restarting the cursor.
+See the [refinement](../../spec/scheduling/MaterialiserDrainRefinement.md)
+for the sum-of-scenarios boundary, real detectors and progress premises.
 
 ## Defects found during the bucket
 

@@ -1,0 +1,14 @@
+MODULE: ConsumerBatchesRespondLagSaturates
+TARGET: ConsumerBatchesRespond
+CLASS: Action
+SUMMARY: lag-only backoff incorrectly becomes an admission refusal regime
+PERTURBS: Sample
+
+--- FIND
+    /\ pressure' \in (IF acute THEN {2} ELSE {0, 1})
+    /\ batch' = BP!ViewBatch(pressure') /\ phase' = "pull"
+--- REPLACE
+    /\ pressure' \in (IF acute THEN {2} ELSE {0, 2})
+    /\ batch' = BP!ViewBatch(pressure') /\ phase' = "pull"
+    \* MUTATION: lag alone saturates rather than throttles.
+--- END
