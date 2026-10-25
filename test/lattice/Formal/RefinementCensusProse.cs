@@ -45,6 +45,10 @@ internal sealed record CensusCountClaim(int LineNumber, string Line, string Text
 /// because it *is* gated, by
 /// <c>The_note_yields_the_expected_behaviour_asserting_denominator</c>; a
 /// derived-and-gated number is the one shape this rule has no quarrel with.
+/// A bare gap is also a domain object (for example, a missing WAL range),
+/// not necessarily a detector verdict. Gap counts therefore need census
+/// vocabulary in the same sentence clause, an open/unresolved status, or
+/// a standalone inventory statement.
 /// </para>
 /// <para>
 /// (3) Issue references are not numerals. A number preceded by <c>#</c> or by
@@ -60,13 +64,12 @@ internal sealed record CensusCountClaim(int LineNumber, string Line, string Text
 /// audit (#2299) keeps finding.
 /// </para>
 /// <para>
-/// It is also blunt in one known direction: a numeral within the window of
-/// <c>gap</c> trips it even when the numeral counts issues rather than rows.
-/// That fired once, on the very paragraph written to replace the census
-/// ("falsified twice over ... by two of the gap issues landing"), and the fix
-/// was to reword. The bluntness is kept deliberately, because deciding what a
-/// numeral counts is exactly the judgement a syntactic guard cannot make, and
-/// the note has no need to put a number next to that word.
+/// Gap classification uses whole words, not identifier substrings, and does
+/// not borrow census vocabulary from an earlier sentence. Otherwise a valid
+/// configuration description such as "PartialPrefix ... finish one gap"
+/// becomes a false census claim (#5001).
+/// "Coverage" alone does not identify a detector census: a replay range also
+/// has coverage gaps. A remaining-gap inventory is still a quantitative claim.
 /// </para>
 /// </summary>
 internal static class RefinementCensusProse
@@ -85,7 +88,23 @@ internal static class RefinementCensusProse
     /// sentences in the note - fall outside it.
     /// </summary>
     private static readonly Regex CountClaim = new(
-        $@"(?<![#\w])(?:{Numeral})\b(?:\s+\w+){{0,2}}\s+(?:{Verdict})\b",
+        $@"(?<![#\w])(?:{Numeral})\b(?:\s+\w+){{0,2}}\s+(?<verdict>{Verdict})\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex CensusContext = new(
+        @"\b(?:census|detectors?|detected|undetected|partial)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex OpenGapStatus = new(
+        @"^\s+(?:(?:remain|remains|are|is)\s+)?(?:still\s+)?(?:open|unresolved|uncovered|undetected)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex GapInventoryPrefix = new(
+        @"^\s*(?:there\s+(?:are|is)\s+)?$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex GapInventorySuffix = new(
+        @"^\s*(?:(?:remain|remains)\s*)?$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     /// <summary>
@@ -120,6 +139,26 @@ internal static class RefinementCensusProse
 
             foreach (Match match in CountClaim.Matches(line))
             {
+                var verdict = match.Groups["verdict"].Value;
+                if (verdict.Equals("gap", StringComparison.OrdinalIgnoreCase)
+                    || verdict.Equals("gaps", StringComparison.OrdinalIgnoreCase))
+                {
+                    var start = match.Index;
+                    while (start > 0 && ".;!?".IndexOf(line[start - 1]) < 0)
+                        start--;
+                    var end = match.Index + match.Length;
+                    while (end < line.Length && ".;!?".IndexOf(line[end]) < 0)
+                        end++;
+
+                    var suffix = line[(match.Index + match.Length)..end];
+                    var standaloneInventory = GapInventoryPrefix.IsMatch(line[start..match.Index])
+                        && GapInventorySuffix.IsMatch(suffix);
+                    if (!standaloneInventory
+                        && !CensusContext.IsMatch(line[start..end])
+                        && !OpenGapStatus.IsMatch(suffix))
+                        continue;
+                }
+
                 claims.Add(new CensusCountClaim(i + 1, trimmed, match.Value));
             }
         }
