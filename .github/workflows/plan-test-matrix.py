@@ -298,6 +298,9 @@ def build_shard_filters(config: dict) -> list[dict]:
     claimed_categories: list[str] = []
     for entry in shards:
         name = entry["shard"]
+        for flag in ("tlc", "tlcSmoke"):
+            if flag in entry and not isinstance(entry[flag], bool):
+                raise SystemExit(f"shard {name!r} {flag} must be a boolean")
         includes = [f"{root}.{prefix}" for prefix in entry.get("include", [])]
         categories = list(entry.get("includeCategories", []))
         for category in categories:
@@ -340,8 +343,8 @@ def build_shard_filters(config: dict) -> list[dict]:
         result.append({
             "shard": name,
             "filter": expression,
-            "tlc": bool(entry.get("tlc")),
-            "tlcSmoke": bool(entry.get("tlcSmoke")),
+            "tlc": entry.get("tlc", False),
+            "tlcSmoke": entry.get("tlcSmoke", False),
             "tiers": entry.get("tiers"),
         })
     return result
@@ -424,6 +427,8 @@ def make_items(
                         "estimate": round(estimate + PER_ITEM_OVERHEAD, 3),
                         "label": f"{package} / {shard['shard']}",
                         "seeded": package in seeded,
+                        "tlc": shard["tlc"],
+                        "tlcSmoke": shard["tlcSmoke"],
                     })
                 )
                 continue
@@ -445,6 +450,8 @@ def make_items(
                     "estimate": round(estimate + PER_ITEM_OVERHEAD, 3),
                     "label": f"{package} / {shard['shard']} ({tier})",
                     "seeded": package in seeded,
+                    "tlc": shard["tlc"],
+                    "tlcSmoke": shard["tlcSmoke"],
                 }
                 if tier in skip_tiers or (shard["tlc"] and skip_tlc_reason) or (
                     shard["tlcSmoke"] and skip_tlc_smoke_reason
