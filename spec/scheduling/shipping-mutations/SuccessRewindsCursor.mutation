@@ -1,0 +1,12 @@
+MODULE: SuccessRewindsCursor
+TARGET: CursorMonotone
+CLASS: Action
+SUMMARY: after establishing positive progress an accepted head rewinds its physical-source cursor
+PERTURBS: Accept
+
+--- FIND
+    /\ cursor' = Head(queue) /\ queue' = Tail(queue) /\ phase' = "fill"
+--- REPLACE
+    /\ cursor' = (IF cursor > 0 THEN cursor - 1 ELSE Head(queue))
+    /\ queue' = Tail(queue) /\ phase' = "fill"
+--- END

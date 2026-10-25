@@ -31,6 +31,7 @@ The checked scheduling seams are:
 | `TurnOccupancy` | A non-reentrant turn, queued calls, and the difference between awaiting an operation inside the turn and dispatching it outside the turn. |
 | `WalAdmission` | Partition-scoped admission capacity, parked saturation waiters, paced recovery release, sampling and wait-budget outcomes. |
 | `WalBackPressure` | Cached tree/partition classification, writer/saga/snapshot/receiver/view responses and signal-independent relief. |
+| `ReplicationShipping` | FIFO physical-source windows, pump-local feedback, fail-closed receiver retention and conditional deferral progress. |
 | `MaterialiserDrain` | Online-copy slots, leaf replay/checkpoint/pin progress, finite-budget WAL shutdown, cooperative view service and stable-identity live routing. |
 | `SagaReadProgress` | Consistent multi-key decision cuts, bounded gated fallback, pressure-independent terminals and original caller acknowledgement after completion durability. |
 | `TagIndexReconcile` | A single durable probe/repair sweep, successful baseline publication, per-phase tree work and timer/reminder recovery. |
@@ -202,6 +203,38 @@ Rebuild/reconcile refresh a split source's live logical
 topology without changing physical identity or restarting the cursor.
 See the [refinement](../../spec/scheduling/MaterialiserDrainRefinement.md)
 for the sum-of-scenarios boundary, real detectors and progress premises.
+
+## Replication shipping and receiver progress
+
+Shipping keeps launch-window capacity, ordered acknowledgement folding and
+receiver retention separate. A rejected FIFO head does not grant cursor
+progress over a later success. Cursor monotonicity is scoped to one physical
+source; explicit rebind/reseed is a separate boundary.
+
+The actual back-pressure consumer receives a logical-name classification.
+Batch-only and pause feedback are optional observations, not a second
+classifier. An observed reduction stops replenishment for this pump, including
+held-terminal release; a later healthy acknowledgement cannot erase an active
+pause or the pump-local stop. Already launched work remains in flight.
+
+Receiver deferral is not an unconditional timeout-to-acknowledgement promise.
+Eligible expiration needs another retry, real elapsed-time opportunities,
+retention capacity and a stable receiver lifetime. An authoritative decided
+prepare stays unacknowledged until application succeeds rather than being
+poisoned to force progress. Full dead-letter, poison and quarantine storage
+fail closed. Restarts preserve durable safety but restart volatile deferral
+age; retries alone do not advance time. The retained retirement-marker bound
+limits the no-reseed-cycle claim. No jitter-based fairness or wall-time bound
+is asserted.
+
+The [area description](../../spec/scheduling/README.md#replication-shipping)
+separates the full state-space measurements, one-target pairs and real
+production/Coyote detector evidence. The revised complete harness passed
+both full configurations and all twenty-six pairs in 2745.4195361 monotonic
+seconds. Its accepted launcher-artifact completion is not a recovered CLI
+terminal event, loaded-DLL attestation or peak-RSS measurement. The seven-module
+65.23-minute routing estimate composes independent certificates and excludes
+the earlier standalone Shipping diagnostics; it is not a measured shard run.
 
 ## Defects found during the bucket
 

@@ -1,0 +1,13 @@
+MODULE: RepairAcknowledgesWithoutApplication
+TARGET: NoSkipWithoutDeadLetter
+CLASS: Invariant
+SUMMARY: repairing the cause itself advances the sender before actual application
+PERTURBS: RepairDecided
+
+--- FIND
+    /\ decided \cap bad # {} /\ bad' = bad \ decided
+    /\ UNCHANGED <<cursor, sent, queue, applied, parked, mode, age, space,
+--- REPLACE
+    /\ decided \cap bad # {} /\ bad' = bad \ decided /\ cursor' = Records
+    /\ UNCHANGED <<sent, queue, applied, parked, mode, age, space,
+--- END

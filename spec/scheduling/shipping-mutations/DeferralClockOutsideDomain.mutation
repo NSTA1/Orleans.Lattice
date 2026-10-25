@@ -1,0 +1,11 @@
+MODULE: DeferralClockOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: first deferral stores an invalid elapsed-clock state
+PERTURBS: Defer
+
+--- FIND
+    /\ age' = [age EXCEPT ![Head(queue)] = IF @ = Timeout + 1 THEN 0 ELSE @]
+--- REPLACE
+    /\ age' = [age EXCEPT ![Head(queue)] = Timeout + 2]
+--- END

@@ -1,0 +1,11 @@
+MODULE: PoisonDecidedPrepare
+TARGET: DecidedPrepareSafe
+CLASS: Invariant
+SUMMARY: poison a prepare whose receiver decision is already recorded
+PERTURBS: Escalate
+
+--- FIND
+           poison == Kind(r) # "point" /\ r \notin decided /\ expired /\ mode[r] = "fresh" /\ space.poison
+--- REPLACE
+           poison == Kind(r) # "point" /\ expired /\ mode[r] = "fresh" /\ space.poison
+--- END
