@@ -19,6 +19,8 @@ internal sealed class TreeAdminOperationWatch : IDisposable
     private readonly OperationFollower _follower;
     private ILatticeTreeAdminOperations? _operations;
     private string? _finished;
+    private int _generation;
+    private bool _disposed;
 
     /// <summary>Creates the watch.</summary>
     /// <param name="time">The clock the follower paces its reads on.</param>
@@ -77,11 +79,13 @@ internal sealed class TreeAdminOperationWatch : IDisposable
     {
         ArgumentNullException.ThrowIfNull(operations);
         ArgumentNullException.ThrowIfNull(candidates);
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (candidates.Count == 0 || IsRunning)
         {
             return false;
         }
 
+        var generation = Interlocked.Increment(ref _generation);
         LatticeOperationPage? page;
         try
         {
@@ -97,6 +101,10 @@ internal sealed class TreeAdminOperationWatch : IDisposable
         // A listing that answered after its search was cancelled belongs to a page
         // that has moved on: following what it found would follow another target's operation.
         cancellationToken.ThrowIfCancellationRequested();
+        if (Volatile.Read(ref _generation) != generation)
+        {
+            return false;
+        }
 
         if (page?.Operations is not { Count: > 0 } listed)
         {
@@ -147,7 +155,15 @@ internal sealed class TreeAdminOperationWatch : IDisposable
     {
         ArgumentNullException.ThrowIfNull(operations);
         ArgumentNullException.ThrowIfNull(start);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var generation = Interlocked.Increment(ref _generation);
         var handle = await start(TreeAdminOperationIds.New(kind, target), cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Volatile.Read(ref _generation) != generation)
+        {
+            return;
+        }
+
         await FollowAsync(operations, handle.OperationId, kind, target, cancellationToken).ConfigureAwait(false);
     }
 
@@ -161,14 +177,20 @@ internal sealed class TreeAdminOperationWatch : IDisposable
             return;
         }
 
+        var generation = Volatile.Read(ref _generation);
         await operations.CancelOperationAsync(operationId, cancellationToken).ConfigureAwait(false);
-        await _follower.RefreshAsync(cancellationToken).ConfigureAwait(false);
+        if (Volatile.Read(ref _generation) == generation)
+        {
+            await _follower.RefreshAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Stops following and forgets the operation; it keeps running on the cluster.</summary>
     public void Clear()
     {
+        Interlocked.Increment(ref _generation);
         _follower.Stop();
+        _operations = null;
         OperationId = null;
         Kind = null;
         Target = null;
@@ -177,6 +199,8 @@ internal sealed class TreeAdminOperationWatch : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        _disposed = true;
+        Clear();
         Finished = null;
         Changed = null;
         _follower.Changed -= OnFollowerChanged;

@@ -55,21 +55,30 @@ internal sealed class OperationFollower(TimeProvider time) : IDisposable
         NotFound = false;
         LastError = null;
 
-        var outcome = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        if (outcome != ClusterPollOutcome.Settled && Volatile.Read(ref _generation) == generation)
-        {
-            _poller.Follow(ReadAsync);
-        }
+        await ReadAndFollowAsync(generation, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Reads once more now, outside the polling cadence, for example after asking the operation to cancel.</summary>
+    /// <summary>Reads once more now, superseding an outstanding read and restarting the cadence only if still running.</summary>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>A task that completes after the read.</returns>
-    public Task RefreshAsync(CancellationToken cancellationToken) =>
-        _read is null ? Task.CompletedTask : ReadAsync(cancellationToken);
+    public Task RefreshAsync(CancellationToken cancellationToken)
+    {
+        if (_read is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        _poller.Stop();
+        var generation = Interlocked.Increment(ref _generation);
+        return ReadAndFollowAsync(generation, cancellationToken);
+    }
 
     /// <summary>Stops following.</summary>
-    public void Stop() => _poller.Stop();
+    public void Stop()
+    {
+        Interlocked.Increment(ref _generation);
+        _poller.Stop();
+    }
 
     /// <inheritdoc />
     public void Dispose()
@@ -77,6 +86,15 @@ internal sealed class OperationFollower(TimeProvider time) : IDisposable
         Interlocked.Increment(ref _generation);
         _read = null;
         _poller.Dispose();
+    }
+
+    private async Task ReadAndFollowAsync(int generation, CancellationToken cancellationToken)
+    {
+        var outcome = await ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (outcome != ClusterPollOutcome.Settled && Volatile.Read(ref _generation) == generation)
+        {
+            _poller.Follow(ReadAsync);
+        }
     }
 
     private async Task<ClusterPollOutcome> ReadAsync(CancellationToken cancellationToken)
@@ -100,6 +118,7 @@ internal sealed class OperationFollower(TimeProvider time) : IDisposable
             failure = exception;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         // A later start, or disposal, superseded this read while it was out: its
         // answer belongs to an operation no longer followed, so it changes nothing.
         if (Volatile.Read(ref _generation) != generation)

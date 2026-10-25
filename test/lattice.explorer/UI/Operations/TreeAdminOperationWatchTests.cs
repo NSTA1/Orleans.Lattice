@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Operations;
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class TreeAdminOperationWatchTests
+public sealed partial class TreeAdminOperationWatchTests
 {
     private readonly ManualTimeProvider _time = new();
     private TreeAdminOperationScript _script = null!;
