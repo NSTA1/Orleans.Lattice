@@ -1,3 +1,4 @@
+using LibGit2Sharp;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Source;
@@ -110,6 +111,57 @@ public sealed class LibGit2SharpRepoContextGitFetcherTests
         Assert.That(
             entries.Select(e => e.RelativePath).OrderBy(p => p, StringComparer.Ordinal),
             Is.EqualTo(new[] { "change.md", "drop.md", "keep.md" }));
+    }
+
+    [TestCase("/proc/self/environ")]
+    [TestCase("../../host-secret.txt")]
+    [TestCase("../outside-directory")]
+    public void ScanCommit_excludes_symbolic_links_even_when_binaries_are_included(string target)
+    {
+        using var fixture = CreateFixture();
+        using (var repo = new Repository(fixture.OriginPath))
+        {
+            using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(target));
+            var blob = repo.ObjectDatabase.CreateBlob(stream);
+            var tree = TreeDefinition.From(repo.Head.Tip.Tree);
+            tree.Add("leak.txt", blob, Mode.SymbolicLink);
+            tree.Add("nested/leak.txt", blob, Mode.SymbolicLink);
+            var signature = new Signature("Lattice Test", "test@example.invalid", DateTimeOffset.UtcNow);
+            var commit = repo.ObjectDatabase.CreateCommit(
+                signature, signature, "add symbolic links", repo.ObjectDatabase.CreateTree(tree),
+                [repo.Head.Tip], prettifyMessage: false);
+            repo.Refs.UpdateTarget(repo.Refs[repo.Head.CanonicalName], commit.Id);
+            Assert.That(repo.Head.Tip.Tree["leak.txt"].Mode, Is.EqualTo(Mode.SymbolicLink));
+        }
+
+        var workTree = Stage(fixture, lastIndexedCommitSha: null, out var commitSha);
+        using var staged = new Repository(workTree);
+        Assert.That(staged.Lookup<Commit>(commitSha).Tree["leak.txt"].Mode, Is.EqualTo(Mode.SymbolicLink));
+        Assert.That(new FileInfo(Path.Combine(workTree, "leak.txt")).LinkTarget, Is.Null);
+        Assert.That(File.ReadAllText(Path.Combine(workTree, "leak.txt")), Is.EqualTo(target));
+        var entries = new LibGit2SharpRepoContextGitFetcher()
+            .ScanCommit(workTree, commitSha, null, null, excludeBinary: false, CancellationToken.None);
+
+        Assert.That(entries.Select(e => e.RelativePath).OrderBy(p => p, StringComparer.Ordinal),
+            Is.EqualTo(new[] { "change.md", "drop.md", "keep.md" }));
+    }
+
+    [Test]
+    public void Fetch_materialises_git_links_as_plain_text_in_the_staging_cache()
+    {
+        using var fixture = CreateFixture();
+        var workTree = GitRemoteSource.WorkTreePath(fixture.StagingRoot, RepoId);
+        Repository.Init(workTree);
+        using (var repo = new Repository(workTree))
+        {
+            repo.Config.Set("core.symlinks", true);
+        }
+
+        Stage(fixture, lastIndexedCommitSha: null, out _);
+
+        using var staged = new Repository(workTree);
+        Assert.That(staged.Config.Get<bool>("core.symlinks").Value, Is.False,
+            "A reused staging cache must not let a repository contributor create filesystem links.");
     }
 
     [Test]

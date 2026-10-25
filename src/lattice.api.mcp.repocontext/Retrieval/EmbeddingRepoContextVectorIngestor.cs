@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
@@ -2351,10 +2352,18 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var fullPath = Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
         try
         {
-            var content = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
-            return new FileReadResult(
-                content.Length > MaxEmbedChars ? content[..MaxEmbedChars] : content,
-                Absent: false);
+            using var reader = new StreamReader(fullPath);
+            var buffer = ArrayPool<char>.Shared.Rent(MaxEmbedChars);
+            try
+            {
+                var count = await reader.ReadBlockAsync(
+                    buffer.AsMemory(0, MaxEmbedChars), cancellationToken).ConfigureAwait(false);
+                return new FileReadResult(new string(buffer, 0, count), Absent: false);
+            }
+            finally
+            {
+                ArrayPool<char>.Shared.Return(buffer, clearArray: true);
+            }
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {

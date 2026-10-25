@@ -1,4 +1,3 @@
-using System.Buffers;
 using LibGit2Sharp;
 using GitBlob = LibGit2Sharp.Blob;
 using GitCommit = LibGit2Sharp.Commit;
@@ -42,6 +41,8 @@ internal sealed class LibGit2SharpRepoContextGitFetcher : IRepoContextGitFetcher
             }
 
             using var repo = new GitRepository(request.WorkTreePath);
+            // Commit contributors must never create links into the indexing host.
+            repo.Config.Set("core.symlinks", false);
             EnsureRemote(repo, source.RemoteUrl);
 
             var previousSha = repo.Head.Tip?.Sha;
@@ -264,8 +265,9 @@ internal sealed class LibGit2SharpRepoContextGitFetcher : IRepoContextGitFetcher
                     break;
 
                 case TreeEntryTargetType.Blob:
-                    if (Included(path, includes, excludes)
-                        && ReadEntry(path, (GitBlob)entry.Target, excludeBinary) is { } fileEntry)
+                    if (entry.Mode != Mode.SymbolicLink
+                        && Included(path, includes, excludes)
+                        && ReadEntry(path, (GitBlob)entry.Target, excludeBinary, cancellationToken) is { } fileEntry)
                     {
                         sink.Add(fileEntry);
                     }
@@ -307,42 +309,20 @@ internal sealed class LibGit2SharpRepoContextGitFetcher : IRepoContextGitFetcher
         return false;
     }
 
-    private static RepoFileEntry? ReadEntry(string path, GitBlob blob, bool excludeBinary)
+    private static RepoFileEntry? ReadEntry(
+        string path, GitBlob blob, bool excludeBinary, CancellationToken cancellationToken)
     {
-        var size = blob.Size;
-        if (size > int.MaxValue)
+        if (blob.Size > int.MaxValue)
         {
             return null;
         }
 
-        var length = (int)size;
-
-        // The blob is rented rather than allocated: a cold scan of a large repository
-        // reads every file exactly once, and a per-file array would push most of a
-        // repository's byte volume through the large object heap.
-        var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(length, 1));
-        try
+        using var stream = blob.GetContentStream();
+        if (FileDigest.Read(stream, excludeBinary, cancellationToken) is not { } read)
         {
-            using (var stream = blob.GetContentStream())
-            {
-                stream.ReadExactly(buffer, 0, length);
-            }
-
-            var content = buffer.AsSpan(0, length);
-            if (excludeBinary && RepoBinaryContent.IsProbablyBinary(content))
-            {
-                return null;
-            }
-
-            return new RepoFileEntry(
-                path,
-                FileDigest.Compute(content),
-                length,
-                LanguageClassifier.Classify(path));
+            return null;
         }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
+
+        return new RepoFileEntry(path, read.Digest, read.SizeBytes, LanguageClassifier.Classify(path));
     }
 }
