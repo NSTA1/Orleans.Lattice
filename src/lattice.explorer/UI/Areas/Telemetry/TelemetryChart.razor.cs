@@ -101,8 +101,8 @@ public partial class TelemetryChart : IDisposable
         get
         {
             var geometry = _geometry!;
-            var start = TelemetryFormat.Time(geometry.Times[0], withDate: true);
-            var end = TelemetryFormat.Time(geometry.Times[^1], withDate: geometry.SpansDays);
+            var start = geometry.Time(geometry.Times[0], withDate: true);
+            var end = geometry.Time(geometry.Times[^1], withDate: geometry.SpansDays);
             return $"{geometry.Series.Count} series from {start} to {end} UTC.";
         }
     }
@@ -118,7 +118,7 @@ public partial class TelemetryChart : IDisposable
             }
 
             var builder = new StringBuilder();
-            builder.Append(TelemetryFormat.Time(geometry.Times[selected], withDate: geometry.SpansDays)).Append(" UTC: ");
+            builder.Append(geometry.Time(geometry.Times[selected], withDate: geometry.SpansDays)).Append(" UTC: ");
             var first = true;
             foreach (var line in geometry.Lines)
             {

@@ -31,12 +31,16 @@ public sealed class TenancySupersededReadTests : TenancyTestContext
         UseTenancyAs();
         var cut = RenderAt<TenancyQuotaPage>("tenancy/acme/quota");
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-skeleton"), Has.Count.EqualTo(1)));
+        var previousToken = (CancellationToken)quota.ReceivedCalls()
+            .Single(call => call.GetMethodInfo().Name == nameof(ILatticeTenantQuotaUsage.GetQuotaUsageAsync))
+            .GetArguments()[1]!;
         var panel = cut.FindComponent<TenancyQuota>().Instance;
 
         Navigation.NavigateTo("tenancy/globex/quota");
         cut.Render();
         cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("17% above each ceiling")));
         Assert.That(cut.FindComponent<TenancyQuota>().Instance, Is.SameAs(panel), "synchronous admission retains the section");
+        Assert.That(previousToken.IsCancellationRequested, Is.True, "changing tenants cancels the previous quota read");
         if (fault)
         {
             previous.SetException(new TimeoutException());
@@ -153,7 +157,7 @@ public sealed class TenancySupersededReadTests : TenancyTestContext
         Cluster.WithTenant("globex");
         UseTenancyAs();
         var notFound = 0;
-        Navigation.OnNotFound += (_, _) => notFound++;
+        Navigation.OnNotFound += (_, _) => Interlocked.Increment(ref notFound);
         var cut = RenderAt<TenancyTenantPage>("tenancy/acme");
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-skeleton"), Has.Count.EqualTo(1)));
 
@@ -171,7 +175,7 @@ public sealed class TenancySupersededReadTests : TenancyTestContext
         }
 
         Assert.That(await TestPoll.TryUntilAsync(
-            () => notFound != 0 || cut.Markup.Contains("Suspended", StringComparison.Ordinal), TimeSpan.FromSeconds(1)),
+            () => Volatile.Read(ref notFound) != 0 || cut.Markup.Contains("Suspended", StringComparison.Ordinal), TimeSpan.FromSeconds(1)),
             Is.False, "an old answer cannot change globex's status or mark its page not-found");
     }
 
@@ -186,7 +190,7 @@ public sealed class TenancySupersededReadTests : TenancyTestContext
         RefuseRegionFallback();
         UseTenancyAs();
         var notFound = 0;
-        Navigation.OnNotFound += (_, _) => notFound++;
+        Navigation.OnNotFound += (_, _) => Interlocked.Increment(ref notFound);
         var cut = RenderAt<TenancyTenantPage>("tenancy/acme");
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-skeleton"), Has.Count.EqualTo(1)));
 
@@ -194,7 +198,7 @@ public sealed class TenancySupersededReadTests : TenancyTestContext
         Navigation.NavigateTo("tenancy");
         previous.SetException(new TenantNotFoundException("acme"));
 
-        Assert.That(await TestPoll.TryUntilAsync(() => notFound != 0, TimeSpan.FromSeconds(1)), Is.False);
+        Assert.That(await TestPoll.TryUntilAsync(() => Volatile.Read(ref notFound) != 0, TimeSpan.FromSeconds(1)), Is.False);
     }
 
     [TestCase(false)]

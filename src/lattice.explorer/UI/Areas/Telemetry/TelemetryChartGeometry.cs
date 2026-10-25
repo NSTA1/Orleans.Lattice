@@ -58,7 +58,10 @@ internal sealed class TelemetryChartGeometry
         Ticks = ticks;
         Minimum = minimum;
         Maximum = maximum;
+        _showSeconds = times.Any(time => time.UtcTicks % TimeSpan.TicksPerMinute != 0);
     }
+
+    private readonly bool _showSeconds;
 
     /// <summary>The shared timeline every series is aligned to, ascending.</summary>
     public IReadOnlyList<DateTimeOffset> Times { get; }
@@ -95,6 +98,13 @@ internal sealed class TelemetryChartGeometry
 
     /// <summary>Whether the timeline spans more than one day, so its labels carry the date.</summary>
     public bool SpansDays => Times.Count > 0 && Times[^1].UtcDateTime.Date != Times[0].UtcDateTime.Date;
+
+    /// <summary>Formats a timeline instant with enough precision to distinguish subminute samples.</summary>
+    /// <param name="instant">The instant.</param>
+    /// <param name="withDate">Whether the date is included.</param>
+    /// <returns>The time in UTC.</returns>
+    public string Time(DateTimeOffset instant, bool withDate) =>
+        TelemetryFormat.Time(instant, withDate, _showSeconds);
 
     /// <summary>Lays out <paramref name="response"/>.</summary>
     /// <param name="response">The facade's answer.</param>

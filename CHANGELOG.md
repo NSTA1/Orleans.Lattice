@@ -56,6 +56,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Telemetry fidelity.** Colliding series names no longer crash charts or tables; step-only links honor their resolution, and subminute samples retain precise times in tables, axes and keyboard readouts. ([#5004](https://github.com/NSTA1/Orleans.Lattice/issues/5004)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Schema - Accurate administration.** Installed support and readiness are separate from permissions, unsupported Explorer controls stay off, stale caller grants are discarded, invalid writes return useful validation errors, and compliance reports count policy rules. ([#4799](https://github.com/NSTA1/Orleans.Lattice/issues/4799)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Api.Data.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
 - **WAL - Offset-based drain age.** Backdated reaps and merges no longer manufacture hours of materialiser lag. No-op reaps preserve the projection clock; offset reports and bounded append history retain time-based pacing without changing retention guards. ([#3606](https://github.com/NSTA1/Orleans.Lattice/issues/3606)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
