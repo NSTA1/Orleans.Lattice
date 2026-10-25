@@ -1,0 +1,13 @@
+MODULE: CallerOnlyAfterTerminalsBeforeCheckpoint
+TARGET: CallerOnlyAfterTerminals
+CLASS: Invariant
+SUMMARY: Caller acknowledgement precedes the completion checkpoint's durable result.
+PERTURBS: TerminalOpportunity
+--- FIND
+    /\ (Terminal \/ Checkpoint \/ Complete \/ TerminalIdle)
+--- REPLACE
+    \* MUTATION: return to the original caller while completion storage is outstanding.
+    /\ (Terminal \/ Checkpoint \/ Complete \/ TerminalIdle
+        \/ (saga = "completing" /\ saga' = "idle" /\ completed' = TRUE
+            /\ UNCHANGED <<drained, materialised, checkpointed, terminalWitness>>))
+--- END

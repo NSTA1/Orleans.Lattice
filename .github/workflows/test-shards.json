@@ -286,7 +286,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardScheduling"],
-        "note": "TurnOccupancy, WalAdmission, TagIndexReconcile and WalBackPressure: 11 configurations and 72 paired mutants (83 TLC cases). The 17.52-minute price composes independent two-CPU/1800MB single-slot certificates: foundation 144.684s, Tag 177s including structural-test overhead, and WalBackPressure 729.46094s. This is a conservative composed estimate, not a measured composite shard run. Scheduling-directory routing precedes the broad Wal prefix."
+        "note": "TurnOccupancy, WalAdmission, TagIndexReconcile, WalBackPressure and SagaReadProgress: 14 configurations and 83 paired mutants (97 TLC cases). The 18.57-minute price composes foundation 144.684s, Tag 177s including structural overhead, WalBackPressure 729.46094s and the sum of all 14 successful Saga TLC case durations, 62.892553s. Saga source evidence retains its separate two shared-index/Counts failures, not as green evidence or TLC cases. Independent Java17/two-CPU/1800MB single-slot timings are a composed estimate, not a composite shard wall-clock measurement. Scheduling-directory routing precedes the broad Wal prefix."
       },
       {
         "shard": "formal-tlc-smoke",

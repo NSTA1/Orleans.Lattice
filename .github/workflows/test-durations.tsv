@@ -137,11 +137,13 @@ lattice	formal-tlc-anti-entropy-2	deterministic	10.0
 lattice	formal-tlc-anti-entropy-3	deterministic	9.2
 lattice	formal-tlc-aliasing	deterministic	1.8
 lattice	formal-tlc-split-gate	deterministic	8.6
-# Scheduling: four modules, 11 configurations and 72 paired mutants (83 TLC cases).
+# Scheduling: five modules, 14 configurations and 83 paired mutants (97 TLC cases).
 # Composed estimate, NOT a single composite measurement: foundation 144.684s,
-# Tag 177s (includes its structural-test overhead), WalBackPressure 729.46094s.
+# Tag 177s (includes structural overhead), WalBackPressure 729.46094s.
+# Saga 62.892553s sums all 14 successful TLC case durations in saga-final.trx;
+# its two known shared-index/Counts failures are not TLC cases or green evidence.
 # Each certificate used Java17, 1 TLC slot, 2 visible CPUs and Xmx1800MB.
-lattice	formal-tlc-scheduling	deterministic	17.52
+lattice	formal-tlc-scheduling	deterministic	18.57
 lattice	formal-tlc-shard-ownership	deterministic	15.3
 lattice	formal-tlc-convergence	deterministic	14.1
 lattice	formal-tlc-replication-wal	deterministic	18.4

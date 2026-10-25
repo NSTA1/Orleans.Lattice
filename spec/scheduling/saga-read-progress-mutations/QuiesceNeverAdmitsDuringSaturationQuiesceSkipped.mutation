@@ -1,0 +1,14 @@
+MODULE: QuiesceNeverAdmitsDuringSaturationQuiesceSkipped
+TARGET: QuiesceNeverAdmitsDuringSaturation
+CLASS: Action
+SUMMARY: A data prepare bypasses the cached saturation verdict.
+PERTURBS: WriterOpportunity
+--- FIND
+    /\ (Prepare \/ Decide \/ WriterIdle)
+--- REPLACE
+    \* MUTATION: data dispatch ignores saturation.
+    /\ (Prepare \/ Decide \/ WriterIdle
+        \/ (saga = "idle" /\ saga' = "prepared" /\ drained' = {}
+            /\ checkpointed' = FALSE /\ completed' = FALSE /\ terminalWitness' = FALSE
+            /\ UNCHANGED <<registryVersion, crossed>>))
+--- END

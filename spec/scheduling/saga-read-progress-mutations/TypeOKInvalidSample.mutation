@@ -1,0 +1,11 @@
+MODULE: TypeOKInvalidSample
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: The environment publishes a value outside the cached verdict domain.
+PERTURBS: Sample
+--- FIND
+    /\ walState' \in 0..2
+--- REPLACE
+    \* MUTATION: publish an invalid verdict.
+    /\ walState' = 3
+--- END
