@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// on every possible replacement of the tree's contents.
 /// </summary>
 [TestFixture]
-public sealed class ReplicationTreeFrontierGrainTests
+public sealed partial class ReplicationTreeFrontierGrainTests
 {
     private const string Tree = "tf-tree";
     private const string OriginA = "site-a";
