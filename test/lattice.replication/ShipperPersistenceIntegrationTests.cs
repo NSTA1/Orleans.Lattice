@@ -197,6 +197,9 @@ public class ShipperPersistenceIntegrationTests
         public Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken) =>
             Task.FromResult<long?>(-1L);
 
+        public Task<long> GetTailOffsetAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException("The subscriber retention-tail read is not exercised by the shipper.");
+
         public Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken) =>
             Task.FromResult(-1L);
 
