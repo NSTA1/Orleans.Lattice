@@ -58,6 +58,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Live history fidelity.** Older pages preserve live revision identity and replace pending markers with durable values; delayed changes stay chronological and live range deletions are labeled correctly. ([#5017](https://github.com/NSTA1/Orleans.Lattice/issues/5017)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Telemetry fidelity.** Colliding series names no longer crash charts or tables; step-only links honor their resolution, and subminute samples retain precise times in tables, axes and keyboard readouts. ([#5004](https://github.com/NSTA1/Orleans.Lattice/issues/5004)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Schema - Accurate administration.** Installed support and readiness are separate from permissions, unsupported Explorer controls stay off, stale caller grants are discarded, invalid writes return useful validation errors, and compliance reports count policy rules. ([#4799](https://github.com/NSTA1/Orleans.Lattice/issues/4799)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Schema`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Api.Data.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
