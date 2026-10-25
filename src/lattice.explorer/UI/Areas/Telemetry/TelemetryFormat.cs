@@ -58,9 +58,13 @@ internal static class TelemetryFormat
     /// <summary>A time for an axis or a table row, in UTC.</summary>
     /// <param name="instant">The instant.</param>
     /// <param name="withDate">Whether the date is included.</param>
+    /// <param name="withSeconds">Whether seconds and any fractional seconds are included.</param>
     /// <returns>The time, such as <c>14:05</c> or <c>2026-01-01 14:05</c>.</returns>
-    public static string Time(DateTimeOffset instant, bool withDate) =>
-        instant.UtcDateTime.ToString(withDate ? "yyyy-MM-dd HH:mm" : "HH:mm", CultureInfo.InvariantCulture);
+    public static string Time(DateTimeOffset instant, bool withDate, bool withSeconds = false)
+    {
+        var format = withDate ? "yyyy-MM-dd HH:mm" : "HH:mm";
+        return instant.UtcDateTime.ToString(withSeconds ? format + ":ss.FFFFFFF" : format, CultureInfo.InvariantCulture);
+    }
 
     private static string Number(double value)
     {
