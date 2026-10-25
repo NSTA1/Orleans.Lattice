@@ -47,7 +47,15 @@ internal static class TreeBootstrapReadFence
         // pair is also a consistent snapshot rather than two separate reads.
         var entry = await registry.GetEntryAsync(logicalTreeId);
         var physical = entry?.PhysicalTreeId ?? logicalTreeId;
-        var shardCount = (await optionsResolver.ResolveAsync(physical)).ShardCount;
+        // Only the physical owner's complete pins can replace an options read.
+        // Aliased copies and legacy rows retain resolution and lazy seeding.
+        var resolved = physical == logicalTreeId
+            && entry?.MaxLeafKeys is not null
+            && entry.MaxInternalChildren is not null
+            && entry.ShardCount is not null
+                ? optionsResolver.Resolve(logicalTreeId, entry)
+                : await optionsResolver.ResolveAsync(physical);
+        var shardCount = resolved.ShardCount;
         return new Shards(physical, RoutedShardIndices.Resolve(shardCount, entry?.ShardMap));
     }
 

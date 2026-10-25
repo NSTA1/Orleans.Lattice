@@ -34,6 +34,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Snapshot control paths.** Bootstrap fencing and snapshot initiation reuse registry entries, removing a read each; independent WAL heads overlap within a bounded window while preserving freeze-before-head ordering. ([#4996](https://github.com/NSTA1/Orleans.Lattice/pull/4996)) (`Orleans.Lattice`)
+
 - **Performance - Maintenance and sampling probes.** Autonomic probes cut serial calls from 8 to 4; shrink planning and donor retirement cut snapshot/merge probes from 4 to 2. Shard sampling uses one status call instead of three. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960)) (`Orleans.Lattice`)
 
 - **Performance - Registration and options seeding.** Tree creation registers and returns its entry in one registry call instead of three; app tree provisioning cuts two calls to one. Lazy options seeding reuses the registration result, cutting calls from three to two. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960), [#4965](https://github.com/NSTA1/Orleans.Lattice/pull/4965)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Apps`)
