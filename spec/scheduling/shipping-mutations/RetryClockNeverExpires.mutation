@@ -1,0 +1,12 @@
+MODULE: RetryClockNeverExpires
+TARGET: StreamProgresses
+CLASS: Temporal
+SUMMARY: a finite backoff never receives its elapsed-time opportunity
+PERTURBS: Tick
+BOUNDS: Records = 2, Cap = 2
+
+--- FIND
+    /\ wait' = IF wait > 0 THEN wait - 1 ELSE 0
+--- REPLACE
+    /\ wait' = wait
+--- END

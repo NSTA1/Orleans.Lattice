@@ -1,0 +1,12 @@
+MODULE: ReseedNeverRetires
+TARGET: StreamProgresses
+CLASS: Temporal
+SUMMARY: completed reseeding never retires poison and keeps terminals withheld
+PERTURBS: Reseed
+BOUNDS: Records = 2, Cap = 2
+
+--- FIND
+    /\ r \in Ids /\ mode[r] = "poisoned"
+--- REPLACE
+    /\ FALSE /\ r \in Ids /\ mode[r] = "poisoned"
+--- END

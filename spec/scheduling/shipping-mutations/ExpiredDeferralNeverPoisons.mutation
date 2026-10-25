@@ -1,0 +1,12 @@
+MODULE: ExpiredDeferralNeverPoisons
+TARGET: EveryDeferralBounded
+CLASS: Temporal
+SUMMARY: an eligible expired saga retries forever without poisoning or parking
+PERTURBS: Escalate
+BOUNDS: Records = 2, Cap = 2
+
+--- FIND
+           poison == Kind(r) # "point" /\ r \notin decided /\ expired /\ mode[r] = "fresh" /\ space.poison
+--- REPLACE
+           poison == FALSE /\ Kind(r) # "point" /\ r \notin decided /\ expired /\ mode[r] = "fresh" /\ space.poison
+--- END

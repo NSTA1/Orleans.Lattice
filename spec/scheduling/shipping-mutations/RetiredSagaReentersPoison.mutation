@@ -1,0 +1,11 @@
+MODULE: RetiredSagaReentersPoison
+TARGET: NoReseedLoop
+CLASS: Action
+SUMMARY: a post-reseed deterministic fault starts another poison cycle
+PERTURBS: Escalate
+
+--- FIND
+                    IF quarantine THEN "quarantined" ELSE IF poison THEN "poisoned" ELSE @]
+--- REPLACE
+                    IF quarantine THEN "poisoned" ELSE IF poison THEN "poisoned" ELSE @]
+--- END

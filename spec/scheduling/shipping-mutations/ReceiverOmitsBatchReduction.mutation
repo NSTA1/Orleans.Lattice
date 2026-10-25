@@ -1,0 +1,12 @@
+MODULE: ReceiverOmitsBatchReduction
+TARGET: ReceiverRegimes
+CLASS: Action
+SUMMARY: bypass the shared consumer action and preserve full load under pressure
+PERTURBS: ReceiverShrinkBatch
+
+--- FIND
+    /\ phase = "feedback" /\ BP!ReceiverShrinkBatch
+--- REPLACE
+    /\ phase = "feedback" /\ controlPhase = 10 /\ controlPhase' = 11
+    /\ control' = [receiver |-> FullBatch]
+--- END

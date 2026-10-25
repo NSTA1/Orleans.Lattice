@@ -171,28 +171,31 @@ public class LatticeReplicationOptions
     /// the entry is parked on the per-tree dead-letter queue and the
     /// origin high-water-mark is advanced past it. Defaults to
     /// <see cref="DefaultMaxApplyRetries"/>. Must be at least <c>1</c>;
-    /// a value of <c>1</c> means a single failure parks the entry
-    /// immediately.
+    /// a value of <c>1</c> means a single failure parks an ordinary entry
+    /// immediately. Saga prepares and terminals instead remain deferred until
+    /// safe poison/quarantine recovery permits acknowledgement.
     /// </summary>
     public int MaxApplyRetries { get; set; } = DefaultMaxApplyRetries;
 
     /// <summary>
-    /// Wall-clock bound on how long the receiver defers a saga prepare that
-    /// exhausted <see cref="MaxApplyRetries"/> before it poisons the whole saga
-    /// on that receiver and parks the prepare with reason
-    /// <see cref="LatticeReplicationMetrics.ReasonPoisonedSaga"/>. Defaults to
-    /// <see cref="DefaultSagaDeferralTimeout"/>. A silo restart restarts the
-    /// in-memory deferral clock, which can only defer longer; it never poisons a
-    /// record earlier than a continuously-running silo would have done. Must be
-    /// strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// Elapsed-time threshold, observed on a later retry, for poisoning an
+    /// eligible deferred saga prepare or terminal after
+    /// <see cref="MaxApplyRetries"/> is exhausted. Defaults to
+    /// <see cref="DefaultSagaDeferralTimeout"/>. This is not an unconditional
+    /// wall-clock deadline: retries, free bounded storage and a sufficiently
+    /// stable receiver lifetime are required. A receiver restart loses its
+    /// in-memory first-deferral clock but preserves durable poison and
+    /// quarantine. Must be strictly greater than <see cref="TimeSpan.Zero"/>.
     /// <para>
-    /// The bound applies only to prepares. A deferred
+    /// A prepare whose registry decision is already recorded remains deferred,
+    /// never poisoned by timeout. An eligible poisoned prepare parks with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonPoisonedSaga"/> only when the
+    /// dead-letter queue has space. A poisoned
     /// <see cref="MutationKind.TxCommit"/> or <see cref="MutationKind.TxAbort"/>
-    /// terminal is never poisoned by timeout, because a terminal may be the
-    /// record that completes the receiver-side tally after the registry decision
-    /// was already recorded; poisoning it would strand the saga's buckets under
-    /// a recorded commit. Fix the terminal's apply failure or re-bootstrap the
-    /// tree from the origin.
+    /// terminal stays withheld until reseeding retires the poison. A subsequent
+    /// failure of a retired saga, after its retry-observed timeout, quarantines
+    /// it instead of starting another reseed cycle. Full poison, quarantine or dead-letter
+    /// storage remains fail-closed.
     /// </para>
     /// </summary>
     public TimeSpan SagaDeferralTimeout { get; set; } = DefaultSagaDeferralTimeout;

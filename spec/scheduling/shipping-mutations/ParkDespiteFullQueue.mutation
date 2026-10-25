@@ -1,0 +1,11 @@
+MODULE: ParkDespiteFullQueue
+TARGET: CapacityFailClosed
+CLASS: Action
+SUMMARY: acknowledge parking despite a full dead-letter queue
+PERTURBS: Escalate
+
+--- FIND
+           park == space.dlq /\ (Kind(r) = "point" \/ quarantine
+--- REPLACE
+           park == (Kind(r) = "point" \/ quarantine
+--- END

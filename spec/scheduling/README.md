@@ -15,6 +15,7 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | MaterialiserDrain | 6 | 8 | 21 | 21 | 33 | 1076 |
 | SagaReadProgress | 3 | 5 | 6 | 11 | 12 | 2451 |
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
+| ReplicationShipping | 4 | 12 | 19 | 26 | 33 | 527689 |
 
 ## Instances and progress premises
 
@@ -231,6 +232,66 @@ eighteen actual production-source perturbation/restoration pairs supply
 assertion-red evidence for all sixteen mapped methods. The refinement retains
 the original evaluator-error TypeOK run, ambiguous mutation anchor and
 false-green slot/pass detectors, not as clean certification.
+
+## Replication shipping
+
+[`ReplicationShipping`](ReplicationShipping.tla), its
+[manifest](ReplicationShipping.manifest.json) and
+[refinement](ReplicationShippingRefinement.md) separate a finite physical-source
+window, FIFO acknowledgement folding, receiver feedback and retry-driven
+deferral progress. The cursor claim is local to one source lineage; rebind and
+reseed may reset it. A rejected head cannot be skipped because a later
+in-flight batch succeeds.
+
+The model calls the actual `WalBackPressure.ReceiverShrinkBatch` action. The
+supplied logical name and Healthy/Throttled/Saturated 4/2/1 regimes remain
+unchanged. A separate finite first-head opportunity supplies valid batch-only
+feedback without manufacturing a pause or relabelling a Healthy verdict.
+Already launched batches cannot be recalled. Observed shrink or pause stops
+replenishment for this pump, including held-terminal release; later null
+feedback may change the next pump's offer but cannot erase the current stop.
+
+`EveryDeferralBounded` is conditional on delivered retries and elapsed-time
+opportunities, available bounded retention, completed reseeding and a stable
+receiver lifetime. A decided prepare is never discarded merely because its
+timeout expired: its application fault must clear for stream progress.
+Dead-letter, poison and quarantine admission each fail closed when full.
+Receiver restart loses volatile first-deferral age, not durable poison or
+quarantine. Retry count does not substitute for elapsed time. No-reseed memory
+is scoped to retained retirement history, not arbitrary history that evicts
+the bounded production marker. Jitter is not fairness or a latency bound.
+
+| Instance | Distinct states | Generated states |
+| --- | --- | --- |
+| Base | 527,689 | 2,174,007 |
+| FourRecords | 3,306,850 | 14,126,738 |
+
+Both full configurations retain all four invariants and twelve properties.
+The base completes at depth 57 and FourRecords at depth 71. Their separately
+measured processes take 171.2132167s and 1809.0807471s under the unchanged
+configured 1,800 MB/two-worker policy. That 1980.2939638s sum is not the complete
+paired-cohort or scheduling-shard price.
+
+The complete revised harness subsequently passed 28/28 cases: both full
+configurations and all twenty-six paired mutations, with fresh process-local
+controls. Its launcher-artifact receipt records 2745.4195361 monotonic seconds
+under the same configured resource policy. The seven-module shard uses a
+conservative 65.23-minute composed independent-certificate estimate, not a
+measured composite run. The earlier standalone fulls are diagnostics and are
+not added again. Accepted completion binds the fresh TRX, redirected native
+output and immediate exit-code/Stopwatch receipt; it is not a recovered CLI
+terminal event, at-launch loaded-binary attestation or peak-RSS measurement.
+
+The model declares 26 one-target pairs and 33 behaviour rows, covering every
+Next/environment action except non-behavioural Stutter. Twenty distinct
+production detector methods include four names already in the prior area
+census, so this module adds 16 distinct names, not 17. Seventeen source-red
+methods are newly established relative to the earlier source evidence;
+the Healthy method is new source-negative evidence for an already-counted
+name. The real pump/applier/policy regressions remain distinct from the formal
+experiments. Coyote executes controlled opportunities through those production
+seams in the replication test package; it is not a replacement protocol or a
+claim to explore every CLR Task schedule.
 
 ## Routing and evidence
 
