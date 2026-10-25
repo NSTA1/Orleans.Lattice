@@ -54,6 +54,45 @@ public sealed class LtTextInputTests : ShellDesignTestContext
     }
 
     [Test]
+    public void An_error_without_a_hint_is_announced_and_clearing_it_removes_invalid_state()
+    {
+        var cut = Render<LtTextInput>(p => p.Add(x => x.Label, "Tree id").Add(x => x.Error, "Choose a tree."));
+        var input = cut.Find("input");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(input.GetAttribute("aria-describedby"), Is.EqualTo(cut.Find(".lt-field__error").Id));
+            Assert.That(input.GetAttribute("aria-invalid"), Is.EqualTo("true"));
+        });
+
+        cut.Render(p => p.Add(x => x.Error, (string?)null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find("input").HasAttribute("aria-describedby"), Is.False);
+            Assert.That(cut.Find("input").HasAttribute("aria-invalid"), Is.False);
+            Assert.That(cut.FindAll(".lt-field__error"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Clearing_the_input_reports_an_empty_value()
+    {
+        var observed = new List<string>();
+        var cut = Render<LtTextInput>(p => p.Add(x => x.Label, "Key")
+            .Add(x => x.Value, "orders/1").Add(x => x.ValueChanged, (string value) => observed.Add(value)));
+
+        cut.Find("input").Input(new ChangeEventArgs { Value = null });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.EqualTo(new[] { string.Empty }));
+            Assert.That(cut.Instance.Value, Is.Empty);
+            Assert.That(cut.Find("input").GetAttribute("value"), Is.Empty.Or.Null);
+        });
+    }
+
+    [Test]
     public void An_error_marks_the_input_invalid_and_is_announced_with_the_hint()
     {
         var cut = Render<LtTextInput>(p => p
