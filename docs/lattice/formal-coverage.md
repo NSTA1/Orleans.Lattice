@@ -504,9 +504,15 @@ outside the TLC shards and run even when policy skips exhaustive model checking.
 The #4852 regression prevents a shard category from silently moving those
 structural checks into skipped work.
 
-Scheduling bases, variants and mutations route to the dedicated
-`formal-tlc-scheduling` shard before the WAL-name fallback. Structural scheduling
-discovery and refinement checks remain outside that shard, so a skipped TLC
+Scheduling bases, variants and mutations route to four dedicated
+deterministic-only shards before the WAL-name fallback, each priced from its
+measured CI duration: the ReplayPermits TwoPartitions variant alone
+(`formal-tlc-scheduling-replay-two-partitions`), the ReplicationShipping base
+and pairs (`formal-tlc-scheduling-shipping`), its full variants
+(`formal-tlc-scheduling-shipping-variants`) and every other scheduling case
+(`formal-tlc-scheduling`). TwoPartitions is the longest indivisible case, so it
+alone sets the floor of the lattice plan's makespan. Structural scheduling
+discovery and refinement checks remain outside those shards, so a skipped TLC
 run does not skip the acceptance census.
 
 ## Related

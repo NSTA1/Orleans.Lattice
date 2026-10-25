@@ -324,10 +324,11 @@ paired-cohort or scheduling-shard price.
 The complete revised harness subsequently passed 28/28 cases: both full
 configurations and all twenty-six paired mutations, with fresh process-local
 controls. Its launcher-artifact receipt records 2745.4195361 monotonic seconds
-under the same configured resource policy. The eight-module shard uses a
-conservative 200.27-minute composed independent-certificate estimate, not a
-measured composite run. The earlier standalone fulls are diagnostics and are
-not added again. Accepted completion binds the fresh TRX, redirected native
+under the same configured resource policy. CI does not compose these
+certificates: it prices the base and pairs at their measured 9.7-minute item
+duration and FourRecords at its measured 18.05 minutes in ci.yml run
+40184175158, on separate shards. The earlier standalone fulls remain
+diagnostics. Accepted completion binds the fresh TRX, redirected native
 output and immediate exit-code/Stopwatch receipt; it is not a recovered CLI
 terminal event, at-launch loaded-binary attestation or peak-RSS measurement.
 
@@ -356,11 +357,19 @@ does not bound a tree's row scan or the synchronous on-demand caller's turn.
 See [the refinement note](TagIndexReconcileRefinement.md) for the exact
 production units, paired counterexamples and cooperative Coyote boundary.
 
-All scheduling-directory bases, variants and mutations route to
-TlcShardScheduling before the broad Wal prefix, on the deterministic-only
-formal-tlc-scheduling shard. Structural gates remain untagged. The checked-in
-mutation files derive each mutant from the live module using exact anchors;
-the harness runs a clean control and one configured target per mutant.
+All scheduling-directory bases, variants and mutations route before the broad
+Wal prefix to one of four deterministic-only shards, partitioned 151/1/27/1
+cases. TlcShardScheduling (formal-tlc-scheduling) holds every case without a
+more specific group, TlcShardSchedulingReplayTwoPartitions holds the
+ReplayPermits TwoPartitions variant alone, TlcShardSchedulingShipping holds the
+ReplicationShipping base and pairs, and TlcShardSchedulingShippingVariants
+holds its full variants. Each is priced from its measured duration in ci.yml
+run 40184175158. TwoPartitions held one TLC slot for 74.47 minutes of that
+run's combined scheduling item and set its critical path; as one indivisible
+case it is the floor of every plan's makespan. Structural gates remain
+untagged. The checked-in mutation files derive each mutant from the live module
+using exact anchors; the harness runs a clean control and one configured target
+per mutant.
 
 Module-local refinement notes classify every property, identify real production
 detectors, and record the replaced draft assertions and their limitations.
@@ -374,5 +383,5 @@ the authoritative [TLC running instructions](../README.md#how-to-run-tlc), then
 run only this area's bases, variants and paired mutation experiments:
 
 ```powershell
-dotnet test test\lattice\Orleans.Lattice.Tests.csproj -c Release --filter "TestCategory=TlcShardScheduling"
+dotnet test test\lattice\Orleans.Lattice.Tests.csproj -c Release --filter "TestCategory=TlcShardScheduling|TestCategory=TlcShardSchedulingReplayTwoPartitions|TestCategory=TlcShardSchedulingShipping|TestCategory=TlcShardSchedulingShippingVariants"
 ```

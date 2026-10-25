@@ -258,9 +258,13 @@ separates the full state-space measurements, one-target pairs and real
 production/Coyote detector evidence. The revised complete harness passed
 both full configurations and all twenty-six pairs in 2745.4195361 monotonic
 seconds. Its accepted launcher-artifact completion is not a recovered CLI
-terminal event, loaded-DLL attestation or peak-RSS measurement. The eight-module
-200.27-minute routing estimate composes independent certificates and excludes
-the earlier standalone Shipping diagnostics; it is not a measured shard run.
+terminal event, loaded-DLL attestation or peak-RSS measurement. CI routing
+does not compose those certificates. The matrix prices the area's four
+scheduling items from their durations measured in ci.yml run 40184175158: the
+ReplayPermits TwoPartitions variant alone at 74.5 minutes, the other 151
+general cases at 52.3, the Shipping base and pairs at 9.7 and FourRecords at
+18.05. The planner packs them independently, and TwoPartitions, the longest
+indivisible case, is the floor of the lattice plan's makespan.
 
 ## Defects found during the bucket
 
