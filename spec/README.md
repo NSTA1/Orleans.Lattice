@@ -47,6 +47,7 @@ be quiet about one.
 | [`scheduling/`](scheduling/README.md) | `TurnOccupancy` | Non-reentrant grain turns, queued calls, and awaiting versus dispatching environment-controlled background work. |
 | [`scheduling/`](scheduling/README.md) | `WalAdmission` | Partition admission capacity, saturation waits, paced recovery release and budget outcomes under explicit progress premises. |
 | [`scheduling/`](scheduling/README.md#wal-back-pressure) | `WalBackPressure` | Tree-wide cached classification, scoped consumer responses, recovery hysteresis and signal-independent relief under explicit progress premises. |
+| [`scheduling/`](scheduling/README.md#replication-shipping) | `ReplicationShipping` | Physical-source FIFO windows, sticky pump feedback, receiver deferral/capacity boundaries and conditional retry progress. |
 | [`scheduling/`](scheduling/README.md#materialiser-drain) | `MaterialiserDrain` | Separate online-copy, leaf-durability and WAL-shutdown drain boundaries, pressure-responsive service and live split routing. |
 | [`scheduling/`](scheduling/README.md#saga-and-reader-progress) | `SagaReadProgress` | Consistent decision cuts, bounded optimistic-to-gated fallback, pressure-independent terminal delivery and original-caller acknowledgement after durable completion. |
 | [`scheduling/`](scheduling/README.md) | `TagIndexReconcile` | Single-sweep probe/repair progress, successful completion and baseline banking, bounded phase callbacks and reminder recovery. |

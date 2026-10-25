@@ -30,7 +30,7 @@ arbitrary custom-policy histories. A later real Healthy/null acknowledgement
 can clear the offered cap, but must not clear this pump's observed-feedback stop.
 
 `EveryDeferralBounded` is conditional, retry-driven progress, not a wall-time
-deadline. This is the user-directed scope decision in
+deadline. This is the parent-autopilot scope decision, not a direct user selection, in
 [#4967 comment 6391108683](https://github.com/NSTA1/Orleans.Lattice/issues/4967#issuecomment-6391108683).
 For an eligible failed record, expiration is observed on a subsequent retry.
 Capacity for poison, quarantine and dead-letter storage is independent. Those
