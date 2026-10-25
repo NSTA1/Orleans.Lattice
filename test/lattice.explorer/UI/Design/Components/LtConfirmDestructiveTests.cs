@@ -103,6 +103,37 @@ public sealed class LtConfirmDestructiveTests : ShellDesignTestContext
         Assert.That(events, Is.EqualTo(new[] { "open:False" }));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Escape_closes_without_confirming_even_when_the_name_matches(bool matches)
+    {
+        var events = new List<string>();
+        var cut = RenderConfirm(events);
+        cut.Find("input").Input(matches ? TreeName : "crm");
+
+        cut.Find(".lt-dialog").KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Escape" });
+
+        Assert.That(events, Is.EqualTo(new[] { "open:False" }));
+    }
+
+    [Test]
+    public void An_empty_object_name_cannot_be_confirmed()
+    {
+        var events = new List<string>();
+        var cut = RenderConfirm(events);
+        cut.Render(p => p.Add(x => x.ObjectName, string.Empty).Add(x => x.ObjectKind, string.Empty));
+
+        cut.Find("input").Input(string.Empty);
+        cut.Find("form").Submit();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Confirm(cut).HasAttribute("disabled"), Is.True);
+            Assert.That(cut.Find("label").TextContent, Is.EqualTo(" name"));
+            Assert.That(events, Is.Empty);
+        });
+    }
+
     [Test]
     public void A_refused_focus_on_open_leaves_the_confirmation_answering()
     {
