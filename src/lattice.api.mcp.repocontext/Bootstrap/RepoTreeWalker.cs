@@ -177,42 +177,18 @@ internal static class RepoTreeWalker
                     return;
                 }
 
-                var content = File.ReadAllBytes(candidate.Absolute);
-
-                // Drop a non-text file before it is hashed, embedded, or indexed:
-                // a NUL byte in the leading window is the same cheap, language- and
-                // extension-agnostic heuristic Git uses to classify a blob as binary.
-                if (excludeBinary && RepoBinaryContent.IsProbablyBinary(content))
+                using var stream = File.OpenRead(candidate.Absolute);
+                var content = FileDigest.Read(stream, excludeBinary, cancellationToken, known ? meta.Digest : null);
+                if (content is not { } read)
                 {
                     return;
                 }
 
-                string digest;
-                var anchorStale = false;
-                if (known && FileDigest.Matches(meta.Digest, content))
-                {
-                    // The stat looked stale (bumped modification time or a size the
-                    // fast-path could not clear) but the content is byte-for-byte the
-                    // stored content. Keep the stored digest verbatim - so the plan
-                    // sees it as unchanged, not a spurious update - and flag the
-                    // anchor stale so the node is rewritten to refresh the ingest
-                    // anchor, letting the fast-path skip this file from now on.
-                    digest = meta.Digest;
-                    anchorStale = true;
-                }
-                else
-                {
-                    // A new file, or genuinely changed content: stamp the modern
-                    // digest so the store migrates off any older algorithm as content
-                    // evolves.
-                    digest = FileDigest.Compute(content);
-                }
-
                 results[index] = new RepoFileEntry(
-                    relativePath, digest, content.LongLength,
+                    relativePath, read.Digest, read.SizeBytes,
                     LanguageClassifier.Classify(relativePath))
                 {
-                    AnchorStale = anchorStale,
+                    AnchorStale = known && string.Equals(meta.Digest, read.Digest, StringComparison.Ordinal),
                 };
 
                 // Publish the running processed-file count for live progress. The

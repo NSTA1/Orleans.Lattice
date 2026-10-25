@@ -9,7 +9,7 @@ internal static class RepoBinaryContent
 {
     // The leading window scanned for a NUL byte to classify a file as binary. This
     // matches the size Git samples (its FIRST_FEW_BYTES) for the same decision.
-    private const int SniffByteCount = 8000;
+    internal const int SniffByteCount = 8000;
 
     /// <summary>
     /// Reports whether <paramref name="content"/> looks like a binary (non-text)

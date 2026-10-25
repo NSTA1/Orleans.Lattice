@@ -160,6 +160,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - Git-source links cannot expose host files.** Symbolic links are excluded from commit scans and staged as plain text, preventing repository contributors from indexing host-readable secrets. ([#5021](https://github.com/NSTA1/Orleans.Lattice/pull/5021)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Indexing - Large mounted files no longer exhaust scan memory.** Binary sniffing and content hashing use fixed scratch space rather than whole-file arrays, preserving digests and legacy comparisons. ([#5021](https://github.com/NSTA1/Orleans.Lattice/pull/5021)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
+- **Vector - File embedding reads are bounded before allocation.** The embedder reads only its 64 Ki-character prefix instead of loading an entire contributor-controlled file and truncating afterwards. ([#5021](https://github.com/NSTA1/Orleans.Lattice/pull/5021)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Security - Snapshot import trusted a frame length prefix.** A forged multi-gigabyte prefix on a short stream forced the whole allocation up front. Large frames now grow with the bytes actually received. ([#4790](https://github.com/NSTA1/Orleans.Lattice/pull/4790)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Indexing - A newline in a path defeated exclude globs and .gitignore rules.** Both pattern translations emitted `.` constructs that do not cross a line feed, so a file under a directory whose name held one was indexed despite matching a deny rule. Both now match across lines and anchor at `\z`. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

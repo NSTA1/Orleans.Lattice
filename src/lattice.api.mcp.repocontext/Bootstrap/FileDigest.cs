@@ -69,6 +69,62 @@ internal static class FileDigest
     }
 
     /// <summary>
+    /// Sniffs and hashes a stream with fixed scratch space. Preserves a matching
+    /// legacy digest so unchanged files do not spuriously migrate algorithms.
+    /// Returns null only when binary exclusion rejects the leading window.
+    /// </summary>
+    internal static (string Digest, long SizeBytes)? Read(
+        Stream content, bool excludeBinary, CancellationToken cancellationToken, string? storedDigest = null)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = content.ReadAtLeast(buffer, RepoBinaryContent.SniffByteCount, throwOnEndOfStream: false);
+            if (excludeBinary && RepoBinaryContent.IsProbablyBinary(buffer.AsSpan(0, count)))
+            {
+                return null;
+            }
+
+            var modern = new XxHash128();
+            using var legacy = storedDigest is { Length: <= MaxDigestChars }
+                && !storedDigest.StartsWith(XxHash128Prefix, StringComparison.Ordinal)
+                    ? IncrementalHash.CreateHash(HashAlgorithmName.SHA256)
+                    : null;
+            long size = 0;
+            while (count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var chunk = buffer.AsSpan(0, count);
+                modern.Append(chunk);
+                legacy?.AppendData(chunk);
+                size += count;
+                count = content.Read(buffer);
+            }
+
+            if (legacy is not null)
+            {
+                var prefix = storedDigest!.StartsWith(Sha256Prefix, StringComparison.Ordinal)
+                    ? Sha256Prefix
+                    : string.Empty;
+                var legacyDigest = prefix + Convert.ToHexStringLower(legacy.GetHashAndReset());
+                if (string.Equals(storedDigest, legacyDigest, StringComparison.Ordinal))
+                {
+                    return (storedDigest, size);
+                }
+            }
+
+            Span<byte> hash = stackalloc byte[XxHash128Bytes];
+            modern.GetCurrentHash(hash);
+            return (XxHash128Prefix + Convert.ToHexStringLower(hash), size);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
+    }
+
+    /// <summary>
     /// Writes the modern tagged digest of <paramref name="content"/> into
     /// <paramref name="destination"/> as ASCII bytes, returning the count written
     /// (always <see cref="Utf8DigestBytes"/>). This is what lets a caller that is
