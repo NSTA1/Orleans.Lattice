@@ -1,0 +1,12 @@
+MODULE: RebuildProgressAcrossAliasCursorReset
+TARGET: RebuildProgressAcrossAlias
+CLASS: Temporal
+SUMMARY: publication restarts a finished repair instead of completing it
+PERTURBS: PublishRepair
+
+--- FIND
+    /\ mode = "Alias" /\ phase = "publish" /\ phase' = "done"
+--- REPLACE
+    /\ mode = "Alias" /\ phase = "publish" /\ phase' = "read"
+    \* MUTATION: completed repair cannot publish and terminates no caller.
+--- END

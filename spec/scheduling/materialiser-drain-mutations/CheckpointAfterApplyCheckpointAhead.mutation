@@ -1,0 +1,11 @@
+MODULE: CheckpointAfterApplyCheckpointAhead
+TARGET: CheckpointAfterApply
+CLASS: Action
+SUMMARY: durable checkpoint claims an entry never applied
+PERTURBS: CheckpointPersist
+
+--- FIND
+    /\ checkpoint' = applied /\ phase' = "snapshot"
+--- REPLACE
+    /\ checkpoint' = applied + 1 /\ phase' = "snapshot" \* MUTATION: unearned checkpoint.
+--- END

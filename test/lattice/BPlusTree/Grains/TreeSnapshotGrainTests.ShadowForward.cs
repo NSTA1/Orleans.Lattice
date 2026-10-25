@@ -221,7 +221,8 @@ public partial class TreeSnapshotGrainTests
         // observe peak concurrency.
         var inFlight = 0;
         var peak = 0;
-        var gate = new TaskCompletionSource();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstWave = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var seen = 0;
 
         for (int i = 0; i < shardCount; i++)
@@ -237,7 +238,7 @@ public partial class TreeSnapshotGrainTests
                     if (now <= current) break;
                     if (Interlocked.CompareExchange(ref peak, now, current) == current) break;
                 }
-                if (Interlocked.Increment(ref seen) >= 2) gate.TrySetResult();
+                if (Interlocked.Increment(ref seen) >= 2) firstWave.TrySetResult();
                 await gate.Task;
                 Interlocked.Decrement(ref inFlight);
                 return (Orleans.Runtime.GrainId?)null;
@@ -254,7 +255,19 @@ public partial class TreeSnapshotGrainTests
         state.State.Mode = SnapshotMode.Online;
         state.State.OperationId = "op-cap";
 
-        await grain.DrainAllShardsOnlineAsync();
+        var drain = grain.DrainAllShardsOnlineAsync();
+        try
+        {
+            await firstWave.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(Volatile.Read(ref seen), Is.EqualTo(2),
+                "keep every first-wave call parked until the cap is observed; releasing at two hides cap-plus-one regressions");
+        }
+        finally
+        {
+            gate.TrySetResult();
+            Assert.DoesNotThrowAsync(async () => await drain.WaitAsync(TimeSpan.FromSeconds(5)),
+                "released copy calls must release their slots and let the finite queue complete");
+        }
 
         Assert.That(peak, Is.EqualTo(2), "Peak concurrent drains must not exceed MaxConcurrentDrains");
     }

@@ -1,0 +1,11 @@
+MODULE: NoDrainPastHeadInclusiveHead
+TARGET: NoDrainPastHead
+CLASS: Invariant
+SUMMARY: consume the exclusive next sequence as an entry
+PERTURBS: ReplayRead
+
+--- FIND
+    /\ applied' = Min(Head - 1, applied + ReplayBatch)
+--- REPLACE
+    /\ applied' = Min(Head, applied + ReplayBatch + 1) \* MUTATION: exclusive head consumed.
+--- END
