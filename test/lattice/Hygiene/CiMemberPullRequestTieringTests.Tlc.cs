@@ -17,35 +17,43 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase(MemberSkippedTiers)]
     public void Scheduling_shards_price_all_certified_modules_in_full_and_member_plans(string? skippedTiers)
     {
-        // Mixed-scope conservative certificates and retained Shipping allocation, not new group clocks.
-        const double generalSeconds = 144.684 + 177 + 729.46094 + 62.8925529 + 54.083547
-            + 6562.8434051 + 1413.7458152 + 125.8571349;
-        const double shippingSeconds = 2745.4195361;
-        const double variantSeconds = 1901.2196480;
+        // Measured in ci.yml run 40184175158 (see test-durations.tsv), not local certificates.
+        // TwoPartitions held one TLC slot from 25.16 to 99.63 minutes. The general cases,
+        // replayed on two slots in their measured order, finish at 52.3, and in any order by
+        // (103.9 - 27.1) / 2 + 27.1. The two Shipping items are their own measured durations.
+        const double twoPartitionsSlotMinutes = 99.63 - 25.16;
+        const double generalMeasuredOrderMinutes = 52.3;
+        const double generalAnyOrderMinutes = (103.9 - 27.1) / 2 + 27.1;
         const double itemOverheadMinutes = 0.04;
-        var expected = new Dictionary<string, (double Minutes, double Seconds)>(StringComparer.Ordinal)
+        var measured = new Dictionary<string, double>(StringComparer.Ordinal)
         {
-            ["formal-tlc-scheduling"] = (154.51, generalSeconds),
-            ["formal-tlc-scheduling-shipping"] = (14.07, shippingSeconds - variantSeconds),
-            ["formal-tlc-scheduling-shipping-variants"] = (31.69, variantSeconds),
+            ["formal-tlc-scheduling-replay-two-partitions"] = twoPartitionsSlotMinutes,
+            ["formal-tlc-scheduling"] = generalMeasuredOrderMinutes,
+            ["formal-tlc-scheduling-shipping"] = 9.7,
+            ["formal-tlc-scheduling-shipping-variants"] = 18.05,
         };
         var scheduling = Plan(["lattice"], skippedTiers)
             .Where(item => item.Shard.StartsWith("formal-tlc-scheduling", StringComparison.Ordinal)).ToArray();
 
+        Assert.That(scheduling.Select(item => item.Shard), Is.EquivalentTo(measured.Keys));
         Assert.Multiple(() =>
         {
-            Assert.That(scheduling.Select(item => item.Shard), Is.EquivalentTo(expected.Keys));
             foreach (var item in scheduling)
             {
                 Assert.That(item.Skip, Is.Null, item.Shard);
                 Assert.That(item.Tier, Is.EqualTo("deterministic"), item.Shard);
-                var price = expected[item.Shard];
-                Assert.That(item.EstimateMinutes, Is.EqualTo(price.Minutes + itemOverheadMinutes).Within(0.000001));
-                Assert.That(price.Minutes * 60, Is.GreaterThanOrEqualTo(price.Seconds), item.Shard);
-                Assert.That(price.Minutes * 60 - price.Seconds, Is.LessThan(0.6), "round once to hundredths of a minute");
+                var price = item.EstimateMinutes - itemOverheadMinutes;
+                Assert.That(price, Is.GreaterThanOrEqualTo(measured[item.Shard] - 0.000001),
+                    item.Shard + " must not be priced below its measurement");
+                Assert.That(price, Is.LessThan(measured[item.Shard] + 0.1),
+                    item.Shard + " rounds its measurement up once, to at most a tenth of a minute");
             }
-            Assert.That(scheduling.Sum(item => item.EstimateMinutes) - 3 * itemOverheadMinutes,
-                Is.EqualTo(200.27).Within(0.000001), "do not add the earlier standalone Shipping diagnostics again");
+            var general = scheduling.Single(item => item.Shard == "formal-tlc-scheduling");
+            Assert.That(general.EstimateMinutes - itemOverheadMinutes, Is.LessThanOrEqualTo(generalAnyOrderMinutes),
+                "the general cases' measured order must sit within the bound for any order on two slots");
+            Assert.That(scheduling.MaxBy(item => item.EstimateMinutes)!.Shard,
+                Is.EqualTo("formal-tlc-scheduling-replay-two-partitions"),
+                "TwoPartitions is the largest indivisible scheduling item");
         });
     }
 
@@ -59,16 +67,26 @@ public sealed partial class CiMemberPullRequestTieringTests
         var legs = document.RootElement.EnumerateArray().ToArray();
         var scheduling = legs.SelectMany(leg => leg.GetProperty("items").EnumerateArray()
                 .Where(item => item.GetProperty("shard").GetString()!.StartsWith("formal-tlc-scheduling", StringComparison.Ordinal))
-                .Select(item => (Leg: leg.GetProperty("id").GetString(), Item: item)))
+                .Select(item => (Leg: leg, Item: item)))
             .ToArray();
-        string[] categories = ["TlcShardScheduling", "TlcShardSchedulingShipping", "TlcShardSchedulingShippingVariants"];
-        string[] shards = ["formal-tlc-scheduling", "formal-tlc-scheduling-shipping", "formal-tlc-scheduling-shipping-variants"];
+        // test-shards.json order, which is the first-match order the planner subtracts in.
+        string[] categories =
+        [
+            "TlcShardSchedulingReplayTwoPartitions", "TlcShardScheduling",
+            "TlcShardSchedulingShipping", "TlcShardSchedulingShippingVariants",
+        ];
+        string[] shards =
+        [
+            "formal-tlc-scheduling-replay-two-partitions", "formal-tlc-scheduling",
+            "formal-tlc-scheduling-shipping", "formal-tlc-scheduling-shipping-variants",
+        ];
 
-        Assert.That(scheduling, Has.Length.EqualTo(3), "three independently runnable work items, not one opaque 200.27-minute item");
+        Assert.That(scheduling, Has.Length.EqualTo(4), "four independently runnable work items, not one opaque 152-case item");
         Assert.Multiple(() =>
         {
-            Assert.That(scheduling.Select(entry => entry.Leg), Is.Unique, "the retained lattice plan can pack these independently");
-            for (var index = 0; index < scheduling.Length; index++)
+            Assert.That(scheduling.Select(entry => entry.Leg.GetProperty("id").GetString()), Is.Unique,
+                "the retained lattice plan can pack these independently");
+            for (var index = 0; index < shards.Length; index++)
             {
                 var filter = scheduling.Single(entry => entry.Item.GetProperty("shard").GetString() == shards[index])
                     .Item.GetProperty("filter").GetString()!;
@@ -77,6 +95,12 @@ public sealed partial class CiMemberPullRequestTieringTests
                 foreach (var earlier in categories.Take(index))
                     Assert.That(terms, Does.Contain("TestCategory!=" + earlier));
             }
+            var twoPartitions = scheduling.Single(entry => entry.Item.GetProperty("shard").GetString() == shards[0]).Leg;
+            Assert.That(twoPartitions.GetProperty("items").GetArrayLength(), Is.EqualTo(1),
+                "nothing packs beside the indivisible TwoPartitions item");
+            Assert.That(twoPartitions.GetProperty("estimate").GetDouble(),
+                Is.EqualTo(legs.Max(leg => leg.GetProperty("estimate").GetDouble())).Within(0.001),
+                "the plan's makespan is its largest indivisible item, so it needs no more legs");
             var catchAll = legs.SelectMany(leg => leg.GetProperty("items").EnumerateArray())
                 .Single(item => item.GetProperty("shard").GetString() == "formal-tlc"
                     && item.GetProperty("tier").GetString() == "deterministic");

@@ -2,8 +2,31 @@ namespace Orleans.Lattice.Tests.Formal;
 
 public sealed partial class TlcCiShardTests
 {
+    private const string ReplayTwoPartitionsCategory = "TlcShardSchedulingReplayTwoPartitions";
     private const string ShippingCategory = "TlcShardSchedulingShipping";
     private const string ShippingVariantsCategory = "TlcShardSchedulingShippingVariants";
+
+    [Test]
+    public void Scheduling_replay_routes_only_its_TwoPartitions_variant_to_a_dedicated_shard()
+    {
+        var module = Module("ReplayPermits");
+        var mutations = module.LoadMutations();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TlcCiShard.SchedulingReplayTwoPartitions, Is.EqualTo(ReplayTwoPartitionsCategory));
+            Assert.That(module.Manifest.Variants.Keys, Is.EquivalentTo(new[] { "TwoPartitions", "PartialPrefix" }));
+            Assert.That(TlcCiShard.OfVariant(module, "TwoPartitions"), Is.EqualTo(ReplayTwoPartitionsCategory));
+            Assert.That(TlcCiShard.OfVariant(module, "PartialPrefix"), Is.EqualTo(TlcCiShard.Scheduling));
+            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.Scheduling));
+            Assert.That(mutations, Is.Not.Empty);
+            foreach (var mutation in mutations)
+                Assert.That(TlcCiShard.Of(module, mutation), Is.EqualTo(TlcCiShard.Scheduling), mutation.Name);
+            var other = Module("ReplicationShipping") with { Name = "SomeFutureScheduling" };
+            Assert.That(TlcCiShard.OfVariant(other, "TwoPartitions"), Is.EqualTo(TlcCiShard.Scheduling),
+                "the dedicated shard is keyed by module and variant, not by variant name alone");
+        });
+    }
 
     [Test]
     public void Scheduling_shipping_keeps_its_base_and_all_paired_mutations_together_apart_from_full_variants()
@@ -49,7 +72,7 @@ public sealed partial class TlcCiShardTests
     }
 
     [Test]
-    public void Scheduling_categories_form_three_nonempty_disjoint_complete_groups()
+    public void Scheduling_categories_form_four_nonempty_disjoint_complete_groups()
     {
         var cases = SpecModuleCases.TlcModules()
             .Concat(SpecModuleCases.TlcMutations())
@@ -61,7 +84,8 @@ public sealed partial class TlcCiShardTests
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
         var expectedCounts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
-            [TlcCiShard.Scheduling] = 152,
+            [TlcCiShard.Scheduling] = 151,
+            [ReplayTwoPartitionsCategory] = 1,
             [ShippingCategory] = 27,
             [ShippingVariantsCategory] = 1,
         };

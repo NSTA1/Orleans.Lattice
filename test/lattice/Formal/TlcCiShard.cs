@@ -126,6 +126,9 @@ internal static class TlcCiShard
     /// <summary>Scheduling-area base, variant and mutation runs without a dedicated measured group.</summary>
     public const string Scheduling = "TlcShardScheduling";
 
+    /// <summary>The ReplayPermits TwoPartitions variant configuration, the single longest scheduling TLC case.</summary>
+    public const string SchedulingReplayTwoPartitions = "TlcShardSchedulingReplayTwoPartitions";
+
     /// <summary>The ReplicationShipping base and all paired mutations, retaining process-local controls together.</summary>
     public const string SchedulingShipping = "TlcShardSchedulingShipping";
 
@@ -150,7 +153,7 @@ internal static class TlcCiShard
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
-         Scheduling, SchedulingShipping, SchedulingShippingVariants];
+         Scheduling, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -243,7 +246,7 @@ internal static class TlcCiShard
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(variant);
 
-        if (SchedulingCategory(module, variant: true) is { } schedulingCategory)
+        if (SchedulingCategory(module, variant) is { } schedulingCategory)
         {
             return schedulingCategory;
         }
@@ -300,13 +303,17 @@ internal static class TlcCiShard
         name.StartsWith("Replication", StringComparison.Ordinal)
         && !string.Equals(name, "Replication", StringComparison.Ordinal);
 
-    private static string? SchedulingCategory(SpecModule module, bool variant = false)
+    private static string? SchedulingCategory(SpecModule module, string? variant = null)
     {
         if (!string.Equals(Path.GetFileName(module.Directory), "scheduling", StringComparison.Ordinal))
             return null;
 
-        return string.Equals(module.Name, "ReplicationShipping", StringComparison.Ordinal)
-            ? variant ? SchedulingShippingVariants : SchedulingShipping
+        if (string.Equals(module.Name, "ReplicationShipping", StringComparison.Ordinal))
+            return variant is null ? SchedulingShipping : SchedulingShippingVariants;
+
+        return string.Equals(module.Name, "ReplayPermits", StringComparison.Ordinal)
+            && string.Equals(variant, "TwoPartitions", StringComparison.Ordinal)
+            ? SchedulingReplayTwoPartitions
             : Scheduling;
     }
 
