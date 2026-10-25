@@ -31,6 +31,23 @@ variant lets the environment destroy a leaf's snapshot or its row, and the opera
 purge a tree, at two faults: 6,402,166 distinct states to depth 42. The `WarmLeaf` variant has no
 faults: 17,041 distinct states to depth 28, with every property checked.
 
+## Polling dispatch refinements
+
+`WalLogSubscriber.DrainAsync` may omit the page read for a partition whose
+readable-head probe is at or below its next-needed offset. This is a stuttering
+step: no read position, HLC or durable checkpoint advances for that partition.
+The decision lives only within the drain; the next drain probes again, so a late
+flush or a concurrent append is deferred, not lost. Backlogged partitions retain
+both the pre-read tail probe and the post-jump fall-off probe. Existing cursor and
+per-partition offset pins are still reported even on an entirely idle drain.
+
+`WalCommitLogReader.GetTailOffsetAsync` delegates to the combined WAL-grain tail
+read. Its watermark capability check, provider-read ordering, overflow clamp and
+conservative no-watermark fallback are unchanged. No append, flush, trim or pin
+protocol transition is elided. The trim-watermark and read-side fall-off detectors
+below still exercise the production path. Idle dispatch and next-drain recovery
+are covered by the `WalLogSubscriberTests` idle-read-elision cases.
+
 ## Variable mapping
 
 | Spec variable | Protocol role | Code counterpart |
