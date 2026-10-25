@@ -1,7 +1,9 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
+using NSubstitute;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Design.Components;
@@ -280,6 +282,92 @@ public sealed class LtTabsTests : ShellDesignTestContext
         await cut.InvokeAsync(() => cut.Instance.DisposeAsync().AsTask());
 
         Assert.That(async () => await cut.Instance.DisposeAsync(), Throws.Nothing, "disposing twice is harmless");
+    }
+
+    [TestCase("Home")]
+    [TestCase("ArrowLeft")]
+    public void Returning_to_the_already_active_tab_moves_focus_without_reporting_a_change(string key)
+    {
+        var observed = new List<string>();
+        var cut = Render<LtTabs>(p =>
+        {
+            p.Add(x => x.Label, "Only view").Add(x => x.ActiveIdChanged, observed.Add);
+            AddTab(p, "keys", "Keys", disabled: false);
+        });
+        var tab = cut.Find("[role=tab]");
+        var reference = tab.GetAttribute("blazor:elementreference");
+
+        cut.Find("[role=tablist]").KeyDown(new KeyboardEventArgs { Key = key });
+        tab.Click();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.Empty);
+            Assert.That(cut.Find("[role=tabpanel]").TextContent, Is.EqualTo("Keys panel"));
+            Assert.That(reference, Is.Not.Empty);
+            Assert.That(FocusedElementId(), Is.EqualTo(reference));
+        });
+    }
+
+    [Test]
+    public void A_tab_list_with_no_enabled_tabs_ignores_keyboard_navigation()
+    {
+        var observed = new List<string>();
+        var cut = Render<LtTabs>(p =>
+        {
+            p.Add(x => x.Label, "Unavailable views").Add(x => x.ActiveIdChanged, observed.Add);
+            AddTab(p, "keys", "Keys", disabled: true);
+            AddTab(p, "history", "History", disabled: true);
+        });
+
+        cut.Find("[role=tablist]").KeyDown(new KeyboardEventArgs { Key = "ArrowRight" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.Empty);
+            Assert.That(cut.FindAll("[role=tabpanel]"), Is.Empty);
+            Assert.That(cut.FindAll("[role=tab]").Select(tab => tab.GetAttribute("aria-selected")), Is.All.EqualTo("false"));
+            Assert.That(cut.FindAll("[role=tab]").Select(tab => tab.GetAttribute("tabindex")), Is.All.EqualTo("-1"));
+        });
+    }
+
+    [Test]
+    public async Task A_delivered_click_on_a_disabled_tab_is_refused()
+    {
+        var observed = new List<string>();
+        var cut = RenderTabs(onChanged: observed.Add);
+
+        // Deliver a stale event even though the browser normally suppresses disabled clicks.
+        await cut.FindAll("[role=tab]")[3].TriggerEventAsync("onclick", new MouseEventArgs());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.Empty);
+            Assert.That(cut.Find("[role=tab][aria-selected=true]").TextContent, Is.EqualTo("Keys"));
+            Assert.That(cut.Find("[role=tabpanel]").TextContent, Is.EqualTo("Keys panel"));
+        });
+    }
+
+    [TestCase(typeof(JSException))]
+    [TestCase(typeof(JSDisconnectedException))]
+    [TestCase(typeof(TaskCanceledException))]
+    [TestCase(typeof(ObjectDisposedException))]
+    public async Task Disposing_after_the_browser_has_gone_releases_the_module_only_once(Type exceptionType)
+    {
+        var module = Substitute.For<IJSObjectReference>();
+        var exception = (Exception)Activator.CreateInstance(exceptionType, "The browser has gone.")!;
+        module.DisposeAsync().Returns(ValueTask.FromException(exception));
+        var runtime = Substitute.For<IJSRuntime>();
+        runtime.InvokeAsync<IJSObjectReference>("import", Arg.Any<object?[]>())
+            .Returns(new ValueTask<IJSObjectReference>(module));
+        Services.AddSingleton(runtime);
+        var cut = RenderTabs();
+
+        await cut.InvokeAsync(() => cut.Instance.DisposeAsync().AsTask());
+        await cut.InvokeAsync(() => cut.Instance.DisposeAsync().AsTask());
+
+        _ = module.Received(1).DisposeAsync();
+        Assert.That(cut.Find("[role=tabpanel]").TextContent, Is.EqualTo("Keys panel"));
     }
 
     private IRenderedComponent<LtTabs> RenderTabs(string? active = null, Action<string>? onChanged = null)
