@@ -1,0 +1,13 @@
+MODULE: TransientFailureRewindsCursor
+TARGET: CursorMonotone
+CLASS: Action
+SUMMARY: transient failure rewinds an already acknowledged cursor
+PERTURBS: TransientFailure
+
+--- FIND
+    /\ faultsLeft' = faultsLeft - 1 /\ accepted' = FALSE /\ phase' = "ack"
+    /\ UNCHANGED <<cursor, sent, queue, applied, parked, mode, age, bad, space,
+--- REPLACE
+    /\ faultsLeft' = faultsLeft - 1 /\ accepted' = FALSE /\ phase' = "ack" /\ cursor' = 0
+    /\ UNCHANGED <<sent, queue, applied, parked, mode, age, bad, space,
+--- END
