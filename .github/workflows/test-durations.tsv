@@ -10,8 +10,9 @@
 # A missing row falls back to DEFAULT_ESTIMATE in plan-test-matrix.py, so this
 # file can never make the plan wrong - only less well balanced.
 #
-# PROVENANCE. Every row is MEASURED, with no estimated or apportioned figure
-# anywhere in the file. Each figure is the MEDIAN wall-clock of that work item
+# PROVENANCE. Every row in the original median refresh was MEASURED; later
+# refreshes and the scheduling reconstruction below have their own provenance.
+# Each original figure is the MEDIAN wall-clock of that work item
 # across every successful pull-request run of ci.yml created between
 # 2026-09-24 and 2026-09-28: 85 successful runs, of which 67 still carried
 # leg-results artifacts and 49 were full fan-outs (46-47 packages, `lattice`
@@ -82,9 +83,10 @@
 #
 # The formal-tlc* deterministic rows are the one exception to the provenance
 # above. They are not a median of leg records: the TLC gates outgrow their
-# shards faster than a median window can follow. They are one run's measured
-# item durations, from ci.yml run 40184175158 (2026-10-25, the #5009 member
-# pull request at head 65f41ea1), in which every one of those items passed.
+# shards faster than a median window can follow. Except for the scheduling
+# reconstruction below, they are one run's measured item durations, from ci.yml
+# run 40184175158 (2026-10-25, the #5009 member pull request at head 65f41ea1),
+# in which every one of those items passed.
 # That run was planned from the previous single-run and local estimates, and
 # it shows why they had to go: the formal-tlc catch-all was priced at 9.1
 # minutes and took 29.9, so the leg carrying it ran 129.5 minutes of tests
@@ -123,10 +125,14 @@ lattice	formal-tlc-bplus-cascade-mutations-2	deterministic	0.52
 # completed between 25.22 and 52.28, and the local process times of
 # TwoPartitions (4,748 s) and PartialPrefix (1,058 s) identify those two as the
 # slot holders. The general cases had both slots until 25.16 and the other slot
-# until 78.76, at most 103.9 slot-minutes. Replayed on two slots in their
-# measured order they finish at 52.3 minutes; any order is bounded by
+# until 78.76, at most 103.9 slot-minutes. With fixed observed case durations,
+# replaying their measured order gives a 52.3-minute reconstructed two-slot estimate,
+# not a separately measured shard duration; the any-order calculation is
 # (103.9 - 27.1) / 2 + 27.1 = 65.5, PartialPrefix's 27.1 slot-minutes being the
-# longest general case. The two Shipping rows are their items' own measured
+# longest general case, not a future throughput bound. TwoPartitions' 74.5-minute
+# planning allocation rounds its observed case interval, not a new split-shard
+# measurement. These historical costs inform planning, not future runtime guarantees.
+# The two Shipping rows are their items' own measured
 # durations. Together these replace the 154.51 / 14.07 / 31.69 allocation
 # estimates (200.27 in total), which were composed from local certificates.
 lattice	formal-tlc-scheduling-replay-two-partitions	deterministic	74.5

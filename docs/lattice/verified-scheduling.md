@@ -260,11 +260,14 @@ both full configurations and all twenty-six pairs in 2745.4195361 monotonic
 seconds. Its accepted launcher-artifact completion is not a recovered CLI
 terminal event, loaded-DLL attestation or peak-RSS measurement. CI routing
 does not compose those certificates. The matrix prices the area's four
-scheduling items from their durations measured in ci.yml run 40184175158: the
-ReplayPermits TwoPartitions variant alone at 74.5 minutes, the other 151
-general cases at 52.3, the Shipping base and pairs at 9.7 and FourRecords at
-18.05. The planner packs them independently, and TwoPartitions, the longest
-indivisible case, is the floor of the lattice plan's makespan.
+scheduling items using ci.yml run 40184175158: the ReplayPermits TwoPartitions
+variant's 74.47-minute observed case interval informs its rounded 74.5-minute
+planning allocation; the other 151 general cases have a 52.3-minute reconstructed
+two-slot estimate from the combined 152-case item's TRX timeline in observed
+order, not a separately measured shard duration. The Shipping base and pairs at
+9.7 minutes and FourRecords at 18.05 are measured item durations. The planner
+packs them independently. TwoPartitions' indivisible allocation sets a planning
+floor for the estimate-based lattice plan, not a guarantee of future runtimes.
 
 ## Defects found during the bucket
 

@@ -505,15 +505,19 @@ The #4852 regression prevents a shard category from silently moving those
 structural checks into skipped work.
 
 Scheduling bases, variants and mutations route to four dedicated
-deterministic-only shards before the WAL-name fallback, each priced from its
-measured CI duration: the ReplayPermits TwoPartitions variant alone
-(`formal-tlc-scheduling-replay-two-partitions`), the ReplicationShipping base
-and pairs (`formal-tlc-scheduling-shipping`), its full variants
-(`formal-tlc-scheduling-shipping-variants`) and every other scheduling case
-(`formal-tlc-scheduling`). TwoPartitions is the longest indivisible case, so it
-alone sets the floor of the lattice plan's makespan. Structural scheduling
-discovery and refinement checks remain outside those shards, so a skipped TLC
-run does not skip the acceptance census.
+deterministic-only shards before the WAL-name fallback: the ReplayPermits
+TwoPartitions variant alone (`formal-tlc-scheduling-replay-two-partitions`), the
+ReplicationShipping base and pairs (`formal-tlc-scheduling-shipping`), its full
+variants (`formal-tlc-scheduling-shipping-variants`) and every other scheduling
+case (`formal-tlc-scheduling`). Pricing uses ci.yml run 40184175158: Shipping's
+9.7 and 18.05 minutes are measured item durations; the general allocation is a
+52.3-minute reconstructed two-slot estimate from the combined 152-case item's
+TRX timeline in observed order, not a separately measured shard duration.
+TwoPartitions' 74.47-minute observed case interval informs its rounded
+74.5-minute planning allocation. That indivisible allocation sets a planning floor
+for the estimate-based lattice plan, not a guarantee of future runtimes.
+Structural scheduling discovery and refinement checks remain outside those
+shards, so a skipped TLC run does not skip the acceptance census.
 
 ## Related
 
