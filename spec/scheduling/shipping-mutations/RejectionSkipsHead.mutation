@@ -1,0 +1,18 @@
+MODULE: RejectionSkipsHead
+TARGET: NoSkipWithoutDeadLetter
+CLASS: Invariant
+SUMMARY: a rejected acknowledgement advances over the unacknowledged head
+PERTURBS: Reject
+
+--- FIND
+    /\ sent' = cursor /\ queue' = <<>> /\ phase' = "wait"
+--- REPLACE
+    /\ sent' = cursor /\ queue' = <<>> /\ phase' = "wait" /\ cursor' = Head(queue)
+--- END
+--- FIND
+    /\ UNCHANGED <<cursor, applied, parked, mode, age, bad, space,
+        faultsLeft, accepted, receiverState, aliased,
+--- REPLACE
+    /\ UNCHANGED <<applied, parked, mode, age, bad, space,
+        faultsLeft, accepted, receiverState, aliased,
+--- END

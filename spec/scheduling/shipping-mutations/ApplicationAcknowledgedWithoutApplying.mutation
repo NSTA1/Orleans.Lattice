@@ -1,0 +1,11 @@
+MODULE: ApplicationAcknowledgedWithoutApplying
+TARGET: NoSkipWithoutDeadLetter
+CLASS: Invariant
+SUMMARY: report acceptance without applying or parking the head
+PERTURBS: Apply
+
+--- FIND
+    /\ applied' = applied \cup {Head(queue)} /\ accepted' = TRUE /\ phase' = "feedback"
+--- REPLACE
+    /\ applied' = applied /\ accepted' = TRUE /\ phase' = "feedback"
+--- END

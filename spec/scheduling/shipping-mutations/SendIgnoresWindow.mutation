@@ -1,0 +1,11 @@
+MODULE: SendIgnoresWindow
+TARGET: InFlightRespected
+CLASS: Invariant
+SUMMARY: allow one extra send beyond the configured window
+PERTURBS: Send
+
+--- FIND
+    /\ phase = "fill" /\ sent < Records /\ Len(queue) < Window /\ ~stop /\ pause = 0
+--- REPLACE
+    /\ phase = "fill" /\ sent < Records /\ Len(queue) <= Window /\ ~stop /\ pause = 0
+--- END

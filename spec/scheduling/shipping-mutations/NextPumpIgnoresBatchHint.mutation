@@ -1,0 +1,11 @@
+MODULE: NextPumpIgnoresBatchHint
+TARGET: FlowControlHonoured
+CLASS: Action
+SUMMARY: the next pump ignores the observed receiver batch clamp
+PERTURBS: NextPump
+
+--- FIND
+    /\ stop' = FALSE /\ batchCap' = control.receiver /\ phase' = "fill"
+--- REPLACE
+    /\ stop' = FALSE /\ batchCap' = FullBatch /\ phase' = "fill"
+--- END

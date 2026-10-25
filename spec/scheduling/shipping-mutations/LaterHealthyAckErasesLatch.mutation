@@ -1,0 +1,11 @@
+MODULE: LaterHealthyAckErasesLatch
+TARGET: FeedbackStopsReplenishment
+CLASS: Action
+SUMMARY: a later null hint clears the same-pump latch before releasing a terminal
+PERTURBS: Accept
+
+--- FIND
+    /\ stop' = (stop \/ control.receiver < FullBatch \/ pause > 0)
+--- REPLACE
+    /\ stop' = (control.receiver < FullBatch \/ pause > 0)
+--- END

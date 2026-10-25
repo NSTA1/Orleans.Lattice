@@ -1,0 +1,12 @@
+MODULE: BatchOnlyFeedbackIgnored
+TARGET: ReceiverRegimes
+CLASS: Action
+SUMMARY: discard a valid batch-only acknowledgement instead of capturing its offered cap
+PERTURBS: ObserveBatchOnlyFeedback
+BOUNDS: Records = 2, Cap = 2
+
+--- FIND
+    /\ control' = [receiver |-> FullBatch \div 2] /\ phase' = "ack"
+--- REPLACE
+    /\ control' = [receiver |-> FullBatch] /\ phase' = "ack"
+--- END

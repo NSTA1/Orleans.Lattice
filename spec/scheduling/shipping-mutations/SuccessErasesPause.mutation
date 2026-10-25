@@ -1,0 +1,12 @@
+MODULE: SuccessErasesPause
+TARGET: PausePreserved
+CLASS: Action
+SUMMARY: a later healthy acknowledgement erases the existing receiver deadline
+PERTURBS: Accept
+
+--- FIND
+        controlPhase, control, batchCap, pause>>
+--- REPLACE
+        controlPhase, control, batchCap>>
+    /\ pause' = 0
+--- END
