@@ -59,6 +59,7 @@ public class WalShardGrainReadInterleaveTests
         var shipMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.ReadShippingAsync));
         var filteredMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.ReadFilteredAsync));
         var sizesMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.GetByteSizesAsync));
+        var tailMethod = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.GetTailOffsetAsync));
 
         Assert.Multiple(() =>
         {
@@ -74,13 +75,16 @@ public class WalShardGrainReadInterleaveTests
             Assert.That(sizesMethod, Is.Not.Null, "GetByteSizesAsync was renamed; update this guard test.");
             Assert.That(sizesMethod!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
                 "Byte accounting must not queue behind append or trim turns.");
+            Assert.That(tailMethod!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
+                "The combined retention-tail fallback must not block foreground appends.");
         });
     }
 
-    [Test]
-    public async Task Append_completes_while_a_read_is_parked_inside_the_provider()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Append_completes_while_a_read_is_parked_inside_the_provider(bool retentionTail)
     {
-        const string tree = "mv-interleave-tree";
+        var tree = $"mv-interleave-tree-{retentionTail}";
         var grain = _cluster.Client.GetGrain<IWalShardGrain>($"{tree}/0");
 
         // Seed a few entries so the read has something to page over.
@@ -94,7 +98,9 @@ public class WalShardGrainReadInterleaveTests
         {
             // Start a read; it enters the gated provider and parks before
             // yielding, holding the conceptual "long Azure read" open.
-            var readTask = grain.ReadAsync(0, 100, CancellationToken.None);
+            Task readTask = retentionTail
+                ? grain.GetTailOffsetAsync(CancellationToken.None)
+                : grain.ReadAsync(0, 100, CancellationToken.None).AsTask();
             await GatingWalStorageProvider.ReadEntered!.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
             // With the read parked, a foreground append must still complete.
@@ -110,6 +116,8 @@ public class WalShardGrainReadInterleaveTests
                 "Combined byte accounting while a read is parked inside the WAL grain turn");
             Assert.That(sizes.Retained, Is.GreaterThan(0),
                 "The tuple must survive an Orleans grain-result boundary.");
+            GatingWalStorageProvider.Release();
+            await readTask.WaitAsync(TimeSpan.FromSeconds(15));
         }
         finally
         {

@@ -147,4 +147,34 @@ public sealed partial class WalCommitLogReaderTests
             LatticeMergeMode.LwwRegister,
             "site-a"),
     };
+
+    [Test]
+    public async Task GetTailOffsetAsync_uses_one_combined_grain_call()
+    {
+        var (reader, grain) = CreateReader();
+        using var cts = new CancellationTokenSource();
+        grain.GetTailOffsetAsync(cts.Token).Returns(42L);
+
+        Assert.That(await reader.GetTailOffsetAsync(TreeId, 0, cts.Token), Is.EqualTo(42L));
+
+        await grain.Received(1).GetTailOffsetAsync(cts.Token);
+        await grain.DidNotReceive().GetTrimWatermarkAsync(Arg.Any<CancellationToken>());
+        await grain.DidNotReceive().GetNextSequenceAsync(Arg.Any<CancellationToken>());
+        await grain.DidNotReceive().ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void GetTailOffsetAsync_preserves_cancellation_and_validation_before_dispatch()
+    {
+        var (reader, grain) = CreateReader();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => reader.GetTailOffsetAsync("", 0), Throws.ArgumentException);
+            Assert.That(() => reader.GetTailOffsetAsync(TreeId, -1), Throws.TypeOf<ArgumentOutOfRangeException>());
+            Assert.That(() => reader.GetTailOffsetAsync(TreeId, 0, cts.Token), Throws.InstanceOf<OperationCanceledException>());
+        });
+        grain.DidNotReceive().GetTailOffsetAsync(Arg.Any<CancellationToken>());
+    }
 }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Views;
 
@@ -35,13 +36,14 @@ internal sealed class ViewTreeAliasObserver(
     /// <inheritdoc />
     public async Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
     {
-        foreach (var registration in _catalog.All())
-        {
-            if (!string.Equals(registration.SourceTreeId, change.TreeId, StringComparison.Ordinal))
-            {
-                continue;
-            }
+        var matching = _catalog.All()
+            .Where(registration => string.Equals(registration.SourceTreeId, change.TreeId, StringComparison.Ordinal))
+            .ToArray();
 
+        // Each maintainer owns its own rebind. Settle the bounded wave before
+        // returning so successive alias changes cannot overtake this fan-out.
+        await BoundedFanOut.ForEachAsync(matching, BoundedFanOut.DefaultWidth, async registration =>
+        {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
@@ -59,6 +61,6 @@ internal sealed class ViewTreeAliasObserver(
                     + "the maintainer will rebind via its backstop re-resolve.",
                     registration.ViewName, change.TreeId, change.NewPhysicalTreeId);
             }
-        }
+        });
     }
 }
