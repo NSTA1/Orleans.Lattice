@@ -34,6 +34,15 @@ def script(name: str) -> str:
     return textwrap.dedent(run["body"])
 
 
+def bash() -> str:
+    # CreateProcess searches System32 before PATH, so a bare "bash" on Windows
+    # can launch the WSL relay instead of the PATH-selected Bash (Git Bash).
+    path = os.environ.get("BASH") or shutil.which("bash")
+    if path is None:
+        raise AssertionError("bash not found on PATH")
+    return path
+
+
 class CoverageMatrixTests(unittest.TestCase):
     def test_every_project_is_planned_once_per_shared_shard(self):
         legs = coverage.plan(ROOT)
@@ -159,7 +168,7 @@ class BrowserInstallTests(unittest.TestCase):
 
     def run_install(self, cache: bool | str, *browsers: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [os.environ.get("BASH", "bash"), "-c",
+            [bash(), "-c",
              'export PATH="$PWD/bin:$PATH"; bash install.sh "$@"', "install",
              str(cache).lower(), *browsers],
             cwd=self.root, env=self.env, text=True, capture_output=True, timeout=20,
@@ -221,6 +230,14 @@ class BrowserInstallTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("::error::", result.stdout)
             self.assertFalse((self.root / "calls").exists())
+
+    def test_shell_tests_launch_the_path_selected_bash(self):
+        launcher = bash()
+        self.assertTrue(os.path.isabs(launcher), launcher)
+        result = subprocess.run([launcher, "-c", 'echo "$BASH_VERSION"'], text=True,
+                                capture_output=True, timeout=20)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"^\d+\.\d+")
 
     def test_ui_and_coverage_steps_use_the_bounded_installer(self):
         for name in ("ui-tests.yml", "coverage.yml"):
@@ -308,7 +325,7 @@ class CoverageShellTests(unittest.TestCase):
         path = self.root / "step.sh"
         path.write_text(self.prefix + body, encoding="utf-8", newline="\n")
         return subprocess.run(
-            [os.environ.get("BASH", "bash"), "step.sh"], cwd=self.root, env=self.env,
+            [bash(), "step.sh"], cwd=self.root, env=self.env,
             text=True, capture_output=True, timeout=30,
         )
 
