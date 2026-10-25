@@ -363,13 +363,17 @@ cases. TlcShardScheduling (formal-tlc-scheduling) holds every case without a
 more specific group, TlcShardSchedulingReplayTwoPartitions holds the
 ReplayPermits TwoPartitions variant alone, TlcShardSchedulingShipping holds the
 ReplicationShipping base and pairs, and TlcShardSchedulingShippingVariants
-holds its full variants. Each is priced from its measured duration in ci.yml
-run 40184175158. TwoPartitions held one TLC slot for 74.47 minutes of that
-run's combined scheduling item and set its critical path; as one indivisible
-case it is the floor of every plan's makespan. Structural gates remain
-untagged. The checked-in mutation files derive each mutant from the live module
-using exact anchors; the harness runs a clean control and one configured target
-per mutant.
+holds its full variants. Pricing uses ci.yml run 40184175158: the general
+allocation is a 52.3-minute reconstructed two-slot estimate from the combined
+152-case item's TRX timeline in observed order, not a separately measured shard
+duration. TwoPartitions held one TLC slot through its 74.47-minute observed case
+interval and set that combined item's critical path; its rounded 74.5-minute
+planning allocation sets an indivisible-case planning floor for the estimate-based
+plan, not a guarantee of future runtimes. The Shipping base/pairs and variant
+retain their own measured item durations of 9.7 and 18.05 minutes. Structural
+gates remain untagged. The checked-in mutation files derive each mutant from the
+live module using exact anchors; the harness runs a clean control and one
+configured target per mutant.
 
 Module-local refinement notes classify every property, identify real production
 detectors, and record the replaced draft assertions and their limitations.
