@@ -13,12 +13,12 @@ and how a deployment grows from one machine to many regions with the same
 programming model. It ends at the three ways into the documentation.
 
 <!-- The video block is written by `npm run companions` in videos/, and the documentation site replaces it with the player. -->
-<!-- video:begin episode="introduction" path="front-door" order="1" length="3:01" cut="231f8425d398" -->
+<!-- video:begin episode="introduction" path="front-door" order="1" length="2:56" cut="9580eb3dabaa" -->
 
 > [!NOTE]
 > Watch it on the [documentation site](https://nsta1.github.io/Orleans.Lattice/docs/videos/introduction.html),
-> or [download it](../../docs-site/media/introduction-231f8425d398.mp4)
-> (MP4, 3:01, 11.6 MB).
+> or [download it](../../docs-site/media/introduction-9580eb3dabaa.mp4)
+> (MP4, 2:56, 11.0 MB).
 
 <!-- video:end -->
 
@@ -43,7 +43,7 @@ Many applications run in more than one place at once, so that they keep going if
 
 Then two places can change the same thing at the same moment.
 
-The usual answer is to make them take turns, with a lock or a vote, and to keep the memory in a separate database, beside the application.
+Usually, changes take turns, with a lock or a vote, and memory lives in a separate database.
 
 Orleans.Lattice takes a different approach. It keeps the working memory inside the application.
 
@@ -55,21 +55,21 @@ It runs on one machine with no cloud account, and grows to many regions without 
 
 In technical terms, Orleans.Lattice is a platform for building durable, distributed state systems on Microsoft Orleans.
 
-At its centre is a sorted key-value store that runs inside your own cluster, with no external database, coordinator or queue beside it.
+At its centre is a sorted key-value store inside your own cluster: no external database, coordinator or queue.
 
 It takes three positions.
 
 ### The store lives in the cluster
 
-First: the store lives in the cluster. State is held by grains, in the same cluster as the code that uses it.
+First: state lives in grains, in the same cluster as the code that uses it.
 
-So a read is a grain call, not a round trip to a separate database tier with its own scaling and its own failures.
+A read is a grain call, not a round trip to a separate database tier with its own scaling and failures.
 
 ### Conflict resolution is algebraic
 
 Second: conflict resolution is algebraic.
 
-Two clusters write at the same time. Cluster A adds three, and cluster B, concurrently, adds five, each to its own count. Neither state is above the other.
+Cluster A adds three, cluster B concurrently adds five, each to its own count. Neither state is above the other.
 
 Each merges the other's update by taking the larger value per replica, so both arrive at the same state: their join.
 
@@ -87,7 +87,7 @@ A host takes only what it registers, and a capability it leaves out costs nothin
 
 ### Local to Global
 
-So a deployment can grow without a rewrite. Start local: one machine, no cloud account.
+Start local: one machine, no cloud account.
 
 Add a team: identity, authorization, schemas and tenants.
 
@@ -99,9 +99,9 @@ At every stage, the programming model is the same. Your code resolves ILattice, 
 
 The documentation has three ways in.
 
-Build, if you are writing code against ILattice.
+Build, if you are writing code against ILattice: start with Hello, Lattice.
 
-Evaluate, if you are deciding whether it fits.
+Evaluate, if you are deciding whether it fits: start with When Lattice fits, and when it doesn't.
 
 Operate, if you are running an estate. You choose.
 

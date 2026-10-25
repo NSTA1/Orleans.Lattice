@@ -1,10 +1,12 @@
 # Orleans.Lattice in three minutes - script
 
-Status: fact-checked on 2026-09-24 by the Docs agent, cue by cue, against the
-README, the reference architecture, the site's home page, the G-Counter join
-figure, `PACKAGES.md`, the package documentation, the source and the release
-tags: the technical half first, then the plain-language opening. Its fixes are
-applied to both.
+Status: fact-checked on 2026-10-25 by the Docs agent for the F2 re-cut, cue by
+cue, against the current corpus and source, including the shortened cues,
+`videos/series.json` and the published B1/E1 companion pages. Verdict:
+factually ready for narration after the read-cue clarification and Sources
+table corrections below. The ending matches F2 and names both published
+first episodes; Operate remains a path-only invitation. Timing and delivery
+still require narration and review.
 
 Written form, in the series voice (Emma, British English). The pronunciation
 lexicon (`voice/lexicon.json`) handles "Orleans" and "ILattice", and, for the
@@ -39,7 +41,7 @@ Many applications run in more than one place at once, so that they keep going if
 
 Then two places can change the same thing at the same moment.
 
-The usual answer is to make them take turns, with a lock or a vote, and to keep the memory in a separate database, beside the application.
+Usually, changes take turns, with a lock or a vote, and memory lives in a separate database.
 
 Orleans.Lattice takes a different approach. It keeps the working memory inside the application.
 
@@ -51,7 +53,7 @@ It runs on one machine with no cloud account, and grows to many regions without 
 
 In technical terms, Orleans.Lattice is a platform for building durable, distributed state systems on Microsoft Orleans.
 
-At its centre is a sorted key-value store that runs inside your own cluster, with no external database, coordinator or queue beside it.
+At its centre is a sorted key-value store inside your own cluster: no external database, coordinator or queue.
 
 It takes three positions.
 
@@ -59,15 +61,15 @@ It takes three positions.
 
 ### The store lives in the cluster
 
-First: the store lives in the cluster. State is held by grains, in the same cluster as the code that uses it.
+First: state lives in grains, in the same cluster as the code that uses it.
 
-So a read is a grain call, not a round trip to a separate database tier with its own scaling and its own failures.
+A read is a grain call, not a round trip to a separate database tier with its own scaling and failures.
 
 ### Conflict resolution is algebraic
 
 Second: conflict resolution is algebraic.
 
-Two clusters write at the same time. Cluster A adds three, and cluster B, concurrently, adds five, each to its own count. Neither state is above the other.
+Cluster A adds three, cluster B concurrently adds five, each to its own count. Neither state is above the other.
 
 Each merges the other's update by taking the larger value per replica, so both arrive at the same state: their join.
 
@@ -85,7 +87,7 @@ A host takes only what it registers, and a capability it leaves out costs nothin
 
 ### Local to Global
 
-So a deployment can grow without a rewrite. Start local: one machine, no cloud account.
+Start local: one machine, no cloud account.
 
 Add a team: identity, authorization, schemas and tenants.
 
@@ -97,9 +99,9 @@ At every stage, the programming model is the same. Your code resolves ILattice, 
 
 The documentation has three ways in.
 
-Build, if you are writing code against ILattice.
+Build, if you are writing code against ILattice: start with Hello, Lattice.
 
-Evaluate, if you are deciding whether it fits.
+Evaluate, if you are deciding whether it fits: start with When Lattice fits, and when it doesn't.
 
 Operate, if you are running an estate. You choose.
 
@@ -116,18 +118,18 @@ than its source, or says it in plainer words, the reason is given.
 | an application remembers things; that memory is its state | the plain-language framing of README, opening paragraph ("durable, distributed state systems") and "Why it exists" ("State is held by grains"); the examples are illustrative, and the third is the count the next scene uses. A count of page views has no limit to overshoot, which a count of tickets sold would (`docs/lattice.tenancy/README.md`, "bounded, quantified overshoot") |
 | many applications run in more than one place at once, so that they keep going if one place fails | README, "The deployment journey", Global ("Multiple regions, each serving reads and writes"); reference-architecture.md, "Disaster recovery" ("Live peers keep serving") |
 | two places can change the same thing at the same moment | README, "Why it exists" ("active-active writes across regions"); `docs-site/figures/join-figures.json`, `gcounter` ("cluster B, concurrently") |
-| the usual answer is to take turns, with a lock or a vote, and to keep the memory in a separate database beside the application | `docs/crdt/readme.md` ("never needs a lock, a coordinator, or a vote"); README, "What is it?" ("lock-based or consensus-based") and "Why it exists" ("usually assembled from a database, a cache, a queue ..."; "a network round trip to a separate tier") |
+| usually, changes take turns, with a lock or a vote, and memory lives in a separate database | `docs/crdt/readme.md` ("never needs a lock, a coordinator, or a vote"); README, "What is it?" ("lock-based or consensus-based") and "Why it exists" ("usually assembled from a database, a cache, a queue ..."; "a network round trip to a separate tier") |
 | Orleans.Lattice keeps the working memory inside the application | the site's thesis ("State that lives in your Orleans cluster"); README, "What is it?" ("embedded in your Orleans cluster", "No external database"). "Working" is deliberate: a durable deployment writes each change to a log on local disk or in an Azure storage account (`docs/lattice.storage.file/README.md`; reference-architecture.md, "Durable WAL"), and the working copy is held in memory and rebuilt from that log (`docs/lattice/architecture.md`, `docs/lattice/wal.md`) |
-| it records each change; every place reaches the same answer, in whatever order the changes arrive; neither waits its turn | `docs/lattice/wal.md` (an append-only log, which replication also consumes); reference-architecture.md, "Consistency scoping" ("Convergence is deterministic and independent of message arrival order", for plain values as well as CRDT values); README, "Why it exists" ("convergence needs no distributed lock manager and no consensus round trip"); `gcounter` ("Either order of delivery reaches the same join"). The picture's 28 is a counter's answer: with plain values both places settle on the later write, as the technical half says |
+| it records each change; every place reaches the same answer, in whatever order the changes arrive; neither waits its turn | `docs/lattice/wal.md` (an append-only log, which replication also consumes); reference-architecture.md, "Consistency scoping" ("Convergence is deterministic and independent of message arrival order", for plain values as well as CRDT values); README, "Why it exists" ("convergence needs no distributed lock manager and no consensus round trip"); `gcounter` ("Either order of delivery reaches the same join"). The opening picture's 28 includes its initial 20 page views; the technical figure's 8 starts at zero. Both are counter answers: with plain values both places settle on the later write, as the technical half says |
 | it runs on one machine with no cloud account, and grows to many regions without a rewrite | README, opening paragraphs ("A complete deployment runs on a single machine with no cloud dependency") and "The deployment journey" ("One machine, no cloud account"; "not a rewrite"; Global, "Multiple regions") |
 | a platform for building durable, distributed state systems on Microsoft Orleans | README, opening paragraph |
-| a sorted key-value store that runs inside your own cluster; no external database, coordinator or queue | README, "What is it?". "Durable" is kept for the platform and left off the store, because the default write-ahead log is in memory and not crash-safe (README, "The deployment journey"; `docs/lattice/wal.md`) |
+| a sorted key-value store inside your own cluster; no external database, coordinator or queue | README, "What is it?". "Durable" is kept for the platform and left off the store, because the default write-ahead log is in memory and not crash-safe (README, "The deployment journey"; `docs/lattice/wal.md`) |
 | three positions | README, "Why it exists" |
-| state is held by grains in the same cluster as the code that uses it; a read is a grain call, not a round trip to a separate database tier | README, "Why it exists", first position ("State is held by grains in the same cluster as the code using it"). Not "the same process": only the shard router and the leaf cache are stateless workers activated locally; shard roots, internal nodes and leaves may be placed on any silo, and a cached read first refreshes from its primary leaf (`docs/lattice/architecture.md`, `docs/lattice/caching.md`) |
+| state lives in grains in the same cluster as the code that uses it; a read is a grain call, not a round trip to a separate database tier with its own scaling and failures | README, "Why it exists", first position ("State is held by grains in the same cluster as the code using it"). Not "the same process": only the shard router and the leaf cache are stateless workers activated locally; shard roots, internal nodes and leaves may be placed on any silo, and a cached read first refreshes from its primary leaf (`docs/lattice/architecture.md`, `docs/lattice/caching.md`) |
 | conflict resolution is algebraic; commutative, associative and idempotent; no lock manager and no consensus round trip; any cluster can accept a write to any key | README, "What is it?" and "Why it exists" |
-| Cluster A adds three and cluster B five, each to its own count; neither state is above the other; the larger value per replica; the join; delivering that update twice changes nothing | `docs-site/figures/join-figures.json`, `gcounter`, mirroring `docs/crdt/gcounter.md` |
+| Cluster A adds three and cluster B concurrently adds five, each to its own count; neither state is above the other; the larger value per replica; the join; delivering that update twice changes nothing | `docs-site/figures/join-figures.json`, `gcounter`, mirroring `docs/crdt/gcounter.md` |
 | for plain values, the last writer wins | README, "What is it?" ("provided you use its CRDT Primitives"); `docs/crdt/readme.md`; `docs/lattice/state-primitives.md` |
 | storage, identity, governance, replication, administration and observability are companion packages behind documented seams; a host takes only what it registers; a capability it leaves out costs nothing | the site's "A core plus seams" lede, word for word but for its punctuation (no serial comma, and ", and" where the site has a semicolon); README, "Architecture: a core plus seams" |
-| Local: one machine, no cloud account; Team: identity, authorization, schemas, tenants; Global: active in every region at once, backup, an autoscaling signal | README, "The deployment journey". Its "Active-active replication" (the site's lede says "active-active across regions") is said in plain words: each region serves reads and writes ("Multiple regions, each serving reads and writes"), and the voice read the hyphenated compound as two words with a pause. Lattice publishes the scaling signal; an external autoscaler such as KEDA acts on it (`docs/lattice.scaling/README.md`) |
+| start local: one machine, no cloud account; Team: identity, authorization, schemas, tenants; Global: active in every region at once, backup, an autoscaling signal | README, "The deployment journey". Its "Active-active replication" (the site's lede says "active-active across regions") is said in plain words: each region serves reads and writes ("Multiple regions, each serving reads and writes"), and the voice read the hyphenated compound as two words with a pause. Lattice publishes the scaling signal; an external autoscaler such as KEDA acts on it (`docs/lattice.scaling/README.md`) |
 | the programming model is the same at every stage; your code resolves ILattice and calls it | the site's "One programming model, Local to Global" ("ILattice unchanged at every stage"); README, "The deployment journey" |
-| the documentation has three ways in: Build, Evaluate and Operate, and who each is for | the site's "Three ways in" |
+| the documentation has three ways in: Build, Evaluate and Operate, and who each is for; start with Hello, Lattice or When Lattice fits, and when it doesn't | the site's "Three ways in"; `videos/series.json`, F2 ending and B1/E1 titles; the published companion pages `docs/videos/hello-lattice.md` and `docs/videos/when-lattice-fits.md` |

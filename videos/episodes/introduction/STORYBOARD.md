@@ -38,6 +38,6 @@ here are the ones they meet again later.
 | | | 25 | Global arrives. |
 | | | 26 | The details give way and the invariant rises under the stage names: "Programming model ILattice unchanged at every stage"; the three lines of code that stay the same fade in beneath it, from the companion page. |
 | Three ways in | `ways` | 27 | "Three ways in": three nodes on a chain; beneath, the mark, the name and the site's address in link blue. |
-| | | 28 | Build, with the marker, and who it is for. |
-| | | 29 | Evaluate; Build fills as passed. |
+| | | 28 | Build, with the marker, and its first episode's title, "Hello, Lattice". The narration names who it is for. |
+| | | 29 | Evaluate and its first episode's title, "When Lattice fits, and when it doesn't"; Build fills as passed. The narration names who it is for. |
 | | | 30 | Operate; the frame holds through the closing pause, then fades. |
