@@ -83,6 +83,10 @@ public sealed class ManualTimeProvider : TimeProvider
     /// between iterations and rises to one again when it re-arms, so a test can
     /// wait for each successive wait rather than only for the first.
     /// </para>
+    /// <para>
+    /// Registration is visible only after the timer is initialized. Once this
+    /// count observes it, an advance cannot overtake its initial arming.
+    /// </para>
     /// </remarks>
     public int PendingTimerCount
     {
@@ -160,10 +164,12 @@ public sealed class ManualTimeProvider : TimeProvider
         var timer = new ManualTimer(this, callback, state);
         lock (_gate)
         {
+            // Only this unpublished timer's lock is taken under the provider gate;
+            // existing timers take their own lock before reading the clock.
+            timer.Change(dueTime, period);
             _timers.Add(timer);
         }
 
-        timer.Change(dueTime, period);
         return timer;
     }
 
