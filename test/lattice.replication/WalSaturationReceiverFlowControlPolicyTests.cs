@@ -68,6 +68,21 @@ public class WalSaturationReceiverFlowControlPolicyTests
     }
 
     [Test]
+    public async Task EvaluateAsync_uses_the_supplied_logical_name_not_an_observed_physical_copy()
+    {
+        var signal = Substitute.For<IWalSaturationSignal>();
+        signal.GetCurrentState(Tree).Returns(WalSaturationState.Healthy);
+        signal.GetCurrentState(Tree + "-physical").Returns(WalSaturationState.Saturated);
+        var policy = CreatePolicy(signal);
+
+        var hint = await policy.EvaluateAsync(Context(), CancellationToken.None);
+
+        Assert.That(hint, Is.EqualTo(ReceiverFlowControlHint.None));
+        signal.Received(1).GetCurrentState(Tree);
+        signal.DidNotReceive().GetCurrentState(Tree + "-physical");
+    }
+
+    [Test]
     public async Task EvaluateAsync_returns_none_for_empty_tree_name()
     {
         var policy = CreatePolicy(SignalReturning(WalSaturationState.Saturated));

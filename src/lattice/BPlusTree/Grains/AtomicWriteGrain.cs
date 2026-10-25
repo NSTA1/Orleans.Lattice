@@ -2097,24 +2097,7 @@ internal sealed partial class AtomicWriteGrain(
         // Read the per-tree options once per quiesce call so an
         // operator-side override takes effect immediately.
         var perTree = optionsMonitor.Get(treeId);
-        var dispatchBudget = perTree.WalAppendDispatchTimeout;
-        TimeSpan effectiveBudget;
-        if (MaxSagaQuiesceWait == Timeout.InfiniteTimeSpan && dispatchBudget == Timeout.InfiniteTimeSpan)
-        {
-            effectiveBudget = Timeout.InfiniteTimeSpan;
-        }
-        else if (MaxSagaQuiesceWait == Timeout.InfiniteTimeSpan)
-        {
-            effectiveBudget = dispatchBudget;
-        }
-        else if (dispatchBudget == Timeout.InfiniteTimeSpan)
-        {
-            effectiveBudget = MaxSagaQuiesceWait;
-        }
-        else
-        {
-            effectiveBudget = MaxSagaQuiesceWait < dispatchBudget ? MaxSagaQuiesceWait : dispatchBudget;
-        }
+        var effectiveBudget = EffectiveQuiesceBudget(MaxSagaQuiesceWait, perTree.WalAppendDispatchTimeout);
         // Link the quiesce budget to the application-stopping token
         // when available so a shutdown that fires mid-wait short-
         // circuits the wait immediately rather than running out the
@@ -2175,6 +2158,15 @@ internal sealed partial class AtomicWriteGrain(
             }
             return SagaQuiesceOutcome.StillSaturated;
         }
+    }
+
+    internal static TimeSpan EffectiveQuiesceBudget(TimeSpan quiesceBudget, TimeSpan dispatchBudget)
+    {
+        if (quiesceBudget == Timeout.InfiniteTimeSpan)
+            return dispatchBudget;
+        if (dispatchBudget == Timeout.InfiniteTimeSpan)
+            return quiesceBudget;
+        return quiesceBudget < dispatchBudget ? quiesceBudget : dispatchBudget;
     }
 
     /// <summary>

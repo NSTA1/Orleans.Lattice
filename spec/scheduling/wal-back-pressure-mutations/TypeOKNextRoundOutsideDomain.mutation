@@ -1,0 +1,12 @@
+MODULE: TypeOKNextRoundOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the environment schedules another callback after terminal shutdown
+PERTURBS: NextRound
+
+--- FIND
+    /\ phase = 14 /\ phase' = IF shuttingDown THEN 15 ELSE 0
+--- REPLACE
+\* MUTATION: corrupt terminal callback lifecycle.
+    /\ phase = 14 /\ phase' = IF shuttingDown THEN 16 ELSE 0
+--- END

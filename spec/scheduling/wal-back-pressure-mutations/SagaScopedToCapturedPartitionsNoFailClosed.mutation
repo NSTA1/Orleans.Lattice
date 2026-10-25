@@ -1,0 +1,12 @@
+MODULE: SagaScopedToCapturedPartitionsNoFailClosed
+TARGET: SagaScopedToCapturedPartitions
+CLASS: Action
+SUMMARY: missing captured partition scope skips the tree-wide fallback
+PERTURBS: SagaQuiesce
+
+--- FIND
+    /\ saga' = [saga EXCEPT !.status = IF SagaValue = 2 THEN "waiting" ELSE "ready",
+--- REPLACE
+\* MUTATION: treat an unavailable snapshot as permission to proceed.
+    /\ saga' = [saga EXCEPT !.status = IF snapshotUsable /\ SagaValue = 2 THEN "waiting" ELSE "ready",
+--- END

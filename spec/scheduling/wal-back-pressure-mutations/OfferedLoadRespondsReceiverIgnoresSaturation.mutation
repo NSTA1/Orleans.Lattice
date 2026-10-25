@@ -1,0 +1,12 @@
+MODULE: OfferedLoadRespondsReceiverIgnoresSaturation
+TARGET: OfferedLoadResponds
+CLASS: Temporal
+SUMMARY: the receiver never reduces offered load under persistent saturation
+PERTURBS: ReceiverShrinkBatch
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.receiver = ReceiverBatch(LogicalValue(1))]
+--- REPLACE
+\* MUTATION: leave receiver offered load unchanged.
+    /\ consumer' = [consumer EXCEPT !.receiver = FullBatch]
+--- END

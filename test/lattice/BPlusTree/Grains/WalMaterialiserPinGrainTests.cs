@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -16,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <see cref="FakePersistentState{T}"/> with no storage provider.
 /// </summary>
 [TestFixture]
-public sealed class WalMaterialiserPinGrainTests
+public sealed partial class WalMaterialiserPinGrainTests
 {
     private const string Consumer = "_lattice_materialiser_tree-1_leaf-7";
 
@@ -25,9 +26,13 @@ public sealed class WalMaterialiserPinGrainTests
 
     private static (WalMaterialiserPinGrain grain, FakePersistentState<WalMaterialiserPinState> state) CreateGrain(
         FakePersistentState<WalMaterialiserPinState>? existing = null,
-        int flushIntervalMs = 0)
+        int flushIntervalMs = 0,
+        IWalSaturationSignal? saturationSignal = null)
     {
         var context = Substitute.For<IGrainContext>();
+        if (saturationSignal is not null)
+            context.ActivationServices.Returns(new ServiceCollection()
+                .AddSingleton(saturationSignal).BuildServiceProvider());
         context.GrainId.Returns(GrainId.Create("wal-materialiser-pin", "tree-1"));
         var state = existing ?? new FakePersistentState<WalMaterialiserPinState>();
         var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();

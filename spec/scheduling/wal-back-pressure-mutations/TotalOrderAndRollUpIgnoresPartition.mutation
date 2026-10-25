@@ -1,0 +1,12 @@
+MODULE: TotalOrderAndRollUpIgnoresPartition
+TARGET: TotalOrderAndRollUp
+CLASS: Action
+SUMMARY: tree rollup reads only the first partition
+PERTURBS: Sample
+
+--- FIND
+    /\ treeVerdict' = [t \in Trees |-> TreeValue(t)]
+--- REPLACE
+\* MUTATION: ignore a busy sibling.
+    /\ treeVerdict' = [t \in Trees |-> PartitionVerdict(t, 1)]
+--- END

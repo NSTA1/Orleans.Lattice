@@ -1,0 +1,12 @@
+MODULE: ConsumerBatchesRespondViewIgnoresSaturation
+TARGET: ConsumerBatchesRespond
+CLASS: Action
+SUMMARY: the view ignores the saturated batch response
+PERTURBS: ViewShrinkBatch
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.view = ViewBatch(treeVerdict[1])]
+--- REPLACE
+\* MUTATION: leave the view at full batch size.
+    /\ consumer' = [consumer EXCEPT !.view = FullBatch]
+--- END

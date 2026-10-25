@@ -1,0 +1,13 @@
+MODULE: PartitionScopedRefusalTreeWideVerdict
+TARGET: PartitionScopedRefusal
+CLASS: Action
+SUMMARY: a plain writer wrongly gates on a busy sibling
+PERTURBS: GateCheck
+BOUNDS: AcuteOnly = FALSE
+
+--- FIND
+    /\ consumer' = [consumer EXCEPT !.writer = Response(GateValue), !.source = "None"]
+--- REPLACE
+\* MUTATION: restore tree-wide coupling from issue 3348.
+    /\ consumer' = [consumer EXCEPT !.writer = Response(treeVerdict[1]), !.source = "None"]
+--- END

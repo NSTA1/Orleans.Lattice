@@ -316,7 +316,8 @@ public sealed partial class CiMemberPullRequestTieringTests
         string Label,
         string? Filter,
         string? Skip,
-        IReadOnlyList<string> ExcludedTiers);
+        IReadOnlyList<string> ExcludedTiers,
+        double EstimateMinutes);
 
     private static IReadOnlyList<PlannedItem> Plan(
         string[] packages,
@@ -346,7 +347,8 @@ public sealed partial class CiMemberPullRequestTieringTests
                     item.TryGetProperty("skip", out var skip) ? skip.GetString() : null,
                     item.TryGetProperty("excluded_tiers", out var excluded)
                         ? excluded.EnumerateArray().Select(entry => entry.GetString()!).ToArray()
-                        : []));
+                        : [],
+                    item.GetProperty("estimate").GetDouble()));
             }
         }
 

@@ -1,0 +1,12 @@
+MODULE: NoSpuriousRefusalNoReReadAfterExpiry
+TARGET: NoSpuriousRefusal
+CLASS: Action
+SUMMARY: expiry refuses on the cached pre-wait verdict
+PERTURBS: ReReadAfterExpiry
+
+--- FIND
+        !.writer = IF consumer.expiry = 2 /\ GateValue = 2 THEN "refused" ELSE Response(GateValue),
+--- REPLACE
+\* MUTATION: omit the current-verdict re-read.
+        !.writer = IF consumer.expiry = 2 THEN "refused" ELSE Response(GateValue),
+--- END
