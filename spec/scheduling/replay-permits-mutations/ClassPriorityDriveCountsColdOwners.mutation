@@ -1,0 +1,11 @@
+MODULE: ClassPriorityDriveCountsColdOwners
+TARGET: ClassPriority
+CLASS: Action
+SUMMARY: cold owners wrongly consume independent GC drive reservations
+PERTURBS: DriveAdmission
+
+--- FIND
+    /\ LET accepted == free > 0 /\ Cardinality(DriveHolders) < Max(1, Circulating \div 2)
+--- REPLACE
+    /\ LET accepted == free > 0 /\ Cardinality(holders) < Max(1, Circulating \div 2)
+--- END

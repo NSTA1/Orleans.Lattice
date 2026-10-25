@@ -221,7 +221,11 @@ internal sealed class ReplaySliceReader
     /// already been counted when this runs; a site that wants no log passes
     /// <see langword="null"/>.
     /// </param>
-    /// <param name="cancellationToken">Cancels the read and the retry loop.</param>
+    /// <param name="cancellationToken">
+    /// Cancels the owning read await and the retry loop even if the provider
+    /// ignores cancellation. A late result is never consumed; a late provider
+    /// fault is observed. This does not introduce a deadline on background replay.
+    /// </param>
     /// <returns>At most <see cref="Budget"/> entries, ascending by offset.</returns>
     internal async Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
         long fromExclusive,
@@ -239,18 +243,19 @@ internal sealed class ReplaySliceReader
                 // A bounded filter takes the filtered overload (issue #3565); an
                 // unbounded one keeps the unfiltered read, which is the same
                 // result without the push-down.
-                slice = !_filter.IsUnbounded
-                    ? await _coordinator.ReadSliceAsync(
+                var read = !_filter.IsUnbounded
+                    ? _coordinator.ReadSliceAsync(
                         fromExclusive,
                         toInclusive,
                         _budget,
                         _filter,
                         cancellationToken)
-                    : await _coordinator.ReadSliceAsync(
+                    : _coordinator.ReadSliceAsync(
                         fromExclusive,
                         toInclusive,
                         _budget,
                         cancellationToken);
+                slice = await AwaitProviderReadAsync(read, cancellationToken);
             }
             catch (Exception ex) when (_budget > 1 && BPlusLeafGrain.IsReadMemoryPressure(ex))
             {
@@ -288,6 +293,29 @@ internal sealed class ReplaySliceReader
             }
 
             return slice;
+        }
+    }
+
+    /// <summary>
+    /// Cancels an owning await of read-only provider work even when that provider
+    /// ignores cancellation. Never use this to detach apply or durability writes.
+    /// </summary>
+    internal static async Task<T> AwaitProviderReadAsync<T>(Task<T> read, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await read.WaitAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _ = read.ContinueWith(
+                static task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+            throw;
         }
     }
 }

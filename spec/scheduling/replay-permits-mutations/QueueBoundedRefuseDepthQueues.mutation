@@ -1,0 +1,15 @@
+MODULE: QueueBoundedRefuseDepthQueues
+TARGET: QueueBounded
+CLASS: Action
+SUMMARY: stalled over-depth work reports queued instead of refused
+PERTURBS: RefuseDepth
+
+--- FIND
+RefuseDepth(r) ==
+    /\ status[r] = "pending" /\ ~RefuseForWait(r) /\ RefuseForDepth(r)
+    /\ status' = [status EXCEPT ![r] = "refused"]
+--- REPLACE
+RefuseDepth(r) ==
+    /\ status[r] = "pending" /\ ~RefuseForWait(r) /\ RefuseForDepth(r)
+    /\ status' = [status EXCEPT ![r] = "queued"]
+--- END

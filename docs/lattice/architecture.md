@@ -185,21 +185,6 @@ The [scheduling boundary](verified-scheduling.md#wal-back-pressure-progress)
 states the finite-work and stable-input progress premises separately from
 durability and from measured latency.
 
-### Saga and reader completion boundaries
-
-Multi-key readers validate one decision cut and use a bounded optimistic-to-gated
-fallback under sustained writer deliveries. The gate is finite and unrenewed:
-lost lease or coverage must produce an explicit outcome, not a mixed batch.
-Available collaborators and stable routing remain progress premises.
-
-Saga decision durability, arbitrary-order terminal delivery, completion
-checkpoint durability and original caller acknowledgement are distinct
-boundaries. Terminal relief is pressure-independent; completing a decision
-alone cannot settle the caller. The
-[scheduling assurance](verified-scheduling.md#saga-and-reader-progress) and
-[refinement](../../spec/scheduling/SagaReadProgressRefinement.md) distinguish
-these obligations from latency and arbitrary competing-reader fairness.
-
 ### Replication shipping and receiver retention
 
 Physical-source shipping windows fold acknowledgements in launch order.
@@ -214,6 +199,34 @@ requires elapsed-time opportunities, retention capacity and a sufficiently
 stable receiver lifetime, not jitter or a bounded scheduling delay. The
 [scheduling boundary](verified-scheduling.md#replication-shipping-and-receiver-progress)
 states the source-lineage, restart and retirement-history limits.
+
+### Replay permit ownership
+
+Replay admission distinguishes free, held and memory-withheld physical capacity.
+Returning a client wait is not releasing a shared cold owner's permit; that
+owner retains capacity until its replay frame unwinds. Genuine owner-lifetime
+cancellation can end read-only provider awaits without detaching prefix
+banking or durability writes. A warm-drive budget does not impose a deadline
+on the intentionally shared cold owner.
+
+The [scheduling boundary](verified-scheduling.md#replay-permit-ownership-and-progress)
+separates capacity conservation, class-sensitive queue observations and earned
+prefix banking from conditional progress and wall-clock performance.
+
+### Saga and reader completion boundaries
+
+Multi-key readers validate one decision cut and use a bounded optimistic-to-gated
+fallback under sustained writer deliveries. The gate is finite and unrenewed:
+lost lease or coverage must produce an explicit outcome, not a mixed batch.
+Available collaborators and stable routing remain progress premises.
+
+Saga decision durability, arbitrary-order terminal delivery, completion
+checkpoint durability and original caller acknowledgement are distinct
+boundaries. Terminal relief is pressure-independent; completing a decision
+alone cannot settle the caller. The
+[scheduling assurance](verified-scheduling.md#saga-and-reader-progress) and
+[refinement](../../spec/scheduling/SagaReadProgressRefinement.md) distinguish
+these obligations from latency and arbitrary competing-reader fairness.
 
 ### Materialiser progress boundaries
 

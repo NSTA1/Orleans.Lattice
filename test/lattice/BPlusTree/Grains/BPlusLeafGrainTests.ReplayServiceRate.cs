@@ -252,7 +252,7 @@ public partial class BPlusLeafGrainTests
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         try
         {
-            var gate = await QuiescentReplayGateAsync();
+            var gate = await QuiescentReplayGateAsync(permitCeiling: 3);
             var ceiling = BPlusLeafGrain.ReplayConcurrencyCeilingForTest;
             Assert.That(ceiling, Is.GreaterThan(2));
             var held = gate.CurrentCount;

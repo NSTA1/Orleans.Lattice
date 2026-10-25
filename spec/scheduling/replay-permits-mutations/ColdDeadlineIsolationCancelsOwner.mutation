@@ -1,0 +1,19 @@
+MODULE: ColdDeadlineIsolationCancelsOwner
+TARGET: ColdDeadlineIsolation
+CLASS: Action
+SUMMARY: the client deadline cancels the independent cold owner
+PERTURBS: ClientDeadline
+
+--- FIND
+    /\ clientActive' = [clientActive EXCEPT ![r] = deadline'[r] > 0]
+    /\ UNCHANGED <<holders, free, withheld, queue, status, role, observed,
+        pressure, pressurePhase, drain, hung, holdLeft, frontier, banked,
+        checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch, cancelled>>
+--- REPLACE
+    /\ clientActive' = [clientActive EXCEPT ![r] = deadline'[r] > 0]
+    /\ cancelled' = IF deadline'[r] = 0 /\ status[r] \in Live /\ role[r] # "Drive"
+        THEN cancelled \cup {r} ELSE cancelled
+    /\ UNCHANGED <<holders, free, withheld, queue, status, role, observed,
+        pressure, pressurePhase, drain, hung, holdLeft, frontier, banked,
+        checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch>>
+--- END

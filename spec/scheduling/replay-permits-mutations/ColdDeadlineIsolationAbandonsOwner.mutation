@@ -1,0 +1,26 @@
+MODULE: ColdDeadlineIsolationAbandonsOwner
+TARGET: ColdDeadlineIsolation
+CLASS: Action
+SUMMARY: a client deadline directly retires the shared owner without cancelling its lifetime
+PERTURBS: ClientDeadline
+--- FIND
+ClientDeadline(r) ==
+    /\ clientActive[r] /\ deadline[r] > 0
+    /\ deadline' = [deadline EXCEPT ![r] = @ - 1]
+    /\ clientActive' = [clientActive EXCEPT ![r] = deadline'[r] > 0]
+    /\ UNCHANGED <<holders, free, withheld, queue, status, role, observed,
+        pressure, pressurePhase, drain, hung, holdLeft, frontier, banked,
+        checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch, cancelled>>
+--- REPLACE
+ClientDeadline(r) ==
+    /\ clientActive[r] /\ deadline[r] > 0
+    /\ deadline' = [deadline EXCEPT ![r] = @ - 1]
+    /\ clientActive' = [clientActive EXCEPT ![r] = deadline'[r] > 0]
+    /\ holders' = IF role[r] # "Drive" THEN holders \ {r} ELSE holders
+    /\ free' = free + (IF role[r] # "Drive" /\ r \in holders THEN 1 ELSE 0)
+    /\ queue' = IF role[r] # "Drive" THEN Remove(queue, r) ELSE queue
+    /\ status' = IF role[r] # "Drive" THEN [status EXCEPT ![r] = "idle"] ELSE status
+    /\ UNCHANGED <<withheld, role, observed, pressure, pressurePhase, drain,
+        hung, holdLeft, frontier, banked, checkpoint, holes, ledger, opportunity,
+        arrivalsClosed, dispatchEpoch, cancelled>>
+--- END

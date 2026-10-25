@@ -1,0 +1,12 @@
+MODULE: RestoreOwnershipStealsServiceCapacity
+TARGET: RestoreOwnership
+CLASS: Action
+SUMMARY: memory restoration releases capacity owned by the service controller
+PERTURBS: Restore
+BOUNDS: ServiceWithheld = 1
+
+--- FIND
+    /\ ~pressure /\ withheld > ServiceWithheld
+--- REPLACE
+    /\ ~pressure /\ withheld > 0
+--- END

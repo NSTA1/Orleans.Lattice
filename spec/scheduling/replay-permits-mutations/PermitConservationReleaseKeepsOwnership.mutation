@@ -1,0 +1,11 @@
+MODULE: PermitConservationReleaseKeepsOwnership
+TARGET: PermitConservation
+CLASS: Invariant
+SUMMARY: completed work returns capacity but still claims to hold it
+PERTURBS: Release
+
+--- FIND
+Release(r) == OwnerComplete(r) /\ r \notin hung /\ Return(r, "done") /\ UNCHANGED opportunity
+--- REPLACE
+Release(r) == OwnerComplete(r) /\ r \notin hung /\ Return(r, "holding") /\ UNCHANGED opportunity
+--- END

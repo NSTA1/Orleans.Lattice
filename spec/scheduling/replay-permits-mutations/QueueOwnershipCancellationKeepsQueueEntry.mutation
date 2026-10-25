@@ -1,0 +1,14 @@
+MODULE: QueueOwnershipCancellationKeepsQueueEntry
+TARGET: QueueOwnership
+CLASS: Invariant
+SUMMARY: actual cold lifetime cancellation leaves its old semaphore waiter registered
+
+--- FIND
+CancelQueued(r) ==
+    /\ status[r] = "queued" /\ r \in cancelled
+    /\ queue' = Remove(queue, r) /\ status' = [status EXCEPT ![r] = "idle"]
+--- REPLACE
+CancelQueued(r) ==
+    /\ status[r] = "queued" /\ r \in cancelled
+    /\ queue' = queue /\ status' = [status EXCEPT ![r] = "idle"]
+--- END

@@ -1,0 +1,11 @@
+MODULE: PermitConservationDriveDuplicatesCapacity
+TARGET: PermitConservation
+CLASS: Invariant
+SUMMARY: nonqueueing admission takes ownership without consuming physical capacity
+PERTURBS: DriveAdmission
+
+--- FIND
+          /\ free' = IF accepted THEN free - 1 ELSE free
+--- REPLACE
+          /\ free' = free
+--- END

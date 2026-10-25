@@ -4320,7 +4320,8 @@ internal sealed partial class BPlusLeafGrain
             {
                 var trimCoordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                     $"{treeId}/{partition}");
-                var tail = await trimCoordinator.GetTailOffsetAsync(cancellationToken);
+                var tail = await ReplaySliceReader.AwaitProviderReadAsync(
+                    trimCoordinator.GetTailOffsetAsync(cancellationToken), cancellationToken);
                 if (WalFallOffCore.IsPrefixLost(persistedCheckpoint, tail))
                 {
                     _lastStaleReplayPartition = partition;
@@ -4454,9 +4455,9 @@ internal sealed partial class BPlusLeafGrain
             // uses for the same question.
             if (warmReplayProven && !_warmCacheReplayFailed && !replayOwnership.Filter.IsUnbounded)
             {
-                var floor = await grainFactory
-                    .GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
-                    .GetTailOffsetAsync(cancellationToken);
+                var floor = await ReplaySliceReader.AwaitProviderReadAsync(
+                    grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
+                        .GetTailOffsetAsync(cancellationToken), cancellationToken);
                 if (floor > checkpoint + 1)
                     _warmCacheReplayFailed = true;
             }
@@ -6612,9 +6613,9 @@ internal sealed partial class BPlusLeafGrain
         {
             try
             {
-                var head = await grainFactory
-                    .GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{p}")
-                    .GetHeadOffsetAsync(cancellationToken);
+                var head = await ReplaySliceReader.AwaitProviderReadAsync(
+                    grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{p}")
+                        .GetHeadOffsetAsync(cancellationToken), cancellationToken);
 
                 var checkpoint = checkpointOverride ?? GetPersistedCheckpointForPartition(p);
                 heads[p] = head;
@@ -6808,7 +6809,8 @@ internal sealed partial class BPlusLeafGrain
         // one, so ordering the sweep costs no extra grain call. A head probed
         // moments ago can only be behind the true head, which simply leaves
         // the newest entries for the materialiser or the next replay.
-        var head = probedHead ?? await coordinator.GetHeadOffsetAsync(cancellationToken);
+        var head = probedHead ?? await ReplaySliceReader.AwaitProviderReadAsync(
+            coordinator.GetHeadOffsetAsync(cancellationToken), cancellationToken);
 
         // The offset of the NEWEST entry that actually exists on this partition
         // (issue #2668). These two quantities are measured from different

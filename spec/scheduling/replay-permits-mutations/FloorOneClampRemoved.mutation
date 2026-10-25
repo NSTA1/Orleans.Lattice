@@ -1,0 +1,10 @@
+MODULE: FloorOneClampRemoved
+TARGET: FloorOne
+CLASS: Invariant
+SUMMARY: pressure may withhold the final circulating permit
+
+--- FIND
+    /\ LET reduce == pressure /\ withheld < Ceiling - 1
+--- REPLACE
+    /\ LET reduce == pressure /\ withheld < Ceiling
+--- END

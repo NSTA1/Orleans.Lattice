@@ -137,14 +137,21 @@ lattice	formal-tlc-anti-entropy-2	deterministic	10.0
 lattice	formal-tlc-anti-entropy-3	deterministic	9.2
 lattice	formal-tlc-aliasing	deterministic	1.8
 lattice	formal-tlc-split-gate	deterministic	8.6
-# Scheduling: seven modules, 18 configurations and 130 paired mutants (148 TLC cases),
-# partitioned 120 general / 27 Shipping base+mutations / 1 Shipping variant.
+# Scheduling: eight modules, 21 configurations and 159 paired mutants (180 TLC cases),
+# partitioned 152 general / 27 Shipping base+mutations / 1 Shipping variant.
 # ALLOCATION ESTIMATES, not separately measured group or whole-shard clocks.
-# General composes six independent certificates: foundation 144.684s for BOTH modules,
+# General composes the prior six-module sources plus Replay; foundation 144.684s for BOTH modules,
 # Tag 177s (includes structural overhead), WalBackPressure 729.46094s.
 # Saga 62.892553s sums all 14 successful TLC case durations in saga-final.trx;
 # its two historical shared-index/Counts failures are not TLC cases or green evidence.
 # Drain 54.083547s is its complete 23-case TLC interval, including case-to-case gaps.
+# Replay full configurations add 6562.8434051 monotonic process seconds.
+# Original 29-pair/23-control run adds a 1413.7458152s UTC TRX interval: 50/2,
+# with all 29 model pairs green and only the two folding probes red.
+# Separately repaired 23 controls add 125.8571349s including build overhead.
+# These mixed-scope conservative sources sum to 8102.4463552s, NOT a new
+# monotonic cohort, all-green 52 claim or sum of overlapping case durations.
+# General total: 1168.1210399 + 8102.4463552 = 9270.5673951s, rounded to 154.51min.
 # Each certificate used Java17, 1 TLC slot, 2 visible CPUs and Xmx1800MB.
 # Shipping source: 4dacaaec4244ebe5890c7c529be68432482de2b9 (#5010).
 # Shipping complete28 harness: 2745.4195361s monotonic, 2 full + 26 paired mutations.
@@ -153,13 +160,13 @@ lattice	formal-tlc-split-gate	deterministic	8.6
 # assign ALL original wrapper/gap overhead to the base/mutation group.
 # TRX SHA256: B82A67B1267A2916601301F3597554B57FADD9CB7798068A44CBF152482D7556.
 # Monotonic receipt SHA256: 2E19CBB0F464098D4FF2913B69F3C6E34CFBC01781FD7B6C09E9386D95E62CA8.
-# The 19.47 + 14.07 + 31.69 = 65.23 rounded allocation excludes earlier standalone
-# Shipping diagnostics (1980.2939638s). No Replay/GC or nine-module measurement.
+# The 154.51 + 14.07 + 31.69 = 200.27 rounded allocation excludes earlier standalone
+# Shipping diagnostics (1980.2939638s). No GC or nine-module measurement.
 # New process overhead / CI wall clock still need observation; the planner retains
 # its existing per-invocation overhead. Partitioning does not shorten FourRecords.
 # Launcher-artifact completion is not a recovered CLI terminal event,
 # loaded-binary attestation or peak-RSS measurement.
-lattice	formal-tlc-scheduling	deterministic	19.47
+lattice	formal-tlc-scheduling	deterministic	154.51
 lattice	formal-tlc-scheduling-shipping	deterministic	14.07
 lattice	formal-tlc-scheduling-shipping-variants	deterministic	31.69
 lattice	formal-tlc-shard-ownership	deterministic	15.3
