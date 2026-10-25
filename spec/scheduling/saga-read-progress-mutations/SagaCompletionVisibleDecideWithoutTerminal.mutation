@@ -1,0 +1,13 @@
+MODULE: SagaCompletionVisibleDecideWithoutTerminal
+TARGET: SagaCompletionVisible
+CLASS: Temporal
+SUMMARY: Decisions continue to exist but terminal delivery never progresses.
+PERTURBS: TerminalOpportunity
+--- FIND
+    /\ (Terminal \/ Checkpoint \/ Complete \/ TerminalIdle)
+--- REPLACE
+    \* MUTATION: leave the decided saga stranded at every delivery.
+    /\ ((saga = "decided"
+            /\ UNCHANGED <<saga, drained, materialised, checkpointed, completed, terminalWitness>>)
+        \/ Checkpoint \/ Complete \/ TerminalIdle)
+--- END

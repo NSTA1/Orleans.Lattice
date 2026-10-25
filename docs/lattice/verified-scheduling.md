@@ -31,6 +31,7 @@ The checked scheduling seams are:
 | `TurnOccupancy` | A non-reentrant turn, queued calls, and the difference between awaiting an operation inside the turn and dispatching it outside the turn. |
 | `WalAdmission` | Partition-scoped admission capacity, parked saturation waiters, paced recovery release, sampling and wait-budget outcomes. |
 | `WalBackPressure` | Cached tree/partition classification, writer/saga/snapshot/receiver/view responses and signal-independent relief. |
+| `SagaReadProgress` | Consistent multi-key decision cuts, bounded gated fallback, pressure-independent terminals and original caller acknowledgement after completion durability. |
 | `TagIndexReconcile` | A single durable probe/repair sweep, successful baseline publication, per-phase tree work and timer/reminder recovery. |
 
 `TurnOccupancy` uses the turn-holder, queued-call and awaited-completion
@@ -160,6 +161,24 @@ These are explicit conditional progress claims, not bounded latency or
 deterministic fairness from jitter. See the
 [refinement mapping](../../spec/scheduling/WalBackPressureRefinement.md)
 for the shared-window episode abstraction and the real Coyote/detector boundary.
+
+## Saga and reader progress
+
+Bounded optimistic retries fall back to an unrenewed decision gate rather than
+requiring an empty interval in a continuously offered writer stream. A valid
+gate and available stable routing permit a consistent batch; expired lease
+or lost coverage must fail explicitly. The model separates successful answers
+under those premises from eventual resolution when the environment invalidates
+the hold. It does not assert starvation-free admission among unbounded readers.
+
+A durable decision is not caller success. Terminals can arrive in arbitrary
+leaf order and do not depend on saturation. The completion checkpoint must then
+be durable before the original caller is acknowledged. Real storage success
+and failure controls reject dropping that await, not merely an incorrect
+in-memory phase. See the
+[refinement](../../spec/scheduling/SagaReadProgressRefinement.md) for the finite
+instances, all retained temporal checks, source-negative certificates and
+cooperative production Coyote boundary.
 
 ## Defects found during the bucket
 

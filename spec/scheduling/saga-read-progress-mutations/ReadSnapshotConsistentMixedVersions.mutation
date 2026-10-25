@@ -1,0 +1,14 @@
+MODULE: ReadSnapshotConsistentMixedVersions
+TARGET: ReadSnapshotConsistent
+CLASS: Invariant
+SUMMARY: A reader certifies a fan-out even when a decision crossed it.
+PERTURBS: ReaderOpportunity
+--- FIND
+    /\ (Capture \/ Acquire \/ ReadLeaf \/ Validate \/ ReaderIdle)
+--- REPLACE
+    \* MUTATION: skip the crossing-decision validation after fan-out.
+    /\ (Capture \/ Acquire \/ ReadLeaf
+        \/ (reader = "validate" /\ reader' = "done" /\ held' = FALSE /\ leaseLeft' = 0
+            /\ UNCHANGED <<snapshot, observed, attempts, crossed>>)
+        \/ ReaderIdle)
+--- END
