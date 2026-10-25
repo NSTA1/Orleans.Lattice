@@ -200,6 +200,19 @@ alone cannot settle the caller. The
 [refinement](../../spec/scheduling/SagaReadProgressRefinement.md) distinguish
 these obligations from latency and arbitrary competing-reader fairness.
 
+### Materialiser progress boundaries
+
+Online snapshot copying limits simultaneous shard-copy calls and source leaves
+per pass. Leaf materialisation separately advances replay, persisted checkpoint,
+durable snapshot coverage and trim-entitling pins. WAL shutdown drains have
+per-stage budgets; they do not bound all leaf teardown awaits.
+
+Positive pressure-responsive view service only implies bounded backlog under
+the stated offered-work-per-service-opportunity premise. Split repair keeps
+its physical source identity but refreshes the owning logical row's live map.
+The [scheduling assurance](verified-scheduling.md#materialiser-drain-progress)
+keeps these different drain units and their environment assumptions explicit.
+
 ### Tag-index reconciliation
 
 The tag-index coordinator persists its active sweep, probe/repair phase and

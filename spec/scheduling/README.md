@@ -12,6 +12,7 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | TurnOccupancy | 4 | 1 | 8 | 7 | 11 | 961 |
 | WalAdmission | 4 | 8 | 11 | 16 | 21 | 86496 |
 | WalBackPressure | 6 | 16 | 18 | 34 | 38 | 135464 |
+| MaterialiserDrain | 6 | 8 | 21 | 21 | 33 | 1076 |
 | SagaReadProgress | 3 | 5 | 6 | 11 | 12 | 2451 |
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
 
@@ -176,6 +177,60 @@ No new production defect is claimed: these controls exercise already-correct
 production seams. The refinement retains the original mixed-snapshot
 mutant-green and its correction, arbitrary terminal order, and distinct
 checkpoint/acknowledgement steps instead of certifying the earlier model.
+
+## Materialiser drain
+
+[`MaterialiserDrain`](MaterialiserDrain.tla), its
+[manifest](MaterialiserDrain.manifest.json) and
+[refinement](MaterialiserDrainRefinement.md) distinguish five scenarios in one
+discovered module: online snapshot shard-copy slots, admitted leaf replay and
+durable checkpoint/snapshot/pin progress, view service, WAL-shard shutdown and
+source repair after a split. This is a sum of scenarios, not a concurrent
+cross-product or a second replay-permit pool.
+
+MaxConcurrentDrains limits online shard-copy calls; BackgroundDrainLeavesPerPass
+limits source leaves in one pass. Neither caps every leaf materialiser.
+WalDrainBudget bounds each WAL-shard in-flight drain, with a possible fresh
+budget for a pending follow-on batch, not every leaf teardown barrier.
+InfiniteTimeSpan intentionally opts out of the finite-budget claim. A provider
+may ignore cancellation; delivered deadline processing must still settle or
+fault its affected callers with the correct shard identity.
+
+The pure WalBackPressure ViewBatch operator supplies positive Healthy,
+Throttled and Saturated service. Unread-row count measures this model's
+backlog; the production drain-lag classifier instead observes oldest-unread
+age and consecutive windows. Supplied pressure regimes cover all consumer
+arms, including retained recovery pressure; the model does not infer a
+classifier verdict from its row count.
+Stable offered load counts writes between successful service opportunities,
+including pauses and storage completion, not between sampler ticks. Minimum
+service must cover that offered load. Replay admission must have settled;
+successful replay and durability completions are separate progress premises,
+not a new deadline imposed on a cold activation owner.
+
+Rebuild and reconcile retain the physical source identity while refreshing
+the owning logical row's live routing after a split/stale-root response.
+This is not an alias-epoch cursor reset. The module does not establish a
+root cause or resolution of the historical deployment investigation #3481.
+
+The Counts table records six invariants, eight properties, twenty-one Next
+actions and twenty-one anchored mutations. Stutter is the sole non-behavioural
+action; TypeOK remains a model-domain check rather than a production row.
+The thirty-three behaviour rows resolve to sixteen distinct detector methods;
+one is shared with WalBackPressure. Base and Larger have 1,076 and 3,780
+distinct states, with 3,126 and 11,866 generated states respectively. Both
+retain all six invariants and eight properties, including all five temporal
+branches. Direct base/Larger wall times were 1.7064307s and 2.7617059s.
+
+The complete twenty-three-case TLC interval was 54.083547 seconds, including
+case-to-case gaps, at configured Xmx1800m, two workers and two visible CPUs.
+That measured contribution is not a measurement of the combined scheduling
+shard. All twenty-three TLC and fifty-three structural/refinement cases passed.
+The sixty-two focused production/hygiene/routing instances also passed;
+eighteen actual production-source perturbation/restoration pairs supply
+assertion-red evidence for all sixteen mapped methods. The refinement retains
+the original evaluator-error TypeOK run, ambiguous mutation anchor and
+false-green slot/pass detectors, not as clean certification.
 
 ## Routing and evidence
 
