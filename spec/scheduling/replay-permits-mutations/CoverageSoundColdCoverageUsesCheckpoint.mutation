@@ -1,0 +1,12 @@
+MODULE: CoverageSoundColdCoverageUsesCheckpoint
+TARGET: CoverageSound
+CLASS: Invariant
+SUMMARY: cold banking stamps the applied checkpoint rather than the reread frontier
+PERTURBS: ReplaySlice
+BOUNDS: GapLen = 2
+
+--- FIND
+    /\ banked' = [banked EXCEPT ![p] = frontier'[p]]
+--- REPLACE
+    /\ banked' = [banked EXCEPT ![p] = checkpoint[p]]
+--- END

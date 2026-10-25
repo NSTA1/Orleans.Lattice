@@ -1,0 +1,18 @@
+MODULE: NoSelfSustainingBacklogReplacementQueuesAgain
+TARGET: NoSelfSustainingBacklog
+CLASS: Action
+SUMMARY: a replacement client queues another owner beside its live shared barrier
+PERTURBS: ClientReplacement
+
+--- FIND
+    /\ deadline' = [deadline EXCEPT ![r] = RequestBudget]
+    /\ UNCHANGED <<holders, free, withheld, queue, status, role, observed,
+        pressure, pressurePhase, drain, hung, holdLeft, frontier, banked,
+        checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch, cancelled>>
+--- REPLACE
+    /\ deadline' = [deadline EXCEPT ![r] = RequestBudget]
+    /\ queue' = IF status[r] = "queued" THEN Append(queue, r) ELSE queue
+    /\ UNCHANGED <<holders, free, withheld, status, role, observed,
+        pressure, pressurePhase, drain, hung, holdLeft, frontier, banked,
+        checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch, cancelled>>
+--- END

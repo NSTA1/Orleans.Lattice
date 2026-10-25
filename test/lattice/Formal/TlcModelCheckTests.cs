@@ -77,7 +77,7 @@ namespace Orleans.Lattice.Tests.Formal;
 [TestFixture]
 [Category("Tlc")]
 [Parallelizable(ParallelScope.Children)]
-public sealed class TlcModelCheckTests
+public sealed partial class TlcModelCheckTests
 {
     private const string CleanBanner = "Model checking completed. No error has been found.";
 
@@ -341,8 +341,8 @@ public sealed class TlcModelCheckTests
             + Environment.NewLine + mutant.Output);
 
         Assert.That(
-            mutant.Output,
-            Does.Contain(mutation.ExpectedBanner),
+            HasExpectedViolation(mutant.Output, mutation),
+            Is.True,
             $"'{mutation.Name}' went red, but not in the expected way. Expected TLC to report "
             + $"'{mutation.ExpectedBanner}'. A red run whose cause is not the named property is not "
             + "evidence for that property."
@@ -510,14 +510,22 @@ public sealed class TlcModelCheckTests
             StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Counts TLC's violation banners. Both wordings are matched because TLC
-    /// names the property for invariants and action properties but not for
-    /// temporal properties.
+    /// Matches the exact target and complete TLC banner, including the distinct
+    /// invariant wording used when the initial state violates it.
     /// </summary>
+    private static bool HasExpectedViolation(string output, SpecMutation mutation)
+    {
+        var pattern = $@"^Error: {Regex.Escape(mutation.ExpectedBanner)}\r?$";
+        if (mutation.PropertyClass == SpecPropertyClass.Invariant)
+            pattern += $@"|^Error: Invariant {Regex.Escape(mutation.Target)} is violated by the initial state:\r?$";
+        return Regex.IsMatch(output, pattern, RegexOptions.Multiline);
+    }
+
+    /// <summary>Counts both invariant wordings and action/temporal violations.</summary>
     private static int CountViolationLines(string output) =>
         Regex.Matches(
             output,
-            @"^Error: (?:Invariant \w+ is violated|Action property \w+ is violated|Temporal properties were violated)\.",
+            @"^Error: (?:Invariant \w+ is violated(?:\.| by the initial state:)|Action property \w+ is violated\.|Temporal properties were violated\.)\r?$",
             RegexOptions.Multiline).Count;
 
     private static string? ResolveJava()
@@ -595,35 +603,7 @@ public sealed class TlcModelCheckTests
             File.WriteAllText(Path.Combine(scratch, tla), moduleText);
             File.WriteAllText(Path.Combine(scratch, cfg), configText);
 
-            var info = new ProcessStartInfo(_java)
-            {
-                WorkingDirectory = scratch,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-
-            // Each JVM gets its own temp directory because TLC extracts the
-            // standard modules (Naturals, FiniteSets, ...) into java.io.tmpdir
-            // and parses them from there. With the system temp directory shared,
-            // one concurrent run deletes or rewrites a file another is reading,
-            // and the second fails with "Cannot find source file for module".
-            info.ArgumentList.Add($"-Djava.io.tmpdir={scratch}");
-            info.ArgumentList.Add("-XX:+UseParallelGC");
-            info.ArgumentList.Add("-cp");
-            info.ArgumentList.Add(_jar);
-            info.ArgumentList.Add("tlc2.TLC");
-            foreach (var option in options)
-            {
-                info.ArgumentList.Add(option);
-            }
-
-            info.ArgumentList.Add("-config");
-            info.ArgumentList.Add(cfg);
-            info.ArgumentList.Add("-workers");
-            info.ArgumentList.Add(TlcWorkers.ToString(CultureInfo.InvariantCulture));
-            info.ArgumentList.Add("-cleanup");
-            info.ArgumentList.Add(tla);
+            var info = CreateTlcStartInfo(scratch, tla, cfg, options);
 
             using var process = Process.Start(info)
                 ?? throw new InvalidOperationException($"could not start '{_java}'");

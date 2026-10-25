@@ -1,0 +1,15 @@
+MODULE: SmoothedWaitRefusalAdmits
+TARGET: SmoothedWaitRefusal
+CLASS: Action
+SUMMARY: excessive fresh wait takes the holding outcome instead of refusal
+PERTURBS: RefuseWait
+
+--- FIND
+RefuseWait(r) ==
+    /\ status[r] = "pending" /\ RefuseForWait(r)
+    /\ status' = [status EXCEPT ![r] = "refused"]
+--- REPLACE
+RefuseWait(r) ==
+    /\ status[r] = "pending" /\ RefuseForWait(r)
+    /\ status' = [status EXCEPT ![r] = "holding"]
+--- END

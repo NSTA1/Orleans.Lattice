@@ -1,0 +1,11 @@
+MODULE: TypeOKLifetimeCancellationOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the lifetime cancellation event names an unknown owner
+PERTURBS: CancelColdLifetime
+
+--- FIND
+    /\ cancelled' = cancelled \cup {r}
+--- REPLACE
+    /\ cancelled' = cancelled \cup {0}
+--- END

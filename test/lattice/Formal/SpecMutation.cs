@@ -134,7 +134,9 @@ public sealed record SpecMutation
     public IReadOnlyList<CfgAssignment> Bounds { get; init; } = [];
 
     /// <summary>
-    /// The exact text TLC emits when <see cref="Target"/> is violated.
+    /// The normal TLC violation banner for <see cref="Target"/>. An invariant
+    /// violated by the initial state has a distinct suffix, which the pairing
+    /// harness also recognizes without accepting evaluation errors.
     /// <para>
     /// Note the asymmetry in the <see cref="SpecPropertyClass.Temporal"/> case:
     /// TLC does NOT name the property for a temporal violation, only for

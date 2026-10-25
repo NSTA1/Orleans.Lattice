@@ -1,0 +1,15 @@
+MODULE: DriveResidencyBoundedBudgetNeverAbandons
+TARGET: DriveResidencyBounded
+CLASS: Invariant
+SUMMARY: the last drive-budget opportunity leaves hung drive work holding a permit
+PERTURBS: BudgetOpportunity
+
+--- FIND
+          THEN AbandonOnBudget(r)
+--- REPLACE
+          THEN /\ holdLeft' = [holdLeft EXCEPT ![r] = 0]
+               /\ UNCHANGED <<holders, free, withheld, queue, status, role, observed,
+                   pressure, pressurePhase, drain, hung, deadline, frontier, banked,
+                   checkpoint, holes, ledger, arrivalsClosed, dispatchEpoch,
+                   clientActive, cancelled>>
+--- END
