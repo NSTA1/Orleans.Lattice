@@ -1,14 +1,17 @@
 {
   "path": "front-door",
   "order": 1,
-  "items": ["F"],
+  "items": [
+    "F",
+    "F2"
+  ],
   "poster": {
     "scene": "in-more-than-one-place",
     "beat": 5,
     "offset": -0.5
   },
   "published": {
-    "cut": "231f8425d398",
-    "bytes": 11604623
+    "cut": "9580eb3dabaa",
+    "bytes": 10970782
   }
 }

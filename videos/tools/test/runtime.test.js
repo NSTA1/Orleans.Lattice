@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { brandDir } from "../lib/layout.js";
+import { brandDir, componentsDir } from "../lib/layout.js";
 
 // The browser runtime the compositions load (shared/brand/*.js), run in a
 // sandbox that stands in for the page.
@@ -50,6 +50,56 @@ test("a site: variable is read from the site's own words, anything else is retur
   assert.equal(scene.site("Plain words"), "Plain words");
   assert.throws(() => scene.site("site:home.missing"), /the site has no 'home.missing'/);
   assert.throws(() => scene.site("site:packages.sections"), /the site has no 'packages.sections'/, "an unloaded source fails loudly");
+});
+
+test("ways shows first-episode titles where supplied and keeps the site's audience elsewhere", () => {
+  const html = readFileSync(path.join(componentsDir, "ways.html"), "utf8");
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
+  const siteWays = [
+    { name: "Build", for: "Writing code" },
+    { name: "Evaluate", for: "Deciding whether it fits" },
+    { name: "Operate", for: "Running an estate" },
+  ];
+  for (const episodes of ["", "Hello, Lattice|When Lattice fits, and when it doesn't"]) {
+    const elements = new Map();
+    const element = () => ({
+      textContent: "",
+      querySelector(selector) {
+        if (!this.children.has(selector)) this.children.set(selector, element());
+        return this.children.get(selector);
+      },
+      children: new Map(),
+    });
+    const items = [];
+    const root = {
+      querySelector(selector) {
+        if (!elements.has(selector)) elements.set(selector, element());
+        return elements.get(selector);
+      },
+      querySelectorAll: () => items,
+    };
+    root.querySelector(".wy-ways").appendChild = (item) => items.push(item);
+    const timeline = { from() {}, to() {}, set() {} };
+    const window = {
+      __hyperframes: { getVariables: () => ({ episodes }) },
+      LatticeScene: {
+        cue: () => ({ at: (index) => index }),
+        site: (value) => value === "site:home.ways" ? siteWays : value,
+        parts: (target, value) => { target.textContent = value; },
+        exit() {},
+      },
+      LatticeMotion: { duration: { base: 0.6, slow: 0.9 } },
+    };
+    const document = { querySelector: () => root, createElement: element };
+    new Function("window", "document", "gsap", "getComputedStyle", script)(
+      window, document, { timeline: () => timeline }, () => ({ getPropertyValue: () => "ink" }),
+    );
+    assert.deepEqual(items.map((item) => item.querySelector(".wy-way-name").textContent), siteWays.map((way) => way.name));
+    assert.deepEqual(
+      items.map((item) => item.querySelector(".wy-way-for").textContent),
+      episodes ? [...episodes.split("|"), siteWays[2].for] : siteWays.map((way) => way.for),
+    );
+  }
 });
 
 /** Just enough of a DOM element for the code colourer: text in, HTML out. */

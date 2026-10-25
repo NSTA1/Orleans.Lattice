@@ -8,7 +8,8 @@
     set in link blue because it is a reference.
 
     Variables: heading (default the site's own); url (the site's address as
-    shown); beats and end are stamped by npm run timeline.
+    shown); episodes (optional pipe-separated first-episode titles, instead
+    of audience descriptions); beats and end are stamped by npm run timeline.
   -->
   <div
     data-composition-id="ways"
@@ -17,6 +18,7 @@
     data-composition-variables='[
       {"id":"heading","type":"string","label":"Heading","default":"site:home.paths.title"},
       {"id":"url","type":"string","label":"Site address","default":"nsta1.github.io/Orleans.Lattice"},
+      {"id":"episodes","type":"string","label":"First-episode titles by path (pipe-separated)","default":""},
       {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
       {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
     ]'
@@ -113,12 +115,14 @@
 
         q(".wy-heading").textContent = scene.site(vars.heading);
         q(".wy-url").textContent = scene.site(vars.url);
-        for (const way of scene.site("site:home.ways")) {
+        const episodes = (vars.episodes || "").split("|");
+        for (const [index, way] of scene.site("site:home.ways").entries()) {
           const item = document.createElement("li");
           item.className = "wy-way";
           item.innerHTML = '<span class="lv-node"></span><h3 class="wy-way-name"></h3><p class="wy-way-for"></p>';
           item.querySelector(".wy-way-name").textContent = way.name;
-          scene.parts(item.querySelector(".wy-way-for"), way.for);
+          if (episodes[index]) item.querySelector(".wy-way-for").textContent = episodes[index];
+          else scene.parts(item.querySelector(".wy-way-for"), way.for);
           q(".wy-ways").appendChild(item);
         }
 

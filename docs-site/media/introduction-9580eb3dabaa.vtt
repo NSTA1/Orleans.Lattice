@@ -1,0 +1,235 @@
+WEBVTT
+
+1
+00:00:01.500 --> 00:00:06.935
+Orleans.Lattice, in three minutes: why it
+exists, what it is, and where to start.
+
+2
+00:00:07.935 --> 00:00:11.930
+Almost every application has
+to remember things: what is in a basket,
+
+3
+00:00:11.930 --> 00:00:14.941
+who may open a document,
+how often a page is viewed.
+
+4
+00:00:15.291 --> 00:00:17.134
+Developers call that memory state.
+
+5
+00:00:18.134 --> 00:00:20.991
+Many applications run
+in more than one place at once,
+
+6
+00:00:20.991 --> 00:00:23.309
+so that they keep going
+if one place fails.
+
+7
+00:00:23.659 --> 00:00:27.569
+Then two places can change the same thing
+at the same moment.
+
+8
+00:00:27.919 --> 00:00:31.210
+Usually, changes take turns,
+with a lock or a vote,
+
+9
+00:00:31.210 --> 00:00:33.791
+and memory lives in a separate database.
+
+10
+00:00:34.141 --> 00:00:36.456
+Orleans.Lattice takes
+a different approach.
+
+11
+00:00:36.456 --> 00:00:39.201
+It keeps the working memory
+inside the application.
+
+12
+00:00:39.551 --> 00:00:43.625
+And it records each change so
+that every place reaches the same answer,
+
+13
+00:00:43.625 --> 00:00:45.748
+in whatever order the changes arrive.
+
+14
+00:00:45.748 --> 00:00:47.068
+Neither waits its turn.
+
+15
+00:00:47.418 --> 00:00:49.791
+It runs on one machine
+with no cloud account,
+
+16
+00:00:49.791 --> 00:00:52.112
+and grows to many regions
+without a rewrite.
+
+17
+00:00:53.112 --> 00:00:57.563
+In technical terms, Orleans.Lattice
+is a platform for building durable,
+
+18
+00:00:57.563 --> 00:01:00.510
+distributed state systems
+on Microsoft Orleans.
+
+19
+00:01:00.860 --> 00:01:05.162
+At its centre is a sorted key-value store
+inside your own cluster:
+
+20
+00:01:05.162 --> 00:01:07.964
+no external database,
+coordinator or queue.
+
+21
+00:01:08.314 --> 00:01:09.896
+It takes three positions.
+
+22
+00:01:12.096 --> 00:01:17.776
+First: state lives in grains, in the same
+cluster as the code that uses it.
+
+23
+00:01:18.126 --> 00:01:19.552
+A read is a grain call,
+
+24
+00:01:19.552 --> 00:01:24.451
+not a round trip to a separate database
+tier with its own scaling and failures.
+
+25
+00:01:25.451 --> 00:01:28.489
+Second: conflict resolution is algebraic.
+
+26
+00:01:28.839 --> 00:01:32.448
+Cluster A adds three,
+cluster B concurrently adds five,
+
+27
+00:01:32.448 --> 00:01:33.892
+each to its own count.
+
+28
+00:01:33.892 --> 00:01:36.057
+Neither state is above the other.
+
+29
+00:01:36.407 --> 00:01:40.631
+Each merges the other's update
+by taking the larger value per replica,
+
+30
+00:01:40.631 --> 00:01:43.347
+so both arrive at the same state:
+their join.
+
+31
+00:01:43.697 --> 00:01:46.581
+Deliver that update twice,
+and nothing changes.
+
+32
+00:01:46.931 --> 00:01:50.937
+Merges are commutative,
+associative and idempotent.
+
+33
+00:01:51.287 --> 00:01:54.075
+So any cluster can accept
+a write to any key,
+
+34
+00:01:54.075 --> 00:01:57.111
+with no lock manager
+and no consensus round trip.
+
+35
+00:01:57.111 --> 00:01:59.527
+For plain values, the last writer wins.
+
+36
+00:02:00.527 --> 00:02:02.601
+Third: everything else is a seam.
+
+37
+00:02:02.601 --> 00:02:06.246
+Storage, identity, governance,
+replication, administration
+
+38
+00:02:06.246 --> 00:02:10.331
+and observability are companion
+packages behind documented seams.
+
+39
+00:02:10.681 --> 00:02:15.179
+A host takes only what it registers, and
+a capability it leaves out costs nothing.
+
+40
+00:02:16.179 --> 00:02:18.632
+Start local: one machine,
+no cloud account.
+
+41
+00:02:18.982 --> 00:02:23.015
+Add a team: identity,
+authorization, schemas and tenants.
+
+42
+00:02:23.365 --> 00:02:28.487
+Go global: active in every region at once,
+with backup and an autoscaling signal.
+
+43
+00:02:28.837 --> 00:02:31.939
+At every stage,
+the programming model is the same.
+
+44
+00:02:31.939 --> 00:02:34.544
+Your code resolves ILattice, and calls it.
+
+45
+00:02:35.544 --> 00:02:38.030
+The documentation has three ways in.
+
+46
+00:02:38.380 --> 00:02:43.693
+Build, if you are writing code against
+ILattice: start with Hello, Lattice.
+
+47
+00:02:44.043 --> 00:02:49.376
+Evaluate, if you are deciding whether
+it fits: start with When Lattice fits,
+
+48
+00:02:49.376 --> 00:02:50.779
+and when it doesn't.
+
+49
+00:02:51.129 --> 00:02:53.478
+Operate, if you are running an estate.
+
+50
+00:02:53.478 --> 00:02:54.158
+You choose.

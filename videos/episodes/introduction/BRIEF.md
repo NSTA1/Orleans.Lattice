@@ -39,7 +39,9 @@ Then, "in technical terms":
 7. The core and its seams: one node per section of `PACKAGES.md`, as on the
    site, keeping only released packages.
 8. Local, Team and Global, with `ILattice` unchanged at every stage.
-9. The three ways into the documentation, and where to find it.
+9. The three ways into the documentation, naming Build's first episode,
+   Hello, Lattice, and Evaluate's first episode, When Lattice fits, and when
+   it doesn't (the F2 re-cut). Operate still points to the documentation.
 
 ## Sources
 
