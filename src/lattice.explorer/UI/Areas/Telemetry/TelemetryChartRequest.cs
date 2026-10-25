@@ -65,6 +65,11 @@ internal sealed record TelemetryChartRequest(TelemetryQueryRequest? Request, str
 
         if (window.Resolve(now) is not var (start, end))
         {
+            if (window.Step is { } requestedStep && query.Accepts(TelemetryQueryParameters.Step))
+            {
+                request = request with { Range = new TelemetryTimeRange { Step = query.Bounds.EffectiveStep(requestedStep) } };
+            }
+
             return new TelemetryChartRequest(request, null, note);
         }
 
