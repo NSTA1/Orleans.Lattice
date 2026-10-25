@@ -34,7 +34,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
-- **Performance - Leaf summary walks.** Bounded counts and diagnostics return payload and topology in one leaf call instead of two; footprint refresh cuts three calls to two while retaining snapshot-storage accounting. (`Orleans.Lattice`)
+- **Performance - Leaf summary walks.** Bounded counts and diagnostics return payload and topology in one leaf call instead of two; footprint refresh cuts three calls to two while retaining snapshot-storage accounting. ([#5013](https://github.com/NSTA1/Orleans.Lattice/pull/5013)) (`Orleans.Lattice`)
 
 - **Performance - Snapshot control paths.** Bootstrap fencing and snapshot initiation reuse registry entries, removing a read each; independent WAL heads overlap within a bounded window while preserving freeze-before-head ordering. ([#4996](https://github.com/NSTA1/Orleans.Lattice/pull/4996)) (`Orleans.Lattice`)
 
