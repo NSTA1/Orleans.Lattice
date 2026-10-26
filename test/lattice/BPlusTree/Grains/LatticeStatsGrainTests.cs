@@ -28,6 +28,7 @@ public class LatticeStatsGrainTests
             MaxLeafKeys = 128,
             MaxInternalChildren = 128,
             ShardCount = physicalShardCount,
+            ShardMap = ShardMap.CreateDefault(virtualShardCount, physicalShardCount),
         });
 
         var lattice = Substitute.For<ILattice>();
@@ -312,16 +313,34 @@ public class LatticeStatsGrainTests
     }
 
     [Test]
-    public async Task GetReportAsync_force_refreshes_the_routing_it_walks()
+    public async Task GetReportAsync_reads_fresh_registry_routing_without_a_stateless_worker_hop()
     {
-        // The tree's stateless worker caches its routing per activation and a
-        // reshard does not invalidate it, so an unforced read kept reporting the
-        // pre-reshard shards (#4146).
-        var (grain, _, lattice, _) = CreateGrain();
+        var (grain, factory, lattice, _) = CreateGrain(
+            options: new LatticeOptions { DiagnosticsCacheTtl = TimeSpan.Zero });
+        var registry = factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
-        await grain.GetReportAsync(deep: false, CancellationToken.None);
+        var first = await grain.GetReportAsync(false, CancellationToken.None);
+        registry.GetEntryAsync(TreeId).Returns(new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry
+        {
+            MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2,
+            PhysicalTreeId = "replacement",
+            ShardMap = ShardMap.CreateDefault(32, 1),
+        });
+        var replacement = Substitute.For<IShardRootGrain>();
+        replacement.GetDiagnosticsBoundedAsync(false, null).Returns(new ShardDiagnosticsPage
+        {
+            Report = new ShardDiagnosticReport { LiveKeys = 99 },
+        });
+        factory.GetGrain<IShardRootGrain>("replacement/0").Returns(replacement);
+        registry.ClearReceivedCalls();
 
-        _ = lattice.Received(1).GetRoutingAsync(true, Arg.Any<CancellationToken>());
-        _ = lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
+        var second = await grain.GetReportAsync(false, CancellationToken.None);
+
+        Assert.That(first.TotalLiveKeys, Is.EqualTo(20));
+        Assert.That(second.TotalLiveKeys, Is.EqualTo(99));
+        Assert.That(second.ShardCount, Is.EqualTo(1));
+        Assert.That(second.VirtualShardCount, Is.EqualTo(32));
+        await registry.Received(1).GetEntryAsync(TreeId);
+        Assert.That(lattice.ReceivedCalls(), Is.Empty);
     }
 }

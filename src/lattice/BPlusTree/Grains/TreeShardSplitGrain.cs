@@ -1166,7 +1166,8 @@ internal sealed class TreeShardSplitGrain(
         Array.Sort(sortedSlots);
 
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{sourceShardIndex}");
-        if (await source.GetLeftmostLeafIdAsync() is null) return;
+        var firstLeafId = await source.GetLeftmostLeafIdAsync();
+        if (firstLeafId is null) return;
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{targetShardIndex}");
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -1226,7 +1227,9 @@ internal sealed class TreeShardSplitGrain(
             const int maxAttempts = 5;
             for (var attempt = 1; ; attempt++)
             {
-                var attemptLeafId = await source.GetLeftmostLeafIdAsync();
+                // Reuse only the initial probe; every retry must re-descend
+                // after a concurrent fold may have retired that first leaf.
+                var attemptLeafId = attempt == 1 ? firstLeafId : await source.GetLeftmostLeafIdAsync();
                 if (attemptLeafId is null) break;
 
                 progress.Replayed = 0;
