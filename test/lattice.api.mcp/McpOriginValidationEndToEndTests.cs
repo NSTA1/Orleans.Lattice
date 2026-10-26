@@ -138,6 +138,65 @@ public sealed class McpOriginValidationEndToEndTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
     }
 
+    [Test]
+    public async Task Foreign_origin_is_refused_when_the_host_applies_a_path_base()
+    {
+        await using var host = await StartHostAsync(
+            o => o.RequireAllowedOrigin = true,
+            app =>
+            {
+                app.UsePathBase("/lattice");
+                app.UseRouting();
+                app.MapLatticeMcp();
+            });
+
+        using var foreign = await SendMcpAsync(host, "/lattice/mcp", "http://attacker.example");
+        using var loopback = await SendMcpAsync(host, "/lattice/mcp", "http://localhost:6274");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(foreign.StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
+            Assert.That(loopback.StatusCode, Is.Not.EqualTo(HttpStatusCode.Forbidden));
+        });
+    }
+
+    [Test]
+    public async Task Foreign_origin_is_refused_when_mcp_is_mapped_under_a_route_group()
+    {
+        await using var host = await StartHostAsync(
+            o => o.RequireAllowedOrigin = true,
+            app => app.MapGroup("/tenant").MapLatticeMcp());
+
+        using var foreign = await SendMcpAsync(host, "/tenant/mcp", "http://attacker.example");
+        using var noOrigin = await SendMcpAsync(host, "/tenant/mcp", origin: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(foreign.StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
+            Assert.That(noOrigin.StatusCode, Is.Not.EqualTo(HttpStatusCode.Forbidden));
+        });
+    }
+
+    private static async Task<HttpResponseMessage> SendMcpAsync(WebApplication host, string path, string? origin)
+    {
+        using var http = new HttpClient { BaseAddress = new Uri(host.Urls.First()) };
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new StringContent(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
+                System.Text.Encoding.UTF8,
+                "application/json"),
+        };
+        if (origin is not null)
+        {
+            request.Headers.Add("Origin", origin);
+        }
+
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Accept.ParseAdd("text/event-stream");
+        return await http.SendAsync(request);
+    }
+
     private static async Task<HttpResponseMessage> SendAsync(WebApplication host, string path, string? origin)
     {
         using var http = new HttpClient { BaseAddress = new Uri(host.Urls.First()) };
@@ -150,7 +209,9 @@ public sealed class McpOriginValidationEndToEndTests
         return await http.SendAsync(request);
     }
 
-    private static async Task<WebApplication> StartHostAsync(Action<LatticeApiMcpOptions> configure)
+    private static async Task<WebApplication> StartHostAsync(
+        Action<LatticeApiMcpOptions> configure,
+        Action<WebApplication>? map = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel();
@@ -165,6 +226,13 @@ public sealed class McpOriginValidationEndToEndTests
         });
 
         var app = builder.Build();
+        if (map is not null)
+        {
+            map(app);
+            await app.StartAsync();
+            return app;
+        }
+
         app.MapLatticeMcp();
         app.MapPost("/mcp/probe", () => "ok");
         app.MapPost("/elsewhere/probe", () => "ok");

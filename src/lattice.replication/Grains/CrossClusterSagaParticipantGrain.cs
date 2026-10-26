@@ -440,8 +440,14 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     }
 
     /// <inheritdoc />
-    public Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request) =>
-        Task.FromResult(BuildStatusResponse());
+    public Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request)
+    {
+        // Held to the same identity binding as prepare, commit and abort: a
+        // status read discloses the saga's phase and detail, so a peer that is
+        // not the recorded coordinator must not read another coordinator's saga.
+        EnsureRequestIdentity(request);
+        return Task.FromResult(BuildStatusResponse());
+    }
 
     private void EnsureRequestIdentity(SagaControlRequest request)
     {
