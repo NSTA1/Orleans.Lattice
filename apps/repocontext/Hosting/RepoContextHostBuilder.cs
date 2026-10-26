@@ -512,6 +512,12 @@ public static class RepoContextHostBuilder
         {
             options.RequireAuthorization = false;
             options.Stateless = true;
+
+            // The listener binds every interface with authentication off, so a
+            // browser page on a rebound hostname must not be able to drive the
+            // write-enabled tools. Non-browser agents send no Origin and are
+            // unaffected; a page served from the local machine stays allowed.
+            options.RequireAllowedOrigin = true;
         });
 
         // Opt in past the default-deny coarse MCP gate. The container stamps every

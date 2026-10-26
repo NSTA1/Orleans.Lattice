@@ -64,6 +64,27 @@ app.MapLatticeMcp();
 | `EnableStateTools` / `EnableDataTools` / `EnableBackupTools` / `EnableAuthTools` / `EnableReplicationTools` / `EnableTenantAdminTools` | `bool` | `false` | Informational module markers. The matching `AddXTools(...)` call sets its marker (nothing sets `EnableDataTools`), but no code reads them: a module is registered - and its group advertised - only by its `AddXTools(...)` call, so setting a marker directly adds nothing. |
 | `EnableBackupControlTools` / `EnableAuthAdministration` / `EnableReplicationControlTools` / `EnableTreeAdminSchemaControlTools` / `EnableTreeAdminLifecycleTools` / `EnableTenantAdminControlTools` | `bool` | `false` | Destructive-verb opt-ins, read by the registered module when it builds its tool list: each is set by the matching `AddXTools(...)` flag (`enableControl`, `enableAdministration`, `enableSchemaControl`, or `enableLifecycle`), and setting one directly is equivalent. None takes effect unless its module is registered. Data writes have no option flag; only `AddDataTools(enableWrites: true)` opts them in. |
 | `ProtectedResourceMetadata` | `LatticeApiMcpProtectedResourceMetadata?` | `null` | Opt into OAuth 2.0 Protected Resource Metadata (RFC 9728). When set, an anonymous metadata document is served at its `WellKnownPath` (default `/.well-known/oauth-protected-resource`) and the `401` bearer challenge carries a `resource_metadata` hint. See [OAuth discovery](#oauth-discovery-rfc-9728). |
+| `RequireAllowedOrigin` | `bool` | `false` | When `true`, a request on the transport path whose `Origin` header is not allowed is refused with `403`, the DNS-rebinding defence the MCP transport specification requires. A request without an `Origin` header is unaffected. See [Origin validation](#origin-validation-dns-rebinding). |
+| `AllowedOrigins` | `IList<string>` | empty | The browser origins (`scheme://host[:port]`) allowed when `RequireAllowedOrigin` is `true`, matched case-insensitively against the whole `Origin` value. |
+| `AllowLoopbackOrigins` | `bool` | `true` | When `RequireAllowedOrigin` is `true`, also allow any `http`/`https` origin on `localhost` or a loopback IP, on any port. |
+
+## Origin validation (DNS rebinding)
+
+A web page can make a browser send requests to a server on the local network or the local machine by *rebinding* its own hostname to that server's address. The browser then treats the server as same-origin with the attacker's page, so a server reachable without authentication - `RequireAuthorization = false` behind no other boundary - would execute the page's tool calls. Set `RequireAllowedOrigin` to refuse those requests: a browser always sends an `Origin` header on the `POST` a tool call needs, and the binding answers `403` before authentication, routing, or any tool runs unless that origin is allowed. Non-browser MCP clients send no `Origin` and are unaffected. The `Host` header is not trusted for this check, because a rebinding page controls it.
+
+```csharp verify
+var builder = WebApplication.CreateBuilder();
+
+builder.Services.AddLatticeMcp(o =>
+{
+    o.RequireAuthorization = false;
+    o.TransportPattern = "/mcp";
+    o.RequireAllowedOrigin = true;
+    o.AllowedOrigins.Add("https://inspector.example.com");
+});
+```
+
+Loopback origins (`localhost`, `127.0.0.0/8`, `[::1]`) are allowed on any port by default, so a local inspector keeps working; set `AllowLoopbackOrigins = false` to allow only `AllowedOrigins`. A browser application co-hosted on the same server that calls the transport must list its own public origin. The check covers only the transport path (`TransportPattern`; the whole application when it is empty).
 
 ## Add the tool modules
 
