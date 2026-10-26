@@ -1,0 +1,223 @@
+WEBVTT
+
+1
+00:00:01.500 --> 00:00:06.695
+In Hello, Lattice, you registered Lattice
+on a silo and wrote and read typed values.
+
+2
+00:00:07.045 --> 00:00:12.048
+Now choose what should happen when two
+writers change the same key concurrently.
+
+3
+00:00:13.048 --> 00:00:15.009
+A plain set keeps the last write.
+
+4
+00:00:15.009 --> 00:00:17.862
+It does not combine
+the contents of two records.
+
+5
+00:00:17.862 --> 00:00:21.191
+If both updates matter,
+replacing one is the wrong rule.
+
+6
+00:00:21.541 --> 00:00:25.269
+A conflict-free replicated data type makes
+that rule part of the value.
+
+7
+00:00:25.269 --> 00:00:29.103
+Choose the rule that matches your data,
+not just the shape of its fields.
+
+8
+00:00:30.103 --> 00:00:33.967
+For a total that only grows,
+choose a grow-only counter.
+
+9
+00:00:33.967 --> 00:00:36.658
+Each writer advances its own component.
+
+10
+00:00:37.008 --> 00:00:40.801
+Here, cluster A adds three,
+while cluster B adds five.
+
+11
+00:00:40.801 --> 00:00:43.330
+Neither has seen the other's change.
+
+12
+00:00:43.680 --> 00:00:46.797
+Merge takes the larger component
+for each writer.
+
+13
+00:00:46.797 --> 00:00:50.551
+Both components survive,
+and the value is their sum: eight.
+
+14
+00:00:50.901 --> 00:00:54.060
+Deliver the same state again
+and the value stays eight.
+
+15
+00:00:54.060 --> 00:00:58.137
+For a count that can also decrease,
+choose a positive-negative counter:
+
+16
+00:00:58.137 --> 00:01:00.779
+separate totals
+for increments and decrements.
+
+17
+00:01:01.779 --> 00:01:04.266
+For a collection that only gains members,
+
+18
+00:01:04.266 --> 00:01:07.481
+a grow-only set combines the members
+from both sides.
+
+19
+00:01:07.831 --> 00:01:13.505
+If members can be removed, choose what
+a concurrent add and remove should mean.
+
+20
+00:01:13.505 --> 00:01:16.163
+An observed-remove set keeps the add.
+
+21
+00:01:16.513 --> 00:01:19.148
+A remove-wins set makes
+the opposite choice.
+
+22
+00:01:19.148 --> 00:01:21.664
+That choice is part of the data's meaning,
+
+23
+00:01:21.664 --> 00:01:24.539
+not a setting to leave
+until a conflict happens.
+
+24
+00:01:25.539 --> 00:01:28.142
+Sometimes neither write should disappear.
+
+25
+00:01:28.142 --> 00:01:31.761
+A multi-value register keeps
+values written concurrently.
+
+26
+00:01:32.111 --> 00:01:33.654
+Both clusters started from todo.
+
+27
+00:01:33.654 --> 00:01:36.259
+One writes in progress,
+and the other writes resolved,
+
+28
+00:01:36.259 --> 00:01:37.850
+without seeing the other's write.
+
+29
+00:01:38.200 --> 00:01:39.873
+The merged register holds both.
+
+30
+00:01:39.873 --> 00:01:43.651
+Your application reads the candidates
+and decides how to resolve them.
+
+31
+00:01:44.001 --> 00:01:48.131
+A later write, made after observing
+both values, replaces both.
+
+32
+00:01:48.131 --> 00:01:53.637
+Two writes in a row on one cluster are not
+this conflict: the second sees the first.
+
+33
+00:01:54.637 --> 00:01:58.528
+For a value that should only move upwards,
+choose a maximum register;
+
+34
+00:01:58.528 --> 00:02:01.574
+for one that only moves downwards,
+a minimum register.
+
+35
+00:02:01.924 --> 00:02:06.959
+For a dictionary whose values also need
+to merge, choose an observed-remove map.
+
+36
+00:02:06.959 --> 00:02:11.680
+Its keys are add-wins, and each value
+merges by its own conflict-free rule.
+
+37
+00:02:12.680 --> 00:02:17.206
+The typed accessor chooses the merge mode
+and encodes the delta.
+
+38
+00:02:17.206 --> 00:02:19.893
+You do not hand-encode the CRDT delta.
+
+39
+00:02:19.893 --> 00:02:23.641
+Give independent writers stable,
+distinct identities.
+
+40
+00:02:23.991 --> 00:02:27.138
+A local tree can mix these types
+on different keys.
+
+41
+00:02:27.138 --> 00:02:30.656
+A replicated tree must use
+the single merge mode declared
+
+42
+00:02:30.656 --> 00:02:32.075
+in its replication map.
+
+43
+00:02:32.425 --> 00:02:37.249
+Maps also need their key and value shape
+registered on the host, once per tree.
+
+44
+00:02:37.249 --> 00:02:41.706
+The CRDT guide has the accessor examples
+and the details for each choice.
+
+45
+00:02:42.706 --> 00:02:45.201
+Next on Build: Scans, filters and cursors.
+
+46
+00:02:45.201 --> 00:02:49.358
+The deep dive on how this works is
+Conflict-free merges in 90 seconds.
+
+47
+00:02:49.358 --> 00:02:52.803
+The links are on this episode's page
+in the documentation.

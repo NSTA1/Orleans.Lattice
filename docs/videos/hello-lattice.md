@@ -133,7 +133,7 @@ byte[]? existing = await lattice.GetOrSetAsync(
 <!-- The list is written from the series plan (videos/series.json) by `npm run companions` in videos/; edit the plan, not this block. -->
 <!-- where-next:begin -->
 
-- **Next on Build:** Values that merge
+- **Next on Build:** [Values that merge](values-that-merge.md)
 - **The pages it introduces:** [Quick start](../../README.md#quick-start) and [API reference](../lattice/api.md)
 
 <!-- where-next:end -->

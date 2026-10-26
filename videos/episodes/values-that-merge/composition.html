@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Values that merge</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/site/join-figures.js"></script>
+    <script src="shared/brand/site/packages.js"></script>
+    <script src="shared/brand/site/home.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <style>
+      html, body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="values-that-merge" data-start="0" data-width="1920" data-height="1080" data-fps="30" data-duration="174.803">
+      <div id="opening" data-composition-id="title-card" data-composition-src="shared/components/title-card.html"
+        data-scene="values-that-merge" data-track-index="0"
+        data-variable-values='{"kicker":"Build / B2 / Orleans.Lattice 9.9","title":"Values that merge","subtitle":"Choose the conflict rule","beats":"1.5,7.045","end":12.448}'
+        data-start="0"
+        data-duration="12.448"></div>
+
+      <div id="replace" data-composition-id="choice-list" data-composition-src="shared/components/choice-list.html"
+        data-scene="replace-or-merge" data-track-index="0"
+        data-variable-values='{"heading":"Replace or merge","items":"[{\"title\":\"Last write\",\"detail\":\"One value replaces another\",\"beat\":0},{\"title\":\"Merge\",\"detail\":\"The rule belongs to the value\",\"beat\":1}]","beats":"0.6,9.093","end":17.055}'
+        data-start="12.448"
+        data-duration="17.055"></div>
+
+      <div id="counter" data-composition-id="join-diagram" data-composition-src="shared/components/join-diagram.html"
+        data-scene="a-counter-keeps-both" data-track-index="0"
+        data-variable-values='{"scenario":"gcounter","heading":"A counter keeps both","redeliver":true,"beats":"0.6,7.505,14.177,21.398","end":31.676}'
+        data-start="29.503"
+        data-duration="31.676"></div>
+
+      <div id="sets" data-composition-id="choice-list" data-composition-src="shared/components/choice-list.html"
+        data-scene="choose-a-set" data-track-index="0"
+        data-variable-values='{"heading":"Choose a set","items":"[{\"title\":\"Grow-only\",\"detail\":\"Keep every member\",\"beat\":0},{\"title\":\"Add-wins\",\"detail\":\"Concurrent add survives\",\"beat\":1},{\"title\":\"Remove-wins\",\"detail\":\"Concurrent removal wins\",\"beat\":2}]","beats":"0.6,6.652,15.334","end":23.76}'
+        data-start="61.179"
+        data-duration="23.76"></div>
+
+      <div id="register" data-composition-id="join-diagram" data-composition-src="shared/components/join-diagram.html"
+        data-scene="keep-the-conflict-visible" data-track-index="0"
+        data-variable-values='{"scenario":"mvregister","heading":"Keep the conflict visible","redeliver":false,"beats":"0.6,7.172,13.261,19.062","end":29.098}'
+        data-start="84.939"
+        data-duration="29.098"></div>
+
+      <div id="families" data-composition-id="choice-list" data-composition-src="shared/components/choice-list.html"
+        data-scene="registers-and-maps" data-track-index="0"
+        data-variable-values='{"heading":"Registers and maps","items":"[{\"title\":\"Maximum / minimum\",\"detail\":\"Move in one direction\",\"beat\":0},{\"title\":\"Observed-remove map\",\"detail\":\"Merge each value recursively\",\"beat\":1}]","beats":"0.6,7.887","end":18.043}'
+        data-start="114.037"
+        data-duration="18.043"></div>
+
+      <div id="accessors" data-composition-id="choice-list" data-composition-src="shared/components/choice-list.html"
+        data-scene="use-the-typed-accessor" data-track-index="0"
+        data-variable-values='{"heading":"Use the typed accessor","items":"[{\"title\":\"Typed delta\",\"detail\":\"Stable, distinct writer identities\",\"beat\":0},{\"title\":\"Local / replicated\",\"detail\":\"Mixed modes / one declared mode\",\"beat\":1},{\"title\":\"Map shape\",\"detail\":\"Register once per tree\",\"beat\":2}]","beats":"0.6,11.911,20.345","end":30.026}'
+        data-start="132.08"
+        data-duration="30.026"></div>
+
+      <div id="ending" data-composition-id="choice-list" data-composition-src="shared/components/choice-list.html"
+        data-scene="where-next" data-track-index="0"
+        data-variable-values='{"heading":"Where next","items":"[{\"title\":\"Scans, filters and cursors\",\"detail\":\"Next on Build\",\"beat\":0},{\"title\":\"Conflict-free merges in 90 seconds\",\"detail\":\"The deep dive\",\"beat\":0},{\"title\":\"CRDT primitives\",\"detail\":\"This episode in the documentation\",\"beat\":0}]","beats":"0.6","end":12.697}'
+        data-start="162.106"
+        data-duration="12.697"></div>
+
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/values-that-merge/narration.wav" data-start="0" data-duration="174.803" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["values-that-merge"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>
