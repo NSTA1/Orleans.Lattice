@@ -210,7 +210,7 @@
       data-width="1920"
       data-height="1080"
       data-fps="30"
-      data-duration="140.715"
+      data-duration="150.692"
     >
       <div
         id="opening"
@@ -218,15 +218,15 @@
         data-composition-src="shared/components/title-card.html"
         data-scene="scans-filters-and-cursors"
         data-track-index="0"
-        data-variable-values='{"kicker":"Build","title":"Scans, filters and cursors","subtitle":"Ordered ranges, server-side filters, resumable pages","beats":"0.5,8.97","end":15.383}'
+        data-variable-values='{"kicker":"Build","title":"Scans, filters and cursors","subtitle":"Ordered ranges, server-side filters, resumable pages","beats":"0.5,9.666","end":16.587}'
         data-start="0"
-        data-duration="15.383"
+        data-duration="16.587"
       ></div>
 
-      <div id="range" class="clip lv-scene frame" data-scene="an-ordered-range" data-track-index="0" data-start="15.383" data-duration="15.765">
+      <div id="range" class="clip lv-scene frame" data-scene="an-ordered-range" data-track-index="0" data-start="16.587" data-duration="16.941">
         <h2 class="lv-heading">An ordered range</h2>
       </div>
-      <div id="range-list" class="clip range-list" data-scene="an-ordered-range" data-from-beat="0" data-track-index="2" data-start="15.983" data-duration="15.165">
+      <div id="range-list" class="clip range-list" data-scene="an-ordered-range" data-from-beat="0" data-track-index="2" data-start="17.187" data-duration="16.341">
         <div class="range-row">
           <code class="range-key">user/1</code>
           <span class="range-note">lower bound - included</span>
@@ -240,12 +240,12 @@
           <span class="range-note">upper bound - excluded</span>
         </div>
       </div>
-      <p id="range-caption" class="clip range-caption" data-scene="an-ordered-range" data-from-beat="1" data-track-index="3" data-start="20.588" data-duration="10.56">Reverse walks the same range from high to low.</p>
+      <p id="range-caption" class="clip range-caption" data-scene="an-ordered-range" data-from-beat="1" data-track-index="3" data-start="22.146" data-duration="11.382">Reverse walks the same range from high to low.</p>
 
-      <div id="filter" class="clip lv-scene frame" data-scene="filter-at-the-leaf" data-track-index="0" data-start="31.148" data-duration="44.83">
+      <div id="filter" class="clip lv-scene frame" data-scene="filter-at-the-leaf" data-track-index="0" data-start="33.528" data-duration="48.417">
         <h2 class="lv-heading">Filter at the leaf</h2>
       </div>
-      <div id="filter-visual" class="clip filter-layout" data-scene="filter-at-the-leaf" data-from-beat="0" data-track-index="2" data-start="31.748" data-duration="44.23">
+      <div id="filter-visual" class="clip filter-layout" data-scene="filter-at-the-leaf" data-from-beat="0" data-track-index="2" data-start="34.128" data-duration="47.817">
         <div>
           <pre class="lv-code filter-code"><code data-snippet="scans-filters-and-cursors/scan">await foreach (var key in tree
     .ScanKeysAsync&lt;Order&gt;(
@@ -264,24 +264,24 @@
           <li class="filter-result"><code>user/2</code><span class="lv-label">age 31 - returned</span></li>
         </ul>
       </div>
-      <p id="filter-explainer" class="clip filter-explainer" data-scene="filter-at-the-leaf" data-from-beat="3" data-track-index="4" data-start="49.706" data-duration="26.272">Unsupported value expressions fail on the client, before a request is sent.</p>
+      <p id="filter-explainer" class="clip filter-explainer" data-scene="filter-at-the-leaf" data-from-beat="3" data-track-index="4" data-start="53.523" data-duration="28.422">Unsupported value expressions fail on the client, before a request is sent.</p>
 
-      <div id="resilient" class="clip lv-scene frame" data-scene="resilient-streams" data-track-index="0" data-start="75.978" data-duration="21.205">
+      <div id="resilient" class="clip lv-scene frame" data-scene="resilient-streams" data-track-index="0" data-start="81.945" data-duration="21.995">
         <h2 class="lv-heading">Resilient streams</h2>
       </div>
-      <ol id="walk" class="clip walk" data-scene="resilient-streams" data-from-beat="0" data-track-index="2" data-start="76.578" data-duration="20.605">
+      <ol id="walk" class="clip walk" data-scene="resilient-streams" data-from-beat="0" data-track-index="2" data-start="82.545" data-duration="21.395">
         <li><span class="lv-label">yield</span><code class="lv-mono">user/1</code></li>
         <li><span class="lv-label">yield</span><code class="lv-mono">user/12</code></li>
         <li><span class="lv-label">enumerator</span><span>reclaimed</span></li>
         <li><span class="lv-label">resume</span><span>after user/12</span></li>
         <li><span class="lv-label">yield</span><code class="lv-mono">user/2</code></li>
       </ol>
-      <p id="walk-note" class="clip walk-note" data-scene="resilient-streams" data-from-beat="2" data-track-index="3" data-start="91.035" data-duration="6.148">Exhausted retry budget: an error, never a silent short prefix.</p>
+      <p id="walk-note" class="clip walk-note" data-scene="resilient-streams" data-from-beat="2" data-track-index="3" data-start="97.306" data-duration="6.634">Exhausted retry budget: an error, never a silent short prefix.</p>
 
-      <div id="pages" class="clip lv-scene frame" data-scene="pages-that-survive" data-track-index="0" data-start="97.183" data-duration="28.758">
+      <div id="pages" class="clip lv-scene frame" data-scene="pages-that-survive" data-track-index="0" data-start="103.94" data-duration="30.979">
         <h2 class="lv-heading">Pages that survive</h2>
       </div>
-      <div id="cursor-layout" class="clip cursor-layout" data-scene="pages-that-survive" data-from-beat="0" data-track-index="2" data-start="97.783" data-duration="28.158">
+      <div id="cursor-layout" class="clip cursor-layout" data-scene="pages-that-survive" data-from-beat="0" data-track-index="2" data-start="104.54" data-duration="30.379">
         <pre class="lv-code cursor-code"><code data-snippet="scans-filters-and-cursors/cursor">var cursorId = await tree
     .OpenEntryCursorAsync&lt;User&gt;(
         u =&gt; u.Age &gt;= 18,
@@ -304,17 +304,17 @@ await tree.CloseCursorAsync(cursorId);</code></pre>
         </div>
       </div>
 
-      <div id="where-next" class="clip lv-scene frame" data-scene="where-next" data-track-index="0" data-start="125.941" data-duration="14.774">
+      <div id="where-next" class="clip lv-scene frame" data-scene="where-next" data-track-index="0" data-start="134.919" data-duration="15.773">
         <h2 class="lv-heading">Where next</h2>
       </div>
-      <ol id="where-next-list" class="clip places" data-scene="where-next" data-from-beat="0" data-track-index="2" data-start="126.541" data-duration="14.174">
+      <ol id="where-next-list" class="clip places" data-scene="where-next" data-from-beat="0" data-track-index="2" data-start="135.519" data-duration="15.173">
         <li class="place place-next">
           <span class="lv-node"></span>
           <h3 class="place-name">Atomic writes</h3>
           <p class="place-what">Next on Build</p>
         </li>
       </ol>
-      <ol id="where-next-pages" class="clip places" style="top: 500px" data-scene="where-next" data-from-beat="1" data-track-index="3" data-start="132.366" data-duration="8.349">
+      <ol id="where-next-pages" class="clip places" style="top: 500px" data-scene="where-next" data-from-beat="1" data-track-index="3" data-start="141.805" data-duration="8.887">
         <li class="place">
           <span class="lv-node"></span>
           <h3 class="place-name">Predicate operations</h3>
@@ -328,7 +328,7 @@ await tree.CloseCursorAsync(cursorId);</code></pre>
       </ol>
 
       <!-- narration:begin -->
-      <audio id="narration" src="renders/narration/scans-filters-and-cursors/narration.wav" data-start="0" data-duration="140.715" data-track-index="1"></audio>
+      <audio id="narration" src="renders/narration/scans-filters-and-cursors/narration.wav" data-start="0" data-duration="150.692" data-track-index="1"></audio>
       <!-- narration:end -->
     </div>
     <script>

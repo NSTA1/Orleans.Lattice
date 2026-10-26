@@ -1,10 +1,12 @@
 # Scans, filters and cursors - script
 
-Status: fact-checked on 2026-10-26 by the Docs agent, cue by cue, against `docs/lattice/predicated-operations.md`, `docs/lattice/api.md`, `videos/series.md` and `videos/series.json`. The predicate cue now clarifies that independent sub-expressions are evaluated on the client; the recovery cue says it resumes after, not on, the last yielded key; and the scan cue describes the resilient key and entry scans without abbreviating their API names.
+Status: fact-checked on 2026-10-26 by the Docs agent, cue by cue, against `docs/lattice/predicated-operations.md`, `docs/lattice/api.md`, `videos/series.md` and `videos/series.json`. The predicate cue now clarifies that independent sub-expressions are evaluated on the client; the recovery cue says it continues after, not on, the last yielded key, and the Docs agent rechecked that wording on 2026-10-26; the scan cue describes the resilient key and entry scans without abbreviating their API names.
 
 Written form, in the series voice (Emma, British English). Each paragraph under "Narration" is one cue, and each cue is a beat its scene can move on. A `pause` comment adds silence before the next cue or after the last one.
 
 ## Narration
+
+<!-- pace 0.92 -->
 
 ### Scans, filters and cursors
 
@@ -38,7 +40,7 @@ A method call on the value outside that set is not silently sent to the server. 
 
 For a long streaming walk, use the resilient key or entry scans, not the raw enumeration methods.
 
-If the remote enumeration is reclaimed, the resilient wrapper reconnects with the filter intact and resumes after the last key it yielded.
+If the remote enumeration is reclaimed, the resilient wrapper reconnects with the filter intact and continues after the last key it yielded.
 
 Recovery is bounded. If attempts run out, it throws instead of returning a short range as complete.
 

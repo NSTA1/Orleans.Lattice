@@ -6,12 +6,12 @@ agent_spec: "docs/agents/concepts.yaml"
 
 An ordered scan can filter values on the owning leaf, while a durable cursor preserves progress across pages and failovers.
 
-<!-- video:begin episode="scans-filters-and-cursors" path="build" order="3" length="2:21" cut="dd33493e1138" -->
+<!-- video:begin episode="scans-filters-and-cursors" path="build" order="3" length="2:31" cut="7d23aac6b1c0" -->
 
 > [!NOTE]
 > Watch it on the [documentation site](https://nsta1.github.io/Orleans.Lattice/docs/videos/scans-filters-and-cursors.html),
-> or [download it](../../docs-site/media/scans-filters-and-cursors-dd33493e1138.mp4)
-> (MP4, 2:21, 7.4 MB).
+> or [download it](../../docs-site/media/scans-filters-and-cursors-7d23aac6b1c0.mp4)
+> (MP4, 2:31, 7.8 MB).
 
 <!-- video:end -->
 
@@ -51,7 +51,7 @@ A method call on the value outside that set is not silently sent to the server. 
 
 For a long streaming walk, use the resilient key or entry scans, not the raw enumeration methods.
 
-If the remote enumeration is reclaimed, the resilient wrapper reconnects with the filter intact and resumes after the last key it yielded.
+If the remote enumeration is reclaimed, the resilient wrapper reconnects with the filter intact and continues after the last key it yielded.
 
 Recovery is bounded. If attempts run out, it throws instead of returning a short range as complete.
 

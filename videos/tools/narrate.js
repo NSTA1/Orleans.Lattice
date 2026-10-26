@@ -46,6 +46,7 @@ import { wavDuration } from "./lib/wav.js";
 
 // Both engines write 24 kHz mono; the joined track and its silences match it.
 const SAMPLE_RATE = 24000;
+const ffmpeg = (args) => spawnSync("ffmpeg", ["-hide_banner", "-nostats", ...args], { encoding: "utf8" });
 
 let paths;
 try {
@@ -70,7 +71,12 @@ try {
 }
 const engine = voice.provider;
 const lexicon = loadLexicon(path.join(workspaceRoot, "voice", "lexicon.json"));
-const { cues, tail } = parseScript(readFileSync(paths.script, "utf8"), `episodes/${slug}/SCRIPT.md`);
+const { cues, tail, pace } = parseScript(readFileSync(paths.script, "utf8"), `episodes/${slug}/SCRIPT.md`);
+const ffmpegAvailable = ffmpeg(["-version"]).status === 0;
+if (pace < 1 && !ffmpegAvailable) {
+  console.error("narrate: the pace directive needs ffmpeg to time-stretch each cue and measure its duration");
+  process.exit(1);
+}
 const cli = JSON.parse(readFileSync(path.join(workspaceRoot, "package.json"), "utf8")).devDependencies.hyperframes;
 const started = Date.now();
 
@@ -241,7 +247,25 @@ if (engine === "chatterbox") {
   });
 }
 
-const durations = files.map((file) => wavDuration(readFileSync(path.join(outDir, file))));
+const audioFiles = files.map((file) => path.join(outDir, file));
+if (pace < 1) {
+  const pacedDir = path.join(outDir, "paced");
+  mkdirSync(pacedDir, { recursive: true });
+  audioFiles.forEach((file, index) => {
+    const paced = path.join(pacedDir, path.basename(file));
+    const result = ffmpeg([
+      "-loglevel", "error", "-y", "-i", file,
+      "-af", `atempo=${pace}`, "-ar", String(SAMPLE_RATE), "-ac", "1", "-c:a", "pcm_s16le",
+      paced,
+    ]);
+    if (result.status !== 0) {
+      console.error(`narrate: ffmpeg failed to time-stretch cue ${index + 1}:\n${result.stderr || result.error?.message}`);
+      process.exit(1);
+    }
+    audioFiles[index] = paced;
+  });
+}
+const durations = audioFiles.map((file) => Math.round(wavDuration(readFileSync(file)) * 1000) / 1000);
 const reused = cues.length - spoken;
 if (engine === "kokoro") {
   files.forEach((_, index) => {
@@ -261,9 +285,8 @@ const { timeline, duration } = buildTimeline(cues, durations, {
 });
 const scenes = buildScenes(cues, timeline, duration, { lead: voice.sceneLeadSeconds });
 
-const ffmpeg = (args) => spawnSync("ffmpeg", ["-hide_banner", "-nostats", ...args], { encoding: "utf8" });
 let loudness = null;
-if (ffmpeg(["-version"]).status !== 0) {
+if (!ffmpegAvailable) {
   console.log("narrate: ffmpeg not found; the clips are spoken, but narration.wav, which the composition plays, needs ffmpeg to join and master them");
 } else {
   // Silence before each clip, so every cue lands exactly where the timeline
@@ -291,7 +314,7 @@ if (ffmpeg(["-version"]).status !== 0) {
   const raw = path.join(outDir, "narration.raw.wav");
   const joined = ffmpeg([
     "-loglevel", "error", "-y",
-    ...files.flatMap((file) => ["-i", path.join(outDir, file)]),
+    ...audioFiles.flatMap((file) => ["-i", file]),
     "-filter_complex", graph.join(";"),
     "-map", "[out]", "-c:a", "pcm_s16le",
     raw,
@@ -339,6 +362,7 @@ if (ffmpeg(["-version"]).status !== 0) {
 const manifest = {
   episode: slug,
   engine,
+  pace,
   voice:
     engine === "kokoro"
       ? { voice: kokoro.voice, lang: kokoro.lang, speed: kokoro.speed }
@@ -362,7 +386,7 @@ const manifest = {
   })),
   cues: cues.map((cue, i) => ({
     index: i + 1,
-    file: files[i],
+    file: path.relative(outDir, audioFiles[i]).split(path.sep).join("/"),
     scene: sceneId(cue.scene ?? "Untitled"),
     start: timeline[i].start,
     end: timeline[i].end,

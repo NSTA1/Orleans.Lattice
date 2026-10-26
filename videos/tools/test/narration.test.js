@@ -47,7 +47,22 @@ test("only the Narration section is spoken, one cue per paragraph, labelled by s
       { text: "That is the whole idea.", scene: "The close", pause: 0.8 },
     ],
     tail: 2.5,
+    pace: 1,
   });
+});
+
+test("a pace directive slows every spoken cue and must precede the narration", () => {
+  const parsed = parseScript("## Narration\n\n<!-- pace 0.92 -->\n\n### Opening\n\nOne.\n\nTwo.");
+  assert.equal(parsed.pace, 0.92);
+  assert.deepEqual(parsed.cues.map((cue) => cue.text), ["One.", "Two."]);
+  assert.throws(
+    () => parseScript("## Narration\n\nOne.\n\n<!-- pace 0.92 -->\n\nTwo.", "x.md"),
+    /pace directive must appear before the first narration cue/,
+  );
+  assert.throws(
+    () => parseScript("## Narration\n\n<!-- pace 0.7 -->\n\nOne.", "x.md"),
+    /pace must be between 0.8 and 1/,
+  );
 });
 
 test("a pause directive is silence before the next cue; direction notes are never spoken", () => {
