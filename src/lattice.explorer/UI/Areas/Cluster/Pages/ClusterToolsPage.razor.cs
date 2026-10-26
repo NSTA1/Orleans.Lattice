@@ -208,31 +208,37 @@ public partial class ClusterToolsPage : IDisposable
 
         try
         {
+            token.ThrowIfCancellationRequested();
             if (_nextChunk == 0)
             {
                 await admin.BeginBulkLoadAsync(TreeId, _operationId, token);
+                token.ThrowIfCancellationRequested();
             }
 
             while (_nextChunk < ChunkCount)
             {
                 var chunk = _entries.GetRange((int)(_nextChunk * ChunkSize), (int)Math.Min(ChunkSize, _entries.Count - (_nextChunk * ChunkSize)));
                 var ack = await admin.AppendBulkLoadAsync(TreeId, _operationId, _nextChunk, chunk, token);
+                token.ThrowIfCancellationRequested();
                 _nextChunk = ack.NextChunkIndex;
                 StateHasChanged();
             }
 
             var result = await admin.CommitBulkLoadAsync(TreeId, _operationId, token);
+            token.ThrowIfCancellationRequested();
             _bulkKeys = result.TotalLiveKeys;
             _bulk = BulkStage.Done;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            throw;
         }
         catch (Exception exception)
         {
-            _bulkError = ClusterFaults.Describe(exception);
-            _bulk = BulkStage.Failed;
+            if (!token.IsCancellationRequested)
+            {
+                _bulkError = ClusterFaults.Describe(exception);
+                _bulk = BulkStage.Failed;
+            }
         }
     }
 
