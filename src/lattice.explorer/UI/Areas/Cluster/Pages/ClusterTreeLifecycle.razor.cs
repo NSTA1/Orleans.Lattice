@@ -86,6 +86,11 @@ public partial class ClusterTreeLifecycle : IDisposable
 
     private void Show(ClusterLoad<TreeDeletionStatus> status)
     {
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _status = status;
         if (status.Value is { PurgeInProgress: true })
         {
@@ -109,6 +114,11 @@ public partial class ClusterTreeLifecycle : IDisposable
 
         await InvokeAsync(() =>
         {
+            if (_lifetime.IsLeft || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (!value.PurgeInProgress && _status.Value is { PurgeInProgress: true })
             {
                 TreeChanges.Changed();
@@ -165,11 +175,20 @@ public partial class ClusterTreeLifecycle : IDisposable
         var result = await ClusterLoad<TreeAliasResolution>.RunAsync(
             ct => Facades.RequireTreeAdmin().SetTreeAliasAsync(TreeId, target, ct),
             _lifetime.Token);
+        if (result.Value is not null)
+        {
+            TreeChanges.Changed();
+        }
+
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _busy = false;
 
         if (result.Value is not null)
         {
-            TreeChanges.Changed();
             Toasts.Show("Alias set.", LtToastTone.Success);
             await OperationSettled.InvokeAsync();
         }
@@ -184,12 +203,21 @@ public partial class ClusterTreeLifecycle : IDisposable
         _confirm = Verb.None;
         _busy = true;
         var result = await ClusterLoad<TreeDeletionStatus>.RunAsync(verb, _lifetime.Token);
+        if (result.Value is not null)
+        {
+            TreeChanges.Changed();
+        }
+
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _busy = false;
 
         if (result.Value is { } value)
         {
             Show(result);
-            TreeChanges.Changed();
             Toasts.Show(done(value), value.PurgeInProgress ? LtToastTone.Info : LtToastTone.Success);
             await OperationSettled.InvokeAsync();
         }
