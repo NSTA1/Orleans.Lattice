@@ -933,7 +933,7 @@ internal sealed partial class ShardRootGrain(
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
                 // Online-resize mirror, at this copy's own stamps (issue #4522).
-                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
+                await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -974,7 +974,7 @@ internal sealed partial class ShardRootGrain(
                 // path so expiry is preserved end-to-end.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value, expiresAtTicks);
                 // Online-resize mirror, at this copy's own stamps (issue #4522).
-                await MirrorAppliedWritesAsync([key], (key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
+                await MirrorAppliedWritesAsync(MirroredKey(key), (key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 return;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1021,7 +1021,7 @@ internal sealed partial class ShardRootGrain(
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
                 // Online-resize mirror, at this copy's own stamps (issue #4522).
-                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
+                await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return null;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1074,7 +1074,7 @@ internal sealed partial class ShardRootGrain(
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
                 // Online-resize mirror, at this copy's own stamps (issue #4522).
-                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
+                await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1174,7 +1174,7 @@ internal sealed partial class ShardRootGrain(
                 try
                 {
                     await MirrorAppliedWritesAsync(
-                        DistinctKeys(entries),
+                        MirroredKeys(entries),
                         entries,
                         static (t, s) => t.SetManyAsync(s),
                         static s => ShadowForwardRefusal.PerEntry(s));
@@ -1402,7 +1402,7 @@ internal sealed partial class ShardRootGrain(
             }
 
             await ForwardCrdtBatchToShadowIfNeededAsync(deltas);
-            await MirrorAppliedRowsAsync(DistinctKeys(deltas));
+            await MirrorAppliedRowsAsync(MirroredKeys(deltas));
             return;
         }
 
@@ -1474,7 +1474,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         await ForwardCrdtBatchToShadowIfNeededAsync(deltas);
-        await MirrorAppliedRowsAsync(DistinctKeys(deltas));
+        await MirrorAppliedRowsAsync(MirroredKeys(deltas));
     }
 
     /// <summary>
@@ -1651,13 +1651,16 @@ internal sealed partial class ShardRootGrain(
                 var forwardTs = Stopwatch.GetTimestamp();
                 try
                 {
-                    var writtenKeys = new HashSet<string>(written, StringComparer.Ordinal);
-                    var writtenEntries = entries.FindAll(e => writtenKeys.Contains(e.Key));
-                    await MirrorAppliedWritesAsync(
-                        writtenKeys,
-                        writtenEntries,
-                        static (t, s) => t.SetManyAsync(s),
-                        static s => ShadowForwardRefusal.PerEntry(s));
+                    if (HasShadowTarget())
+                    {
+                        var writtenKeys = new HashSet<string>(written, StringComparer.Ordinal);
+                        var writtenEntries = entries.FindAll(e => writtenKeys.Contains(e.Key));
+                        await MirrorAppliedWritesAsync(
+                            writtenKeys,
+                            writtenEntries,
+                            static (t, s) => t.SetManyAsync(s),
+                            static s => ShadowForwardRefusal.PerEntry(s));
+                    }
                 }
                 finally
                 {
@@ -1955,7 +1958,7 @@ internal sealed partial class ShardRootGrain(
                 // mirror ships the tombstone row at this copy's own stamp (issue
                 // #4522). This differs from the adaptive-split path, where
                 // post-swap cleanup restores convergence within one tree.
-                await MirrorAppliedWritesAsync([key], key, static (t, s) => t.DeleteAsync(s));
+                await MirrorAppliedWritesAsync(MirroredKey(key), key, static (t, s) => t.DeleteAsync(s));
                 return result;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))

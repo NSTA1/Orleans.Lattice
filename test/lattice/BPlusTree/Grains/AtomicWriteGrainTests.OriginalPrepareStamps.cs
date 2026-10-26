@@ -286,6 +286,22 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
+    public void A_delivery_covering_every_stamped_key_carries_the_stamp_map_itself_and_a_partial_one_a_subset()
+    {
+        var (grain, state, _, _, _) = CreateGrain();
+        var stamps = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal) { ["a"] = StampP, ["b"] = StampP };
+        state.State.OriginalPrepareStamps = stamps;
+        state.State.OriginalPrepareStampsPhysicalTreeId = TreeId;
+
+        var whole = grain.CarriedOriginalStamps(TreeId, committed: true, new Dictionary<string, byte[]> { ["a"] = [1], ["b"] = [2] });
+        Assert.That(whole, Is.SameAs(stamps), "a delivery covering exactly the stamped keys carries the map without copying it");
+
+        var sameCountOtherKeys = grain.CarriedOriginalStamps(TreeId, committed: true, new Dictionary<string, byte[]> { ["a"] = [1], ["z"] = [2] });
+        Assert.That(sameCountOtherKeys, Is.Not.SameAs(stamps));
+        Assert.That(sameCountOtherKeys!.Keys, Is.EquivalentTo(new[] { "a" }), "an equal-sized delivery over other keys still carries only its own");
+    }
+
+    [Test]
     public async Task A_terminal_redelivered_to_the_resized_copy_after_a_purge_carries_no_stamps()
     {
         var map = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount);

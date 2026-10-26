@@ -27,10 +27,11 @@ public sealed class ShellLayoutDisposalTests : ShellLayoutTestContext
         await DisposeComponentsAsync();
         var listener = new Handle();
         await cut.InvokeAsync(() => module.Observing.SetResult(listener));
+        var fault = await LeftPage.FaultAsync(Renderer);
 
         Assert.Multiple(() =>
         {
-            Assert.That(LeftPage.Fault(Renderer), Is.Null, "the circuit would end");
+            Assert.That(fault, Is.Null, "the circuit would end");
             Assert.That(listener.Disposed, Is.True, "a listener registered after the layout is gone is released");
         });
     }

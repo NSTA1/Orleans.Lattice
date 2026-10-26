@@ -83,7 +83,7 @@ internal sealed partial class AtomicWriteGrain
         foreach (var (key, stamp) in found)
         {
             if (stamp is { } p)
-                (stamps ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal))[key] = p;
+                (stamps ??= new Dictionary<string, HybridLogicalClock>(found.Count, StringComparer.Ordinal))[key] = p;
         }
 
         state.State.OriginalPrepareStamps = stamps;
@@ -231,13 +231,32 @@ internal sealed partial class AtomicWriteGrain
             return null;
         }
 
+        // The common shape - the delivery covers exactly the stamped keys (a
+        // saga confined to one shard) - carries the map itself rather than a
+        // copy of it. Neither the delivery nor the receiving shard mutates it.
+        if (stamps.Count == committedValues.Count && StampsEveryKey(stamps, committedValues))
+            return stamps;
+
         Dictionary<string, HybridLogicalClock>? carried = null;
         foreach (var key in committedValues.Keys)
         {
             if (stamps.TryGetValue(key, out var stamp))
-                (carried ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal))[key] = stamp;
+                (carried ??= new Dictionary<string, HybridLogicalClock>(Math.Min(stamps.Count, committedValues.Count), StringComparer.Ordinal))[key] = stamp;
         }
 
         return carried;
+    }
+
+    private static bool StampsEveryKey(
+        Dictionary<string, HybridLogicalClock> stamps,
+        IReadOnlyDictionary<string, byte[]> committedValues)
+    {
+        foreach (var key in committedValues.Keys)
+        {
+            if (!stamps.ContainsKey(key))
+                return false;
+        }
+
+        return true;
     }
 }

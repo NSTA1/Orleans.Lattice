@@ -237,4 +237,39 @@ public sealed class AppConsentAnalysisTests
         Assert.That(draft.ToCeiling(), Is.EqualTo(new AppCapabilityCeilingDescriptor { AllowedOperations = LatticeOperation.Read, ApprovedExceptionScopes = [scope] })
             .Using<AppCapabilityCeilingDescriptor>((a, b) => a.AllowedOperations == b.AllowedOperations && a.ApprovedExceptionScopes.SequenceEqual(b.ApprovedExceptionScopes)));
     }
+
+    [Test]
+    public void Covers_unknown_scope_kind_never_approves_an_exception()
+    {
+        var scope = new AppExceptionScope
+        {
+            App = "crm",
+            Tree = "contacts",
+            Kind = (LatticeScopeKind)int.MaxValue,
+        };
+
+        Assert.That(AppConsentAnalysis.Covers([scope], scope), Is.False);
+    }
+
+    [Test]
+    public void RequiredScopes_duplicate_cross_app_scopes_are_returned_once()
+    {
+        var app = AppsTestData.TaskBoard(crossApp: true);
+        var crossApp = app.Roles[0].Scopes[^1];
+        app = app with
+        {
+            Roles = app.Roles.SetItem(1, app.Roles[1] with { Scopes = [crossApp, crossApp] }),
+        };
+
+        Assert.That(AppConsentAnalysis.RequiredScopes(app), Is.EqualTo(new[]
+        {
+            new AppExceptionScope
+            {
+                App = "crm",
+                Tree = "contacts",
+                Kind = LatticeScopeKind.Prefix,
+                KeyOrPrefix = "eu-",
+            },
+        }));
+    }
 }

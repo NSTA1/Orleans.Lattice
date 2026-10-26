@@ -234,7 +234,7 @@ internal sealed partial class BPlusLeafGrain
         {
             if (carried && LatticeOriginalPrepareStampContext.TryGetStamp(kvp.Key, out var stamp))
             {
-                (stamps ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal))[kvp.Key] = stamp;
+                (stamps ??= new Dictionary<string, HybridLogicalClock>(missingKeys.Count, StringComparer.Ordinal))[kvp.Key] = stamp;
                 (migratedKeys ??= new HashSet<string>(StringComparer.Ordinal)).Add(kvp.Key);
                 continue;
             }
@@ -245,7 +245,7 @@ internal sealed partial class BPlusLeafGrain
                 && bucket.TryGetValue(kvp.Key, out var prepared)
                 && IsMarkedLwwPrepare(transactionId, kvp.Key, deltaBucket))
             {
-                (stamps ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal))[kvp.Key] = prepared.Timestamp;
+                (stamps ??= new Dictionary<string, HybridLogicalClock>(missingKeys.Count, StringComparer.Ordinal))[kvp.Key] = prepared.Timestamp;
                 if (prepared.IsMigrated)
                     (migratedKeys ??= new HashSet<string>(StringComparer.Ordinal)).Add(kvp.Key);
             }

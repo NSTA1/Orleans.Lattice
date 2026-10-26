@@ -405,7 +405,7 @@ internal sealed partial class ShardRootGrain
         // same-operation retry.
         if (state.State.LastCompletedBulkOperationId == operationId)
         {
-            await MirrorAppliedRowsAsync(DistinctKeys(sortedEntries), joinCrdt: false);
+            await MirrorAppliedRowsAsync(MirroredKeys(sortedEntries), joinCrdt: false);
             return;
         }
 
@@ -416,7 +416,7 @@ internal sealed partial class ShardRootGrain
             if (state.State.PendingBulkGraft.OperationId == operationId)
             {
                 await CompleteBulkGraftAsync();
-                await MirrorAppliedRowsAsync(DistinctKeys(sortedEntries), joinCrdt: false);
+                await MirrorAppliedRowsAsync(MirroredKeys(sortedEntries), joinCrdt: false);
                 return;
             }
             await CompleteBulkGraftAsync();

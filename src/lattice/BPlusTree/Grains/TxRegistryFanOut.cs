@@ -725,6 +725,15 @@ internal static class TxRegistryFanOut
     {
         var keys = TxRegistryRouting.EnumerateKeys(treeId, highWater);
         var markTask = grainFactory.GetGrain<ITxRegistryHighWaterGrain>(treeId).GetShardHighWaterAsync();
+        if (keys.Length == 1)
+        {
+            // A tree no shard has written to reads only its legacy key: await
+            // that one call directly instead of through a task array and a
+            // Task.WhenAll combinator.
+            var only = await call(grainFactory.GetGrain<ITxRegistryGrain>(keys[0]));
+            return ([only], TxRegistryHighWaterCache.Observe(grainFactory, treeId, await markTask));
+        }
+
         var tasks = new Task<T>[keys.Length];
         for (var i = 0; i < keys.Length; i++)
         {

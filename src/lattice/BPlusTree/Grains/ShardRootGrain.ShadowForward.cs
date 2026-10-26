@@ -80,8 +80,22 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private IShardRootGrain? TryGetShadowTarget()
     {
+        if (!HasShadowTarget()) return null;
+        var targetKey = $"{state.State.ShadowForward!.DestinationPhysicalTreeId}/{MyShardIndex}";
+        return grainFactory.GetGrain<IShardRootGrain>(targetKey);
+    }
+
+    /// <summary>
+    /// Whether <see cref="TryGetShadowTarget"/> would return a target, decided
+    /// without building the target key or resolving a grain reference. The
+    /// write paths test it before assembling the key set a resize mirror needs,
+    /// so a shard with no active shadow-forward - the steady state - allocates
+    /// nothing for the mirror.
+    /// </summary>
+    private bool HasShadowTarget()
+    {
         var sf = state.State.ShadowForward;
-        if (sf is null) return null;
+        if (sf is null) return false;
         // Rejecting still forwards: the gate refuses every operation that
         // arrives once the phase is set, so the only mutations that get this
         // far are ones that passed the gate before it - an interleaved batch
@@ -91,13 +105,10 @@ internal sealed partial class ShardRootGrain
         // acknowledged write on a copy no router reads.
         if (sf.Phase != ShadowForwardPhase.Draining
             && sf.Phase != ShadowForwardPhase.Drained
-            && sf.Phase != ShadowForwardPhase.Rejecting) return null;
-        if (string.IsNullOrEmpty(sf.DestinationPhysicalTreeId)) return null;
+            && sf.Phase != ShadowForwardPhase.Rejecting) return false;
+        if (string.IsNullOrEmpty(sf.DestinationPhysicalTreeId)) return false;
         // Defensive: refuse to forward to ourselves.
-        if (string.Equals(sf.DestinationPhysicalTreeId, TreeId, StringComparison.Ordinal))
-            return null;
-        var targetKey = $"{sf.DestinationPhysicalTreeId}/{MyShardIndex}";
-        return grainFactory.GetGrain<IShardRootGrain>(targetKey);
+        return !string.Equals(sf.DestinationPhysicalTreeId, TreeId, StringComparison.Ordinal);
     }
 
     /// <summary>

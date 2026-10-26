@@ -1,4 +1,5 @@
 using Bunit.Rendering;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Explorer.Tests.UI;
 
@@ -19,10 +20,13 @@ internal static class LeftPage
     /// would have ended the circuit, or <see langword="null"/> when the page stopped quietly.
     /// </summary>
     /// <param name="renderer">The test context's renderer.</param>
+    /// <param name="settle">How long to wait for the renderer to report a fault.</param>
     /// <returns>The fault, or <see langword="null"/>.</returns>
-    public static Exception? Fault(BunitRenderer renderer)
+    public static async Task<Exception?> FaultAsync(BunitRenderer renderer, TimeSpan? settle = null)
     {
-        SpinWait.SpinUntil(() => renderer.UnhandledException.IsCompleted, Settle);
+        await TestPoll.TryUntilAsync(
+            () => renderer.UnhandledException.IsCompleted,
+            settle ?? Settle);
         return renderer.UnhandledException.IsCompleted ? renderer.UnhandledException.Result : null;
     }
 }
