@@ -1,0 +1,16 @@
+{
+  "path": "build",
+  "order": 3,
+  "items": [
+    "B3"
+  ],
+  "poster": {
+    "scene": "scans-filters-and-cursors",
+    "beat": 0,
+    "offset": 3.5
+  },
+  "published": {
+    "cut": "dd33493e1138",
+    "bytes": 7420349
+  }
+}

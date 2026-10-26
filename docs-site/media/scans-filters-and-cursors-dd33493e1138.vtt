@@ -1,0 +1,187 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:04.789
+Values that merge showed how the value
+decides what concurrent writes mean.
+
+2
+00:00:04.789 --> 00:00:08.620
+Here, we choose which keys to read,
+and how to keep the walk going.
+
+3
+00:00:08.970 --> 00:00:13.717
+This is Scans, filters and cursors:
+ordered ranges, server-side predicates,
+
+4
+00:00:13.717 --> 00:00:14.983
+and resumable pages.
+
+5
+00:00:15.983 --> 00:00:20.238
+A streaming scan walks live keys
+in strict lexicographic order.
+
+6
+00:00:20.588 --> 00:00:23.742
+Give it a lower bound,
+an upper bound, or both.
+
+7
+00:00:23.742 --> 00:00:27.231
+The lower bound is included;
+the upper bound is not.
+
+8
+00:00:27.581 --> 00:00:30.748
+A reverse scan walks
+that same range from high to low.
+
+9
+00:00:31.748 --> 00:00:36.068
+A typed scan can also take a predicate:
+a C-sharp expression over the value.
+
+10
+00:00:36.418 --> 00:00:40.075
+The client translates that expression
+to a small, serialisable rule.
+
+11
+00:00:40.075 --> 00:00:43.894
+An unsupported expression fails before
+any request reaches the cluster.
+
+12
+00:00:44.244 --> 00:00:47.811
+Each leaf checks its own values
+against their JSON document.
+
+13
+00:00:47.811 --> 00:00:49.356
+Only matches are returned.
+
+14
+00:00:49.706 --> 00:00:53.334
+A key-only scan sends no values
+across the wire.
+
+15
+00:00:53.334 --> 00:00:57.264
+An entry scan returns only
+matching key-value pairs.
+
+16
+00:00:57.614 --> 00:00:59.703
+The allowlist covers member access,
+
+17
+00:00:59.703 --> 00:01:03.582
+constants, comparisons, boolean logic,
+and ordinal string checks.
+
+18
+00:01:03.582 --> 00:01:05.133
+Conversions are unwrapped,
+
+19
+00:01:05.133 --> 00:01:09.549
+and expressions independent of the value
+are evaluated once on the client.
+
+20
+00:01:09.899 --> 00:01:14.672
+A method call on the value outside that
+set is not silently sent to the server.
+
+21
+00:01:14.672 --> 00:01:15.578
+It is rejected.
+
+22
+00:01:16.578 --> 00:01:20.483
+For a long streaming walk,
+use the resilient key or entry scans,
+
+23
+00:01:20.483 --> 00:01:22.435
+not the raw enumeration methods.
+
+24
+00:01:22.785 --> 00:01:26.937
+If the remote enumeration is reclaimed,
+the resilient wrapper reconnects
+
+25
+00:01:26.937 --> 00:01:30.685
+with the filter intact
+and resumes after the last key it yielded.
+
+26
+00:01:31.035 --> 00:01:32.208
+Recovery is bounded.
+
+27
+00:01:32.208 --> 00:01:36.783
+If attempts run out, it throws instead
+of returning a short range as complete.
+
+28
+00:01:37.783 --> 00:01:40.395
+When you need explicit pages,
+open a cursor.
+
+29
+00:01:40.395 --> 00:01:42.295
+It returns an opaque identifier;
+
+30
+00:01:42.295 --> 00:01:45.144
+the server checkpoints
+progress after each page.
+
+31
+00:01:45.494 --> 00:01:48.668
+Keep that identifier
+in your own durable state.
+
+32
+00:01:48.668 --> 00:01:52.719
+A cursor can resume after a silo failover
+or client restart.
+
+33
+00:01:53.069 --> 00:01:56.958
+Ask for each page until HasMore is false,
+then close the cursor.
+
+34
+00:01:57.308 --> 00:02:01.817
+For a stable saga-decision view
+across pages, open a point-in-time cursor.
+
+35
+00:02:01.817 --> 00:02:04.741
+A live cursor can reflect
+changes between pages.
+
+36
+00:02:06.541 --> 00:02:08.366
+Next on Build: Atomic writes.
+
+37
+00:02:08.366 --> 00:02:12.016
+The links are on this episode's page
+in the documentation.
+
+38
+00:02:12.366 --> 00:02:15.175
+Predicate operations
+explains the filter language.
+
+39
+00:02:15.175 --> 00:02:18.715
+The API reference gives each scan
+and cursor method's contract.
