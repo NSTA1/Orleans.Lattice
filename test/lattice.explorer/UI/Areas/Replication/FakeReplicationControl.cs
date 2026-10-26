@@ -17,6 +17,8 @@ internal sealed class FakeReplicationControl : ILatticeReplicationControl
 
     public TaskCompletionSource? ChangeGate { get; set; }
 
+    public bool ChangeGateIgnoresCancellation { get; set; }
+
     public int Reads { get; private set; }
 
     public List<(string TreeId, LatticeMergeMode Mode, string? Bootstrap)> Enables { get; } = [];
@@ -32,7 +34,7 @@ internal sealed class FakeReplicationControl : ILatticeReplicationControl
         Enables.Add((treeId, mode, bootstrapSourceClusterId));
         if (ChangeGate is { } gate)
         {
-            await gate.Task.WaitAsync(cancellationToken);
+            await (ChangeGateIgnoresCancellation ? gate.Task : gate.Task.WaitAsync(cancellationToken));
         }
 
         if (ChangeFailure is not null)
@@ -60,7 +62,7 @@ internal sealed class FakeReplicationControl : ILatticeReplicationControl
         Disables.Add(treeId);
         if (ChangeGate is { } gate)
         {
-            await gate.Task.WaitAsync(cancellationToken);
+            await (ChangeGateIgnoresCancellation ? gate.Task : gate.Task.WaitAsync(cancellationToken));
         }
 
         if (ChangeFailure is not null)
