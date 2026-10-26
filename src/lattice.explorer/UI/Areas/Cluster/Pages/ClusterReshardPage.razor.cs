@@ -93,6 +93,11 @@ public partial class ClusterReshardPage : IDisposable
 
     private void Show(ClusterLoad<TreeReshardStatus> status)
     {
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _status = status;
         if (status.Value is { InProgress: true })
         {
@@ -116,6 +121,11 @@ public partial class ClusterReshardPage : IDisposable
 
         await InvokeAsync(() =>
         {
+            if (_lifetime.IsLeft || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (!value.InProgress && _status.Value is { InProgress: true })
             {
                 // The tree's shard count changed: every list of trees read before it is stale.
@@ -178,13 +188,22 @@ public partial class ClusterReshardPage : IDisposable
         var started = await ClusterLoad<TreeReshardStatus>.RunAsync(
             ct => ReadAsync(admin => admin.ReshardTreeAsync(TreeId, plan.Target, ct), ct),
             _lifetime.Token);
+        if (started.Value is not null)
+        {
+            TreeChanges.Changed();
+        }
+
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _busy = false;
 
         if (started.Value is not null)
         {
             _reviewing = null;
             _target = null;
-            TreeChanges.Changed();
             Toasts.Show("Reshard started.", LtToastTone.Info);
             Show(started);
         }

@@ -156,6 +156,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     private readonly ILatticeReplicationContext? _replicationContext;
     private readonly Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? _options;
     private readonly IReplicationTopology? _topology;
+    private readonly IReplicationTenantIsolationGate? _tenantIsolationGate;
 
     /// <summary>
     /// Initialises the service with its dependencies. The
@@ -187,7 +188,10 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// has no enrollment signal and fails closed. The optional
     /// <paramref name="topology"/> names the configured peers whose shipped
     /// applied low watermark this receiver accepts (issue #4586); when it is
-    /// absent none is accepted.
+    /// absent none is accepted. The optional <paramref name="tenantIsolationGate"/>
+    /// authorizes an authenticated peer to read a tenant-scoped tree through the
+    /// digest probes and the content-manifest exchange; when it is absent or
+    /// inactive those RPCs refuse every tenant-scoped tree.
     /// </summary>
     public LatticeReplicationGrpcService(
         LatticeReplicationGrpcMethod method,
@@ -200,7 +204,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         ILatticeCompressionDictionaryProvider? dictionaryProvider = null,
         ILatticeReplicationContext? replicationContext = null,
         Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null,
-        IReplicationTopology? topology = null)
+        IReplicationTopology? topology = null,
+        IReplicationTenantIsolationGate? tenantIsolationGate = null)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
@@ -220,6 +225,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         _replicationContext = replicationContext;
         _options = options;
         _topology = topology;
+        _tenantIsolationGate = tenantIsolationGate;
     }
 
     /// <summary>
@@ -271,6 +277,50 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
 
         throw new RpcException(new Status(StatusCode.PermissionDenied,
             $"Tree '{treeName}' is not enrolled for replication on this cluster."));
+    }
+
+    /// <summary>
+    /// Tenant gate for the RPCs that answer from a tree's content (the digest
+    /// probes and the content-manifest exchange). Enrollment alone is not
+    /// enough for a tenant-scoped tree: the snapshot export path additionally
+    /// requires the tenancy gate to authorize the authenticated requesting peer,
+    /// and a digest or manifest answer over a caller-chosen range is a
+    /// key-existence and content oracle over the same data, so it is held to the
+    /// same rule. Platform-owned and default-tenant (legacy) trees keep their
+    /// enrollment-only behaviour. Fails closed: no authenticated peer, no active
+    /// gate, or a refusal all deny.
+    /// </summary>
+    /// <param name="treeName">The peer-supplied logical tree name, already enrollment-checked.</param>
+    /// <param name="context">The call context carrying the authenticated peer, when origin binding is on.</param>
+    /// <param name="rpc">The RPC name, for the refusal diagnostic.</param>
+    /// <exception cref="RpcException"><see cref="StatusCode.PermissionDenied"/> when the peer may not read the tenant tree.</exception>
+    private async ValueTask EnsurePeerMayReadTenantTreeAsync(string treeName, ServerCallContext context, string rpc)
+    {
+        var owner = LatticeTenantTrees.GetOwner(treeName);
+        if (owner.IsPlatformOwned || owner.Tenant.IsDefault)
+        {
+            return;
+        }
+
+        var peer = context.UserState.TryGetValue(LatticeReplicationGrpcAuthInterceptor.AuthenticatedPeerKey, out var value)
+            ? value as string
+            : null;
+
+        if (!string.IsNullOrWhiteSpace(peer)
+            && _tenantIsolationGate is { IsActive: true } gate
+            && await gate.AuthorizeExportAsync(treeName, peer, context.CancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "Refusing replication {Rpc} for tenant tree '{TreeName}': the requesting peer is not authorized "
+            + "to read this tenant's data.",
+            rpc,
+            treeName);
+
+        throw new RpcException(new Status(StatusCode.PermissionDenied,
+            "Tenant tree read is not authorized for the requesting peer."));
     }
 
     /// <summary>
@@ -497,12 +547,22 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             context, request.TreeName, request.OriginClusterId).ConfigureAwait(false);
         await ObservePurgeFrontierAsync(context, request.OriginClusterId).ConfigureAwait(false);
 
+        // The re-seed answer and the straggler check below both activate the
+        // tree's bootstrap coordinator, and the re-seed answer can start a
+        // bootstrap that registers, fences, and drains the named tree and writes
+        // its transaction registry. The tree name is wire input, so both are
+        // reached only for a tree enrolled for replication here: a peer must not
+        // be able to aim a bootstrap at a tree this cluster keeps local (the
+        // sys- authorization and identity trees, or another tenant's trees).
+        // The applier's own enrollment gate still drops the batch's entries.
+        var enrolled = _replicationContext?.ResolveMergeMode(request.TreeName) is not null;
+
         // A sender that lost records to a WAL trim before shipping them asks
         // this receiver to re-seed past an export epoch (#4534). The origin was
         // just verified against the caller, so the bootstrap source is the
         // authenticated sender. The answer is echoed on whichever ack follows.
         long? bootstrapEpoch = null;
-        if (long.TryParse(
+        if (enrolled && long.TryParse(
                 GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.ReseedAfterEpochHeader),
                 System.Globalization.NumberStyles.Integer,
                 System.Globalization.CultureInfo.InvariantCulture,
@@ -526,7 +586,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // applying this one after the clear could stage a prepare nothing
         // settles (#4533). Refuse the batch; the sender re-ships its plain
         // records and keeps withholding the sagas.
-        if (await ReplicationReseedResponder.RefusesStragglerAsync(
+        if (enrolled && await ReplicationReseedResponder.RefusesStragglerAsync(
                 _grainFactory, request.TreeName, request.OriginClusterId, entries, _logger).ConfigureAwait(false))
         {
             return new ReplicationAckBox
@@ -785,6 +845,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         }
 
         EnsureTreeEnrolledForPeerRead(request.TreeName, nameof(ProbeDigest));
+        await EnsurePeerMayReadTenantTreeAsync(request.TreeName, context, nameof(ProbeDigest)).ConfigureAwait(false);
 
         var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
         try
@@ -854,6 +915,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
 
         EnsureTreeEnrolledForPeerRead(request.TreeName, nameof(ExchangeContentManifest));
         EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(ExchangeContentManifest));
+        await EnsurePeerMayReadTenantTreeAsync(request.TreeName, context, nameof(ExchangeContentManifest))
+            .ConfigureAwait(false);
 
         var entries = request.Entries ?? (IReadOnlyList<ContentManifestEntry>)Array.Empty<ContentManifestEntry>();
 
@@ -958,6 +1021,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         }
 
         EnsureTreeEnrolledForPeerRead(request.TreeName, nameof(ProbeMerkleWalk));
+        await EnsurePeerMayReadTenantTreeAsync(request.TreeName, context, nameof(ProbeMerkleWalk)).ConfigureAwait(false);
 
         var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
         try

@@ -186,6 +186,31 @@ internal sealed class CausalApplyBufferGrain(
         return Task.FromResult(false);
     }
 
+    /// <inheritdoc />
+    public Task<bool[]> IsHoldingManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        ArgumentNullException.ThrowIfNull(timestamps);
+        var requested = timestamps.ToHashSet();
+        var held = new HashSet<HybridLogicalClock>();
+        foreach (var parked in state.State.Entries)
+        {
+            if (requested.Contains(parked.Entry.Timestamp)
+                && string.Equals(parked.Entry.OriginClusterId, originClusterId, StringComparison.Ordinal))
+            {
+                held.Add(parked.Entry.Timestamp);
+            }
+        }
+
+        var result = new bool[timestamps.Count];
+        for (var i = 0; i < result.Length; i++)
+        {
+            result[i] = held.Contains(timestamps[i]);
+        }
+
+        return Task.FromResult(result);
+    }
+
     /// <summary>
     /// Publishes every write of <paramref name="originClusterId"/> the durable
     /// buffer holds to the origin's frontier (issue #4586). Strict publication

@@ -49,6 +49,40 @@ public sealed class LatticeApiMcpOptions
     public bool Stateless { get; set; }
 
     /// <summary>
+    /// Whether requests to the MCP transport that carry an <c>Origin</c> header
+    /// are refused (<c>403</c>) unless that origin is allowed, as the MCP
+    /// streamable-HTTP transport specification requires to prevent DNS-rebinding
+    /// attacks. Defaults to <see langword="false"/> for compatibility. When
+    /// <see langword="true"/>, an origin is allowed when it matches an entry in
+    /// <see cref="AllowedOrigins"/> or, while <see cref="AllowLoopbackOrigins"/> is
+    /// <see langword="true"/>, when it names a loopback host. A request without an
+    /// <c>Origin</c> header (a non-browser MCP client) is unaffected; a browser
+    /// always sends one on the cross-origin <c>POST</c> a rebinding page issues.
+    /// Enable it whenever the endpoint is reachable without authentication.
+    /// </summary>
+    public bool RequireAllowedOrigin { get; set; }
+
+    /// <summary>
+    /// The origins (for example <c>https://inspector.example.com</c>) whose
+    /// browser requests are allowed when <see cref="RequireAllowedOrigin"/> is
+    /// <see langword="true"/>. Matched case-insensitively against the whole
+    /// <c>Origin</c> header value; a trailing <c>/</c> on an entry is ignored.
+    /// Not consulted when <see cref="RequireAllowedOrigin"/> is
+    /// <see langword="false"/>.
+    /// </summary>
+    public IList<string> AllowedOrigins { get; } = new List<string>();
+
+    /// <summary>
+    /// Whether, when <see cref="RequireAllowedOrigin"/> is <see langword="true"/>,
+    /// an <c>http</c> or <c>https</c> origin whose host is <c>localhost</c> or a
+    /// loopback IP address is allowed on any port. Defaults to
+    /// <see langword="true"/>: a page served from the local machine is already
+    /// inside the boundary a DNS-rebinding page is trying to cross. Set to
+    /// <see langword="false"/> to allow only <see cref="AllowedOrigins"/>.
+    /// </summary>
+    public bool AllowLoopbackOrigins { get; set; } = true;
+
+    /// <summary>
     /// The inbound request-header name that carries the caller's credential
     /// token, bridged into the ambient Lattice credential so the data-plane
     /// access gate can resolve the caller's subject. Defaults to

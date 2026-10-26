@@ -34,7 +34,8 @@ public sealed class ReplicationOriginFrontierGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var buffer = Substitute.For<ICausalApplyBufferGrain>();
-        buffer.IsHoldingAsync(Origin, Hlc(4)).Returns(true);
+        buffer.IsHoldingManyAsync(Origin, Arg.Any<IReadOnlyList<HybridLogicalClock>>())
+            .Returns(call => ((IReadOnlyList<HybridLogicalClock>)call[1]).Select(t => t == Hlc(4)).ToArray());
         factory.GetGrain<ICausalApplyBufferGrain>(Tree, Arg.Any<string?>()).Returns(buffer);
         var grain = HighWaterMarkTestGrains.Frontier(Origin, factory);
         await grain.SetHeldAsync(ReplicationOriginFrontierGrain.BufferSource(Tree), [Hlc(4)], CancellationToken.None);
@@ -50,7 +51,8 @@ public sealed class ReplicationOriginFrontierGrainTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var dlq = Substitute.For<IReplicationDeadLetterGrain>();
-        dlq.IsHoldingAsync(Origin, Hlc(4), Arg.Any<CancellationToken>()).Returns(false);
+        dlq.IsHoldingManyAsync(Origin, Arg.Any<IReadOnlyList<HybridLogicalClock>>(), Arg.Any<CancellationToken>())
+            .Returns(call => new bool[((IReadOnlyList<HybridLogicalClock>)call[1]).Count]);
         factory.GetGrain<IReplicationDeadLetterGrain>(Tree, Arg.Any<string?>()).Returns(dlq);
         var state = new FakePersistentState<ReplicationOriginFrontierState>();
         var grain = HighWaterMarkTestGrains.Frontier(Origin, factory, state);

@@ -26,7 +26,7 @@ public class LatticeReplicationGrpcServiceReseedTests
         public ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload) => serializer.Deserialize(payload.Span);
     }
 
-    private static LatticeReplicationGrpcService CreateService(IGrainFactory grainFactory)
+    private static LatticeReplicationGrpcService CreateService(IGrainFactory grainFactory, ILatticeReplicationContext? replicationContext = null)
     {
         var sp = new ServiceCollection().AddSerializer().BuildServiceProvider();
         var encoder = new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>());
@@ -58,7 +58,7 @@ public class LatticeReplicationGrpcServiceReseedTests
             new ReceiverAppliedContentIndex(),
             NullLogger<LatticeReplicationGrpcService>.Instance,
             dictionaryProvider: null,
-            replicationContext: new EnrollAllReplicationContext());
+            replicationContext: replicationContext ?? new EnrollAllReplicationContext());
     }
 
     private static IWalCursorRegistry HealthyRegistry()
@@ -189,6 +189,32 @@ public class LatticeReplicationGrpcServiceReseedTests
         });
     }
 
+    [Test]
+    public async Task Push_with_a_reseed_request_for_an_unenrolled_tree_never_starts_a_bootstrap()
+    {
+        // Regression: the reseed header was honoured before any enrollment check,
+        // so an authenticated peer could name any tree - including the never-enrolled
+        // sys- trees - and drive a bootstrap that installs its snapshot into it.
+        var (factory, coordinator) = Coordinator(completed: null);
+        coordinator.IsReseedPendingAsync("remote").Returns(Task.FromResult(true));
+
+        var ack = await CreateService(factory, new EnrollNothingReplicationContext())
+            .Push(EmptyBox(), new TestServerCallContext(reseedAfter: 0));
+
+        Assert.That(ack.Value.BootstrapEpoch, Is.Null);
+        await coordinator.DidNotReceiveWithAnyArgs().BootstrapForReseedAsync(default!, default, default, default);
+        await coordinator.DidNotReceiveWithAnyArgs().GetCompletedExportEpochAsync(default!);
+        await coordinator.DidNotReceiveWithAnyArgs().IsReseedPendingAsync(default!);
+    }
+
+    private sealed class EnrollNothingReplicationContext : ILatticeReplicationContext
+    {
+        public bool IsReplicationEnabled => true;
+
+        public string LocalReplicaId => "local";
+
+        public LatticeMergeMode? ResolveMergeMode(string treeId) => null;
+    }
     [Test]
     public async Task Push_without_the_header_never_consults_the_bootstrap_coordinator()
     {

@@ -110,4 +110,11 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Batch form of <see cref="IsHoldingAsync"/>, with one result per timestamp
+    /// in request order. Uses the same parked identities and interleaving contract.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool[]> IsHoldingManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps, CancellationToken cancellationToken);
 }
