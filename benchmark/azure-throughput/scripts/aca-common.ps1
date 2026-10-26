@@ -9,6 +9,9 @@
 
 Set-StrictMode -Version Latest
 
+# Storage-side cohort telemetry parsing (Format-StorageMetricsLine and friends).
+. (Join-Path $PSScriptRoot '_storage-metrics.ps1')
+
 # Tag stamped on every resource group this rig creates. Invoke-AcaTeardown
 # will not delete a group that does not carry it.
 $script:AcaRunTagName = 'latticeBenchRun'
@@ -51,6 +54,54 @@ function Get-AcaNames {
 		SiloApp     = "silo-$NamePrefix"
 		ProducerJob = "prod-$NamePrefix"
 	}
+}
+
+function Get-AcaWalAccountName {
+	<#
+	.SYNOPSIS
+		Name of extra WAL storage account $Index (1-based) for a rig.
+	.DESCRIPTION
+		Account 0 is the rig's primary account (Get-AcaNames .Storage), which
+		also holds the clustering table and grain state. Extra accounts carry
+		only WAL partitions. 'st' + up to 16 flat chars + 'w' + one digit stays
+		within the 24-character account-name limit.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string] $NamePrefix,
+		[Parameter(Mandatory)][ValidateRange(1, 7)][int] $Index
+	)
+	return "$((Get-AcaNames -NamePrefix $NamePrefix).Storage)w$Index"
+}
+
+function Get-AcaCohortStorageAccounts {
+	<#
+	.SYNOPSIS
+		The storage accounts a cohort spreading its WAL over $WalAccounts
+		accounts touches, with the role each plays: 'wal0' (the primary, which
+		also holds clustering and grain state) then 'wal1'.. for the extras.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[ValidateRange(1, 8)][int] $WalAccounts = 1
+	)
+	$list = @([pscustomobject]@{ Name = [string]$Context.storage; Role = 'wal0' })
+	$extras = @(Get-AcaContextWalExtraAccounts -Context $Context)
+	for ($i = 1; $i -lt $WalAccounts -and $i -le $extras.Count; $i++) {
+		$list += [pscustomobject]@{ Name = [string]$extras[$i - 1].name; Role = "wal$i" }
+	}
+	return $list
+}
+
+function Get-AcaContextWalExtraAccounts {
+	<#
+	.SYNOPSIS
+		The extra WAL accounts deploy-aca.ps1 -WalAccountCount provisioned, in
+		index order, as recorded in the run context ({ name, tableUri }).
+		Empty for a rig provisioned without them, or before they existed.
+	#>
+	[CmdletBinding()] param([Parameter(Mandatory)][System.Collections.IDictionary] $Context)
+	if (-not $Context.Contains('walExtraAccounts') -or $null -eq $Context['walExtraAccounts']) { return @() }
+	return @($Context['walExtraAccounts'] | Where-Object { $_ })
 }
 
 function Invoke-Az {
@@ -562,10 +613,14 @@ function Reset-AcaBenchTables {
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
-		[string[]] $Keep = @('OrleansSiloInstances')
+		[string[]] $Keep = @('OrleansSiloInstances'),
+		# Defaults to the rig's primary account. The extra WAL accounts are
+		# reset by passing each one with -Keep @(): they hold no clustering table.
+		[string] $StorageAccount
 	)
+	if (-not $StorageAccount) { $StorageAccount = [string]$Context.storage }
 	$sub = (Invoke-Az @('account', 'show', '--query', 'id', '-o', 'tsv')).Trim()
-	$base = "https://management.azure.com/subscriptions/$sub/resourceGroups/$($Context.resourceGroup)/providers/Microsoft.Storage/storageAccounts/$($Context.storage)/tableServices/default/tables"
+	$base = "https://management.azure.com/subscriptions/$sub/resourceGroups/$($Context.resourceGroup)/providers/Microsoft.Storage/storageAccounts/$StorageAccount/tableServices/default/tables"
 	$api = 'api-version=2023-05-01'
 	$listJson = Invoke-Az @('rest', '--method', 'get', '--url', "${base}?$api", '-o', 'json')
 	$names = @(($listJson | ConvertFrom-Json).value | ForEach-Object { [string]$_.name })
@@ -573,25 +628,88 @@ function Reset-AcaBenchTables {
 	foreach ($n in $doomed) {
 		Invoke-Az @('rest', '--method', 'delete', '--url', "$base/${n}?$api", '-o', 'none') | Out-Null
 	}
-	Write-Host "[aca] storage reset: deleted $($doomed.Count) table(s), kept $(@($names | Where-Object { $_ -in $Keep }).Count)" -ForegroundColor DarkGray
+	Write-Host "[aca] storage reset ($StorageAccount): deleted $($doomed.Count) table(s), kept $(@($names | Where-Object { $_ -in $Keep }).Count)" -ForegroundColor DarkGray
 	return $doomed
+}
+
+function Get-AcaStorageMetricsLine {
+	<#
+	.SYNOPSIS
+		Read one storage account's Azure Monitor metrics for a cohort window
+		and return its '[storage-metrics]' cohort-log line.
+	.DESCRIPTION
+		Queries the account's table service at one-minute grain: Transactions
+		split by ResponseType (throttling shows up as ServerBusyError /
+		ClientThrottlingError), and SuccessServerLatency versus
+		SuccessE2ELatency (the gap is time outside the storage service:
+		network and client-side queueing). The window is widened to whole
+		minutes, so it covers the cohort's warm-up and drain as well as the
+		measurement; every cohort runs alone on its rig's accounts, so nothing
+		else contributes to it.
+
+		Metrics land a few minutes after the fact. The query is retried while
+		the account reports no transactions at all - a cohort always makes
+		some - up to -MaxWaitSec, and an account still empty after that is
+		reported 'unavailable' rather than as idle. Never throws: storage
+		metrics are context for the cell, not part of its grade.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[Parameter(Mandatory)][string] $StorageAccount,
+		[Parameter(Mandatory)][string] $Role,
+		[Parameter(Mandatory)][datetime] $SinceUtc,
+		[Parameter(Mandatory)][datetime] $UntilUtc,
+		[int] $MaxWaitSec = 300
+	)
+	try {
+		$sub = (Invoke-Az @('account', 'show', '--query', 'id', '-o', 'tsv')).Trim()
+		$resource = "/subscriptions/$sub/resourceGroups/$($Context.resourceGroup)/providers/Microsoft.Storage/storageAccounts/$StorageAccount/tableServices/default"
+		$start = [datetime]::new($SinceUtc.Ticks - ($SinceUtc.Ticks % [TimeSpan]::TicksPerMinute), [DateTimeKind]::Utc)
+		$end = [datetime]::new($UntilUtc.Ticks - ($UntilUtc.Ticks % [TimeSpan]::TicksPerMinute), [DateTimeKind]::Utc).AddMinutes(2)
+		$window = @('--start-time', $start.ToString('yyyy-MM-ddTHH:mm:ssZ'), '--end-time', $end.ToString('yyyy-MM-ddTHH:mm:ssZ'), '--interval', 'PT1M')
+		$deadline = (Get-Date).AddSeconds($MaxWaitSec)
+		while ($true) {
+			$txJson = Invoke-Az (@('monitor', 'metrics', 'list', '--resource', $resource,
+				'--metrics', 'Transactions', '--aggregation', 'Total', '--filter', "ResponseType eq '*'") + $window + @('-o', 'json'))
+			$latJson = Invoke-Az (@('monitor', 'metrics', 'list', '--resource', $resource,
+				'--metrics', 'SuccessServerLatency', 'SuccessE2ELatency', '--aggregation', 'Average', 'Maximum') + $window + @('-o', 'json'))
+			$metrics = ConvertFrom-StorageMetricsResponse -TransactionsJson $txJson -LatencyJson $latJson
+			if ($metrics.Transactions -gt 0) {
+				return Format-StorageMetricsLine -Account $StorageAccount -Role $Role -Metrics $metrics
+			}
+			if ((Get-Date) -ge $deadline) {
+				return Format-StorageMetricsLine -Account $StorageAccount -Role $Role -Unavailable 'no-transactions-reported'
+			}
+			Write-Host "[aca]   waiting for storage metrics of $StorageAccount" -ForegroundColor DarkGray
+			Start-Sleep -Seconds 30
+		}
+	} catch {
+		Write-Warning "[aca] storage metrics for $StorageAccount unavailable: $($_.Exception.Message)"
+		return Format-StorageMetricsLine -Account $StorageAccount -Role $Role -Unavailable 'query-failed'
+	}
 }
 
 function Get-AcaActiveSiloRevision {
 	<#
 	.SYNOPSIS
-		Return the name of the silo app's single active revision.
+		Return the name of the silo app's newest active revision.
 	.DESCRIPTION
 		Because Set-AcaSiloCount issues exactly one `az containerapp update`
-		per cohort, and the app runs in Single revision mode, the active
-		revision is a one-to-one label for the cohort's silos. That makes it
-		the strongest available filter for the silo log harvest: superseded
-		revisions from earlier cohorts remain in Log Analytics indefinitely
-		and emit the same line shapes, and neither a time window nor an app
-		name can separate them. A revision name can.
+		per cohort and retires every superseded revision before it returns,
+		the active revision is a one-to-one label for the cohort's silos. That
+		makes it the strongest available filter for the silo log harvest:
+		superseded revisions from earlier cohorts remain in Log Analytics
+		indefinitely and emit the same line shapes, and neither a time window
+		nor an app name can separate them. A revision name can.
 
-		Returns $null if no revision is active (the parked state), which the
-		caller should treat as "nothing to harvest" rather than an error.
+		"Newest" is decided by properties.createdTime, never by sorting
+		revision names: ACA mints both ordinal (`--0000001`) and random
+		(`--aux0gii`) suffixes in one app, so a name sort is not a recency
+		order (see Set-AcaSiloCount, where that once retired the live
+		revision).
+
+		Returns $null if no revision is active (the parked state) or the
+		listing fails; a caller about to measure must treat that as fatal.
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context
@@ -600,20 +718,24 @@ function Get-AcaActiveSiloRevision {
 		'containerapp', 'revision', 'list',
 		'--name', $Context.siloApp,
 		'--resource-group', $Context.resourceGroup,
-		'--query', "[?properties.active].name",
+		'--query', "[?properties.active].{name:name,created:properties.createdTime}",
 		'-o', 'json'
 	) -AllowFailure
 	if ($LASTEXITCODE -ne 0 -or -not $json -or -not $json.Trim()) { return $null }
-	try { $active = @($json | ConvertFrom-Json) } catch { return $null }
-	$active = @($active | Where-Object { $_ })
+	try { $rows = @($json | ConvertFrom-Json) } catch { return $null }
+	$active = @($rows | Where-Object { $_ -and $_.name } | ForEach-Object {
+		$created = [datetime]::MinValue
+		if ($_.created) { [void][datetime]::TryParse([string]$_.created, [ref]$created) }
+		[pscustomobject]@{ Name = [string]$_.name; Created = $created }
+	} | Sort-Object Created)
 	if ($active.Count -eq 0) { return $null }
 	if ($active.Count -gt 1) {
-		# Single revision mode should make this impossible. If it happens the
-		# cohort's silo set is ambiguous, so say so rather than silently
-		# harvesting one arbitrary revision's histograms.
-		Write-Warning "[aca] $($Context.siloApp) has $($active.Count) active revisions ($($active -join ', ')); expected exactly 1. Harvesting the newest."
+		# Set-AcaSiloCount retires superseded revisions before returning, so
+		# this should not happen. If it does the cohort's silo set is
+		# ambiguous, so say so rather than silently harvesting one revision.
+		Write-Warning "[aca] $($Context.siloApp) has $($active.Count) active revisions ($($active.Name -join ', ')); expected exactly 1. Harvesting the newest by createdTime."
 	}
-	return @($active | Sort-Object)[-1]
+	return $active[-1].Name
 }
 
 function Wait-AcaSiloReplicas {
@@ -965,7 +1087,12 @@ function Get-AcaJobLog {
 				# The search runs over the tree-id-anchored slice, so a
 				# previous cohort's DONE can never end this one early.
 				if ($cohort | Where-Object { $_ -and $_.Contains($doneMarker) }) { return $cohort }
-			} catch { }
+			} catch {
+				# Keep polling (a response can be cut short mid-ingestion), but
+				# never silently: a parse failure on every poll would otherwise
+				# present as "waiting for log ingestion" until the deadline.
+				Write-Warning "[aca] log harvest for $ExecutionName could not parse the query response ($($_.Exception.Message)); retrying"
+			}
 		}
 		if ((Get-Date) -ge $deadline) {
 			Write-Warning "[aca] log harvest for $ExecutionName (tree $TreeId) did not observe a terminal marker within ${MaxWaitSec}s; returning $($best.Count) line(s)"
@@ -1003,8 +1130,9 @@ function Get-AcaSiloLog {
 		-IncludeDiagnostics retains all console lines, with time and replica
 		identity on non-phaseA lines so they cannot enter the throughput series.
 		It requires -RevisionName to pin the harvest to the cohort's own silos.
-		Because exactly one `az containerapp update` runs per cohort and the
-		app is in Single revision mode, the active revision is a one-to-one
+		Because exactly one `az containerapp update` runs per cohort and
+		Set-AcaSiloCount retires every superseded revision before the cohort
+		starts, the active revision is a one-to-one
 		label for this cohort's replica set - a far stronger identification
 		than a time window, which a previous cohort's draining container can
 		still overlap.

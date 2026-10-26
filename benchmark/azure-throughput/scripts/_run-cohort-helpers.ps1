@@ -378,9 +378,11 @@ function Update-QuiesceState {
 	and this function maps them to a single verdict.
 
 	State precedence (worst-first; the most severe applicable state wins):
-	  WEDGE     - no FINAL emitted at all, OR a long post-producer
-	              zero-rate drain tail that does NOT correspond to a clean
-	              pre-stop quiesce (i.e. real undrained backlog).
+	  WEDGE     - no FINAL emitted at all, OR entries still unresolved
+	              (in flight) when FINAL was emitted, OR a long
+	              post-producer zero-rate drain tail that does NOT
+	              correspond to a clean pre-stop quiesce (i.e. real
+	              undrained backlog).
 	  FAILED    - any per-second failed>0 sample OR FINAL failed>0.
 	  DEGRADED  - watchdog / wal-slot / wal-append counters, OR
 	              cohort-attributable exception lines (net of benign
@@ -423,7 +425,8 @@ function Resolve-CohortVerdict {
 		[int] $ExceptionCount,
 		[int] $BenignShutdownExceptions,
 		[int] $BenignWarmupExceptions = 0,
-		[int] $BenignPlacementConvergence = 0
+		[int] $BenignPlacementConvergence = 0,
+		[long] $UnresolvedFinal = 0
 	)
 
 	$order = @{ 'HEALTHY' = 0; 'DEGRADED' = 1; 'FAILED' = 2; 'WEDGE' = 3 }
@@ -434,6 +437,14 @@ function Resolve-CohortVerdict {
 	if (-not $SawFinal) {
 		if ($order['WEDGE'] -gt $rank) { $rank = $order['WEDGE'] }
 		$reasons += 'no FINAL emitted'
+	}
+	# Entries still in flight when the engine's in-flight-tail budget expired.
+	# They settle after FINAL, so they are in neither ops= nor failed=; without
+	# this rule a cohort that abandoned work graded HEALTHY with failed=0.
+	# Matches run-cohort-aca.ps1, which grades the same token WEDGE.
+	if ($UnresolvedFinal -gt 0) {
+		if ($order['WEDGE'] -gt $rank) { $rank = $order['WEDGE'] }
+		$reasons += "unresolved tail: $UnresolvedFinal entries still in flight at FINAL"
 	}
 	if ($DrainTailSamples -ge $DrainWedgeThreshold) {
 		if ($IsReadOnlyMode) {
@@ -512,9 +523,146 @@ function Measure-CohortWedgeDiagnostics {
 		[Parameter(Mandatory)] [string] $SiloLogPath
 	)
 
+	# A failed journal fetch leaves no file. Select-String on a missing path
+	# is a terminating error under run-cohort.ps1's ErrorActionPreference=Stop,
+	# which aborted the cohort before its verdict (no FINAL -> WEDGE) printed.
+	if (-not (Test-Path -LiteralPath $SiloLogPath)) {
+		return @{ Watchdog = 0; WalSlot = 0; WalAppend = 0 }
+	}
+
 	return @{
 		Watchdog  = @(Select-String -Path $SiloLogPath -Pattern '\[stall-watchdog\] WEDGE DETECTED').Count
 		WalSlot   = @(Select-String -Path $SiloLogPath -Pattern '\[wal-slot').Count
 		WalAppend = @(Select-String -Path $SiloLogPath -Pattern '\[wal-append').Count
 	}
+}
+
+<#
+.SYNOPSIS
+	Parses '[silo] t=' per-second progress lines into sample objects.
+
+.DESCRIPTION
+	Accepts both the current ('ops=', 'ops/sec=') and the legacy ('written=',
+	'Entries written per second=') token shapes so cohort logs captured before
+	the silo log-token rename still parse. Lines that do not parse are
+	skipped. Shared by run-cohort.ps1 and performance-report.ps1's
+	Read-SiloLogStats so both compute the steady-state mean from the same
+	sample set.
+
+.PARAMETER Lines
+	Candidate log lines; anything that is not a '[silo] t=' line is ignored.
+
+.OUTPUTS
+	[pscustomobject[]] with t, ops, rate, inFlight and failed (the
+	per-interval failed count, 0 when the line carries no failed= token).
+#>
+function ConvertFrom-SiloProgressLines {
+	[CmdletBinding()]
+	param([AllowNull()] [AllowEmptyCollection()] [string[]] $Lines)
+
+	$samples = [System.Collections.Generic.List[object]]::new()
+	foreach ($line in @($Lines)) {
+		if ([string]::IsNullOrEmpty($line) -or -not $line.Contains('[silo] t=')) { continue }
+		if ($line -notmatch 't=\s*([\d.]+)s\s+(?:ops|written)=\s*([\d,]+)\s+(?:ops/sec|Entries written per second)=\s*([\d,]+)\s+inFlight=\s*(\d+)') { continue }
+		$sample = [pscustomobject]@{
+			t        = [double]$Matches[1]
+			ops      = [long]($Matches[2] -replace ',', '')
+			rate     = [long]($Matches[3] -replace ',', '')
+			inFlight = [int]$Matches[4]
+			failed   = 0L
+		}
+		if ($line -match 'failed=\s*([\d,]+)') { $sample.failed = [long]($Matches[1] -replace ',', '') }
+		$samples.Add($sample)
+	}
+	return $samples.ToArray()
+}
+
+<#
+.SYNOPSIS
+	Computes the steady-state throughput sample (throughput.md section 27.1)
+	from parsed per-second progress samples.
+
+.DESCRIPTION
+	The cohort sample is the mean of the per-second rate samples over the
+	productive window: from the first non-zero sample at or after
+	-WarmUpSec to the last non-zero sample. The leading bound trims the
+	warm-up ramp (and any pre-connect idle seconds), the trailing bound
+	trims the post-producer drain. Zero-rate samples INSIDE the window are
+	kept: they are seconds in which nothing completed (a stall), and
+	dropping them averages only the seconds that did complete work, which
+	overstates sustained throughput by exactly the stalled fraction - the
+	same artefact that led Layer 3 to stop publishing a rate>0 mean.
+
+	The mean therefore equals (work completed in the window) / (window
+	length), and can never exceed the work actually done. A run with no
+	interior zero samples is unaffected.
+
+.PARAMETER Samples
+	Output of ConvertFrom-SiloProgressLines, in log order.
+
+.PARAMETER WarmUpSec
+	Leading trim in seconds of engine time (default 15).
+
+.OUTPUTS
+	Hashtable: Mean [int], Count [int] (samples in the window),
+	ZeroCount [int] (interior zero-rate samples kept), InFlightMax [int],
+	InFlightMedian [int], WindowStart / WindowEnd [double] (engine t, or
+	$null when the window is empty).
+#>
+function Measure-SteadyStateRate {
+	[CmdletBinding()]
+	param(
+		[AllowNull()] [AllowEmptyCollection()] [object[]] $Samples,
+		[double] $WarmUpSec = 15
+	)
+
+	$empty = @{ Mean = 0; Count = 0; ZeroCount = 0; InFlightMax = 0; InFlightMedian = 0; WindowStart = $null; WindowEnd = $null }
+	$candidates = @(@($Samples) | Where-Object { $null -ne $_ -and $_.t -ge $WarmUpSec })
+	if ($candidates.Count -eq 0) { return $empty }
+
+	$first = -1
+	$last = -1
+	for ($i = 0; $i -lt $candidates.Count; $i++) {
+		if ($candidates[$i].rate -gt 0) {
+			if ($first -lt 0) { $first = $i }
+			$last = $i
+		}
+	}
+	if ($first -lt 0) { return $empty }
+
+	$window = @($candidates[$first..$last])
+	$sum = 0.0
+	$zeros = 0
+	foreach ($s in $window) {
+		$sum += $s.rate
+		if ($s.rate -le 0) { $zeros++ }
+	}
+	$sortedInFlight = @($window | ForEach-Object { $_.inFlight } | Sort-Object)
+	return @{
+		Mean           = [int]($sum / $window.Count)
+		Count          = $window.Count
+		ZeroCount      = $zeros
+		InFlightMax    = [int]($sortedInFlight[-1])
+		InFlightMedian = [int]($sortedInFlight[[int]($sortedInFlight.Count / 2)])
+		WindowStart    = [double]$window[0].t
+		WindowEnd      = [double]$window[-1].t
+	}
+}
+
+<#
+.SYNOPSIS
+	Reads the unresolved-entry count from a silo FINAL line.
+
+.DESCRIPTION
+	The engine appends 'unresolved=N' to FINAL: entries still in flight when
+	its in-flight-tail budget expired, booked as neither ops nor failed.
+	Returns 0 for a FINAL line that predates the token or a missing line.
+#>
+function Get-FinalUnresolved {
+	[CmdletBinding()]
+	param([AllowNull()] [AllowEmptyString()] [string] $FinalLine)
+
+	if ([string]::IsNullOrEmpty($FinalLine)) { return 0L }
+	if ($FinalLine -match '\bunresolved=([\d,]+)') { return [long]($Matches[1] -replace ',', '') }
+	return 0L
 }

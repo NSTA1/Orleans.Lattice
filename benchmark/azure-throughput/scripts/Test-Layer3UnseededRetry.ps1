@@ -43,6 +43,7 @@ function Read-SiloLogStats([string] $SiloLogPath, [string] $WorkloadMode, [int] 
     }
 }
 function Set-Layer3ProducerEvidence($Cohort, [string] $LogPath) { $Cohort['producerBound'] = $false }
+function Set-Layer3StorageEvidence($Cohort, [string] $LogPath) { $Cohort['storage'] = $null }
 function Set-Layer3PreseedEvidence($Cohort, [string] $LogPath, [string] $WorkloadMode) {
     $Cohort['unseeded'] = (Get-Content -Raw $LogPath).StartsWith('unseeded')
 }
@@ -61,13 +62,17 @@ New-Item -ItemType Directory -Force $azScriptsDir, $runRoot | Out-Null
 $queueFile = Join-Path $root 'queue.txt'
 $callsFile = Join-Path $root 'calls.txt'
 Set-Content (Join-Path $azScriptsDir 'aca-common.ps1') "function Get-AcaRunRoot { '$runRoot' }"
+# Read cohorts never defer their harvest, so this is never invoked; the sweep
+# only requires it to exist.
+Set-Content (Join-Path $azScriptsDir 'complete-cohort-aca.ps1') "param([string]`$PendingHarvestPath) throw 'unexpected deferred harvest'"
 # Each call pops the next scripted outcome and records the per-silo rung it ran at.
 Set-Content (Join-Path $azScriptsDir 'run-cohort-aca.ps1') @"
 param([string]`$NamePrefix, [int]`$SiloCount, [string]`$WorkloadMode, [int]`$DurationSec,
     [int]`$VehiclesPerSilo, [int]`$TickHz, [int]`$BatchSize, [int]`$FlushConcurrencyPerSilo,
     [int]`$ShardCount, [int]`$WalPartitions, [int]`$SetManyFanOutBudgetSec,
     [int]`$WalAdmissionCallBudgetSec, [int]`$WalAppendCoalescingInFlightThreshold,
-    [int]`$WalSaturationRecoveryReleaseBatch, [int]`$ClientsPerSilo, [string]`$CohortTag)
+    [int]`$WalSaturationRecoveryReleaseBatch, [int]`$ClientsPerSilo, [string]`$CohortTag,
+    [int]`$WalAccounts, [switch]`$DeferHarvest)
 `$queue = @(Get-Content '$queueFile')
 Set-Content '$queueFile' @(`$queue | Select-Object -Skip 1)
 Add-Content '$callsFile' "`${CohortTag}:`$VehiclesPerSilo"

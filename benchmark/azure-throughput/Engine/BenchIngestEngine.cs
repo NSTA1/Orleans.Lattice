@@ -137,6 +137,13 @@ internal sealed class BenchIngestEngine(
         // field continues to mean "wall-clock since the worker started"
         // for any external parser that already depended on it.
         long firstAcceptedAt = 0;
+        // Timestamp at which the most recent flush settled (any outcome).
+        // The FINAL "active" window ends here rather than at the moment the
+        // drain loop exits. On the single-VM path the ingest channel only
+        // completes when the harness stops the silo, which is after its
+        // post-producer quiesce poll - several idle seconds that used to be
+        // charged to `active` and deflated `(active avg)` on every cohort.
+        long lastSettledAt = 0;
         long writtenTotal = 0;
         long writtenSinceReport = 0;
         long failedTotal = 0;
@@ -240,6 +247,7 @@ internal sealed class BenchIngestEngine(
                 finally
                 {
                     Interlocked.Add(ref inFlightEntries, -batchToFlush.Count);
+                    RecordLatest(ref lastSettledAt, Stopwatch.GetTimestamp());
                     Interlocked.Decrement(ref inFlight);
                     flushGate.Release();
                 }
@@ -519,14 +527,24 @@ internal sealed class BenchIngestEngine(
         var opsFinal = Interlocked.Read(ref writtenTotal);
         var failedFinal = Interlocked.Read(ref failedTotal);
         var discardedFinal = Interlocked.Read(ref discardedTotal);
+        // Flushes still running when FINAL is emitted (the in-flight-tail
+        // budget expired). They settle after FINAL, so they are in neither
+        // ops= nor failed=; without this token a cohort that abandoned work
+        // reported failed=0. Suffix-appended like the tokens below.
+        var unresolvedFlushes = Interlocked.Read(ref inFlight);
+        var unresolvedEntries = Interlocked.Read(ref inFlightEntries);
         // "Active" window: from first accepted batch to last drained flush.
-        // Excludes the idle pre-connect window and is the most accurate
-        // measure of sustained ingest throughput. Falls back to total
-        // when nothing was accepted (silo started but no producer ever
-        // connected).
+        // Excludes the idle pre-connect window and the idle gap between the
+        // last flush settling and the drain loop exiting, and is the most
+        // accurate measure of sustained ingest throughput. When flushes are
+        // still unresolved the window has not closed, so it runs to FINAL.
+        // Falls back to total when nothing was accepted (silo started but no
+        // producer ever connected).
         var firstAccept = Interlocked.Read(ref firstAcceptedAt);
+        var lastSettled = Interlocked.Read(ref lastSettledAt);
+        var activeEnd = unresolvedFlushes == 0 && lastSettled > firstAccept ? lastSettled : endedAt;
         var activeElapsed = firstAccept != 0
-            ? (endedAt - firstAccept) / (double)Stopwatch.Frequency
+            ? (activeEnd - firstAccept) / (double)Stopwatch.Frequency
             : totalElapsed;
         var avgTotal = opsFinal / Math.Max(0.001, totalElapsed);
         var avgActive = opsFinal / Math.Max(0.001, activeElapsed);
@@ -604,12 +622,6 @@ internal sealed class BenchIngestEngine(
         var satExhausted = Interlocked.Read(ref saturationExhaustedTotal);
         var satBackoffSec = Interlocked.Read(ref saturationBackoffMsTotal) / 1000.0;
         var offeredActive = (opsFinal + failedFinal) / Math.Max(0.001, activeElapsed);
-        // Flushes still running when FINAL is emitted (the in-flight-tail
-        // budget expired). They settle after FINAL, so they are in neither
-        // ops= nor failed=; without this token a cohort that abandoned work
-        // reported failed=0. Suffix-appended like the tokens above.
-        var unresolvedFlushes = Interlocked.Read(ref inFlight);
-        var unresolvedEntries = Interlocked.Read(ref inFlightEntries);
         Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0} satRetries={satRetries:N0} satRecovered={satRecovered:N0} satExhausted={satExhausted:N0} satBackoff={satBackoffSec:0.0}s offeredPerSec={offeredActive:N0} unresolved={unresolvedEntries:N0} unresolvedFlushes={unresolvedFlushes:N0}");
     }
 
@@ -619,6 +631,22 @@ internal sealed class BenchIngestEngine(
     // drain after the producer closed the socket and is correctly not
     // counted in either the written or the failed total.
     private const int ShutdownDiscarded = -1;
+
+    // Monotonic max: concurrent flush completions may record out of order.
+    private static void RecordLatest(ref long target, long value)
+    {
+        var seen = Interlocked.Read(ref target);
+        while (value > seen)
+        {
+            var prior = Interlocked.CompareExchange(ref target, value, seen);
+            if (prior == seen)
+            {
+                return;
+            }
+
+            seen = prior;
+        }
+    }
 
     // Bounded retry policy for the silo-side SetManyAsync call. A
     // freshly-started silo's first thousands of leaf-grain activations

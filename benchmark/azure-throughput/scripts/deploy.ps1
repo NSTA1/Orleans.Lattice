@@ -154,7 +154,10 @@ if ($PrivateNetwork) {
 }
 
 Write-Host "Setting subscription $($p.SubscriptionId)" -ForegroundColor Cyan
-az account set --subscription $p.SubscriptionId | Out-Null
+if ($p.SubscriptionId) {
+	az account set --subscription $p.SubscriptionId | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw "az account set --subscription $($p.SubscriptionId) failed (exit $LASTEXITCODE); run 'az login' or fix SubscriptionId in the parameters file." }
+}
 
 Write-Host "Ensuring resource group $($p.ResourceGroup) in $($p.Location)" -ForegroundColor Cyan
 # Tag the group with the run prefix. performance-report.ps1's teardown refuses

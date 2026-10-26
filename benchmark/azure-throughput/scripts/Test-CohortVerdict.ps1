@@ -686,6 +686,81 @@ _Assert -Name 'the production line shape parses' `
 	-Condition ($rl -eq 80) -Detail "expected 80, got $rl"
 
 Write-Host ''
+Write-Host 'Measure-SteadyStateRate / ConvertFrom-SiloProgressLines' -ForegroundColor Cyan
+
+function _RateLine([double] $t, [long] $ops, [long] $rate, [int] $inFlight) {
+	'[silo] t={0,7:0.0}s ops={1,12:N0} ops/sec={2,10:N0} inFlight={3,3}' -f $t, $ops, $rate, $inFlight
+}
+
+# Warm-up below 15s, a mid-run stall (two zero seconds), then a drain tail.
+$stallLines = @(
+	(_RateLine 5 0 0 0), (_RateLine 14 900 900 8),
+	(_RateLine 15 1900 1000 8), (_RateLine 16 2900 1000 8),
+	(_RateLine 17 2900 0 8), (_RateLine 18 2900 0 8),
+	(_RateLine 19 3900 1000 8), (_RateLine 20 3900 0 0), (_RateLine 21 3900 0 0)
+)
+$parsed = @(ConvertFrom-SiloProgressLines -Lines $stallLines)
+_Assert -Name 'progress lines parse with thousands separators' `
+	-Condition ($parsed.Count -eq 9 -and $parsed[2].rate -eq 1000 -and $parsed[2].ops -eq 1900) `
+	-Detail "got count=$($parsed.Count)"
+$ss = Measure-SteadyStateRate -Samples $parsed
+# Window t=15..19: rates 1000,1000,0,0,1000 -> mean 600, interior zeros kept,
+# trailing drain zeros (t=20,21) excluded, pre-15s samples excluded.
+_Assert -Name 'interior stall seconds are kept in the steady-state mean' `
+	-Condition ($ss.Mean -eq 600 -and $ss.Count -eq 5 -and $ss.ZeroCount -eq 2) `
+	-Detail "expected mean=600 n=5 zeros=2, got mean=$($ss.Mean) n=$($ss.Count) zeros=$($ss.ZeroCount)"
+_Assert -Name 'steady window runs from first to last non-zero sample at t>=15' `
+	-Condition ($ss.WindowStart -eq 15 -and $ss.WindowEnd -eq 19) `
+	-Detail "got $($ss.WindowStart)..$($ss.WindowEnd)"
+
+# The mean can never exceed completed work / window: with batch-retirement
+# spikes the old rate>0 form reported 2x here.
+$spiky = @(ConvertFrom-SiloProgressLines -Lines @(
+	(_RateLine 15 4096 4096 1), (_RateLine 16 4096 0 1), (_RateLine 17 8192 4096 1), (_RateLine 18 8192 0 1), (_RateLine 19 12288 4096 1)
+))
+$sp = Measure-SteadyStateRate -Samples $spiky
+_Assert -Name 'batch-retirement spikes are not averaged without their zero seconds' `
+	-Condition ($sp.Mean -eq [int](12288 / 5)) -Detail "expected $([int](12288 / 5)), got $($sp.Mean)"
+
+# A late start: leading zero seconds after t=15 (producer not yet connected)
+# are trimmed, not charged.
+$late = @(ConvertFrom-SiloProgressLines -Lines @(
+	(_RateLine 15 0 0 0), (_RateLine 16 0 0 0), (_RateLine 17 500 500 2), (_RateLine 18 1000 500 2)
+))
+$lt = Measure-SteadyStateRate -Samples $late
+_Assert -Name 'leading idle seconds after warm-up are trimmed' `
+	-Condition ($lt.Mean -eq 500 -and $lt.WindowStart -eq 17) -Detail "got mean=$($lt.Mean) start=$($lt.WindowStart)"
+
+$none = Measure-SteadyStateRate -Samples @(ConvertFrom-SiloProgressLines -Lines @((_RateLine 20 0 0 0)))
+_Assert -Name 'no non-zero sample yields an empty window' `
+	-Condition ($none.Mean -eq 0 -and $none.Count -eq 0 -and $null -eq $none.WindowStart) -Detail "got mean=$($none.Mean) n=$($none.Count)"
+_Assert -Name 'empty input yields an empty window' `
+	-Condition ((Measure-SteadyStateRate -Samples @()).Count -eq 0)
+
+$legacy = @(ConvertFrom-SiloProgressLines -Lines @('[silo] t= 20.0s written= 4,000 Entries written per second= 200 inFlight= 3 failed= 7'))
+_Assert -Name 'legacy written= token shape still parses, with failed=' `
+	-Condition ($legacy.Count -eq 1 -and $legacy[0].rate -eq 200 -and $legacy[0].failed -eq 7) -Detail "got count=$($legacy.Count)"
+
+Write-Host ''
+Write-Host 'Unresolved tail' -ForegroundColor Cyan
+
+_Assert -Name 'FINAL unresolved= is parsed' `
+	-Condition ((Get-FinalUnresolved -FinalLine '[silo] FINAL ops=1,000 failed=0 discarded=0 unresolved=4,096 unresolvedFlushes=1') -eq 4096)
+_Assert -Name 'a FINAL line without unresolved= reads 0' `
+	-Condition ((Get-FinalUnresolved -FinalLine '[silo] FINAL ops=1,000 failed=0') -eq 0 -and (Get-FinalUnresolved -FinalLine '') -eq 0)
+$unres = $clean.Clone(); $unres.UnresolvedFinal = 4096
+$vU = Resolve-CohortVerdict @unres
+_Assert -Name 'an unresolved tail at FINAL grades WEDGE even with failed=0' `
+	-Condition ($vU.State -eq 'WEDGE' -and (@($vU.Reasons) -join ';') -match 'unresolved') `
+	-Detail "got state=$($vU.State) reasons=$($vU.Reasons -join '; ')"
+$vC = Resolve-CohortVerdict @clean
+_Assert -Name 'a clean cohort with no unresolved tail stays HEALTHY' -Condition ($vC.State -eq 'HEALTHY') -Detail "got $($vC.State)"
+
+$missingDiag = Measure-CohortWedgeDiagnostics -SiloLogPath (Join-Path ([System.IO.Path]::GetTempPath()) ("missing-" + [Guid]::NewGuid().ToString('N') + '.log'))
+_Assert -Name 'wedge diagnostics on a missing (unfetched) log score zero instead of throwing' `
+	-Condition ($missingDiag.Watchdog -eq 0 -and $missingDiag.WalSlot -eq 0 -and $missingDiag.WalAppend -eq 0)
+
+Write-Host ''
 $summaryColor = if ($script:_FailCount -eq 0) { 'Green' } else { 'Red' }
 Write-Host ("Total: {0} passed, {1} failed" -f $script:_PassCount, $script:_FailCount) `
 	-ForegroundColor $summaryColor
