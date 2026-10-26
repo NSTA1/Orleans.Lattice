@@ -46,6 +46,46 @@ public partial class CrossClusterSagaParticipantGrainTests
         Assert.That(participant.AbortCount, Is.EqualTo(commit ? 0 : 1));
     }
 
+    [TestCase("coordinator")]
+    [TestCase("tree")]
+    [TestCase("manifest")]
+    [TestCase("set")]
+    [TestCase("saga")]
+    public async Task Status_request_with_different_persisted_identity_is_denied(string field)
+    {
+        var (grain, state, _) = CreateGrain([new RecordingSagaParticipant()]);
+        var original = Request() with { SetId = "set-1" };
+        await grain.PrepareAsync(original);
+        var writes = state.WriteCount;
+        var changed = field switch
+        {
+            "coordinator" => original with { CoordinatorClusterId = "other-peer" },
+            "tree" => original with { TargetTree = "other-tree" },
+            "manifest" => original with { ManifestId = "other-manifest" },
+            "set" => original with { SetId = null },
+            _ => original with { SagaId = "other-saga" },
+        };
+
+        Assert.ThrowsAsync<UnauthorizedAccessException>(async () => await grain.GetStatusAsync(changed));
+
+        var status = await grain.GetStatusAsync(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Phase, Is.EqualTo(SagaPhase.Prepared));
+            Assert.That(state.WriteCount, Is.EqualTo(writes));
+        });
+    }
+
+    [Test]
+    public async Task Status_request_before_prepare_answers_any_coordinator()
+    {
+        var (grain, _, _) = CreateGrain([]);
+
+        var status = await grain.GetStatusAsync(Request() with { CoordinatorClusterId = "any-peer" });
+
+        Assert.That(status.Phase, Is.EqualTo(SagaPhase.None));
+    }
+
     [Test]
     public async Task Abort_before_prepare_persists_identity_for_idempotent_retry()
     {
