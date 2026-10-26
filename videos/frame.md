@@ -241,6 +241,8 @@ ones the technical part uses:
 
 ## Honest status
 
+- Never display Lattice release version numbers in a video. Keep release
+  provenance in the production notes, not in the picture.
 - A package that is unreleased or in progress is labelled on screen wherever it
   appears; in a diagram it is a hollow node, as on the site.
 - No claim the corpus does not make, and no invented customers, adoption

@@ -267,6 +267,23 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     [AlwaysInterleave]
     Task<bool> HasUndecidedParticipantsAsync(Guid txid);
 
+    /// <summary>The maximum number of transactions in one maintenance probe.</summary>
+    const int MaxMaintenanceProbeBatchSize = 128;
+
+    /// <summary>
+    /// Read-committed maintenance predicates, one explicit result per requested
+    /// transaction. Does not resolve delegated decisions or apply retention masks.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, bool>> HasUndecidedParticipantsManyAsync(IReadOnlyList<Guid> txids);
+
+    /// <summary>
+    /// Returns whether both participants and a physically recorded terminal are
+    /// absent in one read-committed observation. For replay purge checks only.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> IsPurgedAsync(Guid txid);
+
     /// <summary>
     /// Returns a snapshot of every recorded saga decision currently in
     /// the registry. Used by the lattice-level read fan-out path to

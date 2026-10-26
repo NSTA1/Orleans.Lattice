@@ -1,0 +1,108 @@
+<template id="choice-list-template">
+  <div
+    id="choice-list-root"
+    data-composition-id="choice-list"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"Choose the rule"},
+      {"id":"items","type":"string","label":"JSON list of title, detail and beat","default":"[]"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+  >
+    <h2 class="lv-heading"></h2>
+    <ol class="cl-items"></ol>
+    <style>
+      [data-composition-id="choice-list"] {
+        width: 1920px;
+        height: 1080px;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      [data-composition-id="choice-list"] .cl-items {
+        position: absolute;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        top: 250px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      [data-composition-id="choice-list"] .cl-item {
+        position: relative;
+        padding-left: 80px;
+        margin-bottom: 48px;
+      }
+      [data-composition-id="choice-list"] .lv-node {
+        position: absolute;
+        left: 0;
+        top: 12px;
+      }
+      [data-composition-id="choice-list"] .cl-title {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: 1.15;
+      }
+      [data-composition-id="choice-list"] .cl-detail {
+        margin: 12px 0 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+        line-height: 1.3;
+      }
+    </style>
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.getElementById("choice-list-root");
+        const scene = window.LatticeScene;
+        const timing = scene.cue(vars);
+        const { duration } = window.LatticeMotion;
+        const items = JSON.parse(vars.items);
+        if (!Array.isArray(items) || items.length < 1 || items.length > 3) {
+          throw new Error("choice-list: supply one to three items");
+        }
+        for (const item of items) {
+          if (typeof item.title !== "string" || typeof item.detail !== "string" ||
+              !Number.isInteger(item.beat) || item.beat < 0 ||
+              (timing.beats.length > 0 && item.beat >= timing.beats.length)) {
+            throw new Error("choice-list: each item needs title, detail and an in-range beat");
+          }
+        }
+        root.querySelector(".lv-heading").textContent = scene.site(vars.heading);
+        const tl = gsap.timeline({ paused: true });
+        const marker = getComputedStyle(root).getPropertyValue("--lt-marker").trim();
+        const surface = getComputedStyle(root).getPropertyValue("--lt-surface").trim();
+        tl.from(root.querySelector(".lv-heading"), { opacity: 0, duration: duration.slow }, 0);
+        items.forEach((item, index) => {
+          const row = document.createElement("li");
+          row.className = "cl-item";
+          const node = document.createElement("span");
+          node.className = "lv-node";
+          const title = document.createElement("h3");
+          title.className = "cl-title";
+          title.textContent = scene.site(item.title);
+          const detail = document.createElement("p");
+          detail.className = "cl-detail";
+          detail.textContent = scene.site(item.detail);
+          row.appendChild(node);
+          row.appendChild(title);
+          row.appendChild(detail);
+          root.querySelector(".cl-items").appendChild(row);
+          const at = timing.at(item.beat, index * 3 + 0.6);
+          tl.from(row, { opacity: 0, y: 20, duration: duration.slow, ease: "lattice-out" }, at);
+          tl.to(node, { backgroundColor: marker, duration: duration.base }, at);
+          if (index + 1 < items.length) {
+            tl.to(node, { backgroundColor: surface, duration: duration.base },
+              timing.at(items[index + 1].beat, (index + 1) * 3 + 0.6));
+          }
+        });
+        scene.exit(tl, root, timing);
+        window.__timelines = window.__timelines || {};
+        window.__timelines["choice-list"] = tl;
+      })();
+    </script>
+  </div>
+</template>

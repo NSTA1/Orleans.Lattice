@@ -246,20 +246,10 @@ internal sealed partial class ReplicationShipperGrain
             return purged;
         }
 
-        // Participants first, then the decision: "no participants, then no
-        // decision" proves a purge, because the forget follows the decision and
-        // the purge follows the forget. A fault propagates and fails the tick.
+        // One read-committed observation proves both absences. A fault still
+        // propagates and fails the tick; delegated visibility is not consulted.
         var registry = TxRegistryRouting.GetRegistry(_grainFactory, _treeName, record.TransactionId);
-        var participants = await registry.GetParticipantsAsync(record.TransactionId);
-        if (participants.Count > 0)
-        {
-            purged = false;
-        }
-        else
-        {
-            var recorded = await registry.GetRecordedStatusAsync(record.TransactionId);
-            purged = recorded is not (TxStatus.Committed or TxStatus.Aborted);
-        }
+        purged = await registry.IsPurgedAsync(record.TransactionId);
 
         if (!purged)
         {

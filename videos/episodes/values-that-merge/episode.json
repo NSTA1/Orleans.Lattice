@@ -1,0 +1,16 @@
+{
+  "path": "build",
+  "order": 2,
+  "items": [
+    "B2"
+  ],
+  "poster": {
+    "scene": "values-that-merge",
+    "beat": 0,
+    "offset": 3.5
+  },
+  "published": {
+    "cut": "29a5c4148870",
+    "bytes": 8027878
+  }
+}
