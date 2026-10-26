@@ -45,7 +45,7 @@ if sys.argv[1] == "--hold":
         signal.pause()
 
 mode = (root / "mode").read_text()
-arguments = sys.argv[2:]
+arguments = sys.argv[1:]
 with (root / "calls").open("a") as log:
     log.write(json.dumps({"uid": os.geteuid(), "args": arguments}) + "\n")
 count = len((root / "calls").read_text().splitlines())
@@ -57,8 +57,8 @@ lock = open(root / "lock", "a")
 try:
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except BlockingIOError:
-    print("fixture: previous privileged installer still owns the lock", flush=True)
-    sys.exit(100)
+    print("fixture: previous privileged installer still owns the lock; inner apt exit 100", flush=True)
+    sys.exit(1)  # Playwright maps the apt failure to wrapper exit 1.
 fcntl.flock(lock, fcntl.LOCK_UN)
 if mode in ("hang", "exit-with-child", "exhaust") and (
         count == 1 or mode == "exhaust"):
@@ -85,8 +85,9 @@ class PrivilegedInstallerTests(unittest.TestCase):
         if sys.platform != "linux" or os.geteuid() == 0:
             raise AssertionError("Run the privilege regression on Linux as a non-root sudo user")
         cls.sudo = shutil.which("sudo")
-        if cls.sudo is None:
-            raise AssertionError("sudo is required; do not skip the privilege regression")
+        cls.pwsh = shutil.which("pwsh")
+        if cls.sudo is None or cls.pwsh is None:
+            raise AssertionError("sudo and pwsh are required; do not skip the privilege regression")
         subprocess.run([cls.sudo, "-n", "true"], check=True, timeout=10)
 
     def setUp(self):
@@ -98,7 +99,6 @@ class PrivilegedInstallerTests(unittest.TestCase):
             shutil.copyfile(WORKFLOWS / name, self.root / name)
         script = self.root / "test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1"
         script.parent.mkdir(parents=True)
-        script.touch()
         self.tools = self.root / "bin"
         self.tools.mkdir()
         for name in ("calls", "lock", "owner", "owners"):
@@ -106,7 +106,12 @@ class PrivilegedInstallerTests(unittest.TestCase):
             path.touch()
             path.chmod(0o666)
         (self.root / "owner").unlink()
-        self.write_tool("pwsh", f"#!{sys.executable}\nSUDO = {self.sudo!r}\n" + WORKER)
+        self.write_tool("worker", f"#!{sys.executable}\nSUDO = {self.sudo!r}\n" + WORKER)
+        script.write_text(
+            f"& '{self.tools / 'worker'}' @args\nexit $LASTEXITCODE\n",
+            encoding="utf-8",
+        )
+        self.write_tool("pwsh", f'#!/bin/bash\nexec "{self.pwsh}" -NoProfile -NonInteractive "$@"\n')
         # sudo's secure_path intentionally does not inherit the fixture PATH.
         # Resolve the clock shim before elevation, but use real sudo for the exec.
         self.write_tool("sudo", f"""\
@@ -120,13 +125,13 @@ class PrivilegedInstallerTests(unittest.TestCase):
             [ "$2" = 120 ] && [ "$3" = 10 ] || exit 95
             script="$1"
             shift 3
-            exec "{sys.executable}" "$script" 0.8 0.2 "$@"
+            exec "{sys.executable}" "$script" 2 0.3 "$@"
         """)
         self.write_tool("timeout", """\
             #!/bin/bash
             [ "$1" = --kill-after=10s ] && [ "$2" = 120s ] || exit 97
             shift 2
-            exec /usr/bin/timeout --kill-after=0.2s 0.8s "$@"
+            exec /usr/bin/timeout --kill-after=0.3s 2s "$@"
         """)
         self.write_tool("sleep", "#!/bin/bash\nexit 0\n")
         self.env = dict(os.environ, PATH=f"{self.tools}:{os.environ['PATH']}")
@@ -238,14 +243,16 @@ class PrivilegedInstallerTests(unittest.TestCase):
             'if timeout --kill-after=10s 120s pwsh "$script" "$@"; then',
         ))
         result = self.install("hang")
-        self.assertEqual(100, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
         self.assertEqual(3, len(self.calls()), result.stdout)
         self.assertIn("exit code 124", result.stdout)
+        self.assertEqual(2, result.stdout.count("failed with exit code 1."))
         self.assertIn("still owns the lock", result.stdout)
+        self.assertIn("inner apt exit 100", result.stdout)
         owner = json.loads((self.root / "owner").read_text())
         self.assertEqual(0, owner["uid"])
         self.assertTrue(Path(f"/proc/{owner['pid']}").exists(), owner)
-        print("Original helper: timeout 124, then lock collisions 100/100 (regression caught).")
+        print("Original helper wrapper exits: 124/1/1; inner apt failures: 100/100 (caught).")
 
     def test_native_regression_is_ungated_in_lightweight_ci(self):
         workflow = (WORKFLOWS / "ci.yml").read_text()
