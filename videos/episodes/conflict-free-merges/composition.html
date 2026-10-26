@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Conflict-free merges in 90 seconds</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/site/join-figures.js"></script>
+    <script src="shared/brand/site/packages.js"></script>
+    <script src="shared/brand/site/home.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="conflict-free-merges"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="77.794"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="opening"
+        data-track-index="0"
+        data-variable-values='{"kicker":"How it works","title":"Conflict-free merges in 90 seconds","subtitle":"Two additions. One union.","beats":"0.5","end":6.921}'
+        data-start="0"
+        data-duration="6.921"
+      ></div>
+      <div
+        id="gset-merge"
+        data-composition-id="join-diagram"
+        data-composition-src="shared/components/join-diagram.html"
+        data-scene="g-set-merge"
+        data-track-index="0"
+        data-variable-values='{"scenario":"gset","heading":"A G-Set merges by union","redeliver":true,"note":"Commutative, associative and idempotent|Append-only membership","beats":"0.6,9.12,20.691,29.455,39.824,51.483,64.133","end":70.873}'
+        data-start="6.921"
+        data-duration="70.873"
+      ></div>
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/conflict-free-merges/narration.wav" data-start="0" data-duration="77.794" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["conflict-free-merges"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>
