@@ -46,7 +46,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Leaf maintenance calls.** Counts (including split-aware ownership) and diagnostics fuse payload/topology reads; footprint refresh retains snapshot accounting. Projection rebuilds return pre-reset links, and bulk append batches leaf birth metadata and links. ([#5013](https://github.com/NSTA1/Orleans.Lattice/pull/5013), [#5024](https://github.com/NSTA1/Orleans.Lattice/issues/5024)) (`Orleans.Lattice`)
 
-- **Performance - Internal-node maintenance calls.** Split completion seeds the new sibling in one grain call instead of one per child; bulk-graft descent and the node-binding walk read each internal node once instead of twice. ([#5100](https://github.com/NSTA1/Orleans.Lattice/pull/5100)) (`Orleans.Lattice`)
+- **Performance - Internal-node maintenance calls.** Split completion seeds the new sibling in one grain call instead of one per child; bulk-graft descent and the node-binding walk read each internal node once instead of twice. ([#5100](https://github.com/NSTA1/Orleans.Lattice/pull/5069)) (`Orleans.Lattice`)
 
 - **Performance - Snapshot control paths.** Bootstrap fencing and snapshot initiation reuse registry entries, removing a read each; independent WAL heads overlap within a bounded window while preserving freeze-before-head ordering. ([#4996](https://github.com/NSTA1/Orleans.Lattice/pull/4996)) (`Orleans.Lattice`)
 
