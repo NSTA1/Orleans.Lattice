@@ -7,8 +7,8 @@ namespace Orleans.Lattice.BPlusTree;
 /// operation id - the authoring coordinator's key, which every terminal of the
 /// sub-saga carries as its cross-tree operation id - and the participating
 /// trees. Recorded by the authoring tree's transaction registry for as long as
-/// the sub-saga's decision is stored, and carried on the snapshot export's rows
-/// of the sub-saga.
+/// the sub-saga's decision is stored, on a host with replication enabled only
+/// (issue #5073), and carried on the snapshot export's rows of the sub-saga.
 /// </summary>
 [GenerateSerializer]
 [Immutable]

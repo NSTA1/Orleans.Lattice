@@ -1,0 +1,160 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:04.717
+Scans, filters and cursors showed
+how to choose what to read.
+
+2
+00:00:04.717 --> 00:00:09.073
+Here, we ask what happens
+when one change touches several keys.
+
+3
+00:00:09.423 --> 00:00:14.834
+This is Atomic writes: related changes
+become visible as a whole, or not at all.
+
+4
+00:00:15.834 --> 00:00:20.298
+Suppose an order changes two keys:
+its status and its tracking reference.
+
+5
+00:00:20.298 --> 00:00:24.089
+They belong together; once one is live,
+the other must be too.
+
+6
+00:00:24.439 --> 00:00:27.290
+Two ordinary writes are
+two chances to stop.
+
+7
+00:00:27.290 --> 00:00:30.790
+If the second fails,
+the first may already be visible.
+
+8
+00:00:31.140 --> 00:00:34.704
+A non-atomic batch remains useful
+when throughput matters
+
+9
+00:00:34.704 --> 00:00:37.080
+and partial application is acceptable.
+
+10
+00:00:37.080 --> 00:00:39.893
+It does not make those
+writes all-or-nothing.
+
+11
+00:00:40.893 --> 00:00:44.504
+For a batch in one tree,
+use the atomic write surface.
+
+12
+00:00:44.854 --> 00:00:47.301
+On success, the whole batch commits.
+
+13
+00:00:47.301 --> 00:00:50.971
+If the saga aborts,
+none of its writes become visible.
+
+14
+00:00:50.971 --> 00:00:54.301
+A caller-side timeout
+leaves the outcome unknown.
+
+15
+00:00:54.651 --> 00:00:56.831
+Readers do not see half of this batch.
+
+16
+00:00:56.831 --> 00:01:00.100
+Its prepared writes stay hidden
+until one commit decision
+
+17
+00:01:00.100 --> 00:01:01.706
+makes them visible together.
+
+18
+00:01:02.056 --> 00:01:04.150
+An abort drops those hidden writes;
+
+19
+00:01:04.150 --> 00:01:06.903
+it does not need to write
+the old values back.
+
+20
+00:01:07.903 --> 00:01:10.869
+Sometimes one change spans distinct trees:
+
+21
+00:01:10.869 --> 00:01:14.259
+an order leaves one tree
+and appears in another.
+
+22
+00:01:14.609 --> 00:01:17.134
+The single-tree call cannot cover both.
+
+23
+00:01:17.134 --> 00:01:20.759
+The cross-tree builder stages
+each tree's part under one
+
+24
+00:01:20.759 --> 00:01:22.571
+stable operation identifier.
+
+25
+00:01:22.921 --> 00:01:26.745
+One shared decision applies
+to every participating tree:
+
+26
+00:01:26.745 --> 00:01:28.930
+commit them all, or commit none.
+
+27
+00:01:29.930 --> 00:01:34.666
+That is atomicity for the write,
+not a snapshot read across trees.
+
+28
+00:01:35.016 --> 00:01:39.080
+Two separate reads at different
+moments can straddle the decision:
+
+29
+00:01:39.080 --> 00:01:42.590
+one may return the old state,
+and the next the new state.
+
+30
+00:01:42.590 --> 00:01:44.683
+For a consistent view of one tree,
+
+31
+00:01:44.683 --> 00:01:49.671
+use a snapshot entry cursor; every page
+reflects the tree state captured at open.
+
+32
+00:01:51.471 --> 00:01:54.119
+Next on Build: TTL and soft delete.
+
+33
+00:01:54.119 --> 00:01:59.189
+The deep dive on how this works is
+Atomic commit without consensus.
+
+34
+00:01:59.189 --> 00:02:03.578
+The links are on this episode's page
+in the documentation.

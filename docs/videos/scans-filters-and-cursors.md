@@ -118,7 +118,7 @@ await tree.CloseCursorAsync(cursorId);
 
 <!-- where-next:begin -->
 
-- **Next on Build:** Atomic writes
+- **Next on Build:** [Atomic writes](atomic-writes.md)
 - **The pages it introduces:** [Predicate operations](../lattice/predicated-operations.md) and [API reference](../lattice/api.md)
 
 <!-- where-next:end -->
