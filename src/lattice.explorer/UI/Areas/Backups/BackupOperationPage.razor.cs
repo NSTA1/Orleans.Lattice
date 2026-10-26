@@ -102,6 +102,7 @@ public partial class BackupOperationPage : IDisposable
 
     private async Task FollowAsync(string id)
     {
+        Detach();
         var follower = new OperationFollower(Time);
         _follower = follower;
         _followedId = id;
@@ -118,7 +119,8 @@ public partial class BackupOperationPage : IDisposable
 
     private async Task CancelAsync()
     {
-        if (_follower?.Status is not { } status)
+        var follower = _follower;
+        if (_cancelling || follower?.Status is not { } status)
         {
             return;
         }
@@ -128,20 +130,35 @@ public partial class BackupOperationPage : IDisposable
         try
         {
             var cancelled = await ClusterOperations.CancelOperationAsync(status.OperationId, _disposed.Token);
+            if (!ReferenceEquals(_follower, follower) || _disposed.Token.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (cancelled is null)
             {
                 _cancelError = "The operation is no longer there to cancel.";
             }
 
-            await _follower.RefreshAsync(_disposed.Token);
+            await follower.RefreshAsync(_disposed.Token);
         }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _disposed.Token))
         {
-            _cancelError = BackupsFaults.Describe(exception);
+            if (ReferenceEquals(_follower, follower) && !_disposed.Token.IsCancellationRequested)
+            {
+                _cancelError = BackupsFaults.Describe(exception);
+            }
+        }
+        catch (OperationCanceledException) when (_disposed.Token.IsCancellationRequested)
+        {
+            // The page has left.
         }
         finally
         {
-            _cancelling = false;
+            if (ReferenceEquals(_follower, follower))
+            {
+                _cancelling = false;
+            }
         }
     }
 
@@ -231,6 +248,7 @@ public partial class BackupOperationPage : IDisposable
         }
 
         _confirmRevert = false;
+        _cancelling = false;
         _cancelError = null;
     }
 }
