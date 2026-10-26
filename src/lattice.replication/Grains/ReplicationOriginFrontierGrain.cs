@@ -11,6 +11,9 @@ internal sealed class ReplicationOriginFrontierGrain(
     IPersistentState<ReplicationOriginFrontierState> state)
     : IReplicationOriginFrontierGrain, IGrainBase
 {
+    /// <summary>Bounds each authoritative source-confirmation request.</summary>
+    internal const int HeldProbeBatchSize = 128;
+
     /// <summary>Prefix of a causal-apply buffer source.</summary>
     internal const string BufferSourcePrefix = "b|";
 
@@ -354,28 +357,57 @@ internal sealed class ReplicationOriginFrontierGrain(
         for (var i = 0; i < required.Count; i++)
         {
             var t = required[i];
-            var lost = state.State.Lost.Contains(t);
-            var held = false;
-            if (!lost && t < lowWatermark)
+            verdicts[i] = CausalFrontierCore.Decide(t, lowWatermark, held: false, lost: state.State.Lost.Contains(t));
+        }
+
+        foreach (var (source, identities) in state.State.HeldBySource)
+        {
+            List<HybridLogicalClock>? timestamps = null;
+            List<int>? indexes = null;
+            for (var i = 0; i < required.Count; i++)
             {
-                foreach (var (source, identities) in state.State.HeldBySource)
+                if (verdicts[i] != CausalDependencyVerdict.Met || !identities.Contains(required[i]))
                 {
-                    if (!identities.Contains(t))
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    if (await IsStillHeldAsync(source, t, cancellationToken).ConfigureAwait(true))
-                    {
-                        held = true;
-                        break;
-                    }
-
-                    (stale ??= new List<(string, HybridLogicalClock)>()).Add((source, t));
+                (timestamps ??= new List<HybridLogicalClock>(Math.Min(required.Count, HeldProbeBatchSize))).Add(required[i]);
+                (indexes ??= new List<int>(Math.Min(required.Count, HeldProbeBatchSize))).Add(i);
+                if (timestamps.Count == HeldProbeBatchSize)
+                {
+                    await ConfirmAsync().ConfigureAwait(true);
                 }
             }
 
-            verdicts[i] = CausalFrontierCore.Decide(t, lowWatermark, held, lost);
+            if (timestamps is { Count: > 0 })
+            {
+                await ConfirmAsync().ConfigureAwait(true);
+            }
+
+            async Task ConfirmAsync()
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var held = await IsStillHeldManyAsync(source, timestamps!, cancellationToken).ConfigureAwait(true);
+                if (held.Length != timestamps!.Count)
+                {
+                    throw new InvalidOperationException("A causal-frontier source returned an incomplete held-identity batch.");
+                }
+
+                for (var j = 0; j < held.Length; j++)
+                {
+                    if (held[j])
+                    {
+                        verdicts[indexes![j]] = CausalDependencyVerdict.Unmet;
+                    }
+                    else
+                    {
+                        (stale ??= new List<(string, HybridLogicalClock)>()).Add((source, timestamps[j]));
+                    }
+                }
+
+                timestamps.Clear();
+                indexes!.Clear();
+            }
         }
 
         if (stale is not null)
@@ -387,25 +419,25 @@ internal sealed class ReplicationOriginFrontierGrain(
     }
 
     /// <summary>
-    /// Asks <paramref name="source"/> whether it still holds the origin's write at
-    /// <paramref name="t"/>. The sources answer from their durable state and
+    /// Asks <paramref name="source"/> whether it still holds the origin's writes.
+    /// The sources answer from the same state as their single-identity probes and
     /// interleave, so this cannot deadlock against a source that is itself
     /// waiting on this grain.
     /// </summary>
-    private async Task<bool> IsStillHeldAsync(string source, HybridLogicalClock t, CancellationToken cancellationToken)
+    private async Task<bool[]> IsStillHeldManyAsync(string source, IReadOnlyList<HybridLogicalClock> timestamps, CancellationToken cancellationToken)
     {
         if (source.StartsWith(BufferSourcePrefix, StringComparison.Ordinal))
         {
             var tree = source[BufferSourcePrefix.Length..];
             return await grainFactory.GetGrain<ICausalApplyBufferGrain>(tree)
-                .IsHoldingAsync(Origin, t).ConfigureAwait(true);
+                .IsHoldingManyAsync(Origin, timestamps).ConfigureAwait(true);
         }
 
         if (source.StartsWith(DeadLetterSourcePrefix, StringComparison.Ordinal))
         {
             var tree = source[DeadLetterSourcePrefix.Length..];
             return await grainFactory.GetGrain<IReplicationDeadLetterGrain>(tree)
-                .IsHoldingAsync(Origin, t, cancellationToken).ConfigureAwait(true);
+                .IsHoldingManyAsync(Origin, timestamps, cancellationToken).ConfigureAwait(true);
         }
 
         if (source.StartsWith(ExportSourcePrefix, StringComparison.Ordinal))
@@ -413,12 +445,20 @@ internal sealed class ReplicationOriginFrontierGrain(
             // Held until the tree applies the write itself. An identity the tree
             // has since forgotten stays held: that only delays the dependent.
             var tree = source[ExportSourcePrefix.Length..];
-            return !await grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(tree)
-                .HasAppliedAsync(Origin, t).ConfigureAwait(true);
+            var applied = await grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(tree)
+                .HasAppliedManyAsync(Origin, timestamps).ConfigureAwait(true);
+            for (var i = 0; i < applied.Length; i++)
+            {
+                applied[i] = !applied[i];
+            }
+
+            return applied;
         }
 
         // An unknown source cannot be confirmed either way: keep treating it as held.
-        return true;
+        var unknown = new bool[timestamps.Count];
+        Array.Fill(unknown, true);
+        return unknown;
     }
 
     /// <summary>Removes each identity its source confirmed it no longer holds.</summary>
