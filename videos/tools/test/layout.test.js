@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -122,4 +122,16 @@ test("every episode folder holds at least its brief and its script", () => {
     assert.ok(existsSync(brief), `episodes/${slug}/BRIEF.md`);
     assert.ok(existsSync(script), `episodes/${slug}/SCRIPT.md`);
   }
+});
+
+test("conflict-free merges cites the existing Values that merge companion from its script folder", () => {
+  const { script } = episodePaths("conflict-free-merges");
+  const markdown = readFileSync(script, "utf8");
+  const sources = markdown.split(/^## Sources\s*$/m)[1];
+  assert.ok(sources, "the actual script must have its Sources section");
+  const link = sources.match(/\[Values that merge\]\(([^)]+)\)/);
+  assert.ok(link, "the preceding episode must be linked in Sources");
+  const target = path.resolve(path.dirname(script), link[1]);
+  assert.ok(existsSync(target), `${link[0]} resolves to missing file ${target}`);
+  assert.equal(target, path.resolve(workspaceRoot, "..", "docs", "videos", "values-that-merge.md"));
 });
