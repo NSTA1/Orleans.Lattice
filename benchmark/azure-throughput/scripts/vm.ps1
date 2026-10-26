@@ -54,7 +54,10 @@ $nsgName = "$($p.NamePrefix)-nsg"
 $pipName = "$($p.NamePrefix)-pip"
 $rg = $p.ResourceGroup
 
-az account set --subscription $p.SubscriptionId | Out-Null
+if ($p.SubscriptionId) {
+	az account set --subscription $p.SubscriptionId | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw "az account set --subscription $($p.SubscriptionId) failed (exit $LASTEXITCODE); run 'az login' or fix SubscriptionId in the parameters file." }
+}
 $isPrivate = Test-BenchPrivateNetwork -ResourceGroup $rg
 
 function Get-PublicIp {

@@ -644,6 +644,8 @@ Confirms cap=16 banner in force (`walPartitions=8 walMaxPending=16`); silo produ
 
 **Quaternary (harness):** the §30.6 item 4 runner-bug is now empirically demonstrated three times in one sweep. Fixed in this PR (commit 2): runner verdict now requires FINAL emitted AND `failed=0` AND drain-tail length < 10 samples AND clean diagnostics before declaring HEALTHY; ladder reads the §27.1 steady-state mean directly so wedged cohorts no longer parse as `throughput=0 e/s`. (Since found: `ladder.ps1` looks for that mean in the output it captures from `run-cohort.ps1`, which prints its summary with `Write-Host`, so the capture never holds it and every rung still parses as `0`; see the `ladder.ps1` notes in this folder's `README.md`.)
 
+**Later fix (harness):** the ladder capture problem noted above is resolved. `run-cohort.ps1` now returns a `LatticeBench.CohortResult` object on its success stream, and `ladder.ps1` builds each CSV row from it, so the measured columns, the verdict and `-DegradeThresholdPct` work.
+
 **Quintenary (harness):** ladder.ps1 had a string-interpolation parse error (`$vehicles:$tickHz` -> PowerShell scope-variable misread). Fixed in this PR (commit 1).
 
 ### 31.3 Decision

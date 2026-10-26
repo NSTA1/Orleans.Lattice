@@ -105,8 +105,13 @@ To run a second environment side-by-side: `./scripts/deploy.ps1 -NamePrefix lat-
 
 ### `update.ps1` - inner loop (sync -> publish -> restart)
 
-Tars the git-tracked tree, ships it over SSH, runs `dotnet publish` for the silo and
-producer on the VM, re-renders the systemd units, and restarts the silo.
+Tars the git-tracked tree, uploads it over SSH, extracts it over `/opt/lattice/src` and
+deletes every file there that git no longer tracks (outside `bin/` and `obj/`, so the
+publish stays incremental; extraction alone never removed a file deleted or renamed in the
+repo, and the SDK kept compiling the stale copy). It then runs `dotnet publish` for the
+silo and producer on the VM, re-renders the systemd units, restarts the silo, and fails
+unless `lattice-silo` is `active` five seconds later (on a fresh deploy that can be the
+~60 s managed-identity propagation window: wait and re-run `update.ps1 -NoBuild`).
 
 | Parameter | Effect |
 |-----------|--------|
@@ -138,18 +143,22 @@ Artifacts per cohort under `benchmark/.run/azure-throughput/`: `silo-<cohort>.lo
 `producer-<cohort>.log`, `sampler-<cohort>.csv` (per-second CPU%/RSS), and
 `counters-<cohort>.csv` when `-CaptureCounters` is set.
 
+The human summary is `Write-Host` (console only). The script also returns one
+`LatticeBench.CohortResult` object on the success stream - `CohortName`, `Written`, `Failed`,
+`Unresolved`, `ActiveSec`, `SteadyMean`, `SteadyCount`, `SteadyZeroCount`, `ActiveAvg`,
+`DrainTailSamples`, the CPU/RSS figures, `Verdict`, `VerdictReasons` and the artifact paths -
+so `$r = ./run-cohort.ps1 ... | Select-Object -Last 1` captures the result. Setting
+`BENCH_INFLIGHT_TAIL_BUDGET_SEC` above 18 in `-ExtraSiloEnv` prints a warning: the silo unit's
+30 s stop window minus the engine's 10 s saturation quiesce leaves no room for more, and a
+SIGKILL before `FINAL` grades the cohort `WEDGE`.
+
 ### `ladder.ps1` - rung sweep
 
-Loops `run-cohort.ps1` over a list of rungs and appends one row per rung to a results CSV.
-
-**As the scripts stand, the CSV's measured columns and `-DegradeThresholdPct` do not work.**
-The ladder parses them out of the `run-cohort.ps1` output it captures with `2>&1`, but
-`run-cohort.ps1` prints its whole summary with `Write-Host`, which that capture never
-receives. Every rung therefore records `0` in each measured column and `UNKNOWN` as its
-`verdict`, the ladder's own per-rung line and closing table repeat those values, and the
-early stop never fires. Read each rung's result from the per-cohort summary `run-cohort.ps1`
-prints to the console, or from that cohort's `silo-<cohort>.log` and `sampler-<cohort>.csv`
-(see "Reading a cohort result").
+Loops `run-cohort.ps1` over a list of rungs and appends one row per rung to a results CSV,
+built from the `LatticeBench.CohortResult` object each cohort returns. A rung whose cohort
+throws (an ssh/scp failure) is recorded with verdict `ERROR` and zeros, and the sweep moves
+on. Invoke it in-process (`./ladder.ps1 -Rungs '1000:5','5000:5'`): under `pwsh -File` the
+`-Rungs` array arrives as one comma-joined string.
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
@@ -158,8 +167,8 @@ prints to the console, or from that cohort's `silo-<cohort>.log` and `sampler-<c
 | `-CooldownSec <N>` | `5` | Pause between rungs. |
 | `-ResponseTimeoutSec <N>` | `180` | Sets `BENCH_RESPONSE_TIMEOUT_SEC` for every rung (drop to 30 to reproduce the grain-RPC-deadline failure mode). |
 | `-ExtraSiloEnv @{...}` | `@{}` | Extra silo env forwarded to every cohort. |
-| `-DegradeThresholdPct <N>` | `0` | Meant to stop the sweep once a rung's throughput drops below `(1 - N/100)` of the best observed (a "find the peak" sweep). It never fires as the scripts stand: the throughput it compares always parses as `0` (see above). |
-| `-ResultsCsv <path>` | `scripts/.ladder-results.csv` | Output CSV path, rewritten from its header at the start of every sweep. Its measured columns read `0` and `verdict` `UNKNOWN` as the scripts stand (see above). |
+| `-DegradeThresholdPct <N>` | `0` | Stop the sweep once a rung's steady mean drops below `(1 - N/100)` of the best observed, or once a rung yields no usable throughput (a `WEDGE` past the knee) after one that did - a "find the peak" sweep. `ERROR` rungs never stop it. |
+| `-ResultsCsv <path>` | `scripts/.ladder-results.csv` | Output CSV path, rewritten from its header at the start of every sweep. |
 | `-NamePrefix <name>` / `-ParametersFile <path>` | - | As above. |
 
 ### `vm.ps1 <action>` - day-to-day VM control
@@ -433,7 +442,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WARMUP_GATE_TIMEOUT_SEC` | 300 | Bound on the `BENCH_EXPECTED_SILOS` wait; the silo fails loudly rather than warming a partial cluster. |
 | `BENCH_WARMUP_GATE_SETTLE_SEC` | 5 | Extra delay after the gate opens, absorbing manifest skew between silos. `0` disables. |
 | `BENCH_WARMUP_BUDGET_SEC` | 480 | Producer, Orleans-client mode only: wall-clock ceiling (clamped to 30-3600 s) on the warm-up retry loop, so a warm-up that keeps hitting the response timeout is abandoned rather than billing N silos. `run-cohort-aca.ps1 -WarmUpBudgetSec` sets it (default 400). |
-| `BENCH_INFLIGHT_TAIL_BUDGET_SEC` | 12 | How long the ingest engine may spend draining in-flight flushes before emitting `FINAL`; it decides whether trailing work is counted in `ops` or in `failed`. The default fits the VM units' systemd stop window; `run-cohort-aca.ps1 -InFlightTailBudgetSec` raises it (default 120). |
+| `BENCH_INFLIGHT_TAIL_BUDGET_SEC` | 12 | How long the ingest engine may spend draining in-flight flushes before emitting `FINAL`; work that settles inside it lands in `ops` or `failed`, work still in flight when it expires is reported as `unresolved=` (and grades the cohort `WEDGE` on both layers). The default fits the VM unit's 30 s systemd stop window, and `run-cohort.ps1` warns above 18; `run-cohort-aca.ps1 -InFlightTailBudgetSec` raises it (default 120), as ACA jobs have no stop window. |
 | `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
 | `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (p50/p90/p99 per instrument/tree/shard/phase). `0` disables. |
 | `BENCH_MV_LAG_REPORT_SEC` | 5 | `set-point-mv` only: cadence (s) of the silo-side `[silo:mv-lag] t=.. view=.. applyLag=.. backlog=..` lines, plus a `final` line at shutdown. On Layer 3 the ingest engine runs in the producer process, which cannot observe the view maintainer's instruments, so `MV-FINAL lagAtStop=n/a` there is expected and these silo lines are the lag evidence. `0` disables. |
@@ -479,26 +488,34 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 > however late in the sweep they ran. It still applies to `run-cohort.ps1` and to
 > `-ResetStorage:$false`.
 
-`run-cohort.ps1` prints a `=== Cohort complete ===` summary and writes the silo journal to
-`benchmark/.run/azure-throughput/silo-<cohort>.log`. Parse the **log file** directly
-(`run-cohort.ps1` writes its summary with `Write-Host`, so capturing the script's stdout
-into a variable yields nothing).
+`run-cohort.ps1` prints a `=== Cohort complete ===` summary, writes the silo journal to
+`benchmark/.run/azure-throughput/silo-<cohort>.log`, and returns the same figures as a
+`LatticeBench.CohortResult` object (the summary itself is `Write-Host`, so capture the
+object, not the text).
 
 Key lines in the silo log:
 
 - `[silo] t= ..s ops= .. ops/sec= .. inFlight= ..` - one per-second sample. `run-cohort.ps1`
-  averages the `ops/sec` of the samples at `t >= 15s` with a non-zero rate (trimming the
-  warm-up ramp and the post-producer drain) into its `Steady mean : .. e/s` summary line,
-  which is the **primary cohort metric** for an A/B.
+  averages the `ops/sec` of the samples from the first non-zero sample at `t >= 15s` to the
+  last non-zero sample (trimming the warm-up ramp and the post-producer drain) into its
+  `Steady mean : .. e/s` summary line, which is the **primary cohort metric** for an A/B and
+  what Layer 2 of `performance-report.ps1` publishes. Zero-rate seconds *inside* that window
+  are stalls and are kept (the summary counts them as `stalled`): the historical `rate>0` form
+  dropped them and so overstated a cohort that stalled mid-run by exactly its stalled fraction.
+  A cohort with no interior zero second reads the same under both.
 - `[silo] FINAL ops=.. failed=.. discarded=.. elapsed=..s active=..s ops/sec (avg)=.. (active avg)=..`
   - the **active avg** divides `ops` by the window from the first accepted batch to the last
-  drained flush, so it excludes the pre-connect idle window but not a post-producer drain
-  stall; the summary repeats it as the secondary `FINAL active` line, marked
+  settled flush (to `FINAL` itself while flushes are still unresolved), so it excludes the
+  pre-connect idle window and the idle wait for the harness to stop the silo, but not a
+  post-producer drain stall. Before the window ended at the last settled flush it ran to the
+  silo stop, charging the harness's quiesce poll to `active` and deflating every single-VM
+  `active avg`. The summary repeats it as the secondary `FINAL active` line, marked
   `(drain-inflated; ignore)` on a WEDGE verdict. `failed` / `discarded` count unsuccessful
   operations. The line ends with `unresolved=.. unresolvedFlushes=..`: entries (and flushes)
   still in flight when the `BENCH_INFLIGHT_TAIL_BUDGET_SEC` tail budget expired. They settle
   after `FINAL`, so they are in neither `ops` nor `failed`; a cohort that abandoned work used to
-  report `failed=0`. `run-cohort-aca.ps1` grades any `unresolved > 0` as `WEDGE`.
+  report `failed=0`. Both `run-cohort.ps1` and `run-cohort-aca.ps1` grade any `unresolved > 0`
+  as `WEDGE`.
 - `Verdict : HEALTHY | DEGRADED | WEDGE | FAILED` and `Drain tail : N trailing rate=0 sample(s) post-producer`
   - the run-cohort classification, appended to the log by `run-cohort.ps1` after the drain
   (the silo does not emit it). A non-zero `failed` - on the `FINAL` line or on any per-second
@@ -516,18 +533,17 @@ Key lines in the silo log:
 
 The CPU, RSS, and diagnostics lines appear only in the printed summary, not in the log:
 `Silo CPU : avg ..% / peak ..%` (of one vCPU) and `Silo RSS peak` come from the per-second
-sampler (`sampler-<cohort>.csv`), and
+sampler (`sampler-<cohort>.csv`), whose CPU columns are deltas over the last second (the silo's
+from its `/proc/<pid>/stat` CPU ticks; until this was fixed it came from a single `top -b -n1`
+frame, which reports no last-second figure and understated the peak), and
 `Diagnostics : stall-watchdog=.. wal-slot=.. wal-append=.. exceptions=.. failed-samples=..`
 counts internal back-pressure/stall signals.
 
 `ladder.ps1` additionally writes one CSV row per rung to its `-ResultsCsv`, with the columns
 `vehicles, tickHz, durationSec, written, failed, activeSec, steadyMean, activeAvg,
 drainTailSamples, totalElapsedSec, siloCpuPeakPct, siloCpuAvgPct, sysCpuPeakPct,
-siloRssGiB, verdict, timestampUtc`. As the scripts stand only the rung's own inputs
-(`vehicles`, `tickHz`, `durationSec`) and `timestampUtc` carry information: the ladder
-parses every other column out of the `run-cohort.ps1` output it captures, which holds
-none of the `Write-Host` summary, so they read `0` and `verdict` reads `UNKNOWN`. Take a
-rung's numbers from its cohort summary or its `silo-<cohort>.log` instead.
+siloRssGiB, verdict, timestampUtc`, taken from each cohort's `LatticeBench.CohortResult`.
+An `ERROR` row is a rung whose cohort threw before producing a result.
 
 ---
 

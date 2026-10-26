@@ -76,7 +76,10 @@ $vmName = "$($p.NamePrefix)-vm"
 $rg = $p.ResourceGroup
 $adminUser = $p.AdminUsername
 
-az account set --subscription $p.SubscriptionId | Out-Null
+if ($p.SubscriptionId) {
+	az account set --subscription $p.SubscriptionId | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw "az account set --subscription $($p.SubscriptionId) failed (exit $LASTEXITCODE); run 'az login' or fix SubscriptionId in the parameters file." }
+}
 
 function Invoke-AzQuery {
 	[CmdletBinding()]
@@ -160,7 +163,7 @@ if (-not $dotnetVersion) {
 	Invoke-Ssh 'chmod +x /tmp/bootstrap.sh && /tmp/bootstrap.sh'
 	$dotnetVersion = (& ssh @sshOpts $sshTarget '/usr/bin/dotnet --version').Trim()
 }
-Invoke-Ssh 'test -d /opt/lattice/src && test -d /opt/lattice/publish || (sudo mkdir -p /opt/lattice/src /opt/lattice/publish /opt/lattice/logs && sudo chown -R azureuser:azureuser /opt/lattice)'
+Invoke-Ssh "test -d /opt/lattice/src && test -d /opt/lattice/publish || (sudo mkdir -p /opt/lattice/src /opt/lattice/publish /opt/lattice/logs && sudo chown -R ${adminUser}:${adminUser} /opt/lattice)"
 Write-Host "  dotnet $dotnetVersion"
 
 # --- 2. systemd units (silo + producer) ---
@@ -185,7 +188,7 @@ if (-not $SkipUnitSync) {
 	}
 	Install-Unit 'lattice-silo.service'
 	Install-Unit 'lattice-producer.service'
-	Invoke-Ssh 'sudo systemctl daemon-reload && sudo systemctl enable lattice-silo lattice-producer >/dev/null 2>&1 || true'
+	Invoke-Ssh 'sudo systemctl daemon-reload && sudo systemctl enable lattice-silo lattice-producer >/dev/null 2>&1'
 }
 
 # --- 3. sync source ---
@@ -197,17 +200,54 @@ if (-not $NoBuild) {
 	Invoke-Ssh 'mkdir -p /opt/lattice/src'
 	Push-Location $repoRoot
 	try {
-		$fileList = & git ls-files
+		$fileList = & git -c core.quotepath=off ls-files
 		if ($LASTEXITCODE -ne 0) { throw 'git ls-files failed (not a git repo?).' }
-		Write-Host ("  $($fileList.Count) tracked files; streaming...") -ForegroundColor DarkGray
+		Write-Host ("  $($fileList.Count) tracked files; packing...") -ForegroundColor DarkGray
 		$tmpList = New-TemporaryFile
+		$tmpTar = New-TemporaryFile
 		try {
-			[System.IO.File]::WriteAllText($tmpList.FullName, ($fileList -join "`n") + "`n")
-			# 5-minute server-side cap on the receive side.
-			& tar -czf - -T $tmpList.FullName | & ssh @sshOpts $sshTarget 'timeout 300 tar -xzf - -C /opt/lattice/src'
-			if ($LASTEXITCODE -ne 0) { throw "tar|ssh sync failed (exit $LASTEXITCODE)." }
-		} finally { Remove-Item $tmpList.FullName -Force -ErrorAction SilentlyContinue }
+			[System.IO.File]::WriteAllText($tmpList.FullName, ($fileList -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
+			# Pack to a local file and upload it, rather than piping tar into
+			# ssh: in a native pipeline $LASTEXITCODE reports only the last
+			# process, so a failed local tar could still let the remote side
+			# extract a truncated archive and the update carry on against a
+			# partial tree.
+			& tar -czf $tmpTar.FullName -T $tmpList.FullName
+			if ($LASTEXITCODE -ne 0) { throw "tar of the tracked tree failed (exit $LASTEXITCODE)." }
+			& scp @sshOpts $tmpTar.FullName "${sshTarget}:/tmp/lattice-src.tgz" | Out-Null
+			if ($LASTEXITCODE -ne 0) { throw "scp of the source archive failed (exit $LASTEXITCODE)." }
+			& scp @sshOpts $tmpList.FullName "${sshTarget}:/tmp/lattice-src.list" | Out-Null
+			if ($LASTEXITCODE -ne 0) { throw "scp of the source file list failed (exit $LASTEXITCODE)." }
+		} finally {
+			Remove-Item $tmpList.FullName -Force -ErrorAction SilentlyContinue
+			Remove-Item $tmpTar.FullName -Force -ErrorAction SilentlyContinue
+		}
 	} finally { Pop-Location }
+	# Extract over the existing tree (keeping bin/ and obj/ so the publish
+	# stays incremental), then delete every other file git no longer tracks.
+	# Extraction alone never removes anything, and SDK-style projects compile
+	# every *.cs under their folder, so a file deleted or renamed in the repo
+	# kept being compiled into the silo from the stale copy on the VM.
+	$syncScript = @'
+#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/lattice/src
+tar -xzf /tmp/lattice-src.tgz
+find . -type f -not -path '*/bin/*' -not -path '*/obj/*' -printf '%P\n' | LC_ALL=C sort > /tmp/lattice-src.have
+LC_ALL=C sort -u /tmp/lattice-src.list > /tmp/lattice-src.want
+LC_ALL=C comm -23 /tmp/lattice-src.have /tmp/lattice-src.want > /tmp/lattice-src.stale
+stale=$(wc -l < /tmp/lattice-src.stale)
+if [ "$stale" -gt 0 ]; then xargs -r -d '\n' rm -f -- < /tmp/lattice-src.stale; fi
+echo "stale files removed: $stale"
+rm -f /tmp/lattice-src.tgz /tmp/lattice-src.list /tmp/lattice-src.have /tmp/lattice-src.want /tmp/lattice-src.stale
+'@
+	$tmpSync = New-TemporaryFile
+	try {
+		[System.IO.File]::WriteAllText($tmpSync.FullName, ($syncScript -replace "`r`n","`n"))
+		& scp @sshOpts $tmpSync.FullName "${sshTarget}:/tmp/sync-src.sh" | Out-Null
+		if ($LASTEXITCODE -ne 0) { throw 'scp of sync-src.sh failed.' }
+	} finally { Remove-Item $tmpSync.FullName -Force -ErrorAction SilentlyContinue }
+	Invoke-Ssh -TimeoutSec 300 'bash /tmp/sync-src.sh'
 
 	# --- 4. publish ---
 	if ($Clean) {
@@ -236,8 +276,15 @@ cd /opt/lattice/src
 if (-not $NoRestart) {
 	Write-Host 'Stopping producer (if running) + restarting silo...' -ForegroundColor Cyan
 	Invoke-Ssh 'sudo systemctl stop lattice-producer 2>/dev/null || true; sudo systemctl restart lattice-silo'
-	Start-Sleep -Seconds 1
-	$active = & ssh @sshOpts $sshTarget 'systemctl is-active lattice-silo'
+	# A silo that crashes on start (bad config, missing role assignment, a
+	# broken publish) still lets `restart` return 0. Give it a few seconds,
+	# then require the unit to be active rather than printing whatever state
+	# it is in as success.
+	Start-Sleep -Seconds 5
+	$active = ((& ssh @sshOpts $sshTarget 'systemctl is-active lattice-silo') -join '').Trim()
+	if ($active -ne 'active') {
+		throw "lattice-silo is '$active' after restart; inspect with: ./benchmark/azure-throughput/scripts/vm.ps1 logs (on a fresh deploy, managed-identity role propagation can take ~60 s and fail the first WAL write with 403: wait a minute and re-run update.ps1 -NoBuild)."
+	}
 	Write-Host "  lattice-silo is-active: $active" -ForegroundColor Green
 	Write-Host ''
 	Write-Host 'Run a cohort with:  ./benchmark/azure-throughput/scripts/run-cohort.ps1' -ForegroundColor Yellow

@@ -1631,9 +1631,17 @@ internal sealed class TcpIngestService(
             }
         }
         catch (OperationCanceledException) { }
+        catch (ChannelClosedException) { /* drain completed the channel at shutdown */ }
         catch (IOException ex)
         {
             logger.LogWarning(ex, "[silo] connection {Remote} dropped", remote);
+        }
+        catch (Exception ex)
+        {
+            // The handler runs as a discarded Task.Run; without this arm any
+            // other fault was an unobserved task exception and the producer's
+            // lines silently stopped arriving with nothing in the log.
+            logger.LogError(ex, "[silo] connection {Remote} handler faulted", remote);
         }
         Console.WriteLine($"[silo] closed {remote}");
     }

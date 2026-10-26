@@ -418,9 +418,8 @@ $execName = $null
 
 try {
 	Write-Host '[cohort] applying silo configuration' -ForegroundColor DarkGray
-	# Env vars and replica count go in ONE update. Two updates would mint two
-	# revisions and, in Single revision mode, the second tears down the
-	# cluster the first had just formed. See Set-AcaSiloCount.
+	# Env vars and replica count go in ONE update, so each cohort mints exactly
+	# one revision. See Set-AcaSiloCount.
 	Set-AcaSiloCount -Context $ctx -Count $SiloCount -EnvVars $siloEnv | Out-Null
 
 	# Capture the revision this cohort's silos run under. Superseded
@@ -429,6 +428,12 @@ try {
 	# revision is the only filter that positively identifies this cohort's
 	# replica set. See Get-AcaActiveSiloRevision.
 	$siloRevision = Get-AcaActiveSiloRevision -Context $ctx
+	if (-not $siloRevision) {
+		# Get-AcaSiloLog refuses an unpinned diagnostic harvest, so a missing
+		# revision used to surface only after the whole cohort had run and
+		# billed N replicas. Fail before the producer starts instead.
+		throw "[cohort] could not resolve the active silo revision of $($ctx.siloApp) after scaling to $SiloCount; the silo harvest cannot be pinned to this cohort."
+	}
 	Write-Host "[cohort] silo revision=$siloRevision" -ForegroundColor DarkGray
 
 	# Replicas reporting Running is necessary but not sufficient: a silo is

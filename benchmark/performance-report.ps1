@@ -343,6 +343,9 @@ $azureThroughputDir = Join-Path $benchmarkRoot 'azure-throughput'
 $azScriptsDir = Join-Path $azureThroughputDir 'scripts'
 # VM ssh resolution (public FQDN or private-network Bastion tunnel).
 . (Join-Path $azScriptsDir '_vm-access.ps1')
+# Shared cohort log parsing (ConvertFrom-SiloProgressLines, Measure-SteadyStateRate),
+# so Read-SiloLogStats computes the steady-state mean exactly as run-cohort.ps1 prints it.
+. (Join-Path $azScriptsDir '_run-cohort-helpers.ps1')
 $docPath = Join-Path $repoRoot 'docs/lattice/performance-single-silo.md'
 $multiSiloDocPath = Join-Path $repoRoot 'docs/lattice/performance-multi-silo.md'
 $runRoot = Join-Path $benchmarkRoot '.run/performance-report'
@@ -1311,14 +1314,24 @@ function Invoke-Layer2Cohorts {
 			# safer with the source-of-truth fix here than relying on key
 			# enumeration to skip the noise. Mirrors the Out-Host pattern in
 			# Invoke-Layer1Cohorts.
-			& $runCohort `
-				-Vehicles    $rowRung.Vehicles `
-				-TickHz      $rowRung.TickHz `
-				-DurationSec $rowRung.DurationSec `
-				-NamePrefix  $Prefix `
-				-ParametersFile $ParametersFilePath `
-				-CaptureCounters:$CaptureCounters `
-				-ExtraSiloEnv $extraEnv | Out-Host
+			# A throw (an ssh/scp failure inside run-cohort.ps1) previously
+			# terminated the whole report under ErrorActionPreference=Stop: the
+			# $LASTEXITCODE check below only sees the last native command run,
+			# not the script's own failure. Skip the cohort instead, as the
+			# check below intends.
+			try {
+				& $runCohort `
+					-Vehicles    $rowRung.Vehicles `
+					-TickHz      $rowRung.TickHz `
+					-DurationSec $rowRung.DurationSec `
+					-NamePrefix  $Prefix `
+					-ParametersFile $ParametersFilePath `
+					-CaptureCounters:$CaptureCounters `
+					-ExtraSiloEnv $extraEnv | Out-Host
+			} catch {
+				Write-Warning "[layer2] cohort $i/$N (mode=$mode): run-cohort.ps1 threw: $_; skipping"
+				continue
+			}
 			if ($LASTEXITCODE -ne 0) {
 				Write-Warning "[layer2] cohort $i/$N (mode=$mode): run-cohort.ps1 exited $LASTEXITCODE; skipping"
 				continue
@@ -1699,19 +1712,20 @@ function Aggregate-Layer3Cells {
 				continue
 			}
 			# Layer 3 publishes completed-ops / active-elapsed, not the
-			# rate>0 steady-state mean. See the rationale on FinalThroughput
-			# in Read-SiloLogStats: client-side 4096-key batching makes the
-			# per-second samples bimodal, so the rate>0 filter averages only
-			# the spikes and reports more throughput than was offered. Fall
-			# back to steadyMean only when a log predates the FINAL parsing,
-			# and say so rather than silently mixing two definitions.
+			# per-second steady-state mean. See the rationale on
+			# FinalThroughput in Read-SiloLogStats: client-side 4096-key
+			# batching makes the per-second samples bimodal, so a per-second
+			# mean is quantised by batch retirement (and the historical rate>0
+			# form averaged only the spikes). Fall back to steadyMean only
+			# when a log predates the FINAL parsing, and say so rather than
+			# silently mixing two definitions.
 			$throughputs = @($healthy | ForEach-Object { $_.finalThroughput } | Where-Object { $_ -gt 0 })
 			$throughputBasis = 'final'
 			if ($throughputs.Count -eq 0) {
 				$throughputs = @($healthy | ForEach-Object { $_.steadyMean } | Where-Object { $_ -gt 0 })
 				$throughputBasis = 'steady-mean (fallback)'
 				if ($throughputs.Count -gt 0) {
-					Write-Warning "[aggregate-l3] mode=$mode silos=${key}: no FINAL throughput parsed; falling back to the steady-state mean, which overstates a batched write path."
+					Write-Warning "[aggregate-l3] mode=$mode silos=${key}: no FINAL throughput parsed; falling back to the per-second steady-state mean, which batch retirement quantises on a batched write path."
 				}
 			}
 			if ($throughputs.Count -eq 0) {
@@ -1890,34 +1904,16 @@ function Read-SiloLogStats {
 		[Parameter(Mandatory)][string] $WorkloadMode,
 		[int] $BatchSize = 4096
 	)
-	# Reuses the same methodology run-cohort.ps1 emits: steady-state mean of
-	# `[silo] t=` per-second rate samples over t in [15s, last-non-zero-rate].
-	$samples = @()
-	$failedSamples = 0
-	foreach ($m in (Select-String -Path $SiloLogPath -Pattern '^\[silo\] t=')) {
-		# Match both the new and legacy per-second formats so logs captured before
-		# the silo rename ("Entries written per second" -> "ops/sec", "written="
-		# -> "ops=") can still be parsed without re-provisioning. Drop the legacy
-		# arm after the next round of cohorts retires those logs.
-		if (-not ($m.Line -match 't=\s*([\d.]+)s\s+(?:ops|written)=\s*([\d,]+)\s+(?:ops/sec|Entries written per second)=\s*([\d,]+)\s+inFlight=\s*(\d+)')) {
-			continue
-		}
-		$samples += [pscustomobject]@{
-			t        = [double]$Matches[1]
-			rate     = [long](($Matches[3]) -replace ',','')
-			inFlight = [int]$Matches[4]
-		}
-		if ($m.Line -match 'failed=\s*([\d,]+)' -and [long](($Matches[1]) -replace ',','') -gt 0) {
-			$failedSamples++
-		}
-	}
-	$steady = $samples | Where-Object { $_.t -ge 15 -and $_.rate -gt 0 }
-	$steadyMean = 0
-	$inFlightMax = 0
-	if (@($steady).Count -gt 0) {
-		$steadyMean = [int](($steady | Measure-Object -Property rate -Sum).Sum / @($steady).Count)
-		$inFlightMax = ($steady | Measure-Object -Property inFlight -Maximum).Maximum
-	}
+	# Reuses the same methodology run-cohort.ps1 emits (shared helpers in
+	# _run-cohort-helpers.ps1): steady-state mean of `[silo] t=` per-second
+	# rate samples from the first non-zero sample at t>=15s to the last
+	# non-zero sample, interior zero (stalled) samples included.
+	$progressLines = @(Select-String -Path $SiloLogPath -Pattern '^\[silo\] t=' | ForEach-Object { $_.Line })
+	$samples = @(ConvertFrom-SiloProgressLines -Lines $progressLines)
+	$failedSamples = @($samples | Where-Object { $_.failed -gt 0 }).Count
+	$steadyStats = Measure-SteadyStateRate -Samples $samples
+	$steadyMean = [int]$steadyStats.Mean
+	$inFlightMax = [int]$steadyStats.InFlightMax
 
 	# Per-call p50/p75/p90/p99. Pick the most representative instrument per
 	# workload mode; fall back to lattice.op.duration_ms (the silo's ingest
@@ -2022,26 +2018,23 @@ function Read-SiloLogStats {
 
 	# Completed-work throughput, as distinct from SteadyMean.
 	#
-	# SteadyMean averages the per-second rate samples that are non-zero
-	# (t>=15s, rate>0). On the Layer 2 path that filter is benign, because
-	# the producer and silo are co-located and work retires fairly smoothly.
-	# On the Layer 3 path it is NOT: the client submits 4096-key batches, so
-	# a whole batch retires in one sample and the intervening samples are
-	# exactly zero. Filtering the zeros away then averages only the spikes.
-	# Measured on a real N=1 cohort: the producer offered 5,935 keys/s and
-	# SteadyMean reported 9,637 keys/s - a rate higher than the offered load,
-	# which is impossible as a sustained figure.
+	# SteadyMean is the mean of the per-second rate samples over the
+	# productive window (first non-zero at t>=15s to last non-zero), interior
+	# zero samples included. Before the interior zeros were kept it averaged
+	# only the non-zero samples (rate>0), which is NOT benign on the Layer 3
+	# path: the client submits 4096-key batches, so a whole batch retires in
+	# one sample and the intervening samples are exactly zero. Filtering the
+	# zeros away averaged only the spikes. Measured on a real N=1 cohort: the
+	# producer offered 5,935 keys/s and the rate>0 mean reported 9,637 keys/s
+	# - a rate higher than the offered load, which is impossible as a
+	# sustained figure.
 	#
-	# Worse for a scaling study, the size of that overstatement depends on
-	# how bursty the run was, which itself varies with the silo count, so the
-	# artefact would bend the very curve the tier exists to measure.
-	#
-	# FinalThroughput is instead total completed ops divided by the active
-	# elapsed time the engine reports at FINAL. It counts only work that
-	# actually succeeded, over the wall-clock it actually took, so it cannot
-	# exceed the offered load and carries no windowing bias. Layer 3 publishes
-	# this; SteadyMean is still returned so both remain inspectable and so
-	# the Layer 2 path is completely unchanged.
+	# Layer 3 still publishes FinalThroughput rather than any per-second
+	# mean: total completed ops divided by the active elapsed time the engine
+	# reports at FINAL. It counts only work that actually succeeded, over the
+	# wall-clock it actually took, so it cannot exceed the offered load and
+	# carries no per-second quantisation at all. SteadyMean is still returned
+	# so both remain inspectable; Layer 2 publishes SteadyMean.
 	$finalOps = $null
 	$finalActiveSec = $null
 	$finalThroughput = $null
@@ -2071,7 +2064,11 @@ function Read-SiloLogStats {
 		PerCallP99Ms    = $p99
 		InstrumentUsed  = $instrumentUsed
 		InFlightMax     = $inFlightMax
-		Failed          = ($finalFailed + $failedSamples)
+		# Failed ENTRIES. FINAL's failed= when present; otherwise the sum of
+		# the per-second failed= deltas. This previously added the COUNT of
+		# failed samples to FINAL's entry count, mixing two units.
+		Failed          = $(if ($finalLine) { $finalFailed } else { [long](@($samples | ForEach-Object { $_.failed }) | Measure-Object -Sum).Sum })
+		FailedSamples   = $failedSamples
 		Verdict         = $verdict
 	}
 }
@@ -2428,7 +2425,7 @@ function New-MetaHeaderForLayer2 {
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
 		$meta['gitSha']             = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples, t>=15s, rate>0; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. Every workload mode reports the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
+		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples from the first non-zero sample at t>=15s to the last non-zero sample, stalled zero-rate seconds inside that window included; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. Every workload mode reports the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
 	}
 	return $meta
 }
@@ -2708,7 +2705,7 @@ function New-MetaHeaderForLayer3 {
 	$meta['rowsMeasured']  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 	$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
 	$meta['walAccounts']   = 1
-	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT reuse Layer 2''s rate>0 steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; filtering the zeros away averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Every cell is a true-throughput measurement, not an offered-load one: offered load is scaled with the silo count (a per-silo rung driven at rung x silo count, so per-silo demand never falls as the cluster grows), and a cell whose first cohort completes at least saturationRatio of what was offered is re-run at double the rung, up to maxRungEscalations times, so the published figure is where the cluster stopped keeping up rather than what the client asked for. A cell still offer-bound after the last escalation is published as a lower bound (>=). Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.'
+	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT use a per-second steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; a mean that filters the zeros away (the historical rate>0 form) averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Every cell is a true-throughput measurement, not an offered-load one: offered load is scaled with the silo count (a per-silo rung driven at rung x silo count, so per-silo demand never falls as the cluster grows), and a cell whose first cohort completes at least saturationRatio of what was offered is re-run at double the rung, up to maxRungEscalations times, so the published figure is where the cluster stopped keeping up rather than what the client asked for. A cell still offer-bound after the last escalation is published as a lower bound (>=). Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.'
 	return $meta
 }
 

@@ -59,12 +59,12 @@ journald-backed log capture with no scraper indirection.
 | `scripts/parameters.ps1` | Default parameters (subscription, region, prefix, VM size). |
 | `scripts/parameters.local.ps1` | **Gitignored** operator overrides; create it by copying `parameters.ps1` (no script creates it). The VM-path scripts prefer it over `parameters.ps1` when present; the Layer 3 scripts take no parameters file. |
 | `scripts/deploy.ps1` | End-to-end provision: key gen, `~/.ssh/config`, Bicep deploy, cloud-init wait, bootstrap fallback, chained `update.ps1`. |
-| `scripts/update.ps1` | Inner loop: `git ls-files \| tar \| ssh` -> `dotnet publish` silo+producer on the VM -> `systemctl restart`. |
-| `scripts/run-cohort.ps1` | Single cohort: applies env drop-ins, restarts silo, starts producer, waits for FINAL, extracts journals, prints summary. |
+| `scripts/update.ps1` | Inner loop: `git ls-files \| tar` -> `scp` -> extract and delete files git no longer tracks -> `dotnet publish` silo+producer on the VM -> `systemctl restart`, failing unless the silo is then `active`. |
+| `scripts/run-cohort.ps1` | Single cohort: applies env drop-ins, restarts silo, starts producer, waits for FINAL, extracts journals, prints summary, and returns it as a `LatticeBench.CohortResult` object. |
 | `scripts/ladder.ps1` | Thin loop over `run-cohort.ps1` for rung sweeps; writes `.ladder-results.csv`. |
 | `scripts/vm.ps1` | Day-to-day helper: `start` / `stop` / `status` / `ssh` / `logs` / `refresh-ip` / `tunnel` / `tunnel-stop`. |
 | `scripts/_vm-access.ps1` | SSH target resolution shared by the VM-path scripts: direct to the public FQDN, or through an Azure Bastion tunnel on a `-PrivateNetwork` rig. |
-| `scripts/_run-cohort-helpers.ps1` | Verdict-computation helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer and its mid-run freeze detector). |
+| `scripts/_run-cohort-helpers.ps1` | Verdict-computation and progress-line helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer and its mid-run freeze detector, and `performance-report.ps1` its steady-state mean). |
 | `scripts/Test-CohortVerdict.ps1` | Regression tests for those helpers against literal log fixtures (pure pwsh, no Azure). |
 | `scripts/Test-PerformanceReportHarness.ps1`, `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1` | Offline regressions for report grading and replay, VM seed wiring, revision-scoped diagnostic paging, the read-mode preseed gates, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
 | `scripts/deploy-aca.ps1` | Layer 3: provisions the multi-silo Azure Container Apps rig and builds its images remotely with `az acr build`. |
@@ -167,10 +167,9 @@ plus `counters-<cohort>.csv` when `-CaptureCounters` is set.
 - `-ResponseTimeoutSec <N>` -- `BENCH_RESPONSE_TIMEOUT_SEC` for every rung (default
   180; 30 reproduces the grain-RPC-deadline failure mode).
 - `-ExtraSiloEnv @{...}` -- extra silo env merged into every cohort.
-- `-DegradeThresholdPct <N>` -- meant to stop the sweep once a rung's throughput falls
-  below `(1 - N/100)` of the best rung so far (default 0: never stop early). As the
-  scripts stand it never fires, because the throughput it compares parses as `0`
-  (see the CSV note under [Reading the results](#reading-the-results)).
+- `-DegradeThresholdPct <N>` -- stop the sweep once a rung's steady mean falls below
+  `(1 - N/100)` of the best rung so far, or once a rung yields no usable throughput
+  after one that did (default 0: never stop early).
 - `-ResultsCsv <path>` -- output CSV (default `scripts/.ladder-results.csv`).
 - `-NamePrefix <name>`, `-ParametersFile <path>` -- as for `run-cohort.ps1`.
 
@@ -297,7 +296,7 @@ Cohort       : v<vehicles>-h<tickHz>-<durationSec>s-<utc>
 Producer     : <systemd state of lattice-producer>
   [producer] DONE total=<n> elapsed=<s>s avg=<n> msg/s
 Silo FINAL   : [silo] FINAL ops=<n> failed=<n> discarded=<n> elapsed=<s>s active=<s>s ...
-Steady mean  : <n> e/s (n=<samples> samples, t>=15s, rate>0) inFlight med/max=<n>/<n>
+Steady mean  : <n> e/s (n=<samples> samples[ incl. <k> stalled (rate=0)], t=<a>..<b>s: first non-zero at t>=15s to last non-zero) inFlight med/max=<n>/<n>
 FINAL active : <n> entries in <s>s active = <n>/s
 Drain tail   : <n> trailing rate=0 sample(s) post-producer
 Silo CPU     : avg <pct>% / peak <pct>% (of one vCPU)
@@ -311,10 +310,15 @@ Logs         : <silo log>
 ```
 
 `Steady mean` is the **primary** throughput number: the mean of the silo's
-per-second rate samples taken at `t >= 15s` with a non-zero rate, which trims both
-the warm-up ramp and the post-producer drain. `FINAL active` -- entries / active
-window -- is a secondary diagnostic; the drain tail inflates its denominator when
-the silo wedges, so it is flagged `(drain-inflated; ignore)` on a `WEDGE` verdict.
+per-second rate samples from the first non-zero sample at `t >= 15s` to the last
+non-zero sample, which trims both the warm-up ramp and the post-producer drain.
+Zero-rate seconds inside that window are stalls and are counted (the earlier
+`rate>0` form dropped them, overstating a cohort that stalled mid-run). `FINAL active`
+-- entries / active window, from the first accepted batch to the last settled flush --
+is a secondary diagnostic; the drain tail inflates its denominator when the silo
+wedges, so it is flagged `(drain-inflated; ignore)` on a `WEDGE` verdict. A `FINAL`
+line reporting `unresolved > 0` (work still in flight when the engine's tail budget
+expired) grades the cohort `WEDGE`. The CPU figures are per-second deltas.
 
 `Diagnostics` counts `[stall-watchdog] WEDGE DETECTED` bursts, the `[wal-slot*`
 and `[wal-append*` lifecycle token families, exceptions attributable to the cohort,
@@ -328,11 +332,9 @@ line (failures that come with that line are the harness's own RPC deadline, not 
 written, failed, active seconds, steady mean, active-avg, drain-tail samples, total
 elapsed, silo CPU peak and average, system CPU peak, silo RSS, verdict, and a UTC
 timestamp. Default location:
-`scripts/.ladder-results.csv` (gitignored). It parses the measured columns out of the
-output it captures from `run-cohort.ps1`, but `run-cohort.ps1` prints the summary above
-with `Write-Host`, which that capture does not receive, so as the scripts stand every
-measured column reads `0` and `verdict` reads `UNKNOWN`. Read each rung's numbers from
-the summary on the console or from its `silo-<cohort>.log` instead.
+`scripts/.ladder-results.csv` (gitignored). Each row comes from the
+`LatticeBench.CohortResult` object `run-cohort.ps1` returns; a rung whose cohort threw
+is recorded with verdict `ERROR`.
 
 ## Saturation knobs
 

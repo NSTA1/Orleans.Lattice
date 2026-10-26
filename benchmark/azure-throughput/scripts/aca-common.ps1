@@ -580,18 +580,24 @@ function Reset-AcaBenchTables {
 function Get-AcaActiveSiloRevision {
 	<#
 	.SYNOPSIS
-		Return the name of the silo app's single active revision.
+		Return the name of the silo app's newest active revision.
 	.DESCRIPTION
 		Because Set-AcaSiloCount issues exactly one `az containerapp update`
-		per cohort, and the app runs in Single revision mode, the active
-		revision is a one-to-one label for the cohort's silos. That makes it
-		the strongest available filter for the silo log harvest: superseded
-		revisions from earlier cohorts remain in Log Analytics indefinitely
-		and emit the same line shapes, and neither a time window nor an app
-		name can separate them. A revision name can.
+		per cohort and retires every superseded revision before it returns,
+		the active revision is a one-to-one label for the cohort's silos. That
+		makes it the strongest available filter for the silo log harvest:
+		superseded revisions from earlier cohorts remain in Log Analytics
+		indefinitely and emit the same line shapes, and neither a time window
+		nor an app name can separate them. A revision name can.
 
-		Returns $null if no revision is active (the parked state), which the
-		caller should treat as "nothing to harvest" rather than an error.
+		"Newest" is decided by properties.createdTime, never by sorting
+		revision names: ACA mints both ordinal (`--0000001`) and random
+		(`--aux0gii`) suffixes in one app, so a name sort is not a recency
+		order (see Set-AcaSiloCount, where that once retired the live
+		revision).
+
+		Returns $null if no revision is active (the parked state) or the
+		listing fails; a caller about to measure must treat that as fatal.
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context
@@ -600,20 +606,24 @@ function Get-AcaActiveSiloRevision {
 		'containerapp', 'revision', 'list',
 		'--name', $Context.siloApp,
 		'--resource-group', $Context.resourceGroup,
-		'--query', "[?properties.active].name",
+		'--query', "[?properties.active].{name:name,created:properties.createdTime}",
 		'-o', 'json'
 	) -AllowFailure
 	if ($LASTEXITCODE -ne 0 -or -not $json -or -not $json.Trim()) { return $null }
-	try { $active = @($json | ConvertFrom-Json) } catch { return $null }
-	$active = @($active | Where-Object { $_ })
+	try { $rows = @($json | ConvertFrom-Json) } catch { return $null }
+	$active = @($rows | Where-Object { $_ -and $_.name } | ForEach-Object {
+		$created = [datetime]::MinValue
+		if ($_.created) { [void][datetime]::TryParse([string]$_.created, [ref]$created) }
+		[pscustomobject]@{ Name = [string]$_.name; Created = $created }
+	} | Sort-Object Created)
 	if ($active.Count -eq 0) { return $null }
 	if ($active.Count -gt 1) {
-		# Single revision mode should make this impossible. If it happens the
-		# cohort's silo set is ambiguous, so say so rather than silently
-		# harvesting one arbitrary revision's histograms.
-		Write-Warning "[aca] $($Context.siloApp) has $($active.Count) active revisions ($($active -join ', ')); expected exactly 1. Harvesting the newest."
+		# Set-AcaSiloCount retires superseded revisions before returning, so
+		# this should not happen. If it does the cohort's silo set is
+		# ambiguous, so say so rather than silently harvesting one revision.
+		Write-Warning "[aca] $($Context.siloApp) has $($active.Count) active revisions ($($active.Name -join ', ')); expected exactly 1. Harvesting the newest by createdTime."
 	}
-	return @($active | Sort-Object)[-1]
+	return $active[-1].Name
 }
 
 function Wait-AcaSiloReplicas {
@@ -965,7 +975,12 @@ function Get-AcaJobLog {
 				# The search runs over the tree-id-anchored slice, so a
 				# previous cohort's DONE can never end this one early.
 				if ($cohort | Where-Object { $_ -and $_.Contains($doneMarker) }) { return $cohort }
-			} catch { }
+			} catch {
+				# Keep polling (a response can be cut short mid-ingestion), but
+				# never silently: a parse failure on every poll would otherwise
+				# present as "waiting for log ingestion" until the deadline.
+				Write-Warning "[aca] log harvest for $ExecutionName could not parse the query response ($($_.Exception.Message)); retrying"
+			}
 		}
 		if ((Get-Date) -ge $deadline) {
 			Write-Warning "[aca] log harvest for $ExecutionName (tree $TreeId) did not observe a terminal marker within ${MaxWaitSec}s; returning $($best.Count) line(s)"
@@ -1003,8 +1018,9 @@ function Get-AcaSiloLog {
 		-IncludeDiagnostics retains all console lines, with time and replica
 		identity on non-phaseA lines so they cannot enter the throughput series.
 		It requires -RevisionName to pin the harvest to the cohort's own silos.
-		Because exactly one `az containerapp update` runs per cohort and the
-		app is in Single revision mode, the active revision is a one-to-one
+		Because exactly one `az containerapp update` runs per cohort and
+		Set-AcaSiloCount retires every superseded revision before the cohort
+		starts, the active revision is a one-to-one
 		label for this cohort's replica set - a far stronger identification
 		than a time window, which a previous cohort's draining container can
 		still overlap.
