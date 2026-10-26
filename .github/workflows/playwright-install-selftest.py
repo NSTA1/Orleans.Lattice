@@ -60,19 +60,22 @@ except BlockingIOError:
     print("fixture: previous privileged installer still owns the lock; inner apt exit 100", flush=True)
     sys.exit(1)  # Playwright maps the apt failure to wrapper exit 1.
 fcntl.flock(lock, fcntl.LOCK_UN)
-if mode in ("hang", "exit-with-child", "exhaust") and (
+if mode in ("hang", "exit-with-child", "exit-with-escaped-child", "exhaust") and (
         count == 1 or mode == "exhaust"):
     command = [sys.executable, __file__, "--hold"]
     if os.geteuid() != 0:
         command = [SUDO, "-n", "--", *command]
     (root / "owner").unlink(missing_ok=True)
-    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(
+        command, start_new_session=mode == "exit-with-escaped-child",
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
     deadline = time.monotonic() + 5
     while not (root / "owner").exists():
         if time.monotonic() >= deadline:
             raise RuntimeError("privileged lock holder did not become ready")
         time.sleep(0.01)
-    if mode == "exit-with-child":
+    if mode in ("exit-with-child", "exit-with-escaped-child"):
         sys.exit(9)
     while True:
         signal.pause()
@@ -214,6 +217,35 @@ class PrivilegedInstallerTests(unittest.TestCase):
         self.assertEqual(2, len(self.calls()), result.stdout)
         self.assertIn("exit code 9", result.stdout)
         self.assert_owner_reaped()
+
+    def test_exited_parent_cannot_leave_a_privileged_setsid_descendant_for_next_attempt(self):
+        result = self.install("exit-with-escaped-child")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(2, len(self.calls()), result.stdout)
+        self.assertIn("exit code 9", result.stdout)
+        self.assert_owner_reaped()
+        owner = json.loads((self.root / "owner").read_text())
+        self.assertEqual(owner["pid"], owner["group"], "Probe must actually call setsid")
+
+    def test_group_only_cleanup_mutation_is_rejected_by_the_setsid_regression(self):
+        runner = self.root / "run-playwright-install.py"
+        source = runner.read_text()
+        self.assertEqual(1, source.count("for child in children:"))
+        self.assertEqual(1, source.count("os.waitpid(-1,"))
+        runner.write_text(source.replace(
+            "for child in children:", "for child in ():",
+        ).replace("os.waitpid(-1,", "os.waitpid(-process.pid,"))
+        result = self.install("exit-with-escaped-child")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(3, len(self.calls()), result.stdout)
+        self.assertIn("exit code 9", result.stdout)
+        self.assertEqual(2, result.stdout.count("failed with exit code 1."))
+        self.assertIn("still owns the lock", result.stdout)
+        owner = json.loads((self.root / "owner").read_text())
+        self.assertEqual(0, owner["uid"])
+        self.assertEqual(owner["pid"], owner["group"])
+        self.assertTrue(Path(f"/proc/{owner['pid']}").exists(), owner)
+        print("Group-only supervisor: setsid owner survives, wrapper exits 9/1/1 (caught).")
 
     def test_timeout_exhaustion_cleans_every_attempt_and_preserves_failure(self):
         result = self.install("exhaust")

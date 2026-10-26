@@ -3,6 +3,7 @@
 
 import ctypes
 import os
+from pathlib import Path
 import signal
 import subprocess
 import sys
@@ -27,16 +28,25 @@ def run(command: list[str], limit: float, grace: float) -> int:
         signal.signal(signum, stop)
 
     def send(signum):
-        try:
+        children = [
+            int(pid) for pid in
+            Path(f"/proc/self/task/{os.getpid()}/children").read_text().split()
+        ]
+        # These PIDs are our unreaped children, so they cannot be recycled
+        # between enumeration and signaling. Include adopted setsid descendants.
+        if any(os.getpgid(child) == process.pid for child in children):
             os.killpg(process.pid, signum)
-        except ProcessLookupError:
-            pass
+        for child in children:
+            try:
+                os.kill(child, signum)
+            except ProcessLookupError:
+                pass
 
     def drained():
         process.poll()
         while True:
             try:
-                child, _ = os.waitpid(-process.pid, os.WNOHANG)
+                child, _ = os.waitpid(-1, os.WNOHANG)
             except ChildProcessError:
                 return True
             if child == 0:
@@ -61,19 +71,18 @@ def run(command: list[str], limit: float, grace: float) -> int:
             send(signal.SIGTERM)
         deadline = time.monotonic() + grace
         while not drained() and time.monotonic() < deadline:
+            send(signal.SIGTERM)
             time.sleep(0.02)
         if not drained():
             print("::warning::Killing remaining installer processes after TERM grace.", flush=True)
             send(signal.SIGKILL)
             if code == 124:
                 code = 137
-        # Reap all adopted members, not just the direct pwsh child.
-        process.wait()
-        while True:
-            try:
-                os.waitpid(-process.pid, 0)
-            except ChildProcessError:
-                break
+        # Killing an intermediate parent can adopt another escaped descendant.
+        # No second grace period: kill/reap until the subreaper owns no children.
+        while not drained():
+            send(signal.SIGKILL)
+            time.sleep(0.02)
     return code
 
 
