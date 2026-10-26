@@ -231,7 +231,7 @@
       data-width="1920"
       data-height="1080"
       data-fps="30"
-      data-duration="118.645"
+      data-duration="125.578"
     >
       <div
         id="opening"
@@ -260,10 +260,10 @@
       </div>
       <p id="partial-note" class="clip partial-note" data-scene="the-partial-write-problem" data-from-beat="2" data-track-index="3" data-start="31.14" data-duration="9.153">Useful when throughput matters and partial application is acceptable.</p>
 
-      <div id="batch" class="clip lv-scene frame" data-scene="one-batch-one-decision" data-track-index="0" data-start="40.293" data-duration="27.175">
+      <div id="batch" class="clip lv-scene frame" data-scene="one-batch-one-decision" data-track-index="0" data-start="40.293" data-duration="27.01">
         <h2 class="lv-heading">One batch, one decision</h2>
       </div>
-      <div id="batch-layout" class="clip batch-layout" data-scene="one-batch-one-decision" data-from-beat="0" data-track-index="2" data-start="40.893" data-duration="26.575">
+      <div id="batch-layout" class="clip batch-layout" data-scene="one-batch-one-decision" data-from-beat="0" data-track-index="2" data-start="40.893" data-duration="26.41">
         <div class="batch-table">
           <div class="batch-row"><code>status = packed</code><span>prepared, hidden</span></div>
           <div class="batch-row"><code>tracking = 7K3</code><span>prepared, hidden</span></div>
@@ -275,10 +275,10 @@
         </div>
       </div>
 
-      <div id="across" class="clip lv-scene frame" data-scene="across-trees" data-track-index="0" data-start="67.468" data-duration="22.027">
+      <div id="across" class="clip lv-scene frame" data-scene="across-trees" data-track-index="0" data-start="67.303" data-duration="22.027">
         <h2 class="lv-heading">Across trees</h2>
       </div>
-      <div id="cross-layout" class="clip cross-layout" data-scene="across-trees" data-from-beat="0" data-track-index="2" data-start="68.068" data-duration="21.427">
+      <div id="cross-layout" class="clip cross-layout" data-scene="across-trees" data-from-beat="0" data-track-index="2" data-start="67.903" data-duration="21.427">
         <pre class="lv-code cross-code"><code data-snippet="atomic-writes/cross-tree">// Move a row between trees in one cross-tree saga.
 await grainFactory
     .BeginAtomicWrite("rekey:order-42")
@@ -294,10 +294,10 @@ await grainFactory
         </div>
       </div>
 
-      <div id="boundary" class="clip lv-scene frame" data-scene="the-boundary" data-track-index="0" data-start="89.495" data-duration="14.443">
+      <div id="boundary" class="clip lv-scene frame" data-scene="the-boundary" data-track-index="0" data-start="89.33" data-duration="21.541">
         <h2 class="lv-heading">The boundary</h2>
       </div>
-      <div id="boundary-layout" class="clip boundary-layout" data-scene="the-boundary" data-from-beat="0" data-track-index="2" data-start="90.095" data-duration="13.843">
+      <div id="boundary-layout" class="clip boundary-layout" data-scene="the-boundary" data-from-beat="0" data-track-index="2" data-start="89.93" data-duration="20.941">
         <div class="read-card">
           <span class="lv-label">Separate read, before</span>
           <code>orders-east: order/42</code><br />
@@ -310,19 +310,19 @@ await grainFactory
           new state
         </div>
       </div>
-      <p id="boundary-note" class="clip boundary-note" data-scene="the-boundary" data-from-beat="1" data-track-index="3" data-start="95.181" data-duration="8.757">Atomicity for a write is not a snapshot across separate reads.</p>
+      <p id="boundary-note" class="clip boundary-note" data-scene="the-boundary" data-from-beat="1" data-track-index="3" data-start="95.016" data-duration="15.855">Cross-tree reads can straddle a decision. One-tree snapshot: snapshot entry cursor.</p>
 
-      <div id="where-next" class="clip lv-scene frame" data-scene="where-next" data-track-index="0" data-start="103.938" data-duration="14.707">
+      <div id="where-next" class="clip lv-scene frame" data-scene="where-next" data-track-index="0" data-start="110.871" data-duration="14.707">
         <h2 class="lv-heading">Where next</h2>
       </div>
-      <ol id="where-next-list" class="clip places" data-scene="where-next" data-from-beat="0" data-track-index="2" data-start="104.538" data-duration="14.107">
+      <ol id="where-next-list" class="clip places" data-scene="where-next" data-from-beat="0" data-track-index="2" data-start="111.471" data-duration="14.107">
         <li class="place place-next">
           <span class="lv-node"></span>
           <h3 class="place-name">TTL and soft delete</h3>
           <p class="place-what">Next on Build</p>
         </li>
       </ol>
-      <ol id="where-next-pages" class="clip places" style="top: 500px" data-scene="where-next" data-from-beat="0" data-track-index="3" data-start="104.538" data-duration="14.107">
+      <ol id="where-next-pages" class="clip places" style="top: 500px" data-scene="where-next" data-from-beat="0" data-track-index="3" data-start="111.471" data-duration="14.107">
         <li class="place">
           <span class="lv-node"></span>
           <h3 class="place-name">Atomic commit without consensus</h3>
@@ -336,7 +336,7 @@ await grainFactory
       </ol>
 
       <!-- narration:begin -->
-      <audio id="narration" src="renders/narration/atomic-writes/narration.wav" data-start="0" data-duration="118.645" data-track-index="1"></audio>
+      <audio id="narration" src="renders/narration/atomic-writes/narration.wav" data-start="0" data-duration="125.578" data-track-index="1"></audio>
       <!-- narration:end -->
     </div>
     <script>

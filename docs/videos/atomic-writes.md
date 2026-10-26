@@ -7,12 +7,12 @@ agent_spec: "docs/agents/concepts.yaml"
 An atomic write makes related key changes visible together, or not at all.
 
 <!-- The video block is written by `npm run companions` in videos/, and the documentation site replaces it with the player. -->
-<!-- video:begin episode="atomic-writes" path="build" order="4" length="1:59" cut="80f81feb22af" -->
+<!-- video:begin episode="atomic-writes" path="build" order="4" length="2:06" cut="fe47bdc3df26" -->
 
 > [!NOTE]
 > Watch it on the [documentation site](https://nsta1.github.io/Orleans.Lattice/docs/videos/atomic-writes.html),
-> or [download it](../../docs-site/media/atomic-writes-80f81feb22af.mp4)
-> (MP4, 1:59, 6.1 MB).
+> or [download it](../../docs-site/media/atomic-writes-fe47bdc3df26.mp4)
+> (MP4, 2:06, 6.4 MB).
 
 <!-- video:end -->
 
@@ -39,7 +39,7 @@ A non-atomic batch remains useful when throughput matters and partial applicatio
 
 For a batch in one tree, use the atomic write surface.
 
-On success, the whole batch commits. If the saga aborts, none of its writes become visible. A timeout alone does not tell you whether it committed.
+On success, the whole batch commits. If the saga aborts, none of its writes become visible. A caller-side timeout leaves the outcome unknown.
 
 Readers do not see half of this batch. Its prepared writes stay hidden until one commit decision makes them visible together.
 
@@ -57,7 +57,7 @@ One shared decision applies to every participating tree: commit them all, or com
 
 That is atomicity for the write, not a snapshot read across trees.
 
-Two separate reads at different moments can straddle the decision: one may return the old state, and the next the new state.
+Two separate reads at different moments can straddle the decision: one may return the old state, and the next the new state. For a consistent view of one tree, use a snapshot entry cursor; every page reflects the tree state captured at open.
 
 ### Where next
 
