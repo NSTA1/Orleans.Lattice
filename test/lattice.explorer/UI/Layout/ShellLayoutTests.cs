@@ -1,4 +1,5 @@
 using Bunit;
+using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
@@ -91,14 +92,23 @@ public sealed class ShellLayoutTests : ShellLayoutTestContext
     public void Skip_links_move_focus_to_their_regions()
     {
         var cut = RenderLayout();
+        var expectedTargets = new[]
+        {
+            cut.Find("#lt-shell-content").GetAttribute("blazor:elementreference"),
+            cut.Find("#lt-shell-directory").GetAttribute("blazor:elementreference"),
+            cut.Find(".lt-shell-address-line__edit").GetAttribute("blazor:elementreference"),
+        };
 
         cut.FindAll(".lt-shell-skip__link")[2].Click();
         cut.FindAll(".lt-shell-skip__link")[0].Click();
         cut.FindAll(".lt-shell-skip__link")[1].Click();
 
-        // Every skip link focuses through the chrome module, which focuses only an element
-        // still in the document.
-        Assert.That(JSInterop.Invocations.Count(invocation => invocation.Identifier == "focusElement"), Is.GreaterThanOrEqualTo(3));
+        var focusTargets = JSInterop.Invocations
+            .Where(invocation => invocation.Identifier == "focusElement")
+            .Select(invocation => ((ElementReference)invocation.Arguments.Single()!).Id)
+            .ToArray();
+
+        Assert.That(focusTargets, Is.EqualTo(expectedTargets));
     }
 
     [Test]
