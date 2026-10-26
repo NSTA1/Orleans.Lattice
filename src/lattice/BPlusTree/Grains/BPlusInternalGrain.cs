@@ -644,20 +644,23 @@ internal sealed partial class BPlusInternalGrain(
 
         if (rightChildren.Count >= 2)
         {
-            // Initialize with the leftmost and first real separator.
-            await newInternal.InitializeAsync(
-                rightChildren[1].SeparatorKey!,
-                rightChildren[0].ChildId,
-                rightChildren[1].ChildId,
-                state.State.ChildrenAreLeaves);
-
-            // Accept remaining children (idempotent per AcceptSplitAsync guard).
-            for (int i = 2; i < rightChildren.Count; i++)
+            // Seed the sibling with its whole right half in one call: one gate
+            // acquire and one persist, with the child parent-seeds overlapped,
+            // instead of an initialise plus one AcceptSplitAsync round trip
+            // (each with its own persist) per remaining child. The right half is
+            // already sorted with a null leftmost separator and is at most half
+            // of this node's children, so it can never overflow the sibling.
+            // Re-running this after a crash overwrites the sibling's state, as
+            // the two-child initialise it replaces did.
+            var separators = new List<string?>(rightChildren.Count);
+            var childIds = new List<GrainId>(rightChildren.Count);
+            for (int i = 0; i < rightChildren.Count; i++)
             {
-                await newInternal.AcceptSplitAsync(
-                    rightChildren[i].SeparatorKey!,
-                    rightChildren[i].ChildId);
+                separators.Add(rightChildren[i].SeparatorKey);
+                childIds.Add(rightChildren[i].ChildId);
             }
+
+            await newInternal.InitializeWithChildrenAsync(separators, childIds, state.State.ChildrenAreLeaves);
         }
 
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
