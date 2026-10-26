@@ -160,6 +160,21 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// The distinct keys of <paramref name="entries"/>, in first-seen order, for
+    /// a resize mirror - or an empty set when no mirror is active, so the steady
+    /// state does not build a key set the mirror would discard unread.
+    /// </summary>
+    private IReadOnlyCollection<string> MirroredKeys(List<KeyValuePair<string, byte[]>> entries) =>
+        HasShadowTarget() ? DistinctKeys(entries) : [];
+
+    /// <summary>
+    /// <paramref name="key"/> as the key set of a single-key resize mirror, or an
+    /// empty set when no mirror is active.
+    /// </summary>
+    private IReadOnlyCollection<string> MirroredKey(string key) =>
+        HasShadowTarget() ? [key] : [];
+
+    /// <summary>
     /// The distinct keys of <paramref name="entries"/>, in first-seen order.
     /// </summary>
     private static List<string> DistinctKeys(List<KeyValuePair<string, byte[]>> entries)
