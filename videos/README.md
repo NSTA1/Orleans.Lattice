@@ -265,7 +265,9 @@ committed to `docs-site/media/`, which the site plays (`npm run publish`).
    generated from `PACKAGES.md`.
 7. **Timing is stamped, never typed.** A clip's `data-start` and
    `data-duration`, its beats and the episode's length come from the narration
-   (`npm run timeline`). Change the script, narrate, and stamp again.
+   (`npm run timeline`). Change the script, narrate, and stamp again. A
+   `<!-- pace 0.92 -->` directive at the start of `## Narration` slows every
+   spoken cue while preserving pitch; the timeline uses the adjusted duration.
 8. **One place for each thing.** An episode's own material stays in its
    folder, anything reused lives once in `shared/`, and nothing goes at the
    root.

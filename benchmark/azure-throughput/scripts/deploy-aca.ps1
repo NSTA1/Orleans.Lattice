@@ -106,8 +106,21 @@
 	Combining it with -ReuseRg requires the group to have been created with
 	-PrivateNetwork too.
 
+.PARAMETER WalAccountCount
+	Storage accounts to spread WAL partitions across (1-8, default 1). Values
+	above 1 provision WAL-only accounts st<prefix>w1.. beside the primary
+	account and wire them into the silo app as keyed WAL providers
+	(BENCH_WAL_EXTRA_ACCOUNT_URIS, plus a BENCH_WAL_EXTRA_ACCOUNT_CONN_<i>
+	secret per account on the public topology), so run-cohort-aca.ps1
+	-WalAccounts can make the account count a cohort variable without a
+	redeploy. Extra accounts are never removed: a -ReuseRg run keeps every
+	extra account the group already holds, even with a smaller value here.
+
 .EXAMPLE
 	./deploy-aca.ps1 -NamePrefix l3ab12cd3 -SiloCount 2
+
+.EXAMPLE
+	./deploy-aca.ps1 -NamePrefix l3ab12cd3 -WalAccountCount 4
 
 .EXAMPLE
 	./deploy-aca.ps1 -NamePrefix l3ab12cd3 -SiloCount 2 -PrivateNetwork
@@ -121,7 +134,8 @@ param(
 	[ValidateRange(1, 8)][double] $SiloMemoryGi = 8,
 	[switch] $SkipImageBuild,
 	[switch] $ReuseRg,
-	[switch] $PrivateNetwork
+	[switch] $PrivateNetwork,
+	[ValidateRange(1, 8)][int] $WalAccountCount = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -133,7 +147,7 @@ $names = Get-AcaNames -NamePrefix $NamePrefix
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 
 $networkMode = if ($PrivateNetwork) { 'private' } else { 'public' }
-Write-Host "[aca] prefix=$NamePrefix silos=$SiloCount region=$Location cpu=$SiloCpu mem=${SiloMemoryGi}Gi network=$networkMode" -ForegroundColor Cyan
+Write-Host "[aca] prefix=$NamePrefix silos=$SiloCount region=$Location cpu=$SiloCpu mem=${SiloMemoryGi}Gi network=$networkMode walAccounts=$WalAccountCount" -ForegroundColor Cyan
 
 # Private-mode resource names. Derived here rather than in Get-AcaNames so the
 # default path's name set, and everything that reads it, is untouched.
@@ -298,70 +312,101 @@ if ($PrivateNetwork) {
 }
 
 # ---------------------------------------------------------------------------
-# 2. Storage account. One account carries the WAL, the Orleans clustering
-#    table and grain storage. Multi-account WAL fan-out is deliberately out of
-#    scope for this tier, so a single account's throughput ceiling is part of
-#    what the scaling curve measures.
+# 2. Storage accounts. The primary account carries the WAL, the Orleans
+#    clustering table and grain storage. -WalAccountCount > 1 adds WAL-only
+#    accounts st<prefix>w1.. that run-cohort-aca.ps1 -WalAccounts spreads the
+#    tree's WAL partitions across, so the account count is a second
+#    independent variable beside the silo count: a curve that flattens at one
+#    account and keeps climbing at four is the account's ceiling, not
+#    Lattice's.
+#
+# Every account gets the identical shape and auth: a private endpoint and the
+# identity's table role on -PrivateNetwork, a key-based connection string
+# otherwise. Key rather than managed identity on the public topology because a
+# user-assigned identity needs an RBAC assignment whose propagation is
+# eventually consistent, which on a short-lived rig shows up as an
+# intermittent 403 on first write that is easily misread as a benchmark fault.
+# The accounts are created and destroyed inside one run, so a key never
+# outlives the rig. (-PrivateNetwork has no choice: policy disables shared
+# keys there.)
 # ---------------------------------------------------------------------------
-if (-not (Test-AzResourceExists -Kind 'storage' -Name $names.Storage -ResourceGroup $names.Rg)) {
-	Write-Host "[aca] creating storage account $($names.Storage)" -ForegroundColor Cyan
-	$storageArgs = @(
-		'storage', 'account', 'create',
-		'--name', $names.Storage,
-		'--resource-group', $names.Rg,
-		'--location', $Location,
-		'--sku', 'Standard_LRS',
-		'--kind', 'StorageV2',
-		'--min-tls-version', 'TLS1_2',
-		'--allow-blob-public-access', 'false'
-	)
-	if ($PrivateNetwork) {
-		$storageArgs += @('--public-network-access', 'Disabled', '--default-action', 'Deny',
-			'--allow-shared-key-access', 'false')
+function New-AcaBenchStorageAccount {
+	param([Parameter(Mandatory)][string] $Name)
+	if (-not (Test-AzResourceExists -Kind 'storage' -Name $Name -ResourceGroup $names.Rg)) {
+		Write-Host "[aca] creating storage account $Name" -ForegroundColor Cyan
+		$storageArgs = @(
+			'storage', 'account', 'create',
+			'--name', $Name,
+			'--resource-group', $names.Rg,
+			'--location', $Location,
+			'--sku', 'Standard_LRS',
+			'--kind', 'StorageV2',
+			'--min-tls-version', 'TLS1_2',
+			'--allow-blob-public-access', 'false'
+		)
+		if ($PrivateNetwork) {
+			$storageArgs += @('--public-network-access', 'Disabled', '--default-action', 'Deny',
+				'--allow-shared-key-access', 'false')
+		}
+		Invoke-Az $storageArgs | Out-Null
 	}
-	Invoke-Az $storageArgs | Out-Null
+
+	$conn = ''
+	if ($PrivateNetwork) {
+		# Table private endpoint + privatelink DNS. The silo and producer use
+		# Table storage only (WAL, clustering, grain state), so no blob or
+		# queue endpoint is needed.
+		$accountId = (Invoke-Az @('storage', 'account', 'show', '-n', $Name, '-g', $names.Rg, '--query', 'id', '-o', 'tsv')).Trim()
+		$vnetId = (Invoke-Az @('network', 'vnet', 'show', '-g', $names.Rg, '-n', $net.Vnet, '--query', 'id', '-o', 'tsv')).Trim()
+		if (-not (Test-AzShow @('network', 'private-dns', 'zone', 'show', '-g', $names.Rg, '-n', $net.TableZone))) {
+			Invoke-Az @('network', 'private-dns', 'zone', 'create', '-g', $names.Rg, '-n', $net.TableZone, '-o', 'none') | Out-Null
+		}
+		if (-not (Test-AzShow @('network', 'private-dns', 'link', 'vnet', 'show', '-g', $names.Rg, '-z', $net.TableZone, '-n', "link-$NamePrefix"))) {
+			Invoke-Az @('network', 'private-dns', 'link', 'vnet', 'create', '-g', $names.Rg, '-z', $net.TableZone,
+				'-n', "link-$NamePrefix", '-v', $vnetId, '-e', 'false', '-o', 'none') | Out-Null
+		}
+		$pe = "pe-$Name-table"
+		if (-not (Test-AzShow @('network', 'private-endpoint', 'show', '-g', $names.Rg, '-n', $pe))) {
+			Write-Host "[aca] creating table private endpoint $pe" -ForegroundColor Cyan
+			Invoke-Az @('network', 'private-endpoint', 'create', '-g', $names.Rg, '-n', $pe, '-l', $Location,
+				'--vnet-name', $net.Vnet, '--subnet', $net.PeSubnet,
+				'--private-connection-resource-id', $accountId, '--group-id', 'table',
+				'--connection-name', "$pe-conn", '-o', 'none') | Out-Null
+			Invoke-Az @('network', 'private-endpoint', 'dns-zone-group', 'create', '-g', $names.Rg,
+				'--endpoint-name', $pe, '-n', 'default',
+				'--private-dns-zone', $net.TableZone, '--zone-name', 'table', '-o', 'none') | Out-Null
+		}
+		if (Grant-AcaRole -PrincipalId $identityPrincipalId -Role 'Storage Table Data Contributor' -Scope $accountId) { $script:rolesGranted = $true }
+	} else {
+		$key = (Invoke-Az @(
+			'storage', 'account', 'keys', 'list',
+			'--account-name', $Name,
+			'--resource-group', $names.Rg,
+			'--query', '[0].value', '-o', 'tsv'
+		)).Trim()
+		$conn = "DefaultEndpointsProtocol=https;AccountName=$Name;AccountKey=$key;EndpointSuffix=core.windows.net"
+	}
+	return [pscustomobject]@{ Name = $Name; TableUri = "https://$Name.table.core.windows.net"; Conn = $conn }
 }
 
-$storageConn = ''
-$storageTableUri = "https://$($names.Storage).table.core.windows.net"
-if ($PrivateNetwork) {
-	# Table private endpoint + privatelink DNS. The silo and producer use
-	# Table storage only (WAL, clustering, grain state), so no blob or queue
-	# endpoint is needed.
-	$storageId = (Invoke-Az @('storage', 'account', 'show', '-n', $names.Storage, '-g', $names.Rg, '--query', 'id', '-o', 'tsv')).Trim()
-	$vnetId = (Invoke-Az @('network', 'vnet', 'show', '-g', $names.Rg, '-n', $net.Vnet, '--query', 'id', '-o', 'tsv')).Trim()
-	if (-not (Test-AzShow @('network', 'private-dns', 'zone', 'show', '-g', $names.Rg, '-n', $net.TableZone))) {
-		Invoke-Az @('network', 'private-dns', 'zone', 'create', '-g', $names.Rg, '-n', $net.TableZone, '-o', 'none') | Out-Null
+$primaryAccount = New-AcaBenchStorageAccount -Name $names.Storage
+$storageConn = $primaryAccount.Conn
+$storageTableUri = $primaryAccount.TableUri
+
+# Extra WAL accounts: the requested ones, plus any further ones an earlier
+# -ReuseRg run already provisioned, so a smaller -WalAccountCount on reuse
+# never strands an account the silo app is still configured with.
+$walExtra = @()
+for ($i = 1; $i -le 7; $i++) {
+	$extraName = Get-AcaWalAccountName -NamePrefix $NamePrefix -Index $i
+	if ($i -lt $WalAccountCount -or ($ReuseRg -and (Test-AzResourceExists -Kind 'storage' -Name $extraName -ResourceGroup $names.Rg))) {
+		$walExtra += New-AcaBenchStorageAccount -Name $extraName
+	} else {
+		break
 	}
-	if (-not (Test-AzShow @('network', 'private-dns', 'link', 'vnet', 'show', '-g', $names.Rg, '-z', $net.TableZone, '-n', "link-$NamePrefix"))) {
-		Invoke-Az @('network', 'private-dns', 'link', 'vnet', 'create', '-g', $names.Rg, '-z', $net.TableZone,
-			'-n', "link-$NamePrefix", '-v', $vnetId, '-e', 'false', '-o', 'none') | Out-Null
-	}
-	if (-not (Test-AzShow @('network', 'private-endpoint', 'show', '-g', $names.Rg, '-n', $net.TablePe))) {
-		Write-Host "[aca] creating table private endpoint $($net.TablePe)" -ForegroundColor Cyan
-		Invoke-Az @('network', 'private-endpoint', 'create', '-g', $names.Rg, '-n', $net.TablePe, '-l', $Location,
-			'--vnet-name', $net.Vnet, '--subnet', $net.PeSubnet,
-			'--private-connection-resource-id', $storageId, '--group-id', 'table',
-			'--connection-name', "$($net.TablePe)-conn", '-o', 'none') | Out-Null
-		Invoke-Az @('network', 'private-endpoint', 'dns-zone-group', 'create', '-g', $names.Rg,
-			'--endpoint-name', $net.TablePe, '-n', 'default',
-			'--private-dns-zone', $net.TableZone, '--zone-name', 'table', '-o', 'none') | Out-Null
-	}
-	if (Grant-AcaRole -PrincipalId $identityPrincipalId -Role 'Storage Table Data Contributor' -Scope $storageId) { $rolesGranted = $true }
-} else {
-	# Key-based connection string rather than managed identity. A user-assigned
-	# identity would need an RBAC role assignment whose propagation is eventually
-	# consistent, which on a short-lived rig shows up as an intermittent 403 on
-	# first write that is easily misread as a benchmark fault. The account is
-	# created and destroyed inside one run, so the key never outlives the rig.
-	# (-PrivateNetwork has no choice: policy disables shared keys there.)
-	$storageKey = (Invoke-Az @(
-		'storage', 'account', 'keys', 'list',
-		'--account-name', $names.Storage,
-		'--resource-group', $names.Rg,
-		'--query', '[0].value', '-o', 'tsv'
-	)).Trim()
-	$storageConn = "DefaultEndpointsProtocol=https;AccountName=$($names.Storage);AccountKey=$storageKey;EndpointSuffix=core.windows.net"
+}
+if ($walExtra.Count -gt 0) {
+	Write-Host "[aca] extra WAL accounts: $(@($walExtra | ForEach-Object Name) -join ', ')" -ForegroundColor Cyan
 }
 
 # ---------------------------------------------------------------------------
@@ -531,6 +576,26 @@ if ($PrivateNetwork) {
 	$secretArgs = @('--secrets', "storageconn=$storageConn")
 }
 
+# Extra WAL accounts become keyed WAL providers acct1.. on every silo. The URI
+# list also drives the account count; on the public topology each account's
+# key-based connection string rides in its own secret (a connection string
+# contains ';', so it cannot share the URI list's delimiter).
+$walExtraEnv = @()
+$walExtraSecrets = @()
+if ($walExtra.Count -gt 0) {
+	$walExtraEnv += "BENCH_WAL_EXTRA_ACCOUNT_URIS=$(@($walExtra | ForEach-Object TableUri) -join ';')"
+	if (-not $PrivateNetwork) {
+		for ($i = 1; $i -le $walExtra.Count; $i++) {
+			$walExtraSecrets += "walconn$i=$($walExtra[$i - 1].Conn)"
+			$walExtraEnv += "BENCH_WAL_EXTRA_ACCOUNT_CONN_$i=secretref:walconn$i"
+		}
+	}
+}
+$siloSecretArgs = $secretArgs
+if ($walExtraSecrets.Count -gt 0) {
+	$siloSecretArgs = if ($secretArgs.Count -gt 0) { $secretArgs + $walExtraSecrets } else { @('--secrets') + $walExtraSecrets }
+}
+
 # ---------------------------------------------------------------------------
 # 5. The silo app and the producer job.
 #
@@ -568,18 +633,29 @@ if (-not (Test-AzResourceExists -Kind 'acaapp' -Name $names.SiloApp -ResourceGro
 		'--memory', "${SiloMemoryGi}Gi",
 		'--min-replicas', '0',
 		'--max-replicas', '30'
-	) + $secretArgs + @(
+	) + $siloSecretArgs + @(
 		'--env-vars',
 			'BENCH_CLUSTERING=azuretable',
 			'BENCH_INGEST_MODE=cluster',
 			'BENCH_SHARD_COUNT=0',
 			'BENCH_LEAF_STORAGE_KIND=azure',
 			'BENCH_TOTAL_DURATION_SEC=0'
-	) + $siloStorageEnv + @(
+	) + $siloStorageEnv + $walExtraEnv + @(
 		'-o', 'none'
 	)) | Out-Null
 } else {
 	Write-Host "[aca] silo app $($names.SiloApp) already exists" -ForegroundColor Yellow
+	if ($walExtraEnv.Count -gt 0) {
+		# A -ReuseRg run that added WAL accounts: the app predates them, so add
+		# their secrets and env now. The update mints a revision, which a
+		# rule-less app holds at one replica, so park it straight afterwards.
+		Write-Host "[aca] wiring $($walExtra.Count) extra WAL account(s) into $($names.SiloApp)" -ForegroundColor Cyan
+		if ($walExtraSecrets.Count -gt 0) {
+			Invoke-Az (@('containerapp', 'secret', 'set', '--name', $names.SiloApp, '--resource-group', $names.Rg, '--secrets') + $walExtraSecrets + @('-o', 'none')) | Out-Null
+		}
+		Invoke-Az (@('containerapp', 'update', '--name', $names.SiloApp, '--resource-group', $names.Rg, '--set-env-vars') + $walExtraEnv + @('-o', 'none')) | Out-Null
+		Set-AcaSiloCount -Context @{ siloApp = $names.SiloApp; resourceGroup = $names.Rg } -Count 0 -TimeoutSec 300 | Out-Null
+	}
 }
 
 if (-not (Test-AzResourceExists -Kind 'acajob' -Name $names.ProducerJob -ResourceGroup $names.Rg)) {
@@ -627,6 +703,10 @@ $ctx = [ordered]@{
 	storage      = $names.Storage
 	storageConn  = $storageConn
 	storageTableUri = $storageTableUri
+	# Extra WAL-only accounts (index i is provider acct<i>); read by
+	# run-cohort-aca.ps1 -WalAccounts. Connection strings stay in the app's
+	# secrets, not here.
+	walExtraAccounts = @($walExtra | ForEach-Object { [ordered]@{ name = $_.Name; tableUri = $_.TableUri } })
 	privateNetwork  = [bool]$PrivateNetwork
 	identityId      = $identityId
 	identityClientId= $identityClientId

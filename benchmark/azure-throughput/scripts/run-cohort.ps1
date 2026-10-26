@@ -69,7 +69,10 @@ if (-not $ParametersFile) {
 $p = & $ParametersFile
 if ($NamePrefix) { $p.NamePrefix = $NamePrefix; $p.ResourceGroup = "rg-$NamePrefix" }
 
-az account set --subscription $p.SubscriptionId | Out-Null
+if ($p.SubscriptionId) {
+	az account set --subscription $p.SubscriptionId | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw "az account set --subscription $($p.SubscriptionId) failed (exit $LASTEXITCODE); run 'az login' or fix SubscriptionId in the parameters file." }
+}
 
 # Public mode: the VM's FQDN. Private-network mode: the local end of a Bastion
 # tunnel (started here if not already running). See _vm-access.ps1.
@@ -180,6 +183,19 @@ $prodEnvLines = @(
 	"Environment=BENCH_DURATION_SEC=$DurationSec"
 )
 
+# lattice-silo.service SIGKILLs the silo TimeoutStopSec=30 s after the stop
+# request. The engine's worst-case post-stop drain is its fixed 10 s saturation
+# quiesce plus BENCH_INFLIGHT_TAIL_BUDGET_SEC (default 12) before FINAL is
+# written, so a tail budget much above 18 s - the Layer 3 value is 120 - lets
+# systemd kill the silo before FINAL, and the cohort grades WEDGE for a reason
+# that has nothing to do with the arm under test.
+if ($ExtraSiloEnv.ContainsKey('BENCH_INFLIGHT_TAIL_BUDGET_SEC')) {
+	$tailBudget = 0.0
+	if ([double]::TryParse([string]$ExtraSiloEnv['BENCH_INFLIGHT_TAIL_BUDGET_SEC'], [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$tailBudget) -and $tailBudget -gt 18) {
+		Write-Warning "BENCH_INFLIGHT_TAIL_BUDGET_SEC=$tailBudget exceeds the ~18 s the silo unit's 30 s stop window leaves after the 10 s saturation quiesce; systemd may SIGKILL the silo before FINAL is written (graded WEDGE)."
+	}
+}
+
 function Push-DropIn([string]$unit, [string[]]$lines) {
 	$content = ($lines -join "`n") + "`n"
 	$tmp = New-TemporaryFile
@@ -232,23 +248,33 @@ $samplerCmd = @'
 set -euo pipefail
 OUT=/tmp/cohort-sampler.csv
 echo 'ts_unix,silo_pid,silo_rss_kib,silo_cpu_pct,sys_cpu_pct,sys_mem_used_kib,sys_mem_total_kib' > "$OUT"
-prev_busy=0; prev_total=0
+# Both CPU columns are deltas over the last ~1 s sampling interval. silo_cpu_pct
+# is the silo's utime+stime tick delta (/proc/<pid>/stat fields 14+15) over the
+# wall-clock delta from /proc/uptime, in percent of ONE vCPU. It previously came
+# from `top -b -n1`, whose single frame has no prior frame to diff against, so
+# it reported a since-start figure rather than the last second's usage and
+# understated both the average and, especially, the peak.
+hz=$(getconf CLK_TCK)
+prev_busy=0; prev_total=0; prev_pid=''; prev_ptick=0; prev_up=0
 while systemctl is-active --quiet lattice-producer; do
   pid=$(systemctl show -p MainPID --value lattice-silo)
   if [ "$pid" = "0" ] || [ -z "$pid" ]; then sleep 1; continue; fi
   read -r _ user nice sys idle iowait irq sirq steal _ < /proc/stat
   total=$((user+nice+sys+idle+iowait+irq+sirq+steal))
   busy=$((total - idle - iowait))
-  if [ "$prev_total" -ne 0 ]; then
-	dt=$((total - prev_total)); db=$((busy - prev_busy))
-	sys_cpu=$(awk -v db="$db" -v dt="$dt" 'BEGIN{ if(dt>0) printf "%.1f", 100.0*db/dt; else print "0" }')
-  else
-	sys_cpu="0"
+  up=$(awk '{print $1}' /proc/uptime)
+  ptick=$(awk '{print $14+$15}' /proc/$pid/stat 2>/dev/null || echo 0)
+  if [ "$prev_total" -eq 0 ] || [ "$pid" != "$prev_pid" ]; then
+    # First observation of this silo process: prime the baselines and emit no
+    # row, rather than a synthetic 0% sample that would drag the average down.
+    prev_total=$total; prev_busy=$busy; prev_pid=$pid; prev_ptick=$ptick; prev_up=$up
+    sleep 1; continue
   fi
-  prev_total=$total; prev_busy=$busy
+  dt=$((total - prev_total)); db=$((busy - prev_busy))
+  sys_cpu=$(awk -v db="$db" -v dt="$dt" 'BEGIN{ if(dt>0) printf "%.1f", 100.0*db/dt; else print "0" }')
+  scpu=$(awk -v a="$ptick" -v b="$prev_ptick" -v u="$up" -v pu="$prev_up" -v hz="$hz" 'BEGIN{ d=u-pu; if(d>0 && a>=b) printf "%.1f", 100.0*(a-b)/hz/d; else print "0" }')
+  prev_total=$total; prev_busy=$busy; prev_ptick=$ptick; prev_up=$up
   rss=$(awk '/^VmRSS:/ {print $2}' /proc/$pid/status 2>/dev/null || echo 0)
-  scpu=$(top -b -n1 -p $pid 2>/dev/null | awk -v pid=$pid '$1==pid {print $9}' | head -1)
-  scpu=${scpu:-0}
   mt=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
   ma=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
   mu=$((mt - ma))
@@ -457,9 +483,13 @@ if ($CaptureCounters) {
 
 Invoke-Ssh 'sudo systemctl stop lattice-producer 2>/dev/null || true'
 
-# Parse summaries.
-$prodSummary = Select-String -Path $prodLog -Pattern '\[producer\] DONE' | Select-Object -First 1
-$siloFinal   = Select-String -Path $siloLog -Pattern 'FINAL (ops|written)=' | Select-Object -First 1
+# Parse summaries. Either log may be missing (its fetch is best-effort and
+# failed above); Select-String on a missing path is a terminating error under
+# ErrorActionPreference=Stop, which would abort the cohort before its verdict
+# is computed, so every scrape below is guarded by Test-Path.
+$siloLogPresent = Test-Path -LiteralPath $siloLog
+$prodSummary = if (Test-Path -LiteralPath $prodLog) { Select-String -Path $prodLog -Pattern '\[producer\] DONE' | Select-Object -First 1 } else { $null }
+$siloFinal   = if ($siloLogPresent) { Select-String -Path $siloLog -Pattern 'FINAL (ops|written)=' | Select-Object -First 1 } else { $null }
 # Wedge diagnostics. These three counters feed the DEGRADED rule in
 # Resolve-CohortVerdict. The token-matching lives in
 # Measure-CohortWedgeDiagnostics (in _run-cohort-helpers.ps1) so it is
@@ -470,48 +500,24 @@ $wedgeDiag   = Measure-CohortWedgeDiagnostics -SiloLogPath $siloLog
 $watchdog    = $wedgeDiag.Watchdog
 $walSlot     = $wedgeDiag.WalSlot
 $walAppend   = $wedgeDiag.WalAppend
-$siloTail    = @(Select-String -Path $siloLog -Pattern '^\[silo\] t=') | Select-Object -Last 1
+$siloTail    = if ($siloLogPresent) { @(Select-String -Path $siloLog -Pattern '^\[silo\] t=') | Select-Object -Last 1 } else { $null }
 
 # Section 27.1: the runner-printed FINAL `active avg` is corrupted by
 # drain-tail behaviour when the silo wedges (denominator inflated by 28+ s
 # of dead time during the post-producer drain stall). The honest cohort
-# sample is the mean of `[silo] t=` per-second rate samples over
-# `t in [15s, last-non-zero-rate]`: the `t >= 15s` filter trims the warmup
-# ramp, the `rate > 0` filter trims the post-producer drain. We compute
-# both numbers here and emit the steady-state mean as the primary metric;
-# the FINAL `active avg` is shown only as a secondary diagnostic.
-$siloPerSec = @()
-$failedSamples = 0
-foreach ($m in (Select-String -Path $siloLog -Pattern '^\[silo\] t=')) {
-	# Accept both the new (ops=, ops/sec=) and legacy (written=, Entries
-	# written per second=) per-second formats so cohort logs captured before
-	# the silo log-token rename can still be parsed without re-provisioning.
-	if ($m.Line -match 't=\s*([\d.]+)s\s+(?:ops|written)=\s*([\d,]+)\s+(?:ops/sec|Entries written per second)=\s*([\d,]+)\s+inFlight=\s*(\d+)') {
-		$sample = [pscustomobject]@{
-			t        = [double]$matches[1]
-			written  = [long](($matches[2]) -replace ',','')
-			rate     = [long](($matches[3]) -replace ',','')
-			inFlight = [int]$matches[4]
-		}
-		$siloPerSec += $sample
-		if ($m.Line -match 'failed=\s*([\d,]+)' -and [long](($matches[1]) -replace ',','') -gt 0) {
-			$failedSamples++
-		}
-	}
-}
-$steady = $siloPerSec | Where-Object { $_.t -ge 15 -and $_.rate -gt 0 }
-$steadyMean = 0
-$steadyCount = @($steady).Count
-if ($steadyCount -gt 0) {
-	$steadyMean = [int](($steady | Measure-Object -Property rate -Sum).Sum / $steadyCount)
-}
-$inFlightMax = 0
-$inFlightMedian = 0
-if ($steadyCount -gt 0) {
-	$inFlightMax = ($steady | Measure-Object -Property inFlight -Maximum).Maximum
-	$sortedIf = @($steady | Sort-Object inFlight)
-	$inFlightMedian = $sortedIf[[int]($sortedIf.Count / 2)].inFlight
-}
+# sample is the mean of `[silo] t=` per-second rate samples over the
+# productive window: from the first non-zero sample at t >= 15s (trims the
+# warm-up ramp) to the last non-zero sample (trims the post-producer drain).
+# Zero-rate samples inside that window are stalls and are kept - see
+# Measure-SteadyStateRate for why dropping them overstates throughput.
+$progressLines = if ($siloLogPresent) { @(Select-String -Path $siloLog -Pattern '^\[silo\] t=' | ForEach-Object { $_.Line }) } else { @() }
+$siloPerSec = @(ConvertFrom-SiloProgressLines -Lines $progressLines)
+$failedSamples = @($siloPerSec | Where-Object { $_.failed -gt 0 }).Count
+$steadyStats = Measure-SteadyStateRate -Samples $siloPerSec
+$steadyMean = [int]$steadyStats.Mean
+$steadyCount = [int]$steadyStats.Count
+$inFlightMax = [int]$steadyStats.InFlightMax
+$inFlightMedian = [int]$steadyStats.InFlightMedian
 
 # Post-producer drain-tail length: number of trailing rate=0 samples. A
 # long zero-rate tail with `inFlight>0` (or with `inFlight=0` but no
@@ -687,8 +693,10 @@ $isReadOnlyMode = @('get-point','get-many') -contains $workloadMode
 # older single-avg FINAL line (active== reported as N/A in that case).
 $writtenFinal = 0; $elapsedFinal = 0.0; $activeFinal = 0.0
 $failedFinal  = 0; $avgTotalFinal = 0.0; $avgActiveFinal = 0.0
+$unresolvedFinal = 0L
 if ($siloFinal) {
 	$line = $siloFinal.Line
+	$unresolvedFinal = Get-FinalUnresolved -FinalLine $line
 	if ($line -match '(?:ops|written)=([\d,]+)')                { $writtenFinal  = [long]($matches[1] -replace ',','') }
 	if ($line -match 'failed=([\d,]+)')                          { $failedFinal   = [long]($matches[1] -replace ',','') }
 	if ($line -match 'elapsed=([\d.]+)s')                        { $elapsedFinal  = [double]$matches[1] }
@@ -739,7 +747,8 @@ $verdict = Resolve-CohortVerdict `
 	-ExceptionCount $exceptionCount `
 	-BenignShutdownExceptions $benignShutdownExceptions `
 	-BenignWarmupExceptions $benignWarmupExceptions `
-	-BenignPlacementConvergence $benignPlacementConvergence
+	-BenignPlacementConvergence $benignPlacementConvergence `
+	-UnresolvedFinal $unresolvedFinal
 $verdictState   = [string]$verdict.State
 $verdictReasons = @($verdict.Reasons)
 
@@ -758,16 +767,19 @@ elseif ($siloTail) { Write-Host ("Silo last    : {0}" -f $siloTail.Line.Trim()) 
 # diagnostic when it differs materially (and is suppressed for WEDGE
 # verdicts where it is provably wrong).
 if ($steadyCount -gt 0) {
-	$inFlightLabel = if ($steadyCount -gt 0) { " inFlight med/max={0}/{1}" -f $inFlightMedian, $inFlightMax } else { '' }
-	Write-Host ("Steady mean  : {0:N0} e/s (n={1} samples, t>=15s, rate>0){2}" -f $steadyMean, $steadyCount, $inFlightLabel)
+	$stallNote = if ($steadyStats.ZeroCount -gt 0) { " incl. $($steadyStats.ZeroCount) stalled (rate=0)" } else { '' }
+	$inFlightLabel = " inFlight med/max={0}/{1}" -f $inFlightMedian, $inFlightMax
+	Write-Host ("Steady mean  : {0:N0} e/s (n={1} samples{2}, t={3:0}..{4:0}s: first non-zero at t>=15s to last non-zero){5}" -f `
+		$steadyMean, $steadyCount, $stallNote, $steadyStats.WindowStart, $steadyStats.WindowEnd, $inFlightLabel)
 } else {
 	Write-Host 'Steady mean  : -- no nonzero per-second samples --' -ForegroundColor Yellow
 }
 if ($writtenFinal -gt 0) {
 	$activeAvgIsTrustworthy = ($verdictState -ne 'WEDGE')
 	$activeAvgSuffix = if ($activeAvgIsTrustworthy) { '' } else { ' (drain-inflated; ignore)' }
-	Write-Host ("FINAL active : {0:N0} entries in {1:0.0}s active = {2:N0}/s{3}{4}" -f `
-		$writtenFinal, $activeFinal, $avgActiveFinal, $(if ($failedFinal -gt 0) { " (failed=$failedFinal)" } else { '' }), $activeAvgSuffix)
+	Write-Host ("FINAL active : {0:N0} entries in {1:0.0}s active = {2:N0}/s{3}{4}{5}" -f `
+		$writtenFinal, $activeFinal, $avgActiveFinal, $(if ($failedFinal -gt 0) { " (failed=$failedFinal)" } else { '' }), `
+		$(if ($unresolvedFinal -gt 0) { " (unresolved=$unresolvedFinal)" } else { '' }), $activeAvgSuffix)
 } else {
 	Write-Host 'FINAL active : -- no FINAL emitted --' -ForegroundColor Yellow
 }
@@ -809,5 +821,39 @@ if ($siloLog -and (Test-Path -LiteralPath $siloLog)) {
 		-VerdictDetail $verdictDetail `
 		-DrainTailSamples $drainTailSamples
 	Add-Content -LiteralPath $siloLog -Value $verdictBlock
+}
+
+# Structured result on the success stream. Everything above is Write-Host,
+# which a caller cannot capture, so this object is the only machine-readable
+# summary - ladder.ps1 reads it instead of scraping console text (which used
+# to record every rung as 0 / UNKNOWN). Callers that only want the console
+# output pipe the script to Out-Host or Out-Null.
+[pscustomobject]@{
+	PSTypeName       = 'LatticeBench.CohortResult'
+	CohortName       = $cohortName
+	TreeId           = $treeId
+	Vehicles         = $Vehicles
+	TickHz           = $TickHz
+	DurationSec      = $DurationSec
+	Written          = [long]$writtenFinal
+	Failed           = [long]$failedFinal
+	Unresolved       = [long]$unresolvedFinal
+	ActiveSec        = [double]$activeFinal
+	ElapsedSec       = [double]$elapsedFinal
+	SteadyMean       = $steadyMean
+	SteadyCount      = $steadyCount
+	SteadyZeroCount  = [int]$steadyStats.ZeroCount
+	ActiveAvg        = [double]$avgActiveFinal
+	DrainTailSamples = $drainTailSamples
+	SiloCpuAvgPct    = [double]$avgSiloCpu
+	SiloCpuPeakPct   = [double]$maxSiloCpu
+	SysCpuAvgPct     = [double]$avgSysCpu
+	SysCpuPeakPct    = [double]$maxSysCpu
+	SiloRssPeakGiB   = [double]$peakRssGiB
+	Verdict          = $verdictState
+	VerdictReasons   = @($verdictReasons)
+	SiloLog          = $siloLog
+	ProducerLog      = $prodLog
+	SamplerLog       = $samplerLog
 }
 } finally { & $cleanup }

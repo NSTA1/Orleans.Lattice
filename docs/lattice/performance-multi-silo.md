@@ -167,7 +167,8 @@ comes from a single rig, so no line mixes the two. As a cross-check the
 second rig also ran `SetManyAsync` at every silo count: it reproduced the
 same shape, a dip at two silos and no sustained gain after four, at 4-24%
 below the first rig cell by cell, which is the spread to allow when
-comparing absolute figures across rigs.
+comparing absolute figures across rigs. The harness now makes this split
+itself (`-Layer3Rigs`).
 
 **The code measured.** Every cell ran the tip of the epic that removed the
 multi-silo ceilings ([#3496](https://github.com/NSTA1/Orleans.Lattice/issues/3496)),
@@ -257,6 +258,39 @@ of its two original cohorts was unseeded and had been excluded.
 <!-- perf-table:layer3:end -->
 
 > Measured 2026-09-26 on Azure Container Apps (Consumption) in westus3 (.NET 10.0.x) at git sha 0981d6d27, n=2/3 cohorts per cell, silo counts 1,2,4,6,8. Offered load scales with the silo count and is raised until each cell plateaus below it, so every figure is true throughput rather than offered load; every cohort starts on freshly emptied storage. All silo counts share one Azure Storage account for the WAL - see the caveats below for what its metrics showed.
+
+## Storage-side metrics
+
+A curve that stops climbing can be Lattice running out of headroom or the
+storage account behind it running out. The grid alone cannot tell the two
+apart, so each cohort also records what its storage accounts reported to
+Azure Monitor while it ran, and this table gives the median per cell:
+
+- **Throttled transactions**: the share of all storage transactions answered
+  `ServerBusy` or `ClientThrottling`, across every account the cohort used.
+  A share that rises with the silo count while throughput flattens means
+  the account is the limit.
+- **Busiest account**: the busiest minute of the busiest account, in
+  transactions per second. Compare it with the per-account Tables
+  scalability target.
+- **Server latency** and **End-to-end latency**: Azure Monitor's
+  `SuccessServerLatency` and `SuccessE2ELatency` for the worst account. The
+  gap between them is time spent outside the storage service, on the network
+  and in client-side queueing.
+
+The first account also holds the Orleans clustering table and grain state,
+so its transactions are not WAL-only. `WAL accounts` is how many accounts
+the tree's WAL partitions were spread across; see
+[Re-running it yourself](#re-running-it-yourself).
+
+<!-- perf-storage:layer3:start
+  schema=v1
+  DO-NOT-HAND-EDIT-BETWEEN-MARKERS
+-->
+
+_No storage-side metrics were captured for this sweep: its cohorts predate them, or every account's metrics were unavailable._
+
+<!-- perf-storage:layer3:end -->
 
 ## How to read this
 
@@ -485,9 +519,12 @@ conservative one.
 writes and grain state land in the same Azure Tables account, so a
 flattening write curve can be measuring that account rather than the
 cluster. For `SetManyAsync` and the 2-key sagas the evidence above says it
-is. Multi-account WAL fan-out exists in the harness and is held out of this
-sweep so that silo count stays the only variable; there is no equivalent
-fan-out for grain state yet.
+is. The harness can now spread this tier's WAL across several accounts
+(`-Layer3WalAccounts`) and records every account's own metrics in the
+storage-side table, which tells the account's limit apart from the
+cluster's. The sweep published here predates both: it ran on one account
+and captured no storage metrics. There is no equivalent fan-out for grain
+state yet.
 
 **The shard count is fixed across every cell.** All cells use the same
 64-shard tree topology, so a change in the curve is a change in host count
@@ -605,12 +642,27 @@ The switches that matter for a partial or resumed run:
   connections the producer opens per silo, capped at 64 in total. Raise it
   when a cell is graded producer-bound, which means the producer could not
   generate the load it was asked for.
+- `-Layer3Rigs <K>` runs the sweep on K identical rigs in parallel. The
+  harness splits the workloads between them itself, keeping every silo
+  count of a workload on one rig so no curve mixes rigs, provisions the rigs
+  concurrently (or uses a comma-separated `-ReuseAca` list), runs one sweep
+  per rig with its log in `benchmark/.run/performance-report/<prefix>/sweep.log`,
+  then merges the cells and renders this document once. Each rig has its
+  own storage, so the sweeps do not contend for the account being measured.
+  K rigs can hold K times the largest silo count of 4-vCPU replicas at once,
+  so check the region's quota.
+- `-Layer3OverlapHarvest` harvests a cohort's logs from Log Analytics in the
+  background while the next cohort runs. Only cohorts whose result cannot
+  change what the sweep does next are deferred: not a cell's first cohort,
+  whose throughput decides the escalation, and not a read cohort, which is
+  re-run at once if its keyspace was not seeded.
+- `-Layer3WalAccounts <N>` spreads every cohort's WAL partitions across N
+  storage accounts, provisioning the extra WAL-only accounts with the rig
+  (`deploy-aca.ps1 -WalAccountCount`); a reused rig must already have them.
 - `-DryRun` re-renders this document without touching Azure, from the most
-  recently written `state.json` under `benchmark/.run/performance-report/`,
-  which must hold a Layer 3 sweep (the replay throws otherwise). Use the
-  switch form, `-Layer3 -DryRun`: the dry-run path checks only the switch,
-  so `-Layer 3 -DryRun` re-renders the single-silo document instead and
-  leaves this one unchanged.
+  recently written `state.json` under `benchmark/.run/performance-report/`
+  that holds a Layer 3 sweep (the replay throws if there is none). Either
+  `-Layer3 -DryRun` or `-Layer 3 -DryRun` works.
 
 See [Benchmarks](benchmarks.md) for the runbook and prerequisites, and
 `benchmark/azure-throughput/throughput.md` for the engine's own

@@ -26,6 +26,8 @@ foreach ($function in $ast.FindAll({
 }, $false)) {
     . ([scriptblock]::Create($function.Extent.Text))
 }
+# The report dot-sources this at script scope, which a function-only load skips.
+. (Join-Path $PSScriptRoot '_storage-metrics.ps1')
 
 $Layer3Rows = @(
     @{ Label = 'GetAsync'; WorkloadMode = 'get-point'; ChartGroup = 'reads' },

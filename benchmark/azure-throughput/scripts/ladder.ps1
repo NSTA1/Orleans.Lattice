@@ -5,11 +5,9 @@
 
 .DESCRIPTION
 	For each (Vehicles, TickHz) rung, runs one cohort via run-cohort.ps1,
-	captures the script's success stream with 2>&1, parses summary fields from
-	that captured text, and appends a row to .ladder-results.csv in this folder.
-	Because run-cohort.ps1 prints its summary with Write-Host, the captured text
-	can contain no summary fields; in that case the row falls back to zero / UNKNOWN
-	values and -DegradeThresholdPct has no nonzero throughput to stop on.
+	takes the LatticeBench.CohortResult object that script returns on its
+	success stream, and appends a row to .ladder-results.csv in this folder.
+	A rung whose cohort threw records verdict ERROR and the sweep continues.
 
 	The harness pins BENCH_RESPONSE_TIMEOUT_SEC=180 by default so a saturated
 	rung does NOT collapse into the silo's own 30s grain-RPC deadline (see
@@ -41,8 +39,9 @@
 	ResponseTimeoutSec setting).
 
 .PARAMETER DegradeThresholdPct
-	If non-zero, stop the sweep once a rung's active throughput drops below
-	(1 - threshold/100) of the best observed throughput so far.
+	If non-zero, stop the sweep once a rung's steady-state throughput drops
+	below (1 - threshold/100) of the best observed throughput so far, or once
+	a rung yields no usable throughput at all after one that did.
 
 .PARAMETER ResultsCsv
 	Output CSV path. Default: scripts/.ladder-results.csv (gitignored).
@@ -106,37 +105,53 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
 	if ($NamePrefix)     { $cohortArgs.NamePrefix = $NamePrefix }
 	if ($ParametersFile) { $cohortArgs.ParametersFile = $ParametersFile }
 
-	# Capture cohort output for parsing while still tee'ing to console.
-	$out = & $cohortScript @cohortArgs 2>&1 | Tee-Object -Variable cohortOut | Out-String
+	# run-cohort.ps1 prints its human summary with Write-Host (which reaches
+	# the console but cannot be captured) and returns one
+	# LatticeBench.CohortResult object on the success stream. Take that
+	# object; anything else on the success stream is remote command output
+	# and is echoed so the console still shows it. Before this, the ladder
+	# regex-scraped captured text that never held the summary, so every rung
+	# recorded 0 / UNKNOWN and -DegradeThresholdPct could never fire.
+	$result = $null
+	try {
+		& $cohortScript @cohortArgs | ForEach-Object {
+			if ($_ -is [psobject] -and $_.PSObject.TypeNames -contains 'LatticeBench.CohortResult') { $result = $_ }
+			else { Write-Host $_ }
+		}
+	} catch {
+		# One rung's ssh/scp failure must not discard the rungs already run;
+		# record it and move on.
+		Write-Host "[ladder] rung ${vehicles}:${tickHz} threw: $_" -ForegroundColor Red
+	}
 
-	# Pull the same summary fields run-cohort.ps1 already prints, so we don't
-	# duplicate parsing logic in two places. Per the section 27.1 methodology
-	# the primary throughput metric is `Steady mean :` (mid-window mean of
-	# `[silo] t=` per-second samples, t>=15s, rate>0). FINAL `(active avg)` is
-	# retained as a secondary field for back-compat and for the
-	# `DegradeThresholdPct` early-stop heuristic when no steady-state samples
-	# are usable.
-	$written  = if ($out -match '(?:ops|written)=([\d,]+)')                { [int](($matches[1]) -replace ',','') } else { 0 }
-	$failed   = if ($out -match 'failed=([\d,]+)')                         { [int](($matches[1]) -replace ',','') } else { 0 }
-	$active   = if ($out -match 'active=([\d.]+)s')                        { [double]$matches[1] }                 else { 0 }
-	$elapsed  = if ($out -match 'elapsed=([\d.]+)s')                       { [double]$matches[1] }                 else { 0 }
-	$steadyMean = if ($out -match 'Steady mean\s+:\s+([\d,]+)\s+e/s')      { [int](($matches[1]) -replace ',','') } else { 0 }
-	$activeAvg  = if ($out -match '\(active avg\)=([\d,]+)')               { [int](($matches[1]) -replace ',','') } else { 0 }
-	$drainTail  = if ($out -match 'Drain tail\s+:\s+(\d+) trailing')       { [int]$matches[1] }                     else { 0 }
-	$siloCpuPeak = if ($out -match 'Silo CPU\s+:\s+avg [\d.]+% / peak ([\d.]+)%') { [double]$matches[1] } else { 0 }
-	$siloCpuAvg  = if ($out -match 'Silo CPU\s+:\s+avg ([\d.]+)%')         { [double]$matches[1] }                 else { 0 }
-	$sysCpuPeak  = if ($out -match 'System CPU\s+:\s+avg [\d.]+% / peak ([\d.]+)%') { [double]$matches[1] } else { 0 }
-	$rssGiB      = if ($out -match 'Silo RSS peak:\s+([\d.]+) GiB')        { [double]$matches[1] }                 else { 0 }
-	$verdict     = if ($out -match 'Verdict\s+:\s+(\w+)')                  { $matches[1] }                          else { 'UNKNOWN' }
-	$tsUtc       = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+	$tsUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+	if ($null -eq $result) {
+		"${vehicles},${tickHz},${DurationSec},0,0,0,0,0,0,0,0,0,0,0,ERROR,${tsUtc}" | Add-Content -Path $ResultsCsv -Encoding utf8
+		Write-Host "[ladder] rung ${vehicles}:${tickHz} -> no cohort result (ERROR)" -ForegroundColor Red
+		if ($i -lt $Rungs.Count - 1 -and $CooldownSec -gt 0) { Start-Sleep -Seconds $CooldownSec }
+		continue
+	}
+
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$written    = $result.Written
+	$failed     = $result.Failed
+	$active     = ([double]$result.ActiveSec).ToString('0.0', $inv)
+	$elapsed    = ([double]$result.ElapsedSec).ToString('0.0', $inv)
+	$steadyMean = [int]$result.SteadyMean
+	$activeAvg  = [int]$result.ActiveAvg
+	$drainTail  = $result.DrainTailSamples
+	$siloCpuPeak = ([double]$result.SiloCpuPeakPct).ToString($inv)
+	$siloCpuAvg  = ([double]$result.SiloCpuAvgPct).ToString($inv)
+	$sysCpuPeak  = ([double]$result.SysCpuPeakPct).ToString($inv)
+	$rssGiB      = ([double]$result.SiloRssPeakGiB).ToString($inv)
+	$verdict     = $result.Verdict
 
 	# `throughput` is the per-rung "best honest sustained number" used for the
-	# DegradeThresholdPct early-stop guard. Prefer steady-state mean; fall
-	# back to FINAL active-avg only when no per-second samples reached the
-	# mid-window. (A FINAL active-avg from a wedged cohort is drain-inflated
-	# and would mask the cliff; the runner now suppresses it for WEDGE
-	# verdicts so the fall-back path stays honest.)
-	$throughput = if ($steadyMean -gt 0) { $steadyMean } else { $activeAvg }
+	# DegradeThresholdPct early-stop guard: the section 27.1 steady-state mean,
+	# falling back to FINAL active-avg only when no per-second samples reached
+	# the mid-window. A WEDGE rung's active-avg is drain-inflated, so it is
+	# never used as a fallback.
+	$throughput = if ($steadyMean -gt 0) { $steadyMean } elseif ($verdict -ne 'WEDGE') { $activeAvg } else { 0 }
 
 	"${vehicles},${tickHz},${DurationSec},${written},${failed},${active},${steadyMean},${activeAvg},${drainTail},${elapsed},${siloCpuPeak},${siloCpuAvg},${sysCpuPeak},${rssGiB},${verdict},${tsUtc}" `
 		| Add-Content -Path $ResultsCsv -Encoding utf8
@@ -153,6 +168,11 @@ for ($i = 0; $i -lt $Rungs.Count; $i++) {
 			Write-Host "[ladder] STOP: $throughput e/s is below $DegradeThresholdPct% floor of best ($bestThroughput at $bestRung)." -ForegroundColor Red
 			break
 		}
+	} elseif ($DegradeThresholdPct -gt 0 -and $bestThroughput -gt 0) {
+		# A rung that produced no usable throughput after one that did is past
+		# the cliff by definition (typically a WEDGE).
+		Write-Host "[ladder] STOP: rung produced no usable throughput (verdict=$verdict) after $bestThroughput e/s at $bestRung." -ForegroundColor Red
+		break
 	}
 
 	if ($i -lt $Rungs.Count - 1 -and $CooldownSec -gt 0) {

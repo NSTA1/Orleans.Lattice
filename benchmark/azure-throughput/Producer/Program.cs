@@ -380,6 +380,16 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         warmSw.Stop();
         Console.WriteLine($"[producer] warmup treeId={settings.TreeId} complete elapsedMs={warmSw.Elapsed.TotalMilliseconds:F0}");
 
+        // Multi-account WAL fan-out. A cluster-mode silo returns before the
+        // single-VM silo's spread step, so on Layer 3 the producer - the one
+        // process that drives the cohort's tree - spreads the warmed, still
+        // empty tree's WAL partitions across BENCH_WAL_ACCOUNTS accounts
+        // before any data is written. A failed spread throws, so the job ends
+        // with no DONE marker and the cohort grades WEDGE rather than running
+        // single-account under a multi-account label.
+        await BenchWalPlacement.SpreadAsync(
+            clusterClient, settings.TreeId, settings.WalPartitions, settings.WalAccounts, "[producer]", ct).ConfigureAwait(false);
+
         // Read-mode keyspace pre-seed, before the measured window opens. On
         // the single-VM path the silo seeds during startup, but the Layer 3
         // silo returns early in cluster mode and never reaches that step, so

@@ -98,7 +98,7 @@ registered on the host for its tree.
 
 <!-- where-next:begin -->
 
-- **Next on Build:** Scans, filters and cursors
+- **Next on Build:** [Scans, filters and cursors](scans-filters-and-cursors.md)
 - **The deep dive:** [Conflict-free merges in 90 seconds](conflict-free-merges.md)
 - **The pages it introduces:** [CRDT primitives](../crdt/readme.md)
 

@@ -301,7 +301,7 @@ Host         : <nproc> vCPU / <MiB> MiB / <kernel>
 Cohort       : v<vehicles>-h<tickHz>-<duration>s-<utc>
 Producer     : inactive
 Silo FINAL   : [silo] FINAL ops=<n> failed=<n> discarded=<n> elapsed=<s>s active=<s>s ops/sec (avg)=<n> (active avg)=<n>
-Steady mean  : <n> e/s (n=<samples> samples, t>=15s, rate>0) inFlight med/max=<m>/<m>
+Steady mean  : <n> e/s (n=<samples> samples[ incl. <k> stalled (rate=0)], t=<a>..<b>s: first non-zero at t>=15s to last non-zero) inFlight med/max=<m>/<m>
 FINAL active : <n> entries in <s>s active = <n>/s
 Drain tail   : <n> trailing rate=0 sample(s) post-producer
 Silo CPU     : avg <pct>% / peak <pct>% (of one vCPU)
@@ -329,7 +329,7 @@ The `Steady mean` line is the **primary cohort sample**: the mean of the silo's 
 
 A stopped (deallocated) VM bills only for the OS disk + public IP + storage account (combined ~$14/month idle on the default `D2as_v5`, whose OS disk is Premium SSD - `Premium_LRS` in `infra/main.bicep`). Full teardown is `az group delete --name rg-lat --yes --no-wait` (or whatever `ResourceGroup` is set to in `parameters.local.ps1`).
 
-**Ladder sweep variant.** When the hypothesis is about scaling behaviour rather than a single-rung A/B (for example, "does the candidate's win regime hold as offered rate climbs?"), use `scripts/ladder.ps1` instead of multiple single-shot `run-cohort.ps1` calls. It loops over a rung list and calls `run-cohort.ps1` for each, and each rung's `=== Cohort complete ===` block still prints to the console. It also writes a CSV at `scripts/.ladder-results.csv` with one row per rung, but do not read results from it: the ladder captures `run-cohort.ps1` with `2>&1`, which does not receive the summary `run-cohort.ps1` prints with `Write-Host`, so every measured column reads `0`, every verdict reads `UNKNOWN` (as does the ladder's own per-rung `[ladder] rung ...` line), and `-DegradeThresholdPct` never stops the sweep. Take each rung's numbers from its console summary or its `benchmark/.run/azure-throughput/silo-<cohort>.log`. It pins `BENCH_RESPONSE_TIMEOUT_SEC=180` by default so a saturated rung surfaces as honest back-pressure rather than the silo's own grain-RPC deadline firing. The ladder is a sweep, not a cohort, so it does not replace the n=3 cohort discipline on the chosen rung.
+**Ladder sweep variant.** When the hypothesis is about scaling behaviour rather than a single-rung A/B (for example, "does the candidate's win regime hold as offered rate climbs?"), use `scripts/ladder.ps1` instead of multiple single-shot `run-cohort.ps1` calls. It loops over a rung list and calls `run-cohort.ps1` for each, and each rung's `=== Cohort complete ===` block still prints to the console. It also writes a CSV at `scripts/.ladder-results.csv` with one row per rung, built from the `LatticeBench.CohortResult` object `run-cohort.ps1` returns (a rung whose cohort threw reads verdict `ERROR`), and `-DegradeThresholdPct` stops the sweep past the knee. It pins `BENCH_RESPONSE_TIMEOUT_SEC=180` by default so a saturated rung surfaces as honest back-pressure rather than the silo's own grain-RPC deadline firing. The ladder is a sweep, not a cohort, so it does not replace the n=3 cohort discipline on the chosen rung.
 
 #### Authoring a new scenario
 

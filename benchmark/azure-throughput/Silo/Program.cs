@@ -895,13 +895,24 @@ builder.UseOrleans(silo =>
     {
         var accountUri = walExtraAccountUris[accountIndex];
         var providerKey = $"acct{accountIndex + 1}";
+        // Layer 3's public topology authenticates with account keys rather than
+        // a managed identity, so deploy-aca.ps1 supplies one connection string
+        // per extra account. They cannot share BENCH_WAL_EXTRA_ACCOUNT_URIS's
+        // ';' delimiter (a connection string contains ';'), hence one indexed
+        // variable each: BENCH_WAL_EXTRA_ACCOUNT_CONN_1 for acct1, and so on.
+        var accountConn = Environment.GetEnvironmentVariable($"BENCH_WAL_EXTRA_ACCOUNT_CONN_{accountIndex + 1}");
         silo.AddLatticeWalStorageProvider(providerKey, sp =>
         {
-            var keyedOptions = new AzureTableWalStorageOptions
+            var keyedOptions = new AzureTableWalStorageOptions();
+            if (!string.IsNullOrWhiteSpace(accountConn))
             {
-                ServiceUri = new Uri(accountUri),
-                TokenCredential = new DefaultAzureCredential(),
-            };
+                keyedOptions.ConnectionString = accountConn;
+            }
+            else
+            {
+                keyedOptions.ServiceUri = new Uri(accountUri);
+                keyedOptions.TokenCredential = new DefaultAzureCredential();
+            }
             ApplyCommonWalTuning(keyedOptions);
             return new AzureTableWalStorageProvider(
                 Options.Create(keyedOptions),
@@ -1330,52 +1341,12 @@ internal sealed class TcpIngestService(
 
         // Multi-account WAL placement spread (experiment independent variable).
         // When BENCH_WAL_ACCOUNTS > 1, redistribute the tree's WAL partitions
-        // across the keyed providers acct1..acct{N-1} - partition p routes to
-        // acct(p % N), with p % N == 0 staying on the default account - before
-        // the TCP listener opens. The tree is freshly warmed and empty here, so
-        // each move is a cheap placement-pin flip with no retained tail to copy.
-        // Arms differ only in how many accounts back the same WAL partitions.
-        if (settings.WalAccounts > 1)
-        {
-            // Source of truth: Orleans.Lattice LatticeConstants.AdminGrainKey
-            // (internal to the library; hardcoded here because the bench silo
-            // assembly has no InternalsVisibleTo grant).
-            const string adminGrainKey = "_lattice_admin";
-            var admin = grainFactory.GetGrain<ILatticeAdmin>(adminGrainKey);
-            var moves = new List<(int Partition, string TargetProviderKey)>();
-            for (var p = 0; p < settings.WalPartitions; p++)
-            {
-                var accountIndex = p % settings.WalAccounts;
-                if (accountIndex != 0)
-                {
-                    moves.Add((p, $"acct{accountIndex}"));
-                }
-            }
-            if (moves.Count > 0)
-            {
-                try
-                {
-                    await admin.ExecuteWalMoveAsync(settings.TreeId, moves, null, stoppingToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[silo] ERROR wal-placement-spread treeId={settings.TreeId} accounts={settings.WalAccounts} partitions={settings.WalPartitions} moves={moves.Count} FAILED: {ex.GetType().Name}: {Truncate(ex.Message, 240)}");
-                    throw;
-                }
-            }
-            try
-            {
-                var placement = await admin.GetWalPlacementAsync(settings.TreeId, stoppingToken).ConfigureAwait(false);
-                var summary = string.Join(",", placement.Partitions.Select(pp => $"{pp.Partition}:{pp.ProviderKey}"));
-                Console.WriteLine($"[silo] wal-placement treeId={settings.TreeId} accounts={settings.WalAccounts} partitions={settings.WalPartitions} version={placement.Version} -> {summary}");
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[silo] WARN wal-placement read treeId={settings.TreeId} failed: {ex.GetType().Name}: {Truncate(ex.Message, 160)}");
-            }
-        }
+        // across the keyed providers acct1..acct{N-1} before the TCP listener
+        // opens. Shared with the Layer 3 producer (BenchWalPlacement), which
+        // performs the same spread after its warm-up because a cluster-mode
+        // silo returns above.
+        await BenchWalPlacement.SpreadAsync(
+            grainFactory, settings.TreeId, settings.WalPartitions, settings.WalAccounts, "[silo]", stoppingToken).ConfigureAwait(false);
 
         // Cross-tree warm-up: the cross-tree atomic-write modes commit across
         // a sibling "{treeId}-b" tree as well as the primary tree. Warm that
@@ -1631,9 +1602,17 @@ internal sealed class TcpIngestService(
             }
         }
         catch (OperationCanceledException) { }
+        catch (ChannelClosedException) { /* drain completed the channel at shutdown */ }
         catch (IOException ex)
         {
             logger.LogWarning(ex, "[silo] connection {Remote} dropped", remote);
+        }
+        catch (Exception ex)
+        {
+            // The handler runs as a discarded Task.Run; without this arm any
+            // other fault was an unobserved task exception and the producer's
+            // lines silently stopped arriving with nothing in the log.
+            logger.LogError(ex, "[silo] connection {Remote} handler faulted", remote);
         }
         Console.WriteLine($"[silo] closed {remote}");
     }

@@ -549,17 +549,20 @@ pwsh benchmark/azure-throughput/scripts/deploy-aca.ps1 -NamePrefix <prefix>
 pwsh benchmark/performance-report.ps1 -Layer3 -ReuseAca <prefix>
 ```
 
+`-Layer3Rigs <K>` instead runs the sweep on K identical rigs in parallel,
+splitting the workloads between them and merging the results itself, and
+`-Layer3WalAccounts <N>` spreads each cohort's WAL across N storage accounts;
+see [Re-running it yourself](performance-multi-silo.md#re-running-it-yourself).
+
 `-DryRun` re-renders the published tables from the last `state.json`
-without touching Azure. For a Layer 3 replay,
-pass the switch form, `-DryRun -Layer3`: the dry run checks that switch
-rather than the resolved layer, so `-Layer 3 -DryRun` replays the
-single-silo tables instead of the multi-silo ones.
+without touching Azure. A Layer 3 replay accepts either `-DryRun -Layer3` or
+`-Layer 3 -DryRun`.
 
 The harness is **not** driven through `./benchmark.ps1` and does not
 push to the local history VictoriaMetrics stack - the result is the
 `[silo] FINAL ops=... failed=... elapsed=...` line in the silo
-journal plus the headline summary block `run-cohort.ps1` prints to
-stdout. Cohort sampling methodology, the full `BENCH_*` saturation-
+journal plus the headline summary block `run-cohort.ps1` prints to the
+console and also returns as a `LatticeBench.CohortResult` object. Cohort sampling methodology, the full `BENCH_*` saturation-
 knobs catalogue, the A/B procedure for WAL optimisations, the VM-SKU
 sizing rule, and the cost / auto-shutdown story all live in
 [`benchmark/azure-throughput/README.md`](../../benchmark/azure-throughput/README.md)
