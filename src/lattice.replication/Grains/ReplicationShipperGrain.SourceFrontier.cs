@@ -367,8 +367,7 @@ internal sealed partial class ReplicationShipperGrain
             try
             {
                 var registry = TxRegistryRouting.GetRegistry(_grainFactory, _treeName, txid);
-                var decided = await registry.GetRecordedStatusAsync(txid) is TxStatus.Committed or TxStatus.Aborted;
-                if (decided || (await registry.GetParticipantsAsync(txid)).Count == 0)
+                if (!await registry.HasUndecidedParticipantsAsync(txid))
                 {
                     frontier.Prepares.Remove(txid);
                 }
