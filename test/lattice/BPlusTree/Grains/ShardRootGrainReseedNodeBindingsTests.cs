@@ -105,7 +105,7 @@ public sealed class ShardRootGrainReseedNodeBindingsTests
         var harness = new ReseedHarness();
         var l0 = harness.Leaf("L0");
         var i0 = harness.Internal("I0", childrenAreLeaves: true, children: [l0.Id]);
-        i0.Grain.AreChildrenLeavesAsync().Throws(new TimeoutException("node silo unreachable"));
+        i0.Grain.GetRoutingTableAsync().Throws(new TimeoutException("node silo unreachable"));
 
         harness.State.State.RootNodeId = i0.Id;
         harness.State.State.RootIsLeaf = false;
@@ -218,11 +218,15 @@ public sealed class ShardRootGrainReseedNodeBindingsTests
         {
             var id = GrainId.Create("internal", $"{ShardKey}:{key}");
             var grain = Substitute.For<IBPlusInternalGrain>();
-            grain.AreChildrenLeavesAsync().Returns(Task.FromResult(childrenAreLeaves));
-            grain.GetChildIdsAsync().Returns(_ =>
+            grain.GetRoutingTableAsync().Returns(_ =>
             {
                 InternalNodesWalked++;
-                return Task.FromResult(new List<GrainId>(children));
+                return Task.FromResult(new RoutingTableSnapshot
+                {
+                    SeparatorKeys = new string?[children.Count],
+                    ChildIds = [.. children],
+                    ChildrenAreLeaves = childrenAreLeaves,
+                });
             });
             grain.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
             Factory.GetGrain<IBPlusInternalGrain>(id).Returns(grain);

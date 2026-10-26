@@ -731,15 +731,18 @@ internal sealed partial class ShardRootGrain
             // A node the purge already cleared reports no children, so the walk
             // simply stops there: everything below it is unreachable by routing
             // too, and re-binding an id nothing can route to buys nothing.
-            var childrenAreLeaves = await node.AreChildrenLeavesAsync();
-            var children = await node.GetChildIdsAsync();
+            // One live read for both fields (the cached snapshot is avoided: a
+            // purge-cleared node must be seen as cleared).
+            var table = await node.GetRoutingTableAsync();
+            var childrenAreLeaves = table.ChildrenAreLeaves;
+            var children = table.ChildIds;
             if (childrenAreLeaves)
             {
                 leafIds.AddRange(children);
                 continue;
             }
 
-            for (int i = children.Count - 1; i >= 0; i--)
+            for (int i = children.Length - 1; i >= 0; i--)
             {
                 stack.Push(children[i]);
             }
