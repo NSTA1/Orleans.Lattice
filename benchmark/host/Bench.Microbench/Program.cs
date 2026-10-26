@@ -101,6 +101,12 @@ if (string.Equals(suite, "walpolling", StringComparison.OrdinalIgnoreCase))
     return pollingSummary.HasCriticalValidationErrors || pollingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "frontierprobes", StringComparison.OrdinalIgnoreCase))
+{
+    var probeSummary = BenchmarkRunner.Run<CausalFrontierProbeBenchmarks>(config);
+    return probeSummary.HasCriticalValidationErrors || probeSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "frontierwaves", StringComparison.OrdinalIgnoreCase))
 {
     var frontierSummary = BenchmarkRunner.Run<FrontierOriginWaveBenchmarks>(config);

@@ -242,6 +242,13 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     Task<bool> HasAppliedAsync(string originClusterId, HybridLogicalClock timestamp);
 
     /// <summary>
+    /// Batch form of <see cref="HasAppliedAsync"/>, with one result per timestamp
+    /// in request order. Uses the same remembered identities and interleaving contract.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool[]> HasAppliedManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps);
+
+    /// <summary>
     /// Durably records that the write of <paramref name="originClusterId"/> at
     /// <paramref name="timestamp"/> was acknowledged and then lost for good - an
     /// operator discarded it from the dead-letter queue (#4603). The mark lives on

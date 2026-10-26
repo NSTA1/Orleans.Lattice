@@ -338,6 +338,33 @@ internal sealed class ReplicationDeadLetterGrain(
         return Task.FromResult(false);
     }
 
+    /// <inheritdoc />
+    public Task<bool[]> IsHoldingManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        ArgumentNullException.ThrowIfNull(timestamps);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+        var requested = timestamps.ToHashSet();
+        var held = new HashSet<HybridLogicalClock>();
+        foreach (var identity in _parked.Keys)
+        {
+            if (requested.Contains(identity.Timestamp)
+                && string.Equals(identity.OriginClusterId, originClusterId, StringComparison.Ordinal))
+            {
+                held.Add(identity.Timestamp);
+            }
+        }
+
+        var result = new bool[timestamps.Count];
+        for (var i = 0; i < result.Length; i++)
+        {
+            result[i] = held.Contains(timestamps[i]);
+        }
+
+        return Task.FromResult(result);
+    }
+
     /// <summary>
     /// Publishes every write of <paramref name="originClusterId"/> this queue
     /// holds to the origin's frontier (issue #4586). Skipped for a local-origin
