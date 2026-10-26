@@ -711,9 +711,16 @@ against `TxRegistryAdmissionBudgetBytes`. Where the WAL trims more slowly
 than the retention, the sustained saga rate one registry shard admits
 falls in proportion, and a tree whose log stops trimming (a lagging
 consumer with no `WalRetention`, for example) eventually refuses new
-sagas with `TxRegistryCapacity` until it trims again. Raise
+sagas with `TxRegistryCapacity` until it trims again. Each cross-tree
+sub-saga there also keeps its cross-tree membership (operation id,
+participant trees, decision stamps and sequences; about 1.1 KiB of JSON,
+weighted at 1,280 bytes) in its tree's registry for as long as its
+tombstone, so one shard retains only about 530 cross-tree decisions: about
+9 sustained cross-tree sagas/s at the default budget and retention. Raise
 `TxRegistryShardCount` to restore headroom. A host without replication is
-unaffected.
+unaffected: it records no cross-tree membership, because only replication
+reads one
+([#5073](https://github.com/NSTA1/Orleans.Lattice/issues/5073)).
 A tombstone held by a live point-in-time cursor pin is skipped by both
 the purge and the read-side mask. Setting
 `TxDecisionRetention = TimeSpan.Zero` restores the
