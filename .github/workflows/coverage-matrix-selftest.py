@@ -162,6 +162,18 @@ class BrowserInstallTests(unittest.TestCase):
             exec /usr/bin/timeout --kill-after=1s 1s "$@"
         """), encoding="utf-8", newline="\n")
         (tools / "sleep").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8", newline="\n")
+        # These portable contract tests stub privilege/supervision. The native
+        # playwright-install-selftest.py exercises real sudo and descendant cleanup.
+        (tools / "sudo").write_text(
+            '#!/bin/bash\n[ "$1" = --non-interactive ] && [ "$2" = -- ] || exit 96\n'
+            'shift 2\nexec "$@"\n', encoding="utf-8", newline="\n",
+        )
+        (tools / "python3").write_text(
+            '#!/bin/bash\n[[ "$1" = */run-playwright-install.py ]] && '
+            '[ "$2" = 120 ] && [ "$3" = 10 ] || exit 95\n'
+            'shift 3\nexec timeout --kill-after=10s 120s "$@"\n',
+            encoding="utf-8", newline="\n",
+        )
         for tool in tools.iterdir():
             tool.chmod(0o755)
         self.env = dict(os.environ, SCENARIO="pass")
@@ -251,6 +263,7 @@ class BrowserInstallTests(unittest.TestCase):
             self.assertNotIn('pwsh "$script"', block)
         yaml = (WORKFLOWS / "ui-tests.yml").read_text(encoding="utf-8")
         self.assertEqual(2, yaml.count("- '.github/workflows/install-playwright-browsers.sh'"))
+        self.assertEqual(2, yaml.count("- '.github/workflows/run-playwright-install.py'"))
         self.assertIn("join(matrix.browsers, '-')", yaml)
         self.assertIn("join(matrix.browsers, ' ')", yaml)
         self.assertIn("key: playwright-chromium-firefox-webkit-", YAML)

@@ -20,12 +20,20 @@ if [ -z "$script" ]; then
   echo "::error::playwright.ps1 not found under the UI build output."
   exit 1
 fi
+runner="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/run-playwright-install.py"
+pwsh="$(command -v pwsh)"
 
 install_with_retry() {
   local attempt code
+  local -a command=(python3 "$runner" 120 10 "$pwsh" "$script" "$@")
+  # Elevate the supervisor too, so its signals can reach apt and dpkg.
+  # Downloads stay unprivileged to preserve the caller's browser cache.
+  if [ "$1" = install-deps ]; then
+    command=(sudo --non-interactive -- "${command[@]}")
+  fi
   for attempt in 1 2 3; do
     echo "Playwright $*: attempt $attempt/3 (120-second limit)."
-    if timeout --kill-after=10s 120s pwsh "$script" "$@"; then
+    if "${command[@]}"; then
       return 0
     else
       code=$?

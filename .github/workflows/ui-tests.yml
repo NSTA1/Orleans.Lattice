@@ -59,6 +59,7 @@ on:
       - '.github/workflows/ui-tests.yml'
       - '.github/workflows/ui-test-shards.json'
       - '.github/workflows/install-playwright-browsers.sh'
+      - '.github/workflows/run-playwright-install.py'
 
   # Integration-branch lane, mirroring ci.yml's push trigger (#2972). A pull
   # request INTO a bucket was gated; the bucket itself was not, so its combined
@@ -100,6 +101,7 @@ on:
       - '.github/workflows/ui-tests.yml'
       - '.github/workflows/ui-test-shards.json'
       - '.github/workflows/install-playwright-browsers.sh'
+      - '.github/workflows/run-playwright-install.py'
 
 permissions:
   contents: read
