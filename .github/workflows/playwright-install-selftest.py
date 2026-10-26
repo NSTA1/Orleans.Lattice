@@ -145,7 +145,11 @@ class PrivilegedInstallerTests(unittest.TestCase):
         # Only fixture PIDs, never a package-manager name, lock path or process scan.
         for owner in (self.root / "owners").read_text().splitlines():
             pid = json.loads(owner)["pid"]
-            if Path(f"/proc/{pid}").exists():
+            try:
+                command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+            except FileNotFoundError:
+                continue
+            if os.fsencode(self.tools / "worker") in command and b"--hold" in command:
                 subprocess.run([self.sudo, "-n", "kill", "-KILL", str(pid)],
                                check=True, timeout=10)
         self.temporary.cleanup()

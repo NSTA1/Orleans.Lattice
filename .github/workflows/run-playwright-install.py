@@ -56,7 +56,9 @@ def run(command: list[str], limit: float, grace: float) -> int:
         # A second termination request must not interrupt ownership cleanup.
         for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             signal.signal(signum, signal.SIG_IGN)
-        send(signal.SIGTERM)
+        # A drained group no longer belongs to us; do not signal a reusable id.
+        if not drained():
+            send(signal.SIGTERM)
         deadline = time.monotonic() + grace
         while not drained() and time.monotonic() < deadline:
             time.sleep(0.02)
