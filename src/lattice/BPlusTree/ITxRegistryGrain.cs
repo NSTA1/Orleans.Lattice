@@ -259,6 +259,15 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task<TxStatus> GetRecordedStatusAsync(Guid txid);
 
     /// <summary>
+    /// Returns whether <paramref name="txid"/> has participants but no physically
+    /// recorded commit or abort. Read-committed, like <see cref="GetRecordedStatusAsync"/>
+    /// and <see cref="GetParticipantsAsync"/>; does not resolve delegated decisions
+    /// or apply the retention mask. For maintenance clamps, not reader visibility.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> HasUndecidedParticipantsAsync(Guid txid);
+
+    /// <summary>
     /// Returns a snapshot of every recorded saga decision currently in
     /// the registry. Used by the lattice-level read fan-out path to
     /// capture a single tree-wide view of decisions before parallel

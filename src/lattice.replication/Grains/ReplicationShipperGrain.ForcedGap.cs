@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Replication.Grains;
@@ -170,16 +171,13 @@ internal sealed partial class ReplicationShipperGrain
     /// <summary>Each partition's lowest retained sequence (its next sequence when empty).</summary>
     private async Task<long[]> ReadRetainedHeadsAsync()
     {
-        var heads = new long[_partitionCount];
-        for (var p = 0; p < _partitionCount; p++)
+        return await BoundedFanOut.RunAsync(_partitionCount, BoundedFanOut.DefaultWidth, async p =>
         {
             var grain = _partitionGrainCache[p] ??=
                 _grainFactory.GetGrain<IWalShardGrain>($"{_walTreeId}/{p}");
             var head = await grain.ReadShippingAsync(0, 1, CancellationToken.None);
-            heads[p] = head.Entries.Count > 0 ? head.Entries[0].Sequence : head.NextSequence;
-        }
-
-        return heads;
+            return head.Entries.Count > 0 ? head.Entries[0].Sequence : head.NextSequence;
+        });
     }
 
     // The highest export epoch the peer echoed this tick, by any ack: a push

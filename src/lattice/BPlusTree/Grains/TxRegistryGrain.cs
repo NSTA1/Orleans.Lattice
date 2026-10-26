@@ -1116,6 +1116,23 @@ internal sealed partial class TxRegistryGrain(
     }
 
     /// <inheritdoc />
+    public async Task<bool> HasUndecidedParticipantsAsync(Guid txid)
+    {
+        while (true)
+        {
+            var decided = state.State.Decisions.TryGetValue(txid, out var status)
+                && status is TxStatus.Committed or TxStatus.Aborted;
+            var pending = !decided
+                && state.State.Participants.TryGetValue(txid, out var participants)
+                && participants.Count > 0;
+            if (await WhenDurableAsync(txid))
+            {
+                return pending;
+            }
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<Dictionary<Guid, TxStatus>> GetStatusManyAsync(IReadOnlyList<Guid> txids)
     {
         ArgumentNullException.ThrowIfNull(txids);

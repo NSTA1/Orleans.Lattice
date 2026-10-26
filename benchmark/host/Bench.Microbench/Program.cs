@@ -89,6 +89,12 @@ for (var i = 0; i < args.Length - 1; i++)
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
 }
 
+if (string.Equals(suite, "reseedsampling", StringComparison.OrdinalIgnoreCase))
+{
+    var samplingSummary = BenchmarkRunner.Run<ReseedSamplingBenchmarks>(config);
+    return samplingSummary.HasCriticalValidationErrors || samplingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "walpolling", StringComparison.OrdinalIgnoreCase))
 {
     var pollingSummary = BenchmarkRunner.Run<WalPollingCallBenchmarks>(config);
