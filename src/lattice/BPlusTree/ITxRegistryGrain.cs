@@ -126,7 +126,8 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// sub-saga parks prepared, so it precedes every terminal of the saga. The
     /// record lives exactly as long as the sub-saga's decision is stored, so a
     /// snapshot export can name the operation on the decision row it ships.
-    /// Idempotent; the first recording wins.
+    /// Idempotent; the first recording wins. Only a host with replication
+    /// enabled calls it, since replication is the record's only reader (#5073).
     /// </summary>
     [AlwaysInterleave]
     Task RecordCrossTreeMembershipAsync(Guid txid, string operationId, IReadOnlyList<string> participants);

@@ -1422,6 +1422,18 @@ public class LatticeOptions
     /// per-row limit, or a tree that never runs atomic sagas, loses nothing by
     /// leaving it enabled.
     /// </para>
+    /// <para>
+    /// Those figures hold for single-tree sagas, and for cross-tree sub-sagas on
+    /// a host without replication. On a host with replication enabled each
+    /// cross-tree sub-saga also keeps a cross-tree membership (its operation id,
+    /// participant trees, and decision stamps and sequences, about 1.1 KiB of
+    /// JSON, weighted at 1 280 bytes) in its tree's registry for as long as its
+    /// tombstone, so a shard retains only about 530 cross-tree decisions: about
+    /// 9 sustained cross-tree sagas/s per shard at the default budget and
+    /// retention, fewer when a slow-trimming write-ahead log holds tombstones
+    /// longer. Raise <see cref="TxRegistryShardCount"/> on a replicated tree
+    /// that runs cross-tree writes faster than that.
+    /// </para>
     /// </summary>
     public long? TxRegistryAdmissionBudgetBytes { get; set; } = DefaultTxRegistryAdmissionBudgetBytes;
 

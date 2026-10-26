@@ -671,8 +671,10 @@ internal sealed partial class AtomicWriteGrain(
                 var registry = RegistryFor(state.State.TreeId, txid);
 
                 // The membership precedes the delegation, and so every terminal
-                // of the saga, and lives as long as its decision (#4683).
-                if (state.State.CrossTreeParticipants is { Count: > 0 } participants)
+                // of the saga, and lives as long as its decision (#4683). Only
+                // replication reads it, so a host without replication skips it
+                // and keeps the registry's admission budget for tombstones (#5073).
+                if (state.State.CrossTreeParticipants is { Count: > 0 } participants && IsReplicationEnabled())
                 {
                     await TxRegistryWriteRetry.RunAsync(
                         (registry, txid, coordinatorKey, participants),
@@ -1969,6 +1971,20 @@ internal sealed partial class AtomicWriteGrain(
     }
     private bool _commitLogWriterResolved;
     private ICommitLogWriter? _commitLogWriter;
+
+    /// <summary>
+    /// Whether the host runs replication, read from the optional
+    /// <see cref="ILatticeReplicationContext"/>. Cached after first lookup;
+    /// <c>false</c> when no context is registered. Gates the cross-tree
+    /// membership record, whose only readers are replication's (#5073).
+    /// </summary>
+    private bool IsReplicationEnabled()
+    {
+        _replicationEnabled ??= GrainContext.ActivationServices?.GetService<ILatticeReplicationContext>()
+            is { IsReplicationEnabled: true };
+        return _replicationEnabled.Value;
+    }
+    private bool? _replicationEnabled;
 
     /// <summary>
     /// Resolves the optional <see cref="IWalSaturationSignal"/>
