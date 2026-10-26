@@ -48,7 +48,7 @@ Back on Build, next: Scans, filters and cursors. The links are on this episode's
 <!-- The list is written from the series plan by `npm run companions` in videos/. -->
 <!-- where-next:begin -->
 
-- **Back to Build:** Scans, filters and cursors
+- **Back to Build:** [Scans, filters and cursors](scans-filters-and-cursors.md)
 - **The pages it introduces:** [CRDT primitives](../crdt/readme.md) and [state primitives](../lattice/state-primitives.md)
 
 <!-- where-next:end -->

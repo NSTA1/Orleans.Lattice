@@ -7,17 +7,19 @@ export function sceneId(title) {
 }
 
 const PAUSE = /^<!--\s*pause\s+(\d+(?:\.\d+)?)\s*-->$/;
+const PACE = /^<!--\s*pace\s+(\d+(?:\.\d+)?)\s*-->$/;
 
 /**
  * Parses an episode's SCRIPT.md into narration cues. Only the "## Narration"
  * section is spoken, and it ends at the next level-2 heading. Each paragraph
  * is one cue, and "### <scene>" labels the cues that follow it. A
- * `<!-- pause N -->` comment adds N seconds of silence before the next cue,
- * or, after the last cue, before the episode ends; every other HTML comment is
- * a direction note and is never spoken.
+ * `<!-- pause N -->` adds silence before the next cue, and `<!-- pace N -->`
+ * at the start of the section time-stretches every cue while preserving pitch.
+ * Every other HTML comment is a direction note and is never spoken.
  *
- * Returns { cues: [{ text, scene, pause }], tail }, where `pause` is the extra
- * silence before a cue and `tail` the silence after the last one.
+ * Returns { cues: [{ text, scene, pause }], tail, pace }, where `pause` is the
+ * extra silence before a cue, `tail` the silence after the last one, and `pace`
+ * is between 0.8 and 1 (1 leaves the cues unchanged).
  */
 export function parseScript(markdown, source = "SCRIPT.md") {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
@@ -33,21 +35,37 @@ export function parseScript(markdown, source = "SCRIPT.md") {
   const section = lines
     .slice(start + 1, end)
     .join("\n")
-    .replace(/<!--[\s\S]*?-->/g, (comment) => (PAUSE.test(comment.trim()) ? `\n\n${comment.trim()}\n\n` : ""));
+    .replace(/<!--[\s\S]*?-->/g, (comment) => {
+      const directive = comment.trim();
+      return PAUSE.test(directive) || PACE.test(directive) ? `\n\n${directive}\n\n` : "";
+    });
 
   const cues = [];
   let scene = null;
   let pending = 0;
+  let pace = 1;
+  let paceSet = false;
   for (const block of section.split(/\n\s*\n/)) {
     const blockLines = block.split("\n").map((line) => line.trim()).filter(Boolean);
     const spoken = [];
     for (const line of blockLines) {
       const heading = /^###\s+(.+)$/.exec(line);
       const pause = PAUSE.exec(line);
+      const paceDirective = PACE.exec(line);
       if (heading) {
         scene = heading[1].trim();
       } else if (pause) {
         pending += Number(pause[1]);
+      } else if (paceDirective) {
+        if (cues.length > 0 || spoken.length > 0) {
+          throw new Error(`${source}: a pace directive must appear before the first narration cue`);
+        }
+        if (paceSet) throw new Error(`${source}: only one pace directive is allowed`);
+        pace = Number(paceDirective[1]);
+        if (pace < 0.8 || pace > 1) {
+          throw new Error(`${source}: pace must be between 0.8 and 1`);
+        }
+        paceSet = true;
       } else {
         spoken.push(line);
       }
@@ -61,7 +79,7 @@ export function parseScript(markdown, source = "SCRIPT.md") {
   if (cues.length === 0) {
     throw new Error(`${source}: the Narration section has no cues`);
   }
-  return { cues, tail: pending };
+  return { cues, tail: pending, pace };
 }
 
 const round = (seconds) => Math.round(seconds * 1000) / 1000;
