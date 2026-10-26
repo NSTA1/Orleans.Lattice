@@ -151,12 +151,13 @@ public sealed partial class ReplicationTreesPageTests
         await DisposeComponentsAsync();
         gate.SetResult();
         await submission;
+        var fault = await LeftPage.FaultAsync(Renderer);
 
         Assert.Multiple(() =>
         {
             Assert.That(ToastService.Toasts, Is.Empty, "the reply belongs to the page that has been left");
             Assert.That(Control.Reads, Is.EqualTo(reads), "a departed page must not start another load");
-            Assert.That(LeftPage.Fault(Renderer), Is.Null);
+            Assert.That(fault, Is.Null);
         });
     }
 }

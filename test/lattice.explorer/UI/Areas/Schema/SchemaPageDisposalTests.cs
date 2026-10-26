@@ -36,10 +36,11 @@ public sealed class SchemaPageDisposalTests : SchemaTestContext
 
         await DisposeComponentsAsync();
         await cut.InvokeAsync(gate.SetResult);
+        var fault = await LeftPage.FaultAsync(Renderer);
 
         Assert.Multiple(() =>
         {
-            Assert.That(LeftPage.Fault(Renderer), Is.Null, "the circuit would end");
+            Assert.That(fault, Is.Null, "the circuit would end");
             Assert.That(notFound, Is.Zero, "a page that has been left declares nothing not found");
         });
     }

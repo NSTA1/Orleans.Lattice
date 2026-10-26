@@ -24,10 +24,11 @@ public sealed class DataPageDisposalTests : DataTestContext
 
         await DisposeComponentsAsync();
         await cut.InvokeAsync(gate.SetResult);
+        var fault = await LeftPage.FaultAsync(Renderer);
 
         Assert.Multiple(() =>
         {
-            Assert.That(LeftPage.Fault(Renderer), Is.Null, "the circuit would end");
+            Assert.That(fault, Is.Null, "the circuit would end");
             Assert.That(Client.ObserveRequests, Has.Count.EqualTo(feeds), "a page that has been left follows nothing");
         });
     }
