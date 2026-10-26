@@ -174,6 +174,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - MCP transport can refuse rebound browser origins.** The opt-in `RequireAllowedOrigin` option answers `403` to foreign `Origin` headers, blocking DNS-rebinding tool calls; the repocontext host enables it. ([#PRNUM](https://github.com/NSTA1/Orleans.Lattice/pull/PRNUM)) (`Orleans.Lattice.Api.Mcp`)
+
 - **Security - Git-source links cannot expose host files.** Symbolic links are excluded from commit scans and staged as plain text, preventing repository contributors from indexing host-readable secrets. ([#5021](https://github.com/NSTA1/Orleans.Lattice/pull/5021)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Indexing - Large mounted files no longer exhaust scan memory.** Binary sniffing and content hashing use fixed scratch space rather than whole-file arrays, preserving digests and legacy comparisons. ([#5021](https://github.com/NSTA1/Orleans.Lattice/pull/5021)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

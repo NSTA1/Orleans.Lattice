@@ -85,6 +85,7 @@ public static partial class LatticeMcpServiceCollectionExtensions
         // OAuth 2.0 Protected Resource Metadata (RFC 9728) challenge hint. Inert
         // unless the host sets LatticeApiMcpOptions.ProtectedResourceMetadata.
         AddProtectedResourceMetadataChallenge(services);
+        services.TryAddEnumerable(ServiceDescriptor.Transient<IStartupFilter, McpOriginValidationStartupFilter>());
 
         // Permission-aware discovery core: resolves each caller's usable facade
         // groups (default: via the Api.Auth effective-permissions surface) and
