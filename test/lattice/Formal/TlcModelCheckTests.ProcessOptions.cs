@@ -26,6 +26,10 @@ public sealed partial class TlcModelCheckTests
             Assert.That(arguments[Array.IndexOf(arguments, "-workers") + 1],
                 Is.EqualTo(TlcWorkers.ToString(CultureInfo.InvariantCulture)));
             Assert.That(arguments, Does.Not.Contain("-deadlock").And.Not.Contain("-simulate"));
+            Assert.That(arguments[Array.IndexOf(arguments, "-cp") + 1], Is.EqualTo(_classpath));
+            Assert.That(_classpath.Split(Path.PathSeparator)[0],
+                Is.EqualTo(Path.Combine(Orleans.Lattice.Testing.Hygiene.HygieneRepository.FindRepoRoot(),
+                    "tools", "tlc", "build", "compiled")));
             Assert.That(info.WorkingDirectory, Is.EqualTo(scratch));
         });
     }
@@ -184,7 +188,7 @@ public sealed partial class TlcModelCheckTests
         info.ArgumentList.Add($"-Djava.io.tmpdir={scratch}");
         info.ArgumentList.Add("-XX:+UseParallelGC");
         info.ArgumentList.Add("-cp");
-        info.ArgumentList.Add(_jar);
+        info.ArgumentList.Add(_classpath);
         info.ArgumentList.Add("tlc2.TLC");
         foreach (var option in options)
             info.ArgumentList.Add(option);

@@ -243,18 +243,20 @@ discovery to refuse every malformed layout listed above.
 
 ## How to run TLC
 
-You need a Java runtime (JDK/JRE 11+) and `tla2tools.jar` from the
-[TLA+ tools releases](https://github.com/tlaplus/tlaplus/releases). From a
-module directory, for example `atomic-commit/`:
+Use JDK 17, the pinned v1.7.4 `tla2tools.jar`, and the source-built
+[checkpoint-order overlay](../tools/tlc/README.md). Build and regression-check
+the overlay first using that page's command; the unchanged jar alone contains
+the OWNER166 mixed-cut checkpoint defect. From a module directory, for example
+`atomic-commit/` (use absolute paths to the repository's build and jar):
 
 ```bash
-java -cp /path/to/tla2tools.jar tlc2.TLC -config AtomicCommit.cfg AtomicCommit.tla
+java -cp /path/to/repo/tools/tlc/build/compiled:/path/to/repo/tools/tla2tools.jar tlc2.TLC -config AtomicCommit.cfg AtomicCommit.tla
 ```
 
 On Windows PowerShell:
 
 ```powershell
-java -cp C:\path\to\tla2tools.jar tlc2.TLC -config AtomicCommit.cfg AtomicCommit.tla
+java -cp "C:\repo\tools\tlc\build\compiled;C:\repo\tools\tla2tools.jar" tlc2.TLC -config AtomicCommit.cfg AtomicCommit.tla
 ```
 
 A clean run ends with `Model checking completed. No error has been found.`
@@ -270,13 +272,20 @@ case, for example `--filter "FullyQualifiedName~TerminationNoFairness"`.
 
 ### How the NUnit fixture finds the toolchain
 
-`TlcModelCheckTests` (see [CI decision](#ci-decision)) locates the same two
+`TlcModelCheckTests` (see [CI decision](#ci-decision)) locates these toolchain
 pieces itself. It reads `tla2tools.jar` from the `TLA_TOOLS_JAR` environment
 variable (an absolute path), falling back to `tools/tla2tools.jar` at the
 repository root (a gitignored path), and it runs `java` from `JAVA_HOME/bin`,
 falling back to the first `java` on `PATH`. The CI workflows download the pinned
 tla2tools v1.7.4 release to `tools/tla2tools.jar` and verify its SHA-256 digest
-before the tests run.
+before the tests run. They then build and regression-check the overlay once per job.
+
+The fixture validates the pinned jar and all four overlay class hashes and puts
+`tools/tlc/build/compiled` before the jar on every TLC invocation. A missing
+verification receipt or absent, extra or mismatched overlay file is a failure,
+not a fallback to the original checker. See the overlay README for the real-method
+red/green regression, actual JVM class-load provenance and tooling-only smoke
+limits; none of those results constitutes a full GC model or recovery proof.
 
 ## CI decision
 

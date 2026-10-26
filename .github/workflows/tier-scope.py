@@ -93,6 +93,7 @@ TLC_INPUTS: list[str] = [
     "test/lattice/*.csproj",
     ".github/workflows/*",
     "tools/tla*",
+    "tools/tlc/*",
     "Directory.Build.*",
     "Directory.Packages.props",
     "global.json",

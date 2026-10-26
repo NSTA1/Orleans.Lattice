@@ -124,7 +124,7 @@ public sealed partial class TlcModelCheckTests
         RegexOptions.Multiline);
 
     private string _java = string.Empty;
-    private string _jar = string.Empty;
+    private string _classpath = string.Empty;
 
     [OneTimeSetUp]
     public void ResolveToolchain()
@@ -157,7 +157,7 @@ public sealed partial class TlcModelCheckTests
         }
 
         _java = java!;
-        _jar = jar;
+        _classpath = TlcCheckpointToolchain.ResolveClasspath(HygieneRepository.FindRepoRoot(), jar);
     }
 
     /// <summary>
