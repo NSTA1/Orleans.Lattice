@@ -800,7 +800,7 @@ internal static class RepoContextToolHandlers
     /// <param name="session">A named caller session that persists reuse bookkeeping across calls.</param>
     /// <param name="cancellationToken">Cancels the bundle.</param>
     /// <returns>The packed bundle, whose exact BPE total never exceeds the clamped budget.</returns>
-    /// <exception cref="McpException">The repository id or task is missing.</exception>
+    /// <exception cref="McpException">The repository id or task is missing, or the session id exceeds 256 characters.</exception>
     public static Task<RepoContextContextResult> ContextAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The repository identifier to bundle context from.")]
@@ -831,7 +831,7 @@ internal static class RepoContextToolHandlers
         [Description(
             "A named caller session id. Its recorded deliveries auto-suppress units the session already holds and "
             + "validate 'known' claims, and this call's deliveries are recorded into it, so a session never pays "
-            + "twice for the same context across calls.")]
+            + "twice for the same context across calls. At most 256 characters.")]
         string? session = null,
         CancellationToken cancellationToken = default)
     {
@@ -843,6 +843,12 @@ internal static class RepoContextToolHandlers
         if (string.IsNullOrWhiteSpace(task))
         {
             throw McpToolClientErrors.InvalidArgument("The 'task' parameter is required and must be a non-empty task description.");
+        }
+
+        if (session is { Length: > RepoContextBundleService.MaxSessionIdLength })
+        {
+            throw McpToolClientErrors.InvalidArgument(
+                $"The 'session' parameter must be at most {RepoContextBundleService.MaxSessionIdLength} characters.");
         }
 
         var bundle = ResolveBundleService(context);

@@ -174,6 +174,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - Push reseed requests require an enrolled tree.** The reseed header no longer starts a bootstrap or straggler refusal for a tree the receiver never enrolled for replication. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Replication.Grpc`)
+
+- **Security - Peer probes honour the tenant export gate.** Digest, Merkle-walk and content-manifest probes of a tenant tree now require an authenticated peer the tenant isolation gate authorizes, closing a key-existence oracle. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Replication.Grpc`)
+
+- **Security - Context sessions are bounded.** `repocontext_context` rejects session ids over 256 characters, caps consulted `seen`/`known` entries, and caps the receipts one session retains. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Security - MCP transport can refuse rebound browser origins.** The opt-in `RequireAllowedOrigin` option answers `403` to foreign `Origin` headers, blocking DNS-rebinding tool calls; the repocontext host enables it. ([#5046](https://github.com/NSTA1/Orleans.Lattice/pull/5046)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - Git-source links cannot expose host files.** Symbolic links are excluded from commit scans and staged as plain text, preventing repository contributors from indexing host-readable secrets. ([#5021](https://github.com/NSTA1/Orleans.Lattice/pull/5021)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

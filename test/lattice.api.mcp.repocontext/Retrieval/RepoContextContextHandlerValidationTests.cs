@@ -19,4 +19,14 @@ public sealed class RepoContextContextHandlerValidationTests
         => Assert.That(
             () => RepoContextToolHandlers.ContextAsync(null!, repoId, task),
             Throws.InstanceOf<McpException>());
+
+    [Test]
+    public void ContextAsync_rejects_an_oversized_session_id()
+        // Regression: the session id becomes part of a stored key, so an unbounded
+        // id let one call write an arbitrarily large key into the session tree.
+        => Assert.That(
+            () => RepoContextToolHandlers.ContextAsync(
+                null!, "acme", "add a widget",
+                session: new string('s', RepoContextBundleService.MaxSessionIdLength + 1)),
+            Throws.InstanceOf<McpException>());
 }
