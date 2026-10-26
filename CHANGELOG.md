@@ -34,9 +34,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
-- **Performance - Re-seed prepare probes.** Re-seed rewind checks recorded decisions and participants in one read-committed grain call instead of two, while failed or undecided reads keep clamping the watermark. ([PR pending](https://github.com/NSTA1/Orleans.Lattice/compare/main...perf%2Fperformance-improvements-34e)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+- **Performance - Re-seed prepare probes.** Re-seed rewind checks recorded decisions and participants in one read-committed grain call instead of two, while failed or undecided reads keep clamping the watermark. ([#5041](https://github.com/NSTA1/Orleans.Lattice/pull/5041)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
-- **Performance - Tenant usage sampling.** Owned-tree usage reports overlap in settled waves of up to 32, preserving cached footprints on failure and sampling-before-publication accounting barriers. ([PR pending](https://github.com/NSTA1/Orleans.Lattice/compare/main...perf%2Fperformance-improvements-34e)) (`Orleans.Lattice.Tenancy`)
+- **Performance - Tenant usage sampling.** Owned-tree usage reports overlap in settled waves of up to 32, preserving cached footprints on failure and sampling-before-publication accounting barriers. ([#5041](https://github.com/NSTA1/Orleans.Lattice/pull/5041)) (`Orleans.Lattice.Tenancy`)
 
 - **Performance - WAL polling.** Idle subscribers skip empty page reads, and retention-tail reads combine metadata into one grain call while retaining trim and late-flush safeguards. ([#5038](https://github.com/NSTA1/Orleans.Lattice/pull/5038)) (`Orleans.Lattice`)
 
@@ -52,7 +52,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Registration and options seeding.** Tree creation registers and returns its entry in one registry call instead of three; app tree provisioning cuts two calls to one. Lazy options seeding reuses the registration result, cutting calls from three to two. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960), [#4965](https://github.com/NSTA1/Orleans.Lattice/pull/4965)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Apps`)
 
-- **Performance - Replication head capture.** Replay horizons, source-lineage boundaries and retained-head re-seed vectors read independent WAL partitions with bounded overlap, preserving retention holds and complete-vector-before-marker ordering. ([#4965](https://github.com/NSTA1/Orleans.Lattice/pull/4965), [PR pending](https://github.com/NSTA1/Orleans.Lattice/compare/main...perf%2Fperformance-improvements-34e)) (`Orleans.Lattice.Replication`)
+- **Performance - Replication head capture.** Replay horizons, source-lineage boundaries and retained-head re-seed vectors read independent WAL partitions with bounded overlap, preserving retention holds and complete-vector-before-marker ordering. ([#4965](https://github.com/NSTA1/Orleans.Lattice/pull/4965), [#5041](https://github.com/NSTA1/Orleans.Lattice/pull/5041)) (`Orleans.Lattice.Replication`)
 
 - **Performance - Autonomic registry reads.** Hot-shard ticks, shard-healing sweeps and the replication applier's de-enrolled-tree discard read the physical tree and shard map from one registry entry, cutting registry calls from 3/3/3 to 2/1/1 without changing public APIs. ([#4952](https://github.com/NSTA1/Orleans.Lattice/pull/4952)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
