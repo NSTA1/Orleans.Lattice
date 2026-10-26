@@ -34,7 +34,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
-- **Performance - Re-seed prepare probes.** Re-seed rewind checks recorded decisions and participants in one read-committed grain call instead of two, while failed or undecided reads keep clamping the watermark. ([#5041](https://github.com/NSTA1/Orleans.Lattice/pull/5041)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+- **Performance - Replay maintenance.** Re-seed probes batch up to 128 transactions per registry, replay purge checks use one read-committed grain call, and independent cross-tree stamp lookups overlap in settled waves of 32. Failed probes retain watermark clamps. ([#5041](https://github.com/NSTA1/Orleans.Lattice/pull/5041), [#5054](https://github.com/NSTA1/Orleans.Lattice/pull/5054)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
 - **Performance - Tenant usage sampling.** Owned-tree usage reports overlap in settled waves of up to 32, preserving cached footprints on failure and sampling-before-publication accounting barriers. ([#5041](https://github.com/NSTA1/Orleans.Lattice/pull/5041)) (`Orleans.Lattice.Tenancy`)
 

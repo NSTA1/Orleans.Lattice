@@ -30,6 +30,17 @@ public partial class CrossClusterAtomicVisibilityTests
         registry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         registry.GetRecordedStatusAsync(kept).Returns(Task.FromResult(TxStatus.Committed));
         registry.HasUndecidedParticipantsAsync(live).Returns(true);
+        registry.IsPurgedAsync(Arg.Any<Guid>()).Returns(true);
+        registry.IsPurgedAsync(kept).Returns(false);
+        registry.IsPurgedAsync(live).Returns(false);
+        registry.HasUndecidedParticipantsManyAsync(Arg.Any<IReadOnlyList<Guid>>())
+            .Returns(async call =>
+            {
+                var result = new Dictionary<Guid, bool>();
+                foreach (var txid in call.Arg<IReadOnlyList<Guid>>())
+                    result[txid] = await registry.HasUndecidedParticipantsAsync(txid);
+                return result;
+            });
         return registry;
     }
 
@@ -93,6 +104,12 @@ public partial class CrossClusterAtomicVisibilityTests
             Assert.That(prepares, Does.Contain(live), "a saga still in flight (its participants registered) ships; its decision will be kept");
             Assert.That(state.State.ReplayFilterHorizon, Is.Null, "the filter clears once every cursor passes the horizon");
         });
+        foreach (var txid in new[] { purged, kept, live })
+        {
+            await registry.Received(1).IsPurgedAsync(txid);
+            await registry.DidNotReceive().GetParticipantsAsync(txid);
+            await registry.DidNotReceive().GetRecordedStatusAsync(txid);
+        }
     }
 
     [Test]
