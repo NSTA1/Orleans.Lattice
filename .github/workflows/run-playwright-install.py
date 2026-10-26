@@ -9,13 +9,16 @@ import subprocess
 import sys
 import time
 
+sys.dont_write_bytecode = True
+from playwright_apt_mirrors import MirrorConfigurationError, mirror_overlay
 
-def run(command: list[str], limit: float, grace: float) -> int:
+
+def run(command: list[str], limit: float, grace: float, environment=None) -> int:
     # Adopt orphaned grandchildren so an exited pwsh cannot hide live apt work.
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
         raise OSError(ctypes.get_errno(), "Cannot supervise installer descendants")
-    process = subprocess.Popen(command, start_new_session=True)
+    process = subprocess.Popen(command, start_new_session=True, env=environment)
     code = 1
     interrupted = 0
 
@@ -87,4 +90,19 @@ def run(command: list[str], limit: float, grace: float) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(run(sys.argv[3:], float(sys.argv[1]), float(sys.argv[2])))
+    limit, grace = float(sys.argv[1]), float(sys.argv[2])
+    command = sys.argv[3:]
+    if command[0] == "--apt-mirror-step":
+        deadline = time.monotonic() + limit
+        try:
+            with mirror_overlay(int(command[1]), deadline) as environment:
+                code = run(command[2:], max(0, deadline - time.monotonic()), grace, environment)
+        except subprocess.TimeoutExpired:
+            print("::warning::Playwright APT configuration exhausted the attempt budget.", flush=True)
+            code = 124
+        except (MirrorConfigurationError, OSError, subprocess.CalledProcessError) as error:
+            print(f"::error::Cannot configure a safe Playwright APT retry: {error}", flush=True)
+            code = 78
+    else:
+        code = run(command, limit, grace)
+    sys.exit(code)

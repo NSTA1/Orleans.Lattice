@@ -98,7 +98,8 @@ class PrivilegedInstallerTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.root.chmod(0o777)
         self.addCleanup(self.cleanup)
-        for name in ("install-playwright-browsers.sh", "run-playwright-install.py"):
+        for name in ("install-playwright-browsers.sh", "run-playwright-install.py",
+                     "playwright_apt_mirrors.py"):
             shutil.copyfile(WORKFLOWS / name, self.root / name)
         script = self.root / "test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1"
         script.parent.mkdir(parents=True)
@@ -128,6 +129,7 @@ class PrivilegedInstallerTests(unittest.TestCase):
             [ "$2" = 120 ] && [ "$3" = 10 ] || exit 95
             script="$1"
             shift 3
+            export APT_CONFIG="{self.root / 'apt.conf'}"
             exec "{sys.executable}" "$script" 2 0.3 "$@"
         """)
         self.write_tool("timeout", """\
@@ -138,6 +140,18 @@ class PrivilegedInstallerTests(unittest.TestCase):
         """)
         self.write_tool("sleep", "#!/bin/bash\nexit 0\n")
         self.env = dict(os.environ, PATH=f"{self.tools}:{os.environ['PATH']}")
+        (self.root / "apt.conf.d").mkdir()
+        (self.root / "mirrors.txt").write_text(
+            "".join(f"http://mirror-{i}.invalid/ubuntu/\tpriority:{i}\n" for i in (1, 2, 3))
+        )
+        (self.root / "sources.list").write_text(
+            f"deb mirror+file:{self.root / 'mirrors.txt'} noble main\n"
+        )
+        (self.root / "apt.conf").write_text(
+            f'Dir::Etc "{self.root}";\nDir::Etc::main "-";\n'
+            'Dir::Etc::parts "apt.conf.d";\nDir::Etc::sourcelist "sources.list";\n'
+            'Dir::Etc::sourceparts "apt.conf.d";\n'
+        )
 
     def write_tool(self, name, body):
         path = self.tools / name

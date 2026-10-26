@@ -171,7 +171,9 @@ class BrowserInstallTests(unittest.TestCase):
         (tools / "python3").write_text(
             '#!/bin/bash\n[[ "$1" = */run-playwright-install.py ]] && '
             '[ "$2" = 120 ] && [ "$3" = 10 ] || exit 95\n'
-            'shift 3\nexec timeout --kill-after=10s 120s "$@"\n',
+            'shift 3\n'
+            'if [ "$1" = --apt-mirror-step ]; then echo "$2" >> mirrors; shift 2; fi\n'
+            'exec timeout --kill-after=10s 120s "$@"\n',
             encoding="utf-8", newline="\n",
         )
         for tool in tools.iterdir():
@@ -234,6 +236,7 @@ class BrowserInstallTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual("3", (self.root / "calls").read_text().strip())
         self.assertIn("failed after three bounded attempts", result.stdout)
+        self.assertEqual(["1", "2"], (self.root / "mirrors").read_text().splitlines())
 
     def test_missing_build_output_or_empty_browser_selection_fails_before_install(self):
         (self.root / "test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1").unlink()
@@ -264,6 +267,7 @@ class BrowserInstallTests(unittest.TestCase):
         yaml = (WORKFLOWS / "ui-tests.yml").read_text(encoding="utf-8")
         self.assertEqual(2, yaml.count("- '.github/workflows/install-playwright-browsers.sh'"))
         self.assertEqual(2, yaml.count("- '.github/workflows/run-playwright-install.py'"))
+        self.assertEqual(2, yaml.count("- '.github/workflows/playwright_apt_mirrors.py'"))
         self.assertIn("join(matrix.browsers, '-')", yaml)
         self.assertIn("join(matrix.browsers, ' ')", yaml)
         self.assertIn("key: playwright-chromium-firefox-webkit-", YAML)
