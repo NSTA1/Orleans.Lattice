@@ -209,6 +209,18 @@ public sealed class TrackedFileEnumerationTests
         });
     }
 
+    [TestCase("CheckpointOrderProbe.java")]
+    [TestCase("CheckpointOrderProbe.JAVA")]
+    public void Java_checkpoint_probe_is_classified_and_scanned_as_text(string name)
+    {
+        var path = Path.Combine(RepoRoot, "tools", "tlc", name);
+        Assert.Multiple(() =>
+        {
+            Assert.That(HygieneFiles.Classify(path), Is.EqualTo(HygieneFileKind.Text));
+            Assert.That(HygieneFiles.ShouldScan(path, RepoRoot), Is.True);
+        });
+    }
+
     [Test]
     public void ShouldScan_throws_for_an_unclassified_file_rather_than_skipping_it()
     {

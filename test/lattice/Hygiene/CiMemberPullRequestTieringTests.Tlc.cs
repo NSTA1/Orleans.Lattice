@@ -164,6 +164,9 @@ public sealed partial class CiMemberPullRequestTieringTests
 
     [TestCase("spec/atomic-commit/AtomicCommit.tla")]
     [TestCase("test/lattice/Formal/TlcModelCheckTests.cs")]
+    [TestCase("tools/tlc/build.py")]
+    [TestCase("tools/tlc/patch.json")]
+    [TestCase("tools/tlc/CheckpointOrderProbe.java")]
     public void A_main_pull_request_that_touches_a_TLC_input_runs_exhaustive_TLC(string changed)
     {
         var decision = DecideTierScope("pull_request", "main", [changed]);
@@ -181,6 +184,9 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase(".github/workflows/test-shards.json")]
     [TestCase("Directory.Packages.props")]
     [TestCase("global.json")]
+    [TestCase("tools/tlc/build.py")]
+    [TestCase("tools/tlc/patch.json")]
+    [TestCase("tools/tlc/CheckpointOrderProbe.java")]
     public void A_member_pull_request_that_touches_a_TLC_input_runs_the_TLC_shards(string changed)
     {
         var decision = DecideTierScope("pull_request", MemberBase, ["src/lattice/X.cs", changed]);

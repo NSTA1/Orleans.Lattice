@@ -3,6 +3,9 @@
 ###############################################################################
 * text=auto
 
+# These regression inputs are byte-hashed before the TLC overlay is built.
+tools/tlc/** text eol=lf
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

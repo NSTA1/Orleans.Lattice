@@ -39,7 +39,7 @@ public static class HygieneFiles
     // extension, exactly like `.gitignore`).
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".cs", ".md", ".csproj", ".razor", ".ps1", ".psm1", ".json", ".yml", ".yaml",
+        ".cs", ".java", ".md", ".csproj", ".razor", ".ps1", ".psm1", ".json", ".yml", ".yaml",
         ".srt", ".vtt", ".jsonl", ".mjs", ".cjs", ".nvmrc", ".npmrc",
         ".css", ".env", ".bicep", ".bicepparam", ".mutation", ".sql", ".py",
         ".proto", ".gitignore", ".dockerignore", ".gitattributes", ".gitmodules",

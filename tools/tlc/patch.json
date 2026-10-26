@@ -1,0 +1,21 @@
+{
+  "upstreamRevision": "5a47802b5c391f59ecdd44117981f4ff8c0656ba",
+  "upstreamSourceUrl": "https://raw.githubusercontent.com/tlaplus/tlaplus/5a47802b5c391f59ecdd44117981f4ff8c0656ba/tlatools/org.lamport.tlatools/src/tlc2/tool/ModelChecker.java",
+  "originalSourceSha256": "CD905A8C59ACF88FEF2D60A8C680B770B82C90AEE7218FB333A658301260430D",
+  "patchedSourceSha256": "C3DD697004F8F1ED31B722D62696CE1E334DE0109D3B9A8A1843FE2E347B3143",
+  "originalJarSha256": "936A262061C914694DFD669A543BE24573C45D5AA0FF20A8B96B23D01E050E88",
+  "oldCheckpoint": "protected void checkpoint() throws IOException {\n\t\t// start checkpointing:\n       \tMP.printMessage(EC.TLC_CHECKPOINT_START, this.metadir);\n\t\tthis.theStateQueue.beginChkpt();\n\t\tthis.trace.beginChkpt();\n\t\tthis.theFPSet.beginChkpt();\n\t\tthis.theStateQueue.resumeAll();\n\t\tUniqueString.internTbl.beginChkpt(this.metadir);\n\t\tif (this.checkLiveness)\n\t\t{\n\t\t\tliveCheck.beginChkpt();\n\t\t}\n\t\t// commit checkpoint:\n\t\tthis.theStateQueue.commitChkpt();\n\t\tthis.trace.commitChkpt();\n\t\tthis.theFPSet.commitChkpt();\n\t\tUniqueString.internTbl.commitChkpt(this.metadir);\n\t\tif (this.checkLiveness)\n\t\t{\n\t\t\tliveCheck.commitChkpt();\n\t\t}\n    \tMP.printMessage(EC.TLC_CHECKPOINT_END);\n\t}",
+  "newCheckpoint": "protected void checkpoint() throws IOException {\n\t\t// start checkpointing:\n       \tMP.printMessage(EC.TLC_CHECKPOINT_START, this.metadir);\n\t\ttry {\n\t\t\tthis.theStateQueue.beginChkpt();\n\t\t\tthis.trace.beginChkpt();\n\t\t\tthis.theFPSet.beginChkpt();\n\t\t\tUniqueString.internTbl.beginChkpt(this.metadir);\n\t\t\tif (this.checkLiveness)\n\t\t\t{\n\t\t\t\tliveCheck.beginChkpt();\n\t\t\t}\n\t\t} finally {\n\t\t\tthis.theStateQueue.resumeAll();\n\t\t}\n\t\t// commit checkpoint:\n\t\tthis.theStateQueue.commitChkpt();\n\t\tthis.trace.commitChkpt();\n\t\tthis.theFPSet.commitChkpt();\n\t\tUniqueString.internTbl.commitChkpt(this.metadir);\n\t\tif (this.checkLiveness)\n\t\t{\n\t\t\tliveCheck.commitChkpt();\n\t\t}\n    \tMP.printMessage(EC.TLC_CHECKPOINT_END);\n\t}",
+  "fixtureSha256": {
+    "CheckpointOrderProbe.java": "49F0D0255BC7682DCDE483D434062B213A8CE018D68F91B2EB054E57933D1233",
+    "WalGcStarvationDrive.tla": "A050908D19ED9B3FC37B4AAFD6FE3741B0844544C651BF5D472D4E12C9423D95",
+    "WalGcStarvationDrive.cfg": "1061D4159BF005B5FCA5C638E9ADA2F8209B0232153DA7B3393AFA771C86A4B2",
+    "WalGcStarvationDrive.tiny.cfg": "61F09668FE77D85858B5FCFD16195C293EAD1BE6413D8E53EF26D6B78CC83BFC"
+  },
+  "compiledClassSha256": {
+    "tlc2/tool/ModelChecker$1.class": "60C08BDF1BC113DF4080A273013CA5BD6058E61CE0974BDA5CD0D5C21BA1F003",
+    "tlc2/tool/ModelChecker$DoInitFunctor$InvariantViolatedException.class": "7F83315F4CBC617B77456F8109A718BB06F04F58E8EAA558D25C2B0371CEE0EB",
+    "tlc2/tool/ModelChecker$DoInitFunctor.class": "8F55BACF655999883026F9546D10D80B1CED7B1E8A150741C24F764F643494B0",
+    "tlc2/tool/ModelChecker.class": "05578406D38F41BC9BB574F6E3D1E0A4D1C17AD2263A3BBF5ACEB4D33A30E2E5"
+  }
+}

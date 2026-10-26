@@ -453,6 +453,7 @@ samples/RepoContextContainer/docker-compose.override.yml
 # a pinned upstream release and a checksum verified at fetch time, so tracking
 # it would add weight to every clone to no benefit. See spec/README.md.
 tools/tla2tools.jar
+tools/tlc/build/
 
 # The agent-memory backup sink's storage (issue #2602). A host bind mount, not
 # a compose-managed volume, so that "docker compose down -v" - the gesture that

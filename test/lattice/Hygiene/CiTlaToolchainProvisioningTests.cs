@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using System.Text.Json;
+using System.Security.Cryptography;
 using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Tests.Hygiene;
@@ -221,6 +223,61 @@ public sealed class CiTlaToolchainProvisioningTests
     private static string Describe(Dictionary<string, string> byWorkflow) =>
         string.Join(", ", byWorkflow.OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .Select(pair => pair.Key + " = " + pair.Value));
+
+    [Test]
+    public void Every_provisioning_lane_builds_and_regression_checks_the_checkpoint_overlay()
+    {
+        var workflows = Workflows()
+            .Select(workflow => (workflow.Name, Text: File.ReadAllText(workflow.Path)))
+            .Where(workflow => JarFetch.IsMatch(workflow.Text))
+            .ToArray();
+        Assert.That(workflows.Select(workflow => workflow.Name),
+            Is.SupersetOf(new[] { "ci.yml", "publish.yml", "ci-serial-old.yml" }));
+        foreach (var workflow in workflows)
+            Assert.That(HasOverlayBuild(workflow.Text), Is.True,
+                workflow.Name + " must build the verified overlay after checking the original jar.");
+    }
+
+    [TestCase("--java-home \"$JAVA_HOME\"")]
+    [TestCase("--jar tools/tla2tools.jar")]
+    [TestCase("--output tools/tlc/build")]
+    [TestCase("python3 tools/tlc/build.py")]
+    public void Overlay_provisioning_guard_rejects_missing_or_misdirected_build(string removed)
+    {
+        var workflow = File.ReadAllText(Workflows().Single(workflow => workflow.Name == CanonicalWorkflow).Path);
+        Assert.That(HasOverlayBuild(workflow), Is.True, "the positive control must be wired");
+        Assert.That(HasOverlayBuild(workflow.Replace(removed, "", StringComparison.Ordinal)), Is.False);
+    }
+
+    [Test]
+    public void Checkpoint_inputs_preserve_reviewed_byte_hashes_and_the_workflow_jar_pin()
+    {
+        var directory = Path.Combine(HygieneRepository.FindRepoRoot(), "tools", "tlc");
+        using var metadata = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "patch.json")));
+        var pin = metadata.RootElement;
+        var canonical = File.ReadAllText(Workflows().Single(workflow => workflow.Name == CanonicalWorkflow).Path);
+        Assert.That(pin.GetProperty("originalJarSha256").GetString(),
+            Is.EqualTo(JarDigest.Match(canonical).Groups["digest"].Value.ToUpperInvariant()));
+        var fixtures = pin.GetProperty("fixtureSha256").EnumerateObject().ToArray();
+        Assert.That(fixtures.Length, Is.EqualTo(4), "probe and frozen tooling-only model/configurations");
+        foreach (var fixture in fixtures)
+        {
+            var bytes = File.ReadAllBytes(Path.Combine(directory, fixture.Name));
+            Assert.That(Convert.ToHexString(SHA256.HashData(bytes)), Is.EqualTo(fixture.Value.GetString()),
+                fixture.Name + " changed or checkout line endings broke its exact-byte contract");
+        }
+        Assert.That(File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), ".gitattributes")),
+            Does.Contain("tools/tlc/** text eol=lf"));
+    }
+
+    private static bool HasOverlayBuild(string text)
+    {
+        const string command = "run: python3 tools/tlc/build.py --java-home \"$JAVA_HOME\" --jar tools/tla2tools.jar --output tools/tlc/build";
+        var build = text.IndexOf(command, StringComparison.Ordinal);
+        var verified = text.IndexOf("sha256sum --check --strict", StringComparison.Ordinal);
+        return verified >= 0 && build > verified
+            && text.IndexOf(command, build + command.Length, StringComparison.Ordinal) < 0;
+    }
 
     private sealed record Workflow(string Name, string Path);
 
