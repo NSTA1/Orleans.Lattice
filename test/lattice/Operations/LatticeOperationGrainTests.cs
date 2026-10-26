@@ -154,6 +154,59 @@ public sealed partial class LatticeOperationGrainTests
     }
 
     [Test]
+    public async Task Begin_again_with_a_different_kind_does_not_disclose_the_existing_operation()
+    {
+        var grain = CreateGrain();
+        await grain.BeginAsync(Begin("test.kind"));
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () => await grain.BeginAsync(Begin("other.kind")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Not.Contain("test.kind"));
+            Assert.That(ex.Message, Does.Not.Contain("tree-a"));
+        });
+    }
+
+    [Test]
+    public async Task Begin_again_with_the_same_kind_over_different_trees_is_refused()
+    {
+        var grain = CreateGrain();
+        await grain.BeginAsync(Begin());
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await grain.BeginAsync(Begin() with { TreeIds = ["tree-b"] }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Not.Contain("tree-a"));
+            Assert.That(_state.State.Record!.TreeIds, Is.EqualTo(new[] { "tree-a" }));
+        });
+    }
+
+    [Test]
+    public async Task Begin_again_with_the_same_kind_over_different_attributes_is_refused()
+    {
+        var grain = CreateGrain();
+        await grain.BeginAsync(Begin() with { Attributes = new Dictionary<string, string> { ["scope"] = "a" } });
+
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await grain.BeginAsync(Begin() with { Attributes = new Dictionary<string, string> { ["scope"] = "b" } }));
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await grain.BeginAsync(Begin()));
+    }
+
+    [Test]
+    public async Task Begin_again_with_the_same_trees_in_another_order_is_idempotent()
+    {
+        var grain = CreateGrain();
+        await grain.BeginAsync(Begin() with { TreeIds = ["tree-a", "tree-b"] });
+
+        var second = await grain.BeginAsync(Begin() with { TreeIds = ["tree-b", "tree-a"] });
+
+        Assert.That(second.Created, Is.False);
+    }
+
+    [Test]
     public async Task Report_moves_to_running_and_derives_the_phase_index()
     {
         var grain = CreateGrain();

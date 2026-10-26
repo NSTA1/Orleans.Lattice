@@ -46,6 +46,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Leaf maintenance calls.** Counts (including split-aware ownership) and diagnostics fuse payload/topology reads; footprint refresh retains snapshot accounting. Projection rebuilds return pre-reset links, and bulk append batches leaf birth metadata and links. ([#5013](https://github.com/NSTA1/Orleans.Lattice/pull/5013), [#5024](https://github.com/NSTA1/Orleans.Lattice/issues/5024)) (`Orleans.Lattice`)
 
+- **Performance - Internal-node maintenance calls.** Split completion seeds the new sibling in one grain call instead of one per child; bulk-graft descent and the node-binding walk read each internal node once instead of twice. ([#5100](https://github.com/NSTA1/Orleans.Lattice/pull/5069)) (`Orleans.Lattice`)
+
 - **Performance - Snapshot control paths.** Bootstrap fencing and snapshot initiation reuse registry entries, removing a read each; independent WAL heads overlap within a bounded window while preserving freeze-before-head ordering. ([#4996](https://github.com/NSTA1/Orleans.Lattice/pull/4996)) (`Orleans.Lattice`)
 
 - **Performance - Maintenance and sampling probes.** Autonomic probes cut serial calls from 8 to 4; shrink planning and donor retirement cut snapshot/merge probes from 4 to 2. Shard sampling uses one status call instead of three. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960)) (`Orleans.Lattice`)
@@ -173,6 +175,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Gates - Domain-fault coverage for held packages.** Shared domain-fault guards cover RepoContext and Vector exceptions without changing their exception bases or wire identities. ([#3375](https://github.com/NSTA1/Orleans.Lattice/issues/3375), [#4562](https://github.com/NSTA1/Orleans.Lattice/issues/4562)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
 
 ### Security
+
+- **Security - MCP origin gate holds under a path base.** Foreign-Origin requests are now refused at the MCP transport endpoint too, so mounting it under a path base or route group no longer bypasses the gate. ([#5070](https://github.com/NSTA1/Orleans.Lattice/pull/5070)) (`Orleans.Lattice.Api.Mcp`)
+
+- **Security - Operation ids join only matching scope.** Re-beginning an operation id joins only when kind, trees and attributes match, and the refusal no longer reveals the existing operation. ([#5070](https://github.com/NSTA1/Orleans.Lattice/pull/5070)) (`Orleans.Lattice`)
+
+- **Security - Saga status reads require the saga identity.** A participant answers a status probe only for the coordinator, tree and manifest it prepared, closing a cross-saga phase leak. ([#5070](https://github.com/NSTA1/Orleans.Lattice/pull/5070)) (`Orleans.Lattice.Replication`)
 
 - **Security - Push reseed requests require an enrolled tree.** The reseed header no longer starts a bootstrap or straggler refusal for a tree the receiver never enrolled for replication. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Replication.Grpc`)
 

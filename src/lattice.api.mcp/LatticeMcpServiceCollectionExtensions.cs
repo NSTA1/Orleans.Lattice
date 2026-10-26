@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -148,6 +149,37 @@ public static partial class LatticeMcpServiceCollectionExtensions
         if (options.RequireAuthorization)
         {
             builder.RequireAuthorization();
+        }
+
+        // The outermost origin middleware scopes itself by the raw request path,
+        // which a host-applied path base or a route-group prefix moves out from
+        // under it. Enforce the same origin verdict at the transport endpoint
+        // itself, where routing has already matched, so the guard cannot be
+        // bypassed by where the host mounts MCP.
+        if (options.RequireAllowedOrigin)
+        {
+            var originGuard = new McpOriginValidationMiddleware(
+                static _ => Task.CompletedTask,
+                Microsoft.Extensions.Options.Options.Create(options));
+            builder.Add(endpoint =>
+            {
+                var inner = endpoint.RequestDelegate;
+                if (inner is null)
+                {
+                    return;
+                }
+
+                endpoint.RequestDelegate = context =>
+                {
+                    if (!originGuard.PermitsOrigin(context.Request))
+                    {
+                        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                        return Task.CompletedTask;
+                    }
+
+                    return inner(context);
+                };
+            });
         }
 
         // Serve the anonymous OAuth protected-resource metadata document when the

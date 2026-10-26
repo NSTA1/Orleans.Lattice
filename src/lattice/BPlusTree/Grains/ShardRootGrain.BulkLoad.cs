@@ -604,10 +604,13 @@ internal sealed partial class ShardRootGrain
                 var node = grainFactory.GetGrain<IBPlusInternalGrain>(currentId);
                 path.Push(currentId);
 
-                if (await node.AreChildrenLeavesAsync())
+                // One call per level: the rightmost child and the leaf-level flag
+                // come back together instead of as two round trips.
+                var (rightmostChild, childrenAreLeaves) = await node.GetRightmostChildWithMetadataAsync();
+                if (childrenAreLeaves)
                     break;
 
-                currentId = await node.GetRightmostChildAsync();
+                currentId = rightmostChild;
             }
 
             // Track the pending promoted (key, child) as locals instead of

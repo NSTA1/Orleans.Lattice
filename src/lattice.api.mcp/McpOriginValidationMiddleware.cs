@@ -52,25 +52,36 @@ internal sealed class McpOriginValidationMiddleware
             return _next(context);
         }
 
-        var origins = request.Headers.Origin;
-        if (origins.Count == 0)
+        if (!PermitsOrigin(request))
         {
-            return _next(context);
-        }
-
-        // A request carrying several Origin values is malformed; every one must
-        // be allowed, so an attacker cannot smuggle a hostile origin past an
-        // allowed one.
-        foreach (var origin in origins)
-        {
-            if (!IsAllowed(origin))
-            {
-                context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                return Task.CompletedTask;
-            }
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return Task.CompletedTask;
         }
 
         return _next(context);
+    }
+
+    /// <summary>
+    /// Path-agnostic origin verdict for one request: <see langword="true"/> when
+    /// the request carries no <c>Origin</c> header or every value it carries is
+    /// allowed. The transport endpoint applies this itself, so the guard still
+    /// holds when the host mounts MCP under a path base or a route group that the
+    /// outermost middleware's path prefix does not see.
+    /// </summary>
+    internal bool PermitsOrigin(HttpRequest request)
+    {
+        // A request carrying several Origin values is malformed; every one must
+        // be allowed, so an attacker cannot smuggle a hostile origin past an
+        // allowed one.
+        foreach (var origin in request.Headers.Origin)
+        {
+            if (!IsAllowed(origin))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     internal bool IsAllowed(string? origin)

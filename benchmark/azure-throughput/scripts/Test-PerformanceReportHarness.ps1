@@ -100,9 +100,18 @@ try {
     Assert-Case 'Layer 2 per-call quantiles come from windows inside the steady window' ($l2.PerCallP50Ms -eq 4 -and $l2.PerCallP99Ms -eq 7 -and $l2.PerCallWindows -eq 2 -and $l2.PerCallCalls -eq 100)
     Assert-Case 'Layer 2 per-call basis is stated' ($l2.PerCallBasis -eq 'windows inside the steady-state window')
     # Layer 3: separate clocks, so every window at t>=15 of every silo merges.
-    [IO.File]::WriteAllLines($log, @('[producer] mode=orleans-client vehicles=1 tickHz=1 duration=1s clients=1') + $progress + $phaseA)
+    # The fixture starts at the harvest's real anchor: the 'mode=' line is
+    # printed before 'settings treeId=' and never reaches a cohort log.
+    [IO.File]::WriteAllLines($log, @('[producer] settings treeId=t tcpPort=7000 batch=4096') + $progress + $phaseA)
     $l3 = Read-SiloLogStats -SiloLogPath $log -WorkloadMode 'get-many'
     Assert-Case 'Layer 3 per-call quantiles merge every window of every silo' ($l3.PerCallWindows -eq 4 -and $l3.PerCallCalls -eq 1040 -and $l3.PerCallBasis -eq 'all windows t>=15s' -and $l3.PerCallP50Ms -lt 4)
+    # Silo windows stamped with silo uptime (t=210s and later) cannot align
+    # with a 15-54s steady window. Even when misclassified as one clock, they
+    # must merge rather than leave the cell 'not captured'.
+    $lateWindows = @($phaseA | ForEach-Object { $_ -replace 't=(\d+)\.3s', { "t=$([int]$_.Groups[1].Value + 200).3s" } })
+    [IO.File]::WriteAllLines($log, @($progress + $lateWindows))
+    $late = Read-SiloLogStats -SiloLogPath $log -WorkloadMode 'get-many' -WarningAction SilentlyContinue
+    Assert-Case 'windows that align with no steady window still publish a latency' ($null -ne $late.PerCallP50Ms -and $late.PerCallBasis -like 'all windows*')
 
     $vm = Read-Ast (Join-Path $PSScriptRoot 'run-cohort.ps1')
     $Vehicles = 10; $treeId = 't'; $ExtraSiloEnv = @{ BENCH_VEHICLE_COUNT = '999'; BENCH_WORKLOAD_MODE = 'get-point' }

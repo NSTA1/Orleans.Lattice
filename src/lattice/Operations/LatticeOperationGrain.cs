@@ -113,11 +113,16 @@ internal sealed class LatticeOperationGrain(
         var existing = await LoadLiveAsync(now);
         if (existing is not null)
         {
-            if (!string.Equals(existing.Kind, request.Kind, StringComparison.Ordinal))
+            // An idempotent retry joins only when it names the same operation: the
+            // same kind over the same scope. A collision with a different kind or
+            // scope is refused without echoing the existing operation's kind or
+            // trees, which the colliding caller may hold no entitlement to read.
+            if (!string.Equals(existing.Kind, request.Kind, StringComparison.Ordinal)
+                || !SameScope(existing, request))
             {
                 throw new InvalidOperationException(
-                    $"Operation '{existing.OperationId}' already exists with kind '{existing.Kind}', "
-                    + $"so it cannot be started again as '{request.Kind}'. Choose a different operation id.");
+                    $"Operation '{existing.OperationId}' already exists and does not match this '{request.Kind}' "
+                    + "request, so it cannot be started again. Choose a different operation id.");
             }
 
             return new LatticeOperationBeginResult(false, existing);
@@ -494,6 +499,30 @@ internal sealed class LatticeOperationGrain(
     // nor hand readers one they could write into.
     private static IReadOnlyList<string> Copy(IReadOnlyList<string> values) =>
         values.Count == 0 ? [] : [.. values];
+
+    private static bool SameScope(LatticeOperationRecord existing, LatticeOperationBeginRequest request)
+    {
+        if (!new HashSet<string>(existing.TreeIds, StringComparer.Ordinal).SetEquals(request.TreeIds))
+        {
+            return false;
+        }
+
+        if (existing.Attributes.Count != request.Attributes.Count)
+        {
+            return false;
+        }
+
+        foreach (var (key, value) in request.Attributes)
+        {
+            if (!existing.Attributes.TryGetValue(key, out var held)
+                || !string.Equals(held, value, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static IReadOnlyDictionary<string, string> Copy(IReadOnlyDictionary<string, string> values) =>
         values.Count == 0

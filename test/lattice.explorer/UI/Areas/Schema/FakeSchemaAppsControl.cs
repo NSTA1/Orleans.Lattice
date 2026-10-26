@@ -16,6 +16,9 @@ internal sealed class FakeSchemaAppsControl : ILatticeAppsControl
     /// <summary>When set, listing the apps throws it.</summary>
     public Exception? ListFailure { get; set; }
 
+    /// <summary>The slugs listed as installed whose description answers nothing, as an app uninstalled between the two reads.</summary>
+    public HashSet<string> Undescribed { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Adds an installed app declaring schema for <paramref name="trees"/>.</summary>
     /// <param name="slug">The app slug.</param>
     /// <param name="version">The installed version.</param>
@@ -47,7 +50,7 @@ internal sealed class FakeSchemaAppsControl : ILatticeAppsControl
     public Task<AppDescriptor?> DescribeAsync(string appSlug, string? version = null, CancellationToken cancellationToken = default)
     {
         var app = Apps.FirstOrDefault(candidate => candidate.Slug == appSlug);
-        return Task.FromResult<AppDescriptor?>(app.Slug is null
+        return Task.FromResult<AppDescriptor?>(app.Slug is null || Undescribed.Contains(app.Slug)
             ? null
             : new AppDescriptor
             {

@@ -70,6 +70,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
                 ChildrenAreLeaves = childrenAreLeaves,
             };
             node.AreChildrenLeavesAsync().Returns(Task.FromResult(childrenAreLeaves));
+            node.GetRightmostChildWithMetadataAsync().Returns(Task.FromResult((childId, childrenAreLeaves)));
             node.GetRoutingTableAsync().Returns(Task.FromResult(routing));
             Internals[key] = node;
             return GrainId.Create("internal", key.ToString("N"));
@@ -103,6 +104,8 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         nodeContext.GrainId.Returns(GrainId.Create("internal", key.ToString("N")));
         ((IGrainBase)node).GrainContext.Returns(nodeContext);
         node.AreChildrenLeavesAsync().Returns(Task.FromResult(true));
+        node.GetRightmostChildWithMetadataAsync().Returns(Task.FromResult(
+            (GrainId.Create("leaf", Guid.NewGuid().ToString("N")), true)));
         node.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
             .Returns(Task.FromResult<SplitResult?>(null));
         node.GetRoutingTableAsync().Returns(Task.FromResult(new RoutingTableSnapshot
@@ -398,12 +401,14 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         // node and corrupt the level invariant.
         var mid = h.AddInternal(childrenAreLeaves: true);
         var root = h.AddInternal(childrenAreLeaves: false, child: mid);
-        h.Internal(root).GetRightmostChildAsync().Returns(Task.FromResult(mid));
+        h.Internal(root).GetRightmostChildWithMetadataAsync().Returns(Task.FromResult((mid, false)));
         h.State.State.RootNodeId = root;
 
         await h.Grain.BulkAppendAsync("op-1", Pairs(1));
 
-        await h.Internal(root).Received().GetRightmostChildAsync();
+        await h.Internal(root).Received().GetRightmostChildWithMetadataAsync();
+        await h.Internal(root).DidNotReceive().AreChildrenLeavesAsync();
+        await h.Internal(root).DidNotReceive().GetRightmostChildAsync();
         await h.Internal(mid).Received().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
         await h.Internal(root).DidNotReceive().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
         Assert.That(existing, Is.Not.EqualTo(default(GrainId)));
@@ -469,8 +474,8 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             ChildIds = [upperLeft, upperRight],
             ChildrenAreLeaves = false,
         }));
-        h.Internal(root).GetRightmostChildAsync().Returns(Task.FromResult(upperRight));
-        h.Internal(upperRight).GetRightmostChildAsync().Returns(Task.FromResult(rightMid));
+        h.Internal(root).GetRightmostChildWithMetadataAsync().Returns(Task.FromResult((upperRight, false)));
+        h.Internal(upperRight).GetRightmostChildWithMetadataAsync().Returns(Task.FromResult((rightMid, false)));
         h.State.State.RootNodeId = root;
         return (root, upperLeft, upperRight, rightMid);
     }

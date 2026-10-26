@@ -2186,7 +2186,13 @@ function Read-SiloLogStats {
 	# the producer's steady window; there every window at t>=15s of every
 	# silo is merged (a silo only serves the workload's calls while the
 	# producer drives it, so there is no post-load drain window to exclude).
-	$sharedClock = -not [bool](Select-String -Path $SiloLogPath -Pattern '^\[producer\] mode=orleans-client' -Quiet)
+	# A Layer 3 cohort log is recognised by ANY '[producer] ' line: a
+	# Layer 2 silo log never carries one (its producer journal is a separate
+	# file), whereas the Layer 3 harvest keeps the producer's lines from its
+	# 'settings treeId=' anchor onward. Matching the 'mode=orleans-client'
+	# line did not work: it is printed before that anchor, so the harvest
+	# always cut it and every Layer 3 cell published no latency.
+	$sharedClock = -not [bool](Select-String -Path $SiloLogPath -Pattern '^\[producer\] ' -Quiet)
 	foreach ($cand in $candidates) {
 		# Anchor: 'instrument=<name> tree=' guarantees exact-name match.
 		$pat = '^\[phaseA\][^\n]*instrument=' + [regex]::Escape($cand) + ' tree='
@@ -2239,11 +2245,17 @@ function Read-SiloLogStats {
 				$cadence = [double](@(for ($g = 1; $g -lt $ts.Count; $g++) { $ts[$g] - $ts[$g - 1] }) | Measure-Object -Minimum).Minimum
 			}
 			$inside = @($rows | Where-Object { ($_.t - $cadence) -ge ($steadyStats.WindowStart - 1) -and $_.t -le ($steadyStats.WindowEnd + 1) })
+			$overlapping = @($rows | Where-Object { $_.t -gt $steadyStats.WindowStart -and ($_.t - $cadence) -lt $steadyStats.WindowEnd })
 			if ($inside.Count -gt 0) {
 				$rows = $inside; $basis = 'windows inside the steady-state window'
+			} elseif ($overlapping.Count -gt 0) {
+				$rows = $overlapping; $basis = 'windows overlapping the steady-state window'
 			} else {
-				$rows = @($rows | Where-Object { $_.t -gt $steadyStats.WindowStart -and ($_.t - $cadence) -lt $steadyStats.WindowEnd })
-				$basis = 'windows overlapping the steady-state window'
+				# No window lines up with the steady window, so the clocks
+				# evidently differ. Merge every window rather than publish
+				# nothing, and say so.
+				Write-Warning "[read-silo-log] $(Split-Path -Leaf $SiloLogPath): no [phaseA] window of $cand aligns with the steady-state window (t=$($steadyStats.WindowStart)..$($steadyStats.WindowEnd)s); merging every window at t>=15s instead"
+				$basis = 'all windows t>=15s (none aligned with the steady window)'
 			}
 		}
 		$merged = Merge-PhaseAWindows -Rows $rows

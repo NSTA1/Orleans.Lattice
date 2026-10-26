@@ -84,7 +84,7 @@ public class CrossClusterSagaModelTests
         Assert.That(b1.CommitCount, Is.EqualTo(1));
         Assert.That(a1.AbortCount, Is.EqualTo(0));
         Assert.That(b1.AbortCount, Is.EqualTo(0));
-        Assert.That(await participantA.GetStatusAsync(new SagaControlRequest { SagaId = SagaId }),
+        Assert.That(await participantA.GetStatusAsync(new SagaControlRequest { SagaId = SagaId, TargetTree = TargetTree, ManifestId = ManifestId, CoordinatorClusterId = CoordinatorCluster }),
             Has.Property(nameof(SagaControlResponse.Phase)).EqualTo(SagaPhase.Committed));
     }
 
@@ -109,7 +109,7 @@ public class CrossClusterSagaModelTests
         // The prepared participant is compensated; it never commits.
         Assert.That(a1.CommitCount, Is.EqualTo(0));
         Assert.That(a1.AbortCount, Is.EqualTo(1));
-        Assert.That(await participantA.GetStatusAsync(new SagaControlRequest { SagaId = SagaId }),
+        Assert.That(await participantA.GetStatusAsync(new SagaControlRequest { SagaId = SagaId, TargetTree = TargetTree, ManifestId = ManifestId, CoordinatorClusterId = CoordinatorCluster }),
             Has.Property(nameof(SagaControlResponse.Phase)).EqualTo(SagaPhase.Aborted));
     }
 }
