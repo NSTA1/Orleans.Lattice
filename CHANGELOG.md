@@ -176,6 +176,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - MCP origin gate holds under a path base.** Foreign-Origin requests are now refused at the MCP transport endpoint too, so mounting it under a path base or route group no longer bypasses the gate. ([#5070](https://github.com/NSTA1/Orleans.Lattice/pull/5070)) (`Orleans.Lattice.Api.Mcp`)
+
+- **Security - Operation ids join only matching scope.** Re-beginning an operation id joins only when kind, trees and attributes match, and the refusal no longer reveals the existing operation. ([#5070](https://github.com/NSTA1/Orleans.Lattice/pull/5070)) (`Orleans.Lattice`)
+
+- **Security - Saga status reads require the saga identity.** A participant answers a status probe only for the coordinator, tree and manifest it prepared, closing a cross-saga phase leak. ([#5070](https://github.com/NSTA1/Orleans.Lattice/pull/5070)) (`Orleans.Lattice.Replication`)
+
 - **Security - Push reseed requests require an enrolled tree.** The reseed header no longer starts a bootstrap or straggler refusal for a tree the receiver never enrolled for replication. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Replication.Grpc`)
 
 - **Security - Peer probes honour the tenant export gate.** Digest, Merkle-walk and content-manifest probes of a tenant tree now require an authenticated peer the tenant isolation gate authorizes, closing a key-existence oracle. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Replication.Grpc`)
