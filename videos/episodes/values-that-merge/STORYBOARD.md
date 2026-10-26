@@ -5,7 +5,7 @@ All diagrams use the site's notation and labels.
 
 | Cue | Scene | Picture and change |
 | --- | --- | --- |
-| 1-2 | Values that merge | Shared title card, Build / B2 / Orleans.Lattice 9.9. The spoken recap precedes the question about concurrent writes. |
+| 1-2 | Values that merge | Shared title card, Build / B2 / Orleans.Lattice, with no release version. Let the title settle before the spoken recap, then ask about concurrent writes. |
 | 3-4 | Replace or merge | Shared choice list: last-write replacement, then a merge rule belonging to the value. The marker identifies the current choice. |
 | 5 | A counter keeps both | Shared join diagram, the site's `gcounter` scenario, starting with the hollow bottom and the order. |
 | 6 | A counter keeps both | A adds three and B adds five, level as concurrent states. |

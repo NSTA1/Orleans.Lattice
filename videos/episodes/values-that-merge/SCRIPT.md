@@ -12,7 +12,7 @@ No code is shown; the CRDT guide holds the compiled accessor examples.
 
 ## Narration
 
-<!-- pause 1.0 -->
+<!-- pause 2.5 -->
 
 ### Values that merge
 

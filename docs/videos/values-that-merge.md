@@ -9,12 +9,12 @@ merges concurrent writes by construction; choose the rule that matches your
 data. This is B2 on the Build path, after Hello, Lattice, covering the
 Orleans.Lattice 9.9 core package.
 
-<!-- video:begin episode="values-that-merge" path="build" order="2" length="2:55" cut="f42231e2e6a6" -->
+<!-- video:begin episode="values-that-merge" path="build" order="2" length="2:56" cut="29a5c4148870" -->
 
 > [!NOTE]
 > Watch it on the [documentation site](https://nsta1.github.io/Orleans.Lattice/docs/videos/values-that-merge.html),
-> or [download it](../../docs-site/media/values-that-merge-f42231e2e6a6.mp4)
-> (MP4, 2:55, 8.0 MB).
+> or [download it](../../docs-site/media/values-that-merge-29a5c4148870.mp4)
+> (MP4, 2:56, 8.0 MB).
 
 <!-- video:end -->
 
