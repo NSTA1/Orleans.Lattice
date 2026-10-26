@@ -40,7 +40,10 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         LatticeStorageUsageGrain Grain,
         IShardRootGrain Shard,
         IWalShardGrain Wal,
-        LatticeStorageUsageMetrics Metrics);
+        LatticeStorageUsageMetrics Metrics,
+        IGrainFactory Factory,
+        ILatticeRegistry Registry,
+        ILattice Lattice);
 
     /// <summary>
     /// One shard root and one WAL partition, both substituted, so a test can
@@ -54,6 +57,13 @@ public sealed class LatticeStorageUsageGrainRefreshTests
         var factory = Substitute.For<IGrainFactory>();
         options ??= new LatticeOptions();
         options.WalPartitions = 1;
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(TreeId).Returns(new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry
+        {
+            MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 1, WalPartitions = 1,
+            ShardMap = ShardMap.CreateDefault(16, 1),
+        });
 
         var lattice = Substitute.For<ILattice>();
         lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
@@ -80,7 +90,42 @@ public sealed class LatticeStorageUsageGrainRefreshTests
             admissionMetrics,
             NullLogger<LatticeStorageUsageGrain>.Instance);
 
-        return new Harness(grain, shard, wal, usageMetrics);
+        return new Harness(grain, shard, wal, usageMetrics, factory, registry, lattice);
+    }
+
+    [Test]
+    public async Task Report_routing_reuses_one_fresh_row_and_addresses_the_physical_wal()
+    {
+        var h = CreateGrain(new LatticeOptions { StorageUsageCacheTtl = TimeSpan.Zero });
+        await h.Grain.GetReportAsync(false, CancellationToken.None);
+        h.Registry.GetEntryAsync(TreeId).Returns(new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry
+        {
+            MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 1, WalPartitions = 1,
+            PhysicalTreeId = "physical-copy", ShardMap = ShardMap.CreateDefault(32, 1),
+        });
+        h.Registry.GetEntryAsync("physical-copy").Returns(new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry
+        {
+            MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 1, WalPartitions = 2,
+        });
+        var shard = Substitute.For<IShardRootGrain>();
+        shard.GetStorageUsageAsync(Arg.Any<CancellationToken>())
+            .Returns(new ShardStorageUsage { LeafStateBytes = 99 });
+        h.Factory.GetGrain<IShardRootGrain>("physical-copy/0").Returns(shard);
+        for (var p = 0; p < 2; p++)
+        {
+            var wal = Substitute.For<IWalShardGrain>();
+            wal.GetByteSizesAsync(Arg.Any<CancellationToken>()).Returns((3L, 4L));
+            h.Factory.GetGrain<IWalShardGrain>($"physical-copy/{p}").Returns(wal);
+        }
+        h.Registry.ClearReceivedCalls();
+
+        var report = await h.Grain.GetReportAsync(false, CancellationToken.None);
+
+        Assert.That(report.LeafStateBytes, Is.EqualTo(99));
+        Assert.That(report.WalRetainedBytes, Is.EqualTo(6));
+        await h.Registry.Received(1).GetEntryAsync(TreeId);
+        await h.Registry.Received(1).GetEntryAsync("physical-copy");
+        Assert.That(h.Lattice.ReceivedCalls(), Is.Empty);
     }
 
     /// <summary>

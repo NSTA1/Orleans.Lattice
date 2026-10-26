@@ -52,12 +52,13 @@ public partial class TreeShardSplitGrainTests
             int sourceShardIndex = 0,
             int virtualShardCount = 16,
             int physicalShardCount = 2,
-            string? physicalTreeId = null)
+            string? physicalTreeId = null,
+            IGrainFactory? factory = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("split", $"{TreeId}/{sourceShardIndex}"));
 
-        var grainFactory = Substitute.For<IGrainFactory>();
+        var grainFactory = factory ?? Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
@@ -513,7 +514,7 @@ public partial class TreeShardSplitGrainTests
     {
         var txid = Guid.NewGuid();
         var snap = BuildSetSnapshot(txid, out var key);
-        var (grain, _, _, target, leaf, _) = CreateGrainWithSweepWiring(
+        var (grain, _, source, target, leaf, _) = CreateGrainWithSweepWiring(
             leafSnapshots: [snap],
             preCheckStatus: TxStatus.InFlight);
 
@@ -535,10 +536,12 @@ public partial class TreeShardSplitGrainTests
 
         Assert.That(attempts, Is.GreaterThanOrEqualTo(2),
             "a transient row-loss fault on the first attempt's leaf must be retried, not surfaced as a split failure");
+        await source.Received(2).GetLeftmostLeafIdAsync();
 
         // The retried sweep must still replay the mutation normally - a
         // retry that swallows the fault but drops the snapshot would be
         // worse than the original false-positive abort.
         await target.Received(1).SetAsync(key, Arg.Is<byte[]>(b => b.SequenceEqual(snap.Value!)));
     }
+
 }
