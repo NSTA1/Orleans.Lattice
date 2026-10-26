@@ -42,10 +42,12 @@ All scripts live under `benchmark/azure-throughput/scripts/`. The single-VM scri
 environment and `-ParametersFile` to point at an explicit parameters file; the Layer 3 ACA
 scripts (`deploy-aca`, `run-cohort-aca`) take a mandatory `-NamePrefix` and read no
 parameters file. The folder also holds dot-sourced helper modules (`_run-cohort-helpers.ps1`,
-`aca-common.ps1`) and parameterless self-tests of the grading logic, run with `pwsh -File`
-(`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`, `Test-Layer3UnseededRetry.ps1`,
-`Test-ProducerBoundReport.ps1`). The Layer 3 sweep itself is driven by
-`benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
+`_storage-metrics.ps1`, `aca-common.ps1`), `complete-cohort-aca.ps1` (the harvest-and-grade half
+of a Layer 3 cohort, see below) and parameterless self-tests of the grading logic, run with
+`pwsh -File` (`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`,
+`Test-Layer3UnseededRetry.ps1`, `Test-ProducerBoundReport.ps1`, `Test-PerformanceReportHarness.ps1`,
+`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`). The Layer 3 sweep itself is
+driven by `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 Between cohorts, `Set-AcaSiloCount` (in `aca-common.ps1`) does not return until every superseded
 silo revision has drained (`Wait-AcaRevisionsRetired`), so an old revision's replicas cannot
 overlap the next cohort's warm-up; expect roughly 30-60 s per silo-count transition (#3588).
@@ -64,6 +66,30 @@ alphanumerics). Common shapes:
 - **`-DryRun`** re-renders a document from the most recently written `state.json`. Replay the
   multi-silo document with either `-Layer3 -DryRun` or `-Layer 3 -DryRun`. Replay selects the
   newest state containing the requested layer, and a Layer 1/2 replay preserves the other block.
+- **Layer 3 on several rigs in parallel (`-Layer3Rigs K`).** The report splits the workloads
+  between K rigs itself - longest-first by estimated cost, never splitting a workload, so each
+  curve and its escalation carry-over come from one rig, and deterministically, so `-Resume`
+  finds each workload where it ran. It provisions the rigs concurrently (prefixes
+  `<NamePrefix>1..K` truncated to nine characters, or fresh random ones) or uses a
+  comma-separated `-ReuseAca a,b,c` list, runs one ordinary single-rig sweep per rig as a child
+  `pwsh` process with `-SkipDocUpdate` (output in `.run/performance-report/<prefix>/sweep.log`,
+  provisioning in `deploy.log`), then merges the rigs' cells into
+  `.run/performance-report/rigs-<prefixes>/state.json` and renders the multi-silo document once.
+  The merge refuses a workload measured on two rigs and rigs that disagree on region or on any
+  cell-shaping setting. Each rig has its own storage, so parallel sweeps never contend for the
+  account under measurement. Rigs it provisioned are parked and deleted unless `-KeepAca`; reused
+  rigs are only parked. Mind the regional vCPU quota: K rigs can hold K x max(`-SiloCounts`) x 4
+  vCPU at once. Do not instead run several `-Layer 3` reports by hand against one document: each
+  rewrites the whole multi-silo block with only its own cells.
+- **`-Layer3OverlapHarvest`** runs a cohort's Log Analytics harvest (mostly waiting for log
+  ingestion, up to ~7 minutes) in a background job while the next cohort runs, for every cohort
+  whose result cannot change what the sweep does next: not a cell's first cohort (its throughput
+  decides the escalation) unless `-SaturationRatio 0`, and not a read cohort (an `UNSEEDED` read
+  is re-run at once). Deferred harvests are joined, and graded exactly like an inline non-first
+  cohort, before the cell is checkpointed. Cohorts so harvested carry `harvestDeferred` in state.
+- **`-Layer3WalAccounts N`** spreads every cohort's WAL across N storage accounts (see
+  `deploy-aca.ps1 -WalAccountCount` and `run-cohort-aca.ps1 -WalAccounts`) and is recorded in
+  the published metadata (`walAccounts=`); a reused rig must already have the accounts.
 
 ---
 
@@ -214,14 +240,20 @@ wait where it left off (the script creates nothing before this step).
 | `-ReuseRg` | off | Provision into the resource group an earlier run created. |
 | `-SkipImageBuild` | off | Reuse the images already in the registry. Only valid with `-ReuseRg`. |
 | `-PrivateNetwork` | off | Internal-only workload-profiles environment on a VNet subnet with NAT-gateway egress, storage with public access and shared keys disabled behind a table private endpoint, and a user-assigned identity for storage (`BENCH_STORAGE_URI`, `BENCH_CLUSTERING_TABLE_SERVICE_URI`, `AZURE_CLIENT_ID`) and ACR pull instead of a connection-string secret and admin credentials. Tags the RG `latticeBenchNetwork=private`. |
+| `-WalAccountCount <1..8>` | `1` | Storage accounts the WAL can be spread across. Values above 1 add WAL-only accounts `st<prefix>w1..` (same auth and network shape as the primary: a private endpoint and the identity's table role on `-PrivateNetwork`, a key-based connection string otherwise) and wire them into the silo app as keyed WAL providers: `BENCH_WAL_EXTRA_ACCOUNT_URIS`, plus one `BENCH_WAL_EXTRA_ACCOUNT_CONN_<i>` secret per account on the public topology. Recorded in the rig context as `walExtraAccounts`. A `-ReuseRg` run adds accounts to an existing app (then parks it) and never drops one it already has. |
 
 `performance-report.ps1 -PrivateNetwork` passes the switch to `deploy.ps1` (Layers 1 and 2)
 and `deploy-aca.ps1` (Layer 3) when it provisions; a reused rig keeps the mode it was created with.
 
 `run-cohort-aca.ps1` runs one cohort: it scales the silos to exactly N, waits for
-membership, runs the producer job, harvests the log from Log Analytics, and scales the
-silos back to zero in a `finally`. Its load parameters are **per silo**, so every cell
-offers the same load per silo.
+membership, runs the producer job, parks the silos, then hands a pending-harvest descriptor
+(`<cohort log>.pending.json`: execution name, silo revision, cohort window, storage accounts) to
+`complete-cohort-aca.ps1`, which harvests the producer and silo logs from Log Analytics, appends
+one `[storage-metrics]` line per storage account the cohort used, grades the cohort and writes
+the cohort log. With `-DeferHarvest` it returns after parking instead, leaving
+`complete-cohort-aca.ps1 -PendingHarvestPath <path>` to the caller. The silos are scaled back to
+zero in a `finally` either way. Its load parameters are **per silo**, so every cell offers the
+same load per silo.
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
@@ -255,6 +287,8 @@ offers the same load per silo.
 | `-ExtraSiloEnv <string[]>` | `@()` | Extra silo env as `NAME=value` strings, appended last so they win (a string array, not the hashtable `run-cohort.ps1` takes). Like every silo variable, they are removed from the next cohort that does not name them (see below). |
 | `-SettleSec <N>` | `30` | Wait after scaling for cluster membership before the producer starts. |
 | `-FreezeWedgeSec <N>` | `60` | Longest tolerated mid-run freeze (cumulative ops not advancing while work is in flight) before the cell is graded `WEDGE` rather than `HEALTHY`; `0` disables the check. |
+| `-WalAccounts <1..8>` | `1` | Storage accounts the cohort's WAL partitions are spread across (`BENCH_WAL_ACCOUNTS` on silos and producer): the primary plus `WalAccounts-1` extra accounts. Fails before anything bills if the rig has fewer (`deploy-aca.ps1 -WalAccountCount`). `-ResetStorage` also empties every extra account. |
+| `-DeferHarvest` | off | Return once the producer has finished and the silos are parked, with `PendingHarvestPath` on the returned object; run `complete-cohort-aca.ps1 -PendingHarvestPath <path>` later to harvest, grade and write the log. The harvest is pinned to the cohort's execution name and silo revision, so its timing changes nothing measured. |
 
 **Silo env does not persist between cohorts.** Each cohort applies its silo env with one
 `az containerapp update --set-env-vars`, which merges into the app's existing environment, so
@@ -396,8 +430,9 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WAL_REPLAY_QUEUE_DEPTH` | `LatticeOptions.DefaultWalReplayPermitQueueDepthPerPermit` (4) | Replay-admission queue depth per permit. The gate admits depth x permits concurrently replaying activations and the permit count follows the silo's CPU grant, so on a 4-vCPU silo the default refuses a cold warm-up that needs every shard root replaying at once. The bench has no foreground reader for the gate to protect; only Layer 3 raises it (`run-cohort-aca.ps1 -WalReplayQueueDepth`, default 64). |
 | `BENCH_WAL_BATCHED_SINGLE_ENTRY_APPENDS` | `LatticeOptions.DefaultWalBatchedSingleEntryAppends` (on) | Routes a bulk WAL append carrying exactly **one** entry through the interleaving `AppendBatchAsync` rather than the exclusive-turn `AppendAsync` overload. Under a wide fan-out the per-leaf slice is one entry, so the exclusive turn holds the partition for a whole provider round trip, pinning `wal.append.batch_entries` at 1 and `wal.append.in_flight` at 0 - which also makes `BENCH_WAL_APPEND_COALESCING_IN_FLIGHT_THRESHOLD` unreachable, since reaching it needs the concurrency the exclusive turn removed. `0` is the control arm of the #3408 A/B (historical behaviour), `1` or unset the fix arm. Echoed in the silo banner, so an arm is self-proving against a stale image. |
 | `BENCH_WAL_MATERIALISER_PIN_BUCKETS` | `LatticeOptions.DefaultWalMaterialiserPinBuckets` (1) | Floor on the durable WAL materialiser pin buckets per pin shard (`WalMaterialiserPinBuckets`). The pin store splits itself above the floor by powers of two once a slot outgrows its 64 KiB byte budget (#3576), so the default no longer overflows the Azure Table 983,040-byte entity limit on a large preseed (before the fix, `get-many` at 128k keys per silo reached 6.15 MB per shard and wedged N=6). Leave unset for published numbers so they reflect product defaults; raise it only to start from a wider layout for an A/B. Echoed in the silo banner. |
-| `BENCH_WAL_ACCOUNTS` | 1 | How many provisioned storage accounts the tree's WAL partitions are spread across (index 0 = `BENCH_STORAGE_URI`, 1..N-1 = the extra accounts). Clamped to the number actually provisioned (`deploy.ps1 -WalAccountCount`). |
-| `BENCH_WAL_EXTRA_ACCOUNT_URIS` | - (set by `update.ps1`) | `;`-delimited list of extra account table endpoints, wired as keyed WAL providers `acct1, acct2, ...`. Normally you don't set this by hand - `deploy.ps1 -WalAccountCount` + `update.ps1` populate it. |
+| `BENCH_WAL_ACCOUNTS` | 1 | How many provisioned storage accounts the tree's WAL partitions are spread across (index 0 = `BENCH_STORAGE_URI`, 1..N-1 = the extra accounts): partition `p` moves to account `p mod N` on the warmed, empty tree. Clamped to the number actually provisioned (`deploy.ps1` / `deploy-aca.ps1 -WalAccountCount`). The single-VM silo spreads before opening its listener; on Layer 3 (cluster ingest mode, where the silo skips that step) the Orleans-client producer spreads after its warm-up (`run-cohort-aca.ps1 -WalAccounts`). |
+| `BENCH_WAL_EXTRA_ACCOUNT_URIS` | - (set by `update.ps1` / `deploy-aca.ps1`) | `;`-delimited list of extra account table endpoints, wired as keyed WAL providers `acct1, acct2, ...`. Normally you don't set this by hand - `deploy.ps1 -WalAccountCount` + `update.ps1`, or `deploy-aca.ps1 -WalAccountCount`, populate it; `run-cohort-aca.ps1` also hands it to the producer so its clamp sees the provisioned count. |
+| `BENCH_WAL_EXTRA_ACCOUNT_CONN_<i>` | - (set by `deploy-aca.ps1`) | Connection string for extra account `i` (provider `acct<i>`), used instead of managed identity when set. One variable per account because a connection string contains `;`. Layer 3's public topology supplies them as secrets; the VM and `-PrivateNetwork` rigs leave them unset. |
 | `BENCH_PIPELINE_PHASE2` | on | Overlap phase 2 of batch N with phases 0+1 of batch N+1 on the same shard. `0` disables. |
 | `BENCH_WAL_PHASE2_COALESCING_WINDOW_MS` | 5 | How long the per-shard PhaseTwoWorker waits after the first arrival so additional commits coalesce into one Azure Tables transaction. `0` = drain on first signal. |
 | `BENCH_WAL_PHASE2_COMMIT_TIMEOUT_SEC` | library default (12) | Per-commit deadline for the PhaseTwoWorker's manifest commit. `0` = unbounded; `>0` = finite deadline (a hung commit becomes a bounded timeout the resync path recovers). |
@@ -522,14 +557,28 @@ Key lines in the silo log:
   sample - raises the verdict to at least `FAILED`. `run-cohort-aca.ps1` appends the same block to
   its Layer 3 log but grades only `HEALTHY` or `WEDGE`: `WEDGE` when the producer printed no
   `DONE` marker, no per-second window was productive, or the cumulative `ops` count stopped
-  advancing for `-FreezeWedgeSec` seconds while work was in flight. A saturated Layer 3 cohort
-  that kept completing work stays `HEALTHY`, its failures carried as data rather than as `FAILED`.
+  advancing for `-FreezeWedgeSec` seconds while work was in flight, the `FINAL` line reported
+  `unresolved > 0`, or a `-WalAccounts` > 1 cohort's log lacks the producer's `wal-placement`
+  line. A saturated Layer 3 cohort that kept completing work stays `HEALTHY`, its failures
+  carried as data rather than as `FAILED`.
 - `[silo] wal-placement treeId=.. accounts=N partitions=M version=.. -> 0:default,1:acct1,...` - emitted when
   `BENCH_WAL_ACCOUNTS > 1`; confirms which account each WAL partition landed on. Its
   absence (with accounts >1) means the arm ran single-account, unless a
   `WARN wal-placement read` line says the spread landed but could not be read back. An
   `ERROR wal-placement-spread` means the spread failed and the silo stopped before opening
-  its listener, so the arm did not run.
+  its listener, so the arm did not run. On Layer 3 the same lines carry a `[producer]` prefix;
+  a failed spread there ends the producer job with no `DONE`, so the cohort grades `WEDGE`.
+- `[storage-metrics] account=.. role=wal0|wal<i> transactions=.. throttled=.. throttledSuccess=..
+  timeouts=.. otherErrors=.. peakTps=.. serverLatencyMs=.. e2eLatencyMs=.. e2eLatencyMaxMs=.. minutes=..`
+  - Layer 3 only, one per storage account the cohort used, from Azure Monitor at one-minute
+  grain over the cohort window (warm-up and drain included; every cohort runs alone on its
+  rig's accounts). `throttled` counts `ServerBusyError` + `ClientThrottlingError` transactions;
+  the gap between `e2eLatencyMs` and `serverLatencyMs` is time outside the storage service.
+  `wal0` also carries clustering and grain-state traffic. An account whose metrics never
+  landed reads `unavailable=<reason>`, never zeros. `performance-report.ps1` takes per cohort
+  the throttled share across accounts and the worst account's peak TPS and latencies, and per
+  cell the median, rendered in the multi-silo doc's `perf-storage:layer3` table. Not part of
+  the grade.
 
 The CPU, RSS, and diagnostics lines appear only in the printed summary, not in the log:
 `Silo CPU : avg ..% / peak ..%` (of one vCPU) and `Silo RSS peak` come from the per-second

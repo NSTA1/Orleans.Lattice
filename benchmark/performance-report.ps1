@@ -146,6 +146,32 @@
 	cell's per-silo rung. Default 3. A cell still offer-bound after the last
 	escalation is published as a lower bound (>=).
 
+.PARAMETER Layer3WalAccounts
+	Layer 3 only. Storage accounts each cohort's WAL is spread across (1-8,
+	default 1): the primary account plus WAL-only accounts provisioned with
+	deploy-aca.ps1 -WalAccountCount. Every cohort also records Azure Monitor
+	metrics for each account it used (transactions, throttling, server and
+	end-to-end latency), rendered in the multi-silo doc's storage table, so a
+	knee can be attributed to the storage account or to Lattice.
+
+.PARAMETER Layer3OverlapHarvest
+	Layer 3 only. Harvest a cohort's logs in a background job while the next
+	cohort runs, for every cohort whose result the next one does not depend
+	on: not a cell's escalating first cohort, and not a read cohort (whose
+	UNSEEDED result triggers an immediate re-run). Harvests are joined at the
+	end of each cell, before its checkpoint.
+
+.PARAMETER Layer3Rigs
+	Layer 3 only. Run the sweep on this many identical rigs in parallel
+	(1-8, default 1). The report splits the workloads between the rigs
+	itself, keeping every silo count of a workload on one rig, provisions
+	the rigs concurrently (or uses the -ReuseAca list), runs one child sweep
+	per rig with its output in .run/performance-report/<prefix>/sweep.log,
+	then merges their cells into one state.json and renders the document
+	once. Rig prefixes are -NamePrefix with a 1..K suffix, or fresh random
+	ones. Mind the regional vCPU quota: K rigs can hold K x max(-SiloCounts)
+	x 4 vCPU at once.
+
 .PARAMETER PrivateNetwork
 	Provision for a subscription whose policy disables public storage network
 	access and blocks VM public IPs (e.g. a Microsoft-internal subscription).
@@ -168,6 +194,10 @@
 	./benchmark/performance-report.ps1 -DryRun -Diff                    # show planned diff
 .EXAMPLE
 	./benchmark/performance-report.ps1 -KeepVm -ReuseVm prdeadbee       # debug session
+.EXAMPLE
+	./benchmark/performance-report.ps1 -Layer 3 -Layer3Rigs 3 -Layer3OverlapHarvest   # 3 rigs in parallel
+.EXAMPLE
+	./benchmark/performance-report.ps1 -Layer 3 -Layer3WalAccounts 4    # WAL over 4 storage accounts
 #>
 [CmdletBinding()]
 param(
@@ -226,7 +256,8 @@ param(
 
 	# Layer 3 only: reuse an already-provisioned ACA rig (see deploy-aca.ps1)
 	# instead of provisioning and tearing one down. The name prefix of that
-	# rig. Mirrors -ReuseVm for Layer 2.
+	# rig. Mirrors -ReuseVm for Layer 2. A comma-separated list of prefixes
+	# runs the sweep across those rigs in parallel (see -Layer3Rigs).
 	[string] $ReuseAca,
 
 	# Layer 3 only: leave the ACA rig standing after the sweep. Mirrors -KeepVm.
@@ -291,6 +322,25 @@ param(
 	# publishes whatever each row's starting rung measured.
 	[double] $SaturationRatio = 0.9,
 	[int] $MaxRungEscalations = 3,
+	# Layer 3 only. Storage accounts every cohort's WAL is spread across: the
+	# rig's primary account plus Layer3WalAccounts-1 WAL-only accounts
+	# (deploy-aca.ps1 -WalAccountCount). A curve that flattens at 1 and keeps
+	# climbing at 4 is the account's ceiling, not Lattice's. Recorded in the
+	# published metadata; a reused rig must already have the accounts.
+	[ValidateRange(1, 8)][int] $Layer3WalAccounts = 1,
+	# Layer 3 only. Run each cohort's Log Analytics harvest in the background
+	# while the next cohort runs, wherever the next cohort does not depend on
+	# its result (see Invoke-Layer3Cohorts). Pinned to the cohort's execution
+	# and silo revision, so it changes nothing about what is measured.
+	[switch] $Layer3OverlapHarvest,
+	# Layer 3 only. Run the sweep on this many identical rigs in parallel. The
+	# report itself splits the workloads between the rigs - every silo count
+	# of a workload on one rig, so each curve and its escalation carry-over
+	# come from a single deployment - provisions them (or uses the
+	# comma-separated -ReuseAca list), runs one sweep per rig, then merges
+	# the cells and renders the document once. Each rig has its own storage,
+	# so the sweeps cannot contend for the account being measured.
+	[ValidateRange(1, 8)][int] $Layer3Rigs = 1,
 	[string] $ParametersFile,
 
 	# Force a specific run prefix; see .PARAMETER NamePrefix. Read by both the
@@ -346,6 +396,8 @@ $azScriptsDir = Join-Path $azureThroughputDir 'scripts'
 # Shared cohort log parsing (ConvertFrom-SiloProgressLines, Measure-SteadyStateRate),
 # so Read-SiloLogStats computes the steady-state mean exactly as run-cohort.ps1 prints it.
 . (Join-Path $azScriptsDir '_run-cohort-helpers.ps1')
+# Layer 3 storage-side telemetry ('[storage-metrics]' cohort-log lines).
+. (Join-Path $azScriptsDir '_storage-metrics.ps1')
 $docPath = Join-Path $repoRoot 'docs/lattice/performance-single-silo.md'
 $multiSiloDocPath = Join-Path $repoRoot 'docs/lattice/performance-multi-silo.md'
 $runRoot = Join-Path $benchmarkRoot '.run/performance-report'
@@ -1446,7 +1498,13 @@ function Invoke-Layer3Cohorts {
 		# keyed [mode]["silos"]. A cell already holding $N cohorts is carried
 		# over and skipped; see -Resume.
 		[hashtable] $ExistingCells = @{},
-		[scriptblock] $OnCellComplete
+		[scriptblock] $OnCellComplete,
+		# Storage accounts each cohort's WAL is spread across (run-cohort-aca.ps1 -WalAccounts).
+		[ValidateRange(1, 8)][int] $WalAccounts = 1,
+		# Defer the harvest of every cohort whose result cannot change what
+		# the sweep does next, and run it in a background job while the next
+		# cohort runs. See the $deferThis rule below.
+		[switch] $OverlapHarvest
 	)
 	$rows = @($Layer3Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
 	if ($rows.Count -eq 0) {
@@ -1456,6 +1514,8 @@ function Invoke-Layer3Cohorts {
 
 	$runCohort = Join-Path $azScriptsDir 'run-cohort-aca.ps1'
 	if (-not (Test-Path $runCohort)) { throw "Missing $runCohort" }
+	$completeCohort = Join-Path $azScriptsDir 'complete-cohort-aca.ps1'
+	if (-not (Test-Path $completeCohort)) { throw "Missing $completeCohort" }
 	# Get-AcaRunRoot: the cohort log paths are derived, not captured from the
 	# pipeline, so this function needs the same run-root resolver the cohort
 	# script itself uses. Dot-sourcing here rather than at script scope keeps
@@ -1516,7 +1576,63 @@ function Invoke-Layer3Cohorts {
 			}
 			Write-Host "[layer3] silos=$silos mode=$mode rung=$($vehPerSilo * $silos)veh/$($perSilo.TickHz)Hz/$($perSilo.DurationSec)s (= $vehPerSilo veh/silo) flushConcurrency=$fcPerSilo/silo cohorts=$cellN" -ForegroundColor Cyan
 
+			# Deferred harvests of this cell, joined before its checkpoint.
+			$pendingHarvests = New-Object System.Collections.Generic.List[object]
 			for ($i = $firstCohort; $i -le $cellN; $i++) {
+				# A cohort's harvest can run in the background only when the
+				# sweep does not need its result before the next cohort:
+				#   - not the cell's escalating first cohort (its throughput
+				#     decides the rung every later cohort runs at), unless
+				#     escalation is off; and
+				#   - not a read cohort, whose UNSEEDED result is re-run at once.
+				# Every other cohort runs at an already-fixed rung and is
+				# accepted whatever it measures, so the decision cannot change.
+				$readMode = $mode -in @('get-point', 'get-many')
+				$deferThis = $OverlapHarvest -and -not $readMode -and (($SaturationRatio -le 0) -or (($cohortList.Count + $pendingHarvests.Count) -gt 0))
+				if ($deferThis) {
+					$vehicles = $vehPerSilo * $silos
+					$offered = $vehicles * $perSilo.TickHz
+					$cohortTag = "c$i"
+					$expectedLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.log"
+					$pendingPath = "$expectedLog.pending.json"
+					foreach ($stale in @($expectedLog, $pendingPath)) { if (Test-Path $stale) { Remove-Item $stale -Force } }
+					Write-Host "[layer3] cohort $i/$cellN silos=$silos mode=$mode veh/silo=$vehPerSilo offered=$offered keys/s (harvest deferred) ..." -ForegroundColor DarkGray
+					try {
+						& $runCohort `
+							-NamePrefix       $AcaPrefix `
+							-SiloCount        $silos `
+							-WorkloadMode     $mode `
+							-DurationSec      $perSilo.DurationSec `
+							-VehiclesPerSilo  $vehPerSilo `
+							-TickHz           $perSilo.TickHz `
+							-BatchSize        $BatchSize `
+							-FlushConcurrencyPerSilo $fcPerSilo `
+							-ShardCount       $ShardCount `
+							-WalPartitions    $WalPartitions `
+							-SetManyFanOutBudgetSec    $SetManyFanOutBudgetSec `
+							-WalAdmissionCallBudgetSec $WalAdmissionCallBudgetSec `
+							-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
+							-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
+							-ClientsPerSilo   $ClientsPerSilo `
+							-WalAccounts      $WalAccounts `
+							-CohortTag        $cohortTag `
+							-DeferHarvest | Out-Host
+					} catch {
+						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
+						continue
+					}
+					if (-not (Test-Path $pendingPath)) {
+						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode): no pending harvest at $pendingPath; skipping"
+						continue
+					}
+					$job = Start-Job -ArgumentList @($completeCohort, $pendingPath) -ScriptBlock {
+						param($script, $path)
+						& $script -PendingHarvestPath $path *>&1 | ForEach-Object { "$_" }
+					}
+					$pendingHarvests.Add(@{ Job = $job; LogPath = $expectedLog; Vehicles = $vehicles; Offered = $offered; Index = $i })
+					continue
+				}
+
 				# Probes run at a rung the cell went on to outgrow. They are
 				# recorded on the accepted cohort as evidence for why the
 				# published rung is what it is, never aggregated.
@@ -1557,6 +1673,7 @@ function Invoke-Layer3Cohorts {
 							-WalAppendCoalescingInFlightThreshold $WalAppendCoalescingInFlightThreshold `
 							-WalSaturationRecoveryReleaseBatch $WalSaturationRecoveryReleaseBatch `
 							-ClientsPerSilo   $ClientsPerSilo `
+							-WalAccounts      $WalAccounts `
 							-CohortTag        $cohortTag | Out-Host
 					} catch {
 						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode) threw: $($_.Exception.Message)"
@@ -1566,33 +1683,10 @@ function Invoke-Layer3Cohorts {
 						Write-Warning "[layer3] cohort $i/$cellN (silos=$silos mode=$mode): no cohort log at $expectedLog; skipping"
 						break
 					}
-					$parsed = Read-SiloLogStats -SiloLogPath $expectedLog -WorkloadMode $mode -BatchSize $BatchSize
-					$entry = @{
-						cohortName      = [System.IO.Path]::GetFileNameWithoutExtension($expectedLog)
-						siloLog         = $expectedLog
-						siloCount       = $silos
-						steadyMean      = $parsed.SteadyMean
-						finalOps        = $parsed.FinalOps
-						finalActiveSec  = $parsed.FinalActiveSec
-						finalThroughput = $parsed.FinalThroughput
-						perCallP50Ms    = $parsed.PerCallP50Ms
-						perCallP75Ms    = $parsed.PerCallP75Ms
-						perCallP90Ms    = $parsed.PerCallP90Ms
-						perCallP99Ms    = $parsed.PerCallP99Ms
-						inFlightMax     = $parsed.InFlightMax
-						failed          = $parsed.Failed
-						verdict         = $parsed.Verdict
-						rungVehicles    = $vehicles
-						rungTickHz      = $perSilo.TickHz
-						rungDurationSec = $perSilo.DurationSec
-						flushConcurrencyPerSilo = $fcPerSilo
-						clientsPerSilo  = $ClientsPerSilo
-						offerBound      = $false
-						executionState  = 'unknown'
-					}
-					Set-Layer3ProducerEvidence -Cohort $entry -LogPath $expectedLog
-					Set-Layer3PreseedEvidence -Cohort $entry -LogPath $expectedLog -WorkloadMode $mode
-					Write-Host ("[layer3]   -> {0} {1} {2} keys/s completed of {3} offered ({4} steady-mean, failed={5})" -f $parsed.Verdict, $mode, $parsed.FinalThroughput, $offered, $parsed.SteadyMean, $parsed.Failed) -ForegroundColor DarkGray
+					$entry = New-Layer3CohortEntry -LogPath $expectedLog -Mode $mode -Silos $silos -Vehicles $vehicles `
+						-TickHz $perSilo.TickHz -DurationSec $perSilo.DurationSec -FlushConcurrencyPerSilo $fcPerSilo `
+						-ClientsPerSilo $ClientsPerSilo -WalAccounts $WalAccounts -BatchSize $BatchSize -Offered $offered
+					$parsed = @{ Verdict = $entry.verdict; FinalThroughput = $entry.finalThroughput }
 
 					# Only the first cohort of a cell escalates, so every cohort
 					# the cell publishes ran at the same offered load. A cohort
@@ -1644,6 +1738,30 @@ function Invoke-Layer3Cohorts {
 				if ($probes.Count -gt 0) { $accepted['escalationProbes'] = @($probes.ToArray()) }
 				$cohortList.Add($accepted)
 			}
+
+			# Join this cell's deferred harvests before it is checkpointed. A
+			# deferred cohort ran at the cell's settled rung, so the only
+			# decision left is the one the inline path makes for a non-first
+			# cohort: one that still reached its offered load is offer-bound.
+			foreach ($ph in $pendingHarvests) {
+				$null = Wait-Job -Job $ph.Job
+				foreach ($line in @(Receive-Job -Job $ph.Job -ErrorAction SilentlyContinue)) { Write-Host "[harvest c$($ph.Index)] $line" -ForegroundColor DarkGray }
+				$jobState = $ph.Job.State
+				Remove-Job -Job $ph.Job -Force -ErrorAction SilentlyContinue
+				if (-not (Test-Path $ph.LogPath)) {
+					Write-Warning "[layer3] cohort $($ph.Index)/$cellN (silos=$silos mode=$mode): deferred harvest ended '$jobState' without a cohort log; skipping"
+					continue
+				}
+				$entry = New-Layer3CohortEntry -LogPath $ph.LogPath -Mode $mode -Silos $silos -Vehicles $ph.Vehicles `
+					-TickHz $perSilo.TickHz -DurationSec $perSilo.DurationSec -FlushConcurrencyPerSilo $fcPerSilo `
+					-ClientsPerSilo $ClientsPerSilo -WalAccounts $WalAccounts -BatchSize $BatchSize -Offered $ph.Offered
+				$entry['harvestDeferred'] = $true
+				if (($SaturationRatio -gt 0) -and ($entry.verdict -eq 'HEALTHY') -and ($null -ne $entry.finalThroughput) -and
+					([double]$entry.finalThroughput -ge ($SaturationRatio * $ph.Offered)) -and -not $entry.producerBound) {
+					$entry.offerBound = $true
+				}
+				$cohortList.Add($entry)
+			}
 			$carryVehiclesPerSilo[$mode] = $vehPerSilo
 			$cells[$mode]["$silos"] = @($cohortList.ToArray())
 
@@ -1688,6 +1806,7 @@ function Aggregate-Layer3Cells {
 				if ($log -and (Test-Path $log)) {
 					Set-Layer3ProducerEvidence -Cohort $cohort -LogPath $log
 					Set-Layer3PreseedEvidence -Cohort $cohort -LogPath $log -WorkloadMode $mode
+					Set-Layer3StorageEvidence -Cohort $cohort -LogPath $log
 				}
 			}
 			# A read cohort whose log carries no producer preseed line read an
@@ -1761,6 +1880,8 @@ function Aggregate-Layer3Cells {
 				# the cluster's throughput, and the table says so.
 				offerBound          = (@($healthy | Where-Object { -not (Get-StateOr $_ 'offerBound' $false) }).Count -eq 0)
 				producerBound       = (@($healthy | Where-Object { Get-StateOr $_ 'producerBound' $false }).Count -gt 0)
+				walAccounts         = [int](Get-StateOr ($healthy | Select-Object -First 1) 'walAccounts' 1)
+				storage             = (Get-Layer3CellStorage -Cohorts $healthy)
 			}
 		}
 		if ($perCount.Count -eq 0) { continue }
@@ -1786,6 +1907,110 @@ function Aggregate-Layer3Cells {
 		$rows[$row.Label] = $perCount
 	}
 	return $rows
+}
+
+function Get-Layer3CellStorage {
+	<#
+	.SYNOPSIS
+		Reduce a cell's HEALTHY cohorts' storage summaries to the cell's
+		storage-side figures: the median of each across the cohorts that
+		carry one, the same reduction as the throughput column.
+	.OUTPUTS
+		Hashtable (throttleRatio, peakAccountTps, serverLatencyMs,
+		e2eLatencyMs, storageN), or $null when no cohort carries storage
+		metrics - never zeros, which would read as an idle account.
+	#>
+	[CmdletBinding()] param([object[]] $Cohorts)
+	$summaries = @(@($Cohorts) | ForEach-Object { Get-StateOr $_ 'storage' $null } | Where-Object { $null -ne $_ })
+	if ($summaries.Count -eq 0) { return $null }
+	$medianOf = {
+		param($key)
+		$vals = @($summaries | ForEach-Object { Get-StateOr $_ $key $null } | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ })
+		if ($vals.Count -eq 0) { return $null }
+		return [math]::Round((Get-Median $vals), 4)
+	}
+	return @{
+		storageN        = $summaries.Count
+		throttleRatio   = & $medianOf 'ThrottleRatio'
+		peakAccountTps  = & $medianOf 'PeakAccountTps'
+		serverLatencyMs = & $medianOf 'ServerLatencyMs'
+		e2eLatencyMs    = & $medianOf 'E2ELatencyMs'
+	}
+}
+
+function New-Layer3CohortEntry {
+	<#
+	.SYNOPSIS
+		Build one Layer 3 cohort's state entry from its harvested cohort log.
+	.DESCRIPTION
+		The single definition of a cohort entry, shared by the inline harvest
+		path and the deferred one (-Layer3OverlapHarvest), so a cell cannot
+		hold two differently-shaped cohorts depending on when each was
+		harvested.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string] $LogPath,
+		[Parameter(Mandatory)][string] $Mode,
+		[Parameter(Mandatory)][int] $Silos,
+		[Parameter(Mandatory)][int] $Vehicles,
+		[Parameter(Mandatory)][int] $TickHz,
+		[Parameter(Mandatory)][int] $DurationSec,
+		[Parameter(Mandatory)][int] $FlushConcurrencyPerSilo,
+		[Parameter(Mandatory)][int] $ClientsPerSilo,
+		[int] $WalAccounts = 1,
+		[int] $BatchSize = 4096,
+		[long] $Offered = 0
+	)
+	$parsed = Read-SiloLogStats -SiloLogPath $LogPath -WorkloadMode $Mode -BatchSize $BatchSize
+	$entry = @{
+		cohortName      = [System.IO.Path]::GetFileNameWithoutExtension($LogPath)
+		siloLog         = $LogPath
+		siloCount       = $Silos
+		steadyMean      = $parsed.SteadyMean
+		finalOps        = $parsed.FinalOps
+		finalActiveSec  = $parsed.FinalActiveSec
+		finalThroughput = $parsed.FinalThroughput
+		perCallP50Ms    = $parsed.PerCallP50Ms
+		perCallP75Ms    = $parsed.PerCallP75Ms
+		perCallP90Ms    = $parsed.PerCallP90Ms
+		perCallP99Ms    = $parsed.PerCallP99Ms
+		inFlightMax     = $parsed.InFlightMax
+		failed          = $parsed.Failed
+		verdict         = $parsed.Verdict
+		rungVehicles    = $Vehicles
+		rungTickHz      = $TickHz
+		rungDurationSec = $DurationSec
+		flushConcurrencyPerSilo = $FlushConcurrencyPerSilo
+		clientsPerSilo  = $ClientsPerSilo
+		walAccounts     = $WalAccounts
+		offerBound      = $false
+		executionState  = 'unknown'
+	}
+	Set-Layer3ProducerEvidence -Cohort $entry -LogPath $LogPath
+	Set-Layer3PreseedEvidence -Cohort $entry -LogPath $LogPath -WorkloadMode $Mode
+	Set-Layer3StorageEvidence -Cohort $entry -LogPath $LogPath
+	Write-Host ("[layer3]   -> {0} {1} {2} keys/s completed of {3} offered ({4} steady-mean, failed={5})" -f $parsed.Verdict, $Mode, $parsed.FinalThroughput, $Offered, $parsed.SteadyMean, $parsed.Failed) -ForegroundColor DarkGray
+	return $entry
+}
+
+function Set-Layer3StorageEvidence {
+	<#
+	.SYNOPSIS
+		Attach the cohort's storage-side summary, read from the
+		'[storage-metrics]' lines complete-cohort-aca.ps1 appended to its log.
+	.DESCRIPTION
+		Sets 'storage' to Get-StorageMetricsSummary's hashtable, or $null when
+		the log carries no usable account (a cohort harvested before storage
+		metrics existed, or one whose accounts were all unavailable).
+		Re-derived from the log at aggregation, like the producer and preseed
+		evidence, so a replay picks up a parser fix.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][hashtable] $Cohort,
+		[Parameter(Mandatory)][string] $LogPath
+	)
+	$lines = if (Test-Path $LogPath) { @(Select-String -Path $LogPath -Pattern '^\[storage-metrics\] ' | ForEach-Object { $_.Line }) } else { @() }
+	$Cohort['storage'] = Get-StorageMetricsSummary -Accounts @(Read-StorageMetricsLines -Lines $lines)
 }
 
 function Set-Layer3ProducerEvidence {
@@ -2544,6 +2769,58 @@ function Render-Layer3Table {
 	return $sb.ToString().TrimEnd("`r","`n")
 }
 
+function Render-Layer3StorageTable {
+	<#
+	.SYNOPSIS
+		Render the storage-side companion to the multi-silo grid: per
+		(workload, silo count) cell, what the storage accounts themselves
+		reported while the cell ran.
+	.DESCRIPTION
+		This is what separates "Lattice stopped scaling" from "the storage
+		account stopped scaling". A cell whose throughput flattens while its
+		throttled share climbs, or whose busiest account sits near the
+		documented per-account Tables target, hit the account; a flattening
+		cell with no throttling and flat server latency did not. The gap
+		between end-to-end and server latency is time spent outside the
+		storage service (network, client-side queueing).
+
+		Figures are the median across the cell's HEALTHY cohorts. Throttled
+		is the share of all transactions answered ServerBusy or
+		ClientThrottling, across every account the cohort used; the busiest
+		account and the latencies are the worst account's. The primary
+		account also serves the Orleans clustering table and grain state, so
+		its transactions are not WAL-only.
+	#>
+	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $RowsAgg)
+	$nl = "`r`n"
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$sb = [System.Text.StringBuilder]::new()
+	$any = $false
+	[void]$sb.Append('| Operation | Silos | WAL accounts | Throttled transactions | Busiest account | Server latency | End-to-end latency |').Append($nl)
+	[void]$sb.Append('|-----------|------:|-------------:|-----------------------:|----------------:|---------------:|-------------------:|').Append($nl)
+	$ms = { param($v) if ($null -eq $v) { 'n/a' } else { ([double]$v).ToString('0.0', $inv) + ' ms' } }
+	foreach ($row in $Layer3Rows) {
+		if (-not $RowsAgg.ContainsKey($row.Label)) { continue }
+		$byCount = $RowsAgg[$row.Label]
+		foreach ($k in @($byCount.Keys | Sort-Object { [int]$_ })) {
+			$cell = $byCount[$k]
+			$st = Get-StateOr $cell 'storage' $null
+			if ($null -eq $st) { continue }
+			$any = $true
+			$thr = Get-StateOr $st 'throttleRatio' $null
+			$thrS = if ($null -eq $thr) { 'n/a' } else { ([double]$thr * 100).ToString('0.00', $inv) + '%' }
+			$tps = Get-StateOr $st 'peakAccountTps' $null
+			$tpsS = if ($null -eq $tps) { 'n/a' } else { ('{0:N0} tx/s' -f [double]$tps) }
+			[void]$sb.Append(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} |' -f $row.Label, $cell.siloCount, (Get-StateOr $cell 'walAccounts' 1), $thrS, $tpsS,
+				(& $ms (Get-StateOr $st 'serverLatencyMs' $null)), (& $ms (Get-StateOr $st 'e2eLatencyMs' $null)))).Append($nl)
+		}
+	}
+	if (-not $any) {
+		return '_No storage-side metrics were captured for this sweep: its cohorts predate them, or every account''s metrics were unavailable._'
+	}
+	return $sb.ToString().TrimEnd("`r", "`n")
+}
+
 function Render-Layer3Chart {
 	<#
 	.SYNOPSIS
@@ -2704,8 +2981,19 @@ function New-MetaHeaderForLayer3 {
 	$meta['cohortN']       = ((@($cohortN | Sort-Object -Unique)) -join '/')
 	$meta['rowsMeasured']  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 	$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-	$meta['walAccounts']   = 1
-	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT use a per-second steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; a mean that filters the zeros away (the historical rate>0 form) averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Every cell is a true-throughput measurement, not an offered-load one: offered load is scaled with the silo count (a per-silo rung driven at rung x silo count, so per-silo demand never falls as the cluster grows), and a cell whose first cohort completes at least saturationRatio of what was offered is re-run at double the rung, up to maxRungEscalations times, so the published figure is where the cluster stopped keeping up rather than what the client asked for. A cell still offer-bound after the last escalation is published as a lower bound (>=). Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. All silo counts share ONE Azure Storage account for the WAL; see the caveats section for what its own metrics showed.'
+	$walAccounts = [int](Get-StateOr $State 'layer3WalAccounts' 1)
+	$meta['walAccounts']   = $walAccounts
+	# A sweep split across parallel rigs (-Layer3Rigs) records them here.
+	# Every workload's curve comes from one rig, so a curve never mixes
+	# deployments, but the workloads were measured on different ones.
+	$rigs = @(Get-StateOr (Get-StateOr $State 'layer3' @{}) 'rigs' @())
+	if ($rigs.Count -gt 1) { $meta['rigs'] = ($rigs -join ',') } elseif ($meta.Contains('rigs')) { $meta.Remove('rigs') }
+	$storageSentence = if ($walAccounts -le 1) {
+		'All silo counts share ONE Azure Storage account for the WAL; the storage-side table reports what that account''s own Azure Monitor metrics showed for each cell.'
+	} else {
+		"Every cohort spreads the tree's WAL partitions across $walAccounts Azure Storage accounts (partition p on account p mod $walAccounts; the first account also holds clustering and grain state); the storage-side table reports what those accounts' own Azure Monitor metrics showed for each cell."
+	}
+	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT use a per-second steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; a mean that filters the zeros away (the historical rate>0 form) averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Every cell is a true-throughput measurement, not an offered-load one: offered load is scaled with the silo count (a per-silo rung driven at rung x silo count, so per-silo demand never falls as the cluster grows), and a cell whose first cohort completes at least saturationRatio of what was offered is re-run at double the rung, up to maxRungEscalations times, so the published figure is where the cluster stopped keeping up rather than what the client asked for. A cell still offer-bound after the last escalation is published as a lower bound (>=). Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. ' + $storageSentence
 	return $meta
 }
 
@@ -2787,7 +3075,9 @@ function Render-ProvenanceNote {
 		'layer3' {
 			$region = if ($Meta.ContainsKey('region'))     { $Meta['region'] }     else { 'unknown' }
 			$counts = if ($Meta.ContainsKey('siloCounts')) { $Meta['siloCounts'] } else { 'unknown' }
-			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count and is raised until each cell plateaus below it, so every figure is true throughput rather than offered load; every cohort starts on freshly emptied storage. All silo counts share one Azure Storage account for the WAL - see the caveats below for what its metrics showed."
+			$accts = if ($Meta.ContainsKey('walAccounts')) { [int]"$($Meta['walAccounts'])" } else { 1 }
+			$storageClause = if ($accts -le 1) { 'All silo counts share one Azure Storage account for the WAL - see the storage-side table and the caveats below for what its metrics showed.' } else { "Every cohort spreads the WAL across $accts Azure Storage accounts - see the storage-side table for what their metrics showed." }
+			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count and is raised until each cell plateaus below it, so every figure is true throughput rather than offered load; every cohort starts on freshly emptied storage. $storageClause"
 		}
 		default { throw "Unknown layer '$Layer' for Render-ProvenanceNote" }
 	}
@@ -2961,15 +3251,316 @@ function Update-MultiSiloDocMarkers {
 	}
 	$content = [regex]::Replace($content, $chartPattern, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $chartBlock })
 
+	# Storage-side table. Optional marker pair: a doc without it is left alone
+	# (with a warning) rather than failing a sweep that measured fine.
+	$storagePattern = '(?s)<!-- perf-storage:layer3:start.*?<!-- perf-storage:layer3:end -->'
+	if ([regex]::IsMatch($content, $storagePattern)) {
+		$storageBlock = '<!-- perf-storage:layer3:start' + $nl + '  schema=v1' + $nl + '  DO-NOT-HAND-EDIT-BETWEEN-MARKERS' + $nl + '-->' + $nl + $nl + (Render-Layer3StorageTable -RowsAgg $rowsAgg) + $nl + $nl + '<!-- perf-storage:layer3:end -->'
+		$content = [regex]::Replace($content, $storagePattern, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $storageBlock })
+	} else {
+		Write-Warning "[layer3] no <!-- perf-storage:layer3:start --> marker pair in $DocPath; storage-side table not rendered"
+	}
+
 	if ($WhatIf) {
 		Write-Host '--- planned multi-silo doc (markers only) ---' -ForegroundColor Cyan
-		foreach ($m in @([regex]::Matches($content, $chartPattern)) + @([regex]::Matches($content, $pattern))) { Write-Host $m.Value }
+		foreach ($m in @([regex]::Matches($content, $chartPattern)) + @([regex]::Matches($content, $pattern)) + @([regex]::Matches($content, $storagePattern))) { Write-Host $m.Value }
 		return $true
 	}
 	[System.IO.File]::WriteAllText($DocPath, $content)
 	return $true
 }
 
+# ----------------------------------------------------------------------------
+# Layer 3 across several rigs (-Layer3Rigs)
+# ----------------------------------------------------------------------------
+
+function Split-Layer3Workloads {
+	<#
+	.SYNOPSIS
+		Partition the Layer 3 workloads between $RigCount rigs.
+	.DESCRIPTION
+		A workload is never split: every silo count of one workload runs on
+		one rig, so each scaling curve - and the rung its escalation carries
+		from one silo count to the next - comes from a single deployment. A
+		curve stitched from two rigs would carry the difference between the
+		rigs as a step in the curve.
+
+		Longest-processing-time first: workloads sorted by estimated cost
+		(cohorts per cell x silo counts x (duration + per-cohort overhead)),
+		each assigned to the least-loaded rig. Ties break on doc order and the
+		lowest rig index, so the split is deterministic - which is what lets
+		-Resume find each workload's cells on the rig that measured them.
+	.OUTPUTS
+		An array of $RigCount string arrays, each in doc order.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string[]] $WorkloadIds,
+		[Parameter(Mandatory)][ValidateRange(1, 64)][int] $RigCount,
+		[Parameter(Mandatory)][int] $N,
+		[Parameter(Mandatory)][int[]] $SiloCounts
+	)
+	$perCohortOverheadSec = 300
+	$costed = for ($idx = 0; $idx -lt $WorkloadIds.Count; $idx++) {
+		$id = $WorkloadIds[$idx]
+		$row = @($Layer3Rows | Where-Object { $_.WorkloadId -eq $id })[0]
+		if ($null -eq $row) { throw "Unknown Layer 3 workload '$id'." }
+		$cellN = [Math]::Max($N, [int](Get-StateOr $row 'CohortsPerCell' $N))
+		$dur = (Resolve-Rung -Spec $row.RungPerSilo).DurationSec
+		[pscustomobject]@{ Id = $id; Order = $idx; Cost = [double]$cellN * $SiloCounts.Count * ($dur + $perCohortOverheadSec) }
+	}
+	$loads = New-Object double[] $RigCount
+	$assigned = @(for ($r = 0; $r -lt $RigCount; $r++) { , (New-Object System.Collections.Generic.List[string]) })
+	foreach ($w in ($costed | Sort-Object -Property @{ Expression = 'Cost'; Descending = $true }, @{ Expression = 'Order'; Ascending = $true })) {
+		$target = 0
+		for ($r = 1; $r -lt $RigCount; $r++) { if ($loads[$r] -lt $loads[$target]) { $target = $r } }
+		$loads[$target] += $w.Cost
+		$assigned[$target].Add($w.Id)
+	}
+	return , @(for ($r = 0; $r -lt $RigCount; $r++) {
+		$mine = $assigned[$r]
+		, @($WorkloadIds | Where-Object { $mine.Contains($_) })
+	})
+}
+
+function Merge-Layer3RigStates {
+	<#
+	.SYNOPSIS
+		Merge the per-rig state of a -Layer3Rigs sweep into one Layer 3 state.
+	.DESCRIPTION
+		Cells are keyed by workload, and Split-Layer3Workloads gives each
+		workload to exactly one rig, so a workload present in two rig states
+		is refused rather than blended. Every setting that shapes a cell must
+		agree across the rigs (they were provisioned and driven by one
+		report invocation, so a disagreement means a foreign state file),
+		because the published metadata states each setting once.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][object[]] $States,
+		[Parameter(Mandatory)][string[]] $Prefixes
+	)
+	if ($States.Count -eq 0) { throw 'No rig state to merge.' }
+	$merged = ($States[0] | ConvertTo-Json -Depth 16 | ConvertFrom-Json -AsHashtable)
+	$merged['layer3'] = @{ cohorts = @{}; rows = @{}; siloCounts = @(); acaPrefix = ($Prefixes -join '+'); rigs = @($Prefixes) }
+	$mustAgree = @('region', 'batchSize', 'responseTimeoutSec', 'layer3ShardCount', 'layer3WalPartitions', 'layer3WalMaxPendingBatches', 'layer3SaturationRatio', 'layer3MaxRungEscalations', 'layer3WalAccounts')
+	$owner = @{}
+	$counts = @()
+	foreach ($i in 0..($States.Count - 1)) {
+		$s = $States[$i]
+		foreach ($k in $mustAgree) {
+			$a = "$(Get-StateOr $States[0] $k '')"; $b = "$(Get-StateOr $s $k '')"
+			if ($a -ne $b) { throw "Cannot merge rig states: '$k' is '$a' on $($Prefixes[0]) but '$b' on $($Prefixes[$i])." }
+		}
+		$l3 = Get-StateOr $s 'layer3' @{}
+		$cohorts = Get-StateOr $l3 'cohorts' @{}
+		foreach ($mode in @($cohorts.Keys)) {
+			if ($owner.ContainsKey($mode)) { throw "Cannot merge rig states: workload '$mode' was measured on both $($owner[$mode]) and $($Prefixes[$i]); a curve must come from one rig." }
+			$owner[$mode] = $Prefixes[$i]
+			$merged.layer3.cohorts[$mode] = $cohorts[$mode]
+		}
+		$counts += @(Get-StateOr $l3 'siloCounts' @())
+		foreach ($k in @('startedUtc')) { $v = Get-StateOr $s $k $null; if ($v -and "$v" -lt "$(Get-StateOr $merged $k '9')") { $merged[$k] = $v } }
+		foreach ($k in @('endedUtc')) { $v = Get-StateOr $s $k $null; if ($v -and "$v" -gt "$(Get-StateOr $merged $k '')") { $merged[$k] = $v } }
+	}
+	$merged.layer3.siloCounts = @($counts | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+	$merged['prefix'] = ($Prefixes -join '+')
+	$merged.layer3.rows = Aggregate-Layer3Cells -Cells $merged.layer3.cohorts
+	return $merged
+}
+
+function ConvertTo-ChildArgumentText {
+	# Render one parameter value as PowerShell source for a child -Command.
+	param($Value)
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	if ($Value -is [System.Array]) { return (@($Value | ForEach-Object { ConvertTo-ChildArgumentText $_ }) -join ',') }
+	if ($Value -is [int] -or $Value -is [long] -or $Value -is [double]) { return ([System.IConvertible]$Value).ToString($inv) }
+	return "'" + ([string]$Value -replace "'", "''") + "'"
+}
+
+function Start-ChildPwsh {
+	<#
+	.SYNOPSIS
+		Run a script in a separate pwsh process with its output in a log file.
+	.DESCRIPTION
+		A process rather than a PowerShell job: Out-Host output (which
+		run-cohort-aca.ps1's az chatter uses) only reaches a redirected stdout
+		in a real process, and a process is also unaffected by a parent that
+		is interrupted. $Parameters maps names to values; $true is a switch.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string] $Script,
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Parameters,
+		[Parameter(Mandatory)][string] $LogPath
+	)
+	$parts = @("& '$($Script -replace "'", "''")'")
+	foreach ($k in $Parameters.Keys) {
+		$v = $Parameters[$k]
+		if ($v -is [bool]) { if ($v) { $parts += "-$k" }; continue }
+		$parts += "-$k"
+		$parts += (ConvertTo-ChildArgumentText $v)
+	}
+	# Exit 0 or 1 by whether the script threw: a bare '& script' would leave
+	# pwsh reporting the last native command's exit code, and the rig's
+	# scripts make deliberately-tolerated failing az calls.
+	$command = '$ErrorActionPreference = ''Stop''; try { ' + ($parts -join ' ') + ' } catch { Write-Host ($_ | Out-String); exit 1 }; exit 0'
+	$encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
+	$dir = Split-Path -Parent $LogPath
+	if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+	$pwsh = (Get-Process -Id $PID).Path
+	return Start-Process -FilePath $pwsh -ArgumentList @('-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', $encoded) `
+		-RedirectStandardOutput $LogPath -RedirectStandardError "$LogPath.err" -NoNewWindow -PassThru
+}
+
+function Wait-ChildPwsh {
+	# Wait for child processes, echoing each one's latest '[layer3]' or '[aca]'
+	# line every $IntervalSec so a multi-hour parallel sweep is not silent.
+	param([Parameter(Mandatory)][object[]] $Children, [int] $IntervalSec = 60)
+	while (@($Children | Where-Object { -not $_.Process.HasExited }).Count -gt 0) {
+		Start-Sleep -Seconds $IntervalSec
+		foreach ($c in $Children) {
+			$status = if ($c.Process.HasExited) { 'done' } else { 'running' }
+			$last = if (Test-Path $c.Log) { @(Get-Content -Path $c.Log -Tail 400 -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\[(layer3|aca|main)\]' }) | Select-Object -Last 1 } else { $null }
+			Write-Host "[rigs] $($c.Prefix) ($status): $last" -ForegroundColor DarkGray
+		}
+	}
+	foreach ($c in $Children) { $c.Process.WaitForExit() }
+}
+
+function Invoke-Layer3MultiRig {
+	<#
+	.SYNOPSIS
+		Run the Layer 3 sweep on several identical rigs in parallel and merge.
+	.DESCRIPTION
+		Provisions (or reuses) one rig per prefix, gives each rig a disjoint
+		set of workloads (Split-Layer3Workloads), runs one ordinary
+		single-rig sweep per rig as a child process with -SkipDocUpdate, then
+		merges the rigs' cells (Merge-Layer3RigStates) into
+		.run/performance-report/rigs-<prefixes>/state.json and renders the
+		multi-silo document once. Each rig has its own storage accounts, so
+		the parallel sweeps cannot contend for the account being measured.
+		Rigs it provisioned are parked and torn down unless -KeepAca; reused
+		rigs are only parked. A rig whose sweep fails costs only its own
+		workloads: the others still publish.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][int] $RigCount,
+		[string[]] $ReusePrefixes = @()
+	)
+	. (Join-Path $azScriptsDir 'aca-common.ps1')
+	$ids = @(Resolve-WorkloadIds -LayerRows $Layer3Rows -WorkloadsSpec $Workloads)
+	if ($RigCount -gt $ids.Count) {
+		Write-Warning "[rigs] $RigCount rigs for $($ids.Count) workload(s); a workload is never split, so using $($ids.Count)."
+		$RigCount = $ids.Count
+	}
+	$prefixes = if ($ReusePrefixes.Count -gt 0) {
+		@($ReusePrefixes[0..($RigCount - 1)])
+	} elseif ($NamePrefix) {
+		$base = Get-CleanedPrefix -Prefix $NamePrefix
+		if ($base.Length -gt 8) { $base = $base.Substring(0, 8) }
+		@(1..$RigCount | ForEach-Object { "$base$_" })
+	} else {
+		@(1..$RigCount | ForEach-Object { New-RunPrefix })
+	}
+	$provision = $ReusePrefixes.Count -eq 0
+	$split = Split-Layer3Workloads -WorkloadIds $ids -RigCount $RigCount -N $N -SiloCounts $SiloCounts
+	for ($r = 0; $r -lt $RigCount; $r++) {
+		Write-Host "[rigs] $($prefixes[$r]): $(@($split[$r]) -join ', ')" -ForegroundColor Cyan
+	}
+
+	$reportScript = Join-Path $scriptDir 'performance-report.ps1'
+	$acaScript = Join-Path $azScriptsDir 'deploy-aca.ps1'
+	$provisioned = @()
+	$children = @()
+	$failed = @()
+	try {
+		if ($provision) {
+			$deploys = @()
+			foreach ($p in $prefixes) {
+				# Flag teardown-needed before the call, as the single-rig path
+				# does: deploy-aca.ps1 creates the group early and can fail late.
+				$provisioned += $p
+				$dParams = [ordered]@{ NamePrefix = $p }
+				if ($PrivateNetwork) { $dParams['PrivateNetwork'] = $true }
+				if ($Layer3WalAccounts -gt 1) { $dParams['WalAccountCount'] = $Layer3WalAccounts }
+				$log = Join-Path (Join-Path $runRoot $p) 'deploy.log'
+				Write-Host "[rigs] provisioning $p (log: $log)" -ForegroundColor Cyan
+				$deploys += @{ Prefix = $p; Log = $log; Process = (Start-ChildPwsh -Script $acaScript -Parameters $dParams -LogPath $log) }
+			}
+			Wait-ChildPwsh -Children $deploys -IntervalSec 30
+			$bad = @($deploys | Where-Object { $_.Process.ExitCode -ne 0 })
+			if ($bad.Count -gt 0) { throw "[rigs] provisioning failed for $(@($bad | ForEach-Object Prefix) -join ', '); see each rig's deploy.log." }
+		} else {
+			foreach ($p in $prefixes) {
+				$extras = @(Get-AcaContextWalExtraAccounts -Context (Read-AcaContext -NamePrefix $p))
+				if ($Layer3WalAccounts - 1 -gt $extras.Count) {
+					throw "-Layer3WalAccounts $Layer3WalAccounts needs $($Layer3WalAccounts - 1) extra WAL account(s) but rig $p has $($extras.Count)."
+				}
+			}
+		}
+
+		for ($r = 0; $r -lt $RigCount; $r++) {
+			$p = $prefixes[$r]
+			$cParams = [ordered]@{
+				Layer = '3'; ReuseAca = $p; Workloads = (@($split[$r]) -join ','); SiloCounts = @($SiloCounts); N = $N
+				BatchSize = $BatchSize; VmSize = $VmSize; Fidelity = $Fidelity; SkipDocUpdate = $true
+				SetManyFanOutBudgetSec = $SetManyFanOutBudgetSec; WalAdmissionCallBudgetSec = $WalAdmissionCallBudgetSec
+				WalAppendCoalescingInFlightThreshold = $WalAppendCoalescingInFlightThreshold
+				WalSaturationRecoveryReleaseBatch = $WalSaturationRecoveryReleaseBatch
+				Layer3ClientsPerSilo = $Layer3ClientsPerSilo; SaturationRatio = $SaturationRatio; MaxRungEscalations = $MaxRungEscalations
+				Layer3WalAccounts = $Layer3WalAccounts; Layer3OverlapHarvest = [bool]$Layer3OverlapHarvest; Resume = [bool]$Resume
+			}
+			$log = Join-Path (Join-Path $runRoot $p) 'sweep.log'
+			Write-Host "[rigs] sweeping $p (log: $log)" -ForegroundColor Cyan
+			$children += @{ Prefix = $p; Log = $log; Process = (Start-ChildPwsh -Script $reportScript -Parameters $cParams -LogPath $log) }
+		}
+		Wait-ChildPwsh -Children $children
+		$failed = @($children | Where-Object { $_.Process.ExitCode -ne 0 } | ForEach-Object { $_.Prefix })
+		foreach ($f in $failed) { Write-Warning "[rigs] sweep on $f exited non-zero; its workloads publish whatever cells it checkpointed. See $(Join-Path (Join-Path $runRoot $f) 'sweep.log')." }
+
+		$states = @()
+		$statePrefixes = @()
+		foreach ($p in $prefixes) {
+			$sf = Join-Path (Join-Path $runRoot $p) 'state.json'
+			if (Test-Path $sf) { $states += , (Read-StateFile -Path $sf); $statePrefixes += $p }
+		}
+		if ($states.Count -eq 0) { throw '[rigs] no rig wrote a state.json; nothing to merge.' }
+		$merged = Merge-Layer3RigStates -States $states -Prefixes $statePrefixes
+		$mergedFile = Join-Path (Join-Path $runRoot ('rigs-' + ($statePrefixes -join '-'))) 'state.json'
+		Write-StateFile -Path $mergedFile -State $merged
+		Write-Host "[rigs] merged state.json: $mergedFile" -ForegroundColor Green
+
+		if (-not $SkipDocUpdate) {
+			if (Update-MultiSiloDocMarkers -DocPath $multiSiloDocPath -State $merged -WhatIf:$Diff) {
+				Write-Host "[rigs] doc updated: $multiSiloDocPath" -ForegroundColor Green
+			} else {
+				throw "[rigs] the merged sweep produced no aggregated cells; $multiSiloDocPath was left unchanged. Check each rig's sweep.log."
+			}
+		}
+	} finally {
+		foreach ($c in @($children)) { if ($c.Process -and -not $c.Process.HasExited) { try { $c.Process.Kill($true) } catch { } } }
+		foreach ($p in $prefixes) {
+			try { Set-AcaSiloCount -Context (Read-AcaContext -NamePrefix $p) -Count 0 | Out-Null }
+			catch { Write-Warning "[rigs] could not park silos for ${p}: $($_.Exception.Message)" }
+		}
+		if ($provisioned.Count -gt 0 -and -not $KeepAca) {
+			foreach ($p in $provisioned) { try { Invoke-AcaTeardown -NamePrefix $p -NoWait } catch { Write-Warning "[rigs] teardown of ${p} failed: $($_.Exception.Message)" } }
+			$deadline = (Get-Date).AddMinutes(45)
+			do {
+				$remaining = @($provisioned | Where-Object { Test-AzGroupExists -Name "rg-$_" })
+				if ($remaining.Count -eq 0 -or (Get-Date) -gt $deadline) { break }
+				Write-Host "[rigs] waiting for deletion of $(@($remaining | ForEach-Object { "rg-$_" }) -join ', ')" -ForegroundColor DarkGray
+				Start-Sleep -Seconds 30
+			} while ($true)
+			if ($remaining.Count -gt 0) { Write-Warning "[rigs] still present after 45 minutes: $(@($remaining | ForEach-Object { "rg-$_" }) -join ', '). Verify manually." }
+			foreach ($p in $provisioned) { Assert-NoStrayBenchContainers -NamePrefix $p | Out-Null }
+		} elseif ($provisioned.Count -gt 0) {
+			Write-Host "[rigs] -KeepAca: rigs preserved (silos parked): $(@($provisioned | ForEach-Object { "rg-$_" }) -join ', ')" -ForegroundColor Yellow
+		}
+	}
+	Write-Host ''
+	Write-Host '=== performance-report.ps1 (Layer 3, parallel rigs) complete ===' -ForegroundColor Green
+	Write-Host ("Rigs       : {0}" -f ($prefixes -join ', '))
+	if ($failed.Count -gt 0) { Write-Host ("Failed     : {0}" -f ($failed -join ', ')) -ForegroundColor Yellow }
+}
 # ────────────────────────────────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────────────────────────────────
@@ -3104,7 +3695,19 @@ function Main {
 		# cannot see Get-AcaRunRoot unless it sources the module itself.
 		. (Join-Path $azScriptsDir 'aca-common.ps1')
 
-		$acaPrefix = if ($ReuseAca) { Get-CleanedPrefix -Prefix $ReuseAca } elseif ($NamePrefix) { Get-CleanedPrefix -Prefix $NamePrefix } else { New-RunPrefix }
+		# Several rigs: the report splits the workloads between them, runs
+		# one sweep per rig in parallel, and merges. See Invoke-Layer3MultiRig.
+		$reuseList = @(if ($ReuseAca) { $ReuseAca -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { Get-CleanedPrefix -Prefix $_ } })
+		if ($reuseList.Count -gt 1 -and $PSBoundParameters.ContainsKey('Layer3Rigs') -and $Layer3Rigs -ne $reuseList.Count) {
+			throw "-Layer3Rigs $Layer3Rigs disagrees with the $($reuseList.Count) rigs -ReuseAca names; pass one or the other."
+		}
+		$rigCount = [Math]::Max($Layer3Rigs, $reuseList.Count)
+		if ($rigCount -gt 1) {
+			Invoke-Layer3MultiRig -RigCount $rigCount -ReusePrefixes $reuseList
+			return
+		}
+
+		$acaPrefix = if ($ReuseAca) { $reuseList[0] } elseif ($NamePrefix) { Get-CleanedPrefix -Prefix $NamePrefix } else { New-RunPrefix }
 		Write-Host "[main] Layer 3 aca prefix=$acaPrefix silos=$($SiloCounts -join ',')" -ForegroundColor Cyan
 
 		$l3Dir = Join-Path $runRoot $acaPrefix
@@ -3151,6 +3754,7 @@ function Main {
 				$acaProvisioned = $true
 				$acaArgs = @{ NamePrefix = $acaPrefix }
 				if ($PrivateNetwork) { $acaArgs['PrivateNetwork'] = $true }
+				if ($Layer3WalAccounts -gt 1) { $acaArgs['WalAccountCount'] = $Layer3WalAccounts }
 				& $acaScript @acaArgs | Out-Host
 				if ($LASTEXITCODE -ne 0) { throw "deploy-aca.ps1 exited $LASTEXITCODE" }
 				# Provisioning has now written the context, so the region the
@@ -3166,6 +3770,10 @@ function Main {
 				}
 			} else {
 				Write-Host "[main] -ReuseAca ${ReuseAca}: skipping ACA provisioning" -ForegroundColor Yellow
+				$reuseExtras = @(Get-AcaContextWalExtraAccounts -Context (Read-AcaContext -NamePrefix $acaPrefix))
+				if ($Layer3WalAccounts - 1 -gt $reuseExtras.Count) {
+					throw "-Layer3WalAccounts $Layer3WalAccounts needs $($Layer3WalAccounts - 1) extra WAL account(s) but rig $acaPrefix has $($reuseExtras.Count). Run deploy-aca.ps1 -NamePrefix $acaPrefix -ReuseRg -SkipImageBuild -WalAccountCount $Layer3WalAccounts first."
+				}
 			}
 
 			$l3Ids = Resolve-WorkloadIds -LayerRows $Layer3Rows -WorkloadsSpec $Workloads
@@ -3197,6 +3805,7 @@ function Main {
 			$l3State['responseTimeoutSec']      = 420
 			$l3State.layer3SaturationRatio      = $SaturationRatio
 			$l3State.layer3MaxRungEscalations   = $MaxRungEscalations
+			$l3State['layer3WalAccounts']       = $Layer3WalAccounts
 
 			$l3Cells = Invoke-Layer3Cohorts `
 				-AcaPrefix   $acaPrefix `
@@ -3215,7 +3824,9 @@ function Main {
 				-SaturationRatio    $SaturationRatio `
 				-MaxRungEscalations $MaxRungEscalations `
 				-ExistingCells $(if ($Resume -and $l3State.layer3.cohorts -is [System.Collections.IDictionary]) { $l3State.layer3.cohorts } else { @{} }) `
-				-OnCellComplete $checkpoint
+				-OnCellComplete $checkpoint `
+				-WalAccounts    $Layer3WalAccounts `
+				-OverlapHarvest:$Layer3OverlapHarvest
 
 			$l3State.layer3.cohorts = $l3Cells
 			$l3State.layer3.rows    = Aggregate-Layer3Cells -Cells $l3Cells

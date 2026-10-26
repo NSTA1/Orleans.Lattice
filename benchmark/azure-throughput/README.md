@@ -66,9 +66,11 @@ journald-backed log capture with no scraper indirection.
 | `scripts/_vm-access.ps1` | SSH target resolution shared by the VM-path scripts: direct to the public FQDN, or through an Azure Bastion tunnel on a `-PrivateNetwork` rig. |
 | `scripts/_run-cohort-helpers.ps1` | Verdict-computation and progress-line helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer and its mid-run freeze detector, and `performance-report.ps1` its steady-state mean). |
 | `scripts/Test-CohortVerdict.ps1` | Regression tests for those helpers against literal log fixtures (pure pwsh, no Azure). |
-| `scripts/Test-PerformanceReportHarness.ps1`, `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1` | Offline regressions for report grading and replay, VM seed wiring, revision-scoped diagnostic paging, the read-mode preseed gates, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
+| `scripts/Test-PerformanceReportHarness.ps1`, `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1`, `scripts/Test-Layer3StorageMetrics.ps1`, `scripts/Test-Layer3OverlapHarvest.ps1` | Offline regressions for report grading and replay, VM seed wiring, revision-scoped diagnostic paging, the read-mode preseed gates, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
 | `scripts/deploy-aca.ps1` | Layer 3: provisions the multi-silo Azure Container Apps rig and builds its images remotely with `az acr build`. |
 | `scripts/run-cohort-aca.ps1` | Layer 3: one cohort - by default empties the rig's storage first (`-ResetStorage`), pins the silos to exactly N, runs the producer job, parks the silos at zero, then harvests the producer and silo logs from Log Analytics into one cohort log. |
+| `scripts/complete-cohort-aca.ps1` | Layer 3: the second half of a cohort - harvests its producer and silo logs, appends its storage-side metrics, grades it and writes the cohort log from the pending-harvest descriptor `run-cohort-aca.ps1` leaves; run inline, or later with `run-cohort-aca.ps1 -DeferHarvest`. |
+| `scripts/_storage-metrics.ps1` | Parsing and reduction of Azure Monitor storage metrics into the `[storage-metrics]` cohort-log lines and per-cohort summaries (pure; no Azure calls). |
 | `scripts/aca-common.ps1` | Shared Layer 3 helpers, also dot-sourced by `performance-report.ps1`: resource naming, the Azure CLI convention, the run-context file, silo scaling, the per-cohort storage reset, job waits and log harvest, and teardown with its ownership guard. |
 
 ## One-time setup
@@ -433,6 +435,18 @@ reused. `-Resume` continues an interrupted sweep from the state saved under its 
 repeat that prefix with `-NamePrefix` (or `-ReuseAca` for a rig that was kept). Both scripts can
 also be run by hand.
 
+`-Layer3Rigs K` runs the sweep on K identical rigs in parallel: the report splits the
+workloads between them itself (every silo count of a workload on one rig, deterministically),
+provisions them concurrently or uses a comma-separated `-ReuseAca a,b,c`, runs one sweep per
+rig as a child process (log: `benchmark/.run/performance-report/<prefix>/sweep.log`), merges
+the rigs' cells and renders the document once. `-Layer3OverlapHarvest` runs a cohort's Log
+Analytics harvest in the background while the next cohort runs, for every cohort whose result
+cannot change what the sweep does next. `-Layer3WalAccounts N` spreads every cohort's WAL
+across N storage accounts. Every cohort also records each storage account's own Azure Monitor
+metrics (transactions, throttling, server and end-to-end latency), which the multi-silo
+document renders per cell beside the grid, so a knee can be attributed to the account or to
+Lattice.
+
 Between cohorts the silo-count change (`Set-AcaSiloCount` in `scripts/aca-common.ps1`) does
 not return until every superseded silo revision has drained: it polls the app's full revision
 list and the replicas of the newest retired revisions, and fails closed with the lingering
@@ -479,6 +493,7 @@ the silo app for a measurement: each cohort pins its own replica count.
 | `-SiloCount` | `2` | Recorded in the run context only; `run-cohort-aca.ps1 -SiloCount` sets the real replica count. |
 | `-ReuseRg` | off | Provision into an existing `rg-<prefix>` from an earlier run (it must carry the rig's tag). Without it, an existing group is refused. |
 | `-SkipImageBuild` | off | Reuse the images already in the registry, for a `-ReuseRg` redeploy. |
+| `-WalAccountCount` | `1` | Storage accounts the WAL can be spread across (1-8). Values above 1 add WAL-only accounts `st<prefix>w1..` wired into the silos as keyed WAL providers; `run-cohort-aca.ps1 -WalAccounts` selects how many a cohort uses. A `-ReuseRg` run adds accounts to an existing rig and never removes one. |
 
 It writes the run context to `benchmark/.run/aca/<prefix>.context.json`, which is
 gitignored. The file holds the registry and storage credentials, so do not share it.
@@ -490,13 +505,16 @@ points the cohort at freshly named WAL and grain-state tables; pass
 `-ResetStorage:$false` to keep the older accumulate-across-cohorts behaviour. It then
 pins the silo app to exactly N replicas under a per-cohort tree id (and an Orleans
 cluster id derived from it), runs the producer job, and parks the silos at zero again -
-in a `finally` as well, so a failed cohort does not leave replicas billing. Last, it
-harvests the producer and silo logs from Log Analytics into
-`benchmark/.run/aca/<prefix>.n<N>.<workload>[.<CohortTag>].log` and appends the same
+in a `finally` as well, so a failed cohort does not leave replicas billing. Last,
+`scripts/complete-cohort-aca.ps1` harvests the producer and silo logs from Log Analytics into
+`benchmark/.run/aca/<prefix>.n<N>.<workload>[.<CohortTag>].log`, appends one
+`[storage-metrics]` line per storage account the cohort used, and appends the same
 verdict block Layer 2 writes: `HEALTHY`, or `WEDGE` when the producer printed no DONE
-marker, no window was productive, or the cumulative `ops` count stopped advancing for
-`-FreezeWedgeSec` seconds while work was in flight. A saturated cohort that kept
-completing work stays `HEALTHY`, with its failures carried as data.
+marker, no window was productive, the cumulative `ops` count stopped advancing for
+`-FreezeWedgeSec` seconds while work was in flight, `FINAL` reported unresolved entries,
+or a multi-account cohort's WAL placement was not confirmed. A saturated cohort that kept
+completing work stays `HEALTHY`, with its failures carried as data. `-DeferHarvest` returns
+before that step and leaves it to `complete-cohort-aca.ps1 -PendingHarvestPath <path>`.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
@@ -520,6 +538,8 @@ completing work stays `HEALTHY`, with its failures carried as data.
 | `-ExtraSiloEnv` | none | Extra `NAME=value` silo environment variables, applied last; a later cohort that does not name them removes them (see below). |
 | `-SettleSec` | `30` | Wait for cluster membership before starting the producer. |
 | `-FreezeWedgeSec` | `60` | Longest tolerated mid-run freeze - the cumulative `ops` count not advancing while `inFlight` stays above zero - before the cohort is graded `WEDGE`; `0` disables the check. |
+| `-WalAccounts` | `1` | Storage accounts the cohort's WAL partitions are spread across (1-8); the producer performs the spread after warm-up. Refused up front if the rig has fewer. |
+| `-DeferHarvest` | off | Return once the producer has finished and the silos are parked; the harvest, storage metrics and grading run later through `complete-cohort-aca.ps1`. |
 
 Silo environment variables do not persist across cohorts on one rig. Each cohort applies
 its variables with one `az containerapp update --set-env-vars`, which merges into the app's

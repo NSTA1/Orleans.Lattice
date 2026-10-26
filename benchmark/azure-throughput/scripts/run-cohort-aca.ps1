@@ -36,6 +36,22 @@
 
 .PARAMETER ShardCount
 	Shard count the producer pins the tree to before load starts.
+
+.PARAMETER WalAccounts
+	Storage accounts the cohort's WAL partitions are spread across (1-8,
+	default 1): the rig's primary account plus WalAccounts-1 of the extra
+	accounts deploy-aca.ps1 -WalAccountCount provisioned. The producer
+	performs the spread after its warm-up and logs '[producer] wal-placement';
+	a multi-account cohort whose log lacks that line grades WEDGE.
+
+.PARAMETER DeferHarvest
+	Return as soon as the producer job has finished and the silos are parked,
+	leaving the Log Analytics harvest, storage metrics and grading to
+	complete-cohort-aca.ps1 -PendingHarvestPath <the returned path>. The
+	harvest is mostly waiting for log ingestion, so a caller can run the next
+	cohort meanwhile; the deferred harvest is pinned to this cohort's
+	execution name and silo revision, so overlapping it changes nothing about
+	what is measured. Without it the harvest runs inline, as before.
 #>
 [CmdletBinding()]
 param(
@@ -282,19 +298,26 @@ param(
 	# Longest tolerated mid-run freeze (cumulative ops not advancing while
 	# inFlight > 0) before the cell is graded WEDGE rather than HEALTHY. A
 	# saturated cell keeps advancing; a frozen one does not. 0 disables.
-	[int] $FreezeWedgeSec = 60
+	[int] $FreezeWedgeSec = 60,
+	[ValidateRange(1, 8)][int] $WalAccounts = 1,
+	[switch] $DeferHarvest
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'aca-common.ps1')
-# Format-CohortVerdictLogBlock: the verdict block Layer 3 appends must be
-# byte-identical to Layer 2's, because the same Read-SiloLogStats parses both.
-. (Join-Path $PSScriptRoot '_run-cohort-helpers.ps1')
 
 $ctx = Read-AcaContext -NamePrefix $NamePrefix
 if (-not $TreeId) { $TreeId = "l3-$WorkloadMode-n$SiloCount-$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
+
+# Fail before anything bills if the rig cannot back the requested account
+# count: the silos and producer would otherwise clamp it silently and the cell
+# would run on fewer accounts than it is labelled with.
+$walExtraAccounts = @(Get-AcaContextWalExtraAccounts -Context $ctx)
+if ($WalAccounts - 1 -gt $walExtraAccounts.Count) {
+	throw "-WalAccounts $WalAccounts needs $($WalAccounts - 1) extra WAL account(s), but rig $NamePrefix has $($walExtraAccounts.Count). Re-run deploy-aca.ps1 -NamePrefix $NamePrefix -ReuseRg -SkipImageBuild -WalAccountCount $WalAccounts."
+}
 
 # One ClusterId per cohort. Azure Table membership partitions by ClusterId and
 # Orleans only reaps defunct rows after DefunctSiloExpiration (7 days by default),
@@ -330,6 +353,11 @@ if ($ResetStorage) {
 	# parked the app.
 	Set-AcaSiloCount -Context $ctx -Count 0 -TimeoutSec 300 | Out-Null
 	Reset-AcaBenchTables -Context $ctx -Keep @('OrleansSiloInstances') | Out-Null
+	# Every extra account, not only the ones this cohort uses: an earlier
+	# cohort with more accounts may have left tables on the others.
+	foreach ($extra in $walExtraAccounts) {
+		Reset-AcaBenchTables -Context $ctx -StorageAccount ([string]$extra.name) -Keep @() | Out-Null
+	}
 	$tableStamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
 	if (-not $PSBoundParameters.ContainsKey('WalTable')) { $WalTable = "Wal$tableStamp" }
 	if (-not $PSBoundParameters.ContainsKey('GrainStateTable')) { $GrainStateTable = "Gs$tableStamp" }
@@ -350,6 +378,7 @@ $siloEnv = @(
 	"BENCH_FLUSH_CONCURRENCY=$FlushConcurrency",
 	"BENCH_POINT_FANOUT=$PointFanOut",
 	"BENCH_WAL_PARTITIONS=$WalPartitions",
+	"BENCH_WAL_ACCOUNTS=$WalAccounts",
 	"BENCH_VEHICLE_COUNT=$VehicleCount",
 	# Silo-side too: the inner hops (LatticeGrain -> shard -> leaf -> WAL)
 	# are silo-to-silo in a multi-silo cluster, so leaving these at the 30s
@@ -456,6 +485,9 @@ try {
 		"BENCH_FLUSH_CONCURRENCY=$FlushConcurrency",
 		"BENCH_POINT_FANOUT=$PointFanOut",
 		"BENCH_WAL_PARTITIONS=$WalPartitions",
+		# The producer spreads the warmed tree's WAL partitions across this
+		# many accounts (BenchWalPlacement); the URI list only bounds the count.
+		"BENCH_WAL_ACCOUNTS=$WalAccounts",
 		"BENCH_SHARD_COUNT=$ShardCount",
 		"BENCH_CLIENT_COUNT=$ClientCount",
 		"BENCH_GENERATOR_PARALLELISM=$GeneratorParallelism",
@@ -473,6 +505,9 @@ try {
 		# membership partition and finds no gateway.
 		"BENCH_CLUSTER_ID=$ClusterId"
 	)
+	if ($walExtraAccounts.Count -gt 0) {
+		$prodEnv += "BENCH_WAL_EXTRA_ACCOUNT_URIS=$(@($walExtraAccounts | ForEach-Object { [string]$_.tableUri }) -join ';')"
+	}
 	Invoke-Az (@(
 		'containerapp', 'job', 'update',
 		'--name', $ctx.producerJob, '--resource-group', $ctx.resourceGroup,
@@ -499,6 +534,7 @@ try {
 	$executionCeilingSec = $DurationSec + $WarmUpBudgetSec + $ResponseTimeoutSec + $InFlightTailBudgetSec + 300
 	$state = Wait-AcaJobExecution -Context $ctx -ExecutionName $execName -TimeoutSec $executionCeilingSec
 	Write-Host "[cohort] execution finished: $state" -ForegroundColor DarkGray
+	$producerEndUtc = (Get-Date).ToUniversalTime()
 
 	# Park the silos BEFORE harvesting. The producer has exited, so nothing
 	# the silos do from here on is measured, while the harvest below waits on
@@ -511,110 +547,44 @@ try {
 	try { Set-AcaSiloCount -Context $ctx -Count 0 -TimeoutSec 300 | Out-Null }
 	catch { Write-Warning "[cohort] early park failed ($_); the finally block will retry" }
 
-	# A failed producer never prints its DONE marker, so the harvest would
-	# poll to its full deadline waiting for a line that cannot arrive - with
-	# N silos billing the whole time. Across an unattended sweep that is the
-	# difference between a cell costing minutes and costing the harvest
-	# timeout. Shorten the wait to a single ingestion-lag allowance, harvest
-	# whatever diagnostics did land (the stack trace is the reason the cell
-	# failed and is worth keeping), and move on.
-	$harvestWait = if ($state -eq 'Succeeded') { 420 } else { 120 }
-	if ($state -ne 'Succeeded') {
-		Write-Warning "[cohort] execution state '$state' is not Succeeded; harvesting diagnostics only (no DONE marker will arrive)."
+	# Everything from here on - the Log Analytics harvest, storage metrics,
+	# grading and the cohort log - reads only what this descriptor pins (the
+	# execution name, the silo revision, the window), so it can run now or,
+	# with -DeferHarvest, while the caller's next cohort runs.
+	$pending = [ordered]@{
+		namePrefix      = $NamePrefix
+		siloCount       = $SiloCount
+		workloadMode    = $WorkloadMode
+		durationSec     = $DurationSec
+		treeId          = $TreeId
+		executionName   = $execName
+		executionState  = $state
+		startedUtc      = $startedUtc.ToString('o')
+		producerEndUtc  = $producerEndUtc.ToString('o')
+		siloRevision    = $siloRevision
+		logPath         = $logPath
+		freezeWedgeSec  = $FreezeWedgeSec
+		walAccounts     = $WalAccounts
+		storageAccounts = @(Get-AcaCohortStorageAccounts -Context $ctx -WalAccounts $WalAccounts | ForEach-Object { [ordered]@{ name = $_.Name; role = $_.Role } })
 	}
+	$pendingPath = "$logPath.pending.json"
+	$pending | ConvertTo-Json -Depth 5 | Set-Content -Path $pendingPath -Encoding utf8
 
-	$lines = Get-AcaJobLog -Context $ctx -ExecutionName $execName -SinceUtc $startedUtc -TreeId $TreeId -MaxWaitSec $harvestWait
-	$siloLines = Get-AcaSiloLog -Context $ctx -SinceUtc $startedUtc -UntilUtc ((Get-Date).ToUniversalTime()) -RevisionName $siloRevision -IncludeDiagnostics
-
-	# Sort the silo half by its `t=` timestamp. Read-SiloLogStats takes the
-	# LAST productive [phaseA] window as the representative one, and Log
-	# Analytics returns rows ordered by ingestion-stamped TimeGenerated
-	# across N replicas - so without this the "last" window can belong to
-	# whichever replica happened to flush its log last, not to the latest
-	# point in the run.
-	$siloLines = @($siloLines | Sort-Object -Property @{ Expression = {
-		if ($_ -match 't=\s*([\d.]+)s') { [double]$Matches[1] } else { [double]::MaxValue }
-	} })
-
-	# One combined log per cohort, producer first. Read-SiloLogStats reads
-	# throughput from the producer's `[silo] t=` lines and per-call quantiles
-	# from the silos' `[phaseA]` lines, and it is the *same* function Layer 2
-	# uses, so the two layers cannot drift apart on what a cell means.
-	Set-Content -Path $logPath -Value (@($lines) + @($siloLines)) -Encoding utf8
-	Write-Host "[cohort] harvested $($lines.Count) producer + $($siloLines.Count) silo line(s) -> $logPath" -ForegroundColor Green
-
-	# Grade the cohort and append the verdict block the report parser reads.
-	#
-	# Layer 2's Resolve-CohortVerdict is deliberately NOT reused here, and
-	# the reason is a real difference in what the two layers measure rather
-	# than a convenience. Layer 2 hand-tunes each workload's rung to sit
-	# *below* the single-account ceiling, so any failure there is genuinely
-	# anomalous and Resolve-CohortVerdict rightly grades FailedFinal>0 as
-	# FAILED. Layer 3 does the opposite on purpose: it offers rung x N in
-	# order to find where the cluster stops converting extra silos into
-	# extra throughput, so the interesting cells are the saturated ones.
-	# Applying Layer 2's rule would exclude exactly the cells that locate
-	# the knee, and the curve would terminate at the last unsaturated N.
-	#
-	# So Layer 3 grades on the one shape that is genuinely unusable - the
-	# silent zero, where nothing completes and nothing fails because every
-	# call is parked past the end of the measurement window. A cell that
-	# delivered real throughput is HEALTHY and its failure count is carried
-	# as data (Read-SiloLogStats already extracts it), not as grounds for
-	# exclusion.
-	#
-	# The one saturated-looking shape that is NOT kept HEALTHY is a mid-run
-	# freeze: the cell delivers throughput, then the cumulative ops counter
-	# stops advancing while in-flight stays pinned, because every call is
-	# parked and none completes. That is a wedge that happened to start after
-	# some work had landed, and grading it HEALTHY lets its failure count read
-	# as saturation (#3475: 128 in-flight sagas frozen for ~400 s, 70% failed,
-	# graded HEALTHY).
-	$producerDone = @($lines | Where-Object { $_.Contains('[producer] DONE') }).Count -gt 0
-	$productive = @($lines | Where-Object {
-		$_.Contains('[silo] t=') -and ($_ -match 'ops/sec=\s*([\d,]+)') -and ([long]($Matches[1] -replace ',','') -gt 0)
-	}).Count
-	$longestFreeze = Get-SiloProgressLongestStall -Lines @($lines)
-	# Flushes still unsettled when FINAL was emitted (the in-flight-tail
-	# budget expired). They are in neither ops= nor failed=, so a cell that
-	# abandoned work used to read failed=0 and grade HEALTHY.
-	$unresolvedAtFinal = 0L
-	$finalLine = @($lines | Where-Object { $_.Contains('[silo] FINAL ') }) | Select-Object -Last 1
-	if ($finalLine -and ($finalLine -match '\bunresolved=([\d,]+)')) {
-		$unresolvedAtFinal = [long]($Matches[1] -replace ',','')
-	}
-
-	$verdictState = 'HEALTHY'
-	$verdictDetail = ''
-	if (-not $producerDone) {
-		$verdictState = 'WEDGE'
-		$verdictDetail = ' (producer emitted no DONE marker)'
-	} elseif ($productive -eq 0) {
-		$verdictState = 'WEDGE'
-		$verdictDetail = ' (no productive window: every call outlived the measurement window)'
-	} elseif ($FreezeWedgeSec -gt 0 -and $longestFreeze -ge $FreezeWedgeSec) {
-		$verdictState = 'WEDGE'
-		$verdictDetail = (' (mid-run freeze: no completion for {0:N0}s with work in flight)' -f $longestFreeze)
-	} elseif ($unresolvedAtFinal -gt 0) {
-		$verdictState = 'WEDGE'
-		$verdictDetail = (' (unresolved tail: {0:N0} entries still in flight when the in-flight-tail budget expired)' -f $unresolvedAtFinal)
-	}
-
-	Add-Content -Path $logPath -Encoding utf8 -Value (Format-CohortVerdictLogBlock `
-		-VerdictState $verdictState -VerdictDetail $verdictDetail -DrainTailSamples 0)
-	$verdictColour = if ($verdictState -eq 'HEALTHY') { 'Green' } else { 'Red' }
-	Write-Host "[cohort] verdict=$verdictState productiveWindows=$productive longestFreezeSec=$([Math]::Round($longestFreeze,1))" -ForegroundColor $verdictColour
-
-	[pscustomobject]@{
-		NamePrefix    = $NamePrefix
-		SiloCount     = $SiloCount
-		WorkloadMode  = $WorkloadMode
-		TreeId        = $TreeId
-		DurationSec   = $DurationSec
-		ExecutionName = $execName
-		ExecutionState= $state
-		LogPath       = $logPath
-		LineCount     = $lines.Count + $siloLines.Count
+	if ($DeferHarvest) {
+		Write-Host "[cohort] harvest deferred: complete-cohort-aca.ps1 -PendingHarvestPath $pendingPath" -ForegroundColor DarkGray
+		[pscustomobject]@{
+			NamePrefix         = $NamePrefix
+			SiloCount          = $SiloCount
+			WorkloadMode       = $WorkloadMode
+			TreeId             = $TreeId
+			DurationSec        = $DurationSec
+			ExecutionName      = $execName
+			ExecutionState     = $state
+			LogPath            = $logPath
+			PendingHarvestPath = $pendingPath
+		}
+	} else {
+		& (Join-Path $PSScriptRoot 'complete-cohort-aca.ps1') -PendingHarvestPath $pendingPath
 	}
 }
 finally {
