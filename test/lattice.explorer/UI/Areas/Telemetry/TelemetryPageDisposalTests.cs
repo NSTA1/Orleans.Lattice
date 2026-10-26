@@ -25,10 +25,11 @@ public sealed class TelemetryPageDisposalTests : TelemetryTestContext
 
         await DisposeComponentsAsync();
         await cut.InvokeAsync(() => catalogue.SetResult(Telemetry.Catalog));
+        var fault = await LeftPage.FaultAsync(Renderer);
 
         Assert.Multiple(() =>
         {
-            Assert.That(LeftPage.Fault(Renderer), Is.Null, "the circuit would end");
+            Assert.That(fault, Is.Null, "the circuit would end");
             Assert.That(notFound, Is.Zero, "a page that has been left declares nothing not found");
         });
     }

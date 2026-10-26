@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.Tests.UI;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 using static Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.App.AppPageTestData;
 
@@ -44,13 +45,11 @@ public sealed partial class AppPageTests
         await DisposeComponentsAsync();
         await cut.InvokeAsync(Workspace.Gate.SetResult);
 
-        // The read resumes on the renderer's dispatcher after a hop through the loader;
-        // a fault it raised would complete the renderer's unhandled-exception task.
-        SpinWait.SpinUntil(() => Renderer.UnhandledException.IsCompleted, TimeSpan.FromSeconds(2));
+        var fault = await LeftPage.FaultAsync(Renderer, TimeSpan.FromSeconds(2));
 
         Assert.Multiple(() =>
         {
-            Assert.That(Renderer.UnhandledException.IsCompleted, Is.False, () => "the circuit would end: " + Renderer.UnhandledException.Result);
+            Assert.That(fault, Is.Null, () => "the circuit would end: " + fault);
             Assert.That(Time.ArmedTimers, Is.Zero, "no retry is armed for a page that is gone");
         });
     }

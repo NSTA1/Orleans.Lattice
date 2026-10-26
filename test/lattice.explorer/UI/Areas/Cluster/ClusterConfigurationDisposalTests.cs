@@ -68,6 +68,6 @@ public sealed class ClusterConfigurationDisposalTests : ClusterTestContext
         await save;
 
         Assert.That(Toasts, Is.Empty);
-        Assert.That(LeftPage.Fault(Renderer), Is.Null);
+        Assert.That(await LeftPage.FaultAsync(Renderer), Is.Null);
     }
 }
