@@ -1,0 +1,16 @@
+{
+  "path": "build",
+  "order": 4,
+  "items": [
+    "B4"
+  ],
+  "poster": {
+    "scene": "atomic-writes",
+    "beat": 0,
+    "offset": 3.5
+  },
+  "published": {
+    "cut": "fe47bdc3df26",
+    "bytes": 6384590
+  }
+}

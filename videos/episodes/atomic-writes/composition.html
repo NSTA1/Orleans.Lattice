@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Atomic writes</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      .frame {
+        position: absolute;
+        inset: 0;
+      }
+      .partial-layout {
+        position: absolute;
+        top: 260px;
+        left: 240px;
+        right: 240px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 80px;
+      }
+      .write-card {
+        min-height: 300px;
+        padding: 36px;
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+      }
+      .write-card h3 {
+        margin: 0 0 32px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+      }
+      .write-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 22px 0;
+        border-top: var(--lv-hairline) solid var(--lt-rule);
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+      }
+      .write-row code,
+      .batch-row code,
+      .read-card code {
+        color: var(--lt-ink);
+        font-family: var(--lv-font-mono);
+        font-size: var(--lv-type-code);
+      }
+      .write-row .lv-label {
+        text-align: right;
+      }
+      .partial-note {
+        position: absolute;
+        top: 740px;
+        left: 276px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+      .batch-layout {
+        position: absolute;
+        top: 250px;
+        left: 260px;
+        right: 260px;
+        display: grid;
+        grid-template-columns: 1fr 420px;
+        gap: 100px;
+        align-items: start;
+      }
+      .batch-table {
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+      }
+      .batch-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        align-items: center;
+        min-height: 116px;
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+      }
+      .batch-row span,
+      .decision p {
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+      }
+      .decision {
+        padding-top: 14px;
+      }
+      .decision p {
+        margin: 0;
+        padding: 0 0 28px;
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+        line-height: 1.25;
+      }
+      .decision .lv-label {
+        display: block;
+        margin-bottom: 12px;
+      }
+      .decision p + p {
+        margin-top: 30px;
+      }
+      .cross-layout {
+        position: absolute;
+        top: 210px;
+        left: 140px;
+        right: 140px;
+        display: grid;
+        grid-template-columns: 1120px 1fr;
+        gap: 72px;
+        align-items: start;
+      }
+      .cross-code {
+        margin: 0;
+        font-size: var(--lv-type-label);
+      }
+      .tree-state {
+        display: grid;
+        gap: 46px;
+        padding-top: 12px;
+      }
+      .tree-state p {
+        margin: 0;
+        padding: 0 0 28px;
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+      }
+      .tree-state .lv-label {
+        display: block;
+        margin-bottom: 12px;
+      }
+      .boundary-layout {
+        position: absolute;
+        top: 300px;
+        left: 220px;
+        right: 220px;
+        display: grid;
+        grid-template-columns: 1fr 220px 1fr;
+        gap: 48px;
+        align-items: center;
+      }
+      .read-card {
+        min-height: 230px;
+        padding: 36px;
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+      }
+      .read-card .lv-label {
+        display: block;
+        margin-bottom: 28px;
+      }
+      .decision-line {
+        width: 1px;
+        height: 230px;
+        justify-self: center;
+        background: var(--lt-rule-strong);
+        position: relative;
+      }
+      .decision-line span {
+        position: absolute;
+        top: 102px;
+        left: 24px;
+        width: 180px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-caption);
+      }
+      .boundary-note {
+        position: absolute;
+        top: 690px;
+        left: 220px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+      .places {
+        position: absolute;
+        top: 245px;
+        left: var(--lv-safe-x);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .place {
+        position: relative;
+        margin-bottom: 54px;
+        padding-left: 76px;
+      }
+      .place .lv-node {
+        position: absolute;
+        top: 10px;
+        left: 0;
+      }
+      .place-next .lv-node {
+        background: var(--lt-ink);
+      }
+      .place-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: 1.1;
+      }
+      .place-what {
+        margin: 12px 0 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-caption);
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="atomic-writes"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="125.578"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="atomic-writes"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Build","title":"Atomic writes","subtitle":"All-or-nothing changes across one tree or several","beats":"0.5,9.423","end":15.234}'
+        data-start="0"
+        data-duration="15.234"
+      ></div>
+
+      <div id="partial" class="clip lv-scene frame" data-scene="the-partial-write-problem" data-track-index="0" data-start="15.234" data-duration="25.059">
+        <h2 class="lv-heading">The partial-write problem</h2>
+      </div>
+      <div id="partial-layout" class="clip partial-layout" data-scene="the-partial-write-problem" data-from-beat="0" data-track-index="2" data-start="15.834" data-duration="24.459">
+        <section class="write-card">
+          <h3>Separate writes</h3>
+          <div class="write-row"><code>status = packed</code><span class="lv-label">visible</span></div>
+          <div class="write-row"><code>tracking = 7K3</code><span class="lv-label">second write fails</span></div>
+        </section>
+        <section class="write-card">
+          <h3>Non-atomic batch</h3>
+          <div class="write-row"><code>status + tracking</code><span class="lv-label">partial application is possible</span></div>
+        </section>
+      </div>
+      <p id="partial-note" class="clip partial-note" data-scene="the-partial-write-problem" data-from-beat="2" data-track-index="3" data-start="31.14" data-duration="9.153">Useful when throughput matters and partial application is acceptable.</p>
+
+      <div id="batch" class="clip lv-scene frame" data-scene="one-batch-one-decision" data-track-index="0" data-start="40.293" data-duration="27.01">
+        <h2 class="lv-heading">One batch, one decision</h2>
+      </div>
+      <div id="batch-layout" class="clip batch-layout" data-scene="one-batch-one-decision" data-from-beat="0" data-track-index="2" data-start="40.893" data-duration="26.41">
+        <div class="batch-table">
+          <div class="batch-row"><code>status = packed</code><span>prepared, hidden</span></div>
+          <div class="batch-row"><code>tracking = 7K3</code><span>prepared, hidden</span></div>
+        </div>
+        <div class="decision">
+          <p><span class="lv-label">Commit</span>Both changes become visible together.</p>
+          <p><span class="lv-label">Abort</span>Prepared changes stay hidden.</p>
+          <p><span class="lv-label">Timeout</span>Outcome is not established.</p>
+        </div>
+      </div>
+
+      <div id="across" class="clip lv-scene frame" data-scene="across-trees" data-track-index="0" data-start="67.303" data-duration="22.027">
+        <h2 class="lv-heading">Across trees</h2>
+      </div>
+      <div id="cross-layout" class="clip cross-layout" data-scene="across-trees" data-from-beat="0" data-track-index="2" data-start="67.903" data-duration="21.427">
+        <pre class="lv-code cross-code"><code data-snippet="atomic-writes/cross-tree">// Move a row between trees in one cross-tree saga.
+await grainFactory
+    .BeginAtomicWrite("rekey:order-42")
+    .ForTree("orders-east")
+        .Delete("order:42")
+    .ForTree("orders-west")
+        .Set("order:42", new Order("42", 250m))
+    .CommitAsync(cancellationToken);</code></pre>
+        <div class="tree-state">
+          <p><span class="lv-label">orders-east</span>Delete the old row</p>
+          <p><span class="lv-label">orders-west</span>Set the new row</p>
+          <p><span class="lv-label">One decision</span>Commit both slices, or neither</p>
+        </div>
+      </div>
+
+      <div id="boundary" class="clip lv-scene frame" data-scene="the-boundary" data-track-index="0" data-start="89.33" data-duration="21.541">
+        <h2 class="lv-heading">The boundary</h2>
+      </div>
+      <div id="boundary-layout" class="clip boundary-layout" data-scene="the-boundary" data-from-beat="0" data-track-index="2" data-start="89.93" data-duration="20.941">
+        <div class="read-card">
+          <span class="lv-label">Separate read, before</span>
+          <code>orders-east: order/42</code><br />
+          old state
+        </div>
+        <div class="decision-line"><span>shared commit decision</span></div>
+        <div class="read-card">
+          <span class="lv-label">Separate read, after</span>
+          <code>orders-west: order/42</code><br />
+          new state
+        </div>
+      </div>
+      <p id="boundary-note" class="clip boundary-note" data-scene="the-boundary" data-from-beat="1" data-track-index="3" data-start="95.016" data-duration="15.855">Cross-tree reads can straddle a decision. One-tree snapshot: snapshot entry cursor.</p>
+
+      <div id="where-next" class="clip lv-scene frame" data-scene="where-next" data-track-index="0" data-start="110.871" data-duration="14.707">
+        <h2 class="lv-heading">Where next</h2>
+      </div>
+      <ol id="where-next-list" class="clip places" data-scene="where-next" data-from-beat="0" data-track-index="2" data-start="111.471" data-duration="14.107">
+        <li class="place place-next">
+          <span class="lv-node"></span>
+          <h3 class="place-name">TTL and soft delete</h3>
+          <p class="place-what">Next on Build</p>
+        </li>
+      </ol>
+      <ol id="where-next-pages" class="clip places" style="top: 500px" data-scene="where-next" data-from-beat="0" data-track-index="3" data-start="111.471" data-duration="14.107">
+        <li class="place">
+          <span class="lv-node"></span>
+          <h3 class="place-name">Atomic commit without consensus</h3>
+          <p class="place-what">The deep dive</p>
+        </li>
+        <li class="place">
+          <span class="lv-node"></span>
+          <h3 class="place-name">Atomic writes</h3>
+          <p class="place-what">The documentation page</p>
+        </li>
+      </ol>
+
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/atomic-writes/narration.wav" data-start="0" data-duration="125.578" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      (function () {
+        const { duration } = window.LatticeMotion;
+        window.LatticeCode.highlightAll(document);
+        const byId = (id) => document.getElementById(id);
+        const start = (element) => Number(element.dataset.start);
+        const end = (element) => start(element) + Number(element.dataset.duration);
+        const tl = gsap.timeline({ paused: true });
+        const ease = "lattice-out";
+
+        function arrive(element, delay = 0.1, rise = 20) {
+          tl.fromTo(element, { opacity: 0, y: rise }, { opacity: 1, y: 0, duration: duration.slow, ease }, start(element) + delay);
+          tl.to(element, { opacity: 0, duration: duration.fast, ease: "power1.in" }, end(element) - duration.fast);
+        }
+
+        for (const id of ["partial", "batch", "across", "boundary", "where-next"]) {
+          arrive(byId(id), 0, 0);
+        }
+        for (const id of ["partial-layout", "batch-layout", "cross-layout", "boundary-layout", "where-next-list"]) {
+          arrive(byId(id));
+        }
+        for (const id of ["partial-note", "boundary-note", "where-next-pages"]) {
+          arrive(byId(id), 0.1, 16);
+        }
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["atomic-writes"] = tl;
+      })();
+    </script>
+  </body>
+</html>
