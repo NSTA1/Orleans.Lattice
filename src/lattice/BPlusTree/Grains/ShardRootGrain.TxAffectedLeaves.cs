@@ -201,9 +201,8 @@ internal sealed partial class ShardRootGrain
     public async Task<Dictionary<string, HybridLogicalClock?>> GetOriginalPrepareStampsAsync(Guid transactionId, bool exhaustive)
     {
         EnsureInternalOrigin(LatticeOperation.RangeRead);
-        var stamps = new Dictionary<string, HybridLogicalClock?>(StringComparer.Ordinal);
         if (transactionId == Guid.Empty)
-            return stamps;
+            return new Dictionary<string, HybridLogicalClock?>(StringComparer.Ordinal);
 
         // The fast pass reads the leaves this activation recorded the saga's
         // prepares reaching. A leaf split leaves the donor's bucket in place
@@ -226,7 +225,7 @@ internal sealed partial class ShardRootGrain
         }
         else
         {
-            return stamps;
+            return new Dictionary<string, HybridLogicalClock?>(StringComparer.Ordinal);
         }
 
         var reads = new Task<Dictionary<string, HybridLogicalClock?>?>[leaves.Count];
@@ -235,6 +234,24 @@ internal sealed partial class ShardRootGrain
             reads[i++] = leaf.GetOriginalPrepareStampsAsync(transactionId);
         await Task.WhenAll(reads);
 
+        // Each leaf answers with a map of its own, so a single answering leaf -
+        // the common case, a saga whose keys share a leaf - is returned as it
+        // is rather than copied into a second map.
+        Dictionary<string, HybridLogicalClock?>? only = null;
+        var answering = 0;
+        var total = 0;
+        foreach (var read in reads)
+        {
+            if (read.Result is not { } leafStamps) continue;
+            only = leafStamps;
+            answering++;
+            total += leafStamps.Count;
+        }
+
+        if (answering == 1)
+            return only!;
+
+        var stamps = new Dictionary<string, HybridLogicalClock?>(total, StringComparer.Ordinal);
         foreach (var read in reads)
         {
             if (read.Result is not { } leafStamps) continue;
