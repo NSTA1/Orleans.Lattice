@@ -731,6 +731,10 @@ $lt = Measure-SteadyStateRate -Samples $late
 _Assert -Name 'leading idle seconds after warm-up are trimmed' `
 	-Condition ($lt.Mean -eq 500 -and $lt.WindowStart -eq 17) -Detail "got mean=$($lt.Mean) start=$($lt.WindowStart)"
 
+$med = Measure-SteadyStateRate -Samples @(ConvertFrom-SiloProgressLines -Lines @((_RateLine 15 100 100 9), (_RateLine 16 200 100 1), (_RateLine 17 300 100 5)))
+_Assert -Name 'the inFlight median of three samples is the middle one, not the maximum' `
+	-Condition ($med.InFlightMedian -eq 5 -and $med.InFlightMax -eq 9) -Detail "got median=$($med.InFlightMedian)"
+
 $none = Measure-SteadyStateRate -Samples @(ConvertFrom-SiloProgressLines -Lines @((_RateLine 20 0 0 0)))
 _Assert -Name 'no non-zero sample yields an empty window' `
 	-Condition ($none.Mean -eq 0 -and $none.Count -eq 0 -and $null -eq $none.WindowStart) -Detail "got mean=$($none.Mean) n=$($none.Count)"
@@ -759,6 +763,45 @@ _Assert -Name 'a clean cohort with no unresolved tail stays HEALTHY' -Condition 
 $missingDiag = Measure-CohortWedgeDiagnostics -SiloLogPath (Join-Path ([System.IO.Path]::GetTempPath()) ("missing-" + [Guid]::NewGuid().ToString('N') + '.log'))
 _Assert -Name 'wedge diagnostics on a missing (unfetched) log score zero instead of throwing' `
 	-Condition ($missingDiag.Watchdog -eq 0 -and $missingDiag.WalSlot -eq 0 -and $missingDiag.WalAppend -eq 0)
+
+Write-Host ''
+Write-Host 'ConvertFrom-PhaseALine / Merge-PhaseAWindows' -ForegroundColor Cyan
+
+function _PhaseA([double] $t, [int] $count, [double] $min, [double] $p50, $p75, [double] $p90, [double] $p99, [double] $max) {
+	$p75Tok = if ($null -ne $p75) { " p75=$p75" } else { '' }
+	"[phaseA] t=${t}s instrument=get_many.duration tree=cohort-x shard=- phase=- status=- count=$count sum=1 min=$min p50=$p50$p75Tok p90=$p90 p99=$p99 max=$max"
+}
+$row = ConvertFrom-PhaseALine -Line (_PhaseA 40.3 73 0.53 3.86 5.33 14.04 201.25 201.25)
+_Assert -Name 'a phaseA row parses its window end, count and quantiles' `
+	-Condition ($row.t -eq 40.3 -and $row.count -eq 73 -and $row.p50 -eq 3.86 -and $row.p75 -eq 5.33 -and $row.max -eq 201.25 -and $row.Tree -eq 'cohort-x')
+_Assert -Name 'a non-phaseA line does not parse' -Condition ($null -eq (ConvertFrom-PhaseALine -Line '[silo] t= 1.0s ops= 1'))
+
+$single = Merge-PhaseAWindows -Rows @($row)
+_Assert -Name 'one window merges to its own quantiles exactly' `
+	-Condition ($single.P50 -eq 3.86 -and $single.P75 -eq 5.33 -and $single.P90 -eq 14.04 -and $single.P99 -eq 201.25 -and $single.Count -eq 73) `
+	-Detail "got p50=$($single.P50) p75=$($single.P75) p90=$($single.P90) p99=$($single.P99)"
+
+$twin = Merge-PhaseAWindows -Rows @($row, (ConvertFrom-PhaseALine -Line (_PhaseA 50.3 73 0.53 3.86 5.33 14.04 201.25 201.25)))
+_Assert -Name 'two identical windows merge to the same quantiles' `
+	-Condition ([math]::Abs($twin.P50 - 3.86) -lt 0.01 -and [math]::Abs($twin.P99 - 201.25) -lt 0.01 -and $twin.Count -eq 146) `
+	-Detail "got p50=$($twin.P50) p99=$($twin.P99)"
+
+# 900 fast calls and 100 slow ones: the median belongs to the fast window and
+# the p99 to the slow one - a last-window pick would report whichever came last.
+$fast = ConvertFrom-PhaseALine -Line (_PhaseA 30 900 0.5 1.0 1.2 1.5 2.0 2.0)
+$slow = ConvertFrom-PhaseALine -Line (_PhaseA 40 100 50 100 110 120 150 150)
+$mix = Merge-PhaseAWindows -Rows @($fast, $slow)
+_Assert -Name 'the merged median is weighted by call count' `
+	-Condition ($mix.P50 -gt 0.5 -and $mix.P50 -lt 2.0) -Detail "got p50=$($mix.P50)"
+_Assert -Name 'the merged p99 comes from the slow tail' `
+	-Condition ($mix.P99 -gt 50 -and $mix.P99 -le 150) -Detail "got p99=$($mix.P99)"
+_Assert -Name 'the merged quantiles are ordered' `
+	-Condition ($mix.P50 -le $mix.P75 -and $mix.P75 -le $mix.P90 -and $mix.P90 -le $mix.P99)
+
+$legacy = Merge-PhaseAWindows -Rows @((ConvertFrom-PhaseALine -Line (_PhaseA 30 10 1 2 $null 3 4 4)))
+_Assert -Name 'a row without p75 leaves the merged p75 null' -Condition ($null -eq $legacy.P75 -and $legacy.P50 -eq 2)
+_Assert -Name 'windows with no calls are ignored, and none at all is null' `
+	-Condition ($null -eq (Merge-PhaseAWindows -Rows @((ConvertFrom-PhaseALine -Line (_PhaseA 30 0 1 2 3 4 5 5)))) -and $null -eq (Merge-PhaseAWindows -Rows @()))
 
 Write-Host ''
 $summaryColor = if ($script:_FailCount -eq 0) { 'Green' } else { 'Red' }

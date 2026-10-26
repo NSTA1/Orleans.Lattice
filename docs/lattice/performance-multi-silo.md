@@ -321,15 +321,17 @@ is the exception - either the cluster was still keeping up at the highest
 load the harness offered, or the producer could not generate that load - so
 the true ceiling is higher.
 
-**Throughput is cluster-wide; the latency quantiles are not.** The
-throughput column counts every key the whole cluster retired. The p50/p99
-columns come from the duration histogram of a single silo's last productive
-reporter window, because the histogram is per-process and this tier does not
-aggregate quantiles across hosts (merging quantiles is not sound, and
-summing them is meaningless). Treat the latency columns as *representative
-of one host under the cluster's share of the load*, not as a cluster-wide
-distribution, and as the time spent inside the silo, not the round trip the
-client sees. For the atomic rows the instrument is the saga's terminal
+**Throughput is counted at the client; the latency quantiles are
+estimated from the silos.** The throughput column counts every key the
+whole cluster retired. Each silo logs its duration histogram as quantiles
+per 10-second reporter window, not raw samples, so the p50/p99 columns
+merge every window of every silo, weighted by its call count, by treating
+each window as a piecewise-linear distribution through its logged
+quantiles. That makes them an estimate of the distribution across the
+cluster, not an exact one. The cells published here predate the merge: they
+came from a single silo's last reporter window, which can represent one
+slice of the run rather than the run. Read the latency columns as the time
+spent inside the silo, not the round trip the client sees. For the atomic rows the instrument is the saga's terminal
 broadcast phase (`saga.broadcast.duration`), not its end-to-end commit time.
 
 **Failures are data here, and they are storage timeouts.** The engine
@@ -643,8 +645,11 @@ The switches that matter for a partial or resumed run:
   when a cell is graded producer-bound, which means the producer could not
   generate the load it was asked for.
 - `-Layer3Rigs <K>` runs the sweep on K identical rigs in parallel. The
-  harness splits the workloads between them itself, keeping every silo
-  count of a workload on one rig so no curve mixes rigs, provisions the rigs
+  harness splits the work between them itself: by workload, keeping every
+  silo count of a workload on one rig so no curve mixes rigs, or - with more
+  rigs than workloads - by dealing a workload's silo counts into one
+  contiguous run per rig, in which case the metadata's `splitCurves` key
+  names the curves that span rigs. It provisions the rigs
   concurrently (or uses a comma-separated `-ReuseAca` list), runs one sweep
   per rig with its log in `benchmark/.run/performance-report/<prefix>/sweep.log`,
   then merges the cells and renders this document once. Each rig has its
