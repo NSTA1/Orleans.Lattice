@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the actual installer with real Linux privilege and process boundaries.
 
-No packages or browsers are installed. Only the attempt clock and five-second
-retry sleep are shortened; sudo, process groups, signals and file locks are real.
+No packages or browsers are installed. A bounded readiness handshake separates
+real PowerShell startup from the shortened cleanup clock; sudo, process groups,
+signals and file locks are real.
 Run as a non-root user with passwordless sudo (the GitHub-hosted runner contract).
 """
 
@@ -20,6 +21,90 @@ import unittest
 
 WORKFLOWS = Path(__file__).resolve().parent
 
+CLOCK = r'''
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import time
+import uuid
+
+WAIT_FOR_READY = True
+root = Path(__file__).resolve().parent
+original_popen = subprocess.Popen
+
+def trace(event):
+    with (root / "clock-events").open("a") as log:
+        log.write(json.dumps({"event": event, "time": time.monotonic()}) + "\n")
+
+class ReadyProcess(original_popen):
+    def __init__(self, *args, **kwargs):
+        self.fixture_attempt = kwargs.get("start_new_session", False)
+        if self.fixture_attempt:
+            self.ready = root / f"ready-{uuid.uuid4().hex}"
+            not_before = time.monotonic() + 3 if (root / "delay-startup").exists() else 0
+            kwargs["env"] = dict(kwargs.get("env") or os.environ,
+                                 PLAYWRIGHT_FIXTURE_READY=str(self.ready),
+                                 PLAYWRIGHT_FIXTURE_NOT_BEFORE=str(not_before))
+        super().__init__(*args, **kwargs)
+
+    def wait(self, timeout=None):
+        if self.fixture_attempt and timeout is not None:
+            trace("startup")
+            deadline = time.monotonic() + 5
+            if WAIT_FOR_READY:
+                while not self.ready.exists() and self.poll() is None:
+                    if time.monotonic() >= deadline:
+                        print("::error::Fixture worker did not become ready within 5 seconds.", flush=True)
+                        raise subprocess.TimeoutExpired(self.args, 5)
+                    time.sleep(0.01)
+                if not self.ready.exists():
+                    raise RuntimeError("Fixture worker exited before its readiness handshake")
+                trace("armed")
+            else:
+                trace("unarmed")
+        return super().wait(timeout=timeout)
+
+subprocess.Popen = ReadyProcess
+sys.argv = [sys.argv[1], "2", "0.3", *sys.argv[2:]]
+try:
+    runpy.run_path(sys.argv[0], run_name="__main__")
+finally:
+    trace("finished")
+'''
+
+ORIGINAL_TIMEOUT = r'''
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+import uuid
+
+assert sys.argv[1:3] == ["--kill-after=10s", "120s"]
+ready = Path(__file__).resolve().parent / f"original-ready-{uuid.uuid4().hex}"
+process = subprocess.Popen(
+    ["/usr/bin/timeout", "--kill-after=0.3s", "7s", *sys.argv[3:]],
+    env=dict(os.environ, PLAYWRIGHT_FIXTURE_READY=str(ready)), start_new_session=True,
+)
+deadline = time.monotonic() + 5
+while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+    time.sleep(0.01)
+if ready.exists() and process.poll() is None:
+    # Arm the real GNU timeout's alarm only after the fixture is ready.
+    # Its seven-second fallback also bounds the five-second startup phase.
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        os.kill(process.pid, signal.SIGALRM)
+elif not ready.exists():
+    print("::error::Original-timeout fixture never became ready.", flush=True)
+sys.exit(process.wait(timeout=3))
+'''
+
 WORKER = r'''
 import fcntl
 import json
@@ -31,6 +116,9 @@ import sys
 import time
 
 root = Path(__file__).resolve().parent.parent
+def ready():
+    Path(os.environ["PLAYWRIGHT_FIXTURE_READY"]).touch()
+
 if sys.argv[1] == "--hold":
     lock = open(root / "lock", "a")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -44,19 +132,24 @@ if sys.argv[1] == "--hold":
     while True:
         signal.pause()
 
+# Delay overlaps PowerShell startup, rather than consuming three more seconds.
+time.sleep(max(0, float(os.environ.get("PLAYWRIGHT_FIXTURE_NOT_BEFORE", "0")) - time.monotonic()))
 mode = (root / "mode").read_text()
 arguments = sys.argv[1:]
 with (root / "calls").open("a") as log:
     log.write(json.dumps({"uid": os.geteuid(), "args": arguments}) + "\n")
 count = len((root / "calls").read_text().splitlines())
 if mode == "fail":
+    ready()
     sys.exit(7)
 if mode == "retry" and count == 1:
+    ready()
     sys.exit(8)
 lock = open(root / "lock", "a")
 try:
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except BlockingIOError:
+    ready()
     print("fixture: previous privileged installer still owns the lock; inner apt exit 100", flush=True)
     sys.exit(1)  # Playwright maps the apt failure to wrapper exit 1.
 fcntl.flock(lock, fcntl.LOCK_UN)
@@ -75,10 +168,12 @@ if mode in ("hang", "exit-with-child", "exit-with-escaped-child", "exhaust") and
         if time.monotonic() >= deadline:
             raise RuntimeError("privileged lock holder did not become ready")
         time.sleep(0.01)
+    ready()
     if mode in ("exit-with-child", "exit-with-escaped-child"):
         sys.exit(9)
     while True:
         signal.pause()
+ready()
 '''
 
 
@@ -105,17 +200,22 @@ class PrivilegedInstallerTests(unittest.TestCase):
         script.parent.mkdir(parents=True)
         self.tools = self.root / "bin"
         self.tools.mkdir()
-        for name in ("calls", "lock", "owner", "owners"):
+        for name in ("calls", "clock-events", "lock", "owner", "owners"):
             path = self.root / name
             path.touch()
             path.chmod(0o666)
         (self.root / "owner").unlink()
         self.write_tool("worker", f"#!{sys.executable}\nSUDO = {self.sudo!r}\n" + WORKER)
+        (self.root / "clock.py").write_text(CLOCK)
+        (self.root / "original-timeout.py").write_text(ORIGINAL_TIMEOUT)
         script.write_text(
             f"& '{self.tools / 'worker'}' @args\nexit $LASTEXITCODE\n",
             encoding="utf-8",
         )
-        self.write_tool("pwsh", f'#!/bin/bash\nexec "{self.pwsh}" -NoProfile -NonInteractive "$@"\n')
+        self.write_tool("pwsh", f'''#!/bin/bash
+            export PLAYWRIGHT_FIXTURE_READY="${{PLAYWRIGHT_FIXTURE_READY:-{self.root / 'original-ready'}}}"
+            exec "{self.pwsh}" -NoProfile -NonInteractive "$@"
+        ''')
         # sudo's secure_path intentionally does not inherit the fixture PATH.
         # Resolve the clock shim before elevation, but use real sudo for the exec.
         self.write_tool("sudo", f"""\
@@ -130,13 +230,12 @@ class PrivilegedInstallerTests(unittest.TestCase):
             script="$1"
             shift 3
             export APT_CONFIG="{self.root / 'apt.conf'}"
-            exec "{sys.executable}" "$script" 2 0.3 "$@"
+            exec "{sys.executable}" "{self.root / 'clock.py'}" "$script" "$@"
         """)
-        self.write_tool("timeout", """\
+        self.write_tool("timeout", f"""\
             #!/bin/bash
             [ "$1" = --kill-after=10s ] && [ "$2" = 120s ] || exit 97
-            shift 2
-            exec /usr/bin/timeout --kill-after=0.3s 2s "$@"
+            exec "{sys.executable}" "{self.root / 'original-timeout.py'}" "$@"
         """)
         self.write_tool("sleep", "#!/bin/bash\nexit 0\n")
         self.env = dict(os.environ, PATH=f"{self.tools}:{os.environ['PATH']}")
@@ -176,7 +275,8 @@ class PrivilegedInstallerTests(unittest.TestCase):
         return subprocess.run(
             ["bash", str(self.root / "install-playwright-browsers.sh"), cache,
              *(browsers or ("chromium",))],
-            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=15,
+            # Three bounded five-second startups plus two seconds/.3 grace each.
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=30,
         )
 
     def calls(self):
@@ -202,6 +302,7 @@ class PrivilegedInstallerTests(unittest.TestCase):
         self.assert_owner_reaped()
 
     def test_cleanup_does_not_signal_unrelated_privileged_process(self):
+        (self.root / "delay-startup").touch()
         marker = self.root / "unrelated"
         sentinel = subprocess.Popen([
             self.sudo, "-n", "--", sys.executable, "-c",
@@ -219,11 +320,45 @@ class PrivilegedInstallerTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             subprocess.run([self.sudo, "-n", "kill", "-0", pid], check=True, timeout=5)
             self.assert_owner_reaped()
+            events = [json.loads(line) for line in (self.root / "clock-events").read_text().splitlines()]
+            self.assertEqual(["startup", "armed", "finished", "startup", "armed", "finished"],
+                             [event["event"] for event in events], events)
+            self.assertGreater(events[1]["time"] - events[0]["time"], 2, events)
+            self.assertGreaterEqual(events[2]["time"] - events[1]["time"], 2, events)
+            self.assertIn("exceeded 2 seconds", result.stdout)
+            self.assertIn("exit code 137", result.stdout)
+            print(f"Sentinel startup={events[1]['time'] - events[0]['time']:.3f}s; "
+                  f"armed execution/cleanup={events[2]['time'] - events[1]['time']:.3f}s.")
         finally:
             if marker.exists():
                 subprocess.run([self.sudo, "-n", "kill", "-KILL", marker.read_text()],
                                check=True, timeout=5)
             sentinel.wait(timeout=5)
+
+    def test_unsynchronised_clock_mutation_catches_slow_worker_startup(self):
+        clock = self.root / "clock.py"
+        source = clock.read_text()
+        self.assertEqual(1, source.count("WAIT_FOR_READY = True"))
+        clock.write_text(source.replace("WAIT_FOR_READY = True", "WAIT_FOR_READY = False"))
+        with self.assertRaisesRegex(AssertionError, r"0 != (124|137)") as caught:
+            self.test_cleanup_does_not_signal_unrelated_privileged_process()
+        self.assertIn("failed after three bounded attempts", str(caught.exception))
+        exits = re.findall(r"failed with exit code (\d+)", str(caught.exception))
+        self.assertEqual(3, len(exits))
+        self.assertTrue(all(code in ("124", "137") for code in exits), exits)
+        self.assertEqual(0, len(self.calls()))
+        print(f"Unsynchronised clock: {'/'.join(exits)} before any worker call (caught).")
+
+    def test_worker_exit_without_readiness_fails_instead_of_certifying_cleanup(self):
+        worker = self.tools / "worker"
+        source = worker.read_text()
+        handshake = 'Path(os.environ["PLAYWRIGHT_FIXTURE_READY"]).touch()'
+        self.assertEqual(1, source.count(handshake))
+        worker.write_text(source.replace(handshake, "pass"))
+        result = self.install("pass")
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(3, len(self.calls()), result.stdout + result.stderr)
+        self.assertIn("Fixture worker exited before its readiness handshake", result.stderr)
 
     def test_exited_parent_cannot_leave_its_privileged_descendant_for_next_attempt(self):
         result = self.install("exit-with-child")
