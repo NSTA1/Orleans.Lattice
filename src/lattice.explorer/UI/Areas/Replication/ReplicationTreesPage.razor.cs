@@ -196,21 +196,33 @@ public partial class ReplicationTreesPage
 
     private async Task EnableAsync()
     {
-        if (!CanSubmitEnable || !Enum.TryParse<LatticeMergeMode>(_enableMode, out var mode))
+        if (_cancellation.IsLeft || !_enableOpen || !CanSubmitEnable || !Enum.TryParse<LatticeMergeMode>(_enableMode, out var mode))
         {
             return;
         }
 
-        if (!_enableTreeFixed && _enableTreeBox is not null && !await _enableTreeBox.ConfirmAsync())
-        {
-            return;
-        }
-
+        var draft = (Tree: _enableTree, Mode: _enableMode, Bootstrap: _enableBootstrap);
+        var token = _cancellation.Token;
         var tree = _enableTree.Trim();
         _busy = true;
         try
         {
-            var result = await Data.EnableAsync(tree, mode, _enableBootstrap, _cancellation.Token);
+            if (!_enableTreeFixed && _enableTreeBox is not null && !await _enableTreeBox.ConfirmAsync())
+            {
+                return;
+            }
+
+            if (token.IsCancellationRequested || !_enableOpen || draft != (_enableTree, _enableMode, _enableBootstrap))
+            {
+                return;
+            }
+
+            var result = await Data.EnableAsync(tree, mode, draft.Bootstrap, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             _enableOpen = false;
             if (result.AlreadyEnabled)
             {
@@ -224,20 +236,29 @@ public partial class ReplicationTreesPage
                     LtToastTone.Success);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             return;
         }
         catch (Exception ex)
         {
-            Toasts.Show(ChangeFailure(ex, "enable", tree), LtToastTone.Danger);
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(ChangeFailure(ex, "enable", tree), LtToastTone.Danger);
+            }
         }
         finally
         {
-            _busy = false;
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+            }
         }
 
-        await LoadAsync(refresh: true);
+        if (!token.IsCancellationRequested)
+        {
+            await LoadAsync(refresh: true);
+        }
     }
 
     private void OpenDisable(ReplicationTreeRow row)
@@ -257,37 +278,52 @@ public partial class ReplicationTreesPage
 
     private async Task DisableAsync()
     {
-        if (_disableRow is not { } row)
+        if (_cancellation.IsLeft || _busy || _disableRow is not { } row)
         {
             return;
         }
 
+        var token = _cancellation.Token;
         _busy = true;
         try
         {
-            var result = await Data.DisableAsync(row.TreeId, _cancellation.Token);
+            var result = await Data.DisableAsync(row.TreeId, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             Toasts.Show(
                 result.AlreadyDisabled
                     ? $"Replication was already disabled for {result.TreeId}."
                     : $"Replication disabled for {result.TreeId}.",
                 result.AlreadyDisabled ? LtToastTone.Info : LtToastTone.Success);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             return;
         }
         catch (Exception ex)
         {
-            Toasts.Show(ChangeFailure(ex, "disable", row.TreeId), LtToastTone.Danger);
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(ChangeFailure(ex, "disable", row.TreeId), LtToastTone.Danger);
+            }
         }
         finally
         {
-            _busy = false;
-            _disableOpen = false;
-            _disableRow = null;
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+                _disableOpen = false;
+                _disableRow = null;
+            }
         }
 
-        await LoadAsync(refresh: true);
+        if (!token.IsCancellationRequested)
+        {
+            await LoadAsync(refresh: true);
+        }
     }
 
     private static string ChangeFailure(Exception exception, string verb, string treeId) => exception switch
