@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -40,8 +41,14 @@ internal sealed class LatticeStatsGrain(
         }
 
         // TTL is configuration-only; retain lazy registration on cache misses.
-        await optionsResolver.ResolveAsync(TreeId);
-        var report = await BuildReportAsync(deep, cancellationToken);
+        TreeRegistryEntry? entry = null;
+        if (ReportRouting.CanReadEntry(TreeId))
+            (entry, _) = await RegistryEntryOptions.ReadAsync(
+                grainFactory.GetLatticeRegistry(), optionsResolver, TreeId);
+        else
+            await optionsResolver.ResolveAsync(TreeId);
+        var routing = await ReportRouting.ResolveAsync(grainFactory, TreeId, entry, cancellationToken);
+        var report = await BuildReportAsync(deep, routing, cancellationToken);
 
         if (deep) _cachedDeep = report;
         else _cachedShallow = report;
@@ -69,15 +76,9 @@ internal sealed class LatticeStatsGrain(
         return Task.CompletedTask;
     }
 
-    private async Task<TreeDiagnosticReport> BuildReportAsync(bool deep, CancellationToken cancellationToken)
+    private async Task<TreeDiagnosticReport> BuildReportAsync(
+        bool deep, RoutingInfo routing, CancellationToken cancellationToken)
     {
-        // Resolve routing (physical tree ID + shard map) via the public entry point
-        // so registry-alias resolution is handled uniformly. Force-refreshed: the
-        // stateless worker's cached map is not invalidated by a reshard, and a
-        // diagnostic walk meets no stale-routing refusal to correct it, so the
-        // report would otherwise keep naming the pre-reshard shards (#4146).
-        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var physicalShardIndices = routing.Map.GetPhysicalShardIndices();

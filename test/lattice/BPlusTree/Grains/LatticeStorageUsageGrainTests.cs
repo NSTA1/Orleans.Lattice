@@ -55,6 +55,14 @@ public sealed class LatticeStorageUsageGrainTests
         var factory = Substitute.For<IGrainFactory>();
         options ??= new LatticeOptions();
         options.WalPartitions = walPartitions;
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(tree).Returns(new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry
+        {
+            MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = shardCount,
+            WalPartitions = walPartitions,
+            ShardMap = ShardMap.CreateDefault(Math.Max(16, shardCount), shardCount),
+        });
 
         var lattice = Substitute.For<ILattice>();
         var map = ShardMap.CreateDefault(Math.Max(16, shardCount), shardCount);

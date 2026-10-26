@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -35,7 +36,13 @@ internal sealed class LatticeStorageUsageGrain(
     public async Task<TreeStorageUsageReport> GetReportAsync(bool forceRefresh, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var options = await optionsResolver.ResolveAsync(TreeId);
+        TreeRegistryEntry? entry = null;
+        ResolvedLatticeOptions options;
+        if (ReportRouting.CanReadEntry(TreeId))
+            (entry, options) = await RegistryEntryOptions.ReadAsync(
+                grainFactory.GetLatticeRegistry(), optionsResolver, TreeId);
+        else
+            options = await optionsResolver.ResolveAsync(TreeId);
         var ttl = options.StorageUsageCacheTtl;
         var now = DateTimeOffset.UtcNow;
 
@@ -45,7 +52,8 @@ internal sealed class LatticeStorageUsageGrain(
             return c;
         }
 
-        var (report, walComplete) = await BuildReportAsync(forceRefresh, options, cancellationToken);
+        var routing = await ReportRouting.ResolveAsync(grainFactory, TreeId, entry, cancellationToken);
+        var (report, walComplete) = await BuildReportAsync(forceRefresh, options, routing, cancellationToken);
         _cached = report;
         _cachedWalComplete = walComplete;
         PublishToMetrics(report, options, walComplete);
@@ -127,15 +135,8 @@ internal sealed class LatticeStorageUsageGrain(
     /// </para>
     /// </summary>
     private async Task<(TreeStorageUsageReport Report, bool WalComplete)> BuildReportAsync(
-        bool forceRefresh, LatticeOptions options, CancellationToken cancellationToken)
+        bool forceRefresh, LatticeOptions options, RoutingInfo routing, CancellationToken cancellationToken)
     {
-        // Resolve routing (physical tree ID + shard map) via the public
-        // entry point so registry-alias resolution is handled uniformly.
-        // Force-refreshed for the reason LatticeStatsGrain gives: a cached
-        // map outlives a reshard, and this walk never meets the stale-routing
-        // refusal that would correct it (#4146).
-        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-        var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var physicalShardIndices = routing.Map.GetPhysicalShardIndices();

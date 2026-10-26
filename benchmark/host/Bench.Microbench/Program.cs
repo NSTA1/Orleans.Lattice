@@ -197,6 +197,12 @@ if (string.Equals(suite, "blockedcensus", StringComparison.OrdinalIgnoreCase))
     return censusSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
+if (string.Equals(suite, "reportrouting", StringComparison.OrdinalIgnoreCase))
+{
+    var reportSummary = BenchmarkRunner.Run<ReportRoutingElisionBenchmarks>(config);
+    return reportSummary.HasCriticalValidationErrors || reportSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "partitionfloorsampling", StringComparison.OrdinalIgnoreCase))
 {
     var samplingSummary = BenchmarkRunner.Run<WalGcPartitionFloorSamplingBenchmarks>(config);
