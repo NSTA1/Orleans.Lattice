@@ -111,6 +111,44 @@ public sealed class DataCompletionSourceTests : DataTestContext
         });
     }
 
+    [Test]
+    public async Task A_tenant_root_with_no_area_completes_nothing()
+    {
+        UseDataTenancy("acme");
+        Client.WithTree("t/acme/orders");
+
+        var results = await Complete("/t/acme", AddressQueryMode.Address);
+
+        Assert.That(results, Is.Empty);
+    }
+
+    [Test]
+    public async Task In_the_keys_scope_of_an_unknown_tree_no_keys_are_read()
+    {
+        Client.WithTree("kiosks");
+
+        var results = await Complete("k", AddressQueryMode.Search, ExplorerAddress.ForTree("data", "missing"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(results.Select(result => result.Label), Is.EqualTo(new[] { "kiosks" }), "trees are still offered");
+            Assert.That(Client.Calls, Has.None.StartsWith("ScanEntriesAsync"));
+        });
+    }
+
+    [Test]
+    public async Task Key_completions_are_bounded_and_the_open_cursor_is_released()
+    {
+        Client.WithTree("orders", keys: 30, prefix: "k");
+
+        var results = await Complete("k", AddressQueryMode.Search, ExplorerAddress.ForTree("data", "orders"));
+
+        Assert.That(results.Count(result => result.Detail == "key in orders"), Is.EqualTo(8));
+        await Orleans.Lattice.Testing.TestPoll.UntilAsync(
+            () => { lock (Client.Calls) { return Client.Calls.Contains("CancelScanAsync"); } },
+            "the page's live cursor is released");
+    }
+
     private async Task<IReadOnlyList<AddressCompletion>> Complete(string text, AddressQueryMode mode, ExplorerAddress? current = null) =>
         await Area.Completions!.CompleteAsync(new AddressQuery(text, mode, current ?? ExplorerAddress.Home), CancellationToken.None);
 }
