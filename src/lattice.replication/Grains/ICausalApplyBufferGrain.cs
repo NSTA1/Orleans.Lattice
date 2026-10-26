@@ -84,4 +84,11 @@ internal interface ICausalApplyBufferGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp);
+
+    /// <summary>
+    /// Batch form of <see cref="IsHoldingAsync"/>, with one result per timestamp
+    /// in request order. Uses the same persisted entries and interleaving contract.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool[]> IsHoldingManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps);
 }

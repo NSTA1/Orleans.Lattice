@@ -211,7 +211,8 @@ public sealed partial class ReplicationTreeFrontierGrainTests
         await grain.ObserveAsync(OriginA, shipped: null, CancellationToken.None);
         var epoch = (await grain.GetAsync(CancellationToken.None)).Epoch;
         await h.Origin(OriginA).RecordLowWatermarkAsync(Hlc(100), generation: 0, CancellationToken.None);
-        h.Hwm.HasAppliedAsync(OriginA, Hlc(12)).Returns(false);
+        h.Hwm.HasAppliedManyAsync(OriginA, Arg.Any<IReadOnlyList<HybridLogicalClock>>())
+            .Returns(call => new bool[((IReadOnlyList<HybridLogicalClock>)call[1]).Count]);
 
         await grain.PinAsync(
             epoch,

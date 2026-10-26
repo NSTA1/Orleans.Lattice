@@ -11,7 +11,7 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Tests.Grains;
 
 [TestFixture]
-public class ReplicationDeadLetterGrainTests
+public partial class ReplicationDeadLetterGrainTests
 {
     private const string TreeId = "tree";
 

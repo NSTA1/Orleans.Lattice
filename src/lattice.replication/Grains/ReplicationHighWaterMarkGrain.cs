@@ -200,6 +200,20 @@ internal sealed class ReplicationHighWaterMarkGrain(
     }
 
     /// <inheritdoc />
+    public Task<bool[]> HasAppliedManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        ArgumentNullException.ThrowIfNull(timestamps);
+        var result = new bool[timestamps.Count];
+        for (var i = 0; i < result.Length; i++)
+        {
+            result[i] = _applied.Contains(originClusterId, timestamps[i]);
+        }
+
+        return Task.FromResult(result);
+    }
+
+    /// <inheritdoc />
     public async Task ResetAppliedIdentitiesAsync(
         CancellationToken cancellationToken,
         bool preserveBootstrapFloor = false)
