@@ -19,6 +19,7 @@
     ported; the site's chain layouts fail loudly until an episode needs them.
   -->
   <div
+    id="join-diagram-root"
     data-composition-id="join-diagram"
     data-width="1920"
     data-height="1080"
@@ -202,7 +203,7 @@
     <script>
       (function () {
         const vars = window.__hyperframes.getVariables();
-        const root = document.querySelector('[data-composition-id="join-diagram"]');
+        const root = document.getElementById("join-diagram-root");
         const q = (selector) => root.querySelector(selector);
         const all = (selector) => Array.from(root.querySelectorAll(selector));
         const token = (name) => getComputedStyle(root).getPropertyValue(name).trim();
