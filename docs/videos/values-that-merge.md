@@ -99,7 +99,7 @@ registered on the host for its tree.
 <!-- where-next:begin -->
 
 - **Next on Build:** Scans, filters and cursors
-- **The deep dive:** Conflict-free merges in 90 seconds
+- **The deep dive:** [Conflict-free merges in 90 seconds](conflict-free-merges.md)
 - **The pages it introduces:** [CRDT primitives](../crdt/readme.md)
 
 <!-- where-next:end -->
