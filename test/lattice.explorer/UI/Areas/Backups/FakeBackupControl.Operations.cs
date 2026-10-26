@@ -27,6 +27,9 @@ internal sealed partial class FakeBackupControl : ILatticeBackupOperations
     /// <summary>When set, every status read fails with this exception.</summary>
     public Exception? StatusFault { get; set; }
 
+    /// <summary>Overrides cancellation, including requests held open across navigation.</summary>
+    public Func<string, Task<LatticeOperationStatus?>>? CancelOperation { get; set; }
+
     /// <summary>When set, the listing fails with this exception.</summary>
     public Exception? ListFault { get; set; }
 
@@ -241,6 +244,11 @@ internal sealed partial class FakeBackupControl : ILatticeBackupOperations
     public Task<LatticeOperationStatus?> CancelOperationAsync(string operationId, CancellationToken cancellationToken = default)
     {
         Calls.Add((nameof(CancelOperationAsync), operationId));
+        if (CancelOperation is { } cancel)
+        {
+            return cancel(operationId);
+        }
+
         if (!Statuses.TryGetValue(operationId, out var status))
         {
             return Task.FromResult<LatticeOperationStatus?>(null);
