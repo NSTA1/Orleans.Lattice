@@ -137,4 +137,76 @@ public sealed class TelemetryChartGeometryTests
             Assert.That(TelemetryChartGeometry.Coordinate(264), Is.EqualTo("264"));
         });
     }
+
+    [Test]
+    public void Build_null_response_rejects_the_named_parameter()
+    {
+        var exception = Assert.Throws<ArgumentNullException>(() =>
+            TelemetryChartGeometry.Build(null!, Unit, TelemetryMeasurementSemantic.PerOperation));
+
+        Assert.That(exception!.ParamName, Is.EqualTo("response"));
+    }
+
+    [Test]
+    public void Build_empty_answer_has_no_timeline_or_day_span()
+    {
+        var geometry = Build();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(geometry.Times, Is.Empty);
+            Assert.That(geometry.Series, Is.Empty);
+            Assert.That(geometry.Lines, Is.Empty);
+            Assert.That(geometry.IsEmpty, Is.True);
+            Assert.That(geometry.IsTimeSeries, Is.False);
+            Assert.That(geometry.SpansDays, Is.False);
+            Assert.That(geometry.IsTruncated, Is.False);
+        });
+    }
+
+    [Test]
+    public void Build_unsorted_offset_samples_align_on_a_shared_utc_timeline()
+    {
+        var start = TelemetryTestData.Now;
+        var geometry = Build(
+            Points("orders",
+                new TelemetryDataPoint(start.AddMinutes(3), 9),
+                new TelemetryDataPoint(start.ToOffset(TimeSpan.FromHours(2)), 1),
+                new TelemetryDataPoint(start.AddMinutes(1), 4)),
+            Points("audit", new TelemetryDataPoint(start.AddMinutes(1), 2)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(geometry.Times, Is.EqualTo(new[] { start, start.AddMinutes(1), start.AddMinutes(3) }));
+            Assert.That(geometry.Times.Select(time => time.Offset), Is.All.EqualTo(TimeSpan.Zero));
+            Assert.That(geometry.Series[0].Latest, Is.EqualTo(9), "latest is chronological, not the last input");
+            Assert.That(geometry.Series[0].Values, Is.EqualTo(new[] { 1d, 4d, 9d }));
+            Assert.That(geometry.Series[1].Values[0], Is.NaN);
+            Assert.That(geometry.Series[1].Values[1], Is.EqualTo(2));
+            Assert.That(geometry.Series[1].Values[2], Is.NaN);
+            Assert.That(geometry.X(0), Is.EqualTo(64));
+            Assert.That(geometry.X(1), Is.EqualTo(64 + 400d / 3).Within(0.0001));
+            Assert.That(geometry.X(2), Is.EqualTo(464));
+            Assert.That(geometry.Band(1).X, Is.EqualTo(64 + 200d / 3).Within(0.0001));
+            Assert.That(geometry.Band(1).Width, Is.EqualTo(200).Within(0.0001));
+        });
+    }
+
+    [Test]
+    public void Build_duplicate_instants_keep_the_last_finite_sample_without_a_phantom_slot()
+    {
+        var start = TelemetryTestData.Now;
+        var geometry = Build(Points("orders",
+            new TelemetryDataPoint(start, 1),
+            new TelemetryDataPoint(start.ToOffset(TimeSpan.FromHours(-5)), 7),
+            new TelemetryDataPoint(start, double.NaN)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(geometry.Times, Has.Count.EqualTo(1));
+            Assert.That(geometry.Series[0].Values, Is.EqualTo(new[] { 7d }));
+            Assert.That(geometry.Series[0].Latest, Is.EqualTo(7));
+            Assert.That(geometry.IsTimeSeries, Is.False);
+        });
+    }
 }

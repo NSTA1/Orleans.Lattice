@@ -57,4 +57,72 @@ public class HistoryValueDiffTests
 
         Assert.That(diff.Select(d => d.Kind), Is.All.EqualTo(HistoryDiffLineKind.Unchanged));
     }
+
+    [Test]
+    public void Compute_null_current_rejects_input_even_without_a_previous_revision()
+    {
+        var exception = Assert.Throws<ArgumentNullException>(() => HistoryValueDiff.Compute(null, null!));
+
+        Assert.That(exception!.ParamName, Is.EqualTo("current"));
+    }
+
+    [Test]
+    public void Compute_inserted_middle_line_preserves_the_following_common_suffix()
+    {
+        var diff = HistoryValueDiff.Compute("a\nc", "a\nb\nc");
+
+        Assert.That(diff, Is.EqualTo(new[]
+        {
+            new HistoryDiffLine(HistoryDiffLineKind.Unchanged, "a"),
+            new HistoryDiffLine(HistoryDiffLineKind.Added, "b"),
+            new HistoryDiffLine(HistoryDiffLineKind.Unchanged, "c"),
+        }));
+    }
+
+    [Test]
+    public void Compute_equal_length_alternatives_remove_before_adding()
+    {
+        var diff = HistoryValueDiff.Compute("a\nb", "b\na");
+
+        Assert.That(diff, Is.EqualTo(new[]
+        {
+            new HistoryDiffLine(HistoryDiffLineKind.Removed, "a"),
+            new HistoryDiffLine(HistoryDiffLineKind.Unchanged, "b"),
+            new HistoryDiffLine(HistoryDiffLineKind.Added, "a"),
+        }));
+    }
+
+    [Test]
+    public void Compute_removed_tail_preserves_empty_lines_and_ordinal_case()
+    {
+        var diff = HistoryValueDiff.Compute("a\n\nB\n", "a\n\nb");
+
+        Assert.That(diff, Is.EqualTo(new[]
+        {
+            new HistoryDiffLine(HistoryDiffLineKind.Unchanged, "a"),
+            new HistoryDiffLine(HistoryDiffLineKind.Unchanged, ""),
+            new HistoryDiffLine(HistoryDiffLineKind.Removed, "B"),
+            new HistoryDiffLine(HistoryDiffLineKind.Removed, ""),
+            new HistoryDiffLine(HistoryDiffLineKind.Added, "b"),
+        }));
+    }
+
+    [TestCase("", "")]
+    [TestCase("a\nb\n", "")]
+    [TestCase("", "a\nb\n")]
+    [TestCase("a\nb\nc", "c\nb\na")]
+    [TestCase("a\na\nb", "a\nb\nb")]
+    [TestCase("a\nb\nc", "a")]
+    public void Compute_edits_reconstruct_both_original_sequences(string previous, string current)
+    {
+        var diff = HistoryValueDiff.Compute(previous, current);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(diff.Where(line => line.Kind != HistoryDiffLineKind.Added).Select(line => line.Text),
+                Is.EqualTo(previous.Split('\n')));
+            Assert.That(diff.Where(line => line.Kind != HistoryDiffLineKind.Removed).Select(line => line.Text),
+                Is.EqualTo(current.Split('\n')));
+        });
+    }
 }
