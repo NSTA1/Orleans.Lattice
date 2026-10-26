@@ -34,6 +34,13 @@ public sealed class LatticeStatsGrainFanOutTests
         context.GrainId.Returns(GrainId.Create("stats", TreeId));
 
         var factory = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(TreeId).Returns(new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry
+        {
+            MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = physicalShardCount,
+            ShardMap = ShardMap.CreateDefault(16, physicalShardCount),
+        });
 
         var lattice = Substitute.For<ILattice>();
         var map = ShardMap.CreateDefault(16, physicalShardCount);
