@@ -31,6 +31,7 @@ public partial class BackupsCataloguePage : IDisposable
     private readonly Dictionary<string, BackupHealthReport?> _health = new(StringComparer.Ordinal);
     private readonly HashSet<string> _healthRead = new(StringComparer.Ordinal);
     private readonly ComponentLifetime _load = new();
+    private readonly ComponentLifetime _extras = new();
     private ExplorerAddress? _loadedFor;
     private BackupCatalogPage? _page;
     private int _pageIndex;
@@ -94,6 +95,7 @@ public partial class BackupsCataloguePage : IDisposable
     public void Dispose()
     {
         _load.Leave();
+        _extras.Leave();
         GC.SuppressFinalize(this);
     }
 
@@ -205,7 +207,7 @@ public partial class BackupsCataloguePage : IDisposable
 
         if (loadExtras)
         {
-            _ = LoadExtrasAsync(cancellationToken);
+            _ = LoadExtrasAsync(_extras.Renew());
         }
 
         BackupCatalogPage page;
@@ -225,10 +227,19 @@ public partial class BackupsCataloguePage : IDisposable
         }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
         {
-            _error = BackupsFaults.Describe(exception);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _error = BackupsFaults.Describe(exception);
+            }
+
             return;
         }
         catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
         {
             return;
         }
@@ -249,19 +260,24 @@ public partial class BackupsCataloguePage : IDisposable
             var status = Tree is { } tree ? LoadScopeStatusAsync(tree, cancellationToken) : Task.CompletedTask;
             var operations = LoadClusterOperationsAsync(cancellationToken);
 
-            _healthAvailable = await health;
+            var healthAvailable = await health;
+            cancellationToken.ThrowIfCancellationRequested();
+            _healthAvailable = healthAvailable;
             if (_healthAvailable && _page is { } page)
             {
-                _ = LoadHealthAsync(page, cancellationToken);
+                _ = LoadHealthAsync(page, _load.Token);
             }
 
-            if (await inventory is { } report)
+            var report = await inventory;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (report is not null)
             {
                 _inventory = InventorySentence(report);
             }
 
             await status;
             await operations;
+            cancellationToken.ThrowIfCancellationRequested();
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -274,13 +290,18 @@ public partial class BackupsCataloguePage : IDisposable
     {
         try
         {
-            _clusterOperations = await ClusterOperationList.RecentAsync(cancellationToken);
+            var operations = await ClusterOperationList.RecentAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _clusterOperations = operations;
             _clusterOperationsError = null;
         }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
         {
-            _clusterOperations = null;
-            _clusterOperationsError = BackupsFaults.IsDenied(exception) ? null : BackupsFaults.Describe(exception);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _clusterOperations = null;
+                _clusterOperationsError = BackupsFaults.IsDenied(exception) ? null : BackupsFaults.Describe(exception);
+            }
         }
     }
 
@@ -291,15 +312,23 @@ public partial class BackupsCataloguePage : IDisposable
         _scopeStatus = null;
         try
         {
-            _scopeStatus = await Control.GetScopeStatusAsync(BackupScopeSelector.WholeTree(tree), cancellationToken);
+            var status = await Control.GetScopeStatusAsync(BackupScopeSelector.WholeTree(tree), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _scopeStatus = status;
         }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
         {
-            _scopeStatusError = BackupsFaults.Describe(exception);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _scopeStatusError = BackupsFaults.Describe(exception);
+            }
         }
         finally
         {
-            _scopeStatusLoading = false;
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _scopeStatusLoading = false;
+            }
         }
     }
 
@@ -322,7 +351,9 @@ public partial class BackupsCataloguePage : IDisposable
 
         try
         {
-            foreach (var (id, report) in await Task.WhenAll(reads))
+            var reports = await Task.WhenAll(reads);
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var (id, report) in reports)
             {
                 _health[id] = report;
                 _healthRead.Add(id);
