@@ -643,7 +643,9 @@ function Measure-SteadyStateRate {
 		Count          = $window.Count
 		ZeroCount      = $zeros
 		InFlightMax    = [int]($sortedInFlight[-1])
-		InFlightMedian = [int]($sortedInFlight[[int]($sortedInFlight.Count / 2)])
+		# Floor, not [int]: [int](3 / 2) rounds half-to-even to 2, which is
+		# the maximum of three samples rather than their median.
+		InFlightMedian = [int]($sortedInFlight[[int][math]::Floor($sortedInFlight.Count / 2)])
 		WindowStart    = [double]$window[0].t
 		WindowEnd      = [double]$window[-1].t
 	}
@@ -665,4 +667,125 @@ function Get-FinalUnresolved {
 	if ([string]::IsNullOrEmpty($FinalLine)) { return 0L }
 	if ($FinalLine -match '\bunresolved=([\d,]+)') { return [long]($Matches[1] -replace ',', '') }
 	return 0L
+}
+
+<#
+.SYNOPSIS
+	Parses one '[phaseA]' histogram row into its window end time, call count
+	and quantile points.
+
+.DESCRIPTION
+	Row shape: '[phaseA] t=40.3s instrument=NAME tree=T shard=S phase=P
+	status=S count=N sum=.. min=.. p50=.. p75=.. p90=.. p99=.. max=..'.
+	Rows written before the p75 extension carry no p75; that quantile is
+	then $null and is skipped by the merge. Returns $null for a line that is
+	not a parseable row.
+#>
+function ConvertFrom-PhaseALine {
+	[CmdletBinding()]
+	param([AllowNull()] [AllowEmptyString()] [string] $Line)
+
+	if ([string]::IsNullOrEmpty($Line) -or -not $Line.StartsWith('[phaseA] ')) { return $null }
+	if ($Line -notmatch '\[phaseA\] t=\s*([\d.]+)s') { return $null }
+	$row = [ordered]@{ t = [double]$Matches[1]; Tree = $null }
+	if ($Line -match ' tree=(\S+)') { $row.Tree = $Matches[1] }
+	foreach ($k in 'count', 'min', 'p50', 'p75', 'p90', 'p99', 'max') {
+		$row[$k] = if ($Line -match "\b$k=([\d.]+)") { [double]$Matches[1] } else { $null }
+	}
+	if ($null -eq $row.count) { return $null }
+	return [pscustomobject]$row
+}
+
+<#
+.SYNOPSIS
+	Combines several '[phaseA]' windows of one instrument into the quantiles
+	of all their calls taken together.
+
+.DESCRIPTION
+	The reporter logs per-window quantiles, not raw samples, so windows
+	cannot be merged exactly. Each window is modelled as a piecewise-linear
+	CDF through its known points (min at 0, p50 at 0.5, p75 at 0.75, p90 at
+	0.9, p99 at 0.99, max at 1), the windows are mixed weighted by their call
+	counts, and each requested quantile is read off the mixture by bisection.
+	For a single window this returns that window's own quantiles exactly,
+	because they are knots of its CDF. A window with no calls is ignored.
+
+	This replaces publishing ONE window (historically the last one before the
+	cutoff), which reported whichever slice of the run that window happened
+	to cover - on a 45 s get-many cohort the last window carried a p50 of
+	0.64 ms against 3.9-5.0 ms in the windows under load.
+
+.PARAMETER Rows
+	Output of ConvertFrom-PhaseALine.
+
+.OUTPUTS
+	Hashtable with P50, P75, P90, P99 ($null when no window carries that
+	quantile) and Count (total calls merged), or $null when no row has calls.
+#>
+function Merge-PhaseAWindows {
+	[CmdletBinding()]
+	param([AllowNull()] [AllowEmptyCollection()] [object[]] $Rows)
+
+	$windows = @(@($Rows) | Where-Object { $null -ne $_ -and $_.count -gt 0 })
+	if ($windows.Count -eq 0) { return $null }
+
+	$probs = @(0.0, 0.5, 0.75, 0.9, 0.99, 1.0)
+	$keys = @('min', 'p50', 'p75', 'p90', 'p99', 'max')
+	$models = foreach ($w in $windows) {
+		$xs = [System.Collections.Generic.List[double]]::new()
+		$ps = [System.Collections.Generic.List[double]]::new()
+		for ($i = 0; $i -lt $keys.Count; $i++) {
+			$v = $w.($keys[$i])
+			if ($null -eq $v) { continue }
+			# Quantiles are monotone; guard against rounding in the log.
+			if ($xs.Count -gt 0 -and $v -lt $xs[$xs.Count - 1]) { $v = $xs[$xs.Count - 1] }
+			$xs.Add([double]$v); $ps.Add($probs[$i])
+		}
+		if ($xs.Count -eq 0) { continue }
+		[pscustomobject]@{ X = $xs.ToArray(); P = $ps.ToArray(); W = [double]$w.count }
+	}
+	$models = @($models)
+	if ($models.Count -eq 0) { return $null }
+	$total = ($models | Measure-Object -Property W -Sum).Sum
+
+	# A window's CDF at x. Below its first known point it contributes the
+	# probability of that point only once x reaches it; between points it is
+	# linear; above its last point it is that point's probability (1 when max
+	# is known).
+	$cdf = {
+		param($m, [double] $at)
+		$xs = $m.X; $ps = $m.P
+		if ($at -lt $xs[0]) { return 0.0 }
+		for ($j = 1; $j -lt $xs.Count; $j++) {
+			if ($at -lt $xs[$j]) {
+				$span = $xs[$j] - $xs[$j - 1]
+				if ($span -le 0) { return $ps[$j - 1] }
+				return $ps[$j - 1] + ($ps[$j] - $ps[$j - 1]) * ($at - $xs[$j - 1]) / $span
+			}
+		}
+		return $ps[$ps.Count - 1]
+	}
+	$lo = ($models | ForEach-Object { $_.X[0] } | Measure-Object -Minimum).Minimum
+	$hi = ($models | ForEach-Object { $_.X[$_.X.Count - 1] } | Measure-Object -Maximum).Maximum
+	$quantile = {
+		param([double] $q, [string] $key)
+		# Only windows that report this quantile constrain it.
+		if (@($windows | Where-Object { $null -ne $_.$key }).Count -eq 0) { return $null }
+		if ($models.Count -eq 1) { $m = $models[0]; $k = [array]::IndexOf($m.P, $q); if ($k -ge 0) { return [math]::Round($m.X[$k], 3) } }
+		$a = $lo; $b = $hi
+		for ($iter = 0; $iter -lt 60; $iter++) {
+			$mid = ($a + $b) / 2
+			$f = 0.0
+			foreach ($m in $models) { $f += $m.W * (& $cdf $m $mid) }
+			if (($f / $total) -lt $q) { $a = $mid } else { $b = $mid }
+		}
+		return [math]::Round($b, 3)
+	}
+	return @{
+		P50   = & $quantile 0.5 'p50'
+		P75   = & $quantile 0.75 'p75'
+		P90   = & $quantile 0.9 'p90'
+		P99   = & $quantile 0.99 'p99'
+		Count = [long]$total
+	}
 }

@@ -257,8 +257,9 @@ param(
 	# Layer 3 only: reuse an already-provisioned ACA rig (see deploy-aca.ps1)
 	# instead of provisioning and tearing one down. The name prefix of that
 	# rig. Mirrors -ReuseVm for Layer 2. A comma-separated list of prefixes
-	# runs the sweep across those rigs in parallel (see -Layer3Rigs).
-	[string] $ReuseAca,
+	# runs the sweep across those rigs in parallel (see -Layer3Rigs). An
+	# array, so the unquoted -ReuseAca a,b form binds as well as -ReuseAca 'a,b'.
+	[string[]] $ReuseAca,
 
 	# Layer 3 only: leave the ACA rig standing after the sweep. Mirrors -KeepVm.
 	[switch] $KeepAca,
@@ -316,10 +317,12 @@ param(
 	# producer rather than the cluster; the report then grades it
 	# producer-bound. Raise it to measure such a cell. Recorded per cohort.
 	[ValidateRange(1, 64)][int] $Layer3ClientsPerSilo = 4,
-	# Layer 3 only. True-throughput escalation: a cell whose first cohort
+	# Layer 3: true-throughput escalation - a cell whose first cohort
 	# completes at least this fraction of the offered load is re-run at double
-	# the per-silo rung, at most -MaxRungEscalations times. 0 disables it and
-	# publishes whatever each row's starting rung measured.
+	# the per-silo rung, at most -MaxRungEscalations times. Layer 2 never
+	# escalates; a row whose cohorts all completed at least this fraction of
+	# their offered load is published as a lower bound (>=) instead. 0
+	# disables both and publishes whatever each row's starting rung measured.
 	[double] $SaturationRatio = 0.9,
 	[int] $MaxRungEscalations = 3,
 	# Layer 3 only. Storage accounts every cohort's WAL is spread across: the
@@ -2174,6 +2177,16 @@ function Read-SiloLogStats {
 	$candidates = @($preferred) + @('lattice.op.duration_ms')
 
 	$p50 = $null; $p75 = $null; $p90 = $null; $p99 = $null; $instrumentUsed = $null
+	$perCallWindows = 0; $perCallCalls = 0L; $perCallBasis = $null
+	# On Layer 2 the per-second progress lines and the [phaseA] rows come
+	# from the same silo process, so their t= clocks agree and a [phaseA]
+	# window can be placed inside the steady-state window. On Layer 3 the
+	# progress lines come from the producer process and the rows from N
+	# silos, each with its own process clock, so no window can be aligned to
+	# the producer's steady window; there every window at t>=15s of every
+	# silo is merged (a silo only serves the workload's calls while the
+	# producer drives it, so there is no post-load drain window to exclude).
+	$sharedClock = -not [bool](Select-String -Path $SiloLogPath -Pattern '^\[producer\] mode=orleans-client' -Quiet)
 	foreach ($cand in $candidates) {
 		# Anchor: 'instrument=<name> tree=' guarantees exact-name match.
 		$pat = '^\[phaseA\][^\n]*instrument=' + [regex]::Escape($cand) + ' tree='
@@ -2206,18 +2219,41 @@ function Read-SiloLogStats {
 			($_.Line -match '\[phaseA\] t=\s*([\d.]+)s') -and ([double]$Matches[1] -ge 15)
 		})
 		if ($productive.Count -eq 0) { continue }
-		# Use the last full productive window (matches the pre-fix behaviour
-		# for now; revisit to do count-weighted aggregation across windows).
-		# Parse each token independently: silo logs from before the p75
-		# reporter extension will only carry p50/p90/p99, in which case p75
-		# stays null and the rendered cell falls through to 'not captured'.
-		$last = $productive[-1].Line
-		if ($last -match 'p50=([\d.]+)') { $p50 = [double]$Matches[1] }
-		if ($last -match 'p75=([\d.]+)') { $p75 = [double]$Matches[1] }
-		if ($last -match 'p90=([\d.]+)') { $p90 = [double]$Matches[1] }
-		if ($last -match 'p99=([\d.]+)') { $p99 = [double]$Matches[1] }
+		$rows = @($productive | ForEach-Object { ConvertFrom-PhaseALine -Line $_.Line } | Where-Object { $null -ne $_ })
+		# Merge every window of the measurement rather than publishing ONE.
+		# Taking the last window reported whichever slice of the run it
+		# happened to cover (on a 45 s get-many cohort: p50 0.64 ms against
+		# 3.9-5.0 ms in the windows under load). Rows without a p75 (logs
+		# from before the reporter's p75 extension) leave p75 null, and the
+		# rendered cell falls through to 'not captured'.
+		$basis = 'all windows t>=15s'
+		if ($sharedClock -and $null -ne $steadyStats.WindowStart) {
+			# A window ending at t covers (t - cadence, t]. Keep the windows
+			# that lie wholly inside the steady-state window; when a short
+			# run leaves none, keep the ones that overlap it.
+			$ts = @($rows | ForEach-Object { $_.t } | Sort-Object -Unique)
+			# The reporter cadence is the smallest gap between windows; a
+			# larger gap is a window in which this instrument saw no calls.
+			$cadence = 10.0
+			if ($ts.Count -ge 2) {
+				$cadence = [double](@(for ($g = 1; $g -lt $ts.Count; $g++) { $ts[$g] - $ts[$g - 1] }) | Measure-Object -Minimum).Minimum
+			}
+			$inside = @($rows | Where-Object { ($_.t - $cadence) -ge ($steadyStats.WindowStart - 1) -and $_.t -le ($steadyStats.WindowEnd + 1) })
+			if ($inside.Count -gt 0) {
+				$rows = $inside; $basis = 'windows inside the steady-state window'
+			} else {
+				$rows = @($rows | Where-Object { $_.t -gt $steadyStats.WindowStart -and ($_.t - $cadence) -lt $steadyStats.WindowEnd })
+				$basis = 'windows overlapping the steady-state window'
+			}
+		}
+		$merged = Merge-PhaseAWindows -Rows $rows
+		if ($null -eq $merged) { continue }
+		$p50 = $merged.P50; $p75 = $merged.P75; $p90 = $merged.P90; $p99 = $merged.P99
 		if ($null -ne $p50 -or $null -ne $p99) {
 			$instrumentUsed = $cand
+			$perCallWindows = @($rows | Select-Object -Property t -Unique).Count
+			$perCallCalls = $merged.Count
+			$perCallBasis = $basis
 			break
 		}
 	}
@@ -2288,6 +2324,9 @@ function Read-SiloLogStats {
 		PerCallP90Ms    = $p90
 		PerCallP99Ms    = $p99
 		InstrumentUsed  = $instrumentUsed
+		PerCallWindows  = $perCallWindows
+		PerCallCalls    = $perCallCalls
+		PerCallBasis    = $perCallBasis
 		InFlightMax     = $inFlightMax
 		# Failed ENTRIES. FINAL's failed= when present; otherwise the sum of
 		# the per-second failed= deltas. This previously added the COUNT of
@@ -2403,7 +2442,15 @@ function Aggregate-Layer1Cells {
 }
 
 function Aggregate-Layer2Cells {
-	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $CohortsByMode)
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][hashtable] $CohortsByMode,
+		# A row whose every usable cohort completed at least this fraction of
+		# its offered load measured the offered load, not the silo: it is
+		# published as a lower bound (>=), the same rule Layer 3 applies.
+		# Layer 2 rungs are chosen below saturation and never escalate, so
+		# this is the normal case. 0 disables the marking.
+		[double] $SaturationRatio = 0.9
+	)
 	$rows = @{}
 	foreach ($row in $Layer2Rows) {
 		$mode = $row.WorkloadMode
@@ -2447,8 +2494,16 @@ function Aggregate-Layer2Cells {
 			Write-Warning "[aggregate-l2] mode=${mode}: no positive steady-state means in $($cohorts.Count) cohorts"
 			continue
 		}
+		# Offered keys/s = vehicles x tick rate of the rung the cohorts ran
+		# at; one vehicle sample is one key in every workload mode.
+		$first = $cohorts[0]
+		$offered = [long](Get-StateOr $first 'rungVehicles' 0) * [long](Get-StateOr $first 'rungTickHz' 0)
+		$offerBound = ($SaturationRatio -gt 0) -and ($offered -gt 0) -and
+			(@($cohorts | Where-Object { [double]$_.steadyMean -lt ($SaturationRatio * $offered) }).Count -eq 0)
 		$rows[$row.Label] = @{
 			sustainedThroughput = [int][math]::Round((Get-Median $means), 0)
+			offeredKeysPerSec   = $offered
+			offerBound          = $offerBound
 			throughputUnit      = $row.ThroughputUnit
 			perCallP50Ms        = if ($p50s.Count -gt 0) { [math]::Round((Get-Median $p50s), 2) } else { $null }
 			perCallP75Ms        = if ($p75s.Count -gt 0) { [math]::Round((Get-Median $p75s), 2) } else { $null }
@@ -2503,6 +2558,7 @@ function Format-Layer2Row {
 	# Layer2Latency helper degrades to 'not captured'.
 	$unit = Get-StateOr $Cell 'throughputUnit' 'op/s'
 	$thr = Format-Throughput (Get-StateOr $Cell 'sustainedThroughput') $unit
+	if (Get-StateOr $Cell 'offerBound' $false) { $thr = '>= ' + $thr }
 	$p50 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP50Ms')
 	$p75 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP75Ms')
 	$p90 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP90Ms')
@@ -2650,7 +2706,7 @@ function New-MetaHeaderForLayer2 {
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
 		$meta['gitSha']             = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples from the first non-zero sample at t>=15s to the last non-zero sample, stalled zero-rate seconds inside that window included; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile is computed inside the silo''s 10-second reporter window from a 4096-sample reservoir; the cell is the median of those per-cohort quantiles. Every workload mode reports the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
+		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples from the first non-zero sample at t>=15s to the last non-zero sample, stalled zero-rate seconds inside that window included; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile merges the silo''s 10-second reporter windows that lie inside the cohort''s steady-state window, weighted by call count (each window''s quantiles come from a 4096-sample reservoir); the cell is the median of those per-cohort quantiles. Every workload mode reports the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
 	}
 	return $meta
 }
@@ -2716,6 +2772,9 @@ function Render-Layer2Table {
 			"$($_.Label): n=$($RowsAgg[$_.Label].cohortN)"
 		})
 		[void]$sb.Append($nl).Append($nl).Append('Usable throughput cohorts: ').Append(($counts -join '; ')).Append('.')
+		if (@($RowsAgg.Values | Where-Object { Get-StateOr $_ 'offerBound' $false }).Count -gt 0) {
+			[void]$sb.Append($nl).Append($nl).Append('Cells marked >= completed (nearly) all of the load they were offered, so they measure that offered load, not the silo''s ceiling: each is a lower bound on what one silo sustains.')
+		}
 	}
 	return $sb.ToString().TrimEnd("`r","`n")
 }
@@ -2988,12 +3047,22 @@ function New-MetaHeaderForLayer3 {
 	# deployments, but the workloads were measured on different ones.
 	$rigs = @(Get-StateOr (Get-StateOr $State 'layer3' @{}) 'rigs' @())
 	if ($rigs.Count -gt 1) { $meta['rigs'] = ($rigs -join ',') } elseif ($meta.Contains('rigs')) { $meta.Remove('rigs') }
+	# A curve whose silo counts were split across rigs (more rigs than
+	# workloads). Listed so a reader knows a step in that curve can be the
+	# difference between two deployments rather than the silo count.
+	$splitCurves = Get-StateOr (Get-StateOr $State 'layer3' @{}) 'splitCurves' @{}
+	$splitText = @(foreach ($m in @($splitCurves.Keys | Sort-Object)) { "$m=$(@($splitCurves[$m]) -join '+')" }) -join ';'
+	$splitSentence = ''
+	if ($splitText) {
+		$meta['splitCurves'] = $splitText
+		$splitSentence = ' The curves listed in splitCurves were measured across rigs, one run of silo counts per rig: a step between two rigs'' cells can be the difference between the deployments (up to about 25% measured across identical rigs), and each rig''s escalation starts from the row''s starting rung.'
+	} elseif ($meta.Contains('splitCurves')) { $meta.Remove('splitCurves') }
 	$storageSentence = if ($walAccounts -le 1) {
 		'All silo counts share ONE Azure Storage account for the WAL; the storage-side table reports what that account''s own Azure Monitor metrics showed for each cell.'
 	} else {
 		"Every cohort spreads the tree's WAL partitions across $walAccounts Azure Storage accounts (partition p on account p mod $walAccounts; the first account also holds clustering and grain state); the storage-side table reports what those accounts' own Azure Monitor metrics showed for each cell."
 	}
-	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT use a per-second steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; a mean that filters the zeros away (the historical rate>0 form) averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 come from the [phaseA] duration histogram of ONE representative silo, not an aggregate across silos. Every cell is a true-throughput measurement, not an offered-load one: offered load is scaled with the silo count (a per-silo rung driven at rung x silo count, so per-silo demand never falls as the cluster grows), and a cell whose first cohort completes at least saturationRatio of what was offered is re-run at double the rung, up to maxRungEscalations times, so the published figure is where the cluster stopped keeping up rather than what the client asked for. A cell still offer-bound after the last escalation is published as a lower bound (>=). Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. ' + $storageSentence
+	$meta['methodology']   = 'Each cell is the median across N HEALTHY cohorts of completed-work throughput: total successfully-completed keys at FINAL divided by the engine''s active elapsed time. Layer 3 deliberately does NOT use a per-second steady-state mean. On this path the client submits 4096-key batches, so a whole batch retires inside one per-second sample and the samples between retirements are exactly zero; a mean that filters the zeros away (the historical rate>0 form) averages only the spikes and reports more throughput than was offered (measured: 9,637 keys/s reported against 5,935 keys/s actually offered). The overstatement also varies with burstiness, which varies with silo count, so it would bend the scaling curve itself. Completed-ops / active-elapsed counts only work that succeeded over the wall-clock it took, so it cannot exceed the offered load and carries no windowing bias. Per-call p50/p99 merge the [phaseA] duration windows of every silo at t>=15s, weighted by call count; the silos'' clocks cannot be aligned to the producer''s steady-state window, so unlike Layer 2 no window is excluded as outside it. Every cell is a true-throughput measurement, not an offered-load one: offered load is scaled with the silo count (a per-silo rung driven at rung x silo count, so per-silo demand never falls as the cluster grows), and a cell whose first cohort completes at least saturationRatio of what was offered is re-run at double the rung, up to maxRungEscalations times, so the published figure is where the cluster stopped keeping up rather than what the client asked for. A cell still offer-bound after the last escalation is published as a lower bound (>=). Speedup and per-silo efficiency are derived against the measured 1-silo cell. Every cohort starts on empty storage: with the silos parked, the harness deletes every table in the storage account except the clustering table and points the silos at a freshly named WAL table and grain-state table, so no cohort inherits trees, registry rows, or WAL backlog from an earlier one. ' + $storageSentence + $splitSentence
 	return $meta
 }
 
@@ -3274,24 +3343,36 @@ function Update-MultiSiloDocMarkers {
 # Layer 3 across several rigs (-Layer3Rigs)
 # ----------------------------------------------------------------------------
 
-function Split-Layer3Workloads {
+function Split-Layer3Sweep {
 	<#
 	.SYNOPSIS
-		Partition the Layer 3 workloads between $RigCount rigs.
+		Plan which (workloads, silo counts) each of $RigCount rigs sweeps.
 	.DESCRIPTION
-		A workload is never split: every silo count of one workload runs on
-		one rig, so each scaling curve - and the rung its escalation carries
-		from one silo count to the next - comes from a single deployment. A
-		curve stitched from two rigs would carry the difference between the
-		rigs as a step in the curve.
+		With at least as many workloads as rigs, a workload is never split:
+		every silo count of one workload runs on one rig, so each scaling
+		curve - and the rung its escalation carries from one silo count to the
+		next - comes from a single deployment. Workloads are assigned
+		longest-processing-time first (cost = cohorts per cell x silo counts x
+		(duration + per-cohort overhead)) to the least-loaded rig.
 
-		Longest-processing-time first: workloads sorted by estimated cost
-		(cohorts per cell x silo counts x (duration + per-cohort overhead)),
-		each assigned to the least-loaded rig. Ties break on doc order and the
-		lowest rig index, so the split is deterministic - which is what lets
-		-Resume find each workload's cells on the rig that measured them.
+		With more rigs than workloads, every workload first gets one rig and
+		each extra rig goes to the workload with the highest cost per rig that
+		still has more silo counts than rigs. That workload's silo counts,
+		ascending, are dealt into contiguous groups, one per rig, so each rig
+		sweeps one workload over a run of adjacent silo counts. Such a curve
+		spans rigs: Merge-Layer3RigStates records it and the published
+		metadata flags it, because a step between two rigs' cells can be the
+		difference between the rigs, and the second rig's escalation starts
+		from the row's starting rung rather than the first rig's settled one.
+		Fewer assignments than $RigCount come back when there are fewer cells
+		than rigs.
+
+		Ties break on doc order and the lowest rig index, so the plan is
+		deterministic - which is what lets -Resume find each cell on the rig
+		that measured it.
 	.OUTPUTS
-		An array of $RigCount string arrays, each in doc order.
+		An array of assignments, each @{ Workloads = [string[]] (doc order);
+		SiloCounts = [int[]] (ascending) }.
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][string[]] $WorkloadIds,
@@ -3300,25 +3381,51 @@ function Split-Layer3Workloads {
 		[Parameter(Mandatory)][int[]] $SiloCounts
 	)
 	$perCohortOverheadSec = 300
-	$costed = for ($idx = 0; $idx -lt $WorkloadIds.Count; $idx++) {
+	$counts = @($SiloCounts | Sort-Object -Unique)
+	$costed = @(for ($idx = 0; $idx -lt $WorkloadIds.Count; $idx++) {
 		$id = $WorkloadIds[$idx]
 		$row = @($Layer3Rows | Where-Object { $_.WorkloadId -eq $id })[0]
 		if ($null -eq $row) { throw "Unknown Layer 3 workload '$id'." }
 		$cellN = [Math]::Max($N, [int](Get-StateOr $row 'CohortsPerCell' $N))
 		$dur = (Resolve-Rung -Spec $row.RungPerSilo).DurationSec
-		[pscustomobject]@{ Id = $id; Order = $idx; Cost = [double]$cellN * $SiloCounts.Count * ($dur + $perCohortOverheadSec) }
+		[pscustomobject]@{ Id = $id; Order = $idx; Cost = [double]$cellN * $counts.Count * ($dur + $perCohortOverheadSec) }
+	})
+
+	if ($RigCount -le $costed.Count) {
+		$loads = New-Object double[] $RigCount
+		$assigned = @(for ($r = 0; $r -lt $RigCount; $r++) { , (New-Object System.Collections.Generic.List[string]) })
+		foreach ($w in ($costed | Sort-Object -Property @{ Expression = 'Cost'; Descending = $true }, @{ Expression = 'Order'; Ascending = $true })) {
+			$target = 0
+			for ($r = 1; $r -lt $RigCount; $r++) { if ($loads[$r] -lt $loads[$target]) { $target = $r } }
+			$loads[$target] += $w.Cost
+			$assigned[$target].Add($w.Id)
+		}
+		return @(for ($r = 0; $r -lt $RigCount; $r++) {
+			$mine = $assigned[$r]
+			@{ Workloads = @($WorkloadIds | Where-Object { $mine.Contains($_) }); SiloCounts = $counts }
+		})
 	}
-	$loads = New-Object double[] $RigCount
-	$assigned = @(for ($r = 0; $r -lt $RigCount; $r++) { , (New-Object System.Collections.Generic.List[string]) })
-	foreach ($w in ($costed | Sort-Object -Property @{ Expression = 'Cost'; Descending = $true }, @{ Expression = 'Order'; Ascending = $true })) {
-		$target = 0
-		for ($r = 1; $r -lt $RigCount; $r++) { if ($loads[$r] -lt $loads[$target]) { $target = $r } }
-		$loads[$target] += $w.Cost
-		$assigned[$target].Add($w.Id)
+
+	# More rigs than workloads: give extra rigs to the costliest workloads.
+	$rigsFor = @{}
+	foreach ($w in $costed) { $rigsFor[$w.Id] = 1 }
+	for ($extra = $RigCount - $costed.Count; $extra -gt 0; $extra--) {
+		$best = $null
+		foreach ($w in $costed) {
+			if ($rigsFor[$w.Id] -ge $counts.Count) { continue }
+			if ($null -eq $best -or ($w.Cost / $rigsFor[$w.Id]) -gt ($best.Cost / $rigsFor[$best.Id])) { $best = $w }
+		}
+		if ($null -eq $best) { break }
+		$rigsFor[$best.Id]++
 	}
-	return , @(for ($r = 0; $r -lt $RigCount; $r++) {
-		$mine = $assigned[$r]
-		, @($WorkloadIds | Where-Object { $mine.Contains($_) })
+	return @(foreach ($w in $costed) {
+		$k = $rigsFor[$w.Id]
+		$start = 0
+		for ($g = 0; $g -lt $k; $g++) {
+			$size = [int][Math]::Floor($counts.Count / $k) + $(if ($g -lt ($counts.Count % $k)) { 1 } else { 0 })
+			@{ Workloads = @($w.Id); SiloCounts = @($counts[$start..($start + $size - 1)]) }
+			$start += $size
+		}
 	})
 }
 
@@ -3327,9 +3434,11 @@ function Merge-Layer3RigStates {
 	.SYNOPSIS
 		Merge the per-rig state of a -Layer3Rigs sweep into one Layer 3 state.
 	.DESCRIPTION
-		Cells are keyed by workload, and Split-Layer3Workloads gives each
-		workload to exactly one rig, so a workload present in two rig states
-		is refused rather than blended. Every setting that shapes a cell must
+		Split-Layer3Sweep gives each (workload, silo count) cell to exactly
+		one rig, so a cell present in two rig states is refused rather than
+		blended. A workload whose cells came from more than one rig is
+		recorded in layer3.splitCurves (workload -> rigs) so the published
+		metadata can flag that curve. Every setting that shapes a cell must
 		agree across the rigs (they were provisioned and driven by one
 		report invocation, so a disagreement means a foreign state file),
 		because the published metadata states each setting once.
@@ -3340,7 +3449,7 @@ function Merge-Layer3RigStates {
 	)
 	if ($States.Count -eq 0) { throw 'No rig state to merge.' }
 	$merged = ($States[0] | ConvertTo-Json -Depth 16 | ConvertFrom-Json -AsHashtable)
-	$merged['layer3'] = @{ cohorts = @{}; rows = @{}; siloCounts = @(); acaPrefix = ($Prefixes -join '+'); rigs = @($Prefixes) }
+	$merged['layer3'] = @{ cohorts = @{}; rows = @{}; siloCounts = @(); acaPrefix = ($Prefixes -join '+'); rigs = @($Prefixes); splitCurves = @{} }
 	$mustAgree = @('region', 'batchSize', 'responseTimeoutSec', 'layer3ShardCount', 'layer3WalPartitions', 'layer3WalMaxPendingBatches', 'layer3SaturationRatio', 'layer3MaxRungEscalations', 'layer3WalAccounts')
 	$owner = @{}
 	$counts = @()
@@ -3353,9 +3462,13 @@ function Merge-Layer3RigStates {
 		$l3 = Get-StateOr $s 'layer3' @{}
 		$cohorts = Get-StateOr $l3 'cohorts' @{}
 		foreach ($mode in @($cohorts.Keys)) {
-			if ($owner.ContainsKey($mode)) { throw "Cannot merge rig states: workload '$mode' was measured on both $($owner[$mode]) and $($Prefixes[$i]); a curve must come from one rig." }
-			$owner[$mode] = $Prefixes[$i]
-			$merged.layer3.cohorts[$mode] = $cohorts[$mode]
+			if (-not $merged.layer3.cohorts.ContainsKey($mode)) { $merged.layer3.cohorts[$mode] = @{} }
+			foreach ($silo in @($cohorts[$mode].Keys)) {
+				$cellKey = "$mode/$silo"
+				if ($owner.ContainsKey($cellKey)) { throw "Cannot merge rig states: cell $mode at $silo silo(s) was measured on both $($owner[$cellKey]) and $($Prefixes[$i]); a cell must come from one rig." }
+				$owner[$cellKey] = $Prefixes[$i]
+				$merged.layer3.cohorts[$mode]["$silo"] = $cohorts[$mode][$silo]
+			}
 		}
 		$counts += @(Get-StateOr $l3 'siloCounts' @())
 		foreach ($k in @('startedUtc')) { $v = Get-StateOr $s $k $null; if ($v -and "$v" -lt "$(Get-StateOr $merged $k '9')") { $merged[$k] = $v } }
@@ -3363,6 +3476,13 @@ function Merge-Layer3RigStates {
 	}
 	$merged.layer3.siloCounts = @($counts | ForEach-Object { [int]$_ } | Sort-Object -Unique)
 	$merged['prefix'] = ($Prefixes -join '+')
+	foreach ($mode in @($merged.layer3.cohorts.Keys)) {
+		$rigsOfMode = @($owner.Keys | Where-Object { $_.StartsWith("$mode/") } | ForEach-Object { $owner[$_] } | Sort-Object -Unique)
+		if ($rigsOfMode.Count -gt 1) {
+			$merged.layer3.splitCurves[$mode] = @($Prefixes | Where-Object { $_ -in $rigsOfMode })
+			Write-Warning "[rigs] the $mode curve spans rigs $($merged.layer3.splitCurves[$mode] -join ', '); a step between their cells can be the difference between the rigs."
+		}
+	}
 	$merged.layer3.rows = Aggregate-Layer3Cells -Cells $merged.layer3.cohorts
 	return $merged
 }
@@ -3431,7 +3551,8 @@ function Invoke-Layer3MultiRig {
 		Run the Layer 3 sweep on several identical rigs in parallel and merge.
 	.DESCRIPTION
 		Provisions (or reuses) one rig per prefix, gives each rig a disjoint
-		set of workloads (Split-Layer3Workloads), runs one ordinary
+		set of cells (Split-Layer3Sweep: whole workloads, or with more rigs
+		than workloads a run of one workload's silo counts), runs one ordinary
 		single-rig sweep per rig as a child process with -SkipDocUpdate, then
 		merges the rigs' cells (Merge-Layer3RigStates) into
 		.run/performance-report/rigs-<prefixes>/state.json and renders the
@@ -3447,9 +3568,13 @@ function Invoke-Layer3MultiRig {
 	)
 	. (Join-Path $azScriptsDir 'aca-common.ps1')
 	$ids = @(Resolve-WorkloadIds -LayerRows $Layer3Rows -WorkloadsSpec $Workloads)
+	$plan = @(Split-Layer3Sweep -WorkloadIds $ids -RigCount $RigCount -N $N -SiloCounts $SiloCounts)
+	if ($plan.Count -lt $RigCount) {
+		Write-Warning "[rigs] $RigCount rigs requested but the sweep has only $($plan.Count) separable cell group(s); using $($plan.Count)."
+		$RigCount = $plan.Count
+	}
 	if ($RigCount -gt $ids.Count) {
-		Write-Warning "[rigs] $RigCount rigs for $($ids.Count) workload(s); a workload is never split, so using $($ids.Count)."
-		$RigCount = $ids.Count
+		Write-Warning "[rigs] more rigs than workloads: some workloads' silo counts are split across rigs, so their curves span rigs (flagged in the published metadata)."
 	}
 	$prefixes = if ($ReusePrefixes.Count -gt 0) {
 		@($ReusePrefixes[0..($RigCount - 1)])
@@ -3461,9 +3586,8 @@ function Invoke-Layer3MultiRig {
 		@(1..$RigCount | ForEach-Object { New-RunPrefix })
 	}
 	$provision = $ReusePrefixes.Count -eq 0
-	$split = Split-Layer3Workloads -WorkloadIds $ids -RigCount $RigCount -N $N -SiloCounts $SiloCounts
 	for ($r = 0; $r -lt $RigCount; $r++) {
-		Write-Host "[rigs] $($prefixes[$r]): $(@($split[$r]) -join ', ')" -ForegroundColor Cyan
+		Write-Host "[rigs] $($prefixes[$r]): $(@($plan[$r].Workloads) -join ', ') at silos $(@($plan[$r].SiloCounts) -join ',')" -ForegroundColor Cyan
 	}
 
 	$reportScript = Join-Path $scriptDir 'performance-report.ps1'
@@ -3500,7 +3624,7 @@ function Invoke-Layer3MultiRig {
 		for ($r = 0; $r -lt $RigCount; $r++) {
 			$p = $prefixes[$r]
 			$cParams = [ordered]@{
-				Layer = '3'; ReuseAca = $p; Workloads = (@($split[$r]) -join ','); SiloCounts = @($SiloCounts); N = $N
+				Layer = '3'; ReuseAca = $p; Workloads = (@($plan[$r].Workloads) -join ','); SiloCounts = @($plan[$r].SiloCounts); N = $N
 				BatchSize = $BatchSize; VmSize = $VmSize; Fidelity = $Fidelity; SkipDocUpdate = $true
 				SetManyFanOutBudgetSec = $SetManyFanOutBudgetSec; WalAdmissionCallBudgetSec = $WalAdmissionCallBudgetSec
 				WalAppendCoalescingInFlightThreshold = $WalAppendCoalescingInFlightThreshold
@@ -3670,7 +3794,7 @@ function Main {
 			}
 		}
 		if ($state.ContainsKey('layer2') -and $state.layer2.ContainsKey('cohorts') -and $state.layer2.cohorts -is [hashtable] -and $state.layer2.cohorts.Count -gt 0) {
-			$state.layer2.rows = Aggregate-Layer2Cells -CohortsByMode $state.layer2.cohorts
+			$state.layer2.rows = Aggregate-Layer2Cells -CohortsByMode $state.layer2.cohorts -SaturationRatio $SaturationRatio
 		}
 		Update-DocMarkers -DocPath $docPath -State $state -WhatIf:$Diff
 		if (-not $Diff -and -not $SkipDocUpdate) {
@@ -3970,7 +4094,7 @@ function Main {
 			Write-Host "[main] Layer 2 workloads: $($l2Ids -join ',')" -ForegroundColor Cyan
 			$l2CohortsByMode = Invoke-Layer2Cohorts -Prefix $prefix -WorkloadIds $l2Ids -Rung $rungHt -N $N -ParametersFilePath $paramFile -ResponseTimeoutSec $state.responseTimeoutSec -WalPartitions $state.walPartitions -WalMaxPendingBatches $state.walMaxPendingBatches -BatchSize $BatchSize -CaptureCounters:$CaptureCounters
 			foreach ($mode in $l2CohortsByMode.Keys) { $state.layer2.cohorts[$mode] = $l2CohortsByMode[$mode] }
-			$l2Rows = Aggregate-Layer2Cells -CohortsByMode $l2CohortsByMode
+			$l2Rows = Aggregate-Layer2Cells -CohortsByMode $l2CohortsByMode -SaturationRatio $SaturationRatio
 			foreach ($k in $l2Rows.Keys) { $state.layer2.rows[$k] = $l2Rows[$k] }
 		}
 
