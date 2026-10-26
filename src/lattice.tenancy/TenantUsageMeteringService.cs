@@ -326,7 +326,50 @@ internal sealed class TenantUsageMeteringService : IHostedService
         var current = new Dictionary<string, TreeUsageSample>(treeIds.Count, StringComparer.Ordinal);
         var samples = new List<TreeUsageSample>(treeIds.Count);
         var retained = 0;
-        foreach (var treeId in treeIds)
+        for (var offset = 0; offset < treeIds.Count; offset += BoundedFanOut.DefaultWidth)
+        {
+            var start = offset;
+            var results = await BoundedFanOut.RunAsync(
+                Math.Min(BoundedFanOut.DefaultWidth, treeIds.Count - start),
+                BoundedFanOut.DefaultWidth,
+                slot => ReadAsync(treeIds[start + slot]),
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            for (var slot = 0; slot < results.Length; slot++)
+            {
+                var (sample, wasRetained) = results[slot];
+                if (sample is null)
+                {
+                    continue;
+                }
+
+                samples.Add(sample.Value);
+                current[treeIds[start + slot]] = sample.Value;
+                if (wasRetained)
+                {
+                    retained++;
+                }
+            }
+        }
+
+        _lastKnownByTenant[tenant.Value] = current;
+
+        if (retained > 0)
+        {
+            // Summarised once per tenant per cycle rather than once per tree, so a
+            // broad storage-subsystem failure does not itself become a log flood.
+            _logger.LogWarning(
+                "Tenant usage metering retained the last-known footprint for {RetainedCount} of "
+                + "{TreeCount} tree(s) for tenant '{Tenant}' because they could not be sampled; "
+                + "the published usage may be stale but is not under-counted.",
+                retained,
+                current.Count,
+                tenant);
+        }
+
+        return samples;
+
+        async Task<(TreeUsageSample? Sample, bool Retained)> ReadAsync(string treeId)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -334,7 +377,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
             // and this check is what decides whether a tree counts toward the tenant.
             if (!LatticeTenantTrees.TryGetTenant(treeId, out var owner) || !owner.Equals(tenant))
             {
-                continue;
+                return (null, false);
             }
 
             try
@@ -366,8 +409,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
                     bytes: usage.TotalBytes,
                     keys: usage.LiveKeys,
                     memoryBytes: usage.LeafStateBytes);
-                samples.Add(sample);
-                current[treeId] = sample;
+                return (sample, false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -378,37 +420,16 @@ internal sealed class TenantUsageMeteringService : IHostedService
                 // A tree that has never been sampled has nothing to retain and is
                 // the one case that still contributes nothing - it has no footprint
                 // on record to under-count.
-                if (lastKnown is not null && lastKnown.TryGetValue(treeId, out var previous))
-                {
-                    samples.Add(previous);
-                    current[treeId] = previous;
-                    retained++;
-                }
-
                 _logger.LogDebug(
                     ex,
                     "Tenant usage metering could not sample tree '{TreeId}' for tenant '{Tenant}'.",
                     treeId,
                     tenant);
+                return lastKnown is not null && lastKnown.TryGetValue(treeId, out var previous)
+                    ? (previous, true)
+                    : (null, false);
             }
         }
-
-        _lastKnownByTenant[tenant.Value] = current;
-
-        if (retained > 0)
-        {
-            // Summarised once per tenant per cycle rather than once per tree, so a
-            // broad storage-subsystem failure does not itself become a log flood.
-            _logger.LogWarning(
-                "Tenant usage metering retained the last-known footprint for {RetainedCount} of "
-                + "{TreeCount} tree(s) for tenant '{Tenant}' because they could not be sampled; "
-                + "the published usage may be stale but is not under-counted.",
-                retained,
-                current.Count,
-                tenant);
-        }
-
-        return samples;
     }
 
     /// <summary>

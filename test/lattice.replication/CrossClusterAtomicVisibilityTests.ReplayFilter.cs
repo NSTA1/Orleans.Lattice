@@ -29,6 +29,7 @@ public partial class CrossClusterAtomicVisibilityTests
         registry.GetParticipantsAsync(live).Returns(Task.FromResult<IReadOnlyList<int>>(new[] { 0 }));
         registry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         registry.GetRecordedStatusAsync(kept).Returns(Task.FromResult(TxStatus.Committed));
+        registry.HasUndecidedParticipantsAsync(live).Returns(true);
         return registry;
     }
 
