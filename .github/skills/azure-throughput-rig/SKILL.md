@@ -66,6 +66,13 @@ alphanumerics). Common shapes:
 - **`-DryRun`** re-renders a document from the most recently written `state.json`. Replay the
   multi-silo document with either `-Layer3 -DryRun` or `-Layer 3 -DryRun`. Replay selects the
   newest state containing the requested layer, and a Layer 1/2 replay preserves the other block.
+- **Layer 2 cells are usually lower bounds.** Layer 2 rungs are chosen below saturation and never
+  escalate, so a row whose usable cohorts all completed at least `-SaturationRatio` (default 0.9)
+  of their offered load (rung vehicles x Hz) is published `>= X` with a note: it measured the
+  offered load, not the silo's ceiling. Do not compare such a cell with an escalated Layer 3 cell.
+  `get-many` at 4,000 vehicles x 5 Hz reads ~20 k keys/s on Layer 2, while Layer 3 escalates the
+  same workload to ~312 k at one silo. Cells published before the steady-mean fix in #5060 can
+  exceed their own offered load (up to 176%), because the old mean averaged only non-zero seconds.
 - **Layer 3 on several rigs in parallel (`-Layer3Rigs K`).** The report splits the sweep
   between K rigs itself (`Split-Layer3Sweep`), deterministically, so `-Resume` finds each cell
   where it ran. With at least as many workloads as rigs it splits by workload - longest-first by

@@ -138,7 +138,14 @@ silo rate samples filtered to the productive window; see
 `benchmark/azure-throughput/throughput.md` section 27.1 for the exact
 formula), merges the matching duration histogram's 10-second reporter
 windows that fall inside that steady-state window, weighted by call count,
-into the per-call p50/p75/p90/p99, and tears the VM down.
+into the per-call p50/p75/p90/p99, and tears the VM down. Every rung is chosen
+to stay below saturation and is never raised, so a row whose cohorts
+completed at least 90% of their offered load (`-SaturationRatio`) measured
+that offered load rather than the silo's ceiling; it is published as a
+lower bound, marked `>=`. Throughput cells published before this rule
+were computed with the older steady-state mean, which averaged only the
+non-zero per-second samples, which is why several of them exceed the load
+their own label states.
 The full provenance
 (host SKU, region, .NET version, WAL options, rung, response-timeout,
 cohort-N, methodology, measurement date) is recorded in the marker block's

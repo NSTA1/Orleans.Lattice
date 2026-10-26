@@ -257,8 +257,9 @@ param(
 	# Layer 3 only: reuse an already-provisioned ACA rig (see deploy-aca.ps1)
 	# instead of provisioning and tearing one down. The name prefix of that
 	# rig. Mirrors -ReuseVm for Layer 2. A comma-separated list of prefixes
-	# runs the sweep across those rigs in parallel (see -Layer3Rigs).
-	[string] $ReuseAca,
+	# runs the sweep across those rigs in parallel (see -Layer3Rigs). An
+	# array, so the unquoted -ReuseAca a,b form binds as well as -ReuseAca 'a,b'.
+	[string[]] $ReuseAca,
 
 	# Layer 3 only: leave the ACA rig standing after the sweep. Mirrors -KeepVm.
 	[switch] $KeepAca,
@@ -316,10 +317,12 @@ param(
 	# producer rather than the cluster; the report then grades it
 	# producer-bound. Raise it to measure such a cell. Recorded per cohort.
 	[ValidateRange(1, 64)][int] $Layer3ClientsPerSilo = 4,
-	# Layer 3 only. True-throughput escalation: a cell whose first cohort
+	# Layer 3: true-throughput escalation - a cell whose first cohort
 	# completes at least this fraction of the offered load is re-run at double
-	# the per-silo rung, at most -MaxRungEscalations times. 0 disables it and
-	# publishes whatever each row's starting rung measured.
+	# the per-silo rung, at most -MaxRungEscalations times. Layer 2 never
+	# escalates; a row whose cohorts all completed at least this fraction of
+	# their offered load is published as a lower bound (>=) instead. 0
+	# disables both and publishes whatever each row's starting rung measured.
 	[double] $SaturationRatio = 0.9,
 	[int] $MaxRungEscalations = 3,
 	# Layer 3 only. Storage accounts every cohort's WAL is spread across: the
@@ -2439,7 +2442,15 @@ function Aggregate-Layer1Cells {
 }
 
 function Aggregate-Layer2Cells {
-	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $CohortsByMode)
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][hashtable] $CohortsByMode,
+		# A row whose every usable cohort completed at least this fraction of
+		# its offered load measured the offered load, not the silo: it is
+		# published as a lower bound (>=), the same rule Layer 3 applies.
+		# Layer 2 rungs are chosen below saturation and never escalate, so
+		# this is the normal case. 0 disables the marking.
+		[double] $SaturationRatio = 0.9
+	)
 	$rows = @{}
 	foreach ($row in $Layer2Rows) {
 		$mode = $row.WorkloadMode
@@ -2483,8 +2494,16 @@ function Aggregate-Layer2Cells {
 			Write-Warning "[aggregate-l2] mode=${mode}: no positive steady-state means in $($cohorts.Count) cohorts"
 			continue
 		}
+		# Offered keys/s = vehicles x tick rate of the rung the cohorts ran
+		# at; one vehicle sample is one key in every workload mode.
+		$first = $cohorts[0]
+		$offered = [long](Get-StateOr $first 'rungVehicles' 0) * [long](Get-StateOr $first 'rungTickHz' 0)
+		$offerBound = ($SaturationRatio -gt 0) -and ($offered -gt 0) -and
+			(@($cohorts | Where-Object { [double]$_.steadyMean -lt ($SaturationRatio * $offered) }).Count -eq 0)
 		$rows[$row.Label] = @{
 			sustainedThroughput = [int][math]::Round((Get-Median $means), 0)
+			offeredKeysPerSec   = $offered
+			offerBound          = $offerBound
 			throughputUnit      = $row.ThroughputUnit
 			perCallP50Ms        = if ($p50s.Count -gt 0) { [math]::Round((Get-Median $p50s), 2) } else { $null }
 			perCallP75Ms        = if ($p75s.Count -gt 0) { [math]::Round((Get-Median $p75s), 2) } else { $null }
@@ -2539,6 +2558,7 @@ function Format-Layer2Row {
 	# Layer2Latency helper degrades to 'not captured'.
 	$unit = Get-StateOr $Cell 'throughputUnit' 'op/s'
 	$thr = Format-Throughput (Get-StateOr $Cell 'sustainedThroughput') $unit
+	if (Get-StateOr $Cell 'offerBound' $false) { $thr = '>= ' + $thr }
 	$p50 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP50Ms')
 	$p75 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP75Ms')
 	$p90 = Format-Layer2Latency (Get-StateOr $Cell 'perCallP90Ms')
@@ -2752,6 +2772,9 @@ function Render-Layer2Table {
 			"$($_.Label): n=$($RowsAgg[$_.Label].cohortN)"
 		})
 		[void]$sb.Append($nl).Append($nl).Append('Usable throughput cohorts: ').Append(($counts -join '; ')).Append('.')
+		if (@($RowsAgg.Values | Where-Object { Get-StateOr $_ 'offerBound' $false }).Count -gt 0) {
+			[void]$sb.Append($nl).Append($nl).Append('Cells marked >= completed (nearly) all of the load they were offered, so they measure that offered load, not the silo''s ceiling: each is a lower bound on what one silo sustains.')
+		}
 	}
 	return $sb.ToString().TrimEnd("`r","`n")
 }
@@ -3771,7 +3794,7 @@ function Main {
 			}
 		}
 		if ($state.ContainsKey('layer2') -and $state.layer2.ContainsKey('cohorts') -and $state.layer2.cohorts -is [hashtable] -and $state.layer2.cohorts.Count -gt 0) {
-			$state.layer2.rows = Aggregate-Layer2Cells -CohortsByMode $state.layer2.cohorts
+			$state.layer2.rows = Aggregate-Layer2Cells -CohortsByMode $state.layer2.cohorts -SaturationRatio $SaturationRatio
 		}
 		Update-DocMarkers -DocPath $docPath -State $state -WhatIf:$Diff
 		if (-not $Diff -and -not $SkipDocUpdate) {
@@ -4071,7 +4094,7 @@ function Main {
 			Write-Host "[main] Layer 2 workloads: $($l2Ids -join ',')" -ForegroundColor Cyan
 			$l2CohortsByMode = Invoke-Layer2Cohorts -Prefix $prefix -WorkloadIds $l2Ids -Rung $rungHt -N $N -ParametersFilePath $paramFile -ResponseTimeoutSec $state.responseTimeoutSec -WalPartitions $state.walPartitions -WalMaxPendingBatches $state.walMaxPendingBatches -BatchSize $BatchSize -CaptureCounters:$CaptureCounters
 			foreach ($mode in $l2CohortsByMode.Keys) { $state.layer2.cohorts[$mode] = $l2CohortsByMode[$mode] }
-			$l2Rows = Aggregate-Layer2Cells -CohortsByMode $l2CohortsByMode
+			$l2Rows = Aggregate-Layer2Cells -CohortsByMode $l2CohortsByMode -SaturationRatio $SaturationRatio
 			foreach ($k in $l2Rows.Keys) { $state.layer2.rows[$k] = $l2Rows[$k] }
 		}
 

@@ -72,6 +72,18 @@ try {
     Assert-Case 'n counts actual throughput samples' ($rows.Writes.cohortN -eq 1 -and $rows.Writes.sustainedThroughput -eq 1000)
     Assert-Case 'per-row cohort count rendered' ((Render-Layer2Table $rows @{}) -match 'Writes: n=1')
 
+    # Offer-bound Layer 2 rows are lower bounds. New-Cohort's rung is 10
+    # vehicles at 5 Hz = 50 keys/s offered.
+    function New-RungCohort([double] $Rate) { $c = New-Cohort $log $Rate; $c['rungTickHz'] = 5; return $c }
+    [IO.File]::WriteAllText($log, '')
+    $ob = Aggregate-Layer2Cells @{ 'set-point' = @((New-RungCohort 49), (New-RungCohort 48)); 'set-many' = @((New-RungCohort 49), (New-RungCohort 30)) } -WarningAction SilentlyContinue
+    Assert-Case 'a row whose cohorts all reached their offer is offer-bound' ($ob.Writes.offerBound -and $ob.Writes.offeredKeysPerSec -eq 50)
+    Assert-Case 'one cohort below the offer keeps the row a measurement' (-not $ob['Not rerun'].offerBound)
+    $obTable = Render-Layer2Table $ob @{}
+    Assert-Case 'an offer-bound row renders as a lower bound with a note' ($obTable -match '\| Writes \| \*\*>= ' -and $obTable -match 'Cells marked >=' -and $obTable -notmatch '\| Not rerun \| \*\*>= ')
+    Assert-Case 'SaturationRatio 0 disables the marking' (-not (Aggregate-Layer2Cells @{ 'set-point' = @((New-RungCohort 49)) } -SaturationRatio 0 -WarningAction SilentlyContinue).Writes.offerBound)
+    Assert-Case 'a cohort without a recorded tick rate is never marked' (-not $rows.Writes.offerBound -and (Render-Layer2Table $rows @{}) -notmatch 'Cells marked >=')
+
     # Per-call quantiles merge the [phaseA] windows of the measurement rather
     # than publishing the last one. Layer 2: progress and phaseA share the
     # silo's clock, so only windows inside the steady window (t=15..54) count.
