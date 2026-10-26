@@ -22,6 +22,9 @@ foreach ($ast in @($report, $common)) {
         . ([scriptblock]::Create($fn.Extent.Text))
     }
 }
+# The report dot-sources these at script scope, which a function-only load skips.
+. (Join-Path $PSScriptRoot '_run-cohort-helpers.ps1')
+. (Join-Path $PSScriptRoot '_storage-metrics.ps1')
 $Layer2Rows = @(
     @{ Label = 'Reads'; WorkloadMode = 'get-point'; ThroughputUnit = 'keys/s' },
     @{ Label = 'Writes'; WorkloadMode = 'set-point'; ThroughputUnit = 'keys/s' },
@@ -68,6 +71,26 @@ try {
     Assert-Case 'legacy HEALTHY miss-path reads excluded' (-not $rows.ContainsKey('Reads'))
     Assert-Case 'n counts actual throughput samples' ($rows.Writes.cohortN -eq 1 -and $rows.Writes.sustainedThroughput -eq 1000)
     Assert-Case 'per-row cohort count rendered' ((Render-Layer2Table $rows @{}) -match 'Writes: n=1')
+
+    # Per-call quantiles merge the [phaseA] windows of the measurement rather
+    # than publishing the last one. Layer 2: progress and phaseA share the
+    # silo's clock, so only windows inside the steady window (t=15..54) count.
+    $progress = @(15..54 | ForEach-Object { "[silo] t= $_.0s ops= $($_ * 1000) ops/sec= 1,000 inFlight= 1" }) + @(55..60 | ForEach-Object { "[silo] t= $_.0s ops= 54,000 ops/sec= 0 inFlight= 0" })
+    $phaseA = @(
+        '[phaseA] t=20.3s instrument=get_many.duration tree=t shard=- phase=- status=- count=40 sum=1 min=9 p50=10 p75=11 p90=12 p99=13 max=13',
+        '[phaseA] t=30.3s instrument=get_many.duration tree=t shard=- phase=- status=- count=50 sum=1 min=3 p50=4 p75=5 p90=6 p99=7 max=7',
+        '[phaseA] t=40.3s instrument=get_many.duration tree=t shard=- phase=- status=- count=50 sum=1 min=3 p50=4 p75=5 p90=6 p99=7 max=7',
+        '[phaseA] t=40.3s instrument=get_many.duration tree=_lattice_trees shard=- phase=- status=- count=500 sum=1 min=0.1 p50=0.1 p75=0.1 p90=0.1 p99=0.1 max=0.1',
+        '[phaseA] t=60.3s instrument=get_many.duration tree=t shard=- phase=- status=- count=900 sum=1 min=0.1 p50=0.5 p75=0.6 p90=0.7 p99=0.8 max=0.8'
+    )
+    [IO.File]::WriteAllLines($log, @($progress + $phaseA + 'Verdict      : HEALTHY'))
+    $l2 = Read-SiloLogStats -SiloLogPath $log -WorkloadMode 'get-many'
+    Assert-Case 'Layer 2 per-call quantiles come from windows inside the steady window' ($l2.PerCallP50Ms -eq 4 -and $l2.PerCallP99Ms -eq 7 -and $l2.PerCallWindows -eq 2 -and $l2.PerCallCalls -eq 100)
+    Assert-Case 'Layer 2 per-call basis is stated' ($l2.PerCallBasis -eq 'windows inside the steady-state window')
+    # Layer 3: separate clocks, so every window at t>=15 of every silo merges.
+    [IO.File]::WriteAllLines($log, @('[producer] mode=orleans-client vehicles=1 tickHz=1 duration=1s clients=1') + $progress + $phaseA)
+    $l3 = Read-SiloLogStats -SiloLogPath $log -WorkloadMode 'get-many'
+    Assert-Case 'Layer 3 per-call quantiles merge every window of every silo' ($l3.PerCallWindows -eq 4 -and $l3.PerCallCalls -eq 1040 -and $l3.PerCallBasis -eq 'all windows t>=15s' -and $l3.PerCallP50Ms -lt 4)
 
     $vm = Read-Ast (Join-Path $PSScriptRoot 'run-cohort.ps1')
     $Vehicles = 10; $treeId = 't'; $ExtraSiloEnv = @{ BENCH_VEHICLE_COUNT = '999'; BENCH_WORKLOAD_MODE = 'get-point' }

@@ -67,12 +67,11 @@ if ($state -ne 'Succeeded') {
 $lines = Get-AcaJobLog -Context $ctx -ExecutionName $execName -SinceUtc $startedUtc -TreeId $TreeId -MaxWaitSec $harvestWait
 $siloLines = Get-AcaSiloLog -Context $ctx -SinceUtc $startedUtc -UntilUtc ((Get-Date).ToUniversalTime()) -RevisionName $siloRevision -IncludeDiagnostics
 
-# Sort the silo half by its `t=` timestamp. Read-SiloLogStats takes the
-# LAST productive [phaseA] window as the representative one, and Log
-# Analytics returns rows ordered by ingestion-stamped TimeGenerated
-# across N replicas - so without this the "last" window can belong to
-# whichever replica happened to flush its log last, not to the latest
-# point in the run.
+# Sort the silo half by its `t=` timestamp so the cohort log reads in run
+# order. Read-SiloLogStats merges every [phaseA] window of every silo, so
+# the order no longer changes a published figure; Log Analytics returns
+# rows ordered by ingestion-stamped TimeGenerated across N replicas, which
+# interleaves the replicas arbitrarily.
 $siloLines = @($siloLines | Sort-Object -Property @{ Expression = {
 	if ($_ -match 't=\s*([\d.]+)s') { [double]$Matches[1] } else { [double]::MaxValue }
 } })

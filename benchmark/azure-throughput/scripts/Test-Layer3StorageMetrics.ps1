@@ -106,16 +106,26 @@ Assert-Case 'storage table stays ASCII' ($table -notmatch '[^\x00-\x7F]')
 
 # --- workload split between rigs ---------------------------------------------
 $all = @($Layer3Rows | ForEach-Object { $_.WorkloadId })
-$split = Split-Layer3Workloads -WorkloadIds $all -RigCount 3 -N 3 -SiloCounts @(1, 2, 4)
-$flat = @($split | ForEach-Object { $_ })
-Assert-Case 'split yields one list per rig' ($split.Count -eq 3)
+$split = @(Split-Layer3Sweep -WorkloadIds $all -RigCount 3 -N 3 -SiloCounts @(4, 1, 2))
+$flat = @($split | ForEach-Object { @($_.Workloads) })
+Assert-Case 'split yields one assignment per rig' ($split.Count -eq 3)
 Assert-Case 'every workload lands on exactly one rig' ($flat.Count -eq $all.Count -and @($flat | Sort-Object -Unique).Count -eq $all.Count)
-Assert-Case 'no rig is empty' (@($split | Where-Object { @($_).Count -eq 0 }).Count -eq 0)
-Assert-Case 'each rig keeps doc order' (@($split | Where-Object { $o = @($_); $idx = @($o | ForEach-Object { [array]::IndexOf($all, $_) }); (($idx | Sort-Object) -join ',') -ne ($idx -join ',') }).Count -eq 0)
-$again = Split-Layer3Workloads -WorkloadIds $all -RigCount 3 -N 3 -SiloCounts @(1, 2, 4)
-Assert-Case 'split is deterministic, so -Resume finds each workload on its rig' ((($split | ForEach-Object { @($_) -join ',' }) -join '|') -eq (($again | ForEach-Object { @($_) -join ',' }) -join '|'))
-$one = Split-Layer3Workloads -WorkloadIds @('set-many') -RigCount 1 -N 3 -SiloCounts @(1)
-Assert-Case 'a single rig gets everything' ($one.Count -eq 1 -and @($one[0]) -join ',' -eq 'set-many')
+Assert-Case 'no rig is empty' (@($split | Where-Object { @($_.Workloads).Count -eq 0 }).Count -eq 0)
+Assert-Case 'each rig keeps doc order' (@($split | Where-Object { $o = @($_.Workloads); $idx = @($o | ForEach-Object { [array]::IndexOf($all, $_) }); (($idx | Sort-Object) -join ',') -ne ($idx -join ',') }).Count -eq 0)
+Assert-Case 'with no more rigs than workloads every rig sweeps every silo count, ascending' (@($split | Where-Object { (@($_.SiloCounts) -join ',') -ne '1,2,4' }).Count -eq 0)
+$again = @(Split-Layer3Sweep -WorkloadIds $all -RigCount 3 -N 3 -SiloCounts @(4, 1, 2))
+Assert-Case 'split is deterministic, so -Resume finds each cell on its rig' ((($split | ForEach-Object { "$(@($_.Workloads) -join ',')@$(@($_.SiloCounts) -join ',')" }) -join '|') -eq (($again | ForEach-Object { "$(@($_.Workloads) -join ',')@$(@($_.SiloCounts) -join ',')" }) -join '|'))
+$one = @(Split-Layer3Sweep -WorkloadIds @('set-many') -RigCount 1 -N 3 -SiloCounts @(1))
+Assert-Case 'a single rig gets everything' ($one.Count -eq 1 -and (@($one[0].Workloads) -join ',') -eq 'set-many')
+$two = @(Split-Layer3Sweep -WorkloadIds @('get-many') -RigCount 2 -N 1 -SiloCounts @(2, 1))
+Assert-Case 'more rigs than workloads splits a workload''s silo counts across rigs' ($two.Count -eq 2 -and (@($two[0].SiloCounts) -join ',') -eq '1' -and (@($two[1].SiloCounts) -join ',') -eq '2' -and (@($two | ForEach-Object { @($_.Workloads) }) -join ',') -eq 'get-many,get-many')
+$five = @(Split-Layer3Sweep -WorkloadIds @('get-many') -RigCount 2 -N 1 -SiloCounts @(1, 2, 4, 6, 8))
+Assert-Case 'silo counts are dealt into contiguous ascending runs' ((@($five | ForEach-Object { @($_.SiloCounts) -join ',' }) -join '|') -eq '1,2,4|6,8')
+$capped = @(Split-Layer3Sweep -WorkloadIds @('get-many') -RigCount 3 -N 1 -SiloCounts @(1, 2))
+Assert-Case 'no rig is planned beyond the number of cells' ($capped.Count -eq 2)
+$mixed = @(Split-Layer3Sweep -WorkloadIds @('get-many', 'set-point') -RigCount 3 -N 1 -SiloCounts @(1, 2, 4))
+Assert-Case 'extra rigs never mix workloads on one rig' ($mixed.Count -eq 3 -and @($mixed | Where-Object { @($_.Workloads).Count -ne 1 }).Count -eq 0)
+Assert-Case 'every (workload, silo count) cell is planned exactly once' (@($mixed | ForEach-Object { $w = $_.Workloads[0]; @($_.SiloCounts) | ForEach-Object { "$w/$_" } }).Count -eq 6 -and @($mixed | ForEach-Object { $w = $_.Workloads[0]; @($_.SiloCounts) | ForEach-Object { "$w/$_" } } | Sort-Object -Unique).Count -eq 6)
 
 # --- rig-state merge ----------------------------------------------------------
 function New-RigState([string] $Mode, [string] $Region = 'westus3', [int] $Accounts = 1) {
@@ -130,7 +140,15 @@ Assert-Case 'merge records the rigs' ((@($merged.layer3.rigs) -join ',') -eq 'ra
 Assert-Case 'merge aggregates rows' ($merged.layer3.rows.Count -eq 2)
 $threw = $false
 try { Merge-Layer3RigStates -States @((New-RigState 'set-many'), (New-RigState 'set-many')) -Prefixes @('ra', 'rb') | Out-Null } catch { $threw = $true }
-Assert-Case 'a workload measured on two rigs is refused, never blended' $threw
+Assert-Case 'a cell measured on two rigs is refused, never blended' $threw
+$rbTwo = New-RigState 'set-many'
+$rbTwo.layer3.cohorts['set-many'] = @{ '2' = @(@{ verdict = 'HEALTHY'; finalThroughput = 1800; steadyMean = 1800; perCallP50Ms = 1.0; perCallP99Ms = 2.0; rungVehicles = 20; rungTickHz = 5; walAccounts = 1 }) }
+$spanning = Merge-Layer3RigStates -States @((New-RigState 'set-many'), $rbTwo) -Prefixes @('ra', 'rb') -WarningAction SilentlyContinue
+Assert-Case 'one workload''s silo counts from two rigs merge into one curve' ((@($spanning.layer3.cohorts['set-many'].Keys | Sort-Object) -join ',') -eq '1,2' -and $spanning.layer3.rows['`SetManyAsync` (4,096 keys/call)']['2'].speedup -eq 1.8)
+Assert-Case 'a curve spanning rigs is recorded' ((@($spanning.layer3.splitCurves['set-many']) -join ',') -eq 'ra,rb')
+$spanMeta = New-MetaHeaderForLayer3 -State $spanning -RowsAgg $spanning.layer3.rows
+Assert-Case 'metadata flags a curve spanning rigs' ($spanMeta['splitCurves'] -eq 'set-many=ra+rb' -and $spanMeta['methodology'] -match 'measured across rigs')
+Assert-Case 'a curve on one rig is not flagged' (-not (New-MetaHeaderForLayer3 -State $merged -RowsAgg $merged.layer3.rows).ContainsKey('splitCurves'))
 $threw = $false
 try { Merge-Layer3RigStates -States @((New-RigState 'set-many'), (New-RigState 'set-point' 'eastus')) -Prefixes @('ra', 'rb') | Out-Null } catch { $threw = $true }
 Assert-Case 'rigs in different regions are refused' $threw

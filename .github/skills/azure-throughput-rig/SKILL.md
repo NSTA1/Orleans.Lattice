@@ -66,17 +66,24 @@ alphanumerics). Common shapes:
 - **`-DryRun`** re-renders a document from the most recently written `state.json`. Replay the
   multi-silo document with either `-Layer3 -DryRun` or `-Layer 3 -DryRun`. Replay selects the
   newest state containing the requested layer, and a Layer 1/2 replay preserves the other block.
-- **Layer 3 on several rigs in parallel (`-Layer3Rigs K`).** The report splits the workloads
-  between K rigs itself - longest-first by estimated cost, never splitting a workload, so each
-  curve and its escalation carry-over come from one rig, and deterministically, so `-Resume`
-  finds each workload where it ran. It provisions the rigs concurrently (prefixes
+- **Layer 3 on several rigs in parallel (`-Layer3Rigs K`).** The report splits the sweep
+  between K rigs itself (`Split-Layer3Sweep`), deterministically, so `-Resume` finds each cell
+  where it ran. With at least as many workloads as rigs it splits by workload - longest-first by
+  estimated cost, never splitting a workload, so each curve and its escalation carry-over come
+  from one rig. With more rigs than workloads (e.g. `-Workloads get-many -Layer3Rigs 2`) each
+  workload gets one rig plus extra rigs by cost, and its silo counts are dealt into contiguous
+  ascending runs, one per rig; that curve then spans rigs, so the merge records it in
+  `layer3.splitCurves`, the published metadata names it (`splitCurves=get-many=a+b`) and its
+  methodology says a step between rigs can be the rig difference, and each rig's escalation
+  starts from the row's starting rung. No more rigs are used than there are cells. It
+  provisions the rigs concurrently (prefixes
   `<NamePrefix>1..K` truncated to nine characters, or fresh random ones) or uses a
   comma-separated `-ReuseAca a,b,c` list, runs one ordinary single-rig sweep per rig as a child
   `pwsh` process with `-SkipDocUpdate` (output in `.run/performance-report/<prefix>/sweep.log`,
   provisioning in `deploy.log`), then merges the rigs' cells into
   `.run/performance-report/rigs-<prefixes>/state.json` and renders the multi-silo document once.
-  The merge refuses a workload measured on two rigs and rigs that disagree on region or on any
-  cell-shaping setting. Each rig has its own storage, so parallel sweeps never contend for the
+  The merge refuses a (workload, silo count) cell measured on two rigs and rigs that disagree on
+  region or on any cell-shaping setting. Each rig has its own storage, so parallel sweeps never contend for the
   account under measurement. Rigs it provisioned are parked and deleted unless `-KeepAca`; reused
   rigs are only parked. Mind the regional vCPU quota: K rigs can hold K x max(`-SiloCounts`) x 4
   vCPU at once. Do not instead run several `-Layer 3` reports by hand against one document: each
@@ -479,7 +486,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WARMUP_BUDGET_SEC` | 480 | Producer, Orleans-client mode only: wall-clock ceiling (clamped to 30-3600 s) on the warm-up retry loop, so a warm-up that keeps hitting the response timeout is abandoned rather than billing N silos. `run-cohort-aca.ps1 -WarmUpBudgetSec` sets it (default 400). |
 | `BENCH_INFLIGHT_TAIL_BUDGET_SEC` | 12 | How long the ingest engine may spend draining in-flight flushes before emitting `FINAL`; work that settles inside it lands in `ops` or `failed`, work still in flight when it expires is reported as `unresolved=` (and grades the cohort `WEDGE` on both layers). The default fits the VM unit's 30 s systemd stop window, and `run-cohort.ps1` warns above 18; `run-cohort-aca.ps1 -InFlightTailBudgetSec` raises it (default 120), as ACA jobs have no stop window. |
 | `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
-| `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (p50/p90/p99 per instrument/tree/shard/phase). `0` disables. |
+| `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (count, min, p50/p75/p90/p99 and max per instrument/tree/shard/phase/status window). `performance-report.ps1` publishes a cohort's per-call quantiles by merging windows weighted by call count (`Merge-PhaseAWindows`, a piecewise-linear model of each window, since raw samples are not logged): on Layer 2 the windows lying inside the steady-state window, on Layer 3 every window at t>=15s of every silo (their clocks cannot be aligned to the producer's). It used to publish only the last window, which on a 45 s get-many cohort read p50 0.64 ms against 3.70 ms merged. `0` disables. |
 | `BENCH_MV_LAG_REPORT_SEC` | 5 | `set-point-mv` only: cadence (s) of the silo-side `[silo:mv-lag] t=.. view=.. applyLag=.. backlog=..` lines, plus a `final` line at shutdown. On Layer 3 the ingest engine runs in the producer process, which cannot observe the view maintainer's instruments, so `MV-FINAL lagAtStop=n/a` there is expected and these silo lines are the lag evidence. `0` disables. |
 | `BENCH_GRAIN_TURN_DIAG_MS` | unset (off) | Positive threshold (ms) for a grain-turn occupancy filter on lattice grains: each incoming grain call running at least that long inside its activation prints `[turn-diag] state=done ms=.. grain=.. method=..`, and calls still running are summarised periodically as `state=pending ... count=N`. It times execution, not mailbox queueing, so a long `done` on a non-reentrant grain is the turn that blocked its callers. Diagnostic only. |
 | `LATTICE_BENCH_AWAIT_DIAG_MS` | unset (off) | Library-side positive threshold (ms) for named await regions inside the lattice grains (leaf replay, split and relocate steps, leaf timer arms such as `leaf.timer.coverage-lag arm=..` and `leaf.timer.digest`, shard serial-turn and point-write waits, `tx.terminal-hlc-leaf`). Prints `[await-diag] state=done|pending|suppressed region=.. ms=.. grain=..`; output is rate-limited per region. Read once at process start; diagnostic only. |
