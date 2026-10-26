@@ -34,6 +34,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Resize mirror idle cost.** A write to a shard with no online resize in progress no longer builds the resize mirror's key set, removing about 30 KB per 1,000-key `SetManyAsync`. ([#5078](https://github.com/NSTA1/Orleans.Lattice/pull/5078)) (`Orleans.Lattice`)
+
+- **Performance - Atomic prepare-stamp copies.** A committed saga no longer copies each key's original prepare stamp into unsized intermediate maps; a 64-key saga allocates about 16 KB less. The stamps read, persisted and carried are unchanged. ([#5078](https://github.com/NSTA1/Orleans.Lattice/pull/5078)) (`Orleans.Lattice`)
+
+- **Performance - Single-key saga registry reads.** A tree-wide saga-registry read of a tree with only its legacy registry key awaits that one call directly, removing about 300 B from every `GetManyAsync`. ([#5078](https://github.com/NSTA1/Orleans.Lattice/pull/5078)) (`Orleans.Lattice`)
+
 - **Performance - Reporting and split probes.** Diagnostics and storage-usage reports reuse one fresh registry row for options and routing. Prepared split sweeps reuse their first head probe, retaining fresh retry reads. ([#5075](https://github.com/NSTA1/Orleans.Lattice/pull/5075)) (`Orleans.Lattice`)
 
 - **Performance - Replay maintenance.** Re-seed probes batch up to 128 transactions per registry, replay purge checks use one read-committed grain call, and independent cross-tree stamp lookups overlap in settled waves of 32. Failed probes retain watermark clamps. ([#5041](https://github.com/NSTA1/Orleans.Lattice/pull/5041), [#5054](https://github.com/NSTA1/Orleans.Lattice/pull/5054)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
