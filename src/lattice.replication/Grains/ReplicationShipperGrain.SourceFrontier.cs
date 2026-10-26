@@ -362,19 +362,40 @@ internal sealed partial class ReplicationShipperGrain
             return;
         }
 
-        foreach (var txid in frontier.Prepares.Keys.ToList())
+        var byRegistry = new Dictionary<int, List<Guid>>();
+        foreach (var txid in frontier.Prepares.Keys)
         {
-            try
+            var id = TxRegistryRouting.ShardOf(txid);
+            if (!byRegistry.TryGetValue(id, out var group))
             {
-                var registry = TxRegistryRouting.GetRegistry(_grainFactory, _treeName, txid);
-                if (!await registry.HasUndecidedParticipantsAsync(txid))
-                {
-                    frontier.Prepares.Remove(txid);
-                }
+                group = [];
+                byRegistry.Add(id, group);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            group.Add(txid);
+        }
+
+        foreach (var txids in byRegistry.Values)
+        {
+            foreach (var window in txids.Chunk(ITxRegistryGrain.MaxMaintenanceProbeBatchSize))
             {
-                Logger.LogDebug(ex, "{Context}: could not read saga {TransactionId}; it keeps clamping the watermark.", LogContext, txid);
+                try
+                {
+                    var registry = TxRegistryRouting.GetRegistry(_grainFactory, _treeName, window[0]);
+                    var pending = await registry.HasUndecidedParticipantsManyAsync(window);
+                    foreach (var txid in window)
+                    {
+                        // Missing results are not evidence that a clamp is safe to release.
+                        if (!pending.ContainsKey(txid))
+                            throw new InvalidOperationException("The registry returned an incomplete maintenance probe.");
+                    }
+                    foreach (var txid in window)
+                        if (!pending[txid]) frontier.Prepares.Remove(txid);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.LogDebug(ex, "{Context}: could not probe {Count} sagas; they keep clamping the watermark.",
+                        LogContext, window.Length);
+                }
             }
         }
     }

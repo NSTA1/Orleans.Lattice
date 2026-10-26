@@ -115,22 +115,22 @@ internal sealed partial class ReplicationShipperGrain
                 _crossTreeStamps.Clear();
             }
 
-            var byRegistry = new Dictionary<GrainId, (ITxRegistryGrain Registry, List<Guid> Txids)>();
+            var byRegistry = new Dictionary<int, (ITxRegistryGrain Registry, List<Guid> Txids)>();
             foreach (var txid in unknown.Distinct())
             {
-                var registry = TxRegistryRouting.GetRegistry(_grainFactory, _treeName, txid);
-                var id = registry.GetGrainId();
+                var id = TxRegistryRouting.ShardOf(txid);
                 if (!byRegistry.TryGetValue(id, out var group))
                 {
-                    group = (registry, []);
+                    group = (TxRegistryRouting.GetRegistry(_grainFactory, _treeName, txid), []);
                     byRegistry[id] = group;
                 }
 
                 group.Txids.Add(txid);
             }
 
-            foreach (var (registry, txids) in byRegistry.Values)
+            await BoundedFanOut.ForEachAsync(byRegistry.Values.ToArray(), BoundedFanOut.DefaultWidth, async group =>
             {
+                var (registry, txids) = group;
                 var memberships = await registry.GetCrossTreeMembershipsAsync(txids);
                 foreach (var txid in txids)
                 {
@@ -138,7 +138,7 @@ internal sealed partial class ReplicationShipperGrain
                         ? (membership.DecisionStamps, membership.DecisionSequences)
                         : (null, null);
                 }
-            }
+            });
         }
 
         for (var i = 0; i < _drainBuffer.Count; i++)
