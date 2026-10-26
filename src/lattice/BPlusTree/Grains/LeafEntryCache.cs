@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
@@ -192,9 +193,9 @@ internal sealed partial class LeafEntryCache
     /// </summary>
     private long AccountedRowBytes(string key, in LwwValue<byte[]> row)
     {
-        if (_deferredLengths is not null && _deferredLengths.TryGetValue(key, out var len))
+        if (_deferredLengths is not null && _deferredLengths.TryGetValue(key, out var serializedLength))
         {
-            return EntryBytes(key, null) + len;
+            return EntryBytes(key, null) + serializedLength;
         }
         return RowBytes(key, row);
     }
@@ -307,15 +308,7 @@ internal sealed partial class LeafEntryCache
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(materialize);
         HydrateForKey(key, pin: true);
-        if (_rows.TryGetValue(key, out var existing))
-        {
-            _stateBytes -= AccountedRowBytes(key, existing);
-            AdjustLiveCount(existing.IsTombstone, metadataRow.IsTombstone);
-        }
-        else if (!metadataRow.IsTombstone)
-        {
-            _liveCount++;
-        }
+        AccountForRowReplacement(key, metadataRow.IsTombstone);
         _stateBytes += EntryBytes(key, null) + serializedLength;
         _rows[key] = metadataRow;
         (_deferredMaterializers ??= new Dictionary<string, Func<byte[]>>(StringComparer.Ordinal))[key] = materialize;
@@ -376,15 +369,7 @@ internal sealed partial class LeafEntryCache
     {
         ArgumentNullException.ThrowIfNull(key);
         HydrateForKey(key, pin: true);
-        if (_rows.TryGetValue(key, out var existing))
-        {
-            _stateBytes -= AccountedRowBytes(key, existing);
-            AdjustLiveCount(existing.IsTombstone, row.IsTombstone);
-        }
-        else if (!row.IsTombstone)
-        {
-            _liveCount++;
-        }
+        AccountForRowReplacement(key, row.IsTombstone);
         _deferredMaterializers?.Remove(key);
         _deferredLengths?.Remove(key);
         _stateBytes += RowBytes(key, row);
@@ -438,6 +423,25 @@ internal sealed partial class LeafEntryCache
         _detachedRowsMaterialised = 0;
         _detachedSeeks = 0;
         _evictedBlocks = 0;
+    }
+
+    /// <summary>
+    /// Removes the old row's accounted bytes and updates the live count before
+    /// a store. The caller must hydrate the key first and add the new payload's
+    /// byte contribution before replacing the row or its deferred length.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AccountForRowReplacement(string key, bool isTombstone)
+    {
+        if (_rows.TryGetValue(key, out var existing))
+        {
+            _stateBytes -= AccountedRowBytes(key, existing);
+            AdjustLiveCount(existing.IsTombstone, isTombstone);
+        }
+        else if (!isTombstone)
+        {
+            _liveCount++;
+        }
     }
 
     /// <summary>
