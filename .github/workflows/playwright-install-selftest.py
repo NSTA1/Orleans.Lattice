@@ -44,8 +44,10 @@ class ReadyProcess(original_popen):
         self.fixture_attempt = kwargs.get("start_new_session", False)
         if self.fixture_attempt:
             self.ready = root / f"ready-{uuid.uuid4().hex}"
+            not_before = time.monotonic() + 3 if (root / "delay-startup").exists() else 0
             kwargs["env"] = dict(kwargs.get("env") or os.environ,
-                                 PLAYWRIGHT_FIXTURE_READY=str(self.ready))
+                                 PLAYWRIGHT_FIXTURE_READY=str(self.ready),
+                                 PLAYWRIGHT_FIXTURE_NOT_BEFORE=str(not_before))
         super().__init__(*args, **kwargs)
 
     def wait(self, timeout=None):
@@ -67,7 +69,10 @@ class ReadyProcess(original_popen):
 
 subprocess.Popen = ReadyProcess
 sys.argv = [sys.argv[1], "2", "0.3", *sys.argv[2:]]
-runpy.run_path(sys.argv[0], run_name="__main__")
+try:
+    runpy.run_path(sys.argv[0], run_name="__main__")
+finally:
+    trace("finished")
 '''
 
 ORIGINAL_TIMEOUT = r'''
@@ -127,8 +132,8 @@ if sys.argv[1] == "--hold":
     while True:
         signal.pause()
 
-if (root / "delay-startup").exists():
-    time.sleep(3)  # Deterministically exceed the two-second unsynchronised clock.
+# Delay overlaps PowerShell startup, rather than consuming three more seconds.
+time.sleep(max(0, float(os.environ.get("PLAYWRIGHT_FIXTURE_NOT_BEFORE", "0")) - time.monotonic()))
 mode = (root / "mode").read_text()
 arguments = sys.argv[1:]
 with (root / "calls").open("a") as log:
@@ -316,9 +321,14 @@ class PrivilegedInstallerTests(unittest.TestCase):
             subprocess.run([self.sudo, "-n", "kill", "-0", pid], check=True, timeout=5)
             self.assert_owner_reaped()
             events = [json.loads(line) for line in (self.root / "clock-events").read_text().splitlines()]
-            self.assertEqual(["startup", "armed", "startup", "armed"],
+            self.assertEqual(["startup", "armed", "finished", "startup", "armed", "finished"],
                              [event["event"] for event in events], events)
             self.assertGreater(events[1]["time"] - events[0]["time"], 2, events)
+            self.assertGreaterEqual(events[2]["time"] - events[1]["time"], 2, events)
+            self.assertIn("exceeded 2 seconds", result.stdout)
+            self.assertIn("exit code 137", result.stdout)
+            print(f"Sentinel startup={events[1]['time'] - events[0]['time']:.3f}s; "
+                  f"armed execution/cleanup={events[2]['time'] - events[1]['time']:.3f}s.")
         finally:
             if marker.exists():
                 subprocess.run([self.sudo, "-n", "kill", "-KILL", marker.read_text()],
