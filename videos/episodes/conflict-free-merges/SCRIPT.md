@@ -34,7 +34,7 @@ Back on Build, next: Scans, filters and cursors. The links are on this episode's
 
 | Narration | Source |
 | --- | --- |
-| A typed data type gives concurrent writes a merge rule | [CRDT primitives](../../../docs/crdt/readme.md), "What is a CRDT" and "The primitives"; [Values that merge](values-that-merge.md), the preceding episode. |
+| A typed data type gives concurrent writes a merge rule | [CRDT primitives](../../../docs/crdt/readme.md), "What is a CRDT" and "The primitives"; [Values that merge](../../../docs/videos/values-that-merge.md), the preceding episode. |
 | A plain write uses last-writer-wins and can replace a concurrent value | [CRDT primitives](../../../docs/crdt/readme.md), warning on plain `SetAsync`; [state primitives](../../../docs/lattice/state-primitives.md), "Opt-in CRDT values". |
 | G-Set only grows, has no remove operation, and merges by union | [G-Set](../../../docs/crdt/gset.md), "Semantics"; [state primitives](../../../docs/lattice/state-primitives.md), "Grow-Only Set". |
 | `alice` and `bob` are concurrent; neither set contains the other; union produces both | [G-Set join figure](../../../docs-site/figures/join-figures.json), scenario `gset`; [G-Set](../../../docs/crdt/gset.md), "Behaviour". |
