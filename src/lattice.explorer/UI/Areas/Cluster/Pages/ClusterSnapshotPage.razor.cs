@@ -78,6 +78,11 @@ public partial class ClusterSnapshotPage : IDisposable
 
     private void Show(ClusterLoad<TreeSnapshotStatus> status)
     {
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _status = status;
         if (status.Value is { InProgress: true })
         {
@@ -101,6 +106,11 @@ public partial class ClusterSnapshotPage : IDisposable
 
         await InvokeAsync(() =>
         {
+            if (_lifetime.IsLeft || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             var previous = _status.Value;
             if (!value.InProgress && previous is { InProgress: true })
             {
@@ -154,12 +164,21 @@ public partial class ClusterSnapshotPage : IDisposable
         var started = await ClusterLoad<TreeSnapshotStatus>.RunAsync(
             ct => Facades.RequireTreeAdmin().SnapshotTreeAsync(TreeId, destination, mode, leaf, children, ct),
             _lifetime.Token);
+        if (started.Value is not null)
+        {
+            TreeChanges.Changed();
+        }
+
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _busy = false;
 
         if (started.Value is not null)
         {
             _reviewing = false;
-            TreeChanges.Changed();
             Toasts.Show("Snapshot started.", LtToastTone.Info);
             Show(started);
         }

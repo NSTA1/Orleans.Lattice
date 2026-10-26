@@ -72,6 +72,11 @@ public partial class ClusterResizePage : IDisposable
 
     private void Show(ClusterLoad<TreeResizeStatus> status)
     {
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _status = status;
         if (status.Value is { } value && IsActive(value))
         {
@@ -101,6 +106,11 @@ public partial class ClusterResizePage : IDisposable
 
         await InvokeAsync(() =>
         {
+            if (_lifetime.IsLeft || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             var previous = _status.Value;
             if (previous is { } before && IsActive(before) && !IsActive(value))
             {
@@ -169,12 +179,21 @@ public partial class ClusterResizePage : IDisposable
         var started = await ClusterLoad<TreeResizeStatus>.RunAsync(
             ct => Facades.RequireTreeAdmin().ResizeTreeAsync(TreeId, target.Leaf, target.Internal, ct),
             _lifetime.Token);
+        if (started.Value is not null)
+        {
+            TreeChanges.Changed();
+        }
+
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _busy = false;
 
         if (started.Value is not null)
         {
             _reviewing = null;
-            TreeChanges.Changed();
             Toasts.Show("Resize started.", LtToastTone.Info);
             Show(started);
         }
@@ -192,13 +211,22 @@ public partial class ClusterResizePage : IDisposable
         var undone = await ClusterLoad<TreeResizeStatus>.RunAsync(
             ct => Facades.RequireTreeAdmin().UndoTreeResizeAsync(TreeId, ct),
             _lifetime.Token);
+        if (undone.Value is not null)
+        {
+            TreeChanges.Changed();
+        }
+
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _busy = false;
 
         if (undone.Value is { } value)
         {
             // Undo is accept-then-poll: the call returns once the undo is
             // persisted, and UndoRequested says whether it is still unwinding.
-            TreeChanges.Changed();
             Toasts.Show(
                 value.UndoRequested ? "Undo accepted. It is unwinding the resize; this page follows it." : "Resize undone.",
                 value.UndoRequested ? LtToastTone.Info : LtToastTone.Success);
