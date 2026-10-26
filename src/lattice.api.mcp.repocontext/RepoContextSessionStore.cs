@@ -28,6 +28,18 @@ internal sealed class RepoContextSessionStore
     /// </summary>
     internal static readonly TimeSpan DefaultSessionTtl = TimeSpan.FromHours(6);
 
+    /// <summary>
+    /// The most unit receipts one session record retains. Every write re-stamps the
+    /// time-to-live, so without a cap an active session's single stored value - read,
+    /// merged, and rewritten whole on every call - would grow without bound. Once full,
+    /// further receipts are not recorded; the only effect is that a later call may
+    /// re-deliver content instead of suppressing it.
+    /// </summary>
+    internal const int MaxSessionReceipts = 4096;
+
+    /// <summary>The most whole-file possession tokens one session record retains, for the same reason as <see cref="MaxSessionReceipts"/>.</summary>
+    internal const int MaxSessionPossessions = 1024;
+
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
 
@@ -106,12 +118,12 @@ internal sealed class RepoContextSessionStore
             ? new RepoContextSessionRecord { SessionId = sessionId, RepoId = repoId }
             : _serializer.Deserialize<RepoContextSessionRecord>(existing);
 
-        for (var i = 0; i < receipts.Count; i++)
+        for (var i = 0; i < receipts.Count && record.Receipts.Count < MaxSessionReceipts; i++)
         {
             record.Receipts.Add(Encoding.UTF8.GetBytes(receipts[i]));
         }
 
-        for (var i = 0; i < possessions.Count; i++)
+        for (var i = 0; i < possessions.Count && record.Possession.Count < MaxSessionPossessions; i++)
         {
             record.Possession.Add(Encoding.UTF8.GetBytes(possessions[i]));
         }

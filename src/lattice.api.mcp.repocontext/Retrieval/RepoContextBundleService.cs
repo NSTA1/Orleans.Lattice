@@ -41,6 +41,26 @@ internal sealed class RepoContextBundleService
     private const int MinBudgetTokens = 1;
     private const int MaxBudgetTokens = 200_000;
 
+    /// <summary>
+    /// The most <c>seen</c> receipts or <c>known</c> claims one call consults. Both
+    /// lists are wire input that can only withhold content, so entries past the cap
+    /// are ignored (the content is simply delivered) rather than hashed and probed.
+    /// </summary>
+    internal const int MaxReuseInputs = 1024;
+
+    /// <summary>
+    /// The longest single <c>seen</c> receipt or <c>known</c> claim consulted. A
+    /// genuine receipt or <c>path@hash</c> claim is far shorter; a longer entry can
+    /// never match and is ignored.
+    /// </summary>
+    internal const int MaxReuseInputLength = 2048;
+
+    /// <summary>
+    /// The longest accepted <c>session</c> id. The id becomes part of a stored key,
+    /// so an unbounded id would let one call write an arbitrarily large key.
+    /// </summary>
+    internal const int MaxSessionIdLength = 256;
+
     private static readonly IReadOnlyList<RepoContextReuseAck> NoReuse = Array.Empty<RepoContextReuseAck>();
 
     private readonly RepoContextSearchService _search;
@@ -131,10 +151,11 @@ internal sealed class RepoContextBundleService
     /// <param name="detail">The requested detail level; an unrecognised value resolves to auto.</param>
     /// <param name="seen">Opaque receipts of units the caller already holds; each matching unit is suppressed. May be <see langword="null"/> or empty.</param>
     /// <param name="known">Whole-file possession claims of the form <c>path@hash</c>; each is honoured only for a version this tool actually delivered whole to the same session. May be <see langword="null"/> or empty.</param>
-    /// <param name="session">A named caller session whose recorded deliveries drive automatic unit suppression and validate <paramref name="known"/> claims, and into which this call's deliveries are recorded. May be <see langword="null"/> or empty.</param>
+    /// <param name="session">A named caller session whose recorded deliveries drive automatic unit suppression and validate <paramref name="known"/> claims, and into which this call's deliveries are recorded. May be <see langword="null"/> or empty; at most 256 characters.</param>
     /// <param name="cancellationToken">Cancels the bundle.</param>
     /// <returns>The packed bundle, whose total never exceeds the clamped budget.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="session"/> is longer than 256 characters.</exception>
     public async Task<RepoContextContextResult> BuildAsync(
         string repoId,
         string task,
@@ -148,6 +169,11 @@ internal sealed class RepoContextBundleService
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(task);
+        if (session is { Length: > MaxSessionIdLength })
+        {
+            throw new ArgumentException(
+                $"The session id must be at most {MaxSessionIdLength} characters.", nameof(session));
+        }
 
         // Timed from a finally so a cancelled or faulted bundle is still recorded,
         // under the 'unresolved' path when it terminated before one was settled. This
@@ -331,10 +357,11 @@ internal sealed class RepoContextBundleService
 
         if (hasSeen)
         {
-            for (var i = 0; i < seen!.Count; i++)
+            var seenCount = Math.Min(seen!.Count, MaxReuseInputs);
+            for (var i = 0; i < seenCount; i++)
             {
                 var receipt = seen[i];
-                if (!string.IsNullOrEmpty(receipt))
+                if (!string.IsNullOrEmpty(receipt) && receipt.Length <= MaxReuseInputLength)
                 {
                     seenReceipts.Add(receipt);
                 }
@@ -364,9 +391,11 @@ internal sealed class RepoContextBundleService
         HashSet<string>? claims = null;
         if (hasKnown)
         {
-            for (var i = 0; i < known!.Count; i++)
+            var knownCount = Math.Min(known!.Count, MaxReuseInputs);
+            for (var i = 0; i < knownCount; i++)
             {
-                if (RepoContextReuse.TryParseKnown(known[i], out var path, out var hash))
+                if (known[i] is { Length: <= MaxReuseInputLength } claim
+                    && RepoContextReuse.TryParseKnown(claim, out var path, out var hash))
                 {
                     var token = RepoContextReuse.PossessionToken(path, hash);
                     if (possessionOracle.Contains(token))
