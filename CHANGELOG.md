@@ -70,7 +70,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Explorer - Backup catalogue and health.** Catalogue rows, inventory, schedules and health discard superseded replies and errors. Pending checks no longer block the next backup or replace its progress, and monitoring-save results stay with their backup. ([#5036](https://github.com/NSTA1/Orleans.Lattice/issues/5036), [#5042](https://github.com/NSTA1/Orleans.Lattice/issues/5042)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Operation ownership.** Cleared watches cannot revive; refreshes discard stale replies and stop terminal polls. WAL reclaim state stays with its plan. Backup retries release old polls, and cancellation results stay with their operation. ([#5028](https://github.com/NSTA1/Orleans.Lattice/issues/5028), [#5042](https://github.com/NSTA1/Orleans.Lattice/issues/5042)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Operation ownership.** Cleared watches and departed reshard, resize and snapshot pages cannot revive polls or toasts. Refreshes reject stale replies and stop terminal polls; WAL reclaim and backup cancellation stay with their operation, and backup retries release old polls. ([#5028](https://github.com/NSTA1/Orleans.Lattice/issues/5028), [#5042](https://github.com/NSTA1/Orleans.Lattice/issues/5042), [#5048](https://github.com/NSTA1/Orleans.Lattice/issues/5048)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Live history fidelity.** Older pages preserve live revision identity and replace pending markers with durable values; delayed changes stay chronological and live range deletions are labeled correctly. ([#5017](https://github.com/NSTA1/Orleans.Lattice/issues/5017)) (`Orleans.Lattice.Explorer.UI`)
 
@@ -173,6 +173,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Gates - Domain-fault coverage for held packages.** Shared domain-fault guards cover RepoContext and Vector exceptions without changing their exception bases or wire identities. ([#3375](https://github.com/NSTA1/Orleans.Lattice/issues/3375), [#4562](https://github.com/NSTA1/Orleans.Lattice/issues/4562)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
 
 ### Security
+
+- **Security - Push reseed requests require an enrolled tree.** The reseed header no longer starts a bootstrap or straggler refusal for a tree the receiver never enrolled for replication. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Replication.Grpc`)
+
+- **Security - Peer probes honour the tenant export gate.** Digest, Merkle-walk and content-manifest probes of a tenant tree now require an authenticated peer the tenant isolation gate authorizes, closing a key-existence oracle. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Replication.Grpc`)
+
+- **Security - Context sessions are bounded.** `repocontext_context` rejects session ids over 256 characters, caps consulted `seen`/`known` entries, and caps the receipts one session retains. ([#5050](https://github.com/NSTA1/Orleans.Lattice/pull/5050)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Security - MCP transport can refuse rebound browser origins.** The opt-in `RequireAllowedOrigin` option answers `403` to foreign `Origin` headers, blocking DNS-rebinding tool calls; the repocontext host enables it. ([#5046](https://github.com/NSTA1/Orleans.Lattice/pull/5046)) (`Orleans.Lattice.Api.Mcp`)
 

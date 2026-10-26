@@ -80,6 +80,26 @@ public sealed class RepoContextSessionStoreTests
     }
 
     [Test]
+    public async Task RecordAsync_caps_the_receipts_and_possessions_one_session_retains()
+    {
+        // Regression: every call re-stamps the TTL and rewrites the whole record, so
+        // without a cap an active session's single stored value grew without bound.
+        var (store, _) = NewStore();
+        var receipts = Enumerable.Range(0, RepoContextSessionStore.MaxSessionReceipts + 10).Select(i => $"r{i}").ToArray();
+        var possessions = Enumerable.Range(0, RepoContextSessionStore.MaxSessionPossessions + 10).Select(i => $"p{i}\u0000h").ToArray();
+
+        await store.RecordAsync(RepoId, "s", receipts, possessions, CancellationToken.None);
+        await store.RecordAsync(RepoId, "s", ["late"], ["late\u0000h"], CancellationToken.None);
+        var record = await store.LoadAsync(RepoId, "s", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(record!.Receipts.Count, Is.EqualTo(RepoContextSessionStore.MaxSessionReceipts));
+            Assert.That(record.Possession.Count, Is.EqualTo(RepoContextSessionStore.MaxSessionPossessions));
+        });
+    }
+
+    [Test]
     public async Task RecordAsync_folds_a_later_call_into_the_earlier_record()
     {
         var (store, _) = NewStore();
