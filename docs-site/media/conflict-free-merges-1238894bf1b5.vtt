@@ -1,0 +1,101 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:04.889
+Values that merge showed how a chosen
+data type can resolve concurrent writes;
+
+2
+00:00:04.889 --> 00:00:06.521
+now watch one merge in a set.
+
+3
+00:00:07.521 --> 00:00:11.723
+A plain write uses last-writer-wins:
+if two clusters write the same key,
+
+4
+00:00:11.723 --> 00:00:15.691
+the later timestamp keeps its value
+and silently replaces the other.
+
+5
+00:00:16.041 --> 00:00:17.763
+A G-Set has a different rule.
+
+6
+00:00:17.763 --> 00:00:21.384
+It only grows: you can add an element,
+but cannot remove one.
+
+7
+00:00:21.384 --> 00:00:22.809
+Start with an empty set.
+
+8
+00:00:22.809 --> 00:00:27.262
+Cluster A adds alice while cluster B,
+without seeing that change, adds bob.
+
+9
+00:00:27.612 --> 00:00:31.358
+Their sets are {alice} and {bob};
+neither contains the other.
+
+10
+00:00:31.358 --> 00:00:36.026
+When they merge, each takes the union,
+keeping every element from both sets.
+
+11
+00:00:36.376 --> 00:00:37.998
+Now deliver bob's add again.
+
+12
+00:00:37.998 --> 00:00:42.341
+Both clusters hold {alice, bob};
+the union gives the same result regardless
+
+13
+00:00:42.341 --> 00:00:46.395
+of delivery order, and repeating
+an add does not duplicate an element.
+
+14
+00:00:46.745 --> 00:00:50.681
+Set union is commutative,
+associative and idempotent: swapping,
+
+15
+00:00:50.681 --> 00:00:54.430
+regrouping or repeating a merge
+leaves the result unchanged.
+
+16
+00:00:54.430 --> 00:00:58.054
+That is why both sides converge
+without choosing a winner.
+
+17
+00:00:58.404 --> 00:01:03.749
+Use a G-Set for append-only membership,
+such as seen identifiers or tags.
+
+18
+00:01:03.749 --> 00:01:08.434
+If your data needs removals,
+choose an OR-Set or RW-Set instead;
+
+19
+00:01:08.434 --> 00:01:10.704
+those define removal semantics.
+
+20
+00:01:11.054 --> 00:01:14.106
+Back on Build, next:
+Scans, filters and cursors.
+
+21
+00:01:14.106 --> 00:01:17.794
+The links are on this episode's page
+in the documentation.

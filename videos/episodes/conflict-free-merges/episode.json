@@ -1,0 +1,16 @@
+{
+  "path": "how-it-works",
+  "order": 1,
+  "items": [
+    "H1"
+  ],
+  "poster": {
+    "scene": "g-set-merge",
+    "beat": 4,
+    "offset": -0.5
+  },
+  "published": {
+    "cut": "1238894bf1b5",
+    "bytes": 3394806
+  }
+}
