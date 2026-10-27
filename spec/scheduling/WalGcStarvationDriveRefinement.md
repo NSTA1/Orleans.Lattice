@@ -452,3 +452,19 @@ The redesign keeps every premise of the original model:
 
 The original BASE run certifies only the original model at its own bounds. Its
 results are predecessor evidence for this redesign, not a certification of it.
+
+### Retired experimental launcher
+
+The twelve-hour experimental launcher that drove the original BASE run and the
+rejected single-slot-share run is retired. The formal harness, CI workflows and
+`tools/` have no dependency on it, and the redesign's measured runs go through
+the ordinary `TlcModelCheckTests` route to `java`, so no adapter or import for
+it remains. Its bounded supervisor fix (OWNER175, corrected candidate
+`08BA6124`, regression `9278C7F8`) was accepted, and every receipt it produced
+is kept as predecessor evidence, including the immutable single-slot-share
+receipt `0BACFA0F`.
+
+The successor gate's twenty-minute cap bounds the test process only. It does
+not supply the old launcher's 43200-second whole-input budget or its
+43100-second post-receipt end-to-end budget, and it is not a hard operating
+system or filesystem deadline.
