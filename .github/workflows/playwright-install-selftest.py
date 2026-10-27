@@ -17,9 +17,34 @@ import sys
 import tempfile
 import textwrap
 import time
+from types import SimpleNamespace
 import unittest
 
 WORKFLOWS = Path(__file__).resolve().parent
+
+READINESS = r'''
+PER_ATTEMPT_STARTUP_CAP = None
+
+def startup_remaining():
+    return max(0, float((root / "startup-budget").read_text()))
+
+def wait_for_ready(process, ready):
+    remaining = startup_remaining()
+    allowance = remaining if PER_ATTEMPT_STARTUP_CAP is None else min(
+        remaining, PER_ATTEMPT_STARTUP_CAP)
+    started = time.monotonic()
+    try:
+        while not ready.exists() and process.poll() is None:
+            if time.monotonic() - started >= allowance:
+                print("::error::Fixture exhausted its shared startup budget.", flush=True)
+                raise subprocess.TimeoutExpired(process.args, allowance)
+            time.sleep(0.01)
+        if not ready.exists():
+            raise RuntimeError("Fixture worker exited before its readiness handshake")
+    finally:
+        (root / "startup-budget").write_text(str(max(
+            0, remaining - (time.monotonic() - started))))
+'''
 
 CLOCK = r'''
 import json
@@ -37,14 +62,16 @@ original_popen = subprocess.Popen
 
 def trace(event):
     with (root / "clock-events").open("a") as log:
-        log.write(json.dumps({"event": event, "time": time.monotonic()}) + "\n")
+        log.write(json.dumps({"event": event, "time": time.monotonic(),
+                              "startup_remaining": startup_remaining()}) + "\n")
 
 class ReadyProcess(original_popen):
     def __init__(self, *args, **kwargs):
         self.fixture_attempt = kwargs.get("start_new_session", False)
         if self.fixture_attempt:
             self.ready = root / f"ready-{uuid.uuid4().hex}"
-            not_before = time.monotonic() + 3 if (root / "delay-startup").exists() else 0
+            delay = root / "delay-startup"
+            not_before = time.monotonic() + float(delay.read_text()) if delay.exists() else 0
             kwargs["env"] = dict(kwargs.get("env") or os.environ,
                                  PLAYWRIGHT_FIXTURE_READY=str(self.ready),
                                  PLAYWRIGHT_FIXTURE_NOT_BEFORE=str(not_before))
@@ -53,15 +80,8 @@ class ReadyProcess(original_popen):
     def wait(self, timeout=None):
         if self.fixture_attempt and timeout is not None:
             trace("startup")
-            deadline = time.monotonic() + 5
             if WAIT_FOR_READY:
-                while not self.ready.exists() and self.poll() is None:
-                    if time.monotonic() >= deadline:
-                        print("::error::Fixture worker did not become ready within 5 seconds.", flush=True)
-                        raise subprocess.TimeoutExpired(self.args, 5)
-                    time.sleep(0.01)
-                if not self.ready.exists():
-                    raise RuntimeError("Fixture worker exited before its readiness handshake")
+                wait_for_ready(self, self.ready)
                 trace("armed")
             else:
                 trace("unarmed")
@@ -85,23 +105,22 @@ import time
 import uuid
 
 assert sys.argv[1:3] == ["--kill-after=10s", "120s"]
-ready = Path(__file__).resolve().parent / f"original-ready-{uuid.uuid4().hex}"
+root = Path(__file__).resolve().parent
+ready = root / f"original-ready-{uuid.uuid4().hex}"
 process = subprocess.Popen(
-    ["/usr/bin/timeout", "--kill-after=0.3s", "7s", *sys.argv[3:]],
+    ["/usr/bin/timeout", "--kill-after=0.3s", f"{startup_remaining() + 2}s", *sys.argv[3:]],
     env=dict(os.environ, PLAYWRIGHT_FIXTURE_READY=str(ready)), start_new_session=True,
 )
-deadline = time.monotonic() + 5
-while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
-    time.sleep(0.01)
-if ready.exists() and process.poll() is None:
-    # Arm the real GNU timeout's alarm only after the fixture is ready.
-    # Its seven-second fallback also bounds the five-second startup phase.
+try:
+    wait_for_ready(process, ready)
+    # Keep real GNU timeout and its original unprivileged signal boundary.
     try:
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
         os.kill(process.pid, signal.SIGALRM)
-elif not ready.exists():
-    print("::error::Original-timeout fixture never became ready.", flush=True)
+except subprocess.TimeoutExpired:
+    if process.poll() is None:
+        os.kill(process.pid, signal.SIGALRM)
 sys.exit(process.wait(timeout=3))
 '''
 
@@ -132,7 +151,7 @@ if sys.argv[1] == "--hold":
     while True:
         signal.pause()
 
-# Delay overlaps PowerShell startup, rather than consuming three more seconds.
+# The scheduling gate overlaps PowerShell startup instead of adding to it.
 time.sleep(max(0, float(os.environ.get("PLAYWRIGHT_FIXTURE_NOT_BEFORE", "0")) - time.monotonic()))
 mode = (root / "mode").read_text()
 arguments = sys.argv[1:]
@@ -177,6 +196,36 @@ ready()
 '''
 
 
+class ReadinessBudgetTests(unittest.TestCase):
+    def test_scheduling_delays_draw_from_one_finite_pool_without_refilling(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "startup-budget").write_text("15")
+            clock = SimpleNamespace(now=0.0)
+
+            def advance(seconds):
+                clock.now += seconds
+
+            namespace = {
+                "root": root, "subprocess": subprocess,
+                "time": SimpleNamespace(monotonic=lambda: clock.now, sleep=advance),
+            }
+            exec(READINESS, namespace)
+            process = SimpleNamespace(args=["fixture"], poll=lambda: None)
+            for delay in (6, 6):
+                started = clock.now
+                ready = SimpleNamespace(exists=lambda: clock.now >= started + delay)
+                namespace["wait_for_ready"](process, ready)
+            self.assertAlmostEqual(3, namespace["startup_remaining"](), delta=0.03)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                namespace["wait_for_ready"](process, SimpleNamespace(exists=lambda: False))
+            self.assertEqual(0, namespace["startup_remaining"]())
+            stopped = clock.now
+            with self.assertRaises(subprocess.TimeoutExpired):
+                namespace["wait_for_ready"](process, SimpleNamespace(exists=lambda: False))
+            self.assertEqual(stopped, clock.now, "A retry must not refill the consumed startup pool")
+
+
 class PrivilegedInstallerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -206,8 +255,8 @@ class PrivilegedInstallerTests(unittest.TestCase):
             path.chmod(0o666)
         (self.root / "owner").unlink()
         self.write_tool("worker", f"#!{sys.executable}\nSUDO = {self.sudo!r}\n" + WORKER)
-        (self.root / "clock.py").write_text(CLOCK)
-        (self.root / "original-timeout.py").write_text(ORIGINAL_TIMEOUT)
+        (self.root / "clock.py").write_text(READINESS + CLOCK)
+        (self.root / "original-timeout.py").write_text(READINESS + ORIGINAL_TIMEOUT)
         script.write_text(
             f"& '{self.tools / 'worker'}' @args\nexit $LASTEXITCODE\n",
             encoding="utf-8",
@@ -272,10 +321,15 @@ class PrivilegedInstallerTests(unittest.TestCase):
 
     def install(self, mode, cache="true", *browsers):
         (self.root / "mode").write_text(mode)
+        # Pool the existing three five-second startup allowances, never refill
+        # on retry. The unchanged outer watchdog still bounds the whole helper.
+        budget = self.root / "startup-budget"
+        budget.write_text(str(getattr(self, "startup_budget", 3 * 5)))
+        budget.chmod(0o666)
         return subprocess.run(
             ["bash", str(self.root / "install-playwright-browsers.sh"), cache,
              *(browsers or ("chromium",))],
-            # Three bounded five-second startups plus two seconds/.3 grace each.
+            # At most 15 seconds of startup plus three two-second/.3 phases.
             cwd=self.root, env=self.env, text=True, capture_output=True, timeout=30,
         )
 
@@ -302,7 +356,7 @@ class PrivilegedInstallerTests(unittest.TestCase):
         self.assert_owner_reaped()
 
     def test_cleanup_does_not_signal_unrelated_privileged_process(self):
-        (self.root / "delay-startup").touch()
+        (self.root / "delay-startup").write_text(str(getattr(self, "startup_delay", 3)))
         marker = self.root / "unrelated"
         sentinel = subprocess.Popen([
             self.sudo, "-n", "--", sys.executable, "-c",
@@ -325,6 +379,10 @@ class PrivilegedInstallerTests(unittest.TestCase):
                              [event["event"] for event in events], events)
             self.assertGreater(events[1]["time"] - events[0]["time"], 2, events)
             self.assertGreaterEqual(events[2]["time"] - events[1]["time"], 2, events)
+            remaining = [event["startup_remaining"] for event in events]
+            self.assertEqual(15, remaining[0], events)
+            self.assertTrue(all(0 <= after <= before
+                                for before, after in zip(remaining, remaining[1:])), events)
             self.assertIn("exceeded 2 seconds", result.stdout)
             self.assertIn("exit code 137", result.stdout)
             print(f"Sentinel startup={events[1]['time'] - events[0]['time']:.3f}s; "
@@ -334,6 +392,34 @@ class PrivilegedInstallerTests(unittest.TestCase):
                 subprocess.run([self.sudo, "-n", "kill", "-KILL", marker.read_text()],
                                check=True, timeout=5)
             sentinel.wait(timeout=5)
+
+    def test_six_second_startups_share_existing_total_budget_without_wasting_a_retry(self):
+        self.startup_delay = 6
+        self.test_cleanup_does_not_signal_unrelated_privileged_process()
+
+    def test_old_five_second_partition_mutation_is_rejected_by_six_second_startups(self):
+        clock = self.root / "clock.py"
+        source = clock.read_text()
+        partition = "PER_ATTEMPT_STARTUP_CAP = None"
+        self.assertEqual(1, source.count(partition))
+        clock.write_text(source.replace(partition, "PER_ATTEMPT_STARTUP_CAP = 5"))
+        with self.assertRaisesRegex(AssertionError, r"0 != (124|137)") as caught:
+            self.test_six_second_startups_share_existing_total_budget_without_wasting_a_retry()
+        self.assertEqual(3, len(re.findall(r"failed with exit code (?:124|137)", str(caught.exception))))
+        self.assertEqual(0, len(self.calls()))
+        print("Old five-second partitions: three readiness timeouts before any worker call (caught).")
+
+    def test_startup_budget_exhaustion_is_fatal_and_never_refilled_on_retry(self):
+        self.startup_budget = 0.1
+        (self.root / "delay-startup").write_text("3")
+        result = self.install("hang")
+        self.assertIn(result.returncode, (124, 137), result.stdout + result.stderr)
+        self.assertEqual(3, result.stdout.count("Fixture exhausted its shared startup budget."))
+        self.assertEqual(0, len(self.calls()))
+        self.assertEqual(0, float((self.root / "startup-budget").read_text()))
+        events = [json.loads(line) for line in (self.root / "clock-events").read_text().splitlines()]
+        self.assertEqual(["startup", "finished"] * 3, [event["event"] for event in events])
+        self.assertEqual(0, events[2]["startup_remaining"], events)
 
     def test_unsynchronised_clock_mutation_catches_slow_worker_startup(self):
         clock = self.root / "clock.py"
