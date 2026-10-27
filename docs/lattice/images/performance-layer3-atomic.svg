@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="510" viewBox="0 0 820 510" role="img" aria-labelledby="t d" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<title id="t">Atomic and cross-tree sagas: sustained throughput vs silo count</title>
+<desc id="d">Atomic and cross-tree sagas: sustained throughput vs silo count. Line chart over 1, 2, 4, 6, 8 silos. Series: SetManyAtomicAsync (64 keys/saga); SetManyAtomicAsync (2 keys/saga, single-tree); BeginAtomicWrite cross-tree (2 keys/saga, 2 trees); BeginAtomicWrite cross-tree (64 keys/saga, 2 trees). The exact values are in the grid below.</desc>
+<defs><clipPath id="plot"><rect x="74" y="52" width="722" height="342"/></clipPath></defs>
+<rect x="0" y="0" width="820" height="510" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+<text x="74" y="32" font-size="17" font-weight="600" fill="#1f2328">Atomic and cross-tree sagas: sustained throughput vs silo count</text>
+<line x1="74" y1="388" x2="796" y2="388" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="388" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">0</text>
+<line x1="74" y1="305.5" x2="796" y2="305.5" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="305.5" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">2000</text>
+<line x1="74" y1="223" x2="796" y2="223" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="223" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">4000</text>
+<line x1="74" y1="140.5" x2="796" y2="140.5" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="140.5" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">6000</text>
+<line x1="74" y1="58" x2="796" y2="58" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="58" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">8000</text>
+<line x1="74" y1="58" x2="74" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="74" y="406" font-size="12" fill="#424a53" text-anchor="middle">1</text>
+<line x1="177.1" y1="58" x2="177.1" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="177.1" y="406" font-size="12" fill="#424a53" text-anchor="middle">2</text>
+<line x1="383.4" y1="58" x2="383.4" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="383.4" y="406" font-size="12" fill="#424a53" text-anchor="middle">4</text>
+<line x1="589.7" y1="58" x2="589.7" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="589.7" y="406" font-size="12" fill="#424a53" text-anchor="middle">6</text>
+<line x1="796" y1="58" x2="796" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="796" y="406" font-size="12" fill="#424a53" text-anchor="middle">8</text>
+<line x1="74" y1="388" x2="796" y2="388" stroke="#57606a" stroke-width="1"/>
+<line x1="74" y1="58" x2="74" y2="388" stroke="#57606a" stroke-width="1"/>
+<text x="435" y="428" font-size="13" fill="#1f2328" text-anchor="middle">Silos</text>
+<text x="18" y="223" font-size="13" fill="#1f2328" text-anchor="middle" transform="rotate(-90 18 223)">Keys/s</text>
+<polyline points="74,263.8 177.1,276.6 383.4,184.8 589.7,195.4 796,91.3" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (64 keys/saga)</title></polyline>
+<circle cx="74" cy="263.8" r="4" fill="#0072B2"/>
+<circle cx="177.1" cy="276.6" r="4" fill="#0072B2"/>
+<circle cx="383.4" cy="184.8" r="4" fill="#0072B2"/>
+<circle cx="589.7" cy="195.4" r="4" fill="#0072B2"/>
+<circle cx="796" cy="91.3" r="4" fill="#0072B2"/>
+<polyline points="74,368.2 177.1,359.5 383.4,357.7 589.7,329.7 796,324.2" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (2 keys/saga, single-tree)</title></polyline>
+<rect x="70" y="364.2" width="8" height="8" fill="#D55E00"/>
+<rect x="173.1" y="355.5" width="8" height="8" fill="#D55E00"/>
+<rect x="379.4" y="353.7" width="8" height="8" fill="#D55E00"/>
+<rect x="585.7" y="325.7" width="8" height="8" fill="#D55E00"/>
+<rect x="792" y="320.2" width="8" height="8" fill="#D55E00"/>
+<polyline points="74,375 177.1,372 383.4,361.4 589.7,354.3 796,346.6" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (2 keys/saga, 2 trees)</title></polyline>
+<polygon points="74,370 69,379 79,379" fill="#009E73"/>
+<polygon points="177.1,367 172.1,376 182.1,376" fill="#009E73"/>
+<polygon points="383.4,356.4 378.4,365.4 388.4,365.4" fill="#009E73"/>
+<polygon points="589.7,349.3 584.7,358.3 594.7,358.3" fill="#009E73"/>
+<polygon points="796,341.6 791,350.6 801,350.6" fill="#009E73"/>
+<polyline points="74,291.3 177.1,279.2 383.4,203.1 589.7,157 796,153.3" fill="none" stroke="#CC79A7" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (64 keys/saga, 2 trees)</title></polyline>
+<polygon points="74,286.3 79,291.3 74,296.3 69,291.3" fill="#CC79A7"/>
+<polygon points="177.1,274.2 182.1,279.2 177.1,284.2 172.1,279.2" fill="#CC79A7"/>
+<polygon points="383.4,198.1 388.4,203.1 383.4,208.1 378.4,203.1" fill="#CC79A7"/>
+<polygon points="589.7,152 594.7,157 589.7,162 584.7,157" fill="#CC79A7"/>
+<polygon points="796,148.3 801,153.3 796,158.3 791,153.3" fill="#CC79A7"/>
+<line x1="74" y1="450" x2="104" y2="450" stroke="#0072B2" stroke-width="2.2"/>
+<circle cx="89" cy="450" r="4" fill="#0072B2"/>
+<text class="legend" x="112" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">SetManyAtomicAsync (64 keys/saga)</text>
+<line x1="435" y1="450" x2="465" y2="450" stroke="#D55E00" stroke-width="2.2"/>
+<rect x="446" y="446" width="8" height="8" fill="#D55E00"/>
+<text class="legend" x="473" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">SetManyAtomicAsync (2 keys/saga, single-tree)</text>
+<line x1="74" y1="472" x2="104" y2="472" stroke="#009E73" stroke-width="2.2"/>
+<polygon points="89,467 84,476 94,476" fill="#009E73"/>
+<text class="legend" x="112" y="472" font-size="12" fill="#1f2328" dominant-baseline="middle">BeginAtomicWrite cross-tree (2 keys/saga, 2 trees)</text>
+<line x1="435" y1="472" x2="465" y2="472" stroke="#CC79A7" stroke-width="2.2"/>
+<polygon points="450,467 455,472 450,477 445,472" fill="#CC79A7"/>
+<text class="legend" x="473" y="472" font-size="12" fill="#1f2328" dominant-baseline="middle">BeginAtomicWrite cross-tree (64 keys/saga, 2 trees)</text>
+</svg>

@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Testing.Hygiene;
 /// A marker block carries a <em>kind</em> as well as a layer id. A
 /// <c>perf-table</c> block must be followed by a markdown table header with
 /// the layer's expected column count; a <c>perf-chart</c> block must be
-/// followed by a mermaid fence. Both kinds share the structural rules
+/// followed by a markdown image of an SVG that exists beside the doc. Both kinds share the structural rules
 /// (balance, non-overlap, a <c>schema=</c> key and the
 /// DO-NOT-HAND-EDIT-BETWEEN-MARKERS notice, a recognised layer id), which is
 /// why the kind is a captured group on one regex rather than a second pair
@@ -90,16 +90,20 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
     // cell per logical column, ignoring the empty leading / trailing pipes).
     // Layer 1: Operation | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate.
     // Layer 2: Operation | Sustained throughput | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99.
-    // Layer 3: Operation | Silos | Offered | Sustained throughput | Speedup vs 1 silo | Per-silo efficiency | Per-call p50 | Per-call p99.
+    // Layer 3: Operation | Silos | Offered | Sustained throughput | Speedup vs 1 silo | Per-silo efficiency | Per-call p50 | Per-call p99 | Failed keys per cohort.
     private const int Layer1ExpectedColumns = 7;
     private const int Layer2ExpectedColumns = 6;
     // Mirrors Render-Layer3Table in benchmark/performance-report.ps1; change
     // both together or the gate fails on the next regeneration.
-    private const int Layer3ExpectedColumns = 8;
+    private const int Layer3ExpectedColumns = 9;
 
     private static readonly Regex StartMarkerRegex = new(
         @"<!--\s*perf-(?<kind>table|chart):(?<layer>[a-z0-9_-]+):start\s*\r?\n(?<body>.*?)\r?\n-->\r?\n",
         RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static readonly Regex ChartImageRegex = new(
+        @"!\[[^\]]*\]\((?<path>[^)\s]+)\)",
+        RegexOptions.Compiled);
 
     private static readonly Regex EndMarkerRegex = new(
         @"<!--\s*perf-(?<kind>table|chart):(?<layer>[a-z0-9_-]+):end\s*-->",
@@ -126,7 +130,7 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
             var ends = EndMarkerRegex.Matches(content);
             examined += starts.Count;
 
-            ValidateDoc(docName, content, starts, ends, violations);
+            ValidateDoc(docName, Path.GetDirectoryName(docPath)!, content, starts, ends, violations);
         }
 
         // Anti-vacuity control (issue #2275). Every rule is driven off
@@ -154,6 +158,7 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
 
     private static void ValidateDoc(
         string docName,
+        string docDirectory,
         string content,
         MatchCollection starts,
         MatchCollection ends,
@@ -304,9 +309,11 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
 
             // Rule 5: the block body matches its kind. A table must open with
             // a markdown table header of the layer's column count; a chart
-            // must open with a mermaid fence. Checking the wrong one would
-            // either reject every chart or accept a chart region that the
-            // renderer had silently emptied.
+            // must open with a markdown image, and every image it references
+            // must be an SVG file that exists beside the doc. Checking the
+            // wrong one would either reject every chart or accept a chart
+            // region that the renderer had silently emptied - or one whose
+            // figure was never written.
             var bodyStart = start.Index + start.Length; // first char after the start marker's trailing newline
             var bodyEnd = matchingEnd.Index;
             if (bodyEnd <= bodyStart) continue;
@@ -320,33 +327,28 @@ public abstract class PerformanceReportMarkerHygieneTestsBase
 
             if (string.Equals(kind, "chart", StringComparison.Ordinal))
             {
-                if (firstNonBlank is null || !firstNonBlank.TrimStart().StartsWith("```mermaid", StringComparison.Ordinal))
+                if (firstNonBlank is null || !firstNonBlank.TrimStart().StartsWith("![", StringComparison.Ordinal))
                 {
                     violations.Add(
-                        $"{docName}: perf-{id}:start (line {startLine}) is not followed by a mermaid fence; "
+                        $"{docName}: perf-{id}:start (line {startLine}) is not followed by a chart image; "
                         + $"first non-blank line was: '{firstNonBlank?.Trim() ?? "<none>"}'");
                 }
                 else
                 {
-                    // Look for a bare closing fence on its own line, after the
-                    // opening one. This is deliberately line-based: the docs are
-                    // written with CRLF, so a substring probe for "```\n" never
-                    // matches (the newline is preceded by \r) and every chart
-                    // block would be reported as unterminated.
-                    var openIndex = Array.FindIndex(betweenLines, s => s.TrimStart().StartsWith("```mermaid", StringComparison.Ordinal));
-                    var closed = false;
-                    for (var k = openIndex + 1; k < betweenLines.Length; k++)
+                    foreach (Match image in ChartImageRegex.Matches(between))
                     {
-                        if (string.Equals(betweenLines[k].Trim(), "```", StringComparison.Ordinal))
+                        var target = image.Groups["path"].Value;
+                        if (!target.EndsWith(".svg", StringComparison.Ordinal))
                         {
-                            closed = true;
-                            break;
+                            violations.Add($"{docName}: perf-{id}:start (line {startLine}) references '{target}', which is not an SVG");
+                            continue;
                         }
-                    }
-                    if (!closed)
-                    {
-                        violations.Add(
-                            $"{docName}: perf-{id}:start (line {startLine}) opens a mermaid fence that is never closed");
+
+                        var file = Path.GetFullPath(Path.Combine(docDirectory, target.Replace('/', Path.DirectorySeparatorChar)));
+                        if (!File.Exists(file))
+                        {
+                            violations.Add($"{docName}: perf-{id}:start (line {startLine}) references '{target}', which does not exist");
+                        }
                     }
                 }
                 continue;

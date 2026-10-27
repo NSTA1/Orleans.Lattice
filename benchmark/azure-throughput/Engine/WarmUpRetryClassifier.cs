@@ -141,6 +141,57 @@ public static class WarmUpRetryClassifier
 
     /// <summary>
     /// True when <paramref name="ex"/> (or any exception in its inner chain) is
+    /// an Azure Storage server timeout or busy response surfaced unwrapped,
+    /// as a bulk-load chunk does: <c>BulkAppendChunkAsync</c> commits through the
+    /// WAL provider and lets a <c>TableTransactionFailedException</c> ("Operation
+    /// could not be completed within the specified time") reach the caller,
+    /// where a batched write would have reported it as a failed key.
+    /// <para>
+    /// Retryable for the preseed because a chunk is re-driven under the same
+    /// operation id, which is an idempotent no-op on every shard that already
+    /// applied it. Matched by message fragment, not by Azure SDK type, because
+    /// the Engine does not reference the storage SDK and the exception may
+    /// arrive inside an Orleans envelope.
+    /// </para>
+    /// </summary>
+    public static bool IsTransientStorageTimeout(Exception? ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            var message = cur.Message;
+            if (string.IsNullOrEmpty(message))
+            {
+                continue;
+            }
+
+            foreach (var fragment in StorageTimeoutFragments)
+            {
+                if (message.Contains(fragment, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The Azure Storage server-side outcomes <see cref="IsTransientStorageTimeout"/>
+    /// treats as transient: a server timeout (<c>OperationTimedOut</c>, HTTP 500)
+    /// and a busy service (<c>ServerBusy</c>, HTTP 503), by error code and by the
+    /// service's own message text.
+    /// </summary>
+    private static readonly string[] StorageTimeoutFragments =
+    [
+        "OperationTimedOut",
+        "Operation could not be completed within the specified time",
+        "ServerBusy",
+        "The server is busy",
+    ];
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any exception in its inner chain) is
     /// an Orleans request timeout - the "Response did not arrive on time"
     /// <see cref="TimeoutException"/> raised client-side when a grain call
     /// outlives the configured response timeout.

@@ -117,12 +117,35 @@ function Invoke-Az {
 		-PassthruOutput streams output to the host instead of capturing it,
 		for long operations (image builds) whose progress the operator needs
 		to see.
+
+		-TransientRetries N re-runs a call that failed with a transient CLI or
+		service fault (Test-AzTransientFailure) up to N more times, 10 s apart
+		and growing. Pass it ONLY for idempotent calls: a CLI fault can hide a
+		call the service applied, so retrying `containerapp update` (which
+		mints a revision and would tear down the cluster the cohort just
+		formed) or `job start` (a second execution) is wrong. One transient
+		`az containerapp job update` fault ("The command failed with an
+		unexpected error ... Expecting property name enclosed in double
+		quotes") cost a Layer 3 cohort before this existed.
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][string[]] $AzArgs,
 		[switch] $PassthruOutput,
-		[switch] $AllowFailure
+		[switch] $AllowFailure,
+		[ValidateRange(0, 5)][int] $TransientRetries = 0
 	)
+	if ($TransientRetries -gt 0 -and -not $PassthruOutput) {
+		for ($attempt = 0; ; $attempt++) {
+			$out = & az @AzArgs 2>&1
+			$code = $LASTEXITCODE
+			if ($code -eq 0 -or $attempt -ge $TransientRetries -or -not (Test-AzTransientFailure -Output @($out))) { break }
+			$wait = 10 * ($attempt + 1)
+			Write-Warning "[aca] az $($AzArgs[0..([Math]::Min(2, $AzArgs.Count - 1))] -join ' ') failed transiently (exit $code); retrying in $wait s ($($attempt + 1)/$TransientRetries)"
+			Start-Sleep -Seconds $wait
+		}
+		$global:LASTEXITCODE = $code
+		return (Complete-AzOutput -AzArgs $AzArgs -Out $out -Code $code -AllowFailure:$AllowFailure)
+	}
 	if ($PassthruOutput) {
 		& az @AzArgs
 		$code = $LASTEXITCODE
@@ -131,8 +154,35 @@ function Invoke-Az {
 	}
 	$out = & az @AzArgs 2>&1
 	$code = $LASTEXITCODE
-	if ($code -ne 0 -and -not $AllowFailure) {
-		throw "az $($AzArgs -join ' ') failed (exit $code): $($out -join [Environment]::NewLine)"
+	return (Complete-AzOutput -AzArgs $AzArgs -Out $out -Code $code -AllowFailure:$AllowFailure)
+}
+
+function Test-AzTransientFailure {
+	<#
+	.SYNOPSIS
+		Whether a failed az call's output names a fault worth retrying: a CLI
+		crash on a malformed response, a dropped connection, or a throttled,
+		unavailable or timed-out service.
+	#>
+	[CmdletBinding()] param([AllowNull()][AllowEmptyCollection()][object[]] $Output)
+	$text = (@($Output) | ForEach-Object { [string]$_ }) -join "`n"
+	return ($text -match 'The command failed with an unexpected error|Connection aborted|ConnectionResetError|RemoteDisconnected|\((TooManyRequests|ServiceUnavailable|InternalServerError|GatewayTimeout|BadGateway)\)|Read timed out|timed out')
+}
+
+function Complete-AzOutput {
+	<#
+	.SYNOPSIS
+		Invoke-Az's result handling: throw on failure unless -AllowFailure,
+		otherwise return the output stripped of the CLI's warning chatter.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string[]] $AzArgs,
+		[AllowNull()][AllowEmptyCollection()][object[]] $Out,
+		[int] $Code,
+		[switch] $AllowFailure
+	)
+	if ($Code -ne 0 -and -not $AllowFailure) {
+		throw "az $($AzArgs -join ' ') failed (exit $Code): $($Out -join [Environment]::NewLine)"
 	}
 	# Drop the CLI's own diagnostic chatter before returning. `az containerapp`
 	# unconditionally prints
@@ -1056,7 +1106,7 @@ function Get-AcaJobLog {
 			'--workspace', $Context.workspaceId,
 			'--analytics-query', $kql,
 			'-o', 'json'
-		) -AllowFailure
+		) -AllowFailure -TransientRetries 2
 		# FAIL FAST on a query that never once succeeded. A malformed KQL
 		# (a mistyped or non-existent column) returns a semantic error on
 		# EVERY poll, and -AllowFailure turns that into an empty result -
@@ -1075,7 +1125,9 @@ function Get-AcaJobLog {
 			$everSucceeded = $true
 			try {
 				$rows = @($json | ConvertFrom-Json)
-				$cohort = & $sliceToCohort @($rows | ForEach-Object { $_.Log_s })
+				# @() because an empty slice, returned through `&`, arrives as
+				# $null, whose .Count throws under strict mode.
+				$cohort = @(& $sliceToCohort @($rows | ForEach-Object { $_.Log_s }))
 				if ($cohort.Count -gt $best.Count) { $best = $cohort }
 				# NOT -like. PowerShell wildcards treat [...] as a character
 				# class, so '*[producer] DONE*' asks for one character from
@@ -1136,6 +1188,14 @@ function Get-AcaSiloLog {
 		label for this cohort's replica set - a far stronger identification
 		than a time window, which a previous cohort's draining container can
 		still overlap.
+
+		Orleans' 'Failed to address message' error (Orleans.Messaging[100071])
+		is counted rather than harvested. Parking the silos makes every
+		in-flight message unroutable at once, and at six silos that logged
+		124,000 copies (208 MB) in 30 seconds, after the measurement: paged
+		200 rows at a time, the harvest took about 40 minutes per cohort.
+		Each replica's copies become one '[aca-silo ...] suppressed N' line
+		with the first and last timestamp, so the burst stays visible.
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
@@ -1149,7 +1209,8 @@ function Get-AcaSiloLog {
 	# harvest once returned three experiments' worth of unfiltered logs.
 	$revFilter = if ($RevisionName) { " | where RevisionName_s == '$RevisionName'" } else { '' }
 	if ($IncludeDiagnostics -and -not $RevisionName) { throw 'Silo diagnostics require the cohort RevisionName.' }
-	$lineFilter = if ($IncludeDiagnostics) { '' } else { " | where Log_s startswith '[phaseA]'" }
+	$noise = "Log_s contains 'Messaging[100071]'"
+	$lineFilter = if ($IncludeDiagnostics) { " | where not($noise)" } else { " | where Log_s startswith '[phaseA]'" }
 	# Freeze ingestion membership across pages, and keep each response well
 	# below Log Analytics' size limit: it can truncate before the row limit.
 	$snapshot = [datetime]::UtcNow.ToString('o')
@@ -1163,18 +1224,32 @@ function Get-AcaSiloLog {
 			'--workspace', $Context.workspaceId,
 			'--analytics-query', $kql,
 			'-o', 'json'
-		) -AllowFailure
+		) -AllowFailure -TransientRetries 3
 		if ($LASTEXITCODE -ne 0) { throw "[aca] silo log query failed. Query: $kql" }
-		$page = if ($json -and $json.Trim()) { @($json | ConvertFrom-Json -ErrorAction Stop) } else { @() }
+		# @() around the whole if: an if-statement assignment unrolls its
+		# value, so an empty page ('[]', the page after a harvest whose row
+		# count is an exact multiple of the page size) arrives as $null, and
+		# $null.Count throws under strict mode, failing the cohort's harvest.
+		$page = @(if ($json -and $json.Trim()) { $json | ConvertFrom-Json -ErrorAction Stop })
 		foreach ($row in $page) { $rows.Add($row) }
 		if ($page.Count -lt $pageSize) { break }
 		if ($rows.Count -ge 200000) { throw '[aca] silo log query reached its row limit; diagnostics may be truncated.' }
 	}
-	return @($rows | ForEach-Object {
+	$suppressed = @()
+	if ($IncludeDiagnostics) {
+		$countQuery = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ingestion_time() <= datetime($snapshot) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter | where $noise | summarize n = count(), t0 = min(TimeGenerated), t1 = max(TimeGenerated) by ContainerGroupName_s | order by ContainerGroupName_s asc"
+		$json = Invoke-Az @('monitor', 'log-analytics', 'query', '--workspace', $Context.workspaceId, '--analytics-query', $countQuery, '-o', 'json') -AllowFailure -TransientRetries 3
+		if ($LASTEXITCODE -ne 0) { throw "[aca] silo log count query failed. Query: $countQuery" }
+		$counts = @(if ($json -and $json.Trim()) { $json | ConvertFrom-Json -ErrorAction Stop })
+		$suppressed = @($counts | Where-Object { $_ -and [long]$_.n -gt 0 } | ForEach-Object {
+			"[aca-silo time=$($_.t0) replica=$($_.ContainerGroupName_s)] suppressed $([long]$_.n) 'Failed to address message' lines (Orleans.Messaging[100071]) up to $($_.t1); counted, not harvested"
+		})
+	}
+	return @(@($rows | ForEach-Object {
 		if ($IncludeDiagnostics -and -not $_.Log_s.StartsWith('[phaseA]')) {
 			"[aca-silo time=$($_.TimeGenerated) replica=$($_.ContainerGroupName_s)] $($_.Log_s)"
 		} else { $_.Log_s }
-	})
+	}) + $suppressed)
 }
 
 function Invoke-AcaTeardown {
