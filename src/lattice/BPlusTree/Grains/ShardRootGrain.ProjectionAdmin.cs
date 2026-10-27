@@ -230,7 +230,7 @@ internal sealed partial class ShardRootGrain
         long[] perPartitionHeads = [];
         if (resumeFromInclusive is null)
         {
-            var resolved = await optionsResolver.ResolveAsync(TreeId);
+            var resolved = await GetOptionsAsync();
             var partitionCount = Math.Max(1, resolved.WalPartitions);
             perPartitionHeads = await CapturePartitionHeadsAsync(partitionCount, cancellationToken);
         }
@@ -322,7 +322,7 @@ internal sealed partial class ShardRootGrain
         // the default single-partition shape this collapses to a
         // single-element array matching the pre-multi-partition
         // scalar shape exactly.
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
+        var resolved = await GetOptionsAsync();
         var partitionCount = Math.Max(1, resolved.WalPartitions);
         return await CapturePartitionHeadsAsync(partitionCount, cancellationToken);
     }
