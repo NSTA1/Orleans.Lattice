@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 
@@ -142,33 +143,35 @@ public sealed class RepoContextVectorWriterEmbeddedCountTests
     public async Task At_most_one_refresh_runs_at_a_time_for_a_repository()
     {
         await using var harness = await StartAsync(Ct);
-        var writer = Resolve(harness);
+        var observed = new List<Task>();
+        var writer = new RepoContextVectorWriter(
+            harness.GrainFactory,
+            harness.Services.GetRequiredService<Serializer>(),
+            harness.Services.GetRequiredService<ILatticeReplicationContext>(),
+            new RepoContextVectorCache(TimeProvider.System, new RepoContextIndexingOptions()),
+            harness.Services.GetRequiredService<RepoContextVectorPlaneReDeriver>(),
+            scheduleCountRefresh: work =>
+            {
+                // Observe actual work, not the reservation's later cleanup acknowledgment.
+                if (observed.Count > 0)
+                {
+                    Assert.That(observed[^1].IsCompleted, Is.True,
+                        "A new refresh starts only after the previous membership walk finished.");
+                }
+
+                var refresh = Task.Run(work);
+                observed.Add(refresh);
+                return refresh;
+            });
 
         await writer.AddMembersAsync(RepoId, new[] { FileKey(0) }, Ct);
 
         // Each iteration writes, so every read is a generation miss and would start a
         // refresh if nothing suppressed it.
-        var observed = new List<Task>();
         for (var i = 1; i <= 24; i++)
         {
             await writer.AddMembersAsync(RepoId, new[] { FileKey(i) }, Ct);
             _ = await writer.CountEmbeddedAsync(RepoId, Ct);
-
-            if (writer.PendingEmbeddedCountRefresh(RepoId) is { } refresh
-                && (observed.Count == 0 || !ReferenceEquals(observed[^1], refresh)))
-            {
-                // A refresh instance can only be replaced once its predecessor settled -
-                // that is precisely "at most one in flight", asserted without racing a
-                // clock.
-                if (observed.Count > 0)
-                {
-                    Assert.That(observed[^1].IsCompleted, Is.True,
-                        "A new refresh started only after the previous one finished, so the "
-                        + "reads share one membership walk instead of piling them up.");
-                }
-
-                observed.Add(refresh);
-            }
         }
 
         Assert.That(observed, Is.Not.Empty,
