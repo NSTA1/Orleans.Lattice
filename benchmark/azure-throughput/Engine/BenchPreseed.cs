@@ -27,6 +27,30 @@ internal static class BenchPreseed
     public static bool IsRequired(BenchWorkloadMode mode, int keyCount) =>
         keyCount > 0 && mode is BenchWorkloadMode.GetPoint or BenchWorkloadMode.GetMany;
 
+    /// <summary>Smallest preseed budget, whatever the key count.</summary>
+    public const int MinBudgetSec = 300;
+
+    /// <summary>
+    /// The seed rate the budget assumes, in keys/s. The keyspace grows with
+    /// vehicles x silos while one storage account absorbs the seed, so a flat
+    /// budget fails the larger cells: 512,000 keys reached 401,408 in 300 s.
+    /// </summary>
+    public const int BudgetFloorKeysPerSec = 1000;
+
+    /// <summary>
+    /// The wall-clock allowed to seed <paramref name="keyCount"/> keys:
+    /// <see cref="MinBudgetSec"/>, or one second per
+    /// <see cref="BudgetFloorKeysPerSec"/> keys when that is longer.
+    /// <c>run-cohort-aca.ps1</c> derives the same figure for its execution
+    /// ceiling, so the two must change together.
+    /// </summary>
+    public static TimeSpan BudgetFor(int keyCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(keyCount);
+        var scaled = ((long)keyCount + BudgetFloorKeysPerSec - 1) / BudgetFloorKeysPerSec;
+        return TimeSpan.FromSeconds(Math.Max(MinBudgetSec, scaled));
+    }
+
     /// <summary>
     /// The key for vehicle <paramref name="index"/>. Mirrors the producer's
     /// vehicle-id derivation exactly, so the read modes look up the keys the

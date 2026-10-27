@@ -559,9 +559,12 @@ static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, Cancella
 static async Task PreseedWithRetryAsync(ILattice lattice, IngestSettings settings, CancellationToken ct)
 {
     // Matches the cohort runner's preseed allowance, independently of the
-    // warm-up, response and measurement budgets.
+    // warm-up, response and measurement budgets. BENCH_PRESEED_BUDGET_SEC
+    // overrides the key-count-scaled default.
+    var overrideSec = ReadIntAllowZero("BENCH_PRESEED_BUDGET_SEC", 0);
+    var budget = overrideSec > 0 ? TimeSpan.FromSeconds(overrideSec) : BenchPreseed.BudgetFor(settings.PreseedKeyCount);
     await BenchPreseed.SeedWithRetryAsync(lattice, settings.PreseedKeyCount,
-        Math.Max(1, settings.BatchSize), settings.TreeId, TimeSpan.FromSeconds(300), ct).ConfigureAwait(false);
+        Math.Max(1, settings.BatchSize), settings.TreeId, budget, ct).ConfigureAwait(false);
 }
 static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, int shardCount, CancellationToken ct)
 {

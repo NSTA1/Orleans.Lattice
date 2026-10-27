@@ -530,8 +530,14 @@ try {
 	# and reports it as a failure, which is the worst possible outcome -
 	# the cell is lost and the log says the producer died rather than that
 	# the harness killed it. The slack absorbs container start and the
-	# preseed pass.
-	$executionCeilingSec = $DurationSec + $WarmUpBudgetSec + $ResponseTimeoutSec + $InFlightTailBudgetSec + 300
+	# preseed pass; a read cohort's preseed budget grows with its key count
+	# (BenchPreseed.BudgetFor: max(300 s, 1 s per 1,000 keys)), so the slack
+	# grows by the same excess over 300 s.
+	$preseedExtraSec = 0
+	if ($WorkloadMode -in @('get-point', 'get-many')) {
+		$preseedExtraSec = [math]::Max(0, [math]::Ceiling($VehicleCount / 1000.0) - 300)
+	}
+	$executionCeilingSec = $DurationSec + $WarmUpBudgetSec + $ResponseTimeoutSec + $InFlightTailBudgetSec + 300 + $preseedExtraSec
 	$state = Wait-AcaJobExecution -Context $ctx -ExecutionName $execName -TimeoutSec $executionCeilingSec
 	Write-Host "[cohort] execution finished: $state" -ForegroundColor DarkGray
 	$producerEndUtc = (Get-Date).ToUniversalTime()

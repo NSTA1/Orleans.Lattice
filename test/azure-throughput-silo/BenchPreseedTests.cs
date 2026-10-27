@@ -44,6 +44,23 @@ public class BenchPreseedTests
         Assert.That(BenchPreseed.IsRequired(mode, keyCount), Is.EqualTo(expected));
     }
 
+    [TestCase(0, 300)]
+    [TestCase(256_000, 300)]
+    [TestCase(300_000, 300)]
+    [TestCase(300_001, 301)]
+    [TestCase(512_000, 512)]
+    [TestCase(1_024_000, 1024)]
+    public void BudgetFor_scales_with_key_count_above_the_floor(int keyCount, int expectedSec)
+    {
+        Assert.That(BenchPreseed.BudgetFor(keyCount), Is.EqualTo(TimeSpan.FromSeconds(expectedSec)));
+    }
+
+    [Test]
+    public void BudgetFor_rejects_a_negative_key_count()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => BenchPreseed.BudgetFor(-1));
+    }
+
     [Test]
     public void BuildEntries_is_deterministic_with_fixed_payload_size()
     {

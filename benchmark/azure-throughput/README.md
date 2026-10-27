@@ -192,8 +192,11 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo-side default of 0 skips the pre-seed, but `run-cohort.ps1 -Vehicles` sets the same fleet size on both processes (including when `ExtraSiloEnv` contains a conflicting count). Layer 2 aggregation requires retained `[silo] preseed ... entries=N` evidence covering the offered fleet; legacy miss-path cohorts and missing logs are excluded. In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
 | `get-many` | `GetManyAsync` over the same keyspace, with the same pre-seed caveats. |
 
-Layer 3 preseed retries are bounded to eight attempts per unlanded slice and 300 seconds
-for the entire seed, including outstanding RPCs. Successful slices reset the attempt
+Layer 3 preseed retries are bounded to eight attempts per unlanded slice and a wall-clock
+budget for the entire seed, including outstanding RPCs: 300 seconds, or one second per
+1,000 keys when that is longer (`BenchPreseed.BudgetFor`; `BENCH_PRESEED_BUDGET_SEC`
+overrides it). The keyspace is vehicles per silo x silos, so a flat budget failed the
+larger read cells. `run-cohort-aca.ps1` widens its execution ceiling by the same excess. Successful slices reset the attempt
 counter, not the deadline; failures retain offset, exception and budget diagnostics.
 The `set-point-mv` view name is `bench-{treeId}`, shared by registration and lag reporting,
 so a fresh cohort cannot resume an earlier source tree's view checkpoints.
