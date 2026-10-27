@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Collections.Immutable;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Testing;
@@ -23,6 +24,7 @@ public class WalOrphanPinSweepGrainTests
         public List<(string TreeId, bool Classify)> Calls { get; } = [];
 
         public Exception? Throw { get; set; }
+        public bool Unavailable { get; set; }
 
         public Task<WalOrphanPinSweepOutcome?> RunAsync(
             string treeId,
@@ -35,11 +37,16 @@ public class WalOrphanPinSweepGrainTests
                 throw Throw;
             }
 
+            if (Unavailable)
+            {
+                return Task.FromResult<WalOrphanPinSweepOutcome?>(null);
+            }
+
             return Task.FromResult<WalOrphanPinSweepOutcome?>(new WalOrphanPinSweepOutcome
             {
                 Classified = classifyFloorHolders,
-                RepairConsumerIds = classifyFloorHolders ? ["c1"] : null,
-                RequireOffsetAdvance = classifyFloorHolders ? [] : null,
+                RepairConsumerIds = classifyFloorHolders ? ["c1"] : [],
+                RequireOffsetAdvance = ImmutableHashSet<string>.Empty,
                 PinPopulation = 3,
             });
         }
@@ -141,6 +148,7 @@ public class WalOrphanPinSweepGrainTests
         await grain.RequestSweepAsync(classifyFloorHolders: true);
 
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.ProcessNextPhaseAsync());
+        Assert.That((await grain.RequestSweepAsync(false))!.Available, Is.False);
 
         runner.Throw = null;
         clock.Advance(LatticeWalGcScheduler.OrphanSweepInterval);
@@ -149,5 +157,47 @@ public class WalOrphanPinSweepGrainTests
         Assert.That(runner.Calls, Has.Count.EqualTo(2));
         Assert.That(runner.Calls[1].Classify, Is.True);
         Assert.That((await grain.RequestSweepAsync(false))!.Generation, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task An_unavailable_runner_requests_local_fallback_and_keeps_demand_owed()
+    {
+        var (grain, runner, clock) = Create();
+        runner.Unavailable = true;
+        await grain.RequestSweepAsync(true);
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.That((await grain.RequestSweepAsync(false))!.Available, Is.False);
+
+        runner.Unavailable = false;
+        clock.Advance(LatticeWalGcScheduler.OrphanSweepInterval);
+        await grain.ProcessNextPhaseAsync();
+        var recovered = await grain.RequestSweepAsync(false);
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered!.Available, Is.True);
+            Assert.That(recovered.Classified, Is.True);
+            Assert.That(recovered.Generation, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Reactivation_rebuilds_demand_and_never_reuses_the_previous_epoch()
+    {
+        var (original, _, _) = Create();
+        await original.RequestSweepAsync(true);
+        await original.ProcessNextPhaseAsync();
+        var previous = await original.RequestSweepAsync(false);
+
+        var (reactivated, _, _) = Create();
+        Assert.That(await reactivated.RequestSweepAsync(true), Is.Null);
+        await reactivated.ProcessNextPhaseAsync();
+        var recovered = await reactivated.RequestSweepAsync(false);
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered!.Epoch, Is.Not.EqualTo(previous!.Epoch));
+            Assert.That(recovered.Generation, Is.EqualTo(1));
+            Assert.That(recovered.Classified, Is.True);
+        });
     }
 }

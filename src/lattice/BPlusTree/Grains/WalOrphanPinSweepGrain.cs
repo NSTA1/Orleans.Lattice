@@ -32,6 +32,7 @@ internal sealed class WalOrphanPinSweepGrain(
     private bool _demandPending;
     private bool _classifyPending;
     private bool _running;
+    private bool _unavailable;
     private DateTimeOffset? _lastSweepStarted;
     private long _generation;
     private WalOrphanPinSweepOutcome? _latest;
@@ -56,7 +57,7 @@ internal sealed class WalOrphanPinSweepGrain(
         _demandPending = true;
         _classifyPending |= classifyFloorHolders;
         StartPhaseTimer();
-        return Task.FromResult(_latest);
+        return Task.FromResult(_unavailable ? WalOrphanPinSweepOutcome.Unavailable : _latest);
     }
 
     /// <inheritdoc/>
@@ -84,6 +85,16 @@ internal sealed class WalOrphanPinSweepGrain(
             if (outcome is not null)
             {
                 _latest = outcome with { Epoch = _epoch, Generation = ++_generation };
+                _unavailable = false;
+            }
+            else
+            {
+                _unavailable = true;
+                _demandPending = true;
+                _classifyPending |= classify;
+                Logger.LogWarning(
+                    "WAL GC orphan sweep coordinator for tree {Tree} has no leaf-state storage; callers must sweep locally.",
+                    TreeId);
             }
         }
         catch
@@ -91,6 +102,7 @@ internal sealed class WalOrphanPinSweepGrain(
             // The demand that started this sweep is not served, so it stays owed.
             _demandPending = true;
             _classifyPending |= classify;
+            _unavailable = true;
             throw;
         }
         finally

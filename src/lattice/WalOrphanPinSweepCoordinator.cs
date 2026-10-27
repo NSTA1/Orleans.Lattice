@@ -4,7 +4,8 @@ namespace Orleans.Lattice;
 /// Default <see cref="IWalOrphanPinSweepCoordinator"/>: forwards demand to the
 /// tree's <see cref="BPlusTree.Grains.IWalOrphanPinSweepGrain"/>.
 /// </summary>
-internal sealed class WalOrphanPinSweepCoordinator(IGrainFactory grainFactory) : IWalOrphanPinSweepCoordinator
+internal sealed class WalOrphanPinSweepCoordinator(IGrainFactory grainFactory, TimeProvider? timeProvider = null)
+    : IWalOrphanPinSweepCoordinator
 {
     /// <inheritdoc/>
     public Task<WalOrphanPinSweepOutcome?> RequestSweepAsync(
@@ -14,9 +15,11 @@ internal sealed class WalOrphanPinSweepCoordinator(IGrainFactory grainFactory) :
     {
         ArgumentNullException.ThrowIfNull(treeId);
         cancellationToken.ThrowIfCancellationRequested();
-        return grainFactory
+        var request = grainFactory
             .GetGrain<BPlusTree.Grains.IWalOrphanPinSweepGrain>(treeId)
-            .RequestSweepAsync(classifyFloorHolders)
-            .WaitAsync(cancellationToken);
+            .RequestSweepAsync(classifyFloorHolders);
+        request.Ignore();
+        return request.WaitAsync(
+            LatticeWalGcScheduler.OrphanSweepOperationBudget, timeProvider ?? TimeProvider.System, cancellationToken);
     }
 }

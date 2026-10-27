@@ -122,6 +122,19 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [Test]
+    public async Task A_silo_falls_back_when_the_coordinator_explicitly_reports_unavailable()
+    {
+        var coordinator = Substitute.For<IWalOrphanPinSweepCoordinator>();
+        coordinator.RequestSweepAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<WalOrphanPinSweepOutcome?>(WalOrphanPinSweepOutcome.Unavailable));
+
+        var (_, pins) = await SweepHusksAsync(partitions: 2, coordinator);
+
+        Assert.That(pins.RemainingPins, Is.Zero,
+            "a coordinator on a silo without storage must not look like a healthy, pending sweep.");
+    }
+
+    [Test]
     public async Task The_runner_sweeps_without_a_rate_limit_and_reports_the_outcome()
     {
         var time = new VirtualTimeProvider();

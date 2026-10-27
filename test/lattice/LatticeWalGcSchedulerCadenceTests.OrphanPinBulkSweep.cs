@@ -299,7 +299,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private static LatticeWalGcScheduler SchedulerSweeping(
         FakePinStore pins,
         IGrainStorage? storage,
-        VirtualTimeProvider time,
+        TimeProvider time,
         int pinShards = 1,
         string? blockingConsumerId = null)
     {
