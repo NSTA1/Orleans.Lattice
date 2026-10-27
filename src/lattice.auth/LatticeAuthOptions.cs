@@ -28,7 +28,10 @@ public sealed class LatticeAuthOptions
     /// deployment cannot lock every operator out of the authorization tree itself
     /// through a policy misconfiguration; keep it to the smallest possible set of
     /// break-glass operator identities. Empty by default (no bootstrap admins).
-    /// Entries must be non-null and non-empty.
+    /// Entries must be non-null and non-empty, and must not be the reserved
+    /// <c>anonymous</c> or <c>system</c> subject ids or an id in the reserved
+    /// <c>t/</c> tenant-group namespace; an anonymous caller is never a bootstrap
+    /// administrator.
     /// </summary>
     public ISet<string> BootstrapAdministrators { get; set; } = new HashSet<string>(StringComparer.Ordinal);
 

@@ -23,11 +23,12 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// even learning whether a tenant exists.
 /// </para>
 /// <para>
-/// <b>Last-writer-wins stamping.</b> The registry's status register keeps its
-/// incumbent stamp internal, so the facade cannot read-then-supersede; instead it
-/// stamps every write with a strictly increasing clock from
-/// <see cref="ITenantAdminClock"/> and the cluster's writer id, which guarantees
-/// each successive control-plane write supersedes the last.
+/// <b>Last-writer-wins stamping.</b> Every write is stamped with a strictly
+/// increasing clock from <see cref="ITenantAdminClock"/> and the cluster's writer
+/// id. A status change is additionally stamped later than the status it replaces
+/// (<see cref="TenantRemovalStamp.ForStatus"/>), because the incumbent may have been
+/// written by a silo whose clock runs ahead of this one and a write stamped behind
+/// it would be dropped by the merge while the facade reported it applied.
 /// </para>
 /// </remarks>
 internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
@@ -108,6 +109,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
 
         var requested = ValidateSubjects(adminSubjects);
+        EnsureSeedableAdminEntries(tenant, requested);
         await ValidateDirectorySubjectsAsync(requested, cancellationToken).ConfigureAwait(false);
 
         if (await _registry.ExistsAsync(tenant, cancellationToken).ConfigureAwait(false))
@@ -186,7 +188,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         // The status write lands through the registry's last-writer-wins merge, so
         // it composes with concurrent registry writes and a re-run of an already
         // interrupted delete is a stamp-advancing no-op.
-        record.SetStatus(TenantStatus.Suspended, _clock.Next(), _writerId);
+        record.SetStatus(TenantStatus.Suspended, TenantRemovalStamp.ForStatus(_clock, record), _writerId);
         await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
 
         // Cascade the delete to the tenant's trees before removing the definition,
@@ -267,15 +269,17 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
             };
         }
 
-        record.SetStatus(target, _clock.Next(), _writerId);
-        await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        record.SetStatus(target, TenantRemovalStamp.ForStatus(_clock, record), _writerId);
+        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
 
+        // Report the status that landed, not the one requested: a later write racing
+        // this one can still win the merge.
         return new TenantStatusChangeResult
         {
             TenantId = tenant.Value,
             PreviousStatus = TenantLifecycleMapping.ToLifecycleStatus(previous),
-            NewStatus = TenantLifecycleMapping.ToLifecycleStatus(target),
-            Changed = true,
+            NewStatus = TenantLifecycleMapping.ToLifecycleStatus(merged.Status),
+            Changed = merged.Status != previous,
         };
     }
 
@@ -310,6 +314,33 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         }
 
         return unique;
+    }
+
+    /// <summary>
+    /// Applies the admin-set confinement to the entries a create seeds, as
+    /// <c>ILatticeTenantAccessAdmin.AddAdminSubjectAsync</c> does to an added
+    /// one, so create cannot be used to record what add would refuse. Another
+    /// tenant's group or a malformed <c>t/</c> id is refused with
+    /// <see cref="TenantAccessConfinementException"/>; the new tenant's own group is
+    /// refused too, because no group of a tenant can exist before the tenant does and
+    /// add requires the group to exist. Allocation-free on the accepted path.
+    /// </summary>
+    /// <param name="tenant">The tenant being created.</param>
+    /// <param name="requested">The validated, de-duplicated admin subjects.</param>
+    /// <exception cref="TenantAccessConfinementException">An entry names another tenant's group or is a malformed <c>t/</c> id.</exception>
+    /// <exception cref="ArgumentException">An entry names one of the new tenant's own groups.</exception>
+    private static void EnsureSeedableAdminEntries(TenantId tenant, IReadOnlyList<string> requested)
+    {
+        for (var i = 0; i < requested.Count; i++)
+        {
+            if (LatticeTenantAccessAdmin.EnsureAdmissibleAdminEntry(tenant, requested[i]))
+            {
+                throw new ArgumentException(
+                    $"Tenant group '{requested[i]}' cannot be seeded as an admin of tenant '{tenant}': the group cannot "
+                        + "exist before its tenant does. Create the tenant, create the group, then add it to the admin set.",
+                    "adminSubjects");
+            }
+        }
     }
 
     /// <summary>

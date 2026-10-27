@@ -105,6 +105,41 @@ public sealed partial class LatticeTenantAdminTests
         });
     }
 
+    [Test]
+    public void CreateTenantAsync_refuses_to_seed_another_tenants_group_as_an_admin()
+    {
+        var registry = new FakeTenantRegistry();
+        var facade = Create(registry);
+
+        Assert.That(
+            async () => await facade.CreateTenantAsync(Tenant, ["ops@acme.example", "t/globex/admins"]),
+            Throws.TypeOf<TenantAccessConfinementException>());
+        Assert.That(registry.Puts, Is.EqualTo(0), "a refused create writes nothing");
+    }
+
+    [Test]
+    public void CreateTenantAsync_refuses_to_seed_a_group_of_the_tenant_it_is_creating()
+    {
+        var registry = new FakeTenantRegistry();
+        var facade = Create(registry);
+
+        Assert.That(
+            async () => await facade.CreateTenantAsync(Tenant, [$"t/{Tenant}/admins"]),
+            Throws.InstanceOf<ArgumentException>().With.Message.Contains("cannot exist before its tenant does"));
+        Assert.That(registry.Puts, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task CreateTenantAsync_still_seeds_users_and_cluster_groups()
+    {
+        var registry = new FakeTenantRegistry();
+        var facade = Create(registry);
+
+        var result = await facade.CreateTenantAsync(Tenant, ["ops@acme.example", "entra-acme-admins"]);
+
+        Assert.That(result.AdminSubjects, Is.EquivalentTo(new[] { "ops@acme.example", "entra-acme-admins" }));
+    }
+
     // ----- Suspend -----
 
     [Test]
@@ -173,6 +208,45 @@ public sealed partial class LatticeTenantAdminTests
         Assert.That(async () => await facade.SuspendTenantAsync(Tenant),
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
         Assert.That(registry.Puts, Is.EqualTo(0));
+    }
+
+    /// <summary>A record whose status was written by a silo whose clock runs an hour ahead.</summary>
+    private static TenantRecord ActiveRecordFromAFastClock(string id) => TenantRecord.Create(
+        Parse(id), TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared,
+        new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.AddHours(1).Ticks }, "fast-silo");
+
+    [Test]
+    public async Task SuspendTenantAsync_supersedes_a_status_written_by_a_silo_whose_clock_runs_ahead()
+    {
+        // A suspend stamped from the local clock alone loses the last-writer-wins
+        // merge to the incumbent, leaving the tenant active while the facade reports
+        // it suspended.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecordFromAFastClock(Tenant));
+        var facade = Create(registry);
+
+        var result = await facade.SuspendTenantAsync(Tenant);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(registry.Peek(Tenant)!.Status, Is.EqualTo(TenantStatus.Suspended));
+            Assert.That(result.NewStatus, Is.EqualTo(TenantLifecycleStatus.Suspended));
+            Assert.That(result.Changed, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task DeleteTenantAsync_suspends_before_cascading_even_against_a_status_from_a_fast_clock()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecordFromAFastClock(Tenant));
+        var cascade = new StatusObservingCascade(registry, 0);
+        var facade = Create(registry, cascade: cascade);
+
+        await facade.DeleteTenantAsync(Tenant);
+
+        Assert.That(cascade.ObservedStatusAtCascade, Is.EqualTo(TenantStatus.Suspended),
+            "the delete's fence must land before any tree is cascaded");
     }
 
     // ----- Resume -----

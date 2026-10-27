@@ -172,6 +172,32 @@ public class GrpcReplicationAuthIntegrationTests
         Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
     }
 
+    [TestCase("Orleans.Lattice.Replication.LatticeReplication", "Push")]
+    [TestCase("ORLEANS.LATTICE.REPLICATION.LATTICEREPLICATION", "PUSH")]
+    [TestCase("orleans.lattice.replication.LatticeReplication", "push")]
+    public void Push_on_a_recased_path_without_secret_never_reaches_the_applier(string serviceName, string methodName)
+    {
+        // ASP.NET Core routing matches the gRPC path case-insensitively, so a
+        // re-cased path still dispatches to the Push handler. The authenticator
+        // must therefore recognise the call by its routed method, not by an ordinal
+        // test of the raw request path, or the re-cased call skips it entirely.
+        var canonical = ResolveMethod().Push;
+        var recased = new Method<ReplicationBatchEnvelopeBox, ReplicationAckBox>(
+            MethodType.Unary, serviceName, methodName, canonical.RequestMarshaller, canonical.ResponseMarshaller);
+        var invoker = _channel.CreateCallInvoker();
+        _applier.ClearReceivedCalls();
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () =>
+        {
+            using var call = invoker.AsyncUnaryCall(
+                recased, host: null, options: GrpcTestFactories.OriginOptions("remote"), request: MinimalBox());
+            await call.ResponseAsync;
+        });
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.Unauthenticated));
+        _applier.DidNotReceiveWithAnyArgs().ApplyBatchAsync(default!, default);
+    }
+
     [Test]
     public async Task Push_with_correct_secret_succeeds()
     {

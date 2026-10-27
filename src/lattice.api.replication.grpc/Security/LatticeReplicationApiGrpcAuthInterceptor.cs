@@ -58,12 +58,13 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationApiMethod(context.Method) || IsUnauthenticatedMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeReplicationApiMethod(method) || IsUnauthenticatedMethod(method))
         {
             return await continuation(request, context).ConfigureAwait(false);
         }
 
-        await EnforceAuthAsync(request, context).ConfigureAwait(false);
+        await EnforceAuthAsync(method, request, context).ConfigureAwait(false);
         return await continuation(request, context).ConfigureAwait(false);
     }
 
@@ -79,13 +80,14 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationApiMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeReplicationApiMethod(method))
         {
             await continuation(request, responseStream, context).ConfigureAwait(false);
             return;
         }
 
-        await EnforceAuthAsync(request, context).ConfigureAwait(false);
+        await EnforceAuthAsync(method, request, context).ConfigureAwait(false);
         await continuation(request, responseStream, context).ConfigureAwait(false);
     }
     /// <inheritdoc />
@@ -98,7 +100,8 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationApiMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeReplicationApiMethod(method))
         {
             return await continuation(requestStream, context).ConfigureAwait(false);
         }
@@ -106,7 +109,7 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
         // A streaming call has no single request message to describe, so the call
         // is identified by its method name alone. The authorization decision is
         // made before the first client message is read.
-        await EnforceAuthAsync<TRequest>(default!, context).ConfigureAwait(false);
+        await EnforceAuthAsync<TRequest>(method, default!, context).ConfigureAwait(false);
         return await continuation(requestStream, context).ConfigureAwait(false);
     }
 
@@ -122,23 +125,24 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationApiMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeReplicationApiMethod(method))
         {
             await continuation(requestStream, responseStream, context).ConfigureAwait(false);
             return;
         }
 
-        await EnforceAuthAsync<TRequest>(default!, context).ConfigureAwait(false);
+        await EnforceAuthAsync<TRequest>(method, default!, context).ConfigureAwait(false);
         await continuation(requestStream, responseStream, context).ConfigureAwait(false);
     }
-    private async Task EnforceAuthAsync<TRequest>(TRequest request, ServerCallContext context)
+    private async Task EnforceAuthAsync<TRequest>(string method, TRequest request, ServerCallContext context)
     {
         if (!_options.CurrentValue.RequireAuthorization)
         {
             return;
         }
 
-        var (operation, targetId) = DescribeCall(context.Method, request);
+        var (operation, targetId) = DescribeCall(method, request);
         var authorizationContext = new LatticeReplicationApiAuthorizationContext(context, operation, targetId);
 
         bool authorized;
@@ -159,7 +163,7 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
         {
             _logger.LogWarning(
                 "Api.Replication: rejected inbound gRPC call to {Method} - authorizer denied the request.",
-                context.Method);
+                method);
             throw new RpcException(new Status(
                 StatusCode.PermissionDenied,
                 "Caller is not authorized to drive the Lattice replication control API. "

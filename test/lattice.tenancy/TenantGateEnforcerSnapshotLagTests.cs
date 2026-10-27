@@ -65,6 +65,26 @@ public sealed class TenantGateEnforcerSnapshotLagTests
     }
 
     [Test]
+    public async Task EnforceAsync_crossing_into_an_owner_suspended_moments_ago_is_refused()
+    {
+        await using var world = await World.CreateAsync(TenantGrantState.Active);
+        world.AssertAdmitted(await world.ReadAsync(), "precondition: the active grant admits the read");
+
+        world.SuspendOwner();
+        await world.PublishRegistryWriteWithRebuildHeldAsync();
+        world.AssertSnapshotStillAdmits();
+
+        var confirmed = await world.ReadAsync();
+        Assert.That(confirmed.Allowed, Is.False, "the registry confirmation must refuse a crossing into a suspended owner");
+        Assert.That(confirmed.Reason, Does.Contain("is not active"));
+
+        await world.ReleaseRebuildAsync();
+        var rebuilt = await world.ReadAsync();
+        Assert.That(rebuilt.Allowed, Is.False, "the rebuilt snapshot refuses it too");
+        Assert.That(rebuilt.Reason, Does.Contain("is not active"));
+    }
+
+    [Test]
     public async Task EnforceAsync_read_immediately_after_approving_the_grant_is_admitted()
     {
         await using var world = await World.CreateAsync(TenantGrantState.Pending);
@@ -311,6 +331,8 @@ public sealed class TenantGateEnforcerSnapshotLagTests
             _owner.TransitionGrant(Grant.GrantId, state, Clock(++_tick), "test");
 
         public void RemoveGrant() => _owner.RemoveGrant(Grant.GrantId, Clock(++_tick), "test");
+
+        public void SuspendOwner() => _owner.SetStatus(TenantStatus.Suspended, Clock(++_tick), "test");
 
         /// <summary>
         /// Publishes the registry write to the maintainer exactly as the core

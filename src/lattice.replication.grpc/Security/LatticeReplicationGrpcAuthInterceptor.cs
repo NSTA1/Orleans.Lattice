@@ -66,7 +66,7 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         // unaffected. The full method name is "/{service}/{method}";
         // we match by service-name prefix to keep the interceptor
         // resilient to future RPC additions on the same services.
-        if (!IsLatticeReplicationMethod(context.Method))
+        if (!IsLatticeReplicationMethod(GrpcRoutedMethod.Resolve(context)))
         {
             return await continuation(request, context).ConfigureAwait(false);
         }
@@ -87,7 +87,7 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationMethod(context.Method))
+        if (!IsLatticeReplicationMethod(GrpcRoutedMethod.Resolve(context)))
         {
             await continuation(request, responseStream, context).ConfigureAwait(false);
             return;
@@ -107,7 +107,7 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationMethod(context.Method))
+        if (!IsLatticeReplicationMethod(GrpcRoutedMethod.Resolve(context)))
         {
             return await continuation(requestStream, context).ConfigureAwait(false);
         }
@@ -131,7 +131,7 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationMethod(context.Method))
+        if (!IsLatticeReplicationMethod(GrpcRoutedMethod.Resolve(context)))
         {
             await continuation(requestStream, responseStream, context).ConfigureAwait(false);
             return;

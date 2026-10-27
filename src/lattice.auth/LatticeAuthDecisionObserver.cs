@@ -106,6 +106,15 @@ internal sealed partial class LatticeAuthDecisionObserver
             return;
         }
 
+        // An administrator's explain evaluates the gate in another subject's name.
+        // It is not that subject's access attempt, so it is neither counted nor
+        // audited. Read only once something is listening, so the fast exit above
+        // stays free.
+        if (AuthExplainScope.IsActive)
+        {
+            return;
+        }
+
         var effectTag = LatticeAuthMetrics.EffectTag(decision.Allowed);
 
         if (decisionsEnabled || durationEnabled)

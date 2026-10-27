@@ -83,7 +83,10 @@ lifecycle, quota, and region-residency verbs and the
   Setting residency, reading status, tenant access administration, cross-tenant
   grant administration, and the quota-usage read are **tenant-admin** actions, authorized when the caller is that operator or
   a live admin subject on the tenant record (for a grant step, the record of the
-  tenant whose side of the agreement the step belongs to). Both tiers are independent of the data-plane
+  tenant whose side of the agreement the step belongs to) and that tenant is `Active`: a
+  suspended tenant's own admins hold no tenant-tier authority until an operator resumes it,
+  so they cannot keep offering grants, writing tenant rules or reshaping its admin set
+  while it is fenced. Both tiers are independent of the data-plane
   `DefaultEffect`, so an unmatched request always resolves to deny even under
   `DefaultEffect = Allow`.
 - **Reserved default tenant.** The well-known legacy-adoption `default` tenant can
@@ -107,7 +110,10 @@ lifecycle, quota, and region-residency verbs and the
   creator can always see what it created; supply a non-empty one and it is used
   **verbatim** (the caller is not added on top), which is how you hand a tenant to
   its delegated admins in a single call. Every entry must be a non-blank subject id, a blank or `null`
-  entry fails closed with an `ArgumentException`, and duplicates collapse. A
+  entry fails closed with an `ArgumentException`, and duplicates collapse. An entry in the reserved
+  `t/` tenant-group namespace is refused just as `AddAdminSubjectAsync` refuses it: another tenant's
+  group or a malformed `t/` id with `TenantAccessConfinementException`, and a group of the tenant being
+  created - which cannot exist before the tenant does - with an `ArgumentException`; nothing is written. A
   caller that cannot be resolved to a subject (an anonymous or system-origin
   create) seeds nothing rather than inventing an owner; grant access explicitly
   in that case. When a real identity directory provider is registered (anything
@@ -138,8 +144,10 @@ lifecycle, quota, and region-residency verbs and the
   tenant-scoped admission can race the delete, then cascades the delete to every tree
   the tenant owns (each `t/{tenantId}/*` tree is soft-deleted), then purges the
   tenant's access data - its tenant-tier rules, its tenant groups and their
-  membership edges in both directions - before the registry record, and the member
-  set with it, is removed. The purge runs whether or not delegated tenant access
+  membership edges in both directions - and removes every cross-tenant grant other
+  tenants issued to it, active or still offered, before the registry record, and the
+  member set with it, is removed. Grants are matched by tenant id, so without that a
+  tenant later created under the same id would inherit them. The purge runs whether or not delegated tenant access
   administration is enabled. An interrupted delete therefore leaves a suspended,
   retriable record rather than orphaned trees or access data.
 - **Quota authoring.** `SetTenantQuotasAsync` replaces a tenant's resource quotas and
