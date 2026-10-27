@@ -56,7 +56,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Internal-node maintenance calls.** Split completion seeds the new sibling in one grain call instead of one per child; bulk-graft descent and the node-binding walk read each internal node once instead of twice. ([#5100](https://github.com/NSTA1/Orleans.Lattice/pull/5069)) (`Orleans.Lattice`)
 
-- **Performance - Snapshot control paths.** Bootstrap fencing and snapshot initiation reuse registry entries, removing a read each; independent WAL heads overlap within a bounded window while preserving freeze-before-head ordering. ([#4996](https://github.com/NSTA1/Orleans.Lattice/pull/4996)) (`Orleans.Lattice`)
+- **Performance - Snapshot control paths.** Bootstrap fencing and snapshot initiation reuse registry entries; warm snapshot-head and lag captures reuse pinned sizing. Independent WAL heads overlap in bounded waves, preserving freeze-before-head ordering. ([#4996](https://github.com/NSTA1/Orleans.Lattice/pull/4996), [#5082](https://github.com/NSTA1/Orleans.Lattice/pull/5082)) (`Orleans.Lattice`)
+
+- **Performance - Merge shard membership.** Large source generations use sorted-map membership instead of quadratic scans to detect retired shards; small maps retain vectorized scans. ([#5082](https://github.com/NSTA1/Orleans.Lattice/pull/5082)) (`Orleans.Lattice`)
 
 - **Performance - Maintenance and sampling probes.** Autonomic probes cut serial calls from 8 to 4; shrink planning and donor retirement cut snapshot/merge probes from 4 to 2. Shard sampling uses one status call instead of three. ([#4956](https://github.com/NSTA1/Orleans.Lattice/pull/4956), [#4960](https://github.com/NSTA1/Orleans.Lattice/pull/4960)) (`Orleans.Lattice`)
 
