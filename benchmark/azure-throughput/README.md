@@ -514,9 +514,10 @@ in a `finally` as well, so a failed cohort does not leave replicas billing. Last
 `[storage-metrics]` line per storage account the cohort used, and appends the same
 verdict block Layer 2 writes: `HEALTHY`, or `WEDGE` when the producer printed no DONE
 marker, no window was productive, the cumulative `ops` count stopped advancing for
-`-FreezeWedgeSec` seconds while work was in flight, `FINAL` reported unresolved entries,
-or a multi-account cohort's WAL placement was not confirmed. A saturated cohort that kept
-completing work stays `HEALTHY`, with its failures carried as data. `-DeferHarvest` returns
+`-FreezeWedgeSec` seconds while work was in flight, or a multi-account cohort's WAL
+placement was not confirmed. A saturated cohort that kept completing work stays
+`HEALTHY`, with its failures and any `FINAL` unresolved entries (its backlog when the
+in-flight-tail budget expired) carried as data; Layer 2 grades unresolved entries `WEDGE`. `-DeferHarvest` returns
 before that step and leaves it to `complete-cohort-aca.ps1 -PendingHarvestPath <path>`.
 
 | Parameter | Default | Meaning |
