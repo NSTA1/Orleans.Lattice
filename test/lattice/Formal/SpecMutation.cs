@@ -400,17 +400,32 @@ public static class SpecMutationCatalogue
             metadata[line[..separator].Trim()] = line[(separator + 1)..].Trim();
         }
 
+        // Between and after edits only blank lines and '#' comments may appear.
+        // Skipping anything else would let a stray REPLACE/END, or text meant
+        // for a block, vanish without a trace.
         while (index < lines.Length)
         {
-            if (!lines[index].StartsWith(FindMarker, StringComparison.Ordinal))
+            var line = lines[index];
+            if (line.StartsWith(FindMarker, StringComparison.Ordinal))
+            {
+                var find = Collect(lines, ref index, FindMarker, ReplaceMarker, name);
+                var replace = Collect(lines, ref index, ReplaceMarker, EndMarker, name);
+                edits.Add(new SpecEdit(find, replace));
+                index++;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#'))
             {
                 index++;
                 continue;
             }
 
-            var find = Collect(lines, ref index, FindMarker, ReplaceMarker, name);
-            var replace = Collect(lines, ref index, ReplaceMarker, EndMarker, name);
-            edits.Add(new SpecEdit(find, replace));
+            throw new InvalidOperationException(IsBlockMarker(line)
+                ? $"{name}.mutation line {index + 1} is the marker '{line}' outside any block; expected "
+                    + $"'{FindMarker}' to open the next edit."
+                : $"{name}.mutation line {index + 1} is text outside any block; expected '{FindMarker}', a "
+                    + $"blank line or a '#' comment: '{line}'");
         }
 
         if (edits.Count == 0)

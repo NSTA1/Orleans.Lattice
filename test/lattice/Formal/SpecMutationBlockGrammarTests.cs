@@ -2,8 +2,10 @@ namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
 /// The block grammar of a <c>.mutation</c> file: every <c>--- FIND</c> /
-/// <c>--- REPLACE</c> pair is closed by its own <c>--- END</c>, and a block
-/// marker met inside an open block is refused rather than collected as text.
+/// <c>--- REPLACE</c> pair is closed by its own <c>--- END</c>, a block
+/// marker met inside an open block is refused rather than collected as text,
+/// and between or after blocks only blank lines and <c>#</c> comments may
+/// appear - a stray marker or text there is refused rather than skipped.
 /// <para>
 /// The parser used to absorb it. A file with several blocks and one final
 /// <c>--- END</c> then parsed to a single edit whose replacement carried every
@@ -84,6 +86,49 @@ public sealed class SpecMutationBlockGrammarTests
                     refusal!.Message,
                     Does.StartWith($"TerminatorMutant.mutation line {line} is the marker '{marker}' inside a '{open}' block; expected '{close}' first."),
                     crlf ? "CRLF" : "LF");
+            }
+        });
+    }
+
+    /// <summary>
+    /// Between and after edits, blank lines, whitespace-only lines and
+    /// <c>#</c> comments separate blocks without changing them.
+    /// </summary>
+    [Test]
+    public void Blank_lines_and_comments_between_blocks_are_accepted([Values] bool crlf)
+    {
+        var mutation = Parse(
+            "--- FIND\nA == 1\n--- REPLACE\nA == 3\n--- END\n\n# second edit\n   \n"
+            + "--- FIND\nB == 2\n--- REPLACE\nB == 4\n--- END\n\n# done\n",
+            crlf);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mutation.Edits, Is.EqualTo(new[] { new SpecEdit("A == 1", "A == 3"), new SpecEdit("B == 2", "B == 4") }));
+            Assert.That(
+                mutation.Apply(BaseSpecification, BaseModuleName),
+                Is.EqualTo("---- MODULE TerminatorMutant ----\nA == 3\nB == 4\n====\n"));
+        });
+    }
+
+    /// <summary>
+    /// After a closed edit, anything other than the next <c>--- FIND</c>, a
+    /// blank line or a comment is refused rather than skipped: a stray
+    /// <c>--- END</c> or <c>--- REPLACE</c>, text that belonged in a block, and
+    /// trailing text after the last block.
+    /// </summary>
+    [TestCase("--- FIND\nA == 1\n--- REPLACE\nA == 3\n--- END\n--- END\n", "line 11 is the marker '--- END' outside any block; expected '--- FIND' to open the next edit.")]
+    [TestCase("--- FIND\nA == 1\n--- REPLACE\nA == 3\n--- END\n--- REPLACE\nB == 4\n--- END\n", "line 11 is the marker '--- REPLACE' outside any block; expected '--- FIND' to open the next edit.")]
+    [TestCase("--- FIND\nA == 1\n--- REPLACE\nA == 3\n--- END\nB == 2\n--- FIND\nB == 2\n--- REPLACE\nB == 4\n--- END\n", "line 11 is text outside any block; expected '--- FIND', a blank line or a '#' comment: 'B == 2'")]
+    [TestCase("--- FIND\nA == 1\n--- REPLACE\nA == 3\n--- END\n\ntrailing\n", "line 12 is text outside any block; expected '--- FIND', a blank line or a '#' comment: 'trailing'")]
+    public void Anything_else_after_a_closed_block_is_refused(string body, string expected)
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var crlf in new[] { false, true })
+            {
+                var refusal = Assert.Throws<InvalidOperationException>(() => Parse(body, crlf));
+                Assert.That(refusal!.Message, Is.EqualTo($"TerminatorMutant.mutation {expected}"), crlf ? "CRLF" : "LF");
             }
         });
     }
