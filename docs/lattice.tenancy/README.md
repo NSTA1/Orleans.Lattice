@@ -214,7 +214,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   same rule the snapshot applies; with
   [delegated tenant access administration](#delegated-tenant-access-administration)
   on, a member entry or a group entry counts too), and a cross-tenant crossing must also find an
-  active grant in the owning tenant's record. Both checks must pass on their own.
+  active grant in the owning tenant's record, and the owning tenant must itself be `Active`: a
+  suspended tenant's grants stay recorded but admit nothing until it is resumed. Both checks must pass on their own.
   So a removed admin, or a subject acting as a just-suspended or deleted tenant, is
   refused on that tenant's own trees as soon as the write commits, a revoked grant
   stops admitting access, and an added admin or an approved grant admits the next
