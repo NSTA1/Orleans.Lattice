@@ -46,7 +46,7 @@ parameters file. The folder also holds dot-sourced helper modules (`_run-cohort-
 of a Layer 3 cohort, see below) and parameterless self-tests of the grading logic, run with
 `pwsh -File` (`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`,
 `Test-Layer3UnseededRetry.ps1`, `Test-ProducerBoundReport.ps1`, `Test-PerformanceReportHarness.ps1`,
-`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`). The Layer 3 sweep itself is
+`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`, `Test-Layer3Chart.ps1`). The Layer 3 sweep itself is
 driven by `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 Between cohorts, `Set-AcaSiloCount` (in `aca-common.ps1`) does not return until every superseded
 silo revision has drained (`Wait-AcaRevisionsRetired`), so an old revision's replicas cannot

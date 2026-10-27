@@ -2948,6 +2948,25 @@ function Render-Layer3Chart {
 		}
 		return ,@($axis)
 	}
+	# The axis is every silo count any of $Rows measured; a row missing one of
+	# them is dropped, not allowed to shrink the axis for every other row (a
+	# 6- and 8-silo gap in one workload once cut the whole speedup chart off at
+	# 4 silos). Falls back to the shared intersection when no row covers the
+	# union, so a chart is still drawn.
+	$chartRows = {
+		param([object[]] $Rows)
+		$union = @($Rows | ForEach-Object { @($RowsAgg[$_.Label].Keys | ForEach-Object { [int]$_ }) } | Sort-Object -Unique)
+		$full = @($Rows | Where-Object { $have = @($RowsAgg[$_.Label].Keys | ForEach-Object { [int]$_ }); @($union | Where-Object { $_ -notin $have }).Count -eq 0 })
+		if ($full.Count -gt 0) {
+			return @{ Axis = $union; Rows = $full; Dropped = @($Rows | Where-Object { $_ -notin $full }) }
+		}
+		return @{ Axis = (& $sharedAxis $Rows); Rows = $Rows; Dropped = @() }
+	}
+	$droppedNote = {
+		param([object[]] $Dropped)
+		if ($Dropped.Count -eq 0) { return '' }
+		return ($nl + $nl + ('Not drawn, because it was not measured at every silo count above (its cells are in the table): {0}.' -f (($Dropped | ForEach-Object { $_.Label }) -join ', ')))
+	}
 
 	$available = @($Layer3Rows | Where-Object { $RowsAgg.ContainsKey($_.Label) })
 	if ($available.Count -eq 0) { return '_No multi-silo cells measured yet._' }
@@ -2964,24 +2983,27 @@ function Render-Layer3Chart {
 	# 1. Normalised speedup, every workload that has an N=1 anchor.
 	$anchored = @($measured | Where-Object { $RowsAgg[$_.Label].ContainsKey('1') })
 	if ($anchored.Count -gt 0) {
-		$axis = & $sharedAxis $anchored
+		$plan = & $chartRows $anchored
+		$axis = @($plan.Axis)
 		if ($axis.Count -ge 2) {
 			$series = @(@{ Name = 'ideal linear scaling (y = silos)'; Values = @($axis | ForEach-Object { $_ }) })
 			$maxVal = [double]($axis | Measure-Object -Maximum).Maximum
-			foreach ($r in $anchored) {
+			foreach ($r in $plan.Rows) {
 				$vals = @($axis | ForEach-Object { [double](Get-StateOr $RowsAgg[$r.Label]["$_"] 'speedup' 0) })
 				foreach ($v in $vals) { if ($v -gt $maxVal) { $maxVal = $v } }
 				$series += ,@{ Name = $r.Label; Values = $vals }
 			}
-			$blocks.Add((& $renderChart 'Speedup over 1 silo vs silo count' 'Speedup (x)' $axis $series ([math]::Ceiling($maxVal * 1.1))))
+			$blocks.Add((& $renderChart 'Speedup over 1 silo vs silo count' 'Speedup (x)' $axis $series ([math]::Ceiling($maxVal * 1.1))) + (& $droppedNote @($plan.Dropped)))
 		}
 	}
 
 	# 2. Absolute throughput, one chart per group.
 	foreach ($g in $Layer3ChartGroups) {
-		$rows = @($measured | Where-Object { (Get-StateOr $_ 'ChartGroup' 'writes') -eq $g.Id })
-		if ($rows.Count -eq 0) { continue }
-		$axis = & $sharedAxis $rows
+		$groupRows = @($measured | Where-Object { (Get-StateOr $_ 'ChartGroup' 'writes') -eq $g.Id })
+		if ($groupRows.Count -eq 0) { continue }
+		$plan = & $chartRows $groupRows
+		$rows = @($plan.Rows)
+		$axis = @($plan.Axis)
 		if ($axis.Count -lt 2) {
 			$blocks.Add(('_{0}: needs at least two silo counts measured for every workload in the group; see the table below._' -f $g.Title))
 			continue
@@ -2994,7 +3016,7 @@ function Render-Layer3Chart {
 		foreach ($r in $rows) {
 			$series += ,@{ Name = $r.Label; Values = @($axis | ForEach-Object { [math]::Round($RowsAgg[$r.Label]["$_"].sustainedThroughput / $div, 2) }) }
 		}
-		$blocks.Add((& $renderChart $g.Title $yLabel $axis $series ([math]::Ceiling(($peak / $div) * 1.1))))
+		$blocks.Add((& $renderChart $g.Title $yLabel $axis $series ([math]::Ceiling(($peak / $div) * 1.1))) + (& $droppedNote @($plan.Dropped)))
 	}
 
 	return ($blocks -join ($nl + $nl))
