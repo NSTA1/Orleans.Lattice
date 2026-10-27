@@ -82,6 +82,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Core - Tag-index repair and mirror recovery.** A transient repair failure no longer advances the repair cursor past a tree, and a key-major mirror left behind by a partial orphan deletion is recovered on the next reconcile. ([#4976](https://github.com/NSTA1/Orleans.Lattice/issues/4976), [#4977](https://github.com/NSTA1/Orleans.Lattice/issues/4977)) (`Orleans.Lattice`)
+- **Replication - Receiver feedback while pipelining.** Pipelined shipping now honours receiver shrink and pause feedback rather than discarding it. ([#4998](https://github.com/NSTA1/Orleans.Lattice/issues/4998)) (`Orleans.Lattice.Replication`)
+- **Indexing - Vector-count snapshot age.** A background refresh no longer replaces a newer vector-count snapshot with an older one. ([#4981](https://github.com/NSTA1/Orleans.Lattice/issues/4981)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Explorer - Tag-index workspaces.** Catalogue, coverage, tags and paged members ignore superseded replies. Retrying reloads the selection, stale page errors clear, and reconcile confirmations and late results stay with their workspace. ([#5090](https://github.com/NSTA1/Orleans.Lattice/pull/5090)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Replication submission ownership.** Pending validation prevents duplicate enables, edited merge modes require a fresh confirmation, and late enable or disable replies cannot post messages or reload a page that has been left. ([#5072](https://github.com/NSTA1/Orleans.Lattice/issues/5072)) (`Orleans.Lattice.Explorer.UI`)

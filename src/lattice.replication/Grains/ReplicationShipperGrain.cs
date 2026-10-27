@@ -1986,6 +1986,10 @@ internal sealed partial class ReplicationShipperGrain(
         bool[] failedAdvanced = Array.Empty<bool>();
         var failedSourceHlc = HybridLogicalClock.Zero;
         var failedBatchId = 0L;
+        var receiverFeedbackObserved = false;
+
+        void ObserveReceiverFeedback() =>
+            receiverFeedbackObserved |= _receiverSuggestedBatchSize is > 0 || _nextRetryAtUtc > DateTime.UtcNow;
 
         // Held saga terminals (#4480) release on acknowledgements. Before the
         // tick ends on a drained WAL, settle the window and fold the filtered
@@ -2004,6 +2008,7 @@ internal sealed partial class ReplicationShipperGrain(
                     failed = true;
                     return false;
                 }
+                ObserveReceiverFeedback();
             }
 
             await FoldFilteredOnlyConsumedCursorsAsync(options, cancellationToken);
@@ -2014,6 +2019,15 @@ internal sealed partial class ReplicationShipperGrain(
         {
             while (true)
             {
+                // Feedback cannot recall the existing window, but must stop
+                // replenishing it. Remaining acknowledgements still fold FIFO.
+                if (receiverFeedbackObserved
+                    || (_receiverSuggestedBatchSize is { } suggested && suggested > 0)
+                    || _nextRetryAtUtc > DateTime.UtcNow)
+                {
+                    break;
+                }
+
                 try
                 {
                     await MergeOneBatchAsync(options, maxPerBatch, cancellationToken);
@@ -2082,6 +2096,7 @@ internal sealed partial class ReplicationShipperGrain(
                             failed = true;
                             break;
                         }
+                        ObserveReceiverFeedback();
                     }
 
                     // A short batch (pre-elision) means the WAL is exhausted
@@ -2166,6 +2181,7 @@ internal sealed partial class ReplicationShipperGrain(
                         failed = true;
                         break;
                     }
+                    ObserveReceiverFeedback();
                 }
 
                 // A short batch means the WAL is exhausted for this
@@ -2289,7 +2305,10 @@ internal sealed partial class ReplicationShipperGrain(
             await AdvanceCursorPipelinedAsync(
                 batch.SourceHlc, batch.MaxReadSeqSnapshot, batch.AdvancedSnapshot, options, cancellationToken);
             state.State.ConsecutiveFailures = 0;
-            _nextRetryAtUtc = DateTime.MinValue;
+            if (_nextRetryAtUtc <= DateTime.UtcNow)
+            {
+                _nextRetryAtUtc = DateTime.MinValue;
+            }
             _peerStats.RecordSuccess(_treeName, _peerClusterId);
             _lastSuccessfulContactUtc = DateTime.UtcNow;
             return true;
@@ -2337,7 +2356,12 @@ internal sealed partial class ReplicationShipperGrain(
             advancedTo, batch.MaxReadSeqSnapshot, batch.AdvancedSnapshot, options, cancellationToken);
 
         state.State.ConsecutiveFailures = 0;
-        _nextRetryAtUtc = DateTime.MinValue;
+        // A preceding ack in this window may have requested a pause. Success
+        // clears failure backoff, not an unexpired receiver deadline.
+        if (_nextRetryAtUtc <= DateTime.UtcNow)
+        {
+            _nextRetryAtUtc = DateTime.MinValue;
+        }
         _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
