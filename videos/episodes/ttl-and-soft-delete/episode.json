@@ -1,0 +1,16 @@
+{
+  "path": "build",
+  "order": 5,
+  "items": [
+    "B5"
+  ],
+  "poster": {
+    "scene": "ttl-and-soft-delete",
+    "beat": 0,
+    "offset": 3.5
+  },
+  "published": {
+    "cut": "391a0143a271",
+    "bytes": 5905544
+  }
+}
