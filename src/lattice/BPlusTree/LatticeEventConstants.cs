@@ -272,7 +272,9 @@ public static class LatticeEventConstants
     /// subsequent terminal <see cref="MutationKind.TxCommit"/> or
     /// <see cref="MutationKind.TxAbort"/> mutation flips or drops the
     /// pending entries on the leaf. Internal - set through
-    /// <see cref="LatticePreparedContext"/>.
+    /// <see cref="LatticePreparedContext"/>, and stripped from external clients
+    /// (the facade skips admission control and the replicated-tree shape guard
+    /// under it).
     /// </summary>
     internal const string PreparedRequestContextKey = "ol.prep";
 
@@ -376,7 +378,8 @@ public static class LatticeEventConstants
     /// scan applies the same registry decision view (linearizable scan
     /// over the registry's <c>InFlight</c>→<c>Committed</c>
     /// transition). Internal - set through
-    /// <see cref="LatticeRegistrySnapshotContext"/>.
+    /// <see cref="LatticeRegistrySnapshotContext"/>, and stripped from external
+    /// clients.
     /// </summary>
     internal const string RegistrySnapshotRequestContextKey = "ol.txregsnap";
 
@@ -386,7 +389,8 @@ public static class LatticeEventConstants
     /// it a leaf that would have to resolve a prepared key throws
     /// <see cref="LatticeTransactionOutcomeUnavailableException"/> instead of
     /// resolving the saga on its own. Internal - set through
-    /// <see cref="LatticeRegistrySnapshotContext"/>.
+    /// <see cref="LatticeRegistrySnapshotContext"/>, and stripped from external
+    /// clients.
     /// </summary>
     internal const string RegistrySnapshotUnavailableRequestContextKey = "ol.txregsnapna";
 

@@ -23,14 +23,15 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
-        if (!IsAppsMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsAppsMethod(method))
             return await continuation(request, context).ConfigureAwait(false);
 
-        if (context.Method == LatticeAppsGrpcMethods.ServicePrefix + nameof(LatticeAppsGrpcMethods.GetAuthScheme)
+        if (method == LatticeAppsGrpcMethods.ServicePrefix + nameof(LatticeAppsGrpcMethods.GetAuthScheme)
             && request is AuthSchemeAdvertisementRequest)
             return await continuation(request, context).ConfigureAwait(false);
 
-        var (operation, slug) = DescribeCall(context.Method, request);
+        var (operation, slug) = DescribeCall(method, request);
         if (operation == LatticeAppsApiOperation.Unknown)
             throw Denied(context);
 
@@ -62,7 +63,7 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
         ServerStreamingServerMethod<TRequest, TResponse> continuation)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (IsAppsMethod(context.Method))
+        if (IsAppsMethod(GrpcRoutedMethod.Resolve(context)))
             throw Denied(context);
         return base.ServerStreamingServerHandler(request, responseStream, context, continuation);
     }
@@ -72,7 +73,7 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
         ClientStreamingServerMethod<TRequest, TResponse> continuation)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (IsAppsMethod(context.Method))
+        if (IsAppsMethod(GrpcRoutedMethod.Resolve(context)))
             throw Denied(context);
         return base.ClientStreamingServerHandler(requestStream, context, continuation);
     }
@@ -82,7 +83,7 @@ internal sealed class LatticeAppsApiGrpcAuthInterceptor(
         ServerCallContext context, DuplexStreamingServerMethod<TRequest, TResponse> continuation)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (IsAppsMethod(context.Method))
+        if (IsAppsMethod(GrpcRoutedMethod.Resolve(context)))
             throw Denied(context);
         return base.DuplexStreamingServerHandler(requestStream, responseStream, context, continuation);
     }

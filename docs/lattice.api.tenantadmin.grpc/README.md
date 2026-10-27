@@ -344,8 +344,11 @@ The public seams a host implements or substitutes to open this surface up:
 | `AuthSchemeAdvertisement` | record | The `GetAuthScheme` response envelope carrying the descriptor list. |
 
 The interceptor itself is internal. It runs the authorizer and scopes enforcement to
-this service by matching on the service-name prefix, so unrelated gRPC services hosted
-in the same ASP.NET Core pipeline are unaffected. The credential bridging happens
+this service by the method each call was routed to, read from the routed endpoint rather
+than from the raw request path (which ASP.NET Core routing matches case-insensitively,
+so a re-cased path is governed exactly like the canonical one), so unrelated gRPC
+services hosted in the same ASP.NET Core pipeline are unaffected. The credential
+bridging happens
 after it, in the service: each RPC lifts the caller credential (through
 `ILatticeTenantAdminApiCredentialBridge`) and the asserted active tenant onto the
 ambient context for that call only, so the facade's fail-closed gate sees the caller's

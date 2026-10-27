@@ -245,4 +245,55 @@ public class MembershipResolutionCacheTests
         Assert.That(warm, Is.EqualTo(subject));
         Assert.That(calls, Is.EqualTo(1), "the newly admitted entry must be served warm");
     }
+
+    [Test]
+    public async Task ResolveAsync_a_flush_between_the_flush_check_and_the_store_still_evicts_the_entry()
+    {
+        // The resolution passed its flush check, then a membership change flushed
+        // the cache before the entry was stored. Storing it anyway kept a subject
+        // resolved under the old membership for a whole TTL after the flush.
+        var (cache, _) = CreateCache();
+        var calls = 0;
+        var subject = new LatticeSubject("alice", new[] { "revoked-group" });
+        cache.BeforeStoreForTesting = cache.Clear;
+
+        _ = await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
+        cache.BeforeStoreForTesting = null;
+        _ = await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
+
+        Assert.That(calls, Is.EqualTo(2), "the flushed resolution must not be served warm");
+    }
+
+    [Test]
+    public async Task A_membership_options_change_flushes_the_cache()
+    {
+        var monitor = Substitute.For<IOptionsMonitor<LatticeMembershipOptions>>();
+        monitor.CurrentValue.Returns(new LatticeMembershipOptions());
+        Action<LatticeMembershipOptions, string?>? listener = null;
+        monitor.OnChange(Arg.Do<Action<LatticeMembershipOptions, string?>>(l => listener = l))
+            .Returns(Substitute.For<IDisposable>());
+        using var cache = new MembershipResolutionCache(new ManualTimeProvider(Start), monitor);
+        var calls = 0;
+        var subject = new LatticeSubject("alice", new[] { "token-asserted" });
+
+        _ = await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
+        listener!(new LatticeMembershipOptions { GroupMergeMode = SubjectGroupMergeMode.DirectoryOnly }, Options.DefaultName);
+        _ = await cache.ResolveAsync(MembershipCacheKey.ForToken("tok"), Resolver(subject, null, () => calls++), default);
+
+        Assert.That(calls, Is.EqualTo(2), "a subject mapped under the old merge rules must be re-resolved");
+    }
+
+    [Test]
+    public void Dispose_releases_the_option_change_subscription_once()
+    {
+        var monitor = Substitute.For<IOptionsMonitor<LatticeMembershipOptions>>();
+        var registration = Substitute.For<IDisposable>();
+        monitor.OnChange(Arg.Any<Action<LatticeMembershipOptions, string?>>()).Returns(registration);
+        var cache = new MembershipResolutionCache(TimeProvider.System, monitor);
+
+        cache.Dispose();
+        cache.Dispose();
+
+        registration.Received(1).Dispose();
+    }
 }

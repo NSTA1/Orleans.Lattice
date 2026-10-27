@@ -517,6 +517,12 @@ Get-ChildItem $Staging -Recurse -Filter *.md | ForEach-Object {
                     return "]($($target.TrimEnd('/'))/README.md$anchor)"
                 }
             }
+            elseif ($item.Extension -eq '.svg' -and (ConvertTo-SiteRelative $item.FullName $Staging) -like 'docs/*') {
+                # docfx.json publishes docs/**/*.svg as resources (the
+                # performance charts), so the image stays on the site; a
+                # github.com blob URL is an HTML page and would not render.
+                return $match.Value
+            }
             elseif ($item.Extension -ne '.md') {
                 # A staged non-markdown file (LICENSE) has no page either.
                 $script:rewritten++

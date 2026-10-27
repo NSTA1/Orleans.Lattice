@@ -114,6 +114,13 @@
     <ProjectReference Include="..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
     <ProjectReference Include="..\..\src\lattice.schema\Orleans.Lattice.Schema.csproj" />
     <ProjectReference Include="..\..\src\lattice.scaling\Orleans.Lattice.Scaling.csproj" />
+    <!--
+      Pulled in solely so docs/videos/*.md companion pages can show the file
+      WAL registration (AddFileWalStorage) as a `csharp verify` snippet, on the
+      same DocsSnippetCompilationTests reference-graph mechanism as above.
+      docs/lattice.storage.file itself stays owned by its package's fixture.
+    -->
+    <ProjectReference Include="..\..\src\lattice.storage.file\Orleans.Lattice.Storage.File.csproj" />
   </ItemGroup>
 
 </Project>

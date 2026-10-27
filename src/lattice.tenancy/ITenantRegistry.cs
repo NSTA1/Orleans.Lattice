@@ -57,11 +57,14 @@ public interface ITenantRegistry
 
     /// <summary>
     /// Removes the record for a tenant from the registry. Removing an unknown
-    /// tenant is a no-op.
+    /// tenant is a no-op. Every cross-tenant grant another tenant issued to the
+    /// removed tenant is removed with it, so a tenant later created under the same
+    /// id inherits none of them.
     /// </summary>
     /// <param name="tenant">The tenant to remove. Must be an initialised (parsed) tenant id.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns><c>true</c> when a record was removed; <c>false</c> when none existed.</returns>
     /// <exception cref="ArgumentException"><paramref name="tenant"/> is the uninitialised <c>default(TenantId)</c>.</exception>
+    /// <exception cref="TenantRegistryConcurrencyException">Competing writers kept advancing the record of a tenant that issued a grant to <paramref name="tenant"/>, so that grant could not be removed; the record of <paramref name="tenant"/> is left in place and a retry completes the delete.</exception>
     Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default);
 }

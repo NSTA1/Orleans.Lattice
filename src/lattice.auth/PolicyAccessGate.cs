@@ -45,8 +45,9 @@ internal sealed class PolicyAccessGate(
         // Root-of-trust: a bootstrap administrator is always Admin on every tree
         // and operation, so a policy misconfiguration can never lock every
         // operator out of the authorization tree itself. Checked before the
-        // engine so it holds even against a cold snapshot.
-        if (IsBootstrapAdministrator(request.Subject.SubjectId))
+        // engine so it holds even against a cold snapshot. An anonymous caller is
+        // never one, whatever the configured set holds.
+        if (!request.Subject.IsAnonymous && IsBootstrapAdministrator(request.Subject.SubjectId))
         {
             var allow = LatticeAccessDecision.Allow();
             observer.Observe(in request, in allow, default, maintainer.CurrentEpoch, start);
@@ -65,9 +66,11 @@ internal sealed class PolicyAccessGate(
         // every tenant's admin subjects, quotas, placement, and grants - the
         // app-registry system-data namespace (sys-app-*,
         // LatticeConstants.AppRegistryTreePrefix) holds every installed app's
-        // capability ceiling, consent record, and role-to-group bindings (the two
-        // registry namespaces are tested together by
-        // AuthConstants.IsControlPlaneRegistryTree and treated identically), and the
+        // capability ceiling, consent record, and role-to-group bindings, and the
+        // membership store (sys-membership-*) holds every group and membership edge,
+        // every tenant's tenant groups included (the registry namespaces and the
+        // membership store are tested together by AuthConstants.IsControlPlaneDataTree
+        // and treated identically), and the
         // all-trees sentinel ("*") is only ever the target of a scopeless
         // cluster-wide capability request such as Telemetry (issue #1795), never of a
         // data-plane read or write, which always names a real tree. All four are
@@ -90,8 +93,8 @@ internal sealed class PolicyAccessGate(
         // namespace it is an ordinary Admin grant on the exact tenant-scope id
         // (authorable because the id is not sys-auth-*), so a delegated per-tenant admin
         // is honoured only for its own tenant and can never inherit Allow for another's;
-        // for the tenant registry and the app registry it is an explicit rule an
-        // operator deliberately scoped at the registry tree; and for the sentinel it is the cluster-wide grant
+        // for the tenant registry, the app registry and the membership store it is an
+        // explicit rule an operator deliberately scoped at the tree; and for the sentinel it is the cluster-wide grant
         // LatticeScope.ClusterWide() authors, which lands in the "*" bucket and is
         // resolved against it directly. A cluster-wide all-trees (Tree:*) wildcard never
         // satisfies the first three, because the evaluator excludes those namespaces
@@ -99,7 +102,7 @@ internal sealed class PolicyAccessGate(
         if (LatticeAuthReservedTrees.IsReserved(request.TreeId)
             || IsClusterWideCapabilityScope(request.TreeId)
             || IsTenantAdminCapabilityNamespace(request.TreeId)
-            || AuthConstants.IsControlPlaneRegistryTree(request.TreeId))
+            || AuthConstants.IsControlPlaneDataTree(request.TreeId))
         {
             var controlPlane = EvaluateControlPlane(in request);
             observer.Observe(in request, in controlPlane, default, maintainer.CurrentEpoch, start);
@@ -358,8 +361,8 @@ internal sealed class PolicyAccessGate(
 
         // Control-plane isolation: the reserved authorization namespace, the
         // tenant-administration capability namespace, the tenant-registry and
-        // app-registry system-data namespaces (sys-tenant-*, sys-app-*), and the
-        // all-trees capability sentinel
+        // app-registry system-data namespaces (sys-tenant-*, sys-app-*), the
+        // membership store (sys-membership-*), and the all-trees capability sentinel
         // are never visible to a non-bootstrap caller by default effect - only an
         // explicit matched allow grant makes them so. Mirror the enforcement path so a
         // caller that cannot administer (or, for the registry, read) the namespace also
@@ -370,7 +373,7 @@ internal sealed class PolicyAccessGate(
         if (LatticeAuthReservedTrees.IsReserved(treeId)
             || IsClusterWideCapabilityScope(treeId)
             || IsTenantAdminCapabilityNamespace(treeId)
-            || AuthConstants.IsControlPlaneRegistryTree(treeId))
+            || AuthConstants.IsControlPlaneDataTree(treeId))
         {
             var reserved = engine.Evaluate(subject, treeId, operation, key: null, rangeStart: null, rangeEnd: null, out var match);
             return new ValueTask<bool>(match.Matched && match.Effect == LatticeEffect.Allow && reserved.Allowed);

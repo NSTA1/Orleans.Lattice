@@ -161,6 +161,17 @@
 	UNSEEDED result triggers an immediate re-run). Harvests are joined at the
 	end of each cell, before its checkpoint.
 
+.PARAMETER Layer3CarryVehiclesPerSilo
+	Layer 3 only. Starting per-silo load for named workloads, as
+	'<workloadMode>=<vehiclesPerSilo>[,...]' (for example
+	'get-many=128000,get-point=16000'). Seeds the load each workload carries
+	from smaller silo counts to larger ones, exactly as a resumed cell does,
+	so it only ever raises a workload's start above its default rung. Use it
+	when a sweep's first silo count is not the workload's smallest - most
+	often a curve split across rigs (-Layer3Rigs), whose later rigs would
+	otherwise climb the escalation ladder again from the default and could
+	settle on a different per-silo load. Passed to every rig's sweep.
+
 .PARAMETER Layer3Rigs
 	Layer 3 only. Run the sweep on this many identical rigs in parallel
 	(1-8, default 1). The report splits the workloads between the rigs
@@ -336,6 +347,10 @@ param(
 	# its result (see Invoke-Layer3Cohorts). Pinned to the cohort's execution
 	# and silo revision, so it changes nothing about what is measured.
 	[switch] $Layer3OverlapHarvest,
+	# Layer 3 only. '<workloadMode>=<vehiclesPerSilo>[,...]': seeds the per-silo
+	# load each named workload carries to larger silo counts, as resumed cells
+	# do (see ConvertFrom-Layer3CarrySpec).
+	[string] $Layer3CarryVehiclesPerSilo = '',
 	# Layer 3 only. Run the sweep on this many identical rigs in parallel. The
 	# report itself splits the workloads between the rigs - every silo count
 	# of a workload on one rig, so each curve and its escalation carry-over
@@ -866,8 +881,27 @@ function Get-MainSha {
 	return $null
 }
 
-function Get-StateOr {
+function Get-StateMeasuredDate {
 	<#
+	.SYNOPSIS
+		The UTC date a state's cells were measured: its endedUtc, else its
+		startedUtc, else today. A -DryRun replay re-renders an old run, so the
+		render time must never stand in for the measurement time.
+	#>
+	[CmdletBinding()] param([Parameter(Mandatory)][System.Collections.IDictionary] $State)
+	foreach ($key in 'endedUtc', 'startedUtc') {
+		$v = Get-StateOr $State $key $null
+		if ($null -eq $v -or "$v" -eq '') { continue }
+		if ($v -is [datetime]) { return $v.ToUniversalTime().ToString('yyyy-MM-dd') }
+		$parsed = [datetime]::MinValue
+		if ([datetime]::TryParse("$v", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) {
+			return $parsed.ToUniversalTime().ToString('yyyy-MM-dd')
+		}
+	}
+	return (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+}
+
+function Get-StateOr {	<#
 	.SYNOPSIS
 		Strict-mode-safe lookup of a state hashtable key with a default value.
 	.DESCRIPTION
@@ -1433,6 +1467,36 @@ function Invoke-Layer2Cohorts {
 # Layer 3 cohorts (multi-silo ACA cluster; one cell per silo count x workload)
 # ────────────────────────────────────────────────────────────────────────────
 
+function ConvertFrom-Layer3CarrySpec {
+	<#
+	.SYNOPSIS
+		Parse -Layer3CarryVehiclesPerSilo ('<workloadMode>=<vehiclesPerSilo>[,...]')
+		into a hashtable keyed by workload mode.
+	.DESCRIPTION
+		Throws on an unknown workload mode, a non-positive or non-integer
+		count, or a mode named twice, so a typo fails before anything bills
+		instead of silently leaving a workload at its default rung. An empty
+		spec is an empty table.
+	#>
+	[CmdletBinding()] param([AllowEmptyString()][AllowNull()][string] $Spec)
+	$result = @{}
+	if ([string]::IsNullOrWhiteSpace($Spec)) { return $result }
+	$known = @($Layer3Rows | ForEach-Object { $_.WorkloadMode })
+	foreach ($part in $Spec.Split(',')) {
+		$pair = $part.Trim()
+		if (-not $pair) { continue }
+		$m = [regex]::Match($pair, '^([A-Za-z0-9-]+)=(\d+)$')
+		if (-not $m.Success) { throw "-Layer3CarryVehiclesPerSilo: '$pair' is not '<workloadMode>=<vehiclesPerSilo>'." }
+		$mode = $m.Groups[1].Value
+		$veh = [int]$m.Groups[2].Value
+		if ($mode -notin $known) { throw "-Layer3CarryVehiclesPerSilo: unknown workload mode '$mode' (known: $($known -join ', '))." }
+		if ($veh -le 0) { throw "-Layer3CarryVehiclesPerSilo: '$mode' needs a positive vehicle count." }
+		if ($result.ContainsKey($mode)) { throw "-Layer3CarryVehiclesPerSilo: '$mode' is named twice." }
+		$result[$mode] = $veh
+	}
+	return $result
+}
+
 function Invoke-Layer3Cohorts {
 	<#
 	.SYNOPSIS
@@ -1501,6 +1565,10 @@ function Invoke-Layer3Cohorts {
 		# keyed [mode]["silos"]. A cell already holding $N cohorts is carried
 		# over and skipped; see -Resume.
 		[hashtable] $ExistingCells = @{},
+		# Starting carried per-silo vehicles, keyed by workload mode
+		# (ConvertFrom-Layer3CarrySpec). Merged with the resumed cells' carry,
+		# taking the larger, so it never lowers a workload's start.
+		[hashtable] $SeedVehiclesPerSilo = @{},
 		[scriptblock] $OnCellComplete,
 		# Storage accounts each cohort's WAL is spread across (run-cohort-aca.ps1 -WalAccounts).
 		[ValidateRange(1, 8)][int] $WalAccounts = 1,
@@ -1539,6 +1607,9 @@ function Invoke-Layer3Cohorts {
 	# N+1 and saves re-climbing the escalation ladder at every count. Seeded
 	# from resumed cells so a resumed sweep does not restart low.
 	$carryVehiclesPerSilo = @{}
+	# $SeedVehiclesPerSilo is deliberately not named $CarryVehiclesPerSilo:
+	# PowerShell variables are case-insensitive, so it would be this table.
+	foreach ($mode in @($SeedVehiclesPerSilo.Keys)) { $carryVehiclesPerSilo[$mode] = [int]$SeedVehiclesPerSilo[$mode] }
 	foreach ($mode in @($cells.Keys)) {
 		foreach ($k in @($cells[$mode].Keys)) {
 			foreach ($c in @($cells[$mode][$k])) {
@@ -1572,10 +1643,21 @@ function Invoke-Layer3Cohorts {
 			# The top-up runs at the recorded cohorts' rung so a cell never
 			# mixes offered loads.
 			$firstCohort = 1
+			# Tags are c<n>, and a cohort that failed leaves a gap (c2, c3 when c1
+			# threw), so a top-up numbered from the count would reuse c3: it
+			# deletes that log and the cell then holds the new cohort twice.
+			# New tags continue after the highest one recorded.
+			$tagShift = 0
 			if ($cells[$mode].ContainsKey("$silos")) {
 				foreach ($existing in @($cells[$mode]["$silos"])) { if ($existing) { $cohortList.Add($existing) } }
 				$firstCohort = $cohortList.Count + 1
 				if ($cohortList.Count -gt 0) { $vehPerSilo = [int]([int](Get-StateOr $cohortList[0] 'rungVehicles' ($vehPerSilo * $silos)) / $silos) }
+				$maxTag = 0
+				foreach ($existing in $cohortList) {
+					$m = [regex]::Match([string](Get-StateOr $existing 'cohortName' ''), '\.c(\d+)$')
+					if ($m.Success -and [int]$m.Groups[1].Value -gt $maxTag) { $maxTag = [int]$m.Groups[1].Value }
+				}
+				$tagShift = [Math]::Max(0, $maxTag - $cohortList.Count)
 			}
 			Write-Host "[layer3] silos=$silos mode=$mode rung=$($vehPerSilo * $silos)veh/$($perSilo.TickHz)Hz/$($perSilo.DurationSec)s (= $vehPerSilo veh/silo) flushConcurrency=$fcPerSilo/silo cohorts=$cellN" -ForegroundColor Cyan
 
@@ -1595,7 +1677,7 @@ function Invoke-Layer3Cohorts {
 				if ($deferThis) {
 					$vehicles = $vehPerSilo * $silos
 					$offered = $vehicles * $perSilo.TickHz
-					$cohortTag = "c$i"
+					$cohortTag = "c$($i + $tagShift)"
 					$expectedLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.log"
 					$pendingPath = "$expectedLog.pending.json"
 					foreach ($stale in @($expectedLog, $pendingPath)) { if (Test-Path $stale) { Remove-Item $stale -Force } }
@@ -1656,7 +1738,7 @@ function Invoke-Layer3Cohorts {
 					# from the pipeline. The log path is fully determined by
 					# (prefix, silos, mode, tag), so derive it instead of fishing
 					# for it.
-					$cohortTag = "c$i"
+					$cohortTag = "c$($i + $tagShift)"
 					$expectedLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.log"
 					if (Test-Path $expectedLog) { Remove-Item $expectedLog -Force }
 					try {
@@ -1843,8 +1925,13 @@ function Aggregate-Layer3Cells {
 			# silently mixing two definitions.
 			$throughputs = @($healthy | ForEach-Object { $_.finalThroughput } | Where-Object { $_ -gt 0 })
 			$throughputBasis = 'final'
+			# The failed-key count of each cohort the median uses, in cohort
+			# order, so the grid shows the failures the prose discusses rather
+			# than leaving them in the logs.
+			$used = @($healthy | Where-Object { [double](Get-StateOr $_ 'finalThroughput' 0) -gt 0 })
 			if ($throughputs.Count -eq 0) {
 				$throughputs = @($healthy | ForEach-Object { $_.steadyMean } | Where-Object { $_ -gt 0 })
+				$used = @($healthy | Where-Object { [double](Get-StateOr $_ 'steadyMean' 0) -gt 0 })
 				$throughputBasis = 'steady-mean (fallback)'
 				if ($throughputs.Count -gt 0) {
 					Write-Warning "[aggregate-l3] mode=$mode silos=${key}: no FINAL throughput parsed; falling back to the per-second steady-state mean, which batch retirement quantises on a batched write path."
@@ -1876,6 +1963,7 @@ function Aggregate-Layer3Cells {
 				perCallP50Ms        = if ($p50s.Count -gt 0) { [math]::Round((Get-Median $p50s), 2) } else { $null }
 				perCallP99Ms        = if ($p99s.Count -gt 0) { [math]::Round((Get-Median $p99s), 2) } else { $null }
 				cohortN             = $throughputs.Count
+				failedPerCohort     = @($used | ForEach-Object { [long](Get-StateOr $_ 'failed' 0) })
 				offeredKeysPerSec   = [int](($healthy | Select-Object -First 1).rungVehicles) * [int](($healthy | Select-Object -First 1).rungTickHz)
 				flushConcurrencyPerSilo = (Get-StateOr ($healthy | Select-Object -First 1) 'flushConcurrencyPerSilo' 8)
 				# Every published cohort still reached the offered load after
@@ -1919,22 +2007,30 @@ function Get-Layer3CellStorage {
 		storage-side figures: the median of each across the cohorts that
 		carry one, the same reduction as the throughput column.
 	.OUTPUTS
-		Hashtable (throttleRatio, peakAccountTps, serverLatencyMs,
-		e2eLatencyMs, storageN), or $null when no cohort carries storage
-		metrics - never zeros, which would read as an idle account.
+		Hashtable (throttleRatio, throttleRatioMax, timeouts, timeoutRatio,
+		peakTps, peakAccountTps, serverLatencyMs, e2eLatencyMs, storageN), or $null
+		when no cohort carries storage metrics - never zeros, which would
+		read as an idle account. throttleRatioMax is the worst cohort, so a
+		single throttled cohort is never hidden by the median.
 	#>
 	[CmdletBinding()] param([object[]] $Cohorts)
 	$summaries = @(@($Cohorts) | ForEach-Object { Get-StateOr $_ 'storage' $null } | Where-Object { $null -ne $_ })
 	if ($summaries.Count -eq 0) { return $null }
 	$medianOf = {
-		param($key)
+		param($key, [int] $digits = 4)
 		$vals = @($summaries | ForEach-Object { Get-StateOr $_ $key $null } | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ })
 		if ($vals.Count -eq 0) { return $null }
-		return [math]::Round((Get-Median $vals), 4)
+		return [math]::Round((Get-Median $vals), $digits)
 	}
 	return @{
 		storageN        = $summaries.Count
 		throttleRatio   = & $medianOf 'ThrottleRatio'
+		throttleRatioMax = $(
+			$t = @($summaries | ForEach-Object { Get-StateOr $_ 'ThrottleRatio' $null } | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ })
+			if ($t.Count -eq 0) { $null } else { [double](($t | Measure-Object -Maximum).Maximum) })
+		timeouts        = & $medianOf 'Timeouts'
+		timeoutRatio    = & $medianOf 'TimeoutRatio' 6
+		peakTps         = & $medianOf 'PeakTps'
 		peakAccountTps  = & $medianOf 'PeakAccountTps'
 		serverLatencyMs = & $medianOf 'ServerLatencyMs'
 		e2eLatencyMs    = & $medianOf 'E2ELatencyMs'
@@ -2657,7 +2753,7 @@ function New-MetaHeaderForLayer1 {
 		$Existing['cohortN'] # preserved
 	} else { '0' }
 	$rowsDate = if ($RowsAgg.Count -gt 0) {
-		(Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+		Get-StateMeasuredDate -State $State
 	} elseif ($Existing.ContainsKey('rowsMeasured')) {
 		$Existing['rowsMeasured']
 	} else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
@@ -2696,7 +2792,7 @@ function New-MetaHeaderForLayer2 {
 		$Existing['cohortN'] # preserved
 	} else { '0' }
 	$rowsDate = if ($RowsAgg.Count -gt 0) {
-		(Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+		Get-StateMeasuredDate -State $State
 	} elseif ($Existing.ContainsKey('rowsMeasured')) {
 		$Existing['rowsMeasured']
 	} else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
@@ -2718,7 +2814,7 @@ function New-MetaHeaderForLayer2 {
 		$meta['cohortN']            = $cohortN
 		$meta['rowsMeasured']       = $rowsDate
 		$meta['gitSha']             = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
-		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples from the first non-zero sample at t>=15s to the last non-zero sample, stalled zero-rate seconds inside that window included; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Cohorts the harness graded WEDGE/FAILED are excluded from aggregation so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at a reduced per-row offered load (annotated in its operation label) chosen to keep the single Azure Tables account below saturation, so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile merges the silo''s 10-second reporter windows that lie inside the cohort''s steady-state window, weighted by call count (each window''s quantiles come from a 4096-sample reservoir); the cell is the median of those per-cohort quantiles. Every workload mode reports the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
+		$meta['methodology']        = 'Throughput cell = median across N HEALTHY cohorts of the steady-state mean (silo per-second rate samples from the first non-zero sample at t>=15s to the last non-zero sample, stalled zero-rate seconds inside that window included; see benchmark/azure-throughput/throughput.md section 27.1). Per-call p50/p75/p90/p99 cells = median across N HEALTHY cohorts of the per-mode preferred [phaseA] duration instrument (set.duration for set-point and set-point-mv, set_many.duration for set-many, saga.broadcast.duration for set-many-atomic, get.duration for get-point, get_many.duration for get-many). Only cohorts the harness graded HEALTHY are aggregated (DEGRADED, FAILED and WEDGE are excluded) so a non-representative overload tail cannot poison a cell. The rung shown above is the read-workload offered load; every write workload is driven at its own lower, fixed offered load (annotated in its operation label), chosen so each cohort reports a sustained, reproducible key-write rate rather than an overload tail. Each per-cohort quantile merges the silo''s 10-second reporter windows that lie inside the cohort''s steady-state window, weighted by call count (each window''s quantiles come from a 4096-sample reservoir); the cell is the median of those per-cohort quantiles. Every workload mode reports the matching caller-visible duration histogram directly; no per-batch-size divisor is applied.'
 	}
 	return $meta
 }
@@ -2780,10 +2876,6 @@ function Render-Layer2Table {
 		}
 	}
 	if ($RowsAgg.Count -gt 0) {
-		$counts = @($Layer2Rows | Where-Object { $RowsAgg.ContainsKey($_.Label) } | ForEach-Object {
-			"$($_.Label): n=$($RowsAgg[$_.Label].cohortN)"
-		})
-		[void]$sb.Append($nl).Append($nl).Append('Usable throughput cohorts: ').Append(($counts -join '; ')).Append('.')
 		if (@($RowsAgg.Values | Where-Object { Get-StateOr $_ 'offerBound' $false }).Count -gt 0) {
 			[void]$sb.Append($nl).Append($nl).Append('Cells marked >= completed (nearly) all of the load they were offered, so they measure that offered load, not the silo''s ceiling: each is a lower bound on what one silo sustains.')
 		}
@@ -2803,19 +2895,19 @@ function Render-Layer3Table {
 		Aggregate-Layer3Cells; where no N=1 cell was measured they render as
 		'n/a' rather than silently re-basing on some other silo count.
 
-		This table is the authoritative companion to the Mermaid chart.
-		Mermaid's xychart-beta is still experimental and its multi-series
-		rendering is not guaranteed on every GitHub surface, so the numbers
-		must be readable without it - the chart is an aid, never the record.
+		This table is the record; the SVG charts beside it are an aid drawn
+		from the same cells. The last column lists the failed keys of each
+		cohort the cell's median used, in cohort order, so the failures the
+		prose discusses are visible here rather than only in the logs.
 	#>
 	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $RowsAgg)
 	$nl = "`r`n"
 	$sb = [System.Text.StringBuilder]::new()
-	[void]$sb.Append('| Operation | Silos | Offered | Sustained throughput | Speedup vs 1 silo | Per-silo efficiency | Per-call p50 | Per-call p99 |').Append($nl)
-	[void]$sb.Append('|-----------|------:|--------:|---------------------:|------------------:|--------------------:|-------------:|-------------:|').Append($nl)
+	[void]$sb.Append('| Operation | Silos | Offered | Sustained throughput | Speedup vs 1 silo | Per-silo efficiency | Per-call p50 | Per-call p99 | Failed keys per cohort |').Append($nl)
+	[void]$sb.Append('|-----------|------:|--------:|---------------------:|------------------:|--------------------:|-------------:|-------------:|-----------------------:|').Append($nl)
 	foreach ($row in $Layer3Rows) {
 		if (-not $RowsAgg.ContainsKey($row.Label)) {
-			[void]$sb.Append(('| {0} | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |' -f $row.Label)).Append($nl)
+			[void]$sb.Append(('| {0} | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |' -f $row.Label)).Append($nl)
 			continue
 		}
 		$byCount = $RowsAgg[$row.Label]
@@ -2831,7 +2923,9 @@ function Render-Layer3Table {
 			$efS = if ($null -ne $ef) { ('{0}%' -f [int][math]::Round($ef * 100, 0)) } else { 'n/a' }
 			$p50 = Format-Layer2Latency (Get-StateOr $cell 'perCallP50Ms')
 			$p99 = Format-Layer2Latency (Get-StateOr $cell 'perCallP99Ms')
-			[void]$sb.Append(('| {0} | {1} | {2} | **{3}** | {4} | {5} | {6} | {7} |' -f $row.Label, $cell.siloCount, $off, $thr, $spS, $efS, $p50, $p99)).Append($nl)
+			$failedList = @(Get-StateOr $cell 'failedPerCohort' @())
+			$failS = if ($failedList.Count -gt 0) { (@($failedList | ForEach-Object { ([long]$_).ToString('N0', [System.Globalization.CultureInfo]::InvariantCulture) }) -join ' / ') } else { 'n/a' }
+			[void]$sb.Append(('| {0} | {1} | {2} | **{3}** | {4} | {5} | {6} | {7} | {8} |' -f $row.Label, $cell.siloCount, $off, $thr, $spS, $efS, $p50, $p99, $failS)).Append($nl)
 		}
 	}
 	if (@($RowsAgg.Values | ForEach-Object { $_.Values } | Where-Object { Get-StateOr $_ 'producerBound' $false }).Count -gt 0) {
@@ -2849,26 +2943,33 @@ function Render-Layer3StorageTable {
 	.DESCRIPTION
 		This is what separates "Lattice stopped scaling" from "the storage
 		account stopped scaling". A cell whose throughput flattens while its
-		throttled share climbs, or whose busiest account sits near the
+		throttled share climbs, or whose transactions per account sit near the
 		documented per-account Tables target, hit the account; a flattening
 		cell with no throttling and flat server latency did not. The gap
 		between end-to-end and server latency is time spent outside the
 		storage service (network, client-side queueing).
 
-		Figures are the median across the cell's HEALTHY cohorts. Throttled
-		is the share of all transactions answered ServerBusy or
-		ClientThrottling, across every account the cohort used; the busiest
-		account and the latencies are the worst account's. The primary
-		account also serves the Orleans clustering table and grain state, so
-		its transactions are not WAL-only.
+		Figures are the median across the cell's HEALTHY cohorts. Timed-out
+		is the count of transactions answered ServerTimeoutError or
+		ClientTimeoutError, across every account the cohort used, with its
+		share of all transactions (each its own median). Throttling
+		(ServerBusy or ClientThrottling) is reported in a sentence under the
+		table from the worst cohort of every cell, so it is never hidden by a
+		median. Storage transactions is the busiest minute of every account
+		combined, in transactions per second (Get-StorageMetricsSummary's
+		PeakTps); the latencies are the worst account's. The
+		primary account also serves the Orleans clustering table and grain
+		state, so its transactions are not WAL-only.
 	#>
 	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $RowsAgg)
 	$nl = "`r`n"
 	$inv = [System.Globalization.CultureInfo]::InvariantCulture
 	$sb = [System.Text.StringBuilder]::new()
 	$any = $false
-	[void]$sb.Append('| Operation | Silos | WAL accounts | Throttled transactions | Busiest account | Server latency | End-to-end latency |').Append($nl)
-	[void]$sb.Append('|-----------|------:|-------------:|-----------------------:|----------------:|---------------:|-------------------:|').Append($nl)
+	$worstThrottle = $null
+	$worstThrottleAt = ''
+	[void]$sb.Append('| Operation | Silos | WAL accounts | Timed-out transactions | Storage transactions | Server latency | End-to-end latency |').Append($nl)
+	[void]$sb.Append('|-----------|------:|-------------:|-----------------------:|---------------------:|---------------:|-------------------:|').Append($nl)
 	$ms = { param($v) if ($null -eq $v) { 'n/a' } else { ([double]$v).ToString('0.0', $inv) + ' ms' } }
 	foreach ($row in $Layer3Rows) {
 		if (-not $RowsAgg.ContainsKey($row.Label)) { continue }
@@ -2878,67 +2979,226 @@ function Render-Layer3StorageTable {
 			$st = Get-StateOr $cell 'storage' $null
 			if ($null -eq $st) { continue }
 			$any = $true
-			$thr = Get-StateOr $st 'throttleRatio' $null
-			$thrS = if ($null -eq $thr) { 'n/a' } else { ([double]$thr * 100).ToString('0.00', $inv) + '%' }
-			$tps = Get-StateOr $st 'peakAccountTps' $null
-			$tpsS = if ($null -eq $tps) { 'n/a' } else { ('{0:N0} tx/s' -f [double]$tps) }
-			[void]$sb.Append(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} |' -f $row.Label, $cell.siloCount, (Get-StateOr $cell 'walAccounts' 1), $thrS, $tpsS,
+			$thrMax = Get-StateOr $st 'throttleRatioMax' (Get-StateOr $st 'throttleRatio' $null)
+			if ($null -ne $thrMax -and ($null -eq $worstThrottle -or [double]$thrMax -gt $worstThrottle)) {
+				$worstThrottle = [double]$thrMax
+				$worstThrottleAt = "$($row.Label) at $($cell.siloCount) silo$(if ([int]$cell.siloCount -ne 1) { 's' })"
+			}
+			$tmo = Get-StateOr $st 'timeouts' $null
+			$tmoR = Get-StateOr $st 'timeoutRatio' $null
+			$tmoS = if ($null -eq $tmo) { 'n/a' } else {
+				$pct = if ($null -eq $tmoR -or [double]$tmo -eq 0) { '' }
+					elseif ([double]$tmoR -gt 0 -and [double]$tmoR -lt 0.0001) { ' (<0.01%)' }
+					else { ' (' + ([double]$tmoR * 100).ToString('0.00', $inv) + '%)' }
+				([double]$tmo).ToString('N0', $inv) + $pct
+			}
+			$tps = Get-StateOr $st 'peakTps' $null
+			$tpsS = if ($null -eq $tps) { 'n/a' } else { ([double]$tps).ToString('N0', $inv) + ' tx/s' }
+			[void]$sb.Append(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} |' -f $row.Label, $cell.siloCount, (Get-StateOr $cell 'walAccounts' 1), $tmoS, $tpsS,
 				(& $ms (Get-StateOr $st 'serverLatencyMs' $null)), (& $ms (Get-StateOr $st 'e2eLatencyMs' $null)))).Append($nl)
 		}
 	}
 	if (-not $any) {
 		return '_No storage-side metrics were captured for this sweep: its cohorts predate them, or every account''s metrics were unavailable._'
 	}
+	[void]$sb.Append($nl)
+	if ($null -eq $worstThrottle) {
+		[void]$sb.Append('Throttling was not reported for these cells.')
+	} elseif ($worstThrottle -le 0) {
+		[void]$sb.Append('Azure Monitor recorded no throttled transactions (`ServerBusy` or `ClientThrottling`) in any cohort of any cell.')
+	} else {
+		[void]$sb.Append('Throttled transactions (`ServerBusy` or `ClientThrottling`) reached ' + ($worstThrottle * 100).ToString('0.00', $inv) + '% of a cohort''s transactions at worst (' + $worstThrottleAt + ').')
+	}
 	return $sb.ToString().TrimEnd("`r", "`n")
+}
+
+function ConvertTo-SvgText {
+	[CmdletBinding()] param([AllowEmptyString()][string] $Text)
+	return $Text.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;').Replace('"', '&quot;')
+}
+
+function Get-NiceAxis {
+	<#
+	.SYNOPSIS
+		A rounded [0, max] axis with about five ticks on a 1/2/2.5/5 x 10^n step.
+	#>
+	[CmdletBinding()] param([Parameter(Mandatory)][double] $Max)
+	if ($Max -le 0) { $Max = 1 }
+	$raw = $Max / 5
+	$mag = [math]::Pow(10, [math]::Floor([math]::Log10($raw)))
+	$step = $mag * 10
+	foreach ($m in 1, 2, 2.5, 5, 10) { if ($raw -le $m * $mag) { $step = $m * $mag; break } }
+	$top = [math]::Ceiling($Max / $step) * $step
+	$ticks = @()
+	for ($v = 0.0; $v -le $top + ($step / 1000); $v += $step) { $ticks += [math]::Round($v, 6) }
+	return @{ Max = $top; Ticks = $ticks; Step = $step }
+}
+
+function New-PerfLineChartSvg {
+	<#
+	.SYNOPSIS
+		Render a line chart as a standalone SVG with a legend.
+	.DESCRIPTION
+		The performance docs embed these as images rather than Mermaid
+		xychart-beta blocks: xychart draws no legend, so a chart of nine
+		series was a tangle of unlabelled lines on both GitHub and the docs
+		site. Every series here is told apart three ways - colour (the
+		Okabe-Ito palette, chosen to survive colour-blindness), dash pattern
+		and marker shape - and named in a legend under the plot. The x axis is
+		linear in the silo count, so the gap between 2 and 4 silos reads as
+		twice the gap between 1 and 2. The background is opaque white so the
+		figure reads the same in a light or dark page theme. Output is
+		deterministic for a given input, and ASCII, as the hygiene gates
+		require.
+
+		A series with IsReference set is drawn as a thin grey dashed line with
+		no markers (the ideal-scaling line on the speedup chart).
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string] $Title,
+		[Parameter(Mandatory)][string] $Description,
+		[Parameter(Mandatory)][string] $XLabel,
+		[Parameter(Mandatory)][string] $YLabel,
+		[Parameter(Mandatory)][int[]] $X,
+		[Parameter(Mandatory)][object[]] $Series
+	)
+	$inv = [System.Globalization.CultureInfo]::InvariantCulture
+	$palette = @('#0072B2', '#D55E00', '#009E73', '#CC79A7', '#E69F00', '#56B4E9', '#000000', '#8C564B', '#7F3C8D')
+	$dashes = @('', '6 3', '2 3', '8 3 2 3')
+	$markers = @('circle', 'square', 'triangle', 'diamond')
+
+	$width = 820
+	$left = 74; $right = 24; $top = 58
+	$plotW = $width - $left - $right
+	$plotH = 330
+	$legendCols = 2
+	$legendColW = [int]($plotW / $legendCols)
+	$legendRows = [math]::Ceiling($Series.Count / $legendCols)
+	$legendTop = $top + $plotH + 62
+	$height = $legendTop + ($legendRows * 22) + 16
+
+	$xMin = [double]($X | Measure-Object -Minimum).Minimum
+	$xMax = [double]($X | Measure-Object -Maximum).Maximum
+	if ($xMax -le $xMin) { $xMax = $xMin + 1 }
+	# The y axis is sized to the measured series only. A reference series
+	# (the ideal-scaling line) would otherwise stretch it to N and press every
+	# measured curve into the bottom of the plot; it is clipped at the top
+	# instead.
+	$yPeak = 0.0
+	$measuredSeries = @($Series | Where-Object { -not [bool](Get-StateOr $_ 'IsReference' $false) })
+	foreach ($s in $(if ($measuredSeries.Count -gt 0) { $measuredSeries } else { $Series })) { foreach ($v in $s.Values) { if ([double]$v -gt $yPeak) { $yPeak = [double]$v } } }
+	$axis = Get-NiceAxis -Max $yPeak
+	$px = { param([double] $v) $left + (($v - $xMin) / ($xMax - $xMin)) * $plotW }
+	$py = { param([double] $v) $top + $plotH - (($v / $axis.Max) * $plotH) }
+	$f = { param([double] $v) $v.ToString('0.##', $inv) }
+
+	$sb = [System.Text.StringBuilder]::new()
+	$line = { param([string] $s) [void]$sb.Append($s).Append("`n") }
+	& $line ('<svg xmlns="http://www.w3.org/2000/svg" width="{0}" height="{1}" viewBox="0 0 {0} {1}" role="img" aria-labelledby="t d" font-family="Segoe UI, Helvetica, Arial, sans-serif">' -f $width, $height)
+	& $line ('<title id="t">{0}</title>' -f (ConvertTo-SvgText $Title))
+	& $line ('<desc id="d">{0}</desc>' -f (ConvertTo-SvgText $Description))
+	& $line ('<defs><clipPath id="plot"><rect x="{0}" y="{1}" width="{2}" height="{3}"/></clipPath></defs>' -f $left, ($top - 6), $plotW, ($plotH + 12))
+	& $line ('<rect x="0" y="0" width="{0}" height="{1}" rx="8" fill="#ffffff" stroke="#d0d7de"/>' -f $width, $height)
+	& $line ('<text x="{0}" y="32" font-size="17" font-weight="600" fill="#1f2328">{1}</text>' -f $left, (ConvertTo-SvgText $Title))
+
+	foreach ($t in $axis.Ticks) {
+		$y = (& $py $t).ToString('0.#', $inv)
+		& $line ('<line x1="{0}" y1="{1}" x2="{2}" y2="{1}" stroke="#d8dee4" stroke-width="1"/>' -f $left, $y, ($left + $plotW))
+		& $line ('<text class="y-tick" x="{0}" y="{1}" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">{2}</text>' -f ($left - 8), $y, (& $f $t))
+	}
+	foreach ($xv in $X) {
+		$xPos = (& $px $xv).ToString('0.#', $inv)
+		& $line ('<line x1="{0}" y1="{1}" x2="{0}" y2="{2}" stroke="#eef1f4" stroke-width="1"/>' -f $xPos, $top, ($top + $plotH))
+		& $line ('<text class="x-tick" x="{0}" y="{1}" font-size="12" fill="#424a53" text-anchor="middle">{2}</text>' -f $xPos, ($top + $plotH + 18), $xv)
+	}
+	& $line ('<line x1="{0}" y1="{1}" x2="{2}" y2="{1}" stroke="#57606a" stroke-width="1"/>' -f $left, ($top + $plotH), ($left + $plotW))
+	& $line ('<line x1="{0}" y1="{1}" x2="{0}" y2="{2}" stroke="#57606a" stroke-width="1"/>' -f $left, $top, ($top + $plotH))
+	& $line ('<text x="{0}" y="{1}" font-size="13" fill="#1f2328" text-anchor="middle">{2}</text>' -f ($left + $plotW / 2), ($top + $plotH + 40), (ConvertTo-SvgText $XLabel))
+	& $line ('<text x="18" y="{0}" font-size="13" fill="#1f2328" text-anchor="middle" transform="rotate(-90 18 {0})">{1}</text>' -f ($top + $plotH / 2), (ConvertTo-SvgText $YLabel))
+
+	$marker = {
+		param([string] $Shape, [double] $cx, [double] $cy, [string] $Colour)
+		$c = $cx.ToString('0.#', $inv); $r = $cy.ToString('0.#', $inv)
+		switch ($Shape) {
+			'square'   { return ('<rect x="{0}" y="{1}" width="8" height="8" fill="{2}"/>' -f ($cx - 4).ToString('0.#', $inv), ($cy - 4).ToString('0.#', $inv), $Colour) }
+			'triangle' { return ('<polygon points="{0},{1} {2},{3} {4},{3}" fill="{5}"/>' -f $c, ($cy - 5).ToString('0.#', $inv), ($cx - 5).ToString('0.#', $inv), ($cy + 4).ToString('0.#', $inv), ($cx + 5).ToString('0.#', $inv), $Colour) }
+			'diamond'  { return ('<polygon points="{0},{1} {2},{3} {0},{4} {5},{3}" fill="{6}"/>' -f $c, ($cy - 5).ToString('0.#', $inv), ($cx + 5).ToString('0.#', $inv), $r, ($cy + 5).ToString('0.#', $inv), ($cx - 5).ToString('0.#', $inv), $Colour) }
+			default    { return ('<circle cx="{0}" cy="{1}" r="4" fill="{2}"/>' -f $c, $r, $Colour) }
+		}
+	}
+
+	$i = 0
+	$styles = @()
+	foreach ($s in $Series) {
+		$isRef = [bool](Get-StateOr $s 'IsReference' $false)
+		if ($isRef) {
+			$style = @{ Colour = '#8c959f'; Dash = '5 4'; Marker = $null; Width = 1.5 }
+		} else {
+			$style = @{ Colour = $palette[$i % $palette.Count]; Dash = $dashes[[math]::Floor($i / $palette.Count) % $dashes.Count]; Marker = $markers[$i % $markers.Count]; Width = 2.2 }
+			if ($i -ge $palette.Count -and -not $style.Dash) { $style.Dash = '6 3' }
+			$i++
+		}
+		$styles += , $style
+		$points = @(for ($k = 0; $k -lt $X.Count; $k++) { '{0},{1}' -f (& $px $X[$k]).ToString('0.#', $inv), (& $py ([double]$s.Values[$k])).ToString('0.#', $inv) }) -join ' '
+		$dashAttr = if ($style.Dash) { ' stroke-dasharray="{0}"' -f $style.Dash } else { '' }
+		& $line ('<polyline points="{0}" fill="none" stroke="{1}" stroke-width="{2}"{3} stroke-linejoin="round" clip-path="url(#plot)"><title>{4}</title></polyline>' -f $points, $style.Colour, $style.Width.ToString('0.#', $inv), $dashAttr, (ConvertTo-SvgText $s.Name))
+		if ($style.Marker) {
+			for ($k = 0; $k -lt $X.Count; $k++) {
+				& $line (& $marker $style.Marker (& $px $X[$k]) (& $py ([double]$s.Values[$k])) $style.Colour)
+			}
+		}
+	}
+
+	for ($n = 0; $n -lt $Series.Count; $n++) {
+		$col = $n % $legendCols
+		$row = [math]::Floor($n / $legendCols)
+		$lx = $left + ($col * $legendColW)
+		$ly = $legendTop + ($row * 22)
+		$st = $styles[$n]
+		$dashAttr = if ($st.Dash) { ' stroke-dasharray="{0}"' -f $st.Dash } else { '' }
+		& $line ('<line x1="{0}" y1="{1}" x2="{2}" y2="{1}" stroke="{3}" stroke-width="{4}"{5}/>' -f $lx, $ly, ($lx + 30), $st.Colour, $st.Width.ToString('0.#', $inv), $dashAttr)
+		if ($st.Marker) { & $line (& $marker $st.Marker ($lx + 15) $ly $st.Colour) }
+		& $line ('<text class="legend" x="{0}" y="{1}" font-size="12" fill="#1f2328" dominant-baseline="middle">{2}</text>' -f ($lx + 38), $ly, (ConvertTo-SvgText $Series[$n].Name))
+	}
+	& $line '</svg>'
+	return $sb.ToString()
 }
 
 function Render-Layer3Chart {
 	<#
 	.SYNOPSIS
-		Render the scaling curves as Mermaid xychart-beta blocks: one
+		Render the scaling curves as SVG line charts with legends: one
 		normalised speedup chart carrying every workload, then one
 		absolute-throughput chart per $Layer3ChartGroups entry.
 	.DESCRIPTION
-		Mermaid's xychart-beta takes a single shared x-axis, so every series
-		in a chart must be sampled at the SAME silo counts. A workload
-		missing a cell at some silo count cannot simply be given a gap -
-		xychart has no null - so it is dropped from that chart rather than
-		plotted against a shifted axis, which would draw a confident, wrong
-		curve. The table always carries every measured cell, so nothing is
-		lost by that exclusion.
+		Returns @{ Markdown; Files }: the markdown that goes between the
+		perf-chart:layer3 markers (one image reference per chart, plus a note
+		naming any workload a chart leaves out), and the SVG text of each chart
+		keyed by file name. The caller writes the files beside the doc under
+		$ImageDirName, so this function stays free of side effects and the
+		offline test can inspect its output.
 
-		The speedup chart comes first because it is the one chart on which
-		all nine workloads are comparable: throughput spans four orders of
-		magnitude across them, but speedup over the workload's own 1-silo
-		cell is dimensionless. It carries an ideal-linear reference series
-		(y = N) as its FIRST line, so the gap between each workload and
-		linear scaling is visible without arithmetic. A workload with no
-		measured 1-silo cell has no speedup and is left off that chart.
+		Every series in a chart is sampled at the same silo counts. A workload
+		missing a cell at some silo count is dropped from that chart rather
+		than drawn with a gap, and named; the axis keeps every silo count any
+		series measured. The table always carries every measured cell.
 
-		Absolute charts use thousands of keys/s, except a group whose peak
-		is below 10k keys/s, which is plotted in plain keys/s so its tick
-		labels are not all fractional.
+		The speedup chart comes first because it is the one chart on which all
+		nine workloads are comparable: throughput spans four orders of
+		magnitude across them, but speedup over the workload's own 1-silo cell
+		is dimensionless. Its first series is the ideal-scaling reference
+		(y = N). A workload with no measured 1-silo cell has no speedup and is
+		left off that chart. Absolute charts use thousands of keys/s, except a
+		group whose peak is below 10k keys/s, which is plotted in keys/s.
 	#>
-	[CmdletBinding()] param([Parameter(Mandatory)][hashtable] $RowsAgg)
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][hashtable] $RowsAgg,
+		[string] $ImageDirName = 'images'
+	)
 	$nl = "`r`n"
+	$files = [ordered]@{}
+	$plain = { param([string] $Label) $Label.Replace('`', '') }
 
-	$renderChart = {
-		param([string] $Title, [string] $YLabel, [int[]] $Axis, [object[]] $Series, [double] $YMax)
-		$sb = [System.Text.StringBuilder]::new()
-		[void]$sb.Append('```mermaid').Append($nl)
-		[void]$sb.Append('xychart-beta').Append($nl)
-		[void]$sb.Append(('    title "{0}"' -f $Title)).Append($nl)
-		[void]$sb.Append(('    x-axis "Silos" [{0}]' -f (($Axis | ForEach-Object { '"' + $_ + '"' }) -join ', '))).Append($nl)
-		[void]$sb.Append(('    y-axis "{0}" 0 --> {1}' -f $YLabel, $YMax)).Append($nl)
-		foreach ($s in $Series) {
-			[void]$sb.Append(('    line [{0}]' -f ($s.Values -join ', '))).Append($nl)
-		}
-		[void]$sb.Append('```').Append($nl).Append($nl)
-		# xychart-beta has no legend, so the series order has to be stated in
-		# prose or the chart is unreadable.
-		[void]$sb.Append(('Series order (xychart-beta renders no legend): {0}.' -f (($Series | ForEach-Object { $_.Name }) -join ', then ')))
-		return $sb.ToString()
-	}
 	$sharedAxis = {
 		param([object[]] $Rows)
 		$axis = $null
@@ -2948,13 +3208,40 @@ function Render-Layer3Chart {
 		}
 		return ,@($axis)
 	}
+	# The axis is every silo count any of $Rows measured; a row missing one of
+	# them is dropped, not allowed to shrink the axis for every other row (a
+	# 6- and 8-silo gap in one workload once cut the whole speedup chart off at
+	# 4 silos). Falls back to the shared intersection when no row covers the
+	# union, so a chart is still drawn.
+	$chartRows = {
+		param([object[]] $Rows)
+		$union = @($Rows | ForEach-Object { @($RowsAgg[$_.Label].Keys | ForEach-Object { [int]$_ }) } | Sort-Object -Unique)
+		$full = @($Rows | Where-Object { $have = @($RowsAgg[$_.Label].Keys | ForEach-Object { [int]$_ }); @($union | Where-Object { $_ -notin $have }).Count -eq 0 })
+		if ($full.Count -gt 0) {
+			return @{ Axis = $union; Rows = $full; Dropped = @($Rows | Where-Object { $_ -notin $full }) }
+		}
+		return @{ Axis = (& $sharedAxis $Rows); Rows = $Rows; Dropped = @() }
+	}
+	$droppedNote = {
+		param([object[]] $Dropped)
+		if ($Dropped.Count -eq 0) { return '' }
+		return ($nl + $nl + ('Not drawn, because it was not measured at every silo count above (its cells are in the table): {0}.' -f (($Dropped | ForEach-Object { $_.Label }) -join ', ')))
+	}
+	$image = {
+		param([string] $Id, [string] $Title, [string] $Alt, [string] $YLabel, [int[]] $Axis, [object[]] $Series, [object[]] $Dropped)
+		$file = "performance-layer3-$Id.svg"
+		$counts = ($Axis | ForEach-Object { "$_" }) -join ', '
+		$desc = '{0} Line chart over {1} silos. Series: {2}. The exact values are in the grid below.' -f $Alt, $counts, (($Series | ForEach-Object { $_.Name }) -join '; ')
+		$files[$file] = New-PerfLineChartSvg -Title $Title -Description $desc -XLabel 'Silos' -YLabel $YLabel -X $Axis -Series $Series
+		return ('![{0}]({1}/{2})' -f $Alt, $ImageDirName, $file) + (& $droppedNote $Dropped)
+	}
 
 	$available = @($Layer3Rows | Where-Object { $RowsAgg.ContainsKey($_.Label) })
-	if ($available.Count -eq 0) { return '_No multi-silo cells measured yet._' }
+	if ($available.Count -eq 0) { return @{ Markdown = '_No multi-silo cells measured yet._'; Files = $files } }
 	$measured = @($available | Where-Object {
 		@($RowsAgg[$_.Label].Values | Where-Object { Get-StateOr $_ 'producerBound' $false }).Count -eq 0
 	})
-	if ($measured.Count -eq 0) { return '_No cluster-ceiling curves available; producer-bound lower bounds remain in the table._' }
+	if ($measured.Count -eq 0) { return @{ Markdown = '_No cluster-ceiling curves available; producer-bound lower bounds remain in the table._'; Files = $files } }
 
 	$blocks = New-Object System.Collections.Generic.List[string]
 	if ($measured.Count -lt $available.Count) {
@@ -2964,24 +3251,24 @@ function Render-Layer3Chart {
 	# 1. Normalised speedup, every workload that has an N=1 anchor.
 	$anchored = @($measured | Where-Object { $RowsAgg[$_.Label].ContainsKey('1') })
 	if ($anchored.Count -gt 0) {
-		$axis = & $sharedAxis $anchored
+		$plan = & $chartRows $anchored
+		$axis = @($plan.Axis)
 		if ($axis.Count -ge 2) {
-			$series = @(@{ Name = 'ideal linear scaling (y = silos)'; Values = @($axis | ForEach-Object { $_ }) })
-			$maxVal = [double]($axis | Measure-Object -Maximum).Maximum
-			foreach ($r in $anchored) {
-				$vals = @($axis | ForEach-Object { [double](Get-StateOr $RowsAgg[$r.Label]["$_"] 'speedup' 0) })
-				foreach ($v in $vals) { if ($v -gt $maxVal) { $maxVal = $v } }
-				$series += ,@{ Name = $r.Label; Values = $vals }
+			$series = @(@{ Name = 'Ideal: speedup = silos'; Values = @($axis | ForEach-Object { [double]$_ }); IsReference = $true })
+			foreach ($r in $plan.Rows) {
+				$series += , @{ Name = (& $plain $r.Label); Values = @($axis | ForEach-Object { [double](Get-StateOr $RowsAgg[$r.Label]["$_"] 'speedup' 0) }) }
 			}
-			$blocks.Add((& $renderChart 'Speedup over 1 silo vs silo count' 'Speedup (x)' $axis $series ([math]::Ceiling($maxVal * 1.1))))
+			$blocks.Add((& $image 'speedup' 'Speedup over one silo, by workload' 'Speedup over one silo for each workload, against ideal linear scaling.' 'Speedup over 1 silo (x)' $axis $series @($plan.Dropped)))
 		}
 	}
 
 	# 2. Absolute throughput, one chart per group.
 	foreach ($g in $Layer3ChartGroups) {
-		$rows = @($measured | Where-Object { (Get-StateOr $_ 'ChartGroup' 'writes') -eq $g.Id })
-		if ($rows.Count -eq 0) { continue }
-		$axis = & $sharedAxis $rows
+		$groupRows = @($measured | Where-Object { (Get-StateOr $_ 'ChartGroup' 'writes') -eq $g.Id })
+		if ($groupRows.Count -eq 0) { continue }
+		$plan = & $chartRows $groupRows
+		$rows = @($plan.Rows)
+		$axis = @($plan.Axis)
 		if ($axis.Count -lt 2) {
 			$blocks.Add(('_{0}: needs at least two silo counts measured for every workload in the group; see the table below._' -f $g.Title))
 			continue
@@ -2989,15 +3276,15 @@ function Render-Layer3Chart {
 		$peak = 0.0
 		foreach ($r in $rows) { foreach ($c in $axis) { $v = [double]$RowsAgg[$r.Label]["$c"].sustainedThroughput; if ($v -gt $peak) { $peak = $v } } }
 		$div = if ($peak -ge 10000) { 1000.0 } else { 1.0 }
-		$yLabel = if ($div -gt 1) { 'Thousand keys/s' } else { 'keys/s' }
+		$yLabel = if ($div -gt 1) { 'Thousand keys/s' } else { 'Keys/s' }
 		$series = @()
 		foreach ($r in $rows) {
-			$series += ,@{ Name = $r.Label; Values = @($axis | ForEach-Object { [math]::Round($RowsAgg[$r.Label]["$_"].sustainedThroughput / $div, 2) }) }
+			$series += , @{ Name = (& $plain $r.Label); Values = @($axis | ForEach-Object { [math]::Round($RowsAgg[$r.Label]["$_"].sustainedThroughput / $div, 2) }) }
 		}
-		$blocks.Add((& $renderChart $g.Title $yLabel $axis $series ([math]::Ceiling(($peak / $div) * 1.1))))
+		$blocks.Add((& $image $g.Id $g.Title ($g.Title + '.') $yLabel $axis $series @($plan.Dropped)))
 	}
 
-	return ($blocks -join ($nl + $nl))
+	return @{ Markdown = ($blocks -join ($nl + $nl)); Files = $files }
 }
 
 function New-MetaHeaderForLayer3 {
@@ -3050,7 +3337,7 @@ function New-MetaHeaderForLayer3 {
 	$meta['maxRungEscalations'] = (Get-StateOr $State 'layer3MaxRungEscalations' 3)
 	$meta['batchSize']     = (Get-StateOr $State 'batchSize' 4096)
 	$meta['cohortN']       = ((@($cohortN | Sort-Object -Unique)) -join '/')
-	$meta['rowsMeasured']  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+	$meta['rowsMeasured']  = Get-StateMeasuredDate -State $State
 	$meta['gitSha']        = (Get-StateOr $State 'mainSha' (Get-StateOr $State 'gitSha' 'unknown'))
 	$walAccounts = [int](Get-StateOr $State 'layer3WalAccounts' 1)
 	$meta['walAccounts']   = $walAccounts
@@ -3065,9 +3352,16 @@ function New-MetaHeaderForLayer3 {
 	$splitCurves = Get-StateOr (Get-StateOr $State 'layer3' @{}) 'splitCurves' @{}
 	$splitText = @(foreach ($m in @($splitCurves.Keys | Sort-Object)) { "$m=$(@($splitCurves[$m]) -join '+')" }) -join ';'
 	$splitSentence = ''
+	$carrySpec = [string](Get-StateOr $State 'layer3CarryVehiclesPerSilo' '')
+	if ($carrySpec) { $meta['carryVehiclesPerSilo'] = $carrySpec } elseif ($meta.Contains('carryVehiclesPerSilo')) { $meta.Remove('carryVehiclesPerSilo') }
 	if ($splitText) {
 		$meta['splitCurves'] = $splitText
-		$splitSentence = ' The curves listed in splitCurves were measured across rigs, one run of silo counts per rig: a step between two rigs'' cells can be the difference between the deployments (up to about 25% measured across identical rigs), and each rig''s escalation starts from the row''s starting rung.'
+		$startClause = if ($carrySpec) {
+			'each rig''s escalation starts from the per-silo load in carryVehiclesPerSilo for the workloads it names, and from the row''s starting rung for the rest.'
+		} else {
+			'each rig''s escalation starts from the row''s starting rung.'
+		}
+		$splitSentence = ' The curves listed in splitCurves were measured across rigs, one run of silo counts per rig: a step between two rigs'' cells can be the difference between the deployments (up to about 25% measured across identical rigs), and ' + $startClause
 	} elseif ($meta.Contains('splitCurves')) { $meta.Remove('splitCurves') }
 	$storageSentence = if ($walAccounts -le 1) {
 		'All silo counts share ONE Azure Storage account for the WAL; the storage-side table reports what that account''s own Azure Monitor metrics showed for each cell.'
@@ -3151,13 +3445,13 @@ function Render-ProvenanceNote {
 		'layer2' {
 			$region = if ($Meta.ContainsKey('region')) { $Meta['region'] }  else { 'unknown' }
 			$rung   = if ($Meta.ContainsKey('rung'))   { $Meta['rung'] }    else { 'unknown' }
-			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts. Read workloads were driven at ${rung}; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation."
+			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts. Read workloads were driven at ${rung}; each write workload was driven at its own lower, fixed offered load (annotated in its operation label)."
 		}
 		'layer3' {
 			$region = if ($Meta.ContainsKey('region'))     { $Meta['region'] }     else { 'unknown' }
 			$counts = if ($Meta.ContainsKey('siloCounts')) { $Meta['siloCounts'] } else { 'unknown' }
 			$accts = if ($Meta.ContainsKey('walAccounts')) { [int]"$($Meta['walAccounts'])" } else { 1 }
-			$storageClause = if ($accts -le 1) { 'All silo counts share one Azure Storage account for the WAL - see the storage-side table and the caveats below for what its metrics showed.' } else { "Every cohort spreads the WAL across $accts Azure Storage accounts - see the storage-side table for what their metrics showed." }
+			$storageClause = if ($accts -le 1) { 'All silo counts share one Azure Storage account for the WAL - see the storage-side table for what its metrics showed.' } else { "Every cohort spreads the WAL across $accts Azure Storage accounts - see the storage-side table for what their metrics showed." }
 			return "> Measured ${date} on ${hostSku} in ${region} (.NET ${dot}) at git sha ${sha}, n=${cohN} cohorts per cell, silo counts ${counts}. Offered load scales with the silo count and is raised until each cell plateaus below it, so every figure is true throughput rather than offered load; every cohort starts on freshly emptied storage. $storageClause"
 		}
 		default { throw "Unknown layer '$Layer' for Render-ProvenanceNote" }
@@ -3316,7 +3610,8 @@ function Update-MultiSiloDocMarkers {
 	$content = [regex]::Replace($content, $pattern, [System.Text.RegularExpressions.MatchEvaluator] { param($m) $block })
 	$content = Set-ProvenanceNote -Content $content -Layer 'layer3' -Note (Render-ProvenanceNote -Layer 'layer3' -Meta $meta)
 
-	$chart = Render-Layer3Chart -RowsAgg $rowsAgg
+	$chartOut = Render-Layer3Chart -RowsAgg $rowsAgg
+	$chart = $chartOut.Markdown
 	# The chart block carries 'schema' and the do-not-edit notice - the two keys
 	# that mark a block as mechanically managed - but deliberately not the full
 	# provenance key set. It is rendered from the same $rowsAgg as the table in
@@ -3345,7 +3640,19 @@ function Update-MultiSiloDocMarkers {
 	if ($WhatIf) {
 		Write-Host '--- planned multi-silo doc (markers only) ---' -ForegroundColor Cyan
 		foreach ($m in @([regex]::Matches($content, $chartPattern)) + @([regex]::Matches($content, $pattern)) + @([regex]::Matches($content, $storagePattern))) { Write-Host $m.Value }
+		Write-Host "--- planned chart images: $(@($chartOut.Files.Keys) -join ', ') ---" -ForegroundColor Cyan
 		return $true
+	}
+	# The charts are SVG files beside the doc, referenced by the chart block.
+	# A chart this render does not produce is deleted, so a stale figure can
+	# never outlive the cells it drew.
+	$imageDir = Join-Path (Split-Path -Parent $DocPath) 'images'
+	New-Item -ItemType Directory -Path $imageDir -Force | Out-Null
+	foreach ($stale in @(Get-ChildItem -Path $imageDir -Filter 'performance-layer3-*.svg' -File)) {
+		if (-not $chartOut.Files.Contains($stale.Name)) { Remove-Item -LiteralPath $stale.FullName -Force }
+	}
+	foreach ($name in $chartOut.Files.Keys) {
+		[System.IO.File]::WriteAllText((Join-Path $imageDir $name), $chartOut.Files[$name], [System.Text.UTF8Encoding]::new($false))
 	}
 	[System.IO.File]::WriteAllText($DocPath, $content)
 	return $true
@@ -3585,8 +3892,16 @@ function Invoke-Layer3MultiRig {
 		Write-Warning "[rigs] $RigCount rigs requested but the sweep has only $($plan.Count) separable cell group(s); using $($plan.Count)."
 		$RigCount = $plan.Count
 	}
+	$carry = ConvertFrom-Layer3CarrySpec -Spec $Layer3CarryVehiclesPerSilo
 	if ($RigCount -gt $ids.Count) {
 		Write-Warning "[rigs] more rigs than workloads: some workloads' silo counts are split across rigs, so their curves span rigs (flagged in the published metadata)."
+		$splitModes = @(foreach ($id in $ids) {
+			if (@($plan | Where-Object { $id -in @($_.Workloads) }).Count -gt 1) { @($Layer3Rows | Where-Object { $_.WorkloadId -eq $id })[0].WorkloadMode }
+		})
+		$unseeded = @($splitModes | Where-Object { -not $carry.ContainsKey($_) })
+		if ($unseeded.Count -gt 0) {
+			Write-Warning "[rigs] split curve(s) $($unseeded -join ', ') have no -Layer3CarryVehiclesPerSilo seed: each later rig climbs the escalation ladder again from the default rung and can settle on a different per-silo load."
+		}
 	}
 	$prefixes = if ($ReusePrefixes.Count -gt 0) {
 		@($ReusePrefixes[0..($RigCount - 1)])
@@ -3643,6 +3958,7 @@ function Invoke-Layer3MultiRig {
 				WalSaturationRecoveryReleaseBatch = $WalSaturationRecoveryReleaseBatch
 				Layer3ClientsPerSilo = $Layer3ClientsPerSilo; SaturationRatio = $SaturationRatio; MaxRungEscalations = $MaxRungEscalations
 				Layer3WalAccounts = $Layer3WalAccounts; Layer3OverlapHarvest = [bool]$Layer3OverlapHarvest; Resume = [bool]$Resume
+				Layer3CarryVehiclesPerSilo = $Layer3CarryVehiclesPerSilo
 			}
 			$log = Join-Path (Join-Path $runRoot $p) 'sweep.log'
 			Write-Host "[rigs] sweeping $p (log: $log)" -ForegroundColor Cyan
@@ -3660,6 +3976,7 @@ function Invoke-Layer3MultiRig {
 		}
 		if ($states.Count -eq 0) { throw '[rigs] no rig wrote a state.json; nothing to merge.' }
 		$merged = Merge-Layer3RigStates -States $states -Prefixes $statePrefixes
+		if ($Layer3CarryVehiclesPerSilo) { $merged['layer3CarryVehiclesPerSilo'] = $Layer3CarryVehiclesPerSilo }
 		$mergedFile = Join-Path (Join-Path $runRoot ('rigs-' + ($statePrefixes -join '-'))) 'state.json'
 		Write-StateFile -Path $mergedFile -State $merged
 		Write-Host "[rigs] merged state.json: $mergedFile" -ForegroundColor Green
@@ -3838,6 +4155,8 @@ function Main {
 			throw "-Layer3Rigs $Layer3Rigs disagrees with the $($reuseList.Count) rigs -ReuseAca names; pass one or the other."
 		}
 		$rigCount = [Math]::Max($Layer3Rigs, $reuseList.Count)
+		# Fail a malformed carry seed before anything provisions or bills.
+		$null = ConvertFrom-Layer3CarrySpec -Spec $Layer3CarryVehiclesPerSilo
 		if ($rigCount -gt 1) {
 			Invoke-Layer3MultiRig -RigCount $rigCount -ReusePrefixes $reuseList
 			return
@@ -3871,6 +4190,19 @@ function Main {
 			New-EmptyState -Prefix $acaPrefix -VmSize $VmSize -Region $l3Region -Rung (Resolve-Rung -Spec $Rung) -BatchSize $BatchSize -BdnFidelity $Fidelity
 		}
 		$l3State['region'] = $l3Region
+		# A reused prefix (-ReuseAca) keeps its state file between runs. Its
+		# provenance must describe the run that produced the cells it publishes:
+		# a fresh run discards the old cells, so it re-stamps the commit too,
+		# and a resume keeps the recorded commit for the cells it keeps but
+		# warns when the new cells come from a different main commit.
+		$runMainSha = Get-MainSha
+		$runGitSha  = (& git rev-parse --short HEAD 2>$null)
+		if (-not $Resume) {
+			if ($runMainSha) { $l3State['mainSha'] = $runMainSha }
+			if ($runGitSha)  { $l3State['gitSha']  = $runGitSha.Trim() }
+		} elseif ($runMainSha -and ((Get-StateOr $l3State 'mainSha' $runMainSha) -ne $runMainSha)) {
+			Write-Warning "[layer3] -Resume: the recorded cells were measured at main $($l3State.mainSha), the new ones at $runMainSha; the published gitSha names only the first."
+		}
 		if (-not $l3State.ContainsKey('layer3')) {
 			$l3State['layer3'] = @{ cohorts = @{}; rows = @{}; siloCounts = @(); acaPrefix = $null }
 		}
@@ -3942,6 +4274,7 @@ function Main {
 			$l3State.layer3SaturationRatio      = $SaturationRatio
 			$l3State.layer3MaxRungEscalations   = $MaxRungEscalations
 			$l3State['layer3WalAccounts']       = $Layer3WalAccounts
+			if ($Layer3CarryVehiclesPerSilo) { $l3State['layer3CarryVehiclesPerSilo'] = $Layer3CarryVehiclesPerSilo } elseif ($l3State.ContainsKey('layer3CarryVehiclesPerSilo')) { $l3State.Remove('layer3CarryVehiclesPerSilo') }
 
 			$l3Cells = Invoke-Layer3Cohorts `
 				-AcaPrefix   $acaPrefix `
@@ -3960,6 +4293,7 @@ function Main {
 				-SaturationRatio    $SaturationRatio `
 				-MaxRungEscalations $MaxRungEscalations `
 				-ExistingCells $(if ($Resume -and $l3State.layer3.cohorts -is [System.Collections.IDictionary]) { $l3State.layer3.cohorts } else { @{} }) `
+				-SeedVehiclesPerSilo (ConvertFrom-Layer3CarrySpec -Spec $Layer3CarryVehiclesPerSilo) `
 				-OnCellComplete $checkpoint `
 				-WalAccounts    $Layer3WalAccounts `
 				-OverlapHarvest:$Layer3OverlapHarvest

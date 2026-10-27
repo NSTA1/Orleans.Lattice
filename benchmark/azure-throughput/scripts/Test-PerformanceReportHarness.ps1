@@ -70,7 +70,7 @@ try {
     $rows = Aggregate-Layer2Cells @{ 'get-point' = @((New-Cohort $log)); 'set-point' = @((New-Cohort $log), (New-Cohort $log 0)) } -WarningAction SilentlyContinue
     Assert-Case 'legacy HEALTHY miss-path reads excluded' (-not $rows.ContainsKey('Reads'))
     Assert-Case 'n counts actual throughput samples' ($rows.Writes.cohortN -eq 1 -and $rows.Writes.sustainedThroughput -eq 1000)
-    Assert-Case 'per-row cohort count rendered' ((Render-Layer2Table $rows @{}) -match 'Writes: n=1')
+    Assert-Case 'per-row cohort counts not rendered (the provenance note carries n)' ((Render-Layer2Table $rows @{}) -notmatch 'Usable throughput cohorts|: n=\d')
 
     # Offer-bound Layer 2 rows are lower bounds. New-Cohort's rung is 10
     # vehicles at 5 Hz = 50 keys/s offered.
@@ -130,10 +130,16 @@ try {
         @{ TimeGenerated = '2026-10-13T12:00:01Z'; ContainerGroupName_s = 'replica-b'; Log_s = 'fail: root-cause' },
         @{ TimeGenerated = '2026-10-13T12:00:02Z'; ContainerGroupName_s = 'replica-b'; Log_s = '[silo] t=2s ops=999 ops/sec=999 inFlight=1' }
     ) | ConvertTo-Json
+    $script:countQuery = ''
     function Invoke-Az {
-        param([string[]] $Arguments, [switch] $AllowFailure)
-        $script:query = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
+        param([string[]] $Arguments, [switch] $AllowFailure, [int] $TransientRetries)
+        $kql = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
         $global:LASTEXITCODE = 0
+        if ($kql.Contains('summarize n = count()')) {
+            $script:countQuery = $kql
+            return (@(@{ ContainerGroupName_s = 'replica-b'; n = 124000; t0 = '2026-10-13T12:00:03Z'; t1 = '2026-10-13T12:00:33Z' }) | ConvertTo-Json -AsArray)
+        }
+        $script:query = $kql
         return $script:response
     }
     $ctx = @{ siloApp = 'silo'; workspaceId = 'workspace' }
@@ -142,6 +148,9 @@ try {
     Assert-Case 'phaseA parser surface unchanged' ($lines[0] -eq '[phaseA] t=1s instrument=test')
     Assert-Case 'root cause includes replica and timestamp' ($lines[1] -match 'replica=replica-b.*root-cause')
     Assert-Case 'silo progress cannot contaminate producer throughput' ($lines[2] -notmatch '^\[silo\]')
+    Assert-Case 'unroutable-message noise is excluded from the paged harvest' ($script:query.Contains("where not(Log_s contains 'Messaging[100071]')"))
+    Assert-Case 'the excluded noise is counted per replica, pinned to the revision' ($script:countQuery.Contains("RevisionName_s == 'current'") -and $lines[3] -match "^\[aca-silo time=[^\]]+ replica=replica-b\] suppressed 124000 'Failed to address message' lines")
+    Assert-Case 'the count line cannot enter the throughput or phaseA series' ($lines[3] -notmatch '^\[(silo|phaseA|producer)\]')
     $threw = $false
     try { Get-AcaSiloLog $ctx ([datetime]::UtcNow) ([datetime]::UtcNow) -IncludeDiagnostics | Out-Null } catch { $threw = $true }
     Assert-Case 'full diagnostics refuse unscoped revision' $threw
@@ -150,10 +159,11 @@ try {
     Assert-Case 'malformed diagnostics never silently disappear' $threw
     $script:pages = [System.Collections.Generic.List[string]]::new()
     function Invoke-Az {
-        param([string[]] $Arguments, [switch] $AllowFailure)
+        param([string[]] $Arguments, [switch] $AllowFailure, [int] $TransientRetries)
         $kql = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
-        $script:pages.Add($kql)
         $global:LASTEXITCODE = 0
+        if ($kql.Contains('summarize n = count()')) { return '[]' }
+        $script:pages.Add($kql)
         $n = if ($script:pages.Count -eq 1) { 200 } else { 1 }
         return (@(1..$n | ForEach-Object {
             @{ TimeGenerated = '2026-10-13T12:00:00Z'; ContainerGroupName_s = 'replica'; Log_s = "error $_" }
@@ -162,6 +172,20 @@ try {
     $lines = Get-AcaSiloLog $ctx ([datetime]::UtcNow.AddHours(-1)) ([datetime]::UtcNow) -RevisionName 'current' -IncludeDiagnostics
     Assert-Case 'diagnostics page beyond first bounded response' ($lines.Count -eq 201 -and $script:pages.Count -eq 2 -and $script:pages[1].Contains('row > 200 and row <= 400'))
     $snapshots = @($script:pages | ForEach-Object { [regex]::Match($_, 'ingestion_time\(\) <= datetime\(([^)]+)\)').Groups[1].Value } | Sort-Object -Unique)
+    # A harvest whose row count is an exact multiple of the page size ends on
+    # an empty page; under strict mode that once failed the cohort's harvest.
+    $script:pages = [System.Collections.Generic.List[string]]::new()
+    function Invoke-Az {
+        param([string[]] $Arguments, [switch] $AllowFailure, [int] $TransientRetries)
+        $kql = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
+        $global:LASTEXITCODE = 0
+        if ($kql.Contains('summarize n = count()')) { return '[]' }
+        $script:pages.Add($kql)
+        if ($script:pages.Count -gt 1) { return '[]' }
+        return (@(1..200 | ForEach-Object { @{ TimeGenerated = '2026-10-13T12:00:00Z'; ContainerGroupName_s = 'replica'; Log_s = "error $_" } }) | ConvertTo-Json -Compress)
+    }
+    $lines = Get-AcaSiloLog $ctx ([datetime]::UtcNow.AddHours(-1)) ([datetime]::UtcNow) -RevisionName 'current' -IncludeDiagnostics
+    Assert-Case 'a harvest ending on an empty page completes' ($lines.Count -eq 200 -and $script:pages.Count -eq 2)
     Assert-Case 'diagnostic pagination uses one ingestion snapshot' ($snapshots.Count -eq 1 -and $snapshots[0].Length -gt 0)
 
     function New-MetaHeaderForLayer2 { param($State, $RowsAgg, $Existing) return @{ cohortN = '1'; date = 'today' } }

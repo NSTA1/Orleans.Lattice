@@ -46,7 +46,7 @@ parameters file. The folder also holds dot-sourced helper modules (`_run-cohort-
 of a Layer 3 cohort, see below) and parameterless self-tests of the grading logic, run with
 `pwsh -File` (`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`,
 `Test-Layer3UnseededRetry.ps1`, `Test-ProducerBoundReport.ps1`, `Test-PerformanceReportHarness.ps1`,
-`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`). The Layer 3 sweep itself is
+`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`, `Test-Layer3Chart.ps1`). The Layer 3 sweep itself is
 driven by `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 Between cohorts, `Set-AcaSiloCount` (in `aca-common.ps1`) does not return until every superseded
 silo revision has drained (`Wait-AcaRevisionsRetired`), so an old revision's replicas cannot
@@ -62,7 +62,12 @@ alphanumerics). Common shapes:
 
 - **Layer 3 on a rig you provisioned.** Run `./scripts/deploy-aca.ps1 -NamePrefix <prefix>`, then
   `benchmark/performance-report.ps1 -Layer 3 -ReuseAca <prefix>`. It parks the silos at zero when it
-  finishes and leaves `rg-<prefix>` standing for you to delete.
+  finishes and leaves `rg-<prefix>` standing for you to delete. A reused rig keeps the images it was
+  built with, so after a code change re-run `deploy-aca.ps1 -NamePrefix <prefix> -ReuseRg` (plus
+  `-PrivateNetwork` if it was built that way) to rebuild them first. Its
+  `benchmark/.run/performance-report/<prefix>/state.json` survives between runs: a fresh run
+  replaces the cells and re-stamps `gitSha`, while `-Resume` keeps both and warns when the new
+  cells come from a different main commit.
 - **`-DryRun`** re-renders a document from the most recently written `state.json`. Replay the
   multi-silo document with either `-Layer3 -DryRun` or `-Layer 3 -DryRun`. Replay selects the
   newest state containing the requested layer, and a Layer 1/2 replay preserves the other block.
@@ -71,7 +76,7 @@ alphanumerics). Common shapes:
   of their offered load (rung vehicles x Hz) is published `>= X` with a note: it measured the
   offered load, not the silo's ceiling. Do not compare such a cell with an escalated Layer 3 cell.
   `get-many` at 4,000 vehicles x 5 Hz reads ~20 k keys/s on Layer 2, while Layer 3 escalates the
-  same workload to ~312 k at one silo. Cells published before the steady-mean fix in #5060 can
+  same workload to ~316 k at one silo. Cells published before the steady-mean fix in #5060 can
   exceed their own offered load (up to 176%), because the old mean averaged only non-zero seconds.
 - **Layer 3 on several rigs in parallel (`-Layer3Rigs K`).** The report splits the sweep
   between K rigs itself (`Split-Layer3Sweep`), deterministically, so `-Resume` finds each cell
@@ -81,8 +86,9 @@ alphanumerics). Common shapes:
   workload gets one rig plus extra rigs by cost, and its silo counts are dealt into contiguous
   ascending runs, one per rig; that curve then spans rigs, so the merge records it in
   `layer3.splitCurves`, the published metadata names it (`splitCurves=get-many=a+b`) and its
-  methodology says a step between rigs can be the rig difference, and each rig's escalation
-  starts from the row's starting rung. No more rigs are used than there are cells. It
+  methodology says a step between rigs can be the rig difference. Each rig's escalation starts
+  from the row's starting rung unless `-Layer3CarryVehiclesPerSilo` seeds it (below); the report
+  warns for a split curve with no seed. No more rigs are used than there are cells. It
   provisions the rigs concurrently (prefixes
   `<NamePrefix>1..K` truncated to nine characters, or fresh random ones) or uses a
   comma-separated `-ReuseAca a,b,c` list, runs one ordinary single-rig sweep per rig as a child
@@ -95,6 +101,16 @@ alphanumerics). Common shapes:
   rigs are only parked. Mind the regional vCPU quota: K rigs can hold K x max(`-SiloCounts`) x 4
   vCPU at once. Do not instead run several `-Layer 3` reports by hand against one document: each
   rewrites the whole multi-silo block with only its own cells.
+- **`-Layer3CarryVehiclesPerSilo 'get-many=128000,get-point=16000'`** seeds the per-silo load
+  each named workload (by workload mode) carries from smaller silo counts to larger ones, exactly
+  as resumed cells do, so it only raises a workload above its default rung. Use it when a sweep's
+  first silo count is not the workload's smallest - a curve split across rigs, or a back-fill of
+  only the larger cells - taking the values from the earlier sweep's settled `rungPerSilo`
+  (cohort `rungVehicles / siloCount`). It is passed to every rig, recorded in the state
+  (`layer3CarryVehiclesPerSilo`) and published as `carryVehiclesPerSilo=` in the metadata. A
+  malformed spec or unknown mode fails before anything provisions. Inside
+  `Invoke-Layer3Cohorts` the parameter is `-SeedVehiclesPerSilo`: PowerShell variable names are
+  case-insensitive, so naming it after the local `$carryVehiclesPerSilo` table silently erased it.
 - **`-Layer3OverlapHarvest`** runs a cohort's Log Analytics harvest (mostly waiting for log
   ingestion, up to ~7 minutes) in a background job while the next cohort runs, for every cohort
   whose result cannot change what the sweep does next: not a cell's first cohort (its throughput
@@ -264,7 +280,9 @@ membership, runs the producer job, parks the silos, then hands a pending-harvest
 (`<cohort log>.pending.json`: execution name, silo revision, cohort window, storage accounts) to
 `complete-cohort-aca.ps1`, which harvests the producer and silo logs from Log Analytics, appends
 one `[storage-metrics]` line per storage account the cohort used, grades the cohort and writes
-the cohort log. With `-DeferHarvest` it returns after parking instead, leaving
+the cohort log. Orleans' `Failed to address message` errors (`Orleans.Messaging[100071]`) are
+counted, not harvested: one `[aca-silo ...] suppressed N` line per replica. Parking six silos
+logged 124,000 of them in 30 s (#5100), which the 200-row paging took about 40 minutes to fetch. With `-DeferHarvest` it returns after parking instead, leaving
 `complete-cohort-aca.ps1 -PendingHarvestPath <path>` to the caller. The silos are scaled back to
 zero in a `finally` either way. Its load parameters are **per silo**, so every cell offers the
 same load per silo.
@@ -303,6 +321,19 @@ same load per silo.
 | `-FreezeWedgeSec <N>` | `60` | Longest tolerated mid-run freeze (cumulative ops not advancing while work is in flight) before the cell is graded `WEDGE` rather than `HEALTHY`; `0` disables the check. |
 | `-WalAccounts <1..8>` | `1` | Storage accounts the cohort's WAL partitions are spread across (`BENCH_WAL_ACCOUNTS` on silos and producer): the primary plus `WalAccounts-1` extra accounts. Fails before anything bills if the rig has fewer (`deploy-aca.ps1 -WalAccountCount`). `-ResetStorage` also empties every extra account. |
 | `-DeferHarvest` | off | Return once the producer has finished and the silos are parked, with `PendingHarvestPath` on the returned object; run `complete-cohort-aca.ps1 -PendingHarvestPath <path>` later to harvest, grade and write the log. The harvest is pinned to the cohort's execution name and silo revision, so its timing changes nothing measured. |
+
+**Transient `az` faults.** `Invoke-Az -TransientRetries N` re-runs a call whose output names a
+transient CLI or service fault (`Test-AzTransientFailure`: the CLI's "unexpected error" crash on a
+malformed response, a dropped connection, 429/500/502/503/504, a read timeout), 10 s apart and
+growing. Only idempotent calls use it: the producer `job update` (it only sets env vars; one such
+crash dropped a cohort before) and the Log Analytics queries of the job-log and silo-log
+harvests (one failed query dropped another). Never add it to `containerapp update` (each call mints a
+revision, so a retry after a hidden success tears down the cohort's cluster) or `job start` (a
+second execution). A cohort that still throws is skipped, and `-Resume` tops its cell up: new
+cohorts are tagged after the highest recorded tag (`c4` after `c2`, `c3`), never by count, which
+would overwrite an existing log. The harvests wrap every `if`-assigned query result in `@()`: an
+`if` assignment turns an empty array into `$null`, whose `.Count` throws under strict mode, so a
+silo log whose row count was an exact multiple of the 200-row page once failed a cohort's harvest.
 
 **Silo env does not persist between cohorts.** Each cohort applies its silo env with one
 `az containerapp update --set-env-vars`, which merges into the app's existing environment, so
@@ -364,10 +395,19 @@ Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step, and
 producer seeds the same keys after warm-up instead, logging `[producer] preseed treeId=.. entries=N`;
 `performance-report.ps1` marks a Layer 3 read cohort whose log lacks that line (or reports
 `entries=0`) `UNSEEDED`, re-runs it at the same rung up to twice, and never publishes it, because
-an unseeded cohort measures only the miss path (#3474). Layer 3 seeds in bounded slices,
-allowing eight attempts per unlanded slice and 300 seconds overall (including outstanding
-RPCs); progress resets attempts but never the deadline. Failure logs retain the offset,
-exception and budget. Layer 2 does not retry unseeded cohorts: it excludes them from the
+an unseeded cohort measures only the miss path (#3474). The Layer 3 seed is a bulk load, not
+`SetManyAsync`: the cohort's tree and tables are fresh, so every shard is empty, and
+`BenchPreseed.SeedAsync` sorts the keys ordinally and drives `ILattice.BulkAppendChunkAsync` in
+chunks of `BenchPreseed.ChunkSize` (16,384) under a per-chunk operation id
+(`preseed-<treeId>-<offset>`), so a retried chunk is an idempotent no-op on shards that applied
+it. It packs leaves to capacity with no splits and about one WAL append per leaf; the
+`SetManyAsync` seed it replaced stalled part-way through the 768,000-key six-silo `get-many`
+seed. The success line adds `method=bulk-append chunkSize=..`. A bulk-load chunk surfaces an Azure
+Tables server timeout or busy response unwrapped (`TableTransactionFailedException` ...
+`OperationTimedOut`), so the seed also retries those (`WarmUpRetryClassifier.IsTransientStorageTimeout`);
+before it did, one such timeout crashed the producer on its first attempt. It allows eight attempts per
+unlanded chunk and the scaled budget overall (including outstanding RPCs); progress resets
+attempts but never the deadline. Failure logs retain the offset, exception and budget. Layer 2 does not retry unseeded cohorts: it excludes them from the
 table. Tables state the usable throughput cohort count per row, and a failed attempted row
 cannot preserve an older result under the new run's metadata.
 
@@ -491,7 +531,8 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WARMUP_GATE_TIMEOUT_SEC` | 300 | Bound on the `BENCH_EXPECTED_SILOS` wait; the silo fails loudly rather than warming a partial cluster. |
 | `BENCH_WARMUP_GATE_SETTLE_SEC` | 5 | Extra delay after the gate opens, absorbing manifest skew between silos. `0` disables. |
 | `BENCH_WARMUP_BUDGET_SEC` | 480 | Producer, Orleans-client mode only: wall-clock ceiling (clamped to 30-3600 s) on the warm-up retry loop, so a warm-up that keeps hitting the response timeout is abandoned rather than billing N silos. `run-cohort-aca.ps1 -WarmUpBudgetSec` sets it (default 400). |
-| `BENCH_INFLIGHT_TAIL_BUDGET_SEC` | 12 | How long the ingest engine may spend draining in-flight flushes before emitting `FINAL`; work that settles inside it lands in `ops` or `failed`, work still in flight when it expires is reported as `unresolved=` (and grades the cohort `WEDGE` on both layers). The default fits the VM unit's 30 s systemd stop window, and `run-cohort.ps1` warns above 18; `run-cohort-aca.ps1 -InFlightTailBudgetSec` raises it (default 120), as ACA jobs have no stop window. |
+| `BENCH_PRESEED_BUDGET_SEC` | max(300, keys / 1,000) | Producer, read modes only: wall-clock budget for the Layer 3 read-mode preseed. The default scales with the key count (`BenchPreseed.BudgetFor`), because the keyspace is vehicles per silo x silos while one storage account absorbs the seed; `run-cohort-aca.ps1` widens its execution ceiling by the same excess over 300 s. Set it only to override the scaled default. |
+| `BENCH_INFLIGHT_TAIL_BUDGET_SEC` | 12 | How long the ingest engine may spend draining in-flight flushes before emitting `FINAL`; work that settles inside it lands in `ops` or `failed`, work still in flight when it expires is reported as `unresolved=`. Layer 2 grades it `WEDGE`, because its rungs are sub-saturation; Layer 3 carries it as data on a cohort that kept completing work (its saturation backlog, outside the completed-ops throughput), as it does failures, and leaves stalled cohorts to the freeze rule. The default fits the VM unit's 30 s systemd stop window, and `run-cohort.ps1` warns above 18; `run-cohort-aca.ps1 -InFlightTailBudgetSec` raises it (default 120), as ACA jobs have no stop window. |
 | `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
 | `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (count, min, p50/p75/p90/p99 and max per instrument/tree/shard/phase/status window). `performance-report.ps1` publishes a cohort's per-call quantiles by merging windows weighted by call count (`Merge-PhaseAWindows`, a piecewise-linear model of each window, since raw samples are not logged): on Layer 2 the windows lying inside the steady-state window, on Layer 3 every window at t>=15s of every silo (their clocks cannot be aligned to the producer's). It used to publish only the last window, which on a 45 s get-many cohort read p50 0.64 ms against 3.70 ms merged. `0` disables. |
 | `BENCH_MV_LAG_REPORT_SEC` | 5 | `set-point-mv` only: cadence (s) of the silo-side `[silo:mv-lag] t=.. view=.. applyLag=.. backlog=..` lines, plus a `final` line at shutdown. On Layer 3 the ingest engine runs in the producer process, which cannot observe the view maintainer's instruments, so `MV-FINAL lagAtStop=n/a` there is expected and these silo lines are the lag evidence. `0` disables. |
@@ -589,9 +630,13 @@ Key lines in the silo log:
   rig's accounts). `throttled` counts `ServerBusyError` + `ClientThrottlingError` transactions;
   the gap between `e2eLatencyMs` and `serverLatencyMs` is time outside the storage service.
   `wal0` also carries clustering and grain-state traffic. An account whose metrics never
-  landed reads `unavailable=<reason>`, never zeros. `performance-report.ps1` takes per cohort
-  the throttled share across accounts and the worst account's peak TPS and latencies, and per
-  cell the median, rendered in the multi-silo doc's `perf-storage:layer3` table. Not part of
+  landed reads `unavailable=<reason>`, never zeros. `timeouts` counts `ServerTimeoutError` +
+  `ClientTimeoutError`; `minuteTotals=<utc-minute>/<n>,...` is the account's per-minute series,
+  which lets accounts be summed minute by minute. `performance-report.ps1` takes per cohort the
+  timed-out and throttled totals and shares across accounts, the busiest minute of all accounts
+  combined (rendered as "Storage transactions"), and the worst account's latencies, and per
+  cell the median, rendered in the multi-silo doc's `perf-storage:layer3` table: a timed-out
+  column, and one sentence under it giving the worst cohort's throttled share. Not part of
   the grade.
 
 The CPU, RSS, and diagnostics lines appear only in the printed summary, not in the log:

@@ -79,28 +79,46 @@ $parsed = @(Read-StorageMetricsLines -Lines $lines)
 Assert-Case 'only storage-metrics lines parse' ($parsed.Count -eq 3)
 Assert-Case 'figures round-trip' ($parsed[0].Transactions -eq 7510 -and $parsed[0].Throttled -eq 300 -and $parsed[0].E2ELatencyMs -eq 15.0)
 Assert-Case 'n/a latency reads back as null' ($null -eq $parsed[1].ServerLatencyMs)
+Assert-Case 'minute totals are culture-free UTC minutes' (($m.MinuteTotals.Keys | Sort-Object) -join ',' -eq '2026-10-26T10:00,2026-10-26T10:01')
+Assert-Case 'minute totals round-trip through the line' ($line -match ' minuteTotals=2026-10-26T10:00/1204,2026-10-26T10:01/6306$' -and $parsed[0].MinuteTotals['2026-10-26T10:01'] -eq 6306)
 Assert-Case 'unavailable is explicit and space-free' ($parsed[2].Unavailable -eq 'query_failed' -and $null -eq $parsed[2].Transactions)
 
 # --- per-cohort summary ------------------------------------------------------
 $sum = Get-StorageMetricsSummary -Accounts $parsed
 Assert-Case 'summary ignores the unavailable account but counts it as missing' ($sum.Accounts -eq 2 -and $sum.MissingAccounts -eq 1)
 Assert-Case 'throttle ratio is across all accounts' ($sum.ThrottleRatio -eq [math]::Round(600 / 15020.0, 4))
+Assert-Case 'peak TPS adds the accounts minute by minute' ($sum.PeakTps -eq [math]::Round(2 * 6306 / 60.0, 1))
+$offset = @(
+	@{ Account = 'a'; Unavailable = $null; Transactions = 700; Throttled = 0; ThrottledSuccess = 0; Timeouts = 0; PeakTps = 10.0; MinuteTotals = @{ '2026-10-26T10:00' = 600L; '2026-10-26T10:01' = 100L } },
+	@{ Account = 'b'; Unavailable = $null; Transactions = 700; Throttled = 0; ThrottledSuccess = 0; Timeouts = 0; PeakTps = 10.0; MinuteTotals = @{ '2026-10-26T10:00' = 100L; '2026-10-26T10:01' = 600L } }
+)
+Assert-Case 'peaks in different minutes are not added together' ((Get-StorageMetricsSummary -Accounts $offset).PeakTps -eq [math]::Round(700 / 60.0, 1))
+$legacy = @(@{ Account = 'a'; Unavailable = $null; Transactions = 700; Throttled = 0; ThrottledSuccess = 0; Timeouts = 0; PeakTps = 10.0 }, @{ Account = 'b'; Unavailable = $null; Transactions = 700; Throttled = 0; ThrottledSuccess = 0; Timeouts = 0; PeakTps = 12.5 })
+Assert-Case 'lines without minute totals fall back to the sum of account peaks' ((Get-StorageMetricsSummary -Accounts $legacy).PeakTps -eq 22.5)
+Assert-Case 'timeouts are summed across accounts with their share' ($sum.Timeouts -eq 12 -and $sum.TimeoutRatio -eq [math]::Round(12 / 15020.0, 6))
 Assert-Case 'latency is the worst account, not an average' ($sum.E2ELatencyMs -eq 15.0 -and $sum.ServerLatencyMs -eq 6.0)
 Assert-Case 'no usable account is null, never an idle zero' ($null -eq (Get-StorageMetricsSummary -Accounts @($parsed[2])) -and $null -eq (Get-StorageMetricsSummary -Accounts @()))
 
 # --- per-cell storage and the table -------------------------------------------
 $cohorts = @(
-	@{ storage = @{ ThrottleRatio = 0.01; PeakAccountTps = 100.0; ServerLatencyMs = 5.0; E2ELatencyMs = 9.0 } },
-	@{ storage = @{ ThrottleRatio = 0.03; PeakAccountTps = 300.0; ServerLatencyMs = 7.0; E2ELatencyMs = 11.0 } },
+	@{ storage = @{ ThrottleRatio = 0.01; Timeouts = 10; TimeoutRatio = 0.001; PeakTps = 100.0; ServerLatencyMs = 5.0; E2ELatencyMs = 9.0 } },
+	@{ storage = @{ ThrottleRatio = 0.03; Timeouts = 30; TimeoutRatio = 0.003; PeakTps = 300.0; ServerLatencyMs = 7.0; E2ELatencyMs = 11.0 } },
 	@{ storage = $null }
 )
 $cell = Get-Layer3CellStorage -Cohorts $cohorts
-Assert-Case 'cell storage is the median across cohorts that carry it' ($cell.storageN -eq 2 -and $cell.throttleRatio -eq 0.02 -and $cell.peakAccountTps -eq 200.0)
+Assert-Case 'cell storage is the median across cohorts that carry it' ($cell.storageN -eq 2 -and $cell.throttleRatio -eq 0.02 -and $cell.peakTps -eq 200.0 -and $cell.timeouts -eq 20 -and $cell.timeoutRatio -eq 0.002)
+Assert-Case 'cell keeps the worst cohort''s throttle share' ($cell.throttleRatioMax -eq 0.03)
 Assert-Case 'a cell with no storage evidence is null' ($null -eq (Get-Layer3CellStorage -Cohorts @(@{ storage = $null })))
 $rowsAgg = @{ '`SetManyAsync` (4,096 keys/call)' = @{ '1' = @{ siloCount = 1; walAccounts = 4; storage = $cell }; '2' = @{ siloCount = 2; walAccounts = 4; storage = $null } } }
 $table = Render-Layer3StorageTable -RowsAgg $rowsAgg
 Assert-Case 'storage table renders measured cells only' (@($table -split "`n" | Where-Object { $_ -match '^\| `SetManyAsync`' }).Count -eq 1)
-Assert-Case 'storage table shows accounts, throttle percent and latency' ($table -match '\| 1 \| 4 \| 2\.00% \| 200 tx/s \| 6\.0 ms \| 10\.0 ms \|')
+Assert-Case 'storage table shows accounts, timeouts with share, and latency' ($table -match '\| 1 \| 4 \| 20 \(0\.20%\) \| 200 tx/s \| 6\.0 ms \| 10\.0 ms \|')
+Assert-Case 'worst throttling is stated under the table' ($table -match 'reached 3\.00% of a cohort''s transactions at worst \(`SetManyAsync` \(4,096 keys/call\) at 1 silo\)')
+$zero = Get-Layer3CellStorage -Cohorts @(@{ storage = @{ ThrottleRatio = 0.0; Timeouts = 2; TimeoutRatio = 0.00002; PeakTps = 10.0 } })
+$zeroTable = Render-Layer3StorageTable -RowsAgg @{ '`SetManyAsync` (4,096 keys/call)' = @{ '2' = @{ siloCount = 2; walAccounts = 1; storage = $zero } } }
+Assert-Case 'a sweep with no throttling says so' ($zeroTable -match 'recorded no throttled transactions')
+Assert-Case 'a tiny non-zero timeout share is not printed as 0.00%' ($zeroTable -match '\| 2 \(<0\.01%\) \|')
+Assert-Case 'a cell from before timeouts were kept reads n/a, not zero' ((Render-Layer3StorageTable -RowsAgg @{ '`SetManyAsync` (4,096 keys/call)' = @{ '1' = @{ siloCount = 1; walAccounts = 1; storage = @{ throttleRatio = 0.0; peakTps = 5.0 } } } }) -match '\| 1 \| 1 \| n/a \|')
 Assert-Case 'a sweep with no storage evidence says so instead of an empty table' ((Render-Layer3StorageTable -RowsAgg @{ '`SetManyAsync` (4,096 keys/call)' = @{ '1' = @{ siloCount = 1; storage = $null } } }) -match '^_No storage-side metrics')
 Assert-Case 'storage table stays ASCII' ($table -notmatch '[^\x00-\x7F]')
 
@@ -171,18 +189,58 @@ $docCopy = [IO.Path]::GetTempFileName()
 try {
 	Copy-Item (Join-Path $PSScriptRoot '..\..\..\docs\lattice\performance-multi-silo.md') $docCopy -Force
 	$withStorage = New-RigState 'set-many' 'westus3' 4
-	$withStorage.layer3.cohorts['set-many']['1'][0]['storage'] = @{ ThrottleRatio = 0.05; PeakAccountTps = 1500.0; ServerLatencyMs = 12.0; E2ELatencyMs = 30.0 }
+	$withStorage.layer3.cohorts['set-many']['1'][0]['storage'] = @{ ThrottleRatio = 0.05; Timeouts = 1234; TimeoutRatio = 0.0123; PeakTps = 1500.0; ServerLatencyMs = 12.0; E2ELatencyMs = 30.0 }
 	$renderState = Merge-Layer3RigStates -States @($withStorage) -Prefixes @('ra')
 	Assert-Case 'the real document renders' (Update-MultiSiloDocMarkers -DocPath $docCopy -State $renderState -WarningAction SilentlyContinue)
 	$rendered = [IO.File]::ReadAllText($docCopy)
 	$storageBlock = [regex]::Match($rendered, '(?s)<!-- perf-storage:layer3:start.*?<!-- perf-storage:layer3:end -->').Value
-	Assert-Case 'the storage block carries the measured cell' ($storageBlock -match '\| `SetManyAsync` \(4,096 keys/call\) \| 1 \| 4 \| 5\.00% \| 1,500 tx/s \| 12\.0 ms \| 30\.0 ms \|')
+	Assert-Case 'the storage block carries the measured cell' ($storageBlock -match '\| `SetManyAsync` \(4,096 keys/call\) \| 1 \| 4 \| 1,234 \(1\.23%\) \| 1,500 tx/s \| 12\.0 ms \| 30\.0 ms \|' -and $storageBlock -match 'reached 5\.00%')
 	Assert-Case 'exactly one storage block remains' ([regex]::Matches($rendered, 'perf-storage:layer3:start').Count -eq 1)
 	Assert-Case 'the grid metadata records the account count' ($rendered -match '(?m)^\s+walAccounts=4\s*$')
 } finally {
 	Remove-Item -LiteralPath $docCopy -Force -ErrorAction SilentlyContinue
 }
 
+# --- transient az retry ------------------------------------------------------
+# az and Start-Sleep are shadowed by functions, which PowerShell resolves before
+# the executable and the cmdlet, so Invoke-Az runs without the CLI or a delay.
+$script:azScript = @()
+$script:azCalls = 0
+function az {
+	$i = $script:azCalls++
+	$step = $script:azScript[[Math]::Min($i, $script:azScript.Count - 1)]
+	$global:LASTEXITCODE = $step.Code
+	return $step.Out
+}
+function Start-Sleep { param([int] $Seconds) }
+$crash = @{ Code = 1; Out = @('ERROR: The command failed with an unexpected error. Here is the traceback:', 'ERROR: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)') }
+$ok = @{ Code = 0; Out = @('WARNING: The behavior of this command has been altered by the following extension: containerapp', 'done') }
+
+$script:azScript = @($crash, $ok); $script:azCalls = 0
+$r = Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 3 3>$null
+Assert-Case 'a transient CLI crash is retried and the retry''s output returned' ($r -eq 'done' -and $script:azCalls -eq 2)
+
+$script:azScript = @($crash); $script:azCalls = 0; $threw = $false
+try { Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 2 3>$null | Out-Null } catch { $threw = $true }
+Assert-Case 'a persistent transient fault stops after the retry budget and throws' ($threw -and $script:azCalls -eq 3)
+
+$script:azScript = @(@{ Code = 1; Out = @('ERROR: (ResourceNotFound) The Resource was not found.') }); $script:azCalls = 0; $threw = $false
+try { Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 3 3>$null | Out-Null } catch { $threw = $true }
+Assert-Case 'a non-transient failure is not retried' ($threw -and $script:azCalls -eq 1)
+
+$script:azScript = @($crash, $ok); $script:azCalls = 0; $threw = $false
+try { Invoke-Az @('containerapp', 'update') | Out-Null } catch { $threw = $true }
+Assert-Case 'without -TransientRetries a transient fault is not retried (non-idempotent calls)' ($threw -and $script:azCalls -eq 1)
+
+$script:azScript = @($crash); $script:azCalls = 0
+$null = Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 1 -AllowFailure 3>$null
+Assert-Case '-AllowFailure after exhausted retries returns with the failing exit code' ($LASTEXITCODE -eq 1 -and $script:azCalls -eq 2)
+$runCohortText = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run-cohort-aca.ps1'))
+$jobStart = [regex]::Match($runCohortText, "(?s)'containerapp', 'job', 'start'.*?\)[^\r\n]*").Value
+$siloCount = @($common.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-AcaSiloCount' }, $true))[0].Extent.Text
+Assert-Case 'the idempotent producer job update retries' ($runCohortText.Contains("'--set-env-vars') + `$prodEnv + @('-o', 'none')) -TransientRetries 3"))
+Assert-Case 'job start and the silo update never retry (a hidden success would duplicate them)' ($jobStart -and $jobStart -notmatch 'TransientRetries' -and $siloCount -notmatch 'TransientRetries')
+Remove-Item Function:\az, Function:\Start-Sleep
 # --- child process argument rendering ---------------------------------------
 Assert-Case 'int arrays render as a PowerShell list' ((ConvertTo-ChildArgumentText @(1, 2, 4)) -eq '1,2,4')
 Assert-Case 'doubles render invariantly' ((ConvertTo-ChildArgumentText 0.9) -eq '0.9')

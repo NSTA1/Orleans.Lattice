@@ -69,7 +69,7 @@ Back on Build, next: TTL and soft delete. The links are on this episode's page i
 <!-- The list is written from the series plan (videos/series.json) by `npm run companions` in videos/; edit the plan, not this block. -->
 <!-- where-next:begin -->
 
-- **Back to Build:** TTL and soft delete
+- **Back to Build:** [TTL and soft delete](ttl-and-soft-delete.md)
 - **The pages it introduces:** [Verified atomic commit](../lattice/verified-atomic-commit.md)
 
 <!-- where-next:end -->

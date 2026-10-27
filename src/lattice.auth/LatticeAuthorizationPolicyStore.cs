@@ -63,6 +63,11 @@ internal sealed class LatticeAuthorizationPolicyStore(
     public async Task PutRuleAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rule);
+
+        // Shape first: confinement and the authoring guard reason only about the
+        // defined kinds, so a rule carrying an undefined one is refused before
+        // either runs. Reads nothing.
+        AuthConstants.EnsureWellFormedRule(rule, nameof(rule));
         EnsureAppOwnedRuleWritable(rule.RuleId, nameof(rule));
         EnsureTenantOwnedRuleWritable(rule.RuleId, nameof(rule));
 

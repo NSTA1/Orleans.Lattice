@@ -20,4 +20,10 @@ internal static class AuthTypeAliases
 
     /// <summary>Alias for <see cref="LatticeAuthDecisionEvent"/>.</summary>
     internal const string LatticeAuthDecisionEvent = "olz.de";
+
+    /// <summary>Alias for <see cref="AuthPolicyEpoch"/>.</summary>
+    internal const string AuthPolicyEpoch = "olz.pe";
+
+    /// <summary>Alias for <see cref="IAuthPolicyEpochGrain"/>.</summary>
+    internal const string IAuthPolicyEpochGrain = "olz.pg";
 }

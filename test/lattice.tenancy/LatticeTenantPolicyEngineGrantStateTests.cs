@@ -137,6 +137,30 @@ public sealed class LatticeTenantPolicyEngineGrantStateTests
         Assert.That(decision.Reason, Does.Contain("no active grant"));
     }
 
+    [Test]
+    public async Task An_active_grant_from_a_suspended_owner_admits_nothing_until_it_is_resumed()
+    {
+        // Suspension fences the owner's data-plane traffic; a crossing into its trees
+        // is that traffic, so its grants must stop admitting while it is suspended.
+        var record = Record("acme", admins: ["alice"]);
+        var offered = CrossTenantGrant.Create("beta", TenantGranteeKind.Tenant, Scope, TenantGrantOperations.Read);
+        record.OfferGrant(offered, Clock(100), "granter");
+        record.TransitionGrant(offered.GrantId, TenantGrantState.Active, Clock(110), "grantee");
+
+        record.SetStatus(TenantStatus.Suspended, Clock(120), "operator");
+        var whileSuspended = await ResolveOnAsync(record);
+
+        record.SetStatus(TenantStatus.Active, Clock(130), "operator");
+        var afterResume = await ResolveOnAsync(record);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(whileSuspended.Allowed, Is.False, "a suspended owner's grant must not admit");
+            Assert.That(whileSuspended.Reason, Does.Contain("is not active"));
+            Assert.That(afterResume.Allowed, Is.True, "the grant is retained and admits again once resumed");
+        });
+    }
+
     /// <summary>
     /// The end-to-end lifecycle as the engine sees it, over one grant: offered and
     /// denying, approved and allowing, revoked and denying again.

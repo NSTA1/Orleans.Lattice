@@ -137,6 +137,35 @@ public sealed class LatticeAuthDecisionObserverTests
     }
 
     [Test]
+    public async Task A_decision_inside_an_explain_scope_is_neither_audited_nor_counted()
+    {
+        // An administrator's explain runs the gate in another subject's name. Auditing
+        // it wrote a decision naming a subject who never made the request.
+        using var collector = new MeterCollector<long>(
+            LatticeAuthMetrics.MeterName, LatticeAuthMetrics.DecisionsName);
+        var sink = new CapturingSink();
+        var observer = CreateObserver(
+            new LatticeAuthOptions { EnableAuditSink = true, AuditVerbosity = LatticeAuthAuditVerbosity.AllDecisions },
+            sink);
+        var deny = LatticeAccessDecision.Deny("blocked");
+
+        await ObserveInsideExplainScopeAsync(observer, deny);
+        var request = Request();
+        observer.Observe(in request, in deny, default, 1, 0);
+
+        Assert.That(sink.Events, Has.Count.EqualTo(1), "only the decision made after the explain returned is audited");
+        Assert.That(collector.Measurements.Count(m => m.Value == 1), Is.EqualTo(1), "only that decision is counted");
+    }
+
+    private static async Task ObserveInsideExplainScopeAsync(LatticeAuthDecisionObserver observer, LatticeAccessDecision decision)
+    {
+        AuthExplainScope.Enter();
+        await Task.Yield();
+        var request = Request();
+        observer.Observe(in request, in decision, default, 1, 0);
+    }
+
+    [Test]
     public void Zero_sampling_ratio_suppresses_all_audit_dispatch()
     {
         var sink = new CapturingSink();

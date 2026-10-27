@@ -137,6 +137,15 @@ internal sealed class LatticeAuthAdmin(
         ArgumentException.ThrowIfNullOrEmpty(groupId);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
+        // D2: a tenant group is removed only by the tenant directory facade's
+        // cascade. Deleting just its record here would leave its edges, registry
+        // entries and rules in force, and the tenant facade treats a group without
+        // a record as already removed, so nothing could clean them up.
+        if (IsTenantTierGroupId(groupId))
+        {
+            throw LatticeTenantOwnedGroupException.RemovalRejected(groupId, nameof(groupId));
+        }
+
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             await _directory.RemoveGroupAsync(groupId, cancellationToken).ConfigureAwait(false);
@@ -579,7 +588,7 @@ internal sealed class LatticeAuthAdmin(
         // explained verdict is identical to the enforced decision by construction.
         var (key, rangeStart, rangeEnd) = TranslateScope(scope);
         var request = new LatticeAccessRequest(scope.TreeId, operation, subject, key, rangeStart, rangeEnd);
-        var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
+        var decision = await AuthorizeExplainedAsync(request, cancellationToken).ConfigureAwait(false);
         var (decidingLayer, decidingRuleId) = TraceDecidingRule(subject, request);
 
         var matched = await CollectMatchedRulesAsync(subject, operation, scope, cancellationToken).ConfigureAwait(false);
@@ -599,6 +608,22 @@ internal sealed class LatticeAuthAdmin(
             DecidingLayer = decidingLayer,
             DecidingRuleId = decidingRuleId,
         };
+    }
+
+    /// <summary>
+    /// Runs the explained subject's request through the gate inside an
+    /// <see cref="AuthExplainScope"/>, so the evaluation is not counted or audited
+    /// as that subject's access attempt. The scope ends when this method returns.
+    /// </summary>
+    /// <param name="request">The explained request.</param>
+    /// <param name="cancellationToken">Cancels the evaluation.</param>
+    /// <returns>The gate's decision.</returns>
+    private async ValueTask<LatticeAccessDecision> AuthorizeExplainedAsync(
+        LatticeAccessRequest request,
+        CancellationToken cancellationToken)
+    {
+        AuthExplainScope.Enter();
+        return await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

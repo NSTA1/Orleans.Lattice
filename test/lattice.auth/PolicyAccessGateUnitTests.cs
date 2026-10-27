@@ -39,6 +39,25 @@ public sealed class PolicyAccessGateUnitTests
         Assert.That(decision.Allowed, Is.True, "a bootstrap administrator is unconditionally allowed");
     }
 
+    [Test]
+    public async Task AuthorizeAsync_an_anonymous_caller_is_never_a_bootstrap_administrator()
+    {
+        // Defence in depth behind the options validator: even an options instance
+        // that skipped validation cannot make an unauthenticated caller the root
+        // of trust.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            BootstrapAdministrators = new HashSet<string>(StringComparer.Ordinal) { LatticeSubject.AnonymousSubjectId },
+        };
+        var harness = await AuthGateHarness.CreateAsync(options);
+        var request = new LatticeAccessRequest(PolicyTree, LatticeOperation.Admin, LatticeSubject.Anonymous);
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.False);
+    }
+
     // ---- Control-plane isolation (reserved namespace) --------------------
 
     [Test]

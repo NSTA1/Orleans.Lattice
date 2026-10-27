@@ -93,6 +93,74 @@ internal static class AuthConstants
     }
 
     /// <summary>
+    /// Whether <paramref name="treeId"/> names a control-plane system-data tree that a
+    /// data-plane grant must never expose: either registry namespace
+    /// (<see cref="IsControlPlaneRegistryTree"/>) or the membership store
+    /// (<c>sys-membership-*</c>, owned by <c>Orleans.Lattice.Membership</c>), which
+    /// holds every group and membership edge in the cluster - every tenant's tenant
+    /// groups included. The enforcement gate governs these with control-plane read
+    /// isolation rather than the data-plane default effect, and the evaluator excludes
+    /// them from the all-trees tier, so neither <see cref="LatticeEffect.Allow"/> as
+    /// the default nor a cluster-wide all-trees wildcard can read them; an explicit
+    /// rule scoped at the tree, or a bootstrap administrator, still can. Allocation-
+    /// free: at most three ordinal prefix probes on the request's tree id.
+    /// </summary>
+    /// <param name="treeId">The candidate tree id. Must not be <c>null</c>.</param>
+    /// <returns><c>true</c> if the id is a control-plane system-data tree; otherwise <c>false</c>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <c>null</c>.</exception>
+    internal static bool IsControlPlaneDataTree(string treeId) =>
+        IsControlPlaneRegistryTree(treeId)
+        || treeId.StartsWith(Membership.MembershipConstants.TreePrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="rule"/> is well formed: a non-empty rule id; a defined
+    /// effect; a subject of a defined kind with a non-empty id; and a scope of a
+    /// defined kind over a non-empty tree id whose key or prefix is absent for a
+    /// whole-tree scope and non-empty otherwise. The public constructors check the
+    /// ids and the key-or-prefix shape but not the enum values, and Orleans
+    /// deserialization and <c>with</c> expressions skip them entirely, so a rule
+    /// from a client, by replication or from a restore can carry an undefined kind.
+    /// The evaluator would read an undefined subject kind as a group and an
+    /// undefined scope kind as the whole tree, while tenant confinement tests only
+    /// the defined kinds, so a malformed rule could grant more than any rule an
+    /// author could write. Allocation-free.
+    /// </summary>
+    /// <param name="rule">The rule. Must not be <c>null</c>.</param>
+    /// <returns><c>true</c> when the rule is well formed.</returns>
+    internal static bool IsWellFormedRule(LatticeAuthorizationRule rule) =>
+        !string.IsNullOrEmpty(rule.RuleId)
+        && Enum.IsDefined(rule.Effect)
+        && rule.Subject is { } subject
+        && Enum.IsDefined(subject.Kind)
+        && !string.IsNullOrEmpty(subject.Id)
+        && rule.Scope is { } scope
+        && !string.IsNullOrEmpty(scope.TreeId)
+        && scope.Kind switch
+        {
+            LatticeScopeKind.Tree => scope.KeyOrPrefix is null,
+            LatticeScopeKind.Key or LatticeScopeKind.Prefix => !string.IsNullOrEmpty(scope.KeyOrPrefix),
+            _ => false,
+        };
+
+    /// <summary>
+    /// Refuses a rule that is not well formed (<see cref="IsWellFormedRule"/>).
+    /// </summary>
+    /// <param name="rule">The rule. Must not be <c>null</c>.</param>
+    /// <param name="paramName">The caller's parameter name, for the thrown exception.</param>
+    /// <exception cref="ArgumentException">The rule is not well formed.</exception>
+    internal static void EnsureWellFormedRule(LatticeAuthorizationRule rule, string paramName)
+    {
+        if (!IsWellFormedRule(rule))
+        {
+            throw new ArgumentException(
+                "An authorization rule must carry a rule id, a defined effect, a subject of a defined kind with an id, "
+                + "and a scope of a defined kind over a tree id, with a key or prefix exactly when the scope is a key "
+                + "or prefix scope.",
+                paramName);
+        }
+    }
+
+    /// <summary>
     /// Rejects a tree id that collides with the reserved <c>sys-auth-*</c>
     /// namespace. Used on the policy-store write path so a rule can never be
     /// scoped at (and thereby steer authorization over) the internal policy tree,

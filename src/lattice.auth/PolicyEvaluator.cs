@@ -456,7 +456,7 @@ internal static class PolicyEvaluator
     /// tree is a genuine application tree - not a control-plane namespace (the
     /// reserved authorization namespace <c>sys-auth-*</c>, the tenant-registry and
     /// app-registry system-data namespaces <c>sys-tenant-*</c> and <c>sys-app-*</c>,
-    /// or the tenant-administration
+    /// the membership store <c>sys-membership-*</c>, or the tenant-administration
     /// capability namespace <c>_lattice_tenant_admin_*</c>) and not the sentinel id
     /// <c>"*"</c> itself. The control-plane exclusion is the fail-closed guard that
     /// keeps a wildcard data grant from ever reaching the control plane -
@@ -481,7 +481,7 @@ internal static class PolicyEvaluator
         }
 
         return !LatticeAuthReservedTrees.IsReserved(treeId)
-            && !AuthConstants.IsControlPlaneRegistryTree(treeId)
+            && !AuthConstants.IsControlPlaneDataTree(treeId)
             && !IsTenantAdminCapabilityNamespace(treeId);
     }
 

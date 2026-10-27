@@ -1,0 +1,16 @@
+{
+  "path": "build",
+  "order": 6,
+  "items": [
+    "B6"
+  ],
+  "poster": {
+    "scene": "going-durable",
+    "beat": 0,
+    "offset": 3.5
+  },
+  "published": {
+    "cut": "8d6a82f0db6f",
+    "bytes": 7213431
+  }
+}

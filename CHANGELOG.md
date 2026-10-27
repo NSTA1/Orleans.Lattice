@@ -202,6 +202,38 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - gRPC authorization follows the routed method.** A re-cased request path reached the real handler while the API interceptors, matching the raw path ordinally, skipped authentication and authorization. Interceptors now key every decision on the routed method's canonical name. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Api.Apps.Grpc`, `Orleans.Lattice.Api.Auth.Grpc`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Data.Grpc`, `Orleans.Lattice.Api.Replication.Grpc`, `Orleans.Lattice.Api.Schema.Grpc`, `Orleans.Lattice.Api.State.Grpc`, `Orleans.Lattice.Api.Telemetry.Grpc`, `Orleans.Lattice.Api.TenantAdmin.Grpc`, `Orleans.Lattice.Api.TreeAdmin.Grpc`, `Orleans.Lattice.Replication.Grpc`)
+
+- **Security - Policy changes reach every silo.** A rule write refreshed only the silo that committed it, so the others kept enforcing their old policy, revoked grants included. A cluster-wide policy epoch now makes every silo rebuild its snapshot within about a second. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Auth`)
+
+- **Security - The membership store is control plane.** The `sys-membership-*` trees, which hold every group and membership edge across tenants, were readable under a default effect of allow or an all-trees grant. They are now isolated like the registry trees. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`)
+
+- **Security - No crossings into a suspended tenant.** A cross-tenant grant kept admitting access to a tenant after it was suspended. A grant now applies only while the tenant that owns the tree is active. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Tenancy`)
+
+- **Security - A suspended tenant's administrators are fenced.** A suspended tenant's own administrators kept their tenant-admin authority. That authority now requires an active tenant; platform operators are unaffected. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Api.TenantAdmin`)
+
+- **Security - Snapshots authorize their destination.** A snapshot checked only its source, so a caller could write the copy into a tree it had no rights on. It now also requires `Admin` on the destination tree. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice`)
+
+- **Security - Deleting a tenant removes grants issued to it.** Cross-tenant grants naming a deleted tenant survived it, so a tenant re-created under the same id inherited them. Deletion now removes them. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Tenancy`)
+
+- **Security - Suspension wins against a skewed clock.** A suspend stamped from a slow clock lost the merge to an older status written by a fast one, leaving the tenant active. It is now stamped past the record's status. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Api.TenantAdmin`)
+
+- **Security - Exact-id admin checks skip tenant-group ids.** With delegated tenant access off, a user whose id equalled a `t/` group in a tenant's admin set was treated as that tenant's administrator. Group ids no longer match a subject id. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Api.TenantAdmin`)
+
+- **Security - Tenant creation confines its seeded administrators.** Creating a tenant accepted another tenant's group, or a malformed `t/` id, as an initial administrator. Such a seed is now refused before anything is written. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Api.TenantAdmin`)
+
+- **Security - Reserved ids cannot be bootstrap administrators.** `BootstrapAdministrators` now refuses `anonymous`, `system` and `t/` ids, and an anonymous caller is never treated as one, so a misconfiguration cannot make every unauthenticated caller an administrator. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Auth`)
+
+- **Security - Malformed authorization rules are refused.** A rule with an undefined subject or scope kind evaluated as a group or whole-tree grant, past tenant confinement. The policy store now refuses such a rule, and the compiler drops any already stored. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Auth`)
+
+- **Security - External clients cannot assert saga context.** The capability filter now strips two internal markers from external Orleans clients: the saga prepare flag, which skipped admission control and the replicated-tree shape guard, and the read-isolation registry snapshot. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice`)
+
+- **Security - The membership cache honours every flush.** A flush racing a resolution could leave the pre-flush subject cached for a full TTL, and a change to `LatticeMembershipOptions` flushed nothing. Both now evict. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Membership`)
+
+- **Security - Explain stays out of the audit trail.** Explaining another subject's access recorded the evaluation as that subject's own decision. It is now neither audited nor counted; the caller's own authorization check still is. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Auth`)
+
+- **Security - Only the tenant cascade removes a tenant group.** The cluster facade deleted just a tenant group's record, leaving its edges, admin entries and rules in force beyond the tenant's reach. It now refuses `t/` ids. ([#5108](https://github.com/NSTA1/Orleans.Lattice/pull/5108)) (`Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.Abstractions`)
+
 - **Security - Patched cryptography dependency.** Hosted Entra sign-in now requires System.Security.Cryptography.Pkcs 10.0.13, fixing GHSA-2fmv-rv2c-59x7 and GHSA-846f-f764-76mx. ([#5096](https://github.com/NSTA1/Orleans.Lattice/pull/5096)) (`Orleans.Lattice.Explorer.Entra.Web`)
 
 - **Security - Telemetry range queries cap evaluation points.** A range query whose window and step would yield more than 11,000 points is refused before reaching the backend, so a tiny step can no longer force an unbounded evaluation. ([#5091](https://github.com/NSTA1/Orleans.Lattice/pull/5091)) (`Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`)

@@ -41,6 +41,9 @@ public sealed class LatticeCapabilityStrippingCallFilterTests
         LatticeEventConstants.ForwardedPrepareRequestContextKey,
         LatticeEventConstants.NewLeafIntentRequestContextKey,
         LatticeEventConstants.CrdtJoinMergeRequestContextKey,
+        LatticeEventConstants.PreparedRequestContextKey,
+        LatticeEventConstants.RegistrySnapshotRequestContextKey,
+        LatticeEventConstants.RegistrySnapshotUnavailableRequestContextKey,
     ];
 
     [TearDown]

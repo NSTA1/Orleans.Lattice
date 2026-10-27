@@ -131,13 +131,16 @@ public interface ITenantPolicyEngine
     /// declined (<see cref="TenantGrantState.Rejected"/>), or withdrawn
     /// (<see cref="TenantGrantState.Revoked"/>) grant resolves to a denial here.
     /// This method is the single seam at which a grant becomes an allow, and so
-    /// the single place that gate is applied.
+    /// the single place that gate is applied. A granting tenant that is not
+    /// <see cref="TenantStatus.Active"/> admits no crossing at all: its traffic is
+    /// fenced while it is suspended, so its grants authorize nothing until it is
+    /// resumed.
     /// </remarks>
     /// <param name="sourceTenant">The tenant requesting access.</param>
     /// <param name="targetTenant">The tenant whose data is being accessed (the granting tenant).</param>
     /// <param name="scope">The scope (tree name or prefix) being accessed. Must not be <c>null</c>.</param>
     /// <param name="operation">The operation being requested.</param>
-    /// <returns>An allow decision when a matching active grant exists, or a denial carrying the reason.</returns>
+    /// <returns>An allow decision when the granting tenant is active and holds a matching active grant, or a denial carrying the reason.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
     TenantAccessDecision ResolveCrossTenantGrant(
         TenantId sourceTenant,

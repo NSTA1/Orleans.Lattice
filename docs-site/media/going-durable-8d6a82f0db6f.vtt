@@ -1,0 +1,145 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:04.744
+TTL and soft delete showed how
+data goes away when you ask it to.
+
+2
+00:00:04.744 --> 00:00:07.944
+Here, we stop it going away
+when a silo restarts.
+
+3
+00:00:08.294 --> 00:00:13.241
+This is Going durable: durable grain
+storage and a durable write-ahead log,
+
+4
+00:00:13.241 --> 00:00:15.550
+in place of the in-memory defaults.
+
+5
+00:00:16.550 --> 00:00:19.493
+Every episode so far has run
+on the defaults,
+
+6
+00:00:19.493 --> 00:00:22.306
+and the defaults keep everything
+in memory.
+
+7
+00:00:22.656 --> 00:00:24.572
+A tree lives in two places.
+
+8
+00:00:24.572 --> 00:00:28.190
+Grain storage holds its leaves
+and their snapshots,
+
+9
+00:00:28.190 --> 00:00:32.588
+and the write-ahead log holds
+every committed write, in order.
+
+10
+00:00:32.588 --> 00:00:38.051
+In memory, neither survives a restart,
+so going durable means replacing both.
+
+11
+00:00:39.051 --> 00:00:40.493
+Start with grain storage.
+
+12
+00:00:40.493 --> 00:00:44.991
+The callback you pass when you register
+Lattice chooses it, so swap the memory
+
+13
+00:00:44.991 --> 00:00:48.797
+provider for a durable Orleans provider,
+here Azure Table storage.
+
+14
+00:00:49.147 --> 00:00:53.939
+That provider must enforce ETags, so
+that a write presenting a stale one fails.
+
+15
+00:00:53.939 --> 00:00:58.125
+Orleans' own durable providers do,
+and each silo checks as it starts:
+
+16
+00:00:58.125 --> 00:01:02.917
+by default, a provider that accepts a
+stale write stops the silo from starting.
+
+17
+00:01:03.917 --> 00:01:05.481
+Then the write-ahead log.
+
+18
+00:01:05.481 --> 00:01:07.046
+With no cloud dependency,
+
+19
+00:01:07.046 --> 00:01:11.614
+the file provider keeps it on local disk:
+one call, and a root directory.
+
+20
+00:01:11.964 --> 00:01:15.214
+It suits a single container
+with a mounted volume.
+
+21
+00:01:15.214 --> 00:01:20.609
+Each batch is all or nothing, so a crash
+before a batch is committed rolls it back.
+
+22
+00:01:21.609 --> 00:01:24.765
+For production deployments replicated
+across regions,
+
+23
+00:01:24.765 --> 00:01:28.694
+the Azure Table provider keeps the log
+in a storage table instead.
+
+24
+00:01:28.694 --> 00:01:31.016
+Either call replaces the in-memory log,
+
+25
+00:01:31.016 --> 00:01:34.291
+whether it comes before
+or after Lattice is registered.
+
+26
+00:01:34.641 --> 00:01:37.653
+Either way,
+the log is only half of a durable tree.
+
+27
+00:01:37.653 --> 00:01:41.020
+It is trimmed once a snapshot
+in grain storage covers it,
+
+28
+00:01:41.020 --> 00:01:44.978
+so pair it with durable grain storage too,
+not the memory provider.
+
+29
+00:01:46.778 --> 00:01:49.855
+Next on Build:
+Moving in from another store.
+
+30
+00:01:49.855 --> 00:01:53.910
+The links are on this episode's page
+in the documentation.

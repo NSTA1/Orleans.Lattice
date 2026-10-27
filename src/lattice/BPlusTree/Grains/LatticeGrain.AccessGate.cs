@@ -303,6 +303,19 @@ internal sealed partial class LatticeGrain
             AccessGate, MembershipContext, sourceTreeId, rangeStart: null, rangeEnd: null, cancellationToken));
 
     /// <summary>
+    /// Fail-closed authorization of a snapshot's caller-supplied destination: whole-tree
+    /// <see cref="LatticeOperation.Admin"/> on <paramref name="destinationTreeId"/>,
+    /// decided by the access gate - and so by the tenant gate composed inside it - for
+    /// that tree exactly as for any other. A snapshot creates its destination and fills
+    /// it with this tree's contents, so authorizing only the source would let a caller
+    /// stand up a populated tree at an id it holds nothing on. Inherits the null-gate /
+    /// system-origin short-circuit, so first-party snapshots pay nothing.
+    /// </summary>
+    private ValueTask EnforceSnapshotDestinationAsync(string destinationTreeId, CancellationToken cancellationToken) =>
+        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            AccessGate, MembershipContext, destinationTreeId, LatticeOperation.Admin, cancellationToken);
+
+    /// <summary>
     /// Fail-closed authorization check for a single-key point read
     /// (<see cref="LatticeOperation.Read"/>). Returns <c>true</c> when the caller
     /// may observe <paramref name="key"/>; a denied key returns <c>false</c> so
