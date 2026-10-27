@@ -3,18 +3,25 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// <summary>
 /// The range-query guardrails a telemetry binding applies before a range query
 /// reaches the backend: the window must be well-ordered, the step strictly
-/// positive, and both must fit inside the configured
+/// positive, both must fit inside the configured
 /// <see cref="LatticeTelemetryOptions.MaxRange"/> and
-/// <see cref="LatticeTelemetryOptions.MaxStep"/> budgets.
+/// <see cref="LatticeTelemetryOptions.MaxStep"/> budgets, and together they must
+/// not request more evaluation points than the backend can serve.
 /// </summary>
 /// <remarks>
 /// The checks are evaluated in a fixed order - ordering, step positivity, range
-/// budget, then step budget - so a request that violates more than one is always
+/// budget, step budget, then point budget - so a request that violates more than one is always
 /// reported against the same violation, and every binding reports the identical
 /// message for the identical request.
 /// </remarks>
 public static class TelemetryRangeGuardrails
 {
+    /// <summary>
+    /// The most evaluation points a single range query may request per series,
+    /// matching the resolution ceiling Prometheus itself enforces.
+    /// </summary>
+    internal const long MaxEvaluationPoints = 11_000;
+
     /// <summary>
     /// Tests a range request against the configured guardrails.
     /// </summary>
@@ -65,6 +72,17 @@ public static class TelemetryRangeGuardrails
         {
             violationMessage =
                 $"The requested step of {step} exceeds the configured maximum of {options.MaxStep}.";
+            return false;
+        }
+
+        // The range and step budgets bound each dimension alone, but not their
+        // quotient: a full-budget range at a one-tick step would otherwise ask the
+        // backend for billions of evaluation points per series.
+        var points = (range.Ticks / step.Ticks) + 1;
+        if (points > MaxEvaluationPoints)
+        {
+            violationMessage =
+                $"The requested range and step yield {points} evaluation points, exceeding the maximum of {MaxEvaluationPoints}.";
             return false;
         }
 

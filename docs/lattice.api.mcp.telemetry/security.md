@@ -62,7 +62,7 @@ The PromQL metric-name extraction is an allow-list gate, not a full PromQL parse
 
 ## Range guardrails
 
-A range query is bounded so a single call cannot ask the backend for an unbounded scan: `end - start` may not exceed `MaxRange` (default 24h) and `step` may not exceed `MaxStep` (default 1h). An over-budget request is rejected with a clean `Success = false` result and never reaches the backend.
+A range query is bounded so a single call cannot ask the backend for an unbounded scan: `end - start` may not exceed `MaxRange` (default 24h) and `step` may not exceed `MaxStep` (default 1h), and the window divided by the step may not yield more than 11,000 evaluation points. An over-budget request is rejected with a clean `Success = false` result and never reaches the backend.
 
 ## Fail-clean surfacing
 

@@ -2352,6 +2352,14 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var fullPath = Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
         try
         {
+            // A link is never enumerated by the walker, so the next walk classifies the
+            // path removed; reporting it missing lets that converge instead of
+            // re-selecting it, and never follows it out of the workspace.
+            if (RepoContextLinkGuard.TraversesLink(repoRoot, fullPath))
+            {
+                return FileReadResult.Missing;
+            }
+
             using var reader = new StreamReader(fullPath);
             var buffer = ArrayPool<char>.Shared.Rent(MaxEmbedChars);
             try

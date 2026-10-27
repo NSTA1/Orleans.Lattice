@@ -491,6 +491,28 @@ public sealed partial class TelemetryToolHandlersTests
     }
 
     [Test]
+    public async Task QueryRange_rejects_a_step_yielding_too_many_points_without_calling_the_backend()
+    {
+        // A 1 ms step over the default 24-hour window is 86.4 million evaluation
+        // points; it must be refused before any backend request is issued.
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryRangeAsync(
+            client, ReadAll(), TelemetryAuthorizers.Allowed(), Guardrails(), CancellationToken.None,
+            "up",
+            DateTimeOffset.FromUnixTimeSeconds(0),
+            DateTimeOffset.FromUnixTimeSeconds(0) + TimeSpan.FromHours(24),
+            TimeSpan.FromMilliseconds(1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Does.Contain("evaluation points"));
+            Assert.That(handler.LastRequest, Is.Null);
+        });
+    }
+
+    [Test]
     public async Task QueryRange_rejects_an_end_before_start()
     {
         var client = Client("{\"status\":\"success\",\"data\":{}}", out _);

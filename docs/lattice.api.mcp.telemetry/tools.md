@@ -48,7 +48,7 @@ Returns a `TelemetryQueryResult`: on success, the backend `ResultType` (`vector`
 | `end` | `DateTimeOffset` | The inclusive end of the range; must be at or after `start`. |
 | `step` | `TimeSpan` | The resolution step between evaluation points, as a duration (for example `00:00:30` for 30 seconds). Must be strictly positive. |
 
-Returns a `TelemetryQueryResult` (a `matrix`). The call is rejected with a clean `Success = false` result - without ever hitting the backend - when `end < start`, when `step <= 0`, when `end - start` exceeds `MaxRange`, or when `step` exceeds `MaxStep`.
+Returns a `TelemetryQueryResult` (a `matrix`). The call is rejected with a clean `Success = false` result - without ever hitting the backend - when `end < start`, when `step <= 0`, when `end - start` exceeds `MaxRange`, when `step` exceeds `MaxStep`, or when the window and step yield more than 11,000 evaluation points.
 
 ### `lattice_telemetry_list_metrics`
 

@@ -91,6 +91,51 @@ public sealed class RepoContextContentReconcilerTests
     }
 
     [Test]
+    public async Task Symlinked_file_is_never_read_into_the_content_projection()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+
+        var outside = Path.Combine(Path.GetTempPath(), $"rcc-out-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outside);
+        try
+        {
+            var target = Path.Combine(outside, "secret.txt");
+            File.WriteAllText(target, "TOP-SECRET-OUTSIDE-WORKSPACE");
+
+            // The walker recorded a regular file at this path; it is swapped for a link
+            // to a file outside the workspace before the content pass re-opens it.
+            var file = WriteFile("src/Swapped.cs", "namespace N; public class Swapped { }");
+            var full = Path.Combine(_repoRoot, "src", "Swapped.cs");
+            File.Delete(full);
+            try
+            {
+                File.CreateSymbolicLink(full, target);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+                Assert.Ignore("Creating a symbolic link is not permitted in this environment.");
+                return;
+            }
+
+            var result = await Reconciler(harness).ReconcileAsync(
+                RepoId, _repoRoot, added: [file], updated: [], removedPaths: [], backfill: [], Ct);
+
+            var record = await ReadContentAsync(harness, "src/Swapped.cs");
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.ProcessedPaths, Does.Not.Contain("src/Swapped.cs"));
+                Assert.That(record, Is.Null,
+                    "A link must not be followed, or the target's contents leave the workspace through search.");
+            });
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task Backfill_file_captures_its_body_text()
     {
         await using var harness = await RepoContextMcpHarness.StartAsync(

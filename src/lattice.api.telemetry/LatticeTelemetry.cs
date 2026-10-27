@@ -361,8 +361,13 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
             return TelemetryBoundsViolation.StepBelowMinimum;
         }
 
-        return range.Duration > _options.MaxRange
-            ? TelemetryBoundsViolation.RangeTooLong
-            : TelemetryBoundsViolation.StepAboveMaximum;
+        if (range.Duration > _options.MaxRange)
+        {
+            return TelemetryBoundsViolation.RangeTooLong;
+        }
+
+        return range.Step > _options.MaxStep
+            ? TelemetryBoundsViolation.StepAboveMaximum
+            : TelemetryBoundsViolation.TooManyPoints;
     }
 }

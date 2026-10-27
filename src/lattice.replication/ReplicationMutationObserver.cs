@@ -87,7 +87,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         // capture path samples nothing unless the host opted into the
         // auto-distributing dictionary.
         _dictionarySampler = dictionaryProvider as ILatticeCompressionDictionarySampler;
-        _factory = treeId => CompiledFilter.From(_options.Get(treeId));
+        _factory = treeId => CompiledFilter.From(treeId, _options.Get(treeId));
 
         // Any options change invalidates every cached filter. ConfigureAll
         // registrations fan out to every named instance, so coarse-grained
@@ -162,7 +162,9 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
         // auto-trainer builds a dictionary representative of the very
         // traffic that will be shipped, with no host wiring. Gated by the
         // per-tree AutoSharedDictionaryEnabled switch snapshotted on the
-        // compiled filter, so the default-off build samples nothing. Only
+        // compiled filter, so the default-off build samples nothing, and
+        // never for a named tenant's tree: the dictionary is served to any
+        // authenticated peer, so it must not embed tenant data. Only
         // Set carries a value worth sampling; Delete / DeleteRange do not.
         if (filter.SampleForTraining
             && _dictionarySampler is { } sampler
@@ -247,7 +249,7 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
             return false;
         }
 
-        public static CompiledFilter From(LatticeReplicationOptions options)
+        public static CompiledFilter From(string treeId, LatticeReplicationOptions options)
         {
             // Snapshot the prefix collection into a non-null array only
             // when at least one usable (non-null) prefix is configured;
@@ -275,7 +277,24 @@ internal sealed class ReplicationMutationObserver : IMutationObserver, IDisposab
                 options.ClusterId,
                 prefixes,
                 options.KeyFilter,
-                options.AutoSharedDictionaryEnabled);
+                options.AutoSharedDictionaryEnabled && IsSharedDictionarySampleable(treeId));
+        }
+
+        /// <summary>
+        /// Whether a tree's committed values may feed the shared dictionary
+        /// reservoir. The trained dictionary is process-wide and is served to
+        /// any authenticated replication peer by <c>PullCompressionDictionary</c>,
+        /// which carries no tree and so cannot apply the per-tenant export gate.
+        /// A dictionary is built from verbatim substrings of its samples, so
+        /// sampling a named tenant's values would disclose them to peers the
+        /// tenancy gate refuses for that tenant. Only platform-owned and
+        /// default-tenant (legacy) trees are sampled; tenant trees still
+        /// compress against the shared dictionary, they just never train it.
+        /// </summary>
+        internal static bool IsSharedDictionarySampleable(string treeId)
+        {
+            var owner = LatticeTenantTrees.GetOwner(treeId);
+            return owner.IsPlatformOwned || owner.Tenant.IsDefault;
         }
     }
 }
