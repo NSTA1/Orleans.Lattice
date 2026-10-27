@@ -3871,6 +3871,19 @@ function Main {
 			New-EmptyState -Prefix $acaPrefix -VmSize $VmSize -Region $l3Region -Rung (Resolve-Rung -Spec $Rung) -BatchSize $BatchSize -BdnFidelity $Fidelity
 		}
 		$l3State['region'] = $l3Region
+		# A reused prefix (-ReuseAca) keeps its state file between runs. Its
+		# provenance must describe the run that produced the cells it publishes:
+		# a fresh run discards the old cells, so it re-stamps the commit too,
+		# and a resume keeps the recorded commit for the cells it keeps but
+		# warns when the new cells come from a different main commit.
+		$runMainSha = Get-MainSha
+		$runGitSha  = (& git rev-parse --short HEAD 2>$null)
+		if (-not $Resume) {
+			if ($runMainSha) { $l3State['mainSha'] = $runMainSha }
+			if ($runGitSha)  { $l3State['gitSha']  = $runGitSha.Trim() }
+		} elseif ($runMainSha -and ((Get-StateOr $l3State 'mainSha' $runMainSha) -ne $runMainSha)) {
+			Write-Warning "[layer3] -Resume: the recorded cells were measured at main $($l3State.mainSha), the new ones at $runMainSha; the published gitSha names only the first."
+		}
 		if (-not $l3State.ContainsKey('layer3')) {
 			$l3State['layer3'] = @{ cohorts = @{}; rows = @{}; siloCounts = @(); acaPrefix = $null }
 		}
