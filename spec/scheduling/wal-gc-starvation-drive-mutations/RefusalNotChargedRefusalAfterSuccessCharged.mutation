@@ -3,6 +3,7 @@ TARGET: RefusalNotCharged
 CLASS: Action
 SUMMARY: a prior successful drive disables the admission-refusal refund
 PERTURBS: GcPass
+BOUNDS: LeafCount = 2
 
 --- FIND
         IF CanAdmit("sweep") THEN DriveStart(l, "sweep") ELSE DriveRefused(l, "sweep")

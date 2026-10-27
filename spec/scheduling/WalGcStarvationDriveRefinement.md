@@ -369,7 +369,7 @@ These are covered by:
 - `ShareOne`: two leaves with three floor permits withheld, with every
   property. It covers a single-slot share, which `TwoLeaf` does not reach; it
   is not a larger state space.
-- six mutants bounded to `LeafCount = 2`, listed in the table below. Each gets
+- seven mutants bounded to `LeafCount = 2`, listed in the table below. Each gets
   a clean control at its own bounds as well as the base control.
 
 The three-leaf bound of the rejected `SingleSlotShare` variant is not enrolled.
@@ -400,7 +400,7 @@ recorded in inventory CC2E78FC, and their new arms. Every original arm ran at
 | 13 | RearmRefreshesSecondRefreshSkipped | RearmRefreshes | ReArm | only the first rearm refreshes its phase | core, one leaf |
 | 14 | RefusalNotChargedChargeRefusal | RefusalNotCharged | GcPass | a refusal spends the consumer attempt budget | core, one leaf |
 | 15 | RefusalNotChargedRearmChargesUndelivered | RefusalNotCharged | PassRearm | the next pass charges a touch that was never delivered | core, one leaf |
-| 16 | RefusalNotChargedRefusalAfterSuccessCharged | RefusalNotCharged | GcPass | a prior successful drive disables the admission-refusal refund | core, one leaf |
+| 16 | RefusalNotChargedRefusalAfterSuccessCharged | RefusalNotCharged | GcPass | a prior successful drive disables the admission-refusal refund | core, two leaves |
 | 17 | RetryAfterSiblingRetryWithoutCredit | RetryAfterSibling | GcPass | a refused touch retries without a non-refused sibling completion | core, two leaves |
 | 18 | ShareRespectedSweepIgnoresReservation | ShareRespected | GcPass | a sweep takes physical capacity without checking its share | core, two leaves, `Ceiling = 2` (the original bound) |
 | 19 | TimerReservedSlotSingleSlotNoHold | TimerReservedSlot | TimerDispatchDrive | a single-slot timer ignores an outstanding sweep refusal | core, one leaf, `Ceiling = 2` |
@@ -410,7 +410,7 @@ recorded in inventory CC2E78FC, and their new arms. Every original arm ran at
 | 23 | TypeOKDeletionOutsideDomain | TypeOK | DeleteTree | environment deletion corrupts the bounded head witness | core, one leaf |
 | 24 | TypeOKWindowOutsideDomain | TypeOK | RefusalWindowTick | clock advancement corrupts the bounded refusal window | core, one leaf |
 
-That is 16 core mutants at one leaf, 6 at two leaves and 2 in the witness. No
+That is 15 core mutants at one leaf, 7 at two leaves and 2 in the witness. No
 mutation is renamed or dropped and every target is unchanged. Moving a mutant
 to one leaf changes the detection experiment, not the guarantee: the property
 it targets is still checked at the original bound in `TwoLeaf`. The gate fails

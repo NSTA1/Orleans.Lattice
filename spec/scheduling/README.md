@@ -371,7 +371,7 @@ table of checked versus argued claims, are in the core
 
 The leaf count is the `LeafCount` constant. The one-leaf base is the fast
 gate; the cross-leaf ordering, credit and shared-slot paths are checked by the
-two-leaf `TwoLeaf` and `ShareOne` variants and by the six mutants that carry a
+two-leaf `TwoLeaf` and `ShareOne` variants and by the seven mutants that carry a
 `LeafCount = 2` bound.
 
 | Instance | Distinct states | Checked boundary |

@@ -142,7 +142,7 @@ public sealed class SpecMutationBlockGrammarTests
     /// </summary>
     [TestCase("NoAwaitedDriveTimerAwaitsDrive", 4, "NoAwaitedDrive", "")]
     [TestCase("RefusalNotChargedChargeRefusal", 3, "RefusalNotCharged", "")]
-    [TestCase("RefusalNotChargedRefusalAfterSuccessCharged", 3, "RefusalNotCharged", "")]
+    [TestCase("RefusalNotChargedRefusalAfterSuccessCharged", 3, "RefusalNotCharged", "LeafCount = 2")]
     [TestCase("RetryAfterSiblingRetryWithoutCredit", 2, "RetryAfterSibling", "LeafCount = 2")]
     [TestCase("TurnReleasedTimerRefusalKeepsTurn", 4, "TurnReleased", "")]
     public void A_repaired_gc_mutation_keeps_one_edit_per_block(string name, int edits, string target, string bounds)
