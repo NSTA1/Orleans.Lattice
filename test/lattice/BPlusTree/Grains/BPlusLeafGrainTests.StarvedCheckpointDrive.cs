@@ -119,15 +119,16 @@ public partial class BPlusLeafGrainTests
             }
         }
 
-        /// <summary>Appends committed sets at offsets 1..<paramref name="through"/>.</summary>
-        internal void GrowTo(long through)
+        /// <summary>Appends records at offsets 1..<paramref name="through"/>, committed sets by default.</summary>
+        internal void GrowTo(long through, Func<long, LatticeMutation>? mutationFactory = null)
         {
             for (var offset = NewestOffset + 1; offset <= through; offset++)
             {
                 if (offset <= 0) continue;
                 _entries.Add(new CommitLogSliceEntry(
                     offset,
-                    BuildCommittedSet($"k{offset}", Encoding.UTF8.GetBytes($"v{offset}"))));
+                    mutationFactory?.Invoke(offset)
+                        ?? BuildCommittedSet($"k{offset}", Encoding.UTF8.GetBytes($"v{offset}"))));
             }
             NewestOffset = through;
             ReachableWalFixture.EnsureReachable(Head, _entries);

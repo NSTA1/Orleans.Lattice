@@ -4185,8 +4185,9 @@ internal sealed partial class BPlusLeafGrain
         var replayShardMap = await ResolveReplayShardMapAsync(treeId);
 
         // The ownership every partition's slices are judged by AND filtered by
-        // (issue #3565), captured from one read of the leaf's state so the two
-        // cannot diverge mid-replay. See LeafReplayOwnership.
+        // (issue #3565), captured from one read of the leaf's state. A resident
+        // replay can overlap a split, so admission also checks the live span
+        // before applying a key-scoped record. See LeafReplayOwnership.
         var replayOwnership = LeafReplayOwnership.Capture(state.State, replayShardMap);
 
         var anyAdvanced = false;
@@ -7180,7 +7181,17 @@ internal sealed partial class BPlusLeafGrain
                 // foot of the loop carries the checkpoint past it. Deferring it
                 // spent a durable ledger slot per range the leaf can never own
                 // and, once the ledger filled, armed the flush clamp.
+                //
+                // A resident drive may have awaited this slice while a split
+                // transferred and trimmed its right half (#5083). The captured
+                // filter remains the read window; intersect it with the live
+                // span so replay cannot restore those rows to the donor. Do not
+                // broaden admission to the live span alone: filtered-out records
+                // may carry routing metadata only. No await separates this check
+                // from the key-scoped projection apply below.
                 if (replayOwnership.ShouldApply(entry.Mutation)
+                    && (entry.Mutation.Kind is not (MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone)
+                        || DeclaresKey(entry.Mutation.Key))
                     && !replayOwnership.IsDisjointRangeDelete(entry.Mutation))
                 {
                     // This entry is this leaf's own work: it either goes

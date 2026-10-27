@@ -41,7 +41,9 @@ public partial class BPlusLeafGrainTests
         int? maxConcurrentReplays = null,
         ShardMap? registryShardMap = null,
         Orleans.Timers.ITimerRegistry? timerRegistry = null,
-        IWalSaturationSignal? saturationSignal = null)
+        IWalSaturationSignal? saturationSignal = null,
+        int maxLeafKeys = 128,
+        Action<IGrainFactory>? configureGrainFactory = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -75,6 +77,7 @@ public partial class BPlusLeafGrainTests
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
+        configureGrainFactory?.Invoke(grainFactory);
 
         // MaterialiserCheckpointInterval = TimeSpan.Zero forces every-entry
         // flush mode so the persisted checkpoint becomes the observable of
@@ -115,7 +118,7 @@ public partial class BPlusLeafGrainTests
             baseOptions.WalMaterialiserMaxConcurrentReplays = replayCeiling;
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
-            maxLeafKeys: 128,
+            maxLeafKeys: maxLeafKeys,
             shardCount: 1,
             factory: grainFactory,
             // Optional so every test that does not care keeps the stamp-based
