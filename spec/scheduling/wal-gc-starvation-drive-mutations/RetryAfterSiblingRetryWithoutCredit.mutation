@@ -3,6 +3,7 @@ TARGET: RetryAfterSibling
 CLASS: Action
 SUMMARY: a refused touch retries without a non-refused sibling completion
 PERTURBS: GcPass
+BOUNDS: LeafCount = 2
 
 --- FIND
     /\ ~deleted /\ Eligible # {}

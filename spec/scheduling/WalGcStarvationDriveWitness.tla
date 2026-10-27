@@ -4,9 +4,15 @@ EXTENDS Naturals, Integers, FiniteSets, TLC
 \* One finite timer cohort competes with a repeated GC opportunity. Ordinary
 \* owners may remain hung. Progress needs returned physical capacity AND timely
 \* storage, not just a GC reservation or weak fairness on a storage action.
-CONSTANTS Leaves, Ceiling, Withheld, DriveBudget, StallTicks, RefusedSweepHold
+CONSTANTS LeafCount, Ceiling, Withheld, DriveBudget, StallTicks, RefusedSweepHold
+Leaves == 1..LeafCount
 VARIABLES leaf, free, cold, hold, head, appended, deleted, timely, admitted, leadDone, rank
 vars == <<leaf, free, cold, hold, head, appended, deleted, timely, admitted, leadDone, rank>>
+\* Witness-only initial-state marker: TRUE exactly in the initial state of a
+\* behaviour and FALSE after its first step, so the core Init obligation is a
+\* modelled invariant rather than a reading of TLC's search depth.
+VARIABLE fresh
+wvars == <<vars, fresh>>
 Max(a, b) == IF a > b THEN a ELSE b
 Circulating == Max(1, Ceiling - Withheld)
 Share == Max(1, Circulating \div 2)
@@ -238,8 +244,11 @@ Next ==
 
 \* Environment opportunities, never a fair grant: GcPass includes refusal.
 \* ColdReturn and timely storage are deliberately NOT made unconditionally fair.
+MarkedInit == Init /\ fresh = TRUE
+MarkedStep == Next /\ fresh' = FALSE
+
 Spec ==
-    /\ Init /\ [][Next]_vars
+    /\ MarkedInit /\ [][MarkedStep]_wvars
     /\ WF_vars(GcPass)
     /\ WF_vars(PassRearm)
     /\ WF_vars(RefusalWindowTick)
@@ -262,9 +271,9 @@ AbsLeaf == [l \in Leaves |-> [
 Core == INSTANCE WalGcStarvationDrive WITH leaf <- AbsLeaf
 \* Core!Spec is checked as three named obligations, because TLC reports a
 \* violated conjunct of an instantiated Spec by source location, not by name.
-\* The Init obligation is an action property guarded on the first state:
-\* every behaviour takes at least one step (Stutter is always enabled).
-CoreInitRefined == [][TLCGet("level") = 1 => Core!Init]_vars
+\* The Init obligation is an invariant over the modelled marker: it is checked
+\* in every initial state, with no step required and no engine depth read.
+CoreInitRefined == fresh => Core!Init
 CoreStepRefined == [][Core!Next]_Core!vars
 CoreFairnessRefined == Core!Fairness
 ====

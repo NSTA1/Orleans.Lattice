@@ -3,6 +3,7 @@ TARGET: NearestFirst
 CLASS: Action
 SUMMARY: pin changes re-sort an already frozen pass list
 PERTURBS: GcPass
+BOUNDS: LeafCount = 2
 
 --- FIND
     /\ \E l \in Nearest :

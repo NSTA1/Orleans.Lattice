@@ -1,6 +1,6 @@
 MODULE: CoreInitRefinedRefusalWindowOpen
 TARGET: CoreInitRefined
-CLASS: Action
+CLASS: Invariant
 SUMMARY: the witness may start with a refusal window already open
 
 --- FIND

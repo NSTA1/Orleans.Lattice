@@ -8,7 +8,8 @@ EXTENDS Naturals, Integers, FiniteSets, TLC
 \* TurnReleased, and WalGcStarvationDriveWitness refines onto this module to
 \* show that dropping them loses no core behaviour.
 
-CONSTANTS Leaves, Ceiling, Withheld, DriveBudget, RefusedSweepHold
+CONSTANTS LeafCount, Ceiling, Withheld, DriveBudget, RefusedSweepHold
+Leaves == 1..LeafCount
 VARIABLES leaf, free, cold, hold, head, appended, deleted, timely, admitted, leadDone, rank
 vars == <<leaf, free, cold, hold, head, appended, deleted, timely, admitted, leadDone, rank>>
 Max(a, b) == IF a > b THEN a ELSE b

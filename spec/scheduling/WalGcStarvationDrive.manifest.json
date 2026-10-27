@@ -15,6 +15,9 @@
   "variants": {
     "ShareOne": {
       "distinctStates": 171308
+    },
+    "TwoLeaf": {
+      "distinctStates": 849286
     }
   }
 }

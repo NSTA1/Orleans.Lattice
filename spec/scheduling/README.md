@@ -18,7 +18,7 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
 | ReplicationShipping | 4 | 12 | 19 | 26 | 33 | 527689 |
 | WalGcStarvationDrive | 5 | 12 | 11 | 23 | 26 | 849286 |
-| WalGcStarvationDriveWitness | 1 | 4 | 13 | 14 | 13 | 7902 |
+| WalGcStarvationDriveWitness | 2 | 3 | 13 | 14 | 13 | 7902 |
 
 ## Instances and progress premises
 
@@ -362,15 +362,26 @@ queue, and states turn release as `TurnReleased`.
 [manifest](WalGcStarvationDriveWitness.manifest.json) and
 [refinement](WalGcStarvationDriveWitnessRefinement.md) keep both mechanisms at a
 small bound. The witness checks the original `TurnNotHeldAcrossDrive`
-obligation and checks, as TLC properties, that its initial states, steps and
-fairness project onto the core. That refinement is checked only at the
-witness bound.
+obligation, checks the marked initial state as the `CoreInitRefined`
+invariant, and checks, as TLC properties, that its steps and fairness project
+onto the core. That refinement is checked at one leaf; the per-leaf
+composition argument for any leaf count is in the witness refinement note.
+
+The leaf count is the `LeafCount` constant. The one-leaf base is the fast
+gate; the cross-leaf ordering, credit and shared-slot paths are checked by the
+two-leaf `TwoLeaf` and `ShareOne` variants and by the six mutants that carry a
+`LeafCount = 2` bound.
 
 | Instance | Distinct states | Checked boundary |
 | --- | ---: | --- |
-| WalGcStarvationDrive Base | 849,286 | Two leaves, all safety and temporal checks. |
-| WalGcStarvationDrive ShareOne | 171,308 | Single-slot share and refusal window, all checks. |
-| WalGcStarvationDriveWitness Base | 7,902 | Stall clock and call queue, refinement onto the core. |
+| WalGcStarvationDrive Base | not yet measured | One leaf, all safety and temporal checks. |
+| WalGcStarvationDrive TwoLeaf | 849,286 | Two leaves, all safety and temporal checks. |
+| WalGcStarvationDrive ShareOne | 171,308 | Two leaves, single-slot share and refusal window, all checks. |
+| WalGcStarvationDriveWitness Base | not yet measured | Stall clock and call queue, one leaf, refinement onto the core. |
+
+The counts above are predecessor counts from the earlier draft and have not
+been re-measured on the committed sources. The TLC gate compares each run with
+its manifest and fails on any mismatch.
 
 A three-leaf core and a larger refinement instance were measured outside CI.
 The liveness and refinement runs did not finish within the twenty-minute cap,

@@ -159,3 +159,146 @@ A three-leaf instance of this core was measured outside CI. Its safety-only
 check passed in several minutes, and its full liveness check did not finish
 within the twenty-minute cap, so it is not enrolled and no three-leaf liveness
 claim is made.
+
+## Disposition of the original model
+
+This section accounts for every obligation of the original single model
+(#4971) against its machine-readable inventory: 17 properties, 13 `Next`
+actions, 8 weak-fairness conditions, 24 mutations and 50 paired arms. Nothing
+listed here is claimed as measured until the paired gate has run on the
+committed sources.
+
+### Properties
+
+| Original property | Class | Checked in | Instances |
+|-------------------|-------|-----------|-----------|
+| PermitConservation | state safety | core | Base, TwoLeaf, ShareOne |
+| ShareRespected | state safety | core | Base, TwoLeaf, ShareOne |
+| NoAwaitedDrive | state safety | core | Base, TwoLeaf, ShareOne |
+| RearmRefreshes | state safety | core | Base, TwoLeaf, ShareOne |
+| TypeOK | state safety | core and witness | all |
+| TimerReservedSlot | action safety | core | Base, TwoLeaf, ShareOne |
+| NoDeletedTreeReactivation | action safety | core | Base, TwoLeaf, ShareOne |
+| NoAskWithoutWalAhead | action safety | core | Base, TwoLeaf, ShareOne |
+| RefusalNotCharged | action safety | core | Base, TwoLeaf, ShareOne |
+| NearestFirst | action safety | core | Base, TwoLeaf, ShareOne |
+| RetryAfterSibling | action safety | core | Base, TwoLeaf, ShareOne |
+| FirstTouchAlone | action safety | core | Base, TwoLeaf, ShareOne |
+| BudgetReleases | action safety | core | Base, TwoLeaf, ShareOne |
+| PinMonotone | action safety | core | Base, TwoLeaf, ShareOne |
+| FloorHolderEventuallyDriven | liveness | core | Base, TwoLeaf, ShareOne |
+| FloorAdvances | liveness | core | Base, TwoLeaf, ShareOne |
+| TurnNotHeldAcrossDrive | liveness | witness, with `TurnReleased` in the core | witness at one leaf; `TurnReleased` in every core instance |
+
+No property is dropped or weakened, and no temporal property is replaced by a
+safety monitor. `TurnNotHeldAcrossDrive` mentions the call queue, which only the
+witness has, so it is checked there; the core's `TurnReleased` is the same
+turn-return obligation stated over the turn and timer fields that both modules
+share.
+
+### Next actions
+
+| Original action | Core | Witness |
+|-----------------|------|---------|
+| `GcPass`, `PassRearm`, `TimerDispatchDrive`, `DriveOpportunity`, `RefusalWindowTick`, `ColdReturn`, `WalAppend`, `DeleteTree`, `Stutter` | byte-identical body | byte-identical body |
+| `TimerTick`, `ReArm` | stall clock removed | original body |
+| `CallArrive`, `CallServe` | absent | original body; erased to a core stutter |
+
+`ColdReturn`, `WalAppend` and `DeleteTree` remain environment actions without
+fairness in both modules. Admission is still derived from the policy inside
+`GcPass` and `TimerDispatchDrive`; no action assumes a fair grant.
+
+### Weak fairness
+
+`GcPass`, `PassRearm`, `RefusalWindowTick`, and the per-leaf `TimerTick`,
+`TimerDispatchDrive`, `DriveOpportunity` and `ReArm` keep their original weak
+fairness in both modules. `CallServe` keeps its weak fairness in the witness,
+where the call queue exists. `CoreFairnessRefined` checks that the witness's
+fairness implies the core's under the refinement mapping.
+
+### Composition for any leaf count
+
+The witness differs from the core only in the per-leaf stall clock, the call
+queue and the `fresh` initial-state marker.
+`WalGcStarvationDriveCompositionTests` checks this syntactically: every action
+other than `TimerTick`, `ReArm`, `CallArrive` and `CallServe` is byte-identical
+between the two modules, and the witness-only fields are read or written only
+by those four actions. Those four actions change the state of their own leaf
+`l` and no other. The refinement mapping is therefore a per-leaf projection, so
+a witness step projects onto a core step, or a stutter, for any `LeafCount` if
+it does so for every leaf state. That per-leaf lemma depends only on the state
+of one leaf and on the shared fields, which a one-leaf instance ranges over
+completely, and TLC checks it there as `CoreStepRefined`. The fairness transfer
+is per-leaf in the same way: the stall clock grows only while the timer is
+`"new"`, and `WF(CallServe)` discharges `TurnNotHeldAcrossDrive`. This argument
+is a syntactic decomposition plus a checked per-leaf lemma, not a mechanised
+proof at two leaves; a two-leaf witness run did not finish within the CI cap and
+carries no claim.
+
+`CoreInitRefined` is an invariant over the explicit `fresh` marker, which is
+true only in initial states, rather than over TLC's search depth.
+`CoreInitRefinedRefusalWindowOpen` is its paired bad-initial-state mutant.
+
+### Leaf count and the larger-bound variants
+
+The core base is one leaf, the fast gate. One leaf cannot exercise rank order
+between leaves, sibling credit, or two leaves contending for the shared slot.
+These are covered by:
+
+- `TwoLeaf`: two leaves at the original BASE bounds, with every property.
+- `ShareOne`: two leaves with three floor permits withheld, with every property.
+- six mutants bounded to `LeafCount = 2`: `NearestFirstNoNearestFirst`,
+  `NearestFirstLivePinResort`, `FirstTouchAloneConcurrentLead`,
+  `ShareRespectedSweepIgnoresReservation` (also `Ceiling = 2`),
+  `TimerReservedSlotTimerTakesLastSlot` and
+  `RetryAfterSiblingRetryWithoutCredit`. Each gets a clean control at its own
+  bounds as well as the base control.
+
+`TwoLeaf` holds the original BASE constants and so carries every original
+cross-leaf obligation at its original bound. The three-leaf bound of the
+earlier model is not enrolled. Its liveness run did not finish within the CI
+cap and carries no claim.
+
+### Mutations and arms
+
+All 24 original mutations keep their names and targets.
+
+- 22 are in the core.
+- `TurnNotHeldAcrossDriveCallNeverServed` and `TypeOKCallOutsideDomain` perturb
+  the call queue, so they are in the witness.
+- Every original mutation ran at `Leaves = {1, 2}`. Sixteen core mutants now run
+  at the one-leaf base, or at `Ceiling = 2` for
+  `TimerReservedSlotSingleSlotNoHold`. The six listed above keep two leaves.
+- Each one-leaf mutant is expected to fire at one leaf; the gate fails the pair
+  if any one does not.
+
+The 50 original arms map as follows.
+
+- **24 clean full-bound controls:** the core base and witness base controls.
+- **24 mutants:** run under the same names.
+- **2 extra matching controls** (`Ceiling = 2` for
+  `ShareRespectedSweepIgnoresReservation` and
+  `TimerReservedSlotSingleSlotNoHold`): each becomes the matching-bound control
+  the gate runs for any mutant whose bounds differ from the base.
+
+New experiments:
+
+- `TurnReleasedTimerRefusalKeepsTurn`, in the core.
+- 12 refinement mutants in the witness.
+
+### Premises kept
+
+The redesign keeps every premise of the original model:
+
+- Admission is derived from policy.
+- `ColdReturn` carries no fairness.
+- "Timely" means an earned prefix plus banking.
+- Appends and timer rounds are finite.
+- `free` is an independent counter, not derived from other fields.
+- No leaf symmetry is assumed.
+- Rank is frozen per pass.
+- There is no exact three-retry theorem.
+- The original single-slot share is not monotone.
+
+The original BASE run certifies only the original model at its own bounds. Its
+results are predecessor evidence for this redesign, not a certification of it.

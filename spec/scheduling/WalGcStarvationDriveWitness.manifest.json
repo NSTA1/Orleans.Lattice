@@ -5,8 +5,8 @@
     "Stutter"
   ],
   "counts": {
-    "invariants": 1,
-    "properties": 4,
+    "invariants": 2,
+    "properties": 3,
     "actions": 13,
     "mutations": 14,
     "behaviourRows": 13,

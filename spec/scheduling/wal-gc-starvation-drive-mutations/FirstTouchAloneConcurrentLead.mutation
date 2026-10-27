@@ -3,6 +3,7 @@ TARGET: FirstTouchAlone
 CLASS: Action
 SUMMARY: the next sweep touch starts before the floor lead finishes
 PERTURBS: GcPass
+BOUNDS: LeafCount = 2
 
 --- FIND
     /\ leadDone \/ Sweeps = {}

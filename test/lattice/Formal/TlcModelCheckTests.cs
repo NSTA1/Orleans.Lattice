@@ -635,6 +635,7 @@ public sealed partial class TlcModelCheckTests
             File.WriteAllText(Path.Combine(scratch, cfg), configText);
 
             var info = CreateTlcStartInfo(scratch, tla, cfg, options);
+            var watch = Stopwatch.StartNew();
 
             using var process = Process.Start(info)
                 ?? throw new InvalidOperationException($"could not start '{_java}'");
@@ -649,9 +650,18 @@ public sealed partial class TlcModelCheckTests
             // timeout bound the process rather than aborting a valid slow run.
             // TLC_UNBOUNDED_WAIT
             process.WaitForExit();
+            watch.Stop();
 
-            var output = string.Concat(stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
-            return new TlcResult(process.ExitCode, output);
+            var stdoutText = stdout.GetAwaiter().GetResult();
+            var stderrText = stderr.GetAwaiter().GetResult();
+            if (TlcEvidenceRetention.ConfiguredRoot is { } evidence)
+            {
+                TlcEvidenceRetention.Retain(
+                    evidence, TestContext.CurrentContext.Test.FullName, moduleName, scratch, info,
+                    process.ExitCode, stdoutText, stderrText, watch.Elapsed);
+            }
+
+            return new TlcResult(process.ExitCode, string.Concat(stdoutText, stderrText));
         }
         finally
         {
