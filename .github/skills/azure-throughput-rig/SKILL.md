@@ -62,7 +62,12 @@ alphanumerics). Common shapes:
 
 - **Layer 3 on a rig you provisioned.** Run `./scripts/deploy-aca.ps1 -NamePrefix <prefix>`, then
   `benchmark/performance-report.ps1 -Layer 3 -ReuseAca <prefix>`. It parks the silos at zero when it
-  finishes and leaves `rg-<prefix>` standing for you to delete.
+  finishes and leaves `rg-<prefix>` standing for you to delete. A reused rig keeps the images it was
+  built with, so after a code change re-run `deploy-aca.ps1 -NamePrefix <prefix> -ReuseRg` (plus
+  `-PrivateNetwork` if it was built that way) to rebuild them first. Its
+  `benchmark/.run/performance-report/<prefix>/state.json` survives between runs: a fresh run
+  replaces the cells and re-stamps `gitSha`, while `-Resume` keeps both and warns when the new
+  cells come from a different main commit.
 - **`-DryRun`** re-renders a document from the most recently written `state.json`. Replay the
   multi-silo document with either `-Layer3 -DryRun` or `-Layer 3 -DryRun`. Replay selects the
   newest state containing the requested layer, and a Layer 1/2 replay preserves the other block.
@@ -71,7 +76,7 @@ alphanumerics). Common shapes:
   of their offered load (rung vehicles x Hz) is published `>= X` with a note: it measured the
   offered load, not the silo's ceiling. Do not compare such a cell with an escalated Layer 3 cell.
   `get-many` at 4,000 vehicles x 5 Hz reads ~20 k keys/s on Layer 2, while Layer 3 escalates the
-  same workload to ~312 k at one silo. Cells published before the steady-mean fix in #5060 can
+  same workload to ~316 k at one silo. Cells published before the steady-mean fix in #5060 can
   exceed their own offered load (up to 176%), because the old mean averaged only non-zero seconds.
 - **Layer 3 on several rigs in parallel (`-Layer3Rigs K`).** The report splits the sweep
   between K rigs itself (`Split-Layer3Sweep`), deterministically, so `-Resume` finds each cell
