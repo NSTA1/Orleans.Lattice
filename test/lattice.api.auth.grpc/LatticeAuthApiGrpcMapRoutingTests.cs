@@ -86,4 +86,35 @@ public sealed class LatticeAuthApiGrpcMapRoutingTests
             Is.EqualTo(StatusCode.PermissionDenied),
             "A mapped route exists (not Unimplemented) and the default-deny interceptor guards it.");
     }
+
+    [TestCase("Orleans.Lattice.Api.Auth")]
+    [TestCase("ORLEANS.LATTICE.API.AUTH")]
+    public void A_recased_service_path_is_still_guarded_by_the_interceptor(string serviceName)
+    {
+        // ASP.NET Core routing matches the path case-insensitively, so the re-cased
+        // call reaches the GetGroup handler; the interceptor must still refuse it.
+        var methods = _host.Services.GetRequiredService<LatticeAuthApiGrpcMethods>();
+        var recased = new Method<AuthGroupRef, AuthGroupResult>(
+            MethodType.Unary,
+            serviceName,
+            methods.GetGroup.Name.ToUpperInvariant(),
+            methods.GetGroup.RequestMarshaller,
+            methods.GetGroup.ResponseMarshaller);
+        var facade = _host.Services.GetRequiredService<ILatticeAuthAdmin>();
+        facade.ClearReceivedCalls();
+
+        using var call = _channel.CreateCallInvoker().AsyncUnaryCall(
+            recased,
+            host: null,
+            new CallOptions(),
+            new AuthGroupRef { GroupId = "anyone" });
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await call.ResponseAsync);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(facade.ReceivedCalls(), Is.Empty, "A refused call must never reach the facade.");
+        });
+    }
 }

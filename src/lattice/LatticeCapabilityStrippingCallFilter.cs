@@ -132,6 +132,16 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// an incoming CRDT row into its own instead of resolving last-writer-wins
     /// (issue #4618); only the resize and snapshot mirror and drain may assert it.
     /// </para>
+    /// <para>
+    /// The saga prepare flag is included because the facade skips admission
+    /// control and the replicated-tree shape guard under it, and a leaf mints a
+    /// prepare stamp and buckets the write as pending; only the atomic-write
+    /// saga, the replication apply path and the split sweep may assert it. The
+    /// registry snapshot pair is included because a read fan-out adopts a
+    /// snapshot already in scope instead of fetching its own, and a leaf decides
+    /// which saga writes a read sees from it; only the facade, a durable cursor
+    /// and the replication snapshot provider may assert one.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -153,6 +163,9 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.OriginalPrepareStampsRequestContextKey,
         LatticeEventConstants.NewLeafIntentRequestContextKey,
         LatticeEventConstants.CrdtJoinMergeRequestContextKey,
+        LatticeEventConstants.PreparedRequestContextKey,
+        LatticeEventConstants.RegistrySnapshotRequestContextKey,
+        LatticeEventConstants.RegistrySnapshotUnavailableRequestContextKey,
     ];
 
     /// <inheritdoc />

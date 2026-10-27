@@ -222,6 +222,16 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
             return TenantAccessDecision.Deny($"Target tenant '{targetTenant}' is not registered.");
         }
 
+        // A suspended tenant's data-plane traffic is fenced, and a crossing into its
+        // trees is that traffic: its grants stay recorded but admit nothing until it
+        // is resumed. Checked here, the single home of the grant decision, so the
+        // snapshot path and the registry confirmation both refuse it.
+        if (target.Status != TenantStatus.Active)
+        {
+            return TenantAccessDecision.Deny(
+                $"Target tenant '{targetTenant}' is not active (status '{target.Status}'), so its grants admit nothing.");
+        }
+
         if (target.TryGetTenantGrants(sourceTenant.Value, out var grants) && grants is not null)
         {
             for (var i = 0; i < grants.Length; i++)

@@ -1,7 +1,8 @@
 namespace Orleans.Lattice.Api.Auth;
 
 /// <summary>
-/// Thrown by <see cref="ILatticeAuthAdmin.UpsertGroupAsync"/> when the group id is in
+/// Thrown by <see cref="ILatticeAuthAdmin.UpsertGroupAsync"/> and
+/// <see cref="ILatticeAuthAdmin.RemoveGroupAsync"/> when the group id is in
 /// the reserved tenant-tier grammar: any id that starts with
 /// <see cref="LatticeTenantTrees.SegmentPrefix"/> (<c>t/</c>), the namespace of
 /// tenant groups (<see cref="LatticeTenantGroupId"/>, <c>t/{tenant}/{name}</c>).
@@ -87,6 +88,30 @@ public sealed class LatticeTenantOwnedGroupException : ArgumentException, ILatti
             + "Tenant groups are managed by the tenant's own administrators through the tenant directory "
             + "administration surface (ILatticeTenantDirectoryAdmin), which confines them to their tenant. "
             + $"Choose a cluster group id outside the '{LatticeTenantTrees.SegmentPrefix}' namespace instead.";
+        return new LatticeTenantOwnedGroupException(message, paramName, groupId);
+    }
+
+    /// <summary>
+    /// Creates the exception the cluster facade raises for a rejected removal of the
+    /// reserved group id <paramref name="groupId"/>. The facade can delete only the
+    /// group record, which would leave the group's membership edges, the tenant's
+    /// admin and member entries naming it, and the tenant rules naming it in force,
+    /// beyond the reach of the tenant facade, which treats a group without a record
+    /// as already removed.
+    /// </summary>
+    /// <param name="groupId">The reserved group id that was targeted. Must not be <c>null</c>.</param>
+    /// <param name="paramName">The name of the offending facade parameter. Must not be <c>null</c>.</param>
+    /// <returns>A configured <see cref="LatticeTenantOwnedGroupException"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="groupId"/> or <paramref name="paramName"/> is <c>null</c>.</exception>
+    internal static LatticeTenantOwnedGroupException RemovalRejected(string groupId, string paramName)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+        ArgumentNullException.ThrowIfNull(paramName);
+        var message = $"The group id '{groupId}' is in the reserved tenant-group namespace (it starts with "
+            + $"'{LatticeTenantTrees.SegmentPrefix}') and cannot be removed through the cluster authorization facade, "
+            + "which would delete only the group record and leave its membership edges, tenant admin and member "
+            + "entries, and tenant rules in force. Remove it through ILatticeTenantDirectoryAdmin.RemoveGroupAsync, "
+            + "which removes all of them.";
         return new LatticeTenantOwnedGroupException(message, paramName, groupId);
     }
 }

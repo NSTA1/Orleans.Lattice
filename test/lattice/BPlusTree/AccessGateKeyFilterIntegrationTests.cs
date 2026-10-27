@@ -329,4 +329,58 @@ public partial class AccessGateKeyFilterIntegrationTests
         Assert.That(await target.GetAsync("shared/one"), Is.Not.Null,
             "an authorized merge still copies the source");
     }
+
+    [Test]
+    public async Task SnapshotAsync_denies_when_the_caller_cannot_administer_the_destination_tree()
+    {
+        const string sourceId = "agf-snapshot-denied-src";
+        const string destinationId = "agf-snapshot-denied-dst";
+        var source = _cluster.GrainFactory.GetGrain<ILattice>(sourceId);
+        await SeedAsync(source, "forged/one");
+
+        // The attacker shape: Admin on a source it owns, nothing on the destination,
+        // which may be an id another caller's policy already grants.
+        ConfigurableAccessGate.Decide = req =>
+            req.TreeId == destinationId
+                ? LatticeAccessDecision.Deny("caller may not administer the snapshot destination")
+                : LatticeAccessDecision.Allow();
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            () => source.SnapshotAsync(destinationId, SnapshotMode.Offline));
+
+        // Refused before the snapshot coordinator registers anything.
+        ConfigurableAccessGate.Reset();
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        Assert.That(await registry.ExistsAsync(destinationId), Is.False, "no destination tree is registered");
+    }
+
+    [Test]
+    public async Task SnapshotAsync_is_accepted_when_the_caller_administers_both_trees()
+    {
+        const string sourceId = "agf-snapshot-allowed-src";
+        const string destinationId = "agf-snapshot-allowed-dst";
+        var source = _cluster.GrainFactory.GetGrain<ILattice>(sourceId);
+        await SeedAsync(source, "shared/one");
+        var authorized = new List<string>();
+        ConfigurableAccessGate.Decide = req =>
+        {
+            if (req.Operation == LatticeOperation.Admin)
+            {
+                lock (authorized)
+                {
+                    authorized.Add(req.TreeId);
+                }
+            }
+
+            return LatticeAccessDecision.Allow();
+        };
+
+        await source.SnapshotAsync(destinationId, SnapshotMode.Offline);
+
+        lock (authorized)
+        {
+            Assert.That(authorized, Is.SupersetOf(new[] { sourceId, destinationId }),
+                "both the source and the destination are put to the gate");
+        }
+    }
 }

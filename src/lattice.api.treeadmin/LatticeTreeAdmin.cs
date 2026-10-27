@@ -1309,11 +1309,11 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         // forged content the victim subsequently reads as its own.
         //
         // The core's own destination guard (ThrowIfReservedSnapshotDestination) is
-        // namespace-shaped only - it refuses the '_lattice_' and 'sys-' namespaces and
-        // a foreign tenant's - and its EnforceWholeTreeAsync(Admin) is hard-bound to
-        // the SOURCE tree's id, so an ordinary same-namespace destination is otherwise
-        // ungoverned. This is the mirror of the far-side check the sibling cross-tree
-        // verb LatticeGrain.MergeAsync already makes via EnforceSourceTreeReadAsync.
+        // namespace-shaped only, and the core now also enforces Admin on the
+        // destination (LatticeGrain.SnapshotAsync); authorizing it here as well keeps
+        // the facade's own transport authorizer covering both trees. This is the
+        // mirror of the far-side check the sibling cross-tree verb
+        // LatticeGrain.MergeAsync makes via EnforceSourceTreeReadAsync.
         await _authorizer.AuthorizeTreeAdminAsync(effectiveDestinationTreeId, cancellationToken).ConfigureAwait(false);
 
         // Wrap the public ILattice verb so the tree's own guards (system-tree) and

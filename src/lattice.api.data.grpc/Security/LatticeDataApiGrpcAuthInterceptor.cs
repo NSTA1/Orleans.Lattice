@@ -57,12 +57,13 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeDataApiMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeDataApiMethod(method))
         {
             return await continuation(request, context).ConfigureAwait(false);
         }
 
-        await EnforceAuthAsync(request, context).ConfigureAwait(false);
+        await EnforceAuthAsync(method, request, context).ConfigureAwait(false);
         return await continuation(request, context).ConfigureAwait(false);
     }
 
@@ -78,13 +79,14 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeDataApiMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeDataApiMethod(method))
         {
             await continuation(request, responseStream, context).ConfigureAwait(false);
             return;
         }
 
-        await EnforceAuthAsync(request, context).ConfigureAwait(false);
+        await EnforceAuthAsync(method, request, context).ConfigureAwait(false);
         await continuation(request, responseStream, context).ConfigureAwait(false);
     }
     /// <inheritdoc />
@@ -97,7 +99,8 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeDataApiMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeDataApiMethod(method))
         {
             return await continuation(requestStream, context).ConfigureAwait(false);
         }
@@ -105,7 +108,7 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
         // A streaming call has no single request message to describe, so the call
         // is identified by its method name alone. The authorization decision is
         // made before the first client message is read.
-        await EnforceAuthAsync<TRequest>(default!, context).ConfigureAwait(false);
+        await EnforceAuthAsync<TRequest>(method, default!, context).ConfigureAwait(false);
         return await continuation(requestStream, context).ConfigureAwait(false);
     }
 
@@ -121,23 +124,24 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeDataApiMethod(context.Method))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeDataApiMethod(method))
         {
             await continuation(requestStream, responseStream, context).ConfigureAwait(false);
             return;
         }
 
-        await EnforceAuthAsync<TRequest>(default!, context).ConfigureAwait(false);
+        await EnforceAuthAsync<TRequest>(method, default!, context).ConfigureAwait(false);
         await continuation(requestStream, responseStream, context).ConfigureAwait(false);
     }
-    private async Task EnforceAuthAsync<TRequest>(TRequest request, ServerCallContext context)
+    private async Task EnforceAuthAsync<TRequest>(string method, TRequest request, ServerCallContext context)
     {
         if (!_options.CurrentValue.RequireAuthorization)
         {
             return;
         }
 
-        var (operation, targetTreeId) = DescribeCall(context.Method, request);
+        var (operation, targetTreeId) = DescribeCall(method, request);
         var authorizationContext = new LatticeDataApiAuthorizationContext(context, operation, targetTreeId);
 
         bool authorized;
@@ -158,7 +162,7 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
         {
             _logger.LogWarning(
                 "Api.Data: rejected inbound gRPC call to {Method} - authorizer denied the request.",
-                context.Method);
+                method);
             throw new RpcException(new Status(
                 StatusCode.PermissionDenied,
                 "Caller is not authorized to reach the Lattice data API. "

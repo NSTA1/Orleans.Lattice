@@ -111,6 +111,17 @@ public static class LatticeAuthServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<CompiledPolicySnapshotMaintainer>());
 
+        // Cross-silo policy currency. The change feed above fires only on the silo
+        // hosting the leaf that committed a policy write, so every other silo
+        // learns of it through the cluster-wide policy epoch: the committing silo
+        // advances it (as a mutation observer) and every silo polls it and rebuilds
+        // when it moves (as a hosted service). Same instance for both roles.
+        builder.Services.TryAddSingleton<AuthPolicyEpochSynchronizer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<AuthPolicyEpochSynchronizer>());
+        builder.Services.AddSingleton<IHostedService>(
+            sp => sp.GetRequiredService<AuthPolicyEpochSynchronizer>());
+
         // The decision engine: the in-memory decision surface the enforcement
         // gate consults. Registered once as the concrete type (which the gate and
         // the audit path depend on for the detailed, rule-carrying evaluation)

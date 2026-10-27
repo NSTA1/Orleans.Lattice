@@ -45,9 +45,18 @@ public interface ILatticeAuthAdmin
     /// <param name="cancellationToken">Cancels the read.</param>
     Task<AuthGroup?> GetGroupAsync(string groupId, CancellationToken cancellationToken = default);
 
-    /// <summary>Removes a group record. A no-op when no such group exists.</summary>
+    /// <summary>
+    /// Removes a group record. A no-op when no such group exists. Removal does not
+    /// cascade: membership edges that name the group stay in place and keep
+    /// contributing it to their members' resolved closure, so remove them with
+    /// <see cref="RemoveMemberAsync"/> to retire a group.
+    /// </summary>
     /// <param name="groupId">The group id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="groupId"/> starts with <c>t/</c>: a tenant group is removed only through the tenant
+    /// directory facade, whose removal cascades.
+    /// </exception>
     Task RemoveGroupAsync(string groupId, CancellationToken cancellationToken = default);
 
     /// <summary>Reads one page of the group catalog in ascending group-id order.</summary>

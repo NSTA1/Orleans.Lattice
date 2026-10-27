@@ -10,20 +10,20 @@ namespace Orleans.Lattice.Membership;
 /// directory. Only a resolved identity is cached: an anonymous verdict is never
 /// stored, so an unauthenticated caller cannot populate the map, and the map is
 /// capped at <see cref="MaxCachedSubjects"/> live entries so a rotating-token
-/// population cannot grow it without bound. Freshness is enforced two ways:
+/// population cannot grow it without bound. Freshness is enforced three ways:
 /// every entry is bounded by the
 /// minimum of the configured cache lifetime and the credential's own expiry (so
-/// a subject is never served past its token's <c>exp</c>), and the cache is
+/// a subject is never served past its token's <c>exp</c>), the cache is
 /// flushed whenever this silo observes a <c>sys-membership-*</c> mutation
 /// (through the core <see cref="IMutationObserver"/> seam), so a membership change
-/// is reflected without a process restart. The observer runs on the silo that
+/// is reflected without a process restart, and it is flushed whenever
+/// <see cref="LatticeMembershipOptions"/> changes, so a subject mapped under the
+/// previous group merge rules is not served after them. The observer runs on the silo that
 /// commits the write, so in a multi-silo cluster another silo's cache keeps a
 /// pre-change entry until that entry expires. Cache hits and misses are counted on the
 /// membership-owned meter through <see cref="LatticeMembershipMetrics"/>.
 /// </summary>
-internal sealed class MembershipResolutionCache(
-    TimeProvider timeProvider,
-    IOptionsMonitor<LatticeMembershipOptions> options) : IMutationObserver
+internal sealed class MembershipResolutionCache : IMutationObserver, IDisposable
 {
     /// <summary>
     /// The hard ceiling on cached subjects. The cache key is derived from the
@@ -37,15 +37,39 @@ internal sealed class MembershipResolutionCache(
     internal const int MaxCachedSubjects = 4096;
 
     private readonly ConcurrentDictionary<MembershipCacheKey, Entry> _entries = new();
+    private readonly TimeProvider _timeProvider;
+    private readonly IOptionsMonitor<LatticeMembershipOptions> _options;
+    private IDisposable? _optionsChange;
 
-    // Bumped by every flush. A resolution captures it before resolving and stores
+    // Bumped by every flush. A resolution captures it before resolving and keeps
     // its result only if no flush happened meanwhile, so a subject resolved under
     // the pre-flush rules is never cached after the flush that was meant to
     // evict it.
     private long _generation;
 
+    /// <summary>
+    /// Initializes the cache and subscribes it to option changes, each of which
+    /// flushes it.
+    /// </summary>
+    /// <param name="timeProvider">The clock that bounds entry lifetimes.</param>
+    /// <param name="options">The membership options; a change flushes the cache.</param>
+    public MembershipResolutionCache(
+        TimeProvider timeProvider,
+        IOptionsMonitor<LatticeMembershipOptions> options)
+    {
+        _timeProvider = timeProvider;
+        _options = options;
+        _optionsChange = options.OnChange(_ => Clear());
+    }
+
     /// <summary>The number of live cache entries. Exposed for tests.</summary>
     internal int Count => _entries.Count;
+
+    /// <summary>
+    /// Runs after a resolution has passed its flush check and before it stores
+    /// its entry, so a test can flush inside that window.
+    /// </summary>
+    internal Action? BeforeStoreForTesting { get; set; }
 
     /// <summary>
     /// Attempts to serve a warm entry for <paramref name="cacheKey"/> without
@@ -57,9 +81,9 @@ internal sealed class MembershipResolutionCache(
     /// <returns><c>true</c> when a live entry was served.</returns>
     public bool TryGetCached(in MembershipCacheKey cacheKey, out LatticeSubject subject)
     {
-        if (options.CurrentValue.ResolutionCacheTtl > TimeSpan.Zero
+        if (_options.CurrentValue.ResolutionCacheTtl > TimeSpan.Zero
             && _entries.TryGetValue(cacheKey, out var entry)
-            && timeProvider.GetUtcNow() < entry.ExpiresAt)
+            && _timeProvider.GetUtcNow() < entry.ExpiresAt)
         {
             subject = entry.Subject;
             LatticeMembershipMetrics.RecordResolutionCacheHit();
@@ -86,8 +110,8 @@ internal sealed class MembershipResolutionCache(
         Func<CancellationToken, ValueTask<ResolvedSubject>> resolver,
         CancellationToken cancellationToken)
     {
-        var ttl = options.CurrentValue.ResolutionCacheTtl;
-        var now = timeProvider.GetUtcNow();
+        var ttl = _options.CurrentValue.ResolutionCacheTtl;
+        var now = _timeProvider.GetUtcNow();
 
         if (ttl > TimeSpan.Zero && _entries.TryGetValue(cacheKey, out var entry) && now < entry.ExpiresAt)
         {
@@ -119,7 +143,18 @@ internal sealed class MembershipResolutionCache(
 
             if (expiresAt > now && Interlocked.Read(ref _generation) == generation)
             {
-                StoreBounded(cacheKey, new Entry(resolved.Subject, expiresAt), now);
+                var stored = new Entry(resolved.Subject, expiresAt);
+                BeforeStoreForTesting?.Invoke();
+                StoreBounded(cacheKey, stored, now);
+
+                // A flush that landed between the check above and the store
+                // cleared the map before this entry reached it. Re-check and
+                // withdraw exactly this entry, so a concurrent resolution's
+                // newer entry is never dropped.
+                if (Interlocked.Read(ref _generation) != generation)
+                {
+                    _entries.TryRemove(new KeyValuePair<MembershipCacheKey, Entry>(cacheKey, stored));
+                }
             }
         }
 
@@ -163,7 +198,8 @@ internal sealed class MembershipResolutionCache(
 
     /// <summary>
     /// Drops every cached entry, and stops any resolution already in flight from
-    /// caching its result. Used by tests, by membership mutations, and by the
+    /// caching its result. Used by tests, by membership mutations, by a change to
+    /// <see cref="LatticeMembershipOptions"/>, and by the
     /// tenancy add-on when its delegated tenant access administration flag
     /// changes, so no subject resolved before the flip outlives it.
     /// </summary>
@@ -172,6 +208,9 @@ internal sealed class MembershipResolutionCache(
         Interlocked.Increment(ref _generation);
         _entries.Clear();
     }
+
+    /// <summary>Stops flushing on option changes.</summary>
+    public void Dispose() => Interlocked.Exchange(ref _optionsChange, null)?.Dispose();
 
     /// <inheritdoc />
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)

@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Auth;
 /// <summary>
 /// Validates <see cref="LatticeAuthOptions"/> at silo start: rejects a
 /// non-positive history retention window, an undefined history retention mode,
-/// an undefined default effect, a null-or-empty bootstrap administrator id, a
+/// an undefined default effect, a null-or-empty or reserved bootstrap
+/// administrator id, a
 /// null-or-empty strict-consistency tree id, an undefined audit verbosity, an
 /// out-of-range audit sampling ratio, and a non-positive audit-trail
 /// time-to-live.
@@ -41,6 +42,14 @@ internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuth
         {
             failures.Add($"{nameof(LatticeAuthOptions.BootstrapAdministrators)} must not contain a null or empty subject id.");
         }
+        else if (options.BootstrapAdministrators.Any(IsReservedSubjectId))
+        {
+            failures.Add(
+                $"{nameof(LatticeAuthOptions.BootstrapAdministrators)} must not contain the reserved "
+                + $"'{LatticeSubject.AnonymousSubjectId}' or '{LatticeSubject.SystemSubjectId}' subject id, or an id in "
+                + $"the reserved '{LatticeTenantTrees.SegmentPrefix}' tenant-group namespace: none of them names an "
+                + "authenticated principal, and the anonymous id would make every unauthenticated caller an administrator.");
+        }
 
         if (options.StrictConsistencyTrees is not null
             && options.StrictConsistencyTrees.Any(string.IsNullOrEmpty))
@@ -67,4 +76,14 @@ internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuth
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;
     }
+
+    /// <summary>
+    /// <c>true</c> for a subject id that never names an authenticated principal: the
+    /// anonymous and system sentinels, and any id in the reserved tenant-group
+    /// namespace, which the subject mapper resolves to anonymous.
+    /// </summary>
+    private static bool IsReservedSubjectId(string subjectId) =>
+        string.Equals(subjectId, LatticeSubject.AnonymousSubjectId, StringComparison.Ordinal)
+        || string.Equals(subjectId, LatticeSubject.SystemSubjectId, StringComparison.Ordinal)
+        || subjectId.StartsWith(LatticeTenantTrees.SegmentPrefix, StringComparison.Ordinal);
 }

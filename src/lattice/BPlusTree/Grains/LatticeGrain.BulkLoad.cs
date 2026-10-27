@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice.Views;
@@ -347,6 +347,13 @@ internal sealed partial class LatticeGrain
         ThrowIfReservedSnapshotDestination(destinationTreeId);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
+
+        // The destination is a second, independent authorization boundary, as the
+        // source is for MergeAsync. The namespace guard above only refuses reserved
+        // and foreign-tenant ids - and accepts an asserted active tenant that nothing
+        // has yet validated - so the destination is put to the gate (tenant gate
+        // included) before anything is registered or copied.
+        await EnforceSnapshotDestinationAsync(destinationTreeId, cancellationToken);
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => snapshot.SnapshotAsync(destinationTreeId, mode, maxLeafKeys, maxInternalChildren),

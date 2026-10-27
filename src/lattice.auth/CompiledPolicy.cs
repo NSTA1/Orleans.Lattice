@@ -122,6 +122,15 @@ internal sealed class CompiledPolicy
         List<LatticeAuthorizationRule>? tenantRules = null;
         foreach (var rule in rules)
         {
+            // A malformed rule - one that reached the policy tree without passing the
+            // store, by replication or a restore - is dropped rather than compiled: the
+            // evaluator would otherwise read an undefined subject kind as a group and
+            // an undefined scope kind as the whole tree (fail closed).
+            if (!AuthConstants.IsWellFormedRule(rule))
+            {
+                continue;
+            }
+
             if (LatticeTenantRuleIds.IsTenantOwned(rule.RuleId))
             {
                 if (includeTenantLayer)

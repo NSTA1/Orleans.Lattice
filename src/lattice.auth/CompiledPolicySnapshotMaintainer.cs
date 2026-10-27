@@ -168,8 +168,9 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
     }
 
     /// <summary>
-    /// Rebuilds the snapshot synchronously and returns the epoch it produced.
-    /// Exposed for tests that need to force a deterministic rebuild.
+    /// Rebuilds the snapshot synchronously and returns the epoch it produced. Used
+    /// by <see cref="AuthPolicyEpochSynchronizer"/> to catch up with a policy write
+    /// committed on another silo, and by tests that need a deterministic rebuild.
     /// </summary>
     internal async Task<long> RebuildNowAsync(CancellationToken cancellationToken = default)
     {

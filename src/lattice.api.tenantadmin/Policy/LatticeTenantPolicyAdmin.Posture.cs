@@ -26,7 +26,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
         var isTenantAdmin = !caller.IsAnonymous
             && (enabled
                 ? record.IsAdmin(caller.SubjectId, caller.GroupIds)
-                : record.HasAdminSubject(caller.SubjectId));
+                : TenantRegionResidencyAuthorizer.IsExactIdAdmin(record, caller.SubjectId));
 
         var quotas = record.Quotas;
         long? groups = null;

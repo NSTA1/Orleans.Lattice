@@ -172,48 +172,41 @@ public sealed partial class AuthAdminPolicyTests
     // ----- Rule scope: unrecognised kind -----
 
     [Test]
-    public async Task explain_never_cites_a_rule_whose_own_scope_kind_is_unrecognised()
+    public void put_refuses_a_rule_whose_own_scope_kind_is_unrecognised()
     {
-        // The mirror case: a rule persisted by a newer build carries an extent
-        // this one cannot interpret, so it must be treated as governing nothing
-        // rather than assumed to cover the request.
+        // The store refuses the rule before writing it; that explain still never
+        // cites one a newer build persisted is covered over a substitute store in
+        // LatticeAuthAdminUnrecognisedRuleTests.
         const string tree = "overlap-unknown-rule";
         using (AsAdmin())
         {
-            await _fixture.Admin.PutRuleAsync(new LatticeAuthorizationRule(
-                "r-unknown-scope",
-                LatticeSubjectSelector.User(Subject),
-                UnknownKindScope(tree),
-                LatticeOperation.Read,
-                LatticeEffect.Allow));
-
-            var cited = await ExplainedRuleIdsAsync(Subject, LatticeOperation.Read, LatticeScope.Tree(tree));
-
-            Assert.That(cited, Does.Not.Contain("r-unknown-scope"));
+            Assert.That(
+                async () => await _fixture.Admin.PutRuleAsync(new LatticeAuthorizationRule(
+                    "r-unknown-scope",
+                    LatticeSubjectSelector.User(Subject),
+                    UnknownKindScope(tree),
+                    LatticeOperation.Read,
+                    LatticeEffect.Allow)),
+                Throws.ArgumentException);
         }
     }
 
     // ----- Subject selector matching -----
 
     [Test]
-    public async Task explain_never_cites_a_rule_whose_subject_selector_kind_is_unrecognised()
+    public void put_refuses_a_rule_whose_subject_selector_kind_is_unrecognised()
     {
-        // Same fail-closed posture as the scope matrix: a selector kind persisted
-        // by a newer build matches nobody here, rather than being presented as
-        // governing the caller.
         const string tree = "overlap-unknown-selector";
         using (AsAdmin())
         {
-            await _fixture.Admin.PutRuleAsync(new LatticeAuthorizationRule(
-                "r-unknown-selector",
-                new LatticeSubjectSelector((LatticeSubjectSelectorKind)99, Subject),
-                LatticeScope.Tree(tree),
-                LatticeOperation.Read,
-                LatticeEffect.Allow));
-
-            var cited = await ExplainedRuleIdsAsync(Subject, LatticeOperation.Read, LatticeScope.Tree(tree));
-
-            Assert.That(cited, Does.Not.Contain("r-unknown-selector"));
+            Assert.That(
+                async () => await _fixture.Admin.PutRuleAsync(new LatticeAuthorizationRule(
+                    "r-unknown-selector",
+                    new LatticeSubjectSelector((LatticeSubjectSelectorKind)99, Subject),
+                    LatticeScope.Tree(tree),
+                    LatticeOperation.Read,
+                    LatticeEffect.Allow)),
+                Throws.ArgumentException);
         }
     }
 

@@ -148,15 +148,86 @@ internal sealed class LatticeTenantRegistry(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Before the record is removed, the tenant's access data is purged and every
+    /// cross-tenant grant another tenant issued <em>to</em> it is removed from that
+    /// tenant's record (<see cref="PurgeInboundGrantsAsync"/>). Grants are matched by
+    /// the grantee id alone, so without the second step a tenant later created
+    /// under the same id would inherit every grant - active or still offered - the
+    /// deleted one held. Both steps are idempotent, so an interrupted delete is
+    /// completed by re-running it.
+    /// </remarks>
     public async Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)
     {
         var key = RequireTenantKey(tenant);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         await accessDataPurge.PurgeAsync(tenant, cancellationToken).ConfigureAwait(false);
+        await PurgeInboundGrantsAsync(tenant, cancellationToken).ConfigureAwait(false);
         using (LatticeSystemOrigin.Enter())
         {
             return await Registry.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Removes every cross-tenant grant naming <paramref name="tenant"/> as its
+    /// grantee from the records of the tenants that issued them, whatever the
+    /// grant's state. Each removal is stamped later than the slot it supersedes and
+    /// carries that slot's agreement generation, and a removal outranks a live
+    /// grant within one generation whatever the clocks say, so it lands even
+    /// against a writer whose clock runs ahead. Only records that hold such a grant
+    /// are written, after the scan completes.
+    /// </summary>
+    /// <param name="tenant">The tenant being deleted.</param>
+    /// <param name="cancellationToken">Cancels the purge.</param>
+    /// <returns>The number of grants removed.</returns>
+    internal async Task<int> PurgeInboundGrantsAsync(TenantId tenant, CancellationToken cancellationToken)
+    {
+        var grantee = RequireTenantKey(tenant);
+        List<TenantRecord>? granting = null;
+        var removed = 0;
+
+        await foreach (var record in ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (record.Id.Equals(tenant))
+            {
+                continue;
+            }
+
+            List<string>? doomed = null;
+            foreach (var (grantId, slot) in record.GrantSlots)
+            {
+                if (slot.Present
+                    && slot.Grant.GranteeKind == TenantGranteeKind.Tenant
+                    && string.Equals(slot.Grant.Grantee, grantee, StringComparison.Ordinal))
+                {
+                    (doomed ??= []).Add(grantId);
+                }
+            }
+
+            if (doomed is null)
+            {
+                continue;
+            }
+
+            foreach (var grantId in doomed)
+            {
+                record.RemoveGrant(grantId, HybridLogicalClock.Tick(record.GrantSlots[grantId].Clock), writerId: null);
+            }
+
+            removed += doomed.Count;
+            (granting ??= []).Add(record);
+        }
+
+        if (granting is not null)
+        {
+            foreach (var record in granting)
+            {
+                await PutAsync(record, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return removed;
     }
 
     /// <summary>
