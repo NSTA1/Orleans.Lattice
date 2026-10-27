@@ -36,7 +36,8 @@ internal sealed class LeafCursorReporter(
     ILogger<LeafCursorReporter>? logger = null,
     IGrainStorage? pinStorage = null,
     Func<string, GrainId>? pinGrainIdResolver = null,
-    LatticeOptionsResolver? optionsResolver = null) : ILeafCursorReporter
+    LatticeOptionsResolver? optionsResolver = null,
+    SiloStopRoutingLatch? stopLatch = null) : ILeafCursorReporter
 {
     /// <summary>
     /// Minimum wall-clock spacing between durable pin writes for a single
@@ -826,12 +827,26 @@ internal sealed class LeafCursorReporter(
         var faulted = false;
         try
         {
+            if (pinStorage is not null && stopLatch?.IsWithdrawn(StopRoutedGrainType.MaterialiserPin) == true)
+            {
+                // Issue #5100: this silo is stopping and an earlier pin call
+                // proved no silo in the cluster hosts the pin grain type any
+                // longer. Sending this call could only fail the same way, at
+                // Error level in the Orleans messaging log, before reaching the
+                // fallback below anyway. Go straight to the identical durable
+                // slot instead: with no live pin activation anywhere there is
+                // nothing a direct write can race.
+                await DirectStorePinAsync(grainKey, bucket).ConfigureAwait(false);
+                return true;
+            }
+
             var pin = grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey);
             await (writeThrough ? pin.SeedManyAsync(bucket) : pin.ReportManyAsync(bucket))
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (pinStorage is not null && IsPinRoutingUnavailable(ex))
         {
+            stopLatch?.Observe(StopRoutedGrainType.MaterialiserPin, ex);
             // Full-silo graceful shutdown (issues #1464 and #3382): the durable
             // pin cannot be routed mid-teardown, either because the stopping
             // silo refuses to create its activation (#1464) or because the grain

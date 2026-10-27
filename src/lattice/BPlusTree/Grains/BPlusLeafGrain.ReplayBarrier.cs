@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -80,6 +81,78 @@ internal sealed partial class BPlusLeafGrain
     /// should.
     /// </summary>
     private bool _replayBarrierRetired;
+
+    /// <summary>
+    /// The silo's stop-routing latch (issue #5100), resolved once per activation.
+    /// <see langword="null"/> on a directly constructed grain or a host that does
+    /// not register one, in which case no coordinator call is ever skipped.
+    /// </summary>
+    private SiloStopRoutingLatch? _stopRoutingLatch;
+
+    /// <summary>Whether <see cref="_stopRoutingLatch"/> has been resolved.</summary>
+    private bool _stopRoutingLatchResolved;
+
+    /// <summary>
+    /// Resolves the silo's stop-routing latch, caching the result. Never throws.
+    /// </summary>
+    private SiloStopRoutingLatch? ResolveStopRoutingLatch()
+    {
+        if (_stopRoutingLatchResolved)
+            return _stopRoutingLatch;
+
+        try
+        {
+            _stopRoutingLatch = context.ActivationServices?.GetService<SiloStopRoutingLatch>();
+        }
+        catch
+        {
+            _stopRoutingLatch = null;
+        }
+
+        _stopRoutingLatchResolved = true;
+        return _stopRoutingLatch;
+    }
+
+    /// <summary>
+    /// Whether this silo is stopping and the replay coordinator grain type has
+    /// already been proven unplaceable cluster-wide, so any coordinator call can
+    /// only fail (issue #5100).
+    /// </summary>
+    private bool IsReplayCoordinatorWithdrawn()
+        => ResolveStopRoutingLatch()?.IsWithdrawn(StopRoutedGrainType.ReplayCoordinator) == true;
+
+    /// <summary>
+    /// Throws <see cref="OperationCanceledException"/> in place of a replay
+    /// coordinator call that could only fail because the coordinator type is
+    /// withdrawn and this silo is stopping (issue #5100). Replay treats a
+    /// cancellation as the silo-stop outcome it is: the waiting request fails,
+    /// the barrier disarms, and no fault warning is logged.
+    /// </summary>
+    private void ThrowIfReplayCoordinatorWithdrawn()
+    {
+        if (IsReplayCoordinatorWithdrawn())
+        {
+            throw new OperationCanceledException(
+                "The replay coordinator grain type is no longer hosted by any active silo and this silo is stopping (issue #5100).");
+        }
+    }
+
+    /// <summary>
+    /// Offers a replay coordinator call's fault to the stop-routing latch, so a
+    /// catalog-withdrawal fault during a stop stops every later coordinator call
+    /// from this silo. Never throws.
+    /// </summary>
+    private void ObserveReplayCoordinatorFault(Exception fault)
+    {
+        try
+        {
+            ResolveStopRoutingLatch()?.Observe(StopRoutedGrainType.ReplayCoordinator, fault);
+        }
+        catch
+        {
+            // Observation must never replace the fault being handled.
+        }
+    }
 
     /// <summary>
     /// Set by <see cref="EnsureReplayStarted"/> and never cleared, recording that
@@ -336,6 +409,14 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
+            // Replay is coordinator calls end to end. Once this stopping silo has
+            // proven the coordinator type gone from the cluster, every one of
+            // them would be refused and logged at Error by the messaging layer,
+            // so end as cancelled - the silo-stop outcome - without sending any
+            // (issue #5100). The waiting request fails exactly as a stop-time
+            // cancellation already fails it.
+            ThrowIfReplayCoordinatorWithdrawn();
+
             using (AwaitDiagnostics.Begin("leaf.replay", context.GrainId, "tree=" + treeId))
             {
                 await ExecuteActivationReplayAsync(cancellationToken);
@@ -352,6 +433,11 @@ internal sealed partial class BPlusLeafGrain
         catch (Exception ex)
         {
             RecordReplayBarrierOutcome(treeId, LatticeMetrics.ReplayBarrierFaulted);
+
+            // A coordinator call refused because the coordinator type is gone
+            // from the cluster while this silo stops latches it withdrawn, so
+            // every later replay on this silo skips the call (issue #5100).
+            ObserveReplayCoordinatorFault(ex);
 
             // An admission refusal is expected backpressure, not a replay fault,
             // so it is aggregated into a periodic summary with no exception

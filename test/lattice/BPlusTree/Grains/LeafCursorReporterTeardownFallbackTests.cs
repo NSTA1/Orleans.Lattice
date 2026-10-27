@@ -36,7 +36,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class LeafCursorReporterTeardownFallbackTests
+public sealed partial class LeafCursorReporterTeardownFallbackTests
 {
     /// <summary>
     /// Clears the process-wide durable-pin pressure state (issue #2014) between
@@ -56,7 +56,8 @@ public sealed class LeafCursorReporterTeardownFallbackTests
         GrainId.Create("wal-materialiser-pin", grainKey);
 
     private static (LeafCursorReporter reporter, FakePinGrainStorage storage) Create(
-        IWalMaterialiserPinGrain pin)
+        IWalMaterialiserPinGrain pin,
+        SiloStopRoutingLatch? stopLatch = null)
     {
         var registry = Substitute.For<IWalCursorRegistry>();
         var factory = Substitute.For<IGrainFactory>();
@@ -68,7 +69,8 @@ public sealed class LeafCursorReporterTeardownFallbackTests
             options: null,
             logger: null,
             pinStorage: storage,
-            pinGrainIdResolver: PinGrainId);
+            pinGrainIdResolver: PinGrainId,
+            stopLatch: stopLatch);
         return (reporter, storage);
     }
 
