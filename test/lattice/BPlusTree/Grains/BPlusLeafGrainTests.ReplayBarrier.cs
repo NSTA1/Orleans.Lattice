@@ -89,6 +89,9 @@ public partial class BPlusLeafGrainTests
             ["ClearGrainStateForPurgeAsync"] =
                 "ClearGrainStateAsync for a purge (issue #4700): the same discard, preceded by marking "
                 + "the row record, so it RETIRES the barrier for the same reason.",
+            ["ClearGrainStateAndGetNextSiblingAsync"] =
+                "Captures only routing metadata, then uses the same clear core, RETIRING the replay "
+                + "rather than waiting for the projection that is being discarded.",
             ["RebuildProjectionFromWalAsync"] =
                 "Supersedes the replay outright and so RETIRES the barrier. It is the administrative "
                 + "remedy for a broken projection and must not require the broken replay to finish "
@@ -509,7 +512,7 @@ public partial class BPlusLeafGrainTests
             // barrier, which frees this fixture's wedge and would let every method
             // invoked after them pass for the wrong reason. They are covered by
             // their own assertions below.
-            .Where(m => m.Name is not "ClearGrainStateAsync" and not "ClearGrainStateForPurgeAsync" and not "RebuildProjectionFromWalAsync" and not "RebuildProjectionAndNextSiblingAsync")
+            .Where(m => m.Name is not "ClearGrainStateAsync" and not "ClearGrainStateForPurgeAsync" and not "ClearGrainStateAndGetNextSiblingAsync" and not "RebuildProjectionFromWalAsync" and not "RebuildProjectionAndNextSiblingAsync")
             .ToList();
 
         Assert.That(methods, Is.Not.Empty, "no metadata entry points were resolved, so this is vacuous");

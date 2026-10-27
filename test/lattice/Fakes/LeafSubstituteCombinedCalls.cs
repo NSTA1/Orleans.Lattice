@@ -37,6 +37,15 @@ internal static class LeafSubstituteCombinedCalls
     /// </summary>
     public static IBPlusLeafGrain ComposeChainLink(this IBPlusLeafGrain leaf)
     {
+        leaf.ClearGrainStateAndGetNextSiblingAsync(Arg.Any<bool>()).Returns(async call =>
+        {
+            var next = await leaf.GetNextSiblingAsync();
+            if (call.Arg<bool>())
+                await leaf.ClearGrainStateForPurgeAsync();
+            else
+                await leaf.ClearGrainStateAsync();
+            return next;
+        });
         leaf.GetKeyRangeAndNextSiblingAsync().Returns(async _ =>
         {
             var next = await leaf.GetNextSiblingAsync();

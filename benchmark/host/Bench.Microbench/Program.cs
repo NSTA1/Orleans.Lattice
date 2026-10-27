@@ -89,6 +89,12 @@ for (var i = 0; i < args.Length - 1; i++)
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
 }
 
+if (string.Equals(suite, "maintenancecalls", StringComparison.OrdinalIgnoreCase))
+{
+    var maintenanceCalls = BenchmarkRunner.Run<MaintenanceCallReductionBenchmarks>(config);
+    return maintenanceCalls.HasCriticalValidationErrors || maintenanceCalls.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "replaymaintenance", StringComparison.OrdinalIgnoreCase))
 {
     var replaySummary = BenchmarkRunner.Run<ReplayMaintenanceBenchmarks>(config);

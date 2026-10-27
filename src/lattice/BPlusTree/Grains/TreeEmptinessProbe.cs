@@ -35,6 +35,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// elapsing, or any shard faulting - is likewise reported as "not empty" so the
 /// caller simply proceeds down its normal coordinator path.
 /// </para>
+/// <para>
+/// Probe the first shard before activating the rest: a hit needs one call
+/// rather than a whole-tree fan-out. A miss still probes every remaining shard
+/// concurrently, under the same end-to-end budget.
+/// </para>
 /// </summary>
 internal static class TreeEmptinessProbe
 {
@@ -76,16 +81,10 @@ internal static class TreeEmptinessProbe
         string physicalTreeId,
         IReadOnlyList<int> physicalShards,
         TimeSpan budget)
-    {        try
+    {
+        try
         {
-            var probes = new Task<bool>[physicalShards.Count];
-            for (int i = 0; i < physicalShards.Count; i++)
-            {
-                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
-                probes[i] = DriveShardAnyAsync(shard);
-            }
-
-            var all = Task.WhenAll(probes);
+            var all = ProbeAsync();
 
             if (budget != Timeout.InfiniteTimeSpan)
             {
@@ -104,17 +103,33 @@ internal static class TreeEmptinessProbe
                 await timeoutCts.CancelAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
             }
 
-            foreach (var shardHasKeys in await all.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext))
-            {
-                if (shardHasKeys) return false;
-            }
-            return true;
+            return await all.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // An inconclusive probe must never block the operation: fall
             // through to the coordinator path rather than fail outright.
             return false;
+        }
+
+        async Task<bool> ProbeAsync()
+        {
+            if (physicalShards.Count == 0) return true;
+
+            var first = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[0]}");
+            if (await DriveShardAnyAsync(first).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext))
+                return false;
+
+            var probes = new Task<bool>[physicalShards.Count - 1];
+            for (var i = 1; i < physicalShards.Count; i++)
+            {
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
+                probes[i - 1] = DriveShardAnyAsync(shard);
+            }
+
+            foreach (var hasKeys in await Task.WhenAll(probes).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext))
+                if (hasKeys) return false;
+            return true;
         }
     }
 

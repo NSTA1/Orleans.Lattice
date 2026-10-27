@@ -459,21 +459,21 @@ internal sealed partial class ShardRootGrain
         // over an internal root (issue 899) still purges the internal subtree
         // and the leaf chain rather than treating the internal root as a leaf.
         var rootIsLeafTyped = RootIsLeafTyped;
-        if (rootIsLeafTyped)
-        {
-            leafId = state.State.RootNodeId;
-        }
-        else
-        {
-            leafId = await TraverseToLeftmostLeafAsync();
-        }
-
         var internalNodeIds = new List<GrainId>();
         List<GrainId>? routedLeafIds = null;
         if (!rootIsLeafTyped)
         {
             routedLeafIds = new List<GrainId>();
             await CollectInternalNodeIds(state.State.RootNodeId!.Value, internalNodeIds, routedLeafIds);
+            // The ordered topology walk already read the leftmost path.
+            // Keep the type guard for legacy inconsistent child flags.
+            leafId = routedLeafIds.Count > 0
+                ? await DescendToEdgeLeafTypeGuardAsync(routedLeafIds[0], leftmost: true)
+                : throw new InvalidOperationException($"ShardRootGrain {context.GrainId} purge topology has no routed leaves.");
+        }
+        else
+        {
+            leafId = state.State.RootNodeId;
         }
 
         // DELIBERATELY NOT WORK-BOUNDED (issue 1956). Do not apply
@@ -488,8 +488,8 @@ internal sealed partial class ShardRootGrain
         while (leafId is not null)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-            var nextId = await leaf.GetNextSiblingAsync();
-            await ClearLeafAsync(leafId.Value);
+            if (forPurge) purgeClearedLeafIds?.Add(leafId.Value);
+            var nextId = await leaf.ClearGrainStateAndGetNextSiblingAsync(forPurge);
             clearedLeafIds?.Add(leafId.Value);
             walk.RecordLeafVisited();
             leafId = nextId;
