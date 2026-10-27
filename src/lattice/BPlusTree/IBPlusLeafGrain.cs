@@ -1408,6 +1408,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
         IReadOnlyDictionary<string, byte[]>? committedValues = null);
 
     /// <summary>
+    /// Durably carries already-decided replay prepares to their current leaf
+    /// owner and commits them with replay stamping. Preserves tombstones,
+    /// expiry, original prepare stamps, batch membership and typed CRDT deltas.
+    /// </summary>
+    Task ApplyPreparedReplayCommitAsync(
+        Guid transactionId,
+        List<PendingMutationSnapshot> preparedMutations,
+        HybridLogicalClock terminalTimestamp,
+        int remainingForwards = 64);
+
+    /// <summary>
     /// Returns the leaf's current
     /// <see cref="Orleans.Lattice.HybridLogicalClock"/>. Used by
     /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/> to compute a

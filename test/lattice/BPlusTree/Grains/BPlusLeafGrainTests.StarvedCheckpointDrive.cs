@@ -83,6 +83,8 @@ public partial class BPlusLeafGrainTests
         /// </remarks>
         internal Func<Task>? OnRead { get; set; }
 
+        internal int MaxRecordsPerSlice { get; set; } = int.MaxValue;
+
         internal GrowingWal()
         {
             var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
@@ -94,14 +96,14 @@ public partial class BPlusLeafGrainTests
             coord.ReadSliceAsync(
                     Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
                 .Returns(call => Serve(ReplaySliceStub.Unfiltered(
-                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), call.ArgAt<int>(2))));
+                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), Math.Min(call.ArgAt<int>(2), MaxRecordsPerSlice))));
 
             // A bounded leaf pushes its ownership down (issue #3565), so the
             // filtered overload serves the same entries by the reference rule.
             coord.ReadSliceAsync(
                     Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<WalKeyFilter>(), Arg.Any<CancellationToken>())
                 .Returns(call => Serve(ReplaySliceStub.Filtered(
-                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), call.ArgAt<int>(2), call.ArgAt<WalKeyFilter>(3))));
+                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), Math.Min(call.ArgAt<int>(2), MaxRecordsPerSlice), call.ArgAt<WalKeyFilter>(3))));
 
             Coordinator = coord;
 

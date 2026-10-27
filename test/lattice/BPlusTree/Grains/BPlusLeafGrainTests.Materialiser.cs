@@ -43,7 +43,8 @@ public partial class BPlusLeafGrainTests
         Orleans.Timers.ITimerRegistry? timerRegistry = null,
         IWalSaturationSignal? saturationSignal = null,
         int maxLeafKeys = 128,
-        Action<IGrainFactory>? configureGrainFactory = null)
+        Action<IGrainFactory>? configureGrainFactory = null,
+        LeafNodeState? recoveredState = null)
     {
         reporter ??= Substitute.For<ILeafCursorReporter>();
 
@@ -70,9 +71,14 @@ public partial class BPlusLeafGrainTests
         context.ActivationServices.Returns(services);
 
         var state = new FakePersistentState<LeafNodeState>();
-        if (treeId is not null)
-            state.State.TreeId = treeId;
-        state.State.ProjectionCheckpointOffset = persistedCheckpoint;
+        if (recoveredState is not null)
+            state.State = recoveredState;
+        else
+        {
+            if (treeId is not null)
+                state.State.TreeId = treeId;
+            state.State.ProjectionCheckpointOffset = persistedCheckpoint;
+        }
         seedState?.Invoke(state.State);
 
         var grainFactory = Substitute.For<IGrainFactory>();

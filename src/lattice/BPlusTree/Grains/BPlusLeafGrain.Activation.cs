@@ -4490,7 +4490,7 @@ internal sealed partial class BPlusLeafGrain
 
             using (LatticeApplyOffsetContext.BeginScope(terminal.Partition, terminal.Offset))
             {
-                projection.Apply(terminal.Mutation);
+                await ApplyReplayMutationAsync(terminal.Mutation);
             }
 
             deferredOffsets.Resolve(terminal.Partition, terminal.Offset);
@@ -7479,7 +7479,7 @@ internal sealed partial class BPlusLeafGrain
                         {
                             using (LatticeApplyOffsetContext.BeginScope(partition, entry.Offset))
                             {
-                                projection.Apply(entry.Mutation);
+                                await ApplyReplayMutationAsync(entry.Mutation);
                             }
                         }
                         catch (Exception applyFailure) when (applyFailure is not OperationCanceledException)
