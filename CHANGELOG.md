@@ -198,6 +198,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - Patched cryptography dependency.** Hosted Entra sign-in now requires System.Security.Cryptography.Pkcs 10.0.13, fixing GHSA-2fmv-rv2c-59x7 and GHSA-846f-f764-76mx. ([#5096](https://github.com/NSTA1/Orleans.Lattice/pull/5096)) (`Orleans.Lattice.Explorer.Entra.Web`)
+
 - **Security - Telemetry range queries cap evaluation points.** A range query whose window and step would yield more than 11,000 points is refused before reaching the backend, so a tiny step can no longer force an unbounded evaluation. ([#5091](https://github.com/NSTA1/Orleans.Lattice/pull/5091)) (`Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`)
 
 - **Security - Shared dictionaries never train on tenant data.** Auto-trained compression dictionaries, served to any authenticated peer, no longer sample values from named-tenant trees, so they cannot carry one tenant's data to another. ([#5091](https://github.com/NSTA1/Orleans.Lattice/pull/5091)) (`Orleans.Lattice.Replication`)
