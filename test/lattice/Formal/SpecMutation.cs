@@ -497,6 +497,13 @@ public static class SpecMutationCatalogue
     /// normalised to <c>\n</c> on both sides of the comparison so that a
     /// checkout with CRLF endings (or a mutation file committed with them)
     /// cannot turn an anchor into a silent non-match.
+    /// <para>
+    /// Any other block marker met before <paramref name="close"/> is refused.
+    /// Collecting it as text is how a REPLACE block missing its own
+    /// <c>--- END</c> swallowed every later block, markers included, into its
+    /// replacement: the anchor still matched, the later perturbations were never
+    /// applied, and the mutant reached TLC as unparseable TLA+.
+    /// </para>
     /// </summary>
     private static string Collect(string[] lines, ref int index, string open, string close, string name)
     {
@@ -509,6 +516,14 @@ public static class SpecMutationCatalogue
         var body = new List<string>();
         while (index < lines.Length && !lines[index].StartsWith(close, StringComparison.Ordinal))
         {
+            if (IsBlockMarker(lines[index]))
+            {
+                throw new InvalidOperationException(
+                    $"{name}.mutation line {index + 1} is the marker '{lines[index]}' inside a '{open}' block; "
+                    + $"expected '{close}' first. Every '{FindMarker}' / '{ReplaceMarker}' block needs its own "
+                    + $"'{EndMarker}'.");
+            }
+
             body.Add(lines[index]);
             index++;
         }
@@ -520,6 +535,11 @@ public static class SpecMutationCatalogue
 
         return string.Join("\n", body);
     }
+
+    private static bool IsBlockMarker(string line) =>
+        line.StartsWith(FindMarker, StringComparison.Ordinal)
+        || line.StartsWith(ReplaceMarker, StringComparison.Ordinal)
+        || line.StartsWith(EndMarker, StringComparison.Ordinal);
 
     private static string Require(IDictionary<string, string> metadata, string key, string name) =>
         metadata.TryGetValue(key, out var value) && value.Length > 0
