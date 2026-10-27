@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Telemetry
 
-Transport-neutral **telemetry proxy** for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). It holds the machinery that turns a cluster's OpenTelemetry metrics into answerable queries - the read-only Prometheus / PromQL-compatible backend client, the credential boundary in front of it, the range guardrails, and the fail-closed metric-access allow-list - without depending on any transport.
+Transport-neutral **telemetry proxy** for [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). It holds the machinery that turns a cluster's OpenTelemetry metrics into answerable queries - the read-only Prometheus / PromQL-compatible backend client, the credential boundary in front of it, the range guardrails, and the fail-closed metric-access allow-list - without depending on any transport.
 
 Every telemetry binding adapts over this one package, so the security-critical PromQL code exists exactly once and is never forked per transport.
 
@@ -31,3 +31,7 @@ services.AddLatticeTelemetryBackend();
 `AddLatticeTelemetryBackend()` is idempotent and defers to an `IPrometheusQueryClient` the host registered first, so a test or an alternative backend can be substituted without touching the policy wiring.
 
 This package starts nothing and exposes no transport of its own. The gRPC binding for the curated facade ships in `Orleans.Lattice.Api.Telemetry.Grpc`, and the MCP tool group ships in `Orleans.Lattice.Api.Mcp.Telemetry`.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.telemetry/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

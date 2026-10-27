@@ -12,4 +12,8 @@ gRPC unary push transport for [`Orleans.Lattice.Replication`](https://www.nuget.
 
 ## Documentation
 
-See the [gRPC transport guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.replication.grpc/README.md) for the full topology, security (TLS/mTLS), and operations guide.
+See the [gRPC transport guide](https://nsta1.github.io/Orleans.Lattice/docs/lattice.replication.grpc/README.html) for the full topology, security (TLS/mTLS), and operations guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.replication.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

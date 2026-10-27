@@ -22,8 +22,12 @@ siloBuilder
     });
 ```
 
-The WAL is only half of a durable tree. Each leaf's state row and its snapshots live in the grain storage provider `AddLattice` registers, and the WAL garbage collector trims entries once a snapshot there covers them, so the in-memory grain storage above loses that state on restart - and with it any data whose WAL entries were already trimmed. For a durable deployment register a durable grain storage provider instead, and ensure it rejects stale-ETag writes. The core lattice startup probe warns by default, or rejects silo start in `Reject` mode, when the configured grain storage accepts a stale ETag. The [RepoContext container sample](https://github.com/NSTA1/Orleans.Lattice/blob/main/samples/RepoContextContainer/README.md) pairs this WAL with Orleans ADO.NET grain storage over a single SQLite file on the same volume.
+The WAL is only half of a durable tree. Each leaf's state row and its snapshots live in the grain storage provider `AddLattice` registers, and the WAL garbage collector trims entries once a snapshot there covers them, so the in-memory grain storage above loses that state on restart - and with it any data whose WAL entries were already trimmed. For a durable deployment register a durable grain storage provider instead, and ensure it rejects stale-ETag writes. The core lattice startup probe warns by default, or rejects silo start in `Reject` mode, when the configured grain storage accepts a stale ETag. The [RepoContext container sample](https://nsta1.github.io/Orleans.Lattice/samples/RepoContextContainer/README.html) pairs this WAL with Orleans ADO.NET grain storage over a single SQLite file on the same volume.
 
 The provider also wires the durable-WAL garbage-collection stack (WAL cursor registry, leaf reporter, and WAL GC). Each leaf's applied frontier is mirrored into durable pins the GC consults, so a restart that wipes the process-local cursor registry cannot let the GC trim entries a leaf still needs.
 
-See the [storage guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.storage.file/README.md) for the on-disk layout, the durability contract, compaction tuning, and operations guidance. For the core WAL provider seam, see [WAL storage providers](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice/wal-storage-providers.md).
+See the [storage guide](https://nsta1.github.io/Orleans.Lattice/docs/lattice.storage.file/README.html) for the on-disk layout, the durability contract, compaction tuning, and operations guidance. For the core WAL provider seam, see [WAL storage providers](https://nsta1.github.io/Orleans.Lattice/docs/lattice/wal-storage-providers.html).
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.storage.file/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

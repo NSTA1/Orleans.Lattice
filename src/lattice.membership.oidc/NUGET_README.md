@@ -1,6 +1,6 @@
 # Orleans.Lattice.Membership.Oidc
 
-Generic OpenID Connect credential authenticator for [`Orleans.Lattice.Membership`](https://github.com/NSTA1/Orleans.Lattice).
+Generic OpenID Connect credential authenticator for [`Orleans.Lattice.Membership`](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership/README.html).
 
 This package adds a provider-agnostic OIDC authenticator that plugs into the
 membership authenticator seam. It specializes the built-in JWT authenticator
@@ -24,5 +24,9 @@ signing-key, and lifetime checks and only layers on the OIDC-specific concerns:
 This package is an additive sibling to `Orleans.Lattice.Membership.Entra`.
 Neither depends on the other, and both can be registered together.
 
-See the [OIDC membership documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.membership.oidc/README.md)
+See the [OIDC membership documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership.oidc/README.html)
 for configuration.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership.oidc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

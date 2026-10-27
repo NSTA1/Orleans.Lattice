@@ -1,7 +1,7 @@
 # Orleans.Lattice.Explorer.Core
 
 Head-agnostic core of the **Orleans.Lattice Explorer** - the operational console
-for an [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) cluster, which
+for an [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html) cluster, which
 browses cluster state read-only and administers the cluster through
 capability-gated areas. This package holds the shared, head-independent building blocks that
 the Explorer's web head composes over.
@@ -48,5 +48,9 @@ services.AddExplorerData();
 ```
 
 See the
-[Explorer documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.explorer/README.md)
+[Explorer documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer/README.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

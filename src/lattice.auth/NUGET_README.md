@@ -1,7 +1,7 @@
 # Orleans.Lattice.Auth
 
 Optional, opt-in **authorization and fail-closed enforcement** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Turns the resolved
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Turns the resolved
 `LatticeSubject` from `Orleans.Lattice.Membership` into an enforced access
 decision at the data-plane boundary - **byte-for-byte identical to the pre-gate
 behaviour, and zero runtime cost, when `AddLatticeAuth` is not registered**.
@@ -66,7 +66,11 @@ siloBuilder
 Must be registered after `AddLattice(...)` and `AddLatticeMembership()`.
 
 See the
-[Auth documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.auth/README.md)
+[Auth documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.auth/README.html)
 and the
-[security posture](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.auth/security-posture.md)
+[security posture](https://nsta1.github.io/Orleans.Lattice/docs/lattice.auth/security-posture.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.auth/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

@@ -41,8 +41,12 @@ For production, replace both in-memory pieces. Register a durable grain storage 
 
 ## Documentation
 
-Full documentation, the complete feature matrix, the `ILattice` API reference, and runnable samples are on [GitHub](https://github.com/NSTA1/Orleans.Lattice#readme).
+Full documentation, the complete feature matrix, the `ILattice` API reference, and runnable samples are on [the documentation site](https://nsta1.github.io/Orleans.Lattice/).
 
 ## License
 
-MIT. See [LICENSE](https://github.com/NSTA1/Orleans.Lattice/blob/main/LICENSE).
+MIT.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

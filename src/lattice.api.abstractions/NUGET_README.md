@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.Abstractions
 
 Shared **contract** package for the
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) API facades. It
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html) API facades. It
 holds the transport-agnostic service interfaces, their request / response
 models and the typed exceptions they document, and nothing else - no
 implementation, no registration, no background work.
@@ -37,7 +37,7 @@ This package is the seam between them. It carries:
   accept-then-poll handle, status, list-page, and cancel contract used by backup,
   schema, tree-administration, and other long-running facades. Backup's blocking verbs are deprecated and
   will be removed in the next major version; migrate at
-  https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs.
+  https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-removed-blocking-verbs.
 
 The facade packages reference this package and implement the interfaces; the
 binding packages reference this package and consume them. Publishing the
@@ -59,3 +59,7 @@ builder.Services.AddLatticeStateApiGrpc(); // binds a gRPC surface over it
 // ... app build ...
 app.MapLatticeStateApiGrpc();
 ```
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.abstractions/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

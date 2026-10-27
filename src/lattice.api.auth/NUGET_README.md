@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.Auth
 
 Optional, opt-in **configuration and control facade** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) authorization.
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html) authorization.
 Exposes a single transport-agnostic admin surface that administers the
 membership directory and the authorization policy store from one place. A
 sibling package projects this facade onto a code-first gRPC surface.
@@ -67,3 +67,7 @@ siloBuilder
 Bind a transport over the facade to administer membership and policy remotely:
 the sibling `Orleans.Lattice.Api.Auth.Grpc` package projects it onto a
 code-first gRPC surface.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.auth/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

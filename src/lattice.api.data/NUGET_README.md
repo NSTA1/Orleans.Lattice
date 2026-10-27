@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.Data
 
 Optional, opt-in **read-write external data-plane API** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Exposes a
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Exposes a
 transport-agnostic facade that lets non-.NET clients set, delete, range-delete,
 bulk-upsert, atomically batch, point-read, and bounded-range-read tree entries,
 and write or read typed CRDTs. A sibling package,
@@ -46,3 +46,7 @@ single-page bounded `ReadRangeAsync`, and the typed CRDT write and read verbs
 (PN-counter, OR-Set, OR-Flag, RW-Flag, G-counter, G-Set, RW-Set, version vector,
 MV / max / min registers, sequence, and OR-Map). A live streaming scan / change
 feed is intentionally out of scope.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.data/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

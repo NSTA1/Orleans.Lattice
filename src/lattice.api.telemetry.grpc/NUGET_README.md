@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.Telemetry.Grpc
 
 Optional, opt-in **gRPC transport binding** for
-[Orleans.Lattice.Api.Telemetry](https://github.com/NSTA1/Orleans.Lattice) - the
+[Orleans.Lattice.Api.Telemetry](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.telemetry/README.html) - the
 transport-agnostic, read-only telemetry facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
@@ -63,5 +63,9 @@ transitive re-coupling compiles perfectly well and nothing else in the build
 would notice.
 
 See the
-[Orleans.Lattice repository](https://github.com/NSTA1/Orleans.Lattice) for full
+[telemetry gRPC documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.telemetry.grpc/README.html) for full
 documentation.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.telemetry.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

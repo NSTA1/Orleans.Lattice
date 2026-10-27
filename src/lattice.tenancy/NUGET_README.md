@@ -1,7 +1,7 @@
 # Orleans.Lattice.Tenancy
 
 Optional, opt-in **multi-tenancy** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Partitions a
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Partitions a
 deployment into keyspace-isolated tenants, each with its own trees, quotas, and
 optional region residency, across a single cluster or many - **byte-for-byte
 identical to the pre-tenancy behaviour, and zero runtime cost, when
@@ -95,5 +95,9 @@ This package carries no operator control surface of its own. Add
 tenant lifecycle.
 
 See the
-[Multi-tenancy documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.tenancy/README.md)
+[Multi-tenancy documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.tenancy/README.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.tenancy/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

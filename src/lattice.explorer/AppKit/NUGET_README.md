@@ -177,6 +177,10 @@ every width down to a 360px phone: controls are 44px touch targets in
 comfortable density (never below 24px in compact), media never overflows, and
 long data wraps. The kit ships no width queries; an app owns its own layout.
 
-Part of [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). See the
-[Lattice Apps in the Explorer guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.explorer/lattice-apps.md)
+Part of [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). See the
+[Lattice Apps in the Explorer guide](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer/lattice-apps.html)
 for the frame protocol, trust model and app authoring.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

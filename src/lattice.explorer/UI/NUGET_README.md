@@ -65,3 +65,7 @@ not-found page, which names the nearest address that does exist.
 
 This rewrite of the package is in progress and has not shipped a release; the
 package's earlier releases carried the previous Explorer UI.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)
