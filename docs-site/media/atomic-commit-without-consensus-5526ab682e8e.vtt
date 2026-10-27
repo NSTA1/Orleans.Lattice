@@ -1,0 +1,178 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:02.925
+Atomic writes make a batch all-or-nothing.
+
+2
+00:00:02.925 --> 00:00:07.543
+This episode follows the single decision
+that lets readers see it as one change.
+
+3
+00:00:08.543 --> 00:00:11.010
+A batch can update several keys
+in one tree,
+
+4
+00:00:11.010 --> 00:00:13.758
+such as an order's status
+and its tracking value.
+
+5
+00:00:14.108 --> 00:00:15.823
+A coordinator groups the keys
+
+6
+00:00:15.823 --> 00:00:19.727
+by their owning shards and stages
+each change as a prepared write.
+
+7
+00:00:20.077 --> 00:00:25.057
+Each leaf keeps its prepared values
+in a pending bucket for this transaction.
+
+8
+00:00:25.057 --> 00:00:27.838
+They are not visible
+to concurrent readers.
+
+9
+00:00:28.188 --> 00:00:29.793
+If every prepare succeeds,
+
+10
+00:00:29.793 --> 00:00:33.435
+the saga records commit
+in the tree's transaction registry.
+
+11
+00:00:33.785 --> 00:00:37.047
+That registry write is
+the tree-wide visibility flip.
+
+12
+00:00:37.397 --> 00:00:40.664
+A read that finds a pending key
+resolves it through the registry's
+
+13
+00:00:40.664 --> 00:00:44.031
+recorded outcome, rather than guessing
+from which leaf has finished.
+
+14
+00:00:44.381 --> 00:00:47.075
+A multi-key reader uses
+one decision snapshot.
+
+15
+00:00:47.075 --> 00:00:49.769
+It sees the batch's full effect
+or none of it,
+
+16
+00:00:49.769 --> 00:00:52.229
+never one prepared key without the others.
+
+17
+00:00:52.579 --> 00:00:53.637
+After the decision,
+
+18
+00:00:53.637 --> 00:00:57.870
+terminal marks travel to the touched
+leaves and drain their pending buckets.
+
+19
+00:00:57.870 --> 00:01:01.212
+On the originating tree,
+a read of a key still in a prepared
+
+20
+00:01:01.212 --> 00:01:05.333
+bucket can follow the recorded outcome
+while terminal marks are in flight.
+
+21
+00:01:05.333 --> 00:01:09.677
+The batch's logical visibility does
+not wait for every leaf to apply its mark.
+
+22
+00:01:10.027 --> 00:01:12.417
+The leaves finish applying the outcome;
+
+23
+00:01:12.417 --> 00:01:15.236
+they do not make a second
+visibility decision.
+
+24
+00:01:16.236 --> 00:01:18.690
+If a prepare fails,
+the coordinator retries.
+
+25
+00:01:18.690 --> 00:01:22.426
+If the batch still cannot complete,
+the saga records abort instead.
+
+26
+00:01:22.776 --> 00:01:27.250
+The prepared values never became visible,
+so abort drops their buckets.
+
+27
+00:01:27.250 --> 00:01:30.338
+It does not write a rollback value
+for every key.
+
+28
+00:01:30.688 --> 00:01:34.245
+That matters when another writer
+changed a key during the saga:
+
+29
+00:01:34.245 --> 00:01:37.350
+rollback writes could overwrite
+that concurrent change.
+
+30
+00:01:37.700 --> 00:01:41.104
+There is coordination:
+the saga coordinator drives the work
+
+31
+00:01:41.104 --> 00:01:44.219
+and learns whether the shard
+fan-out staged the batch.
+
+32
+00:01:44.569 --> 00:01:47.361
+But the leaves do not reach a commit
+by consensus.
+
+33
+00:01:47.361 --> 00:01:49.204
+The registry records one outcome,
+
+34
+00:01:49.204 --> 00:01:51.941
+and readers use that outcome
+for the whole batch.
+
+35
+00:01:52.291 --> 00:01:57.225
+For the protocol's verification and design
+mapping, read Verified atomic commit.
+
+36
+00:01:57.575 --> 00:02:00.619
+Back on Build, next: TTL and soft delete.
+
+37
+00:02:00.619 --> 00:02:04.926
+The links are on this episode's page
+in the documentation.
