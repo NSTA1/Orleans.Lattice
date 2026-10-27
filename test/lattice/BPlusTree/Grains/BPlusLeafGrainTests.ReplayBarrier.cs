@@ -147,7 +147,7 @@ public partial class BPlusLeafGrainTests
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",
         "GetChildDigestSnapshotAsync", "GetTopologyNodeAsync",
         // Saga and transaction terminals.
-        "ApplyTxTerminalAsync", "MarkSagaShadowAsync",
+        "ApplyTxTerminalAsync", "ApplyPreparedReplayCommitAsync", "MarkSagaShadowAsync",
         // Drops replayed pending buckets and records the discard marker that
         // replay consults, so it must run against the fully replayed buckets.
         "DiscardPendingTransactionAsync", "DiscardPendingTransactionsAndGetNextSiblingAsync",

@@ -421,7 +421,9 @@ internal sealed partial class BPlusLeafGrain
     /// the effective checkpoint for its partition, which is the case whenever
     /// the cold-cache override drives the checkpoint back to -1) is DROPPED
     /// rather than restored, so the WAL read remains the single source for it
-    /// and nothing is applied twice. The invariant is exactly: the ledger
+    /// and nothing is applied twice. Checkpointed prepares outside a split donor's
+    /// current span are retained even on a cold rebuild: its filtered WAL read
+    /// cannot recover their payloads for delivery to the new owner. The invariant is exactly: the ledger
     /// covers the offsets this replay will not re-read.
     /// </para>
     /// </summary>
@@ -459,7 +461,14 @@ internal sealed partial class BPlusLeafGrain
             }
 
             var checkpoint = checkpointOverride ?? GetPersistedCheckpointForPartition(entry.Partition);
-            if (entry.Offset > checkpoint)
+            // A cold rebuild re-reads the WAL, but its narrowed live span
+            // excludes prepares retained by a donor before its split. Keep
+            // those checkpointed payloads until their terminal reaches the
+            // new owner; the range-filtered read cannot reconstruct them.
+            var retainedMovedPrepare = entry.Mutation.IsPrepared
+                && !DeclaresKey(entry.Mutation.Key)
+                && entry.Offset <= GetPersistedCheckpointForPartition(entry.Partition);
+            if (entry.Offset > checkpoint && !retainedMovedPrepare)
                 continue; // Replay re-reads it; the WAL stays the single source.
 
             (kept ??= []).Add(entry);

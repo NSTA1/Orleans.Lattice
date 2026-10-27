@@ -83,6 +83,8 @@ public partial class BPlusLeafGrainTests
         /// </remarks>
         internal Func<Task>? OnRead { get; set; }
 
+        internal int MaxRecordsPerSlice { get; set; } = int.MaxValue;
+
         internal GrowingWal()
         {
             var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
@@ -94,14 +96,14 @@ public partial class BPlusLeafGrainTests
             coord.ReadSliceAsync(
                     Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
                 .Returns(call => Serve(ReplaySliceStub.Unfiltered(
-                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), call.ArgAt<int>(2))));
+                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), Math.Min(call.ArgAt<int>(2), MaxRecordsPerSlice))));
 
             // A bounded leaf pushes its ownership down (issue #3565), so the
             // filtered overload serves the same entries by the reference rule.
             coord.ReadSliceAsync(
                     Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<WalKeyFilter>(), Arg.Any<CancellationToken>())
                 .Returns(call => Serve(ReplaySliceStub.Filtered(
-                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), call.ArgAt<int>(2), call.ArgAt<WalKeyFilter>(3))));
+                    _entries, call.ArgAt<long>(0), call.ArgAt<long>(1), Math.Min(call.ArgAt<int>(2), MaxRecordsPerSlice), call.ArgAt<WalKeyFilter>(3))));
 
             Coordinator = coord;
 
@@ -119,15 +121,16 @@ public partial class BPlusLeafGrainTests
             }
         }
 
-        /// <summary>Appends committed sets at offsets 1..<paramref name="through"/>.</summary>
-        internal void GrowTo(long through)
+        /// <summary>Appends records at offsets 1..<paramref name="through"/>, committed sets by default.</summary>
+        internal void GrowTo(long through, Func<long, LatticeMutation>? mutationFactory = null)
         {
             for (var offset = NewestOffset + 1; offset <= through; offset++)
             {
                 if (offset <= 0) continue;
                 _entries.Add(new CommitLogSliceEntry(
                     offset,
-                    BuildCommittedSet($"k{offset}", Encoding.UTF8.GetBytes($"v{offset}"))));
+                    mutationFactory?.Invoke(offset)
+                        ?? BuildCommittedSet($"k{offset}", Encoding.UTF8.GetBytes($"v{offset}"))));
             }
             NewestOffset = through;
             ReachableWalFixture.EnsureReachable(Head, _entries);
