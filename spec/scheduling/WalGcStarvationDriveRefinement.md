@@ -243,6 +243,13 @@ sources, that every action other than `TimerTick`, `ReArm`, `CallArrive` and
 `call` are read or written only by those four actions. The lemmas below rely
 on those two syntactic facts and on nothing about the size of `Leaves`.
 
+**Constant domain.** The argument is stated only for well-formed constants:
+`LeafCount`, `Ceiling` and `DriveBudget` positive integers, and `Withheld`,
+`RefusedSweepHold` and `StallTicks` natural numbers. Every committed
+configuration lies in this domain. Neither module declares an `ASSUME` for it,
+and nothing below is claimed for other integer values. "For any constants"
+below means any constants in this domain.
+
 1. **Init (argued; checked at the witness bound as `CoreInitRefined`).** The
    witness `Init` is the core `Init` with `stall` and `call` added to each leaf
    record. Applying `AbsLeaf` removes exactly those fields, so the projection
@@ -289,10 +296,15 @@ at the witness bound; it is a test of the lemma, not its proof.
   `~deleted` hold from then on. Then the witness `TimerTick(l)` is
   continuously enabled. While `timer = "new"`, the only action that writes
   `leaf[l].stall` is `TimerTick(l)` (`ReArm(l)` needs `timer = "rearm"`), and
-  it only increments. `stall` lies in `-2..StallTicks`, so after at most
-  `StallTicks + 2` witness ticks the full branch fires, which is a core
-  `TimerTick(l)` step that changes `timer`. Core weak fairness of
-  `TimerTick(l)` follows for every `StallTicks`.
+  it only increments. `stall` lies in `-2..StallTicks` with `StallTicks` a
+  natural number, so at most `StallTicks + 2` increments are possible, and
+  witness weak fairness makes each of them, and then one further tick, occur.
+  That further tick takes the full branch, which is a core `TimerTick(l)` step
+  that changes `timer` (for example, from `stall = -2` with `StallTicks = 1`,
+  three increments are followed by the full tick). Core weak fairness of
+  `TimerTick(l)` follows for every natural `StallTicks`. This establishes that
+  the opportunity eventually occurs; it gives no bound on scheduler latency,
+  because fairness does not bound how many other steps interleave.
 - `CallServe(l)` has no core counterpart; its fairness is used below.
 
 **Properties of the original model.** Every original property except
@@ -321,7 +333,7 @@ constrains `stall` and `call`.
 
 So whenever the core satisfies its properties at given `LeafCount`, `Ceiling`,
 `Withheld`, `DriveBudget` and `RefusedSweepHold`, the original model satisfies
-all 17 of its properties at those constants with any `StallTicks`.
+all 17 of its properties at those constants with any natural `StallTicks`.
 
 **Where each claim is checked.**
 
