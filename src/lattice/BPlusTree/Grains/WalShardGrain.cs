@@ -363,7 +363,7 @@ internal sealed partial class WalShardGrain(
                 $"{nameof(WalShardGrain)} activation key '{key}' has a non-integer or negative shard index suffix.");
         }
 
-        var metricTreeId = await optionsResolver.ResolveMetricTreeIdAsync(_treeId);
+        var (metricTreeId, walPartitions) = await optionsResolver.ResolveWalActivationMetadataAsync(_treeId);
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTreeId);
         _tenantTag = LatticeTenantLabel.ForTree(_treeId);
         _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, _shardIndex);
@@ -374,7 +374,7 @@ internal sealed partial class WalShardGrain(
         // the activation-time materialiser, not the live IOptionsMonitor value
         // that may have drifted since the tree was registered.
         //
-        // This deliberately uses the pure GetWalPartitionsAsync fast path
+        // This deliberately uses a pure activation metadata read
         // rather than the full ResolveAsync. ResolveAsync performs lazy
         // first-use seeding: when the registry row is absent it calls
         // RegisterAsync to create one. A WAL shard can activate *after* a
@@ -383,7 +383,6 @@ internal sealed partial class WalShardGrain(
         // re-creates the row, resurrecting the purged tree so TreeExistsAsync
         // reports it as still present. An activation that only needs a metric
         // tag must never mutate the registry.
-        var walPartitions = await optionsResolver.GetWalPartitionsAsync(_treeId);
         // Phase A attribution tags. The values are captured once at
         // activation; if the operator retunes WalMaxPendingBatches
         // through IOptionsMonitor while activations are live, existing
@@ -1711,6 +1710,13 @@ internal sealed partial class WalShardGrain(
         }
         var live = highest - lowest + 1L;
         return live < 0L ? 0L : live;
+    }
+
+    /// <inheritdoc />
+    public async Task<long> GetResumeFloorAsync(CancellationToken cancellationToken)
+    {
+        var next = await GetNextSequenceAsync(cancellationToken);
+        return next - await GetLiveEntryCountAsync(cancellationToken);
     }
 
     /// <inheritdoc />

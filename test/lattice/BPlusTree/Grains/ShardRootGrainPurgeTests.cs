@@ -174,10 +174,11 @@ public sealed partial class ShardRootGrainPurgeTests
 
         public ShardRootGrain Grain { get; }
 
-        public LeafNode Leaf(string key, GrainId? nextSibling = null)
+        public LeafNode Leaf(string key, GrainId? nextSibling = null, bool compose = true)
         {
             var id = GrainId.Create(LeafGrainType, $"{ShardKey}:{key}");
-            var grain = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var grain = Substitute.For<IBPlusLeafGrain>();
+            if (compose) grain.ComposeChainLink();
             grain.GetNextSiblingAsync().Returns(Task.FromResult(nextSibling));
             grain.ClearGrainStateAsync().Returns(Task.CompletedTask);
             grain.ClearGrainStateForPurgeAsync().Returns(Task.CompletedTask);

@@ -253,6 +253,13 @@ internal sealed class RepoContextContentReconciler
         var fullPath = Path.Combine(repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
         try
         {
+            // Refuse a link: its own FileInfo.Length is the link's size, so it would
+            // also slip past MaxReadBytes, and the read would leave the workspace.
+            if (RepoContextLinkGuard.TraversesLink(repoRoot, fullPath))
+            {
+                return null;
+            }
+
             var info = new FileInfo(fullPath);
             if (!info.Exists || info.Length > MaxReadBytes)
             {

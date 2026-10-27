@@ -151,6 +151,26 @@ internal sealed class LatticeOptionsResolver(
         return GetMetricTreeId(treeId);
     }
 
+    /// <summary>
+    /// Reads fresh activation provenance and the immutable WAL partition pin
+    /// together, without registering a missing or purged tree. A previously
+    /// cached partition count still wins, including for a legacy unpinned row.
+    /// Placement and move-fence resolution remain separate fresh reads.
+    /// </summary>
+    internal async ValueTask<(string MetricTreeId, int WalPartitions)> ResolveWalActivationMetadataAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            return (treeId, LatticeConstants.DefaultSystemTreeWalPartitions);
+
+        var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
+        CacheMetricTreeId(treeId, entry);
+        var partitions = _walPartitionsCache.TryGetValue(treeId, out var cached)
+            ? cached
+            : CacheWalPartitions(treeId, entry);
+        return (GetMetricTreeId(treeId), partitions);
+    }
+
     private void CacheMetricTreeId(string treeId, State.TreeRegistryEntry? entry)
     {
         // Refresh at activation/birth, so reusing a purged id cannot inherit the
@@ -452,6 +472,11 @@ internal sealed class LatticeOptionsResolver(
     {
         var entry = await _registryReads.GetEntryAsync(treeId).ConfigureAwait(false);
         CacheMetricTreeId(treeId, entry);
+        return CacheWalPartitions(treeId, entry);
+    }
+
+    private int CacheWalPartitions(string treeId, State.TreeRegistryEntry? entry)
+    {
         var baseOptions = optionsMonitor.Get(treeId);
         var partitions = entry?.WalPartitions ?? baseOptions.WalPartitions;
         // First writer wins the cache slot; if a racing ResolveAsync

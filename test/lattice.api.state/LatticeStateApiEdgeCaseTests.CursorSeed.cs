@@ -81,6 +81,21 @@ public sealed partial class LatticeStateApiEdgeCaseTests
             Assert.That(inFlight, Is.EqualTo(SeedPartitions), "peak concurrent WAL tail reads while seeding the cursor");
             Assert.That(await first, Is.True);
             Assert.That(enumerator.Current.Key, Is.EqualTo("key"));
+            for (var p = 0; p < SeedPartitions; p++)
+            {
+                var wal = grainFactory.GetGrain<IWalShardGrain>($"tree/{p}");
+                if (continuationToken is not null)
+                {
+                    await wal.Received(1).GetResumeFloorAsync(Arg.Any<CancellationToken>());
+                    _ = wal.DidNotReceive().GetNextSequenceAsync(Arg.Any<CancellationToken>());
+                    await wal.DidNotReceive().GetLiveEntryCountAsync(Arg.Any<CancellationToken>());
+                }
+                else
+                {
+                    _ = wal.Received(1).GetNextSequenceAsync(Arg.Any<CancellationToken>());
+                    await wal.DidNotReceive().GetResumeFloorAsync(Arg.Any<CancellationToken>());
+                }
+            }
         }
         finally
         {
@@ -116,6 +131,12 @@ public sealed partial class LatticeStateApiEdgeCaseTests
             });
             wal.GetLiveEntryCountAsync(Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(p == trimmedPartition ? 1L : liveCount));
+            var retained = p == trimmedPartition ? 1L : liveCount;
+            wal.GetResumeFloorAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
+            {
+                Interlocked.Increment(ref tails[0]);
+                return await gate.Task - retained;
+            });
             wal.ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(p == 0
                 ? new ValueTask<WalShardPage>(WalPage(new WalShardSequencedEntry
                 {

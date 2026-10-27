@@ -1235,6 +1235,13 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task ClearGrainStateForPurgeAsync();
 
     /// <summary>
+    /// Captures the right sibling before clearing this leaf, then returns it
+    /// only after the clear succeeds. Uses the purge recovery mark when
+    /// <paramref name="forPurge"/> is true; otherwise performs a plain clear.
+    /// </summary>
+    Task<GrainId?> ClearGrainStateAndGetNextSiblingAsync(bool forPurge);
+
+    /// <summary>
     /// Re-asserts this leaf's binding to <paramref name="treeId"/> and
     /// <paramref name="shardIndex"/> on recovery of a deleted tree (issue #4700).
     /// A leaf with a state row is bound as by the birth seams. A leaf with no state

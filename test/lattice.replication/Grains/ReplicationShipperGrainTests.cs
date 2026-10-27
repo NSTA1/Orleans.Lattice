@@ -251,6 +251,9 @@ public partial class ReplicationShipperGrainTests
         public Task<long> GetTailOffsetAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException("The subscriber retention-tail read is not exercised by the shipper.");
 
+        public Task<long> GetResumeFloorAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException("State-observer resume validation is not exercised by the shipper.");
+
         /// <summary>
         /// Models the partition's published clock floor (issue #4586): every
         /// shipping read returns it paired with the next offset, as the real

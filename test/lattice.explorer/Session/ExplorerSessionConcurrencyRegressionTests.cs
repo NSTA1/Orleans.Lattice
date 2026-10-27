@@ -54,6 +54,8 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
             scope);
 
         var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        long reads = 0;
+        long scopeChanges = 0;
         using var start = new ManualResetEventSlim(false);
 
         // Several readers against one switcher, run for a bounded window rather than
@@ -83,6 +85,7 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
                     {
                         // Any read composes or reads the cached scoped name.
                         preferences.GetOrDefault(ScopedKey, string.Empty);
+                        Interlocked.Increment(ref reads);
                     }
                 }
                 catch (Exception ex)
@@ -103,6 +106,7 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
                     // Each move clears the cache, so the readers keep missing and
                     // re-inserting - which is the collision.
                     scope.MoveTo($"user{i++}", "https://cluster-a");
+                    Interlocked.Increment(ref scopeChanges);
                 }
             }
             catch (Exception ex)
@@ -124,12 +128,17 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
             thread.Join();
         }
 
-        Assert.That(failures, Is.Empty, () =>
-            "Reading a preference concurrently with a scope change threw. On a Blazor circuit "
-            + "this exception surfaces on the render path, which terminates the circuit and "
-            + "leaves the page rendered but inert."
-            + Environment.NewLine
-            + string.Join(Environment.NewLine, failures.Select(e => e.ToString())));
+        Assert.Multiple(() =>
+        {
+            Assert.That(reads, Is.GreaterThan(0), "the concurrent read path must run during the stress window");
+            Assert.That(scopeChanges, Is.GreaterThan(0), "the scope-change path must run during the stress window");
+            Assert.That(failures, Is.Empty, () =>
+                "Reading a preference concurrently with a scope change threw. On a Blazor circuit "
+                + "this exception surfaces on the render path, which terminates the circuit and "
+                + "leaves the page rendered but inert."
+                + Environment.NewLine
+                + string.Join(Environment.NewLine, failures.Select(e => e.ToString())));
+        });
     }
 
     /// <summary>

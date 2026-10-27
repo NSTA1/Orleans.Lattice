@@ -4658,6 +4658,14 @@ internal sealed partial class BPlusLeafGrain(
     /// <inheritdoc />
     public Task ClearGrainStateForPurgeAsync() => ClearGrainStateCoreAsync(forPurge: true);
 
+    /// <inheritdoc />
+    public async Task<GrainId?> ClearGrainStateAndGetNextSiblingAsync(bool forPurge)
+    {
+        var next = state.State.NextSibling;
+        await ClearGrainStateCoreAsync(forPurge);
+        return next;
+    }
+
     private async Task ClearGrainStateCoreAsync(bool forPurge)
     {
         using var routingMutation = EnterLeafRoutingMutation();

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Atomic commit without consensus</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/scene.js"></script>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="atomic-commit-without-consensus"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="124.926"
+    >
+      <div
+        id="recap"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="one-atomic-decision"
+        data-track-index="0"
+        data-variable-values='{"kicker":"How it works","title":"Atomic commit without consensus","subtitle":"One decision, two keys","beats":"0.5","end":7.943}'
+        data-start="0"
+        data-duration="7.943"
+      ></div>
+      <div
+        id="prepare-and-decide"
+        data-composition-id="atomic-saga"
+        data-composition-src="shared/components/atomic-saga.html"
+        data-scene="prepare-and-decide"
+        data-track-index="0"
+        data-variable-values='{"heading":"Prepare, decide, apply","keyOne":"order/status","keyTwo":"order/tracking","beats":"0.6,6.165,12.134,20.245,25.842,29.454,36.438,44.636,62.084","end":67.693}'
+        data-start="7.943"
+        data-duration="67.693"
+      ></div>
+      <div
+        id="outcomes"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="commit-or-abort"
+        data-track-index="0"
+        data-variable-values='{"heading":"One recorded outcome","items":"[{\"title\":\"Abort\",\"detail\":\"Hidden prepared values are discarded\",\"beat\":0},{\"title\":\"Commit\",\"detail\":\"All prepared values become visible together\",\"beat\":1},{\"title\":\"TTL and soft delete\",\"detail\":\"Read: Verified atomic commit\",\"beat\":5}]","beats":"0.6,7.14,15.052,22.064,28.933,36.655,41.939","end":49.29}'
+        data-start="75.636"
+        data-duration="49.29"
+      ></div>
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/atomic-commit-without-consensus/narration.wav" data-start="0" data-duration="124.926" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["atomic-commit-without-consensus"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

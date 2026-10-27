@@ -413,7 +413,7 @@ Enables peer negotiation for shared compression dictionaries.
 
 ### `AutoSharedDictionaryEnabled`
 
-Enables automatic shared-dictionary training and distribution when the related registration helper is used. `AddLatticeAutoSharedDictionary` registers the auto-training dictionary provider and turns this option on for every tree; setting the flag without that provider registered does not train anything.
+Enables automatic shared-dictionary training and distribution when the related registration helper is used. `AddLatticeAutoSharedDictionary` registers the auto-training dictionary provider and turns this option on for every tree; setting the flag without that provider registered does not train anything. Values from named-tenant trees (`t/{tenant}/...`) are never sampled for training, because the trained dictionary is served to any authenticated peer and embeds sampled bytes; tenant trees still compress with the shared dictionary.
 
 ### `WireVersionNegotiationEnabled`
 
