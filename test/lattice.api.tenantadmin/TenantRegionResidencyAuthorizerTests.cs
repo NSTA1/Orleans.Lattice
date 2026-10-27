@@ -212,6 +212,67 @@ public sealed class TenantRegionResidencyAuthorizerTests
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
     }
 
+    // ---- a suspended tenant is fenced for its own admins -----------------
+
+    private static TenantRecord Suspended(string adminSubject)
+    {
+        var record = Record(adminSubject: adminSubject);
+        record.SetStatus(TenantStatus.Suspended, HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero)), "operator");
+        return record;
+    }
+
+    [Test]
+    public void AuthorizeTenantAdminAsync_an_admin_of_a_suspended_tenant_is_denied()
+    {
+        // An operator suspends a tenant to fence it - for example because one of its
+        // admins is compromised - so its admins must not keep offering grants,
+        // writing tenant rules or reshaping its admin set while it is suspended.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Suspended("tenant-admin"));
+        var authorizer = Authorizer(new FixedGate(allow: false), registry, new LatticeSubject("tenant-admin"));
+
+        var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await authorizer.AuthorizeTenantAdminAsync(Acme, "cross-tenant grants", CancellationToken.None));
+
+        Assert.That(ex!.Message, Does.Contain("active tenant"));
+    }
+
+    [Test]
+    public async Task AuthorizeTenantAdminAsync_an_operator_still_administers_a_suspended_tenant()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Suspended("tenant-admin"));
+        var authorizer = Authorizer(new FixedGate(allow: true), registry, new LatticeSubject("op"));
+
+        var record = await authorizer.AuthorizeTenantAdminAsync(Acme, "cross-tenant grants", CancellationToken.None);
+
+        Assert.That(record.Status, Is.EqualTo(TenantStatus.Suspended));
+    }
+
+    [Test]
+    public async Task TryAuthorizeTenantAdminAsync_an_admin_of_a_suspended_tenant_gets_no_authority()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Suspended("tenant-admin"));
+        var authorizer = Authorizer(new FixedGate(allow: false), registry, new LatticeSubject("tenant-admin"));
+
+        Assert.That(await authorizer.TryAuthorizeTenantAdminAsync(Acme), Is.Null);
+    }
+
+    [Test]
+    public async Task AuthorizeTenantAdminAsync_a_resumed_tenant_restores_its_admins()
+    {
+        var registry = new FakeTenantRegistry();
+        var record = Suspended("tenant-admin");
+        record.SetStatus(TenantStatus.Active, HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero))), "operator");
+        registry.Seed(record);
+        var authorizer = Authorizer(new FixedGate(allow: false), registry, new LatticeSubject("tenant-admin"));
+
+        var authorized = await authorizer.AuthorizeTenantAdminAsync(Acme);
+
+        Assert.That(authorized.Id, Is.EqualTo(Acme));
+    }
+
     [Test]
     public async Task AuthorizeTenantAdminAsync_a_system_origin_caller_reads_the_record()
     {

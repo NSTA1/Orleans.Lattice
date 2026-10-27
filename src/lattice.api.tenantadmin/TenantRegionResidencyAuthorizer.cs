@@ -25,7 +25,9 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <para>
 /// <b>Tenant-admin tier</b> (set residency within allowed, read status). Granted
 /// when the caller is that platform operator <b>or</b> a live admin subject on the
-/// tenant record (<see cref="TenantRecord.HasAdminSubject"/>). While delegated
+/// tenant record (<see cref="TenantRecord.HasAdminSubject"/>) of a tenant that is
+/// <see cref="TenantStatus.Active"/>: a suspended tenant's own admins hold no
+/// tenant-tier authority until an operator resumes it. While delegated
 /// tenant access administration is enabled the check is group-aware: an admin-set
 /// entry naming one of the caller's resolved groups also counts
 /// (<see cref="TenantRecord.IsAdmin"/>). Admin-subject
@@ -131,7 +133,7 @@ public sealed class TenantRegionResidencyAuthorizer
     /// allowed set, or reading per-region status) for <paramref name="tenant"/> and
     /// returns the tenant's current record so the facade reuses this single read.
     /// The caller is authorized when it is a platform operator or a live admin
-    /// subject on the tenant record. Fail-closed and independent of the data-plane
+    /// subject on the tenant record of an active tenant. Fail-closed and independent of the data-plane
     /// default effect.
     /// </summary>
     /// <param name="tenant">The tenant the action targets.</param>
@@ -157,7 +159,7 @@ public sealed class TenantRegionResidencyAuthorizer
     /// other respect to
     /// <see cref="AuthorizeTenantAdminAsync(TenantId, CancellationToken)"/>: the
     /// caller is authorized when it is a platform operator or a live admin subject
-    /// on the tenant record, fail-closed and independent of the data-plane default
+    /// on the tenant record of an active tenant, fail-closed and independent of the data-plane default
     /// effect.
     /// </summary>
     /// <param name="tenant">The tenant the action targets.</param>
@@ -192,10 +194,12 @@ public sealed class TenantRegionResidencyAuthorizer
             return record ?? throw new TenantNotFoundException(tenant.Value);
         }
 
-        // A non-operator is authorized only as a live admin subject on an existing
-        // record. A missing record is reported as a denial (never a not-found), so
-        // a non-admin caller cannot probe tenant existence.
-        if (record is not null && !subject.IsAnonymous && IsTenantAdmin(record, subject))
+        // A non-operator is authorized only as a live admin subject on an existing,
+        // active record. A missing record is reported as a denial (never a
+        // not-found), so a non-admin caller cannot probe tenant existence. A
+        // suspended tenant is fenced, and so are its own admins: they cannot go on
+        // reshaping its grants, rules or admin set until an operator resumes it.
+        if (record is not null && IsActiveTenantAdmin(record, subject))
         {
             return record;
         }
@@ -204,7 +208,7 @@ public sealed class TenantRegionResidencyAuthorizer
             tenant.Value,
             LatticeOperation.Admin,
             subject.SubjectId,
-            $"Administering a tenant's {action} requires platform-operator or tenant-admin authority.");
+            $"Administering a tenant's {action} requires platform-operator authority, or tenant-admin authority over an active tenant.");
     }
 
     /// <summary>
@@ -212,7 +216,7 @@ public sealed class TenantRegionResidencyAuthorizer
     /// <see cref="AuthorizeTenantAdminAsync(TenantId, string, CancellationToken)"/>:
     /// returns <paramref name="tenant"/>'s record when the caller holds
     /// tenant-admin-tier authority over it (platform operator, or a live admin
-    /// subject on the record), and <see langword="null"/> when it does not - which
+    /// subject on the record of an active tenant), and <see langword="null"/> when it does not - which
     /// also covers a tenant that is not registered, so it can never be used to
     /// distinguish the two.
     /// </summary>
@@ -251,8 +255,17 @@ public sealed class TenantRegionResidencyAuthorizer
             return record;
         }
 
-        return !subject.IsAnonymous && IsTenantAdmin(record, subject) ? record : null;
+        return IsActiveTenantAdmin(record, subject) ? record : null;
     }
+
+    /// <summary>
+    /// The tenant-tier authority of a non-operator: a live admin subject on a record
+    /// whose tenant is <see cref="TenantStatus.Active"/>. A suspended tenant's admins
+    /// hold no tenant-tier authority until an operator resumes it, and an anonymous
+    /// caller never does. Allocation-free.
+    /// </summary>
+    private bool IsActiveTenantAdmin(TenantRecord record, in LatticeSubject subject) =>
+        record.Status == TenantStatus.Active && !subject.IsAnonymous && IsTenantAdmin(record, subject);
 
     /// <summary>
     /// The tenant-admin membership test. While delegated tenant access

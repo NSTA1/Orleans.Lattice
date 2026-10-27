@@ -83,7 +83,10 @@ lifecycle, quota, and region-residency verbs and the
   Setting residency, reading status, tenant access administration, cross-tenant
   grant administration, and the quota-usage read are **tenant-admin** actions, authorized when the caller is that operator or
   a live admin subject on the tenant record (for a grant step, the record of the
-  tenant whose side of the agreement the step belongs to). Both tiers are independent of the data-plane
+  tenant whose side of the agreement the step belongs to) and that tenant is `Active`: a
+  suspended tenant's own admins hold no tenant-tier authority until an operator resumes it,
+  so they cannot keep offering grants, writing tenant rules or reshaping its admin set
+  while it is fenced. Both tiers are independent of the data-plane
   `DefaultEffect`, so an unmatched request always resolves to deny even under
   `DefaultEffect = Allow`.
 - **Reserved default tenant.** The well-known legacy-adoption `default` tenant can
