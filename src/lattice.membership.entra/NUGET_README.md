@@ -1,6 +1,6 @@
 # Orleans.Lattice.Membership.Entra
 
-Microsoft Entra ID (Azure AD) credential authenticator for [`Orleans.Lattice.Membership`](https://github.com/NSTA1/Orleans.Lattice).
+Microsoft Entra ID (Azure AD) credential authenticator for [`Orleans.Lattice.Membership`](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership/README.html).
 
 This package adds an Entra ID authenticator that plugs into the membership
 authenticator seam. It specializes the built-in JWT authenticator rather than
@@ -23,5 +23,9 @@ The Microsoft Graph dependency needed to resolve overflowed group membership is
 isolated in the separate `Orleans.Lattice.Membership.Entra.Graph` package, so
 this package stays free of the Graph SDK.
 
-See the [Entra membership documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.membership.entra/README.md)
+See the [Entra membership documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership.entra/README.html)
 for configuration.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership.entra/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

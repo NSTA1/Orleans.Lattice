@@ -1,7 +1,7 @@
 # Orleans.Lattice.Explorer.Web
 
 Opt-in **embeddable hosting library** for the
-[Orleans.Lattice Explorer](https://github.com/NSTA1/Orleans.Lattice) Blazor Server
+[Orleans.Lattice Explorer](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer/README.html) Blazor Server
 web head. Add and run the explorer console - a read-only browser of cluster
 state plus capability-gated administration areas - **inside your own ASP.NET
 application** (or a thin dedicated host) and point it at a cluster's state-API
@@ -98,5 +98,9 @@ path); never apply it cluster-wide, so co-hosting the explorer does not impose a
 sticky-session tax on the cluster's data-plane ingress.
 
 See the
-[Explorer documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.explorer/README.md)
+[Explorer documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer/README.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

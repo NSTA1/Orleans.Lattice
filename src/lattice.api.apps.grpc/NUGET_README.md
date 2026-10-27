@@ -34,6 +34,10 @@ does not own the invoker or channel.
 user-specific data. Missing descriptions and consent remain null across the
 wire. Wire aliases and field ids are stable and additive-only.
 
-Part of [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). See the
-[Apps gRPC binding documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.apps.grpc/README.md)
+Part of [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). See the
+[Apps gRPC binding documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.apps.grpc/README.html)
 for registration, clients and the wire contract.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.apps.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

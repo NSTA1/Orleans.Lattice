@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.Schema
 
 Optional, opt-in **schema-management control facade** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Exposes a single
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Exposes a single
 transport-agnostic admin surface that drives the
 [`Orleans.Lattice.Schema`](https://www.nuget.org/packages/Orleans.Lattice.Schema)
 engine - set / clear / inspect enforcement policy, dead-letter inspection,
@@ -65,3 +65,7 @@ siloBuilder
 Bind a transport over the facade to drive schema management remotely: the sibling
 `Orleans.Lattice.Api.Schema.Grpc` package projects it onto a code-first gRPC
 surface.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

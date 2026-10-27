@@ -1,7 +1,7 @@
 # Orleans.Lattice.GrainIndex
 
 Optional, opt-in **typed grain indexing** for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice).
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html).
 
 An Orleans grain that holds typed state can be enrolled in a *grain index*: the
 grain's projected state is written into a lattice tree owned by this package, so
@@ -25,4 +25,8 @@ tree shards rather than by pulling every candidate back to the caller.
   reports status and controls the crawl.
 
 See the
-[grain index documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.grainindex/README.md).
+[grain index documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.grainindex/README.html).
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.grainindex/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

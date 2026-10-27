@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Mcp.Telemetry
 
-Optional, opt-in **telemetry** add-on for [`Orleans.Lattice.Api.Mcp`](https://github.com/NSTA1/Orleans.Lattice). It exposes a cluster's OpenTelemetry metrics as MCP tools by proxying a read-only Prometheus / PromQL-compatible backend, so an AI agent that already drives the cluster through the MCP endpoint can also ask operational questions ("what is the WAL append rate?") over the same authenticated surface.
+Optional, opt-in **telemetry** add-on for [`Orleans.Lattice.Api.Mcp`](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp/README.html). It exposes a cluster's OpenTelemetry metrics as MCP tools by proxying a read-only Prometheus / PromQL-compatible backend, so an AI agent that already drives the cluster through the MCP endpoint can also ask operational questions ("what is the WAL append rate?") over the same authenticated surface.
 
 ## What it gives you
 
@@ -25,4 +25,8 @@ app.MapLatticeMcp();
 
 `AddTelemetryTools(...)` is idempotent and registers exactly one telemetry tool group. The group is advertised only to a caller that the registered `ILatticeApiMcpAuthorizer` admits (the default `DenyAllMcpAuthorizer` admits none, so register a permissive or custom one) and whose effective permissions grant the `Telemetry` operation cluster-wide, so an ungranted caller is offered no telemetry tools at all, and each tool re-checks that capability at call time before it queries the backend.
 
-See the [MCP API documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.mcp/README.md) for the binding's security and discovery model.
+See the [MCP API documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp/README.html) for the binding's security and discovery model.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp.telemetry/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

@@ -1,7 +1,7 @@
 # Orleans.Lattice.Schema
 
 Schema enforcement and schema versioning for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice), built on a shared,
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html), built on a shared,
 serializable **value-to-value transform IR** - `LatticeValueTransform` - that is
 the sibling of the core boolean predicate IR (`LatticePredicateNode`). Where the
 predicate IR answers "does this value's JSON document match?", the transform IR
@@ -32,7 +32,7 @@ These in-process admin services perform no authorization of their own; the
 exposes accept-then-poll operations for remediation, migration, advance-and-migrate,
 and compliance scans, so long runs return a handle immediately and can be polled or
 cancelled. See the
-[schema documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.schema/README.md).
+[schema documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.schema/README.html).
 
 ## Design
 
@@ -80,3 +80,7 @@ Both seams are serializable so a transform can be persisted on a shadow-build
 coordinator. The evaluator is deterministic and total per value: it **throws a
 clear exception on malformed input** rather than silently corrupting a value, so
 a consumer can abort a shadow build cleanly.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.schema/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

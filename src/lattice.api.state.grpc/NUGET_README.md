@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.State.Grpc
 
-gRPC transport binding for [`Orleans.Lattice.Api.State`](https://www.nuget.org/packages/Orleans.Lattice.Api.State) - the optional read-only cluster-state API for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice).
+gRPC transport binding for [`Orleans.Lattice.Api.State`](https://www.nuget.org/packages/Orleans.Lattice.Api.State) - the optional read-only cluster-state API for [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html).
 
 It exposes the transport-agnostic state facade as unary and server-streaming RPCs over a code-first, Orleans-serialized contract (no `.proto` / `protoc` toolchain), reusing the same versioned serialization the rest of Lattice uses:
 
@@ -32,3 +32,7 @@ The surface exposes potentially sensitive structural and entry-level data, so it
 ## Contract versioning
 
 The wire messages are Orleans-serialized records with additive-only fields. New fields get new ids; aliases and field numbers are never renumbered, so a newer response decodes cleanly under an older client and vice-versa.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.state.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.Backup
 
 Optional, opt-in **backup / restore control facade** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Exposes a single
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Exposes a single
 transport-agnostic admin surface that drives the
 [`Orleans.Lattice.Backup`](https://www.nuget.org/packages/Orleans.Lattice.Backup)
 engine - capture, incremental, backup-set capture, list, stream, describe,
@@ -68,5 +68,9 @@ sibling
 package projects it onto a code-first gRPC surface.
 
 See the
-[Backup API documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.backup/README.md)
+[Backup API documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/README.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

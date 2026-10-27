@@ -1,6 +1,6 @@
 # Orleans.Lattice.Scaling
 
-Opt-in autoscaling signal for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice).
+Opt-in autoscaling signal for [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html).
 
 This package exposes a read-only, cluster-aggregate, two-axis (compute and
 storage) pressure snapshot that an external autoscaler can scrape to size the
@@ -31,9 +31,13 @@ registration and endpoint extension classes; `LatticeScalingMetrics`; and
 
 Register the signal on your silo with `AddLatticeScalingSignal`, then resolve
 `ILatticeScalingSignal` and call `GetScalingSignalAsync`. See the
-[Orleans.Lattice.Scaling docs](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.scaling/README.md)
+[Orleans.Lattice.Scaling docs](https://nsta1.github.io/Orleans.Lattice/docs/lattice.scaling/README.html)
 for details.
 
 ## License
 
 MIT. See the repository root for the full license text.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.scaling/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

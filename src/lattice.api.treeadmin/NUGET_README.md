@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.TreeAdmin
 
 Optional, opt-in **tree-administration control facade** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Presents a single
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Presents a single
 transport-agnostic admin surface for whole-tree lifecycle administration. A
 sibling package projects this facade onto a code-first gRPC surface, and the MCP
 control-plane package advertises it as a discoverable capability group.
@@ -56,3 +56,7 @@ siloBuilder
 Bind a transport over the facade to drive tree administration remotely: the
 sibling `Orleans.Lattice.Api.TreeAdmin.Grpc` package projects it onto a code-first
 gRPC surface.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

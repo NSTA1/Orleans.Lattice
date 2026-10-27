@@ -46,3 +46,7 @@ builder.Services.AddSingleton<ILatticeDataApiAuthorizer, MyAuthorizer>();
 // ...
 app.MapLatticeDataApiGrpc();
 ```
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.data.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

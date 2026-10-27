@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.TenantAdmin
 
 Optional transport-agnostic **control facade** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) multi-tenant
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html) multi-tenant
 clusters. It presents one discoverable, fail-closed control surface for tenant
 administration over the tenancy add-on's tenant registry, so a host can expose it
 through a single seam that every transport binding (gRPC, MCP) adapts over.
@@ -98,5 +98,9 @@ This package adds no transport behaviour of its own. Add the gRPC or MCP binding
 package to expose the facade over the wire.
 
 See the
-[tenant-administration documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.tenantadmin/README.md)
+[tenant-administration documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.tenantadmin/README.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.tenantadmin/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

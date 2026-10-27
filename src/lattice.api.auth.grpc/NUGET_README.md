@@ -88,3 +88,7 @@ The `serializerProvider` must have Orleans serialization registered
 (`AddSerializer()`) so the client and server wire marshallers match exactly.
 Transport concerns (address, TLS, deadlines, retries, call credentials) are
 configured on the channel the caller supplies.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.auth.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

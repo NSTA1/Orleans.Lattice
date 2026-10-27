@@ -1,7 +1,7 @@
 # Orleans.Lattice.Backup
 
 Optional, opt-in **causally-consistent backup and restore** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Captures a named,
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Captures a named,
 point-in-time backup of a selected scope of a lattice tree and restores it later
 without losing a single bit of causal metadata - **zero runtime cost until
 `AddLatticeBackup` is registered**.
@@ -66,9 +66,9 @@ provider, and for disaster recovery a durable external sink.
 
 For operator-facing backup and restore, the API facade offers accept-then-poll
 operations with durable progress and cancellation. Engine service interfaces in
-this package remain current; the facade's older blocking verbs are deprecated and
-will be removed in the next major version. Migration guide:
-https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs.
+this package remain current; the facade's older blocking verbs were removed in
+version 10.0.0. Migration guide:
+https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-removed-blocking-verbs.
 
 Must be registered after `AddLattice(...)`. For a remotely-drivable control
 plane, add the
@@ -77,5 +77,9 @@ facade and its
 [gRPC binding](https://www.nuget.org/packages/Orleans.Lattice.Api.Backup.Grpc).
 
 See the
-[Backup documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.backup/README.md)
+[Backup documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.backup/README.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.backup/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

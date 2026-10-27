@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.State
 
-Optional read-only **cluster state API** add-on for [`Orleans.Lattice`](https://github.com/NSTA1/Orleans.Lattice). It is the outward-facing read surface of a lattice cluster: external clients can query, observe, and subscribe to live state and metadata over a transport-agnostic facade, without any mutation path.
+Optional read-only **cluster state API** add-on for [`Orleans.Lattice`](https://nsta1.github.io/Orleans.Lattice/README.html). It is the outward-facing read surface of a lattice cluster: external clients can query, observe, and subscribe to live state and metadata over a transport-agnostic facade, without any mutation path.
 
 ## What it gives you
 
@@ -24,4 +24,8 @@ siloBuilder
 
 For remote access, pair it with [`Orleans.Lattice.Api.State.Grpc`](https://www.nuget.org/packages/Orleans.Lattice.Api.State.Grpc), the code-first gRPC binding and typed client over the same Orleans-serialized records. The facade is intended to back a tree-explorer dashboard and the `Orleans.Lattice.Api.Mcp` MCP server.
 
-See the [State API documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.state/README.md) for the full surface, security model, and client guide.
+See the [State API documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.state/README.html) for the full surface, security model, and client guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.state/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

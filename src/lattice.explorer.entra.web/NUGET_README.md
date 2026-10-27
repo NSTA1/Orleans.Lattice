@@ -52,5 +52,9 @@ builder.Services.AddLatticeExplorerEntraWebAuth(options =>
 });
 ```
 
-See the [package documentation](https://github.com/NSTA1/Orleans.Lattice/tree/main/docs/lattice.explorer.entra.web)
+See the [package documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer.entra.web/README.html)
 for configuration and the full sign-in flow.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.explorer.entra.web/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

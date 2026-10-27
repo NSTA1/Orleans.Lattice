@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.Schema.Grpc
 
 Optional, opt-in **gRPC transport binding** for
-[Orleans.Lattice.Api.Schema](https://github.com/NSTA1/Orleans.Lattice) - the
+[Orleans.Lattice.Api.Schema](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/README.html) - the
 transport-agnostic schema-management control facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
@@ -42,3 +42,7 @@ capability probe evaluates both grants without side effects and reports them as
 advisory flags instead of refusing. Authorization runs before the schema admin
 plane is touched, so an unauthorized caller can never observe or change schema
 state.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)
