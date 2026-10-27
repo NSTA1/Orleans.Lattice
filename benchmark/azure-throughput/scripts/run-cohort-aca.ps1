@@ -511,7 +511,7 @@ try {
 	Invoke-Az (@(
 		'containerapp', 'job', 'update',
 		'--name', $ctx.producerJob, '--resource-group', $ctx.resourceGroup,
-		'--set-env-vars') + $prodEnv + @('-o', 'none')) | Out-Null
+		'--set-env-vars') + $prodEnv + @('-o', 'none')) -TransientRetries 3 | Out-Null
 
 	Write-Host '[cohort] starting producer job' -ForegroundColor Cyan
 	$startJson = Invoke-Az @(

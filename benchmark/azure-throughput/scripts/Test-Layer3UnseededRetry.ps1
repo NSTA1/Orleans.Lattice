@@ -135,6 +135,23 @@ try {
     $r = Invoke-Case -MaxUnseededRetries 2 -Carry @{ 'get-many' = 500 } -Outcomes @('seeded 3000', 'seeded 3000')
     Assert-Case 'a carry seed below the starting rung never lowers it' (($r.Calls -join ',') -eq 'c1:1000,c2:1000')
 
+    # 6. A resumed cell whose first cohort failed (recorded c2, c3) is topped
+    #    up as c4: numbering from the count would reuse c3, deleting that log
+    #    and recording the new cohort twice.
+    Set-Content $queueFile @('seeded 3000')
+    Set-Content $callsFile @()
+    Get-ChildItem $runRoot | Remove-Item -Force
+    $c3Log = Join-Path $runRoot 't.n1.get-many.c3.log'
+    Set-Content $c3Log 'seeded 3100'
+    $existing = @{ 'get-many' = @{ '1' = @(
+        @{ cohortName = 't.n1.get-many.c2'; siloCount = 1; rungVehicles = 1000; finalThroughput = 3000; verdict = 'HEALTHY' },
+        @{ cohortName = 't.n1.get-many.c3'; siloCount = 1; rungVehicles = 1000; finalThroughput = 3100; verdict = 'HEALTHY' }) } }
+    $cells = Invoke-Layer3Cohorts -AcaPrefix t -WorkloadIds @('get-many') -SiloCounts @(1) -N 3 -ExistingCells $existing 3>$null 6>$null
+    Assert-Case 'a top-up continues after the highest recorded tag' ((@(Get-Content $callsFile) -join ',') -eq 'c4:1000')
+    Assert-Case 'the recorded c3 log survives the top-up' ((Test-Path $c3Log) -and (Get-Content -Raw $c3Log).Trim() -eq 'seeded 3100')
+    Assert-Case 'the topped-up cell holds three distinct cohorts' (@($cells['get-many']['1']).Count -eq 3 -and
+        @(@($cells['get-many']['1']) | ForEach-Object { $_.cohortName } | Sort-Object -Unique).Count -eq 3)
+
     # 5. The spec parser fails a typo before anything bills.
     $spec = ConvertFrom-Layer3CarrySpec -Spec ' get-many=128000 '
     Assert-Case 'a carry spec parses to workload mode -> vehicles' ($spec.Count -eq 1 -and $spec['get-many'] -eq 128000)

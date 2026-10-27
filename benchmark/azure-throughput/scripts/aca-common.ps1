@@ -117,12 +117,35 @@ function Invoke-Az {
 		-PassthruOutput streams output to the host instead of capturing it,
 		for long operations (image builds) whose progress the operator needs
 		to see.
+
+		-TransientRetries N re-runs a call that failed with a transient CLI or
+		service fault (Test-AzTransientFailure) up to N more times, 10 s apart
+		and growing. Pass it ONLY for idempotent calls: a CLI fault can hide a
+		call the service applied, so retrying `containerapp update` (which
+		mints a revision and would tear down the cluster the cohort just
+		formed) or `job start` (a second execution) is wrong. One transient
+		`az containerapp job update` fault ("The command failed with an
+		unexpected error ... Expecting property name enclosed in double
+		quotes") cost a Layer 3 cohort before this existed.
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][string[]] $AzArgs,
 		[switch] $PassthruOutput,
-		[switch] $AllowFailure
+		[switch] $AllowFailure,
+		[ValidateRange(0, 5)][int] $TransientRetries = 0
 	)
+	if ($TransientRetries -gt 0 -and -not $PassthruOutput) {
+		for ($attempt = 0; ; $attempt++) {
+			$out = & az @AzArgs 2>&1
+			$code = $LASTEXITCODE
+			if ($code -eq 0 -or $attempt -ge $TransientRetries -or -not (Test-AzTransientFailure -Output @($out))) { break }
+			$wait = 10 * ($attempt + 1)
+			Write-Warning "[aca] az $($AzArgs[0..([Math]::Min(2, $AzArgs.Count - 1))] -join ' ') failed transiently (exit $code); retrying in $wait s ($($attempt + 1)/$TransientRetries)"
+			Start-Sleep -Seconds $wait
+		}
+		$global:LASTEXITCODE = $code
+		return (Complete-AzOutput -AzArgs $AzArgs -Out $out -Code $code -AllowFailure:$AllowFailure)
+	}
 	if ($PassthruOutput) {
 		& az @AzArgs
 		$code = $LASTEXITCODE
@@ -131,8 +154,35 @@ function Invoke-Az {
 	}
 	$out = & az @AzArgs 2>&1
 	$code = $LASTEXITCODE
-	if ($code -ne 0 -and -not $AllowFailure) {
-		throw "az $($AzArgs -join ' ') failed (exit $code): $($out -join [Environment]::NewLine)"
+	return (Complete-AzOutput -AzArgs $AzArgs -Out $out -Code $code -AllowFailure:$AllowFailure)
+}
+
+function Test-AzTransientFailure {
+	<#
+	.SYNOPSIS
+		Whether a failed az call's output names a fault worth retrying: a CLI
+		crash on a malformed response, a dropped connection, or a throttled,
+		unavailable or timed-out service.
+	#>
+	[CmdletBinding()] param([AllowNull()][AllowEmptyCollection()][object[]] $Output)
+	$text = (@($Output) | ForEach-Object { [string]$_ }) -join "`n"
+	return ($text -match 'The command failed with an unexpected error|Connection aborted|ConnectionResetError|RemoteDisconnected|\((TooManyRequests|ServiceUnavailable|InternalServerError|GatewayTimeout|BadGateway)\)|Read timed out|timed out')
+}
+
+function Complete-AzOutput {
+	<#
+	.SYNOPSIS
+		Invoke-Az's result handling: throw on failure unless -AllowFailure,
+		otherwise return the output stripped of the CLI's warning chatter.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][string[]] $AzArgs,
+		[AllowNull()][AllowEmptyCollection()][object[]] $Out,
+		[int] $Code,
+		[switch] $AllowFailure
+	)
+	if ($Code -ne 0 -and -not $AllowFailure) {
+		throw "az $($AzArgs -join ' ') failed (exit $Code): $($Out -join [Environment]::NewLine)"
 	}
 	# Drop the CLI's own diagnostic chatter before returning. `az containerapp`
 	# unconditionally prints

@@ -201,6 +201,44 @@ try {
 	Remove-Item -LiteralPath $docCopy -Force -ErrorAction SilentlyContinue
 }
 
+# --- transient az retry ------------------------------------------------------
+# az and Start-Sleep are shadowed by functions, which PowerShell resolves before
+# the executable and the cmdlet, so Invoke-Az runs without the CLI or a delay.
+$script:azScript = @()
+$script:azCalls = 0
+function az {
+	$i = $script:azCalls++
+	$step = $script:azScript[[Math]::Min($i, $script:azScript.Count - 1)]
+	$global:LASTEXITCODE = $step.Code
+	return $step.Out
+}
+function Start-Sleep { param([int] $Seconds) }
+$crash = @{ Code = 1; Out = @('ERROR: The command failed with an unexpected error. Here is the traceback:', 'ERROR: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)') }
+$ok = @{ Code = 0; Out = @('WARNING: The behavior of this command has been altered by the following extension: containerapp', 'done') }
+
+$script:azScript = @($crash, $ok); $script:azCalls = 0
+$r = Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 3 3>$null
+Assert-Case 'a transient CLI crash is retried and the retry''s output returned' ($r -eq 'done' -and $script:azCalls -eq 2)
+
+$script:azScript = @($crash); $script:azCalls = 0; $threw = $false
+try { Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 2 3>$null | Out-Null } catch { $threw = $true }
+Assert-Case 'a persistent transient fault stops after the retry budget and throws' ($threw -and $script:azCalls -eq 3)
+
+$script:azScript = @(@{ Code = 1; Out = @('ERROR: (ResourceNotFound) The Resource was not found.') }); $script:azCalls = 0; $threw = $false
+try { Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 3 3>$null | Out-Null } catch { $threw = $true }
+Assert-Case 'a non-transient failure is not retried' ($threw -and $script:azCalls -eq 1)
+
+$script:azScript = @($crash, $ok); $script:azCalls = 0; $threw = $false
+try { Invoke-Az @('containerapp', 'update') | Out-Null } catch { $threw = $true }
+Assert-Case 'without -TransientRetries a transient fault is not retried (non-idempotent calls)' ($threw -and $script:azCalls -eq 1)
+
+$script:azScript = @($crash); $script:azCalls = 0
+$null = Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 1 -AllowFailure 3>$null
+Assert-Case '-AllowFailure after exhausted retries returns with the failing exit code' ($LASTEXITCODE -eq 1 -and $script:azCalls -eq 2)
+Assert-Case 'the producer job update, and only it, retries' (
+	[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run-cohort-aca.ps1')).Contains("'--set-env-vars') + `$prodEnv + @('-o', 'none')) -TransientRetries 3") -and
+	@(Select-String -Path (Join-Path $PSScriptRoot '*.ps1') -Pattern '-TransientRetries \d' | Where-Object { $_.Path -notmatch 'Test-' -and $_.Line -notmatch '^\s*#|\.PARAMETER|-TransientRetries N' }).Count -eq 1)
+Remove-Item Function:\az, Function:\Start-Sleep
 # --- child process argument rendering ---------------------------------------
 Assert-Case 'int arrays render as a PowerShell list' ((ConvertTo-ChildArgumentText @(1, 2, 4)) -eq '1,2,4')
 Assert-Case 'doubles render invariantly' ((ConvertTo-ChildArgumentText 0.9) -eq '0.9')

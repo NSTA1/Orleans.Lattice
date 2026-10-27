@@ -1643,10 +1643,21 @@ function Invoke-Layer3Cohorts {
 			# The top-up runs at the recorded cohorts' rung so a cell never
 			# mixes offered loads.
 			$firstCohort = 1
+			# Tags are c<n>, and a cohort that failed leaves a gap (c2, c3 when c1
+			# threw), so a top-up numbered from the count would reuse c3: it
+			# deletes that log and the cell then holds the new cohort twice.
+			# New tags continue after the highest one recorded.
+			$tagShift = 0
 			if ($cells[$mode].ContainsKey("$silos")) {
 				foreach ($existing in @($cells[$mode]["$silos"])) { if ($existing) { $cohortList.Add($existing) } }
 				$firstCohort = $cohortList.Count + 1
 				if ($cohortList.Count -gt 0) { $vehPerSilo = [int]([int](Get-StateOr $cohortList[0] 'rungVehicles' ($vehPerSilo * $silos)) / $silos) }
+				$maxTag = 0
+				foreach ($existing in $cohortList) {
+					$m = [regex]::Match([string](Get-StateOr $existing 'cohortName' ''), '\.c(\d+)$')
+					if ($m.Success -and [int]$m.Groups[1].Value -gt $maxTag) { $maxTag = [int]$m.Groups[1].Value }
+				}
+				$tagShift = [Math]::Max(0, $maxTag - $cohortList.Count)
 			}
 			Write-Host "[layer3] silos=$silos mode=$mode rung=$($vehPerSilo * $silos)veh/$($perSilo.TickHz)Hz/$($perSilo.DurationSec)s (= $vehPerSilo veh/silo) flushConcurrency=$fcPerSilo/silo cohorts=$cellN" -ForegroundColor Cyan
 
@@ -1666,7 +1677,7 @@ function Invoke-Layer3Cohorts {
 				if ($deferThis) {
 					$vehicles = $vehPerSilo * $silos
 					$offered = $vehicles * $perSilo.TickHz
-					$cohortTag = "c$i"
+					$cohortTag = "c$($i + $tagShift)"
 					$expectedLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.log"
 					$pendingPath = "$expectedLog.pending.json"
 					foreach ($stale in @($expectedLog, $pendingPath)) { if (Test-Path $stale) { Remove-Item $stale -Force } }
@@ -1727,7 +1738,7 @@ function Invoke-Layer3Cohorts {
 					# from the pipeline. The log path is fully determined by
 					# (prefix, silos, mode, tag), so derive it instead of fishing
 					# for it.
-					$cohortTag = "c$i"
+					$cohortTag = "c$($i + $tagShift)"
 					$expectedLog = Join-Path (Get-AcaRunRoot) "$AcaPrefix.n$silos.$mode.$cohortTag.log"
 					if (Test-Path $expectedLog) { Remove-Item $expectedLog -Force }
 					try {

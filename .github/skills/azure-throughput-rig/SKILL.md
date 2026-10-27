@@ -322,6 +322,16 @@ same load per silo.
 | `-WalAccounts <1..8>` | `1` | Storage accounts the cohort's WAL partitions are spread across (`BENCH_WAL_ACCOUNTS` on silos and producer): the primary plus `WalAccounts-1` extra accounts. Fails before anything bills if the rig has fewer (`deploy-aca.ps1 -WalAccountCount`). `-ResetStorage` also empties every extra account. |
 | `-DeferHarvest` | off | Return once the producer has finished and the silos are parked, with `PendingHarvestPath` on the returned object; run `complete-cohort-aca.ps1 -PendingHarvestPath <path>` later to harvest, grade and write the log. The harvest is pinned to the cohort's execution name and silo revision, so its timing changes nothing measured. |
 
+**Transient `az` faults.** `Invoke-Az -TransientRetries N` re-runs a call whose output names a
+transient CLI or service fault (`Test-AzTransientFailure`: the CLI's "unexpected error" crash on a
+malformed response, a dropped connection, 429/500/502/503/504, a read timeout), 10 s apart and
+growing. Only the producer `job update` uses it (3 retries), because it only sets env vars; one
+such crash dropped a cohort before. Never add it to `containerapp update` (each call mints a
+revision, so a retry after a hidden success tears down the cohort's cluster) or `job start` (a
+second execution). A cohort that still throws is skipped, and `-Resume` tops its cell up: new
+cohorts are tagged after the highest recorded tag (`c4` after `c2`, `c3`), never by count, which
+would overwrite an existing log.
+
 **Silo env does not persist between cohorts.** Each cohort applies its silo env with one
 `az containerapp update --set-env-vars`, which merges into the app's existing environment, so
 the same update also passes `--remove-env-vars` for every variable an earlier cohort set that
