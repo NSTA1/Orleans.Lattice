@@ -24,13 +24,14 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         public int Reads => Volatile.Read(ref _reads);
         public int Outstanding => Volatile.Read(ref _outstanding);
         public int MaximumOutstanding => Volatile.Read(ref _maximumOutstanding);
+        public bool CompleteNewReads { get; set; }
 
         public void Release() => _release.TrySetResult();
 
         public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
             var read = Interlocked.Increment(ref _reads);
-            if (initialReadCompletes && read == 1)
+            if (CompleteNewReads || (initialReadCompletes && read == 1))
             {
                 grainState.RecordExists = false;
                 return;

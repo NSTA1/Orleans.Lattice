@@ -301,7 +301,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         IGrainStorage? storage,
         TimeProvider time,
         int pinShards = 1,
-        string? blockingConsumerId = null)
+        string? blockingConsumerId = null,
+        IWalOrphanPinSweepCoordinator? orphanSweepCoordinator = null)
     {
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -312,7 +313,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         factory.GetGrain<IWalMaterialiserPinGrain>(Arg.Any<string>())
             .Returns(call => pins.For(call.ArgAt<string>(0)));
 
-        return CreateScheduler(factory, gc, OrphanSweepOptions(pinShards), time, leafStateStorage: storage);
+        return CreateScheduler(
+            factory, gc, OrphanSweepOptions(pinShards), time,
+            leafStateStorage: storage, orphanSweepCoordinator: orphanSweepCoordinator);
     }
 
     // --------------------------------------------------------- classification

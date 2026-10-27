@@ -1,9 +1,9 @@
 using System.Collections.Immutable;
-using System.Reflection;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Testing;
+using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests;
@@ -123,22 +123,27 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         {
             pins.Seed(OrphanSweepTree, OrphanConsumerId(i), HybridLogicalClock.Zero, 42);
         }
-        using var scheduler = SchedulerSweeping(pins, storage, new ManualTimeProvider());
-        var sweep = ((IWalOrphanPinSweepRunner)scheduler).RunAsync(OrphanSweepTree, true, CancellationToken.None);
-        await storage.FirstBatch.WaitAsync(TimeSpan.FromSeconds(5));
-
-        try
-        {
-            var apply = typeof(LatticeWalGcScheduler).GetMethod(
-                "ApplyCoordinatedOrphanSweep", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            apply.Invoke(scheduler, [OrphanSweepTree, new WalOrphanPinSweepOutcome
+        var clock = new VirtualTimeProvider();
+        var coordinator = Substitute.For<IWalOrphanPinSweepCoordinator>();
+        coordinator.RequestSweepAsync(OrphanSweepTree, Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<WalOrphanPinSweepOutcome?>(new WalOrphanPinSweepOutcome
             {
                 Epoch = Guid.NewGuid(),
                 Generation = 99,
                 PinPopulation = 999,
                 OffsetPopulation = 777,
                 PartitionPopulations = ImmutableDictionary<int, int>.Empty.Add(0, 888),
-            }, false]);
+            }));
+        using var scheduler = SchedulerSweeping(pins, storage, clock, orphanSweepCoordinator: coordinator);
+        var sweep = ((IWalOrphanPinSweepRunner)scheduler).RunAsync(OrphanSweepTree, true, CancellationToken.None);
+        await storage.FirstBatch.WaitAsync(TimeSpan.FromSeconds(5));
+
+        try
+        {
+            storage.CompleteNewReads = true;
+            await StartAndRunFirstPassAsync(scheduler, clock);
+            await coordinator.Received().RequestSweepAsync(
+                OrphanSweepTree, Arg.Any<bool>(), Arg.Any<CancellationToken>());
             storage.Release();
             var completed = await sweep.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Multiple(() =>
@@ -151,6 +156,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         finally
         {
             storage.Release();
+            await scheduler.StopAsync(CancellationToken.None);
         }
     }
 
