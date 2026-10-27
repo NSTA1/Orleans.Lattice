@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
 
@@ -14,6 +15,50 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class TreeMergeGrainTests
 {
+    [Test]
+    public void Retired_source_probe_matches_linear_membership_for_sparse_maps_and_unordered_generations()
+    {
+        int[] current = [0, 3, 17, int.MaxValue];
+        int[][] generations =
+        [
+            [],
+            [17, 0, int.MaxValue, 3],
+            [0, 3, 16],
+            [-1, 0],
+            [int.MaxValue, 18],
+        ];
+        foreach (var recorded in generations)
+        {
+            for (var start = 0; start <= recorded.Length; start++)
+            {
+                var expected = recorded.Skip(start).Any(index => !current.Contains(index));
+                Assert.That(TreeMergeGrain.HasRetiredSourceShard(recorded, start, current), Is.EqualTo(expected),
+                    $"generation start {start} in [{string.Join(",", recorded)}]");
+            }
+        }
+
+        Assert.That(TreeMergeGrain.HasRetiredSourceShard([0], 0, []), Is.True);
+    }
+
+    [TestCase(16)]
+    [TestCase(256)]
+    [TestCase(257)]
+    [TestCase(4096)]
+    public void Retired_source_probe_finds_missing_indices_in_large_sorted_maps(int shards)
+    {
+        var current = Enumerable.Range(0, shards).Select(index => index * 3).ToArray();
+        var recorded = current.Reverse().ToArray();
+        Assert.That(TreeMergeGrain.HasRetiredSourceShard(recorded, 0, current), Is.False);
+        foreach (var missingAt in new[] { 0, shards / 2, shards - 1 })
+        {
+            var changed = (int[])recorded.Clone();
+            changed[missingAt]++;
+            Assert.That(TreeMergeGrain.HasRetiredSourceShard(changed, 0, current), Is.True);
+            Assert.That(TreeMergeGrain.HasRetiredSourceShard(changed, missingAt + 1, current), Is.False,
+                "retired shards from older generations must not trigger another drain");
+        }
+    }
+
     private static (IBPlusLeafGrain Leaf, GrainId LeafId) SetupSurvivorHoldingAbsorbedKey(IGrainFactory grainFactory)
     {
         var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString());
