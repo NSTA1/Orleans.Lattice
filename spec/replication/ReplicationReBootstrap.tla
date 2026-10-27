@@ -317,7 +317,8 @@ Trim ==
 (* its way to s - its receive frontier D is above it - and every attached  *)
 (* peer has it - its vouched watermark P is above it, which a peer owed a  *)
 (* re-seed holds back until the re-seed's export, which carries the       *)
-(* tombstone, completes (#4615). A detached peer does not hold it back.   *)
+(* tombstone, completes with no reconcile owed (#4615, #5116). A         *)
+(* detached peer does not hold it back.                                  *)
 (* Production waits only for the wall-clock grace period (mutation         *)
 (* EventualConvergenceReapInsideGrace).                                    *)
 (***************************************************************************)
@@ -328,7 +329,7 @@ Reap ==
     /\ reg[s].present
     /\ reg[s].del
     /\ \A o \in Others : \A i \in (cursor[<<o, s>>] + 1)..Len(wal[o]) : wal[o][i].h > reg[s].h
-    /\ detached \/ (DeleteShipped /\ ~(fellOff /\ ~booted))
+    /\ detached \/ (DeleteShipped /\ ~(fellOff /\ (~booted \/ owed)))
     /\ reg' = [reg EXCEPT ![s] = Absent]
     /\ reaped' = Max2(reaped, reg[s].h)
     /\ UNCHANGED <<authored, wal, cursor, clk, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
@@ -532,7 +533,11 @@ ExportRow ==
 (* watermark rises as delivery proceeds. A lineage mismatch with an        *)
 (* orphaned source entry is permanent, so it is not retried. A full or     *)
 (* retry pass's drop floor becomes final when the pass was stable, and is  *)
-(* cleared when it was not (#4549).                                        *)
+(* cleared when it was not (#4549). An export opened while r was detached *)
+(* cannot settle reattachment: reattaching re-marks the required export   *)
+(* epoch, so a new pass remains owed (#4533, #5116). That pass installs a *)
+(* fresh floor after a third-origin write admitted during this export    *)
+(* lands; its end scan reconciles the row, or its floor drops the retry.  *)
 (***************************************************************************)
 EndExport ==
     /\ ex.phase # "idle"
@@ -569,6 +574,7 @@ EndExport ==
     /\ scopedDone' = (scopedDone \/ ex.phase = "scoped")
     /\ owed' = IF ex.phase = "scoped" THEN owed
                ELSE \/ topo # ex.topo0 \/ phys # ex.phys0 \/ ex.del0 \/ deleted \/ delDone # ex.dep0
+                    \/ detached
                     \/ /\ ex.scope /\ ~ex.carried /\ reg[r].present /\ ~reg[r].del
                        /\ reg[r].o # s /\ reg[r].h >= ex.lwm0[reg[r].o]
     /\ ex' = IdleExport

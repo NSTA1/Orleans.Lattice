@@ -149,6 +149,27 @@ behaviour with no unilateral source restore, with no other carve-out, and
 after one the receiver keeps every write of another origin until a
 coordinated restore runs.
 
+The #5116 matching-bound control exposed two distinct gaps. The original
+detached-reattachment omission was **model-only**: production re-marks the
+shipper's required export epoch on reattachment, so an export opened earlier
+cannot settle it. The model now leaves its successor whole-tree pass owed.
+Its second counterexample exposed a **production completion defect**: an
+unstable export published a completed epoch despite an owed reconcile,
+releasing the sender's re-seed and tombstone protection before the stable
+successor carried the delete. Production now withholds completion publication,
+epoch getters and completed status while owed, and the model keeps P held.
+The coordinator still finishes its handoff so the owed retry can run; a settled
+successor publishes its newer epoch normally without lowering stored epochs.
+
+The original reap mutation keeps `Third = TRUE, Reattach = FALSE, MaxHlc = 2`
+and three writes. `EventualConvergenceDetachedExportSettlesReattach` reproduces
+the model omission; `EventualConvergenceOwedExportCompletesReseed` reproduces
+the production completion defect, each with a matching clean control. The
+[refinement note](ReplicationReBootstrap.Refinement.md) records the code/TLA
+correspondence, completion-consumer audit, production detector qualification
+and new handoff/integration red-before/green-after regressions. No original
+bound, negative arm, property or fairness is weakened.
+
 ## The low-watermark companion
 
 A causal dependency names one write: the other origin's write at an HLC the
@@ -256,8 +277,8 @@ On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
 (1,592,864 generated) at a complete-search depth of 17. Every property in
 `ReplicationCausalDelivery.cfg` held over 19,161 distinct states (62,250
 generated) at a depth of 16. Every property in `ReplicationReBootstrap.cfg`
-held over 633,326 distinct states (1,898,971 generated) at a depth of 26,
-and in its Floor variant over 449,383 (1,327,241 generated) at a depth of
+held over 761,543 distinct states (2,328,265 generated) at a depth of 25,
+and in its Floor variant over 551,869 (1,647,259 generated) at a depth of
 21.
 Every property in `ReplicationLowWatermark.cfg` held over 330,842 distinct
 states (1,669,854 generated) at a depth of 26, and in its Sagas, Loss,
@@ -276,5 +297,5 @@ This table is the one place this directory states them; see
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `Replication` | 5 | 3 | 14 | 22 | 20 | 306,494 |
 | `ReplicationCausalDelivery` | 2 | 1 | 5 | 6 | 6 | 19,161 |
-| `ReplicationReBootstrap` | 2 | 1 | 18 | 33 | 19 | 633,326 |
+| `ReplicationReBootstrap` | 2 | 1 | 18 | 35 | 19 | 761,543 |
 | `ReplicationLowWatermark` | 2 | 1 | 18 | 21 | 19 | 330,842 |

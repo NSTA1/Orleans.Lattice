@@ -74,6 +74,60 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     }
 
     [Test]
+    public async Task Handoff_with_an_owed_reconcile_withholds_its_epoch_until_a_successor_settles()
+    {
+        var fake = new FakePersistentState<BootstrapCoordinatorState>();
+        Seed(fake, LatticeBootstrapState.IncrementalHandoff);
+        var epoch = Guid.NewGuid();
+        fake.State.FrontierEpoch = epoch;
+        fake.State.SnapshotExportEpoch = 7;
+        fake.State.CompletedExportEpochs[SourceCluster] = 3;
+        fake.State.CompletedExportEpochs["another-source"] = 2;
+        fake.State.CompletedExportLineages[SourceCluster] = epoch;
+        fake.State.ReconcileOwedBySource[SourceCluster] = true;
+        var (grain, _, factory, _, reminders, _, _, _) = Create(fake);
+        var frontier = Substitute.For<IReplicationTreeFrontierGrain>();
+        frontier.PinAsync(default, default!, default!, default).ReturnsForAnyArgs(true);
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Tree).Returns(frontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>())
+            .Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
+        reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive").Returns(Task.FromResult<IGrainReminder?>(null));
+
+        Assert.That(await grain.GetDrainedExportEpochAsync(SourceCluster), Is.Null,
+            "the in-progress handoff epoch must also stay protected");
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await grain.GetCompletedExportEpochAsync(SourceCluster), Is.Null,
+                "an owed pass cannot release the sender's re-seed and tombstone protection");
+            Assert.That(await grain.GetCompletedExportEpochAsync(SourceCluster, epoch), Is.Null);
+            Assert.That(await grain.GetDrainedExportEpochAsync(SourceCluster), Is.Null,
+                "the cross-tree drain consumer must not bypass the owed completion gate");
+            Assert.That(fake.State.CompletedExportEpochs[SourceCluster], Is.EqualTo(3),
+                "keep the previous stable completion without publishing the owed pass");
+            Assert.That(await grain.GetCompletedExportEpochAsync("another-source"), Is.EqualTo(2),
+                "the owed gate is per source");
+            Assert.That(fake.State.ReconcileOwedBySource[SourceCluster], Is.True);
+            Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
+                "the owed retry must be able to start");
+            Assert.That((await grain.GetStatusAsync(CancellationToken.None)).CompletedSourceClusterId, Is.Null);
+        });
+
+        Seed(fake, LatticeBootstrapState.IncrementalHandoff);
+        fake.State.SnapshotExportEpoch = 9;
+        fake.State.ReconcileOwedBySource.Remove(SourceCluster);
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await grain.GetCompletedExportEpochAsync(SourceCluster), Is.EqualTo(9));
+            Assert.That(await grain.GetCompletedExportEpochAsync(SourceCluster, epoch), Is.EqualTo(9));
+            Assert.That(await grain.GetDrainedExportEpochAsync(SourceCluster), Is.EqualTo(9));
+        });
+    }
+
+    [Test]
     public async Task A_pinned_completion_echoes_its_export_epoch_only_under_the_lineage_it_installed()
     {
         var (grain, epoch) = await CompleteHandoffAsync(pinned: true);

@@ -104,7 +104,14 @@ before calling `AddLatticeReplication`.
 
   An unknown generation (a sender that predates generations), a generation
   that moved during the export, or a deleted or purging source records a
-  durable owed retry. Maintenance re-enters the normal full bootstrap path
+  durable owed retry. Such a pass may finish its local handoff, but it does
+  not publish a completed export epoch, vouch a drained epoch to sibling
+  imports, or report a completed source while reconciliation remains owed
+  (#5116). The sender therefore retains its re-seed marker and tombstone
+  protection until a successor settles the reconcile. Previously recorded
+  epochs remain stored monotonically but are not echoed while owed; the
+  settled successor publishes its newer epoch normally.
+  Maintenance re-enters the normal full bootstrap path
   with a fresh pre-capture and every gate run again, so an upgraded sender
   reconciles on its first retry. Owed retries back off exponentially from
   one minute to a six-hour cap, so a sender that never reports a

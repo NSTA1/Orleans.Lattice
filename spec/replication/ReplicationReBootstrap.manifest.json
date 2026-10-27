@@ -6,11 +6,11 @@
     "invariants": 2,
     "properties": 1,
     "actions": 18,
-    "mutations": 33,
+    "mutations": 35,
     "behaviourRows": 19,
-    "distinctStates": 633326
+    "distinctStates": 761543
   },
   "variants": {
-    "Floor": { "distinctStates": 449383 }
+    "Floor": { "distinctStates": 551869 }
   }
 }
