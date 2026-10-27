@@ -39,27 +39,45 @@ $all = @(1, 2, 4, 6, 8)
 $rowsAgg = @{}
 foreach ($row in $Layer3Rows) { $rowsAgg[$row.Label] = New-Cells $all 1000 }
 $getMany = ($Layer3Rows | Where-Object { $_.WorkloadMode -eq 'get-many' }).Label
+$getManyPlain = $getMany.Replace('`', '')
 $rowsAgg[$getMany] = New-Cells @(1, 2, 4) 100000
 
 $out = Render-Layer3Chart -RowsAgg $rowsAgg
-$speedup = ($out -split '```mermaid')[1]
-Assert-Case 'speedup chart keeps every silo count' ($speedup -match 'x-axis "Silos" \["1", "2", "4", "6", "8"\]')
-$speedupOrder = ($speedup -split "?
-" | Where-Object { $_ -like 'Series order*' } | Select-Object -First 1)
-Assert-Case 'speedup chart drops the workload missing cells' ($speedupOrder -and -not ($speedupOrder -match [regex]::Escape($getMany)))
-Assert-Case 'a dropped workload is named' ($out -match ('Not drawn, because it was not measured at every silo count above \(its cells are in the table\): ' + [regex]::Escape($getMany)))
-Assert-Case 'no chart is truncated to the shared counts' (-not ($out -match 'x-axis "Silos" \["1", "2", "4"\]'))
+$speedupName = 'performance-layer3-speedup.svg'
+Assert-Case 'every chart is an image reference' ($out.Markdown -match [regex]::Escape("](images/$speedupName)"))
+Assert-Case 'one SVG per chart' ($out.Files.Count -eq 4)
+$speedup = [xml]$out.Files[$speedupName]
+$ns = @{ s = 'http://www.w3.org/2000/svg' }
+$xTicks = @(Select-Xml -Xml $speedup -XPath "//s:text[@class='x-tick']" -Namespace $ns | ForEach-Object { $_.Node.InnerText })
+$labels = @(Select-Xml -Xml $speedup -XPath "//s:text[@class='legend']" -Namespace $ns | ForEach-Object { $_.Node.InnerText })
+Assert-Case 'speedup chart keeps every silo count' (($xTicks -join ',') -eq '1,2,4,6,8')
+$xPos = @(Select-Xml -Xml $speedup -XPath "//s:text[@class='x-tick']" -Namespace $ns | ForEach-Object { $_.Node.GetAttribute('x') })
+$xNum = @($xPos | Where-Object { $_ -match '^\d+(\.\d+)?$' } | ForEach-Object { [double]$_ })
+Assert-Case 'x ticks sit at numeric, increasing positions' ($xNum.Count -eq 5 -and (@(1..4 | Where-Object { $xNum[$_] -le $xNum[$_ - 1] }).Count -eq 0))
+$points = @(Select-Xml -Xml $speedup -XPath '//s:polyline' -Namespace $ns | ForEach-Object { $_.Node.GetAttribute('points') -split ' ' })
+Assert-Case 'every line point is a numeric coordinate pair' ($points.Count -gt 0 -and @($points | Where-Object { $_ -notmatch '^\d+(\.\d+)?,-?\d+(\.\d+)?$' }).Count -eq 0)
+Assert-Case 'speedup chart drops the workload missing cells' ($getManyPlain -notin $labels)
+Assert-Case 'speedup legend names the reference and every drawn workload' (@($labels | Where-Object { $_ -like 'Ideal:*' }).Count -eq 1 -and (@($Layer3Rows | Where-Object { $_.Label.Replace('`', '') -in $labels }).Count -eq ($Layer3Rows.Count - 1)))
+Assert-Case 'one line per series' (@(Select-Xml -Xml $speedup -XPath '//s:polyline' -Namespace $ns).Count -eq $Layer3Rows.Count)
+Assert-Case 'a dropped workload is named' ($out.Markdown -match ('Not drawn, because it was not measured at every silo count above \(its cells are in the table\): ' + [regex]::Escape($getMany)))
+$nonAscii = @($out.Files.Values | Where-Object { $_ -match '[^\x00-\x7F]' })
+Assert-Case 'SVGs are ASCII' ($nonAscii.Count -eq 0)
+$parsed = @($out.Files.Values | ForEach-Object { try { [void][xml]$_; $true } catch { $false } })
+Assert-Case 'every SVG is well-formed XML' (@($parsed | Where-Object { -not $_ }).Count -eq 0)
+$again = Render-Layer3Chart -RowsAgg $rowsAgg
+Assert-Case 'rendering is deterministic' (@($out.Files.Keys | Where-Object { $out.Files[$_] -ne $again.Files[$_] }).Count -eq 0)
 
 $complete = @{}
 foreach ($row in $Layer3Rows) { $complete[$row.Label] = New-Cells $all 1000 }
 $clean = Render-Layer3Chart -RowsAgg $complete
-Assert-Case 'a complete sweep names nothing as dropped' (-not ($clean -match 'Not drawn'))
+Assert-Case 'a complete sweep names nothing as dropped' (-not ($clean.Markdown -match 'Not drawn'))
 
 $sparse = @{}
 foreach ($row in $Layer3Rows) { $sparse[$row.Label] = New-Cells @(1, 2, 4) 1000 }
 $sparse[$getMany] = New-Cells @(1, 2, 6) 1000
 $fallback = Render-Layer3Chart -RowsAgg $sparse
-Assert-Case 'falls back to the shared counts when no row covers the union' ($fallback -match 'x-axis "Silos" \["1", "2"\]')
+$fbTicks = @(Select-Xml -Xml ([xml]$fallback.Files[$speedupName]) -XPath "//s:text[@class='x-tick']" -Namespace $ns | ForEach-Object { $_.Node.InnerText })
+Assert-Case 'falls back to the shared counts when no row covers the union' (($fbTicks -join ',') -eq '1,2')
 
 if ($failures -gt 0) { throw "$failures Layer 3 chart assertion(s) failed." }
 Write-Host 'All Layer 3 chart assertions passed.'

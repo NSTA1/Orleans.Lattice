@@ -70,7 +70,7 @@ try {
     $rows = Aggregate-Layer2Cells @{ 'get-point' = @((New-Cohort $log)); 'set-point' = @((New-Cohort $log), (New-Cohort $log 0)) } -WarningAction SilentlyContinue
     Assert-Case 'legacy HEALTHY miss-path reads excluded' (-not $rows.ContainsKey('Reads'))
     Assert-Case 'n counts actual throughput samples' ($rows.Writes.cohortN -eq 1 -and $rows.Writes.sustainedThroughput -eq 1000)
-    Assert-Case 'per-row cohort count rendered' ((Render-Layer2Table $rows @{}) -match 'Writes: n=1')
+    Assert-Case 'per-row cohort counts not rendered (the provenance note carries n)' ((Render-Layer2Table $rows @{}) -notmatch 'Usable throughput cohorts|: n=\d')
 
     # Offer-bound Layer 2 rows are lower bounds. New-Cohort's rung is 10
     # vehicles at 5 Hz = 50 keys/s offered.
