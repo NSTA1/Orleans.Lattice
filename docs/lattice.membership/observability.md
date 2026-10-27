@@ -32,10 +32,10 @@ Each instrument name is also a public constant on `LatticeMembershipMetrics` (`R
 
 ### What the hit / miss counters measure
 
-The per-silo cache turns the credential a caller presents into a resolved subject (id + transitive group closure). Resolution is memoised with a configurable TTL (`LatticeMembershipOptions.ResolutionCacheTtl`, default 5 minutes) and bounded by the inbound token's own expiry, and it is flushed whenever this silo observes a `sys-membership-*` mutation (the mutation observer runs on the silo that commits the write, so another silo's entries are bounded only by their expiry). The counters are recorded at the cache itself:
+The per-silo cache turns the credential a caller presents into a resolved subject (id + transitive group closure). Resolution is memoised with a configurable TTL (`LatticeMembershipOptions.ResolutionCacheTtl`, default 5 minutes) and bounded by the inbound token's own expiry, and it is flushed whenever this silo observes a `sys-membership-*` mutation or a change to `LatticeMembershipOptions` (the mutation observer runs on the silo that commits the write, so another silo's entries are bounded only by their expiry). The counters are recorded at the cache itself:
 
 - A **hit** is counted when the cache serves a warm subject without re-authenticating or reading the directory.
-- A **miss** is counted when there is no live entry (never cached, expired past the TTL, past the token's `exp`, or flushed by a membership change) and the cache resolves the subject afresh.
+- A **miss** is counted when there is no live entry (never cached, expired past the TTL, past the token's `exp`, or flushed by a membership or options change) and the cache resolves the subject afresh.
 
 Three boundaries shape the ratio. A call that presents no credential at all resolves to the anonymous subject before the cache is consulted, so it counts neither a hit nor a miss. A credential that resolves to the anonymous subject (unrecognised, invalid, or expired) is never cached, so it counts a miss on every call. And the cache holds at most 4,096 subjects per silo; once it is full, a new subject is not cached until an entry expires or the cache is flushed, so its calls keep counting misses. With `ResolutionCacheTtl` set to `TimeSpan.Zero` every credentialed resolution is a miss.
 
