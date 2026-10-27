@@ -1,7 +1,7 @@
 # Orleans.Lattice.Backup.AzureBlob
 
 Optional, opt-in **Azure Blob Storage** backup sink for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice).
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html).
 
 Implements the `ILatticeBackupSink` seam from `Orleans.Lattice.Backup` against an
 Azure Storage account so backups are persisted durably off-cluster:
@@ -32,3 +32,7 @@ siloBuilder
 
 The call replaces the sink registration outright, so it displaces the default
 in-cluster sink whether it runs before or after `AddLatticeBackup`.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.backup.azureblob/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

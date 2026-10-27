@@ -1,7 +1,7 @@
 # Orleans.Lattice.Membership
 
 Optional, opt-in **caller-identity resolution** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Resolves *who is
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Resolves *who is
 calling* into a `LatticeSubject` - a stable subject id, the fully
 transitively-expanded set of group ids, and an optional flat claim bag - so the
 authorization layer (`Orleans.Lattice.Auth`) can make an access decision.
@@ -53,5 +53,9 @@ lifetime, history retention, and an optional claim-to-group projection are
 configured through `LatticeMembershipOptions`.
 
 See the
-[Membership documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.membership/README.md)
+[Membership documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership/README.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

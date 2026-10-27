@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Mcp.Telemetry.Azure
 
-Azure managed-identity backend-token provider for the transport-neutral [`Orleans.Lattice.Api.Telemetry`](https://github.com/NSTA1/Orleans.Lattice) facade. It satisfies the telemetry proxy's `DynamicBearer` auth mode with a rotating Entra (Azure AD) access token, so any telemetry binding - the MCP cluster-telemetry tools, or a client head hosting the facade directly - can query an **Azure Monitor workspace (managed Prometheus)** endpoint, which requires a short-lived AAD bearer token rather than a static credential.
+Azure managed-identity backend-token provider for the transport-neutral [`Orleans.Lattice.Api.Telemetry`](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.telemetry/README.html) facade. It satisfies the telemetry proxy's `DynamicBearer` auth mode with a rotating Entra (Azure AD) access token, so any telemetry binding - the MCP cluster-telemetry tools, or a client head hosting the facade directly - can query an **Azure Monitor workspace (managed Prometheus)** endpoint, which requires a short-lived AAD bearer token rather than a static credential.
 
 ## Why it exists
 
@@ -35,4 +35,8 @@ app.MapLatticeMcp();
 
 `AddAzureTelemetryBackendToken(...)` is idempotent and registers exactly one provider. A host that registers its own `ITelemetryBackendTokenProvider` first keeps it.
 
-See the [MCP telemetry documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.mcp.telemetry/README.md) for the proxy's security and discovery model.
+See the [MCP telemetry documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp.telemetry/README.html) for the proxy's security and discovery model.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp.telemetry.azure/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

@@ -36,4 +36,8 @@ The embedding-gap scanner is part of the hub's index pass, so it stays local to 
 
 ## Learn more
 
-See the [multi-cluster guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.mcp.repocontext.replication/README.md) for the full tree-mode map and topology walkthroughs.
+See the [multi-cluster guide](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp.repocontext.replication/README.html) for the full tree-mode map and topology walkthroughs.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp.repocontext.replication/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

@@ -1,6 +1,6 @@
 # Orleans.Lattice.Dashboards
 
-Pre-built Grafana dashboards for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice) telemetry. Bundles ready-to-import JSON dashboards covering almost every instrument on the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters, plus the exact-KNN gather instruments of the repository-context `Orleans.Lattice.Api.Mcp.RepoContext` meter on the `Overview` dashboard.
+Pre-built Grafana dashboards for [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html) telemetry. Bundles ready-to-import JSON dashboards covering almost every instrument on the `orleans.lattice`, `orleans.lattice.replication`, `orleans.lattice.replication.grpc`, `orleans.lattice.auth`, `orleans.lattice.membership`, `orleans.lattice.backup`, `orleans.lattice.scaling`, and `orleans.lattice.tenancy` meters, plus the exact-KNN gather instruments of the repository-context `Orleans.Lattice.Api.Mcp.RepoContext` meter on the `Overview` dashboard.
 
 ## What it gives you
 
@@ -9,7 +9,7 @@ Pre-built Grafana dashboards for [Orleans.Lattice](https://github.com/NSTA1/Orle
 - **Programmatic access** - `LatticeDashboards.GetGrafanaDashboardJson(kind)` returns the raw dashboard JSON for importing or writing to a Grafana provisioning directory.
 - **OpenTelemetry-ready** - designed for a Prometheus-exported OpenTelemetry pipeline; no bespoke agent or exporter required.
 
-For the underlying instruments and what each one measures, see the [metrics reference](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice/metrics.md).
+For the underlying instruments and what each one measures, see the [metrics reference](https://nsta1.github.io/Orleans.Lattice/docs/lattice/metrics.html).
 
 ## Quick start
 
@@ -25,7 +25,7 @@ For the underlying instruments and what each one measures, see the [metrics refe
            .AddPrometheusExporter());
    ```
 
-   `AddMeter` matches a meter name exactly and does not cascade, so each add-on dashboard also needs its own meter registered by name: `orleans.lattice.auth` and `orleans.lattice.membership` for `Authorization`, `orleans.lattice.backup` for `Backup`, `orleans.lattice.scaling` for `Scaling`, `orleans.lattice.replication.grpc` for `ReplicationGrpc`, and `orleans.lattice.tenancy` for `Tenancy`; the `Overview` dashboard's exact-KNN panels likewise need `Orleans.Lattice.Api.Mcp.RepoContext`. See the [configuration guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.dashboards/configuration.md).
+   `AddMeter` matches a meter name exactly and does not cascade, so each add-on dashboard also needs its own meter registered by name: `orleans.lattice.auth` and `orleans.lattice.membership` for `Authorization`, `orleans.lattice.backup` for `Backup`, `orleans.lattice.scaling` for `Scaling`, `orleans.lattice.replication.grpc` for `ReplicationGrpc`, and `orleans.lattice.tenancy` for `Tenancy`; the `Overview` dashboard's exact-KNN panels likewise need `Orleans.Lattice.Api.Mcp.RepoContext`. See the [configuration guide](https://nsta1.github.io/Orleans.Lattice/docs/lattice.dashboards/configuration.html).
 
 2. Import the dashboard JSON into Grafana, or write it to a provisioning directory:
 
@@ -34,4 +34,8 @@ For the underlying instruments and what each one measures, see the [metrics refe
    File.WriteAllText("/var/lib/grafana/dashboards/orleans-lattice/overview.json", json);
    ```
 
-See the [`docs/lattice.dashboards/`](https://github.com/NSTA1/Orleans.Lattice/tree/main/docs/lattice.dashboards) directory for usage and the metric-to-panel map.
+See the [dashboard documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.dashboards/README.html) for usage and the metric-to-panel map.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.dashboards/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

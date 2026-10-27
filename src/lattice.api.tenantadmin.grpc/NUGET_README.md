@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.TenantAdmin.Grpc
 
 Optional, opt-in **gRPC transport binding** for
-[Orleans.Lattice.Api.TenantAdmin](https://github.com/NSTA1/Orleans.Lattice) - the
+[Orleans.Lattice.Api.TenantAdmin](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.tenantadmin/README.html) - the
 transport-agnostic tenant-administration control facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
@@ -44,5 +44,9 @@ deployment, and a tenant denial is reported as `PermissionDenied` rather than an
 opaque `Internal` fault.
 
 See the
-[tenant-administration gRPC documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.tenantadmin.grpc/README.md)
+[tenant-administration gRPC documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.tenantadmin.grpc/README.html)
 for the full guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.tenantadmin.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

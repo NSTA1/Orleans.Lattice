@@ -1,6 +1,6 @@
 # Orleans.Lattice.Membership.Entra.Graph
 
-Microsoft Graph-backed group resolver for [`Orleans.Lattice.Membership.Entra`](https://github.com/NSTA1/Orleans.Lattice).
+Microsoft Graph-backed group resolver for [`Orleans.Lattice.Membership.Entra`](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership.entra/README.html).
 
 Entra ID tokens cap the number of group ids they carry. When a caller belongs to
 more groups than the token can hold, Entra omits the `groups` claim and marks the
@@ -32,5 +32,9 @@ Register it after the Entra authenticator, and set that authenticator's
 authenticator consults the resolver for the overage case only in that mode (its
 `TokenOnly` default never makes an external lookup).
 
-See the [Entra Graph documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.membership.entra.graph/README.md)
+See the [Entra Graph documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership.entra.graph/README.html)
 for configuration.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.membership.entra.graph/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

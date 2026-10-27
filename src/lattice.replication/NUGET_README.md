@@ -13,4 +13,8 @@ Cross-cluster **active-active replication** for [Orleans.Lattice](https://www.nu
 
 ## Getting started
 
-Register replication alongside the core lattice with durable grain storage and a durable WAL - the replication cursors, high-water marks, and bootstrap state persist in the lattice grain storage alongside the tree itself - then declare the peer topology. See the [replication overview](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.replication/README.md) for the full multi-cluster setup, transport wiring, security, and operations guide.
+Register replication alongside the core lattice with durable grain storage and a durable WAL - the replication cursors, high-water marks, and bootstrap state persist in the lattice grain storage alongside the tree itself - then declare the peer topology. See the [replication overview](https://nsta1.github.io/Orleans.Lattice/docs/lattice.replication/README.html) for the full multi-cluster setup, transport wiring, security, and operations guide.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.replication/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

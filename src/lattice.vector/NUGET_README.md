@@ -1,7 +1,7 @@
 # Orleans.Lattice.Vector
 
 Allocation-lean **approximate nearest-neighbour** index over dense `float`
-vectors, for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice).
+vectors, for [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html).
 
 The algorithmic core in the `Orleans.Lattice.Vector` namespace has no Orleans
 dependency and can be used standalone. The `Orleans.Lattice.Vector.Persistence`
@@ -183,3 +183,7 @@ latency is proportional to the corpus and approximate latency is not.
 Full tables - the probe dial against recall, the churn cycle, the restart and
 lazy-load sweep, and the per-operation allocation audit - are in
 `test/lattice.vector/MEASUREMENTS.md` in the repository.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.vector/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

@@ -46,6 +46,10 @@ Behaviour:
 - Uninstall soft-deletes an app's structural trees and never purges them itself;
   the core purges each soft-deleted tree once its soft-delete window elapses.
 
-Part of [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). See the
-[Apps API documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.apps/README.md)
+Part of [Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). See the
+[Apps API documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.apps/README.html)
 for the full control surface and security model.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.apps/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

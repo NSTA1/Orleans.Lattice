@@ -47,8 +47,12 @@ Pass `registerAsApp: true` to additionally register the surface as the installab
 
 ## Run it as a container - "codebase memory in a box"
 
-The [**RepoContextContainer sample**](https://github.com/NSTA1/Orleans.Lattice/blob/main/samples/RepoContextContainer/README.md) packages all of this into a single restart-durable Docker container (with an embedding companion) that mounts a workspace read-only, registers repositories under it on demand, and serves the tools over MCP with no external services. It is the fastest way to see the whole flow end to end: start, add a mounted repo, search and recall, restart, and the context is still there.
+The [**RepoContextContainer sample**](https://nsta1.github.io/Orleans.Lattice/samples/RepoContextContainer/README.html) packages all of this into a single restart-durable Docker container (with an embedding companion) that mounts a workspace read-only, registers repositories under it on demand, and serves the tools over MCP with no external services. It is the fastest way to see the whole flow end to end: start, add a mounted repo, search and recall, restart, and the context is still there.
 
 ## Learn more
 
-See the [repository-context guide](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.mcp.repocontext/README.md) for the record model, the full tool catalogue, memory and TTL semantics, and the semantic-search seam.
+See the [repository-context guide](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp.repocontext/README.html) for the record model, the full tool catalogue, memory and TTL semantics, and the semantic-search seam.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.mcp.repocontext/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

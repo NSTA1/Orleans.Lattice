@@ -1,7 +1,7 @@
 # Orleans.Lattice.Caching.AzureBlob
 
 Optional, opt-in **Azure Blob Storage** `IDistributedCache` for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice).
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html).
 
 Implements the ASP.NET Core `IDistributedCache` abstraction against an Azure
 Storage account, so a multi-replica web head has a shared, off-cluster cache
@@ -31,3 +31,7 @@ The cache is registered through the standard `IDistributedCache` seam, so any
 consumer that resolves the abstraction uses the Azure Blob backend. The last
 registration wins, so this call selects the blob backend over an earlier
 `AddDistributedMemoryCache`.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.caching.azureblob/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

@@ -82,6 +82,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Core - Tag-index repair and mirror recovery.** A transient repair failure no longer advances the repair cursor past a tree, and a key-major mirror left behind by a partial orphan deletion is recovered on the next reconcile. ([#4976](https://github.com/NSTA1/Orleans.Lattice/issues/4976), [#4977](https://github.com/NSTA1/Orleans.Lattice/issues/4977)) (`Orleans.Lattice`)
+- **Replication - Receiver feedback while pipelining.** Pipelined shipping now honours receiver shrink and pause feedback rather than discarding it. ([#4998](https://github.com/NSTA1/Orleans.Lattice/issues/4998)) (`Orleans.Lattice.Replication`)
+- **Indexing - Vector-count snapshot age.** A background refresh no longer replaces a newer vector-count snapshot with an older one. ([#4981](https://github.com/NSTA1/Orleans.Lattice/issues/4981)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Explorer - Tag-index workspaces.** Catalogue, coverage, tags and paged members ignore superseded replies. Retrying reloads the selection, stale page errors clear, and reconcile confirmations and late results stay with their workspace. ([#5090](https://github.com/NSTA1/Orleans.Lattice/pull/5090)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Replication submission ownership.** Pending validation prevents duplicate enables, edited merge modes require a fresh confirmation, and late enable or disable replies cannot post messages or reload a page that has been left. ([#5072](https://github.com/NSTA1/Orleans.Lattice/issues/5072)) (`Orleans.Lattice.Explorer.UI`)
@@ -193,6 +197,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Gates - Domain-fault coverage for held packages.** Shared domain-fault guards cover RepoContext and Vector exceptions without changing their exception bases or wire identities. ([#3375](https://github.com/NSTA1/Orleans.Lattice/issues/3375), [#4562](https://github.com/NSTA1/Orleans.Lattice/issues/4562)) (`Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Vector`)
 
 ### Security
+
+- **Security - Patched cryptography dependency.** Hosted Entra sign-in now requires System.Security.Cryptography.Pkcs 10.0.13, fixing GHSA-2fmv-rv2c-59x7 and GHSA-846f-f764-76mx. ([#5096](https://github.com/NSTA1/Orleans.Lattice/pull/5096)) (`Orleans.Lattice.Explorer.Entra.Web`)
 
 - **Security - Telemetry range queries cap evaluation points.** A range query whose window and step would yield more than 11,000 points is refused before reaching the backend, so a tiny step can no longer force an unbounded evaluation. ([#5091](https://github.com/NSTA1/Orleans.Lattice/pull/5091)) (`Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`)
 

@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.TreeAdmin.Grpc
 
 Optional, opt-in **gRPC transport binding** for
-[Orleans.Lattice.Api.TreeAdmin](https://github.com/NSTA1/Orleans.Lattice) - the
+[Orleans.Lattice.Api.TreeAdmin](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/README.html) - the
 transport-agnostic tree-administration control facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
@@ -28,3 +28,7 @@ The binding is **default-deny**: until the host registers a permissive
 authentication boundary), every call is rejected. The unauthenticated
 `GetAuthScheme` discovery RPC is the single exemption, so a client can learn how
 to sign in before it holds a credential.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin.grpc/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)

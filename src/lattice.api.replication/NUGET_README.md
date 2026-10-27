@@ -1,7 +1,7 @@
 # Orleans.Lattice.Api.Replication
 
 Optional, opt-in **replication control facade** add-on for
-[Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice). Exposes a single
+[Orleans.Lattice](https://nsta1.github.io/Orleans.Lattice/README.html). Exposes a single
 transport-agnostic admin surface that drives runtime per-tree cross-cluster
 replication configuration through the
 [`Orleans.Lattice.Replication`](https://www.nuget.org/packages/Orleans.Lattice.Replication)
@@ -66,3 +66,7 @@ siloBuilder
 ```
 
 Bind a transport over the facade to drive replication configuration remotely.
+
+## Links
+
+[Documentation](https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.replication/README.html) | [Repository](https://github.com/NSTA1/Orleans.Lattice)
