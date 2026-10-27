@@ -82,13 +82,13 @@ Set-Content (Join-Path '$runRoot' "`$NamePrefix.n`$SiloCount.`$WorkloadMode.`$Co
 # Starting rung 1000 veh/silo x 5 Hz = 5000 keys/s offered at one silo.
 $Layer3Rows = @(@{ Label = 'GetManyAsync'; WorkloadId = 'get-many'; WorkloadMode = 'get-many'; RungPerSilo = '1000:5:10' })
 
-function Invoke-Case([string[]] $Outcomes, [int] $MaxUnseededRetries) {
+function Invoke-Case([string[]] $Outcomes, [int] $MaxUnseededRetries, [int] $Silos = 1, [hashtable] $Carry = @{}) {
     Set-Content $queueFile $Outcomes
     Set-Content $callsFile @()
     Get-ChildItem $runRoot | Remove-Item -Force
-    $cells = Invoke-Layer3Cohorts -AcaPrefix t -WorkloadIds @('get-many') -SiloCounts @(1) -N 2 `
-        -MaxUnseededRetries $MaxUnseededRetries 3>$null 6>$null
-    return @{ Cells = @($cells['get-many']['1']); Calls = @(Get-Content $callsFile) }
+    $cells = Invoke-Layer3Cohorts -AcaPrefix t -WorkloadIds @('get-many') -SiloCounts @($Silos) -N 2 `
+        -MaxUnseededRetries $MaxUnseededRetries -SeedVehiclesPerSilo $Carry 3>$null 6>$null
+    return @{ Cells = @($cells['get-many']["$Silos"]); Calls = @(Get-Content $callsFile) }
 }
 
 try {
@@ -123,6 +123,27 @@ try {
     $r = Invoke-Case -MaxUnseededRetries 2 -Outcomes @('seeded 3000', 'seeded 4990')
     Assert-Case 'a seeded later cohort that reaches offered load is still offer-bound' (
         ($r.Calls -join ',') -eq 'c1:1000,c2:1000' -and $r.Cells[1].offerBound)
+
+    # 4. A carry seed starts a sweep whose first silo count is not the
+    #    workload's smallest (a curve split across rigs) at the settled
+    #    per-silo load instead of re-climbing from the starting rung.
+    #    4 silos x 4000 veh x 5 Hz = 80,000 keys/s offered; 30,000 is well
+    #    below it, so neither cohort escalates.
+    $r = Invoke-Case -MaxUnseededRetries 2 -Silos 4 -Carry @{ 'get-many' = 4000 } -Outcomes @('seeded 30000', 'seeded 30000')
+    Assert-Case 'a carry seed sets the first cohort''s per-silo load' (($r.Calls -join ',') -eq 'c1:4000,c2:4000')
+    Assert-Case 'the seeded cell records the seeded offered load' ($r.Cells[0].rungVehicles -eq 16000)
+    $r = Invoke-Case -MaxUnseededRetries 2 -Carry @{ 'get-many' = 500 } -Outcomes @('seeded 3000', 'seeded 3000')
+    Assert-Case 'a carry seed below the starting rung never lowers it' (($r.Calls -join ',') -eq 'c1:1000,c2:1000')
+
+    # 5. The spec parser fails a typo before anything bills.
+    $spec = ConvertFrom-Layer3CarrySpec -Spec ' get-many=128000 '
+    Assert-Case 'a carry spec parses to workload mode -> vehicles' ($spec.Count -eq 1 -and $spec['get-many'] -eq 128000)
+    Assert-Case 'an empty carry spec is an empty table' ((ConvertFrom-Layer3CarrySpec -Spec '').Count -eq 0)
+    foreach ($bad in @('get-mny=1000', 'get-many=0', 'get-many=12k', 'get-many=1,get-many=2', 'get-many')) {
+        $threw = $false
+        try { $null = ConvertFrom-Layer3CarrySpec -Spec $bad } catch { $threw = $true }
+        Assert-Case "carry spec '$bad' is refused" $threw
+    }
 }
 finally {
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue

@@ -86,8 +86,9 @@ alphanumerics). Common shapes:
   workload gets one rig plus extra rigs by cost, and its silo counts are dealt into contiguous
   ascending runs, one per rig; that curve then spans rigs, so the merge records it in
   `layer3.splitCurves`, the published metadata names it (`splitCurves=get-many=a+b`) and its
-  methodology says a step between rigs can be the rig difference, and each rig's escalation
-  starts from the row's starting rung. No more rigs are used than there are cells. It
+  methodology says a step between rigs can be the rig difference. Each rig's escalation starts
+  from the row's starting rung unless `-Layer3CarryVehiclesPerSilo` seeds it (below); the report
+  warns for a split curve with no seed. No more rigs are used than there are cells. It
   provisions the rigs concurrently (prefixes
   `<NamePrefix>1..K` truncated to nine characters, or fresh random ones) or uses a
   comma-separated `-ReuseAca a,b,c` list, runs one ordinary single-rig sweep per rig as a child
@@ -100,6 +101,16 @@ alphanumerics). Common shapes:
   rigs are only parked. Mind the regional vCPU quota: K rigs can hold K x max(`-SiloCounts`) x 4
   vCPU at once. Do not instead run several `-Layer 3` reports by hand against one document: each
   rewrites the whole multi-silo block with only its own cells.
+- **`-Layer3CarryVehiclesPerSilo 'get-many=128000,get-point=16000'`** seeds the per-silo load
+  each named workload (by workload mode) carries from smaller silo counts to larger ones, exactly
+  as resumed cells do, so it only raises a workload above its default rung. Use it when a sweep's
+  first silo count is not the workload's smallest - a curve split across rigs, or a back-fill of
+  only the larger cells - taking the values from the earlier sweep's settled `rungPerSilo`
+  (cohort `rungVehicles / siloCount`). It is passed to every rig, recorded in the state
+  (`layer3CarryVehiclesPerSilo`) and published as `carryVehiclesPerSilo=` in the metadata. A
+  malformed spec or unknown mode fails before anything provisions. Inside
+  `Invoke-Layer3Cohorts` the parameter is `-SeedVehiclesPerSilo`: PowerShell variable names are
+  case-insensitive, so naming it after the local `$carryVehiclesPerSilo` table silently erased it.
 - **`-Layer3OverlapHarvest`** runs a cohort's Log Analytics harvest (mostly waiting for log
   ingestion, up to ~7 minutes) in a background job while the next cohort runs, for every cohort
   whose result cannot change what the sweep does next: not a cell's first cohort (its throughput
@@ -269,7 +280,9 @@ membership, runs the producer job, parks the silos, then hands a pending-harvest
 (`<cohort log>.pending.json`: execution name, silo revision, cohort window, storage accounts) to
 `complete-cohort-aca.ps1`, which harvests the producer and silo logs from Log Analytics, appends
 one `[storage-metrics]` line per storage account the cohort used, grades the cohort and writes
-the cohort log. With `-DeferHarvest` it returns after parking instead, leaving
+the cohort log. Orleans' `Failed to address message` errors (`Orleans.Messaging[100071]`) are
+counted, not harvested: one `[aca-silo ...] suppressed N` line per replica. Parking six silos
+logged 124,000 of them in 30 s (#5100), which the 200-row paging took about 40 minutes to fetch. With `-DeferHarvest` it returns after parking instead, leaving
 `complete-cohort-aca.ps1 -PendingHarvestPath <path>` to the caller. The silos are scaled back to
 zero in a `finally` either way. Its load parameters are **per silo**, so every cell offers the
 same load per silo.

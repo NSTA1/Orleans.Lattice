@@ -130,10 +130,16 @@ try {
         @{ TimeGenerated = '2026-10-13T12:00:01Z'; ContainerGroupName_s = 'replica-b'; Log_s = 'fail: root-cause' },
         @{ TimeGenerated = '2026-10-13T12:00:02Z'; ContainerGroupName_s = 'replica-b'; Log_s = '[silo] t=2s ops=999 ops/sec=999 inFlight=1' }
     ) | ConvertTo-Json
+    $script:countQuery = ''
     function Invoke-Az {
         param([string[]] $Arguments, [switch] $AllowFailure)
-        $script:query = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
+        $kql = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
         $global:LASTEXITCODE = 0
+        if ($kql.Contains('summarize n = count()')) {
+            $script:countQuery = $kql
+            return (@(@{ ContainerGroupName_s = 'replica-b'; n = 124000; t0 = '2026-10-13T12:00:03Z'; t1 = '2026-10-13T12:00:33Z' }) | ConvertTo-Json -AsArray)
+        }
+        $script:query = $kql
         return $script:response
     }
     $ctx = @{ siloApp = 'silo'; workspaceId = 'workspace' }
@@ -142,6 +148,9 @@ try {
     Assert-Case 'phaseA parser surface unchanged' ($lines[0] -eq '[phaseA] t=1s instrument=test')
     Assert-Case 'root cause includes replica and timestamp' ($lines[1] -match 'replica=replica-b.*root-cause')
     Assert-Case 'silo progress cannot contaminate producer throughput' ($lines[2] -notmatch '^\[silo\]')
+    Assert-Case 'unroutable-message noise is excluded from the paged harvest' ($script:query.Contains("where not(Log_s contains 'Messaging[100071]')"))
+    Assert-Case 'the excluded noise is counted per replica, pinned to the revision' ($script:countQuery.Contains("RevisionName_s == 'current'") -and $lines[3] -match "^\[aca-silo time=[^\]]+ replica=replica-b\] suppressed 124000 'Failed to address message' lines")
+    Assert-Case 'the count line cannot enter the throughput or phaseA series' ($lines[3] -notmatch '^\[(silo|phaseA|producer)\]')
     $threw = $false
     try { Get-AcaSiloLog $ctx ([datetime]::UtcNow) ([datetime]::UtcNow) -IncludeDiagnostics | Out-Null } catch { $threw = $true }
     Assert-Case 'full diagnostics refuse unscoped revision' $threw
@@ -152,8 +161,9 @@ try {
     function Invoke-Az {
         param([string[]] $Arguments, [switch] $AllowFailure)
         $kql = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
-        $script:pages.Add($kql)
         $global:LASTEXITCODE = 0
+        if ($kql.Contains('summarize n = count()')) { return '[]' }
+        $script:pages.Add($kql)
         $n = if ($script:pages.Count -eq 1) { 200 } else { 1 }
         return (@(1..$n | ForEach-Object {
             @{ TimeGenerated = '2026-10-13T12:00:00Z'; ContainerGroupName_s = 'replica'; Log_s = "error $_" }

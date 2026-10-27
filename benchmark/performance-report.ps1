@@ -161,6 +161,17 @@
 	UNSEEDED result triggers an immediate re-run). Harvests are joined at the
 	end of each cell, before its checkpoint.
 
+.PARAMETER Layer3CarryVehiclesPerSilo
+	Layer 3 only. Starting per-silo load for named workloads, as
+	'<workloadMode>=<vehiclesPerSilo>[,...]' (for example
+	'get-many=128000,get-point=16000'). Seeds the load each workload carries
+	from smaller silo counts to larger ones, exactly as a resumed cell does,
+	so it only ever raises a workload's start above its default rung. Use it
+	when a sweep's first silo count is not the workload's smallest - most
+	often a curve split across rigs (-Layer3Rigs), whose later rigs would
+	otherwise climb the escalation ladder again from the default and could
+	settle on a different per-silo load. Passed to every rig's sweep.
+
 .PARAMETER Layer3Rigs
 	Layer 3 only. Run the sweep on this many identical rigs in parallel
 	(1-8, default 1). The report splits the workloads between the rigs
@@ -336,6 +347,10 @@ param(
 	# its result (see Invoke-Layer3Cohorts). Pinned to the cohort's execution
 	# and silo revision, so it changes nothing about what is measured.
 	[switch] $Layer3OverlapHarvest,
+	# Layer 3 only. '<workloadMode>=<vehiclesPerSilo>[,...]': seeds the per-silo
+	# load each named workload carries to larger silo counts, as resumed cells
+	# do (see ConvertFrom-Layer3CarrySpec).
+	[string] $Layer3CarryVehiclesPerSilo = '',
 	# Layer 3 only. Run the sweep on this many identical rigs in parallel. The
 	# report itself splits the workloads between the rigs - every silo count
 	# of a workload on one rig, so each curve and its escalation carry-over
@@ -1452,6 +1467,36 @@ function Invoke-Layer2Cohorts {
 # Layer 3 cohorts (multi-silo ACA cluster; one cell per silo count x workload)
 # ────────────────────────────────────────────────────────────────────────────
 
+function ConvertFrom-Layer3CarrySpec {
+	<#
+	.SYNOPSIS
+		Parse -Layer3CarryVehiclesPerSilo ('<workloadMode>=<vehiclesPerSilo>[,...]')
+		into a hashtable keyed by workload mode.
+	.DESCRIPTION
+		Throws on an unknown workload mode, a non-positive or non-integer
+		count, or a mode named twice, so a typo fails before anything bills
+		instead of silently leaving a workload at its default rung. An empty
+		spec is an empty table.
+	#>
+	[CmdletBinding()] param([AllowEmptyString()][AllowNull()][string] $Spec)
+	$result = @{}
+	if ([string]::IsNullOrWhiteSpace($Spec)) { return $result }
+	$known = @($Layer3Rows | ForEach-Object { $_.WorkloadMode })
+	foreach ($part in $Spec.Split(',')) {
+		$pair = $part.Trim()
+		if (-not $pair) { continue }
+		$m = [regex]::Match($pair, '^([A-Za-z0-9-]+)=(\d+)$')
+		if (-not $m.Success) { throw "-Layer3CarryVehiclesPerSilo: '$pair' is not '<workloadMode>=<vehiclesPerSilo>'." }
+		$mode = $m.Groups[1].Value
+		$veh = [int]$m.Groups[2].Value
+		if ($mode -notin $known) { throw "-Layer3CarryVehiclesPerSilo: unknown workload mode '$mode' (known: $($known -join ', '))." }
+		if ($veh -le 0) { throw "-Layer3CarryVehiclesPerSilo: '$mode' needs a positive vehicle count." }
+		if ($result.ContainsKey($mode)) { throw "-Layer3CarryVehiclesPerSilo: '$mode' is named twice." }
+		$result[$mode] = $veh
+	}
+	return $result
+}
+
 function Invoke-Layer3Cohorts {
 	<#
 	.SYNOPSIS
@@ -1520,6 +1565,10 @@ function Invoke-Layer3Cohorts {
 		# keyed [mode]["silos"]. A cell already holding $N cohorts is carried
 		# over and skipped; see -Resume.
 		[hashtable] $ExistingCells = @{},
+		# Starting carried per-silo vehicles, keyed by workload mode
+		# (ConvertFrom-Layer3CarrySpec). Merged with the resumed cells' carry,
+		# taking the larger, so it never lowers a workload's start.
+		[hashtable] $SeedVehiclesPerSilo = @{},
 		[scriptblock] $OnCellComplete,
 		# Storage accounts each cohort's WAL is spread across (run-cohort-aca.ps1 -WalAccounts).
 		[ValidateRange(1, 8)][int] $WalAccounts = 1,
@@ -1558,6 +1607,9 @@ function Invoke-Layer3Cohorts {
 	# N+1 and saves re-climbing the escalation ladder at every count. Seeded
 	# from resumed cells so a resumed sweep does not restart low.
 	$carryVehiclesPerSilo = @{}
+	# $SeedVehiclesPerSilo is deliberately not named $CarryVehiclesPerSilo:
+	# PowerShell variables are case-insensitive, so it would be this table.
+	foreach ($mode in @($SeedVehiclesPerSilo.Keys)) { $carryVehiclesPerSilo[$mode] = [int]$SeedVehiclesPerSilo[$mode] }
 	foreach ($mode in @($cells.Keys)) {
 		foreach ($k in @($cells[$mode].Keys)) {
 			foreach ($c in @($cells[$mode][$k])) {
@@ -3289,9 +3341,16 @@ function New-MetaHeaderForLayer3 {
 	$splitCurves = Get-StateOr (Get-StateOr $State 'layer3' @{}) 'splitCurves' @{}
 	$splitText = @(foreach ($m in @($splitCurves.Keys | Sort-Object)) { "$m=$(@($splitCurves[$m]) -join '+')" }) -join ';'
 	$splitSentence = ''
+	$carrySpec = [string](Get-StateOr $State 'layer3CarryVehiclesPerSilo' '')
+	if ($carrySpec) { $meta['carryVehiclesPerSilo'] = $carrySpec } elseif ($meta.Contains('carryVehiclesPerSilo')) { $meta.Remove('carryVehiclesPerSilo') }
 	if ($splitText) {
 		$meta['splitCurves'] = $splitText
-		$splitSentence = ' The curves listed in splitCurves were measured across rigs, one run of silo counts per rig: a step between two rigs'' cells can be the difference between the deployments (up to about 25% measured across identical rigs), and each rig''s escalation starts from the row''s starting rung.'
+		$startClause = if ($carrySpec) {
+			'each rig''s escalation starts from the per-silo load in carryVehiclesPerSilo for the workloads it names, and from the row''s starting rung for the rest.'
+		} else {
+			'each rig''s escalation starts from the row''s starting rung.'
+		}
+		$splitSentence = ' The curves listed in splitCurves were measured across rigs, one run of silo counts per rig: a step between two rigs'' cells can be the difference between the deployments (up to about 25% measured across identical rigs), and ' + $startClause
 	} elseif ($meta.Contains('splitCurves')) { $meta.Remove('splitCurves') }
 	$storageSentence = if ($walAccounts -le 1) {
 		'All silo counts share ONE Azure Storage account for the WAL; the storage-side table reports what that account''s own Azure Monitor metrics showed for each cell.'
@@ -3822,8 +3881,16 @@ function Invoke-Layer3MultiRig {
 		Write-Warning "[rigs] $RigCount rigs requested but the sweep has only $($plan.Count) separable cell group(s); using $($plan.Count)."
 		$RigCount = $plan.Count
 	}
+	$carry = ConvertFrom-Layer3CarrySpec -Spec $Layer3CarryVehiclesPerSilo
 	if ($RigCount -gt $ids.Count) {
 		Write-Warning "[rigs] more rigs than workloads: some workloads' silo counts are split across rigs, so their curves span rigs (flagged in the published metadata)."
+		$splitModes = @(foreach ($id in $ids) {
+			if (@($plan | Where-Object { $id -in @($_.Workloads) }).Count -gt 1) { @($Layer3Rows | Where-Object { $_.WorkloadId -eq $id })[0].WorkloadMode }
+		})
+		$unseeded = @($splitModes | Where-Object { -not $carry.ContainsKey($_) })
+		if ($unseeded.Count -gt 0) {
+			Write-Warning "[rigs] split curve(s) $($unseeded -join ', ') have no -Layer3CarryVehiclesPerSilo seed: each later rig climbs the escalation ladder again from the default rung and can settle on a different per-silo load."
+		}
 	}
 	$prefixes = if ($ReusePrefixes.Count -gt 0) {
 		@($ReusePrefixes[0..($RigCount - 1)])
@@ -3880,6 +3947,7 @@ function Invoke-Layer3MultiRig {
 				WalSaturationRecoveryReleaseBatch = $WalSaturationRecoveryReleaseBatch
 				Layer3ClientsPerSilo = $Layer3ClientsPerSilo; SaturationRatio = $SaturationRatio; MaxRungEscalations = $MaxRungEscalations
 				Layer3WalAccounts = $Layer3WalAccounts; Layer3OverlapHarvest = [bool]$Layer3OverlapHarvest; Resume = [bool]$Resume
+				Layer3CarryVehiclesPerSilo = $Layer3CarryVehiclesPerSilo
 			}
 			$log = Join-Path (Join-Path $runRoot $p) 'sweep.log'
 			Write-Host "[rigs] sweeping $p (log: $log)" -ForegroundColor Cyan
@@ -3897,6 +3965,7 @@ function Invoke-Layer3MultiRig {
 		}
 		if ($states.Count -eq 0) { throw '[rigs] no rig wrote a state.json; nothing to merge.' }
 		$merged = Merge-Layer3RigStates -States $states -Prefixes $statePrefixes
+		if ($Layer3CarryVehiclesPerSilo) { $merged['layer3CarryVehiclesPerSilo'] = $Layer3CarryVehiclesPerSilo }
 		$mergedFile = Join-Path (Join-Path $runRoot ('rigs-' + ($statePrefixes -join '-'))) 'state.json'
 		Write-StateFile -Path $mergedFile -State $merged
 		Write-Host "[rigs] merged state.json: $mergedFile" -ForegroundColor Green
@@ -4075,6 +4144,8 @@ function Main {
 			throw "-Layer3Rigs $Layer3Rigs disagrees with the $($reuseList.Count) rigs -ReuseAca names; pass one or the other."
 		}
 		$rigCount = [Math]::Max($Layer3Rigs, $reuseList.Count)
+		# Fail a malformed carry seed before anything provisions or bills.
+		$null = ConvertFrom-Layer3CarrySpec -Spec $Layer3CarryVehiclesPerSilo
 		if ($rigCount -gt 1) {
 			Invoke-Layer3MultiRig -RigCount $rigCount -ReusePrefixes $reuseList
 			return
@@ -4192,6 +4263,7 @@ function Main {
 			$l3State.layer3SaturationRatio      = $SaturationRatio
 			$l3State.layer3MaxRungEscalations   = $MaxRungEscalations
 			$l3State['layer3WalAccounts']       = $Layer3WalAccounts
+			if ($Layer3CarryVehiclesPerSilo) { $l3State['layer3CarryVehiclesPerSilo'] = $Layer3CarryVehiclesPerSilo } elseif ($l3State.ContainsKey('layer3CarryVehiclesPerSilo')) { $l3State.Remove('layer3CarryVehiclesPerSilo') }
 
 			$l3Cells = Invoke-Layer3Cohorts `
 				-AcaPrefix   $acaPrefix `
@@ -4210,6 +4282,7 @@ function Main {
 				-SaturationRatio    $SaturationRatio `
 				-MaxRungEscalations $MaxRungEscalations `
 				-ExistingCells $(if ($Resume -and $l3State.layer3.cohorts -is [System.Collections.IDictionary]) { $l3State.layer3.cohorts } else { @{} }) `
+				-SeedVehiclesPerSilo (ConvertFrom-Layer3CarrySpec -Spec $Layer3CarryVehiclesPerSilo) `
 				-OnCellComplete $checkpoint `
 				-WalAccounts    $Layer3WalAccounts `
 				-OverlapHarvest:$Layer3OverlapHarvest
