@@ -97,22 +97,32 @@ public partial class BackupCapturePage : IDisposable
         }
     }
 
-    private Task SetKindAsync(string value)
+    private async Task SetKindAsync(string value)
     {
-        _baseLoad.Renew();
-        _kind = value is IncrementalKind or SetKind ? value : FullKind;
-        _error = null;
+        var token = _baseLoad.Renew();
+        var kind = value is IncrementalKind or SetKind ? value : FullKind;
+        var tree = _tree?.Trim();
+        if (kind == SetKind && _kind != SetKind && !string.IsNullOrEmpty(tree)
+            && !_setTrees.Contains(tree, StringComparer.Ordinal)
+            && _treeBox is not null && !await _treeBox.ConfirmAsync().ConfigureAwait(true))
+        {
+            return;
+        }
 
+        if (_disposed.IsLeft || token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _kind = kind;
+        _error = null;
         // The tree carried into a set is judged as Add judges it: trimmed, and only
         // when it names a tree the set does not already hold (#4413).
-        var tree = _tree?.Trim();
         if (_kind == SetKind && !string.IsNullOrEmpty(tree) && !_setTrees.Contains(tree, StringComparer.Ordinal))
         {
             _setTrees.Add(tree);
             SetTree(string.Empty);
         }
-
-        return Task.CompletedTask;
     }
 
     private void SetTree(string value)
@@ -189,6 +199,7 @@ public partial class BackupCapturePage : IDisposable
 
     private async Task CaptureAsync()
     {
+        var details = (_name, _kind, _tree, _scopeKind, _keyOrPrefix, _base);
         _error = null;
         _nameError = string.IsNullOrWhiteSpace(_name) ? "Give the backup a name." : null;
         _treeError = null;
@@ -222,6 +233,12 @@ public partial class BackupCapturePage : IDisposable
 
             if (_disposed.IsLeft)
             {
+                return;
+            }
+
+            if (details != (_name, _kind, _tree, _scopeKind, _keyOrPrefix, _base))
+            {
+                _error = "The capture details changed. Review them and capture again.";
                 return;
             }
 

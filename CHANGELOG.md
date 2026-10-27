@@ -92,6 +92,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Atomic - Cross-tree sagas no longer exhaust the transaction registry.** A host without replication records no cross-tree membership, restoring about 100 cross-tree sagas/s per registry shard. Replicated hosts keep it; their lower cross-tree ceiling is now documented. ([#5073](https://github.com/NSTA1/Orleans.Lattice/issues/5073)) (`Orleans.Lattice`)
 
+- **Explorer - Backup form consistency.** Captures require a new submission if details change during tree validation. Switching to a set validates the carried tree, and pending schedule cancellation blocks conflicting changes. ([#5099](https://github.com/NSTA1/Orleans.Lattice/issues/5099)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Backup catalogue and health.** Catalogue rows, inventory, schedules and health discard superseded replies and errors. Pending checks no longer block the next backup or replace its progress, and monitoring-save results stay with their backup. ([#5036](https://github.com/NSTA1/Orleans.Lattice/issues/5036), [#5042](https://github.com/NSTA1/Orleans.Lattice/issues/5042)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Operation ownership.** Cleared watches and departed operation pages cannot revive polls, toasts or callbacks. Refreshes reject stale replies and stop terminal polls; reclaim and backup cancellation stay scoped. Backup retries release old polls; abandoned bulk loads stop sending writes. ([#5028](https://github.com/NSTA1/Orleans.Lattice/issues/5028), [#5042](https://github.com/NSTA1/Orleans.Lattice/issues/5042), [#5048](https://github.com/NSTA1/Orleans.Lattice/issues/5048), [#5056](https://github.com/NSTA1/Orleans.Lattice/issues/5056)) (`Orleans.Lattice.Explorer.UI`)
