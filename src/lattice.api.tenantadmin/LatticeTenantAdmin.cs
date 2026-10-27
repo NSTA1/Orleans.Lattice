@@ -23,11 +23,12 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// even learning whether a tenant exists.
 /// </para>
 /// <para>
-/// <b>Last-writer-wins stamping.</b> The registry's status register keeps its
-/// incumbent stamp internal, so the facade cannot read-then-supersede; instead it
-/// stamps every write with a strictly increasing clock from
-/// <see cref="ITenantAdminClock"/> and the cluster's writer id, which guarantees
-/// each successive control-plane write supersedes the last.
+/// <b>Last-writer-wins stamping.</b> Every write is stamped with a strictly
+/// increasing clock from <see cref="ITenantAdminClock"/> and the cluster's writer
+/// id. A status change is additionally stamped later than the status it replaces
+/// (<see cref="TenantRemovalStamp.ForStatus"/>), because the incumbent may have been
+/// written by a silo whose clock runs ahead of this one and a write stamped behind
+/// it would be dropped by the merge while the facade reported it applied.
 /// </para>
 /// </remarks>
 internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
@@ -186,7 +187,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         // The status write lands through the registry's last-writer-wins merge, so
         // it composes with concurrent registry writes and a re-run of an already
         // interrupted delete is a stamp-advancing no-op.
-        record.SetStatus(TenantStatus.Suspended, _clock.Next(), _writerId);
+        record.SetStatus(TenantStatus.Suspended, TenantRemovalStamp.ForStatus(_clock, record), _writerId);
         await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
 
         // Cascade the delete to the tenant's trees before removing the definition,
@@ -267,15 +268,17 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
             };
         }
 
-        record.SetStatus(target, _clock.Next(), _writerId);
-        await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        record.SetStatus(target, TenantRemovalStamp.ForStatus(_clock, record), _writerId);
+        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
 
+        // Report the status that landed, not the one requested: a later write racing
+        // this one can still win the merge.
         return new TenantStatusChangeResult
         {
             TenantId = tenant.Value,
             PreviousStatus = TenantLifecycleMapping.ToLifecycleStatus(previous),
-            NewStatus = TenantLifecycleMapping.ToLifecycleStatus(target),
-            Changed = true,
+            NewStatus = TenantLifecycleMapping.ToLifecycleStatus(merged.Status),
+            Changed = merged.Status != previous,
         };
     }
 

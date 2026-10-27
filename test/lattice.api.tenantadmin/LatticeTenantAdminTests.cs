@@ -175,6 +175,45 @@ public sealed partial class LatticeTenantAdminTests
         Assert.That(registry.Puts, Is.EqualTo(0));
     }
 
+    /// <summary>A record whose status was written by a silo whose clock runs an hour ahead.</summary>
+    private static TenantRecord ActiveRecordFromAFastClock(string id) => TenantRecord.Create(
+        Parse(id), TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared,
+        new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.AddHours(1).Ticks }, "fast-silo");
+
+    [Test]
+    public async Task SuspendTenantAsync_supersedes_a_status_written_by_a_silo_whose_clock_runs_ahead()
+    {
+        // A suspend stamped from the local clock alone loses the last-writer-wins
+        // merge to the incumbent, leaving the tenant active while the facade reports
+        // it suspended.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecordFromAFastClock(Tenant));
+        var facade = Create(registry);
+
+        var result = await facade.SuspendTenantAsync(Tenant);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(registry.Peek(Tenant)!.Status, Is.EqualTo(TenantStatus.Suspended));
+            Assert.That(result.NewStatus, Is.EqualTo(TenantLifecycleStatus.Suspended));
+            Assert.That(result.Changed, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task DeleteTenantAsync_suspends_before_cascading_even_against_a_status_from_a_fast_clock()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecordFromAFastClock(Tenant));
+        var cascade = new StatusObservingCascade(registry, 0);
+        var facade = Create(registry, cascade: cascade);
+
+        await facade.DeleteTenantAsync(Tenant);
+
+        Assert.That(cascade.ObservedStatusAtCascade, Is.EqualTo(TenantStatus.Suspended),
+            "the delete's fence must land before any tree is cascaded");
+    }
+
     // ----- Resume -----
 
     [Test]
