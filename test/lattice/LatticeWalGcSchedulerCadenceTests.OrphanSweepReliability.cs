@@ -10,12 +10,15 @@ namespace Orleans.Lattice.Tests;
 
 public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task A_stalled_sweep_releases_admission_on_cancellation_or_timeout(bool timeout)
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public async Task A_stalled_sweep_releases_admission_on_cancellation_or_timeout(bool timeout, bool queuedRelease)
     {
         var clock = new ManualTimeProvider();
-        var storage = new BlockedLeafStateStorage(1, initialReadCompletes: false, synchronousRelease: true);
+        var storage = new BlockedLeafStateStorage(1, initialReadCompletes: false,
+            synchronousRelease: true, queueReleaseContinuations: queuedRelease);
         var pins = new FakePinStore();
         pins.Seed(OrphanSweepTree, OrphanConsumerId(0));
         using var scheduler = SchedulerSweeping(pins, storage, clock);
@@ -38,7 +41,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             }
 
             Assert.That(pins.Removals, Is.Empty, "A timeout is not evidence that the publisher is gone.");
-            storage.Release();
+            ReleaseAndDrainOrphanReads(storage, scheduler);
             var recovered = await runner.RunAsync(OrphanSweepTree, true, CancellationToken.None)
                 .WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Multiple(() =>
@@ -50,16 +53,18 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         }
         finally
         {
-            storage.Release();
+            ReleaseAndDrainOrphanReads(storage, scheduler);
         }
     }
 
-    [Test]
-    public async Task Concurrent_trees_share_silo_admission_and_abandoned_reads_keep_their_slots()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Concurrent_trees_share_silo_admission_and_abandoned_reads_keep_their_slots(bool queuedRelease)
     {
         const int Concurrency = 16;
         var clock = new ManualTimeProvider();
-        var storage = new BlockedLeafStateStorage(Concurrency, initialReadCompletes: false, synchronousRelease: true);
+        var storage = new BlockedLeafStateStorage(Concurrency, initialReadCompletes: false,
+            synchronousRelease: true, queueReleaseContinuations: queuedRelease);
         var pins = new FakePinStore();
         for (var i = 0; i < Concurrency; i++)
         {
@@ -99,7 +104,14 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 Assert.That(pins.Removals, Is.Empty);
             });
 
-            storage.Release();
+            if (queuedRelease)
+            {
+                storage.Release();
+                Assert.That(storage.Outstanding, Is.EqualTo(Concurrency),
+                    "Posted continuations must remain pending until explicitly resumed.");
+                Assert.That(scheduler.OrphanLeafReadsDrained, Is.False);
+            }
+            ReleaseAndDrainOrphanReads(storage, scheduler);
             await runner.RunAsync(OtherTree, false, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Multiple(() =>
             {
@@ -110,14 +122,16 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         }
         finally
         {
-            storage.Release();
+            ReleaseAndDrainOrphanReads(storage, scheduler);
         }
     }
 
-    [Test]
-    public async Task Applying_an_old_outcome_mid_sweep_cannot_corrupt_the_new_census()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Applying_an_old_outcome_mid_sweep_cannot_corrupt_the_new_census(bool queuedRelease)
     {
-        var storage = new BlockedLeafStateStorage(1, initialReadCompletes: false, synchronousRelease: true);
+        var storage = new BlockedLeafStateStorage(1, initialReadCompletes: false,
+            synchronousRelease: true, queueReleaseContinuations: queuedRelease);
         var pins = new FakePinStore();
         for (var i = 0; i < 3; i++)
         {
@@ -144,7 +158,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             await StartAndRunFirstPassAsync(scheduler, clock);
             await coordinator.Received().RequestSweepAsync(
                 OrphanSweepTree, Arg.Any<bool>(), Arg.Any<CancellationToken>());
-            storage.Release();
+            ReleaseAndDrainOrphanReads(storage, scheduler);
             var completed = await sweep.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Multiple(() =>
             {
@@ -155,7 +169,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         }
         finally
         {
-            storage.Release();
+            ReleaseAndDrainOrphanReads(storage, scheduler);
             await scheduler.StopAsync(CancellationToken.None);
         }
     }
