@@ -282,16 +282,14 @@ internal sealed class LatticeStateObserver(
     /// Throws <see cref="LatticeStateCursorExpiredException"/> when
     /// <paramref name="resumeOffset"/> falls below the earliest sequence the
     /// partition still retains. Each partition keeps its own read order (the
-    /// next sequence, then the live count); partitions are checked concurrently.
+    /// next sequence, then the live count) inside one call; partitions are checked concurrently.
     /// </summary>
     private static async Task EnsureResumableAsync(
         IWalShardGrain grain,
         long resumeOffset,
         CancellationToken cancellationToken)
     {
-        var nextSequence = await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
-        var liveCount = await grain.GetLiveEntryCountAsync(cancellationToken).ConfigureAwait(false);
-        var earliestRetained = nextSequence - liveCount;
+        var earliestRetained = await grain.GetResumeFloorAsync(cancellationToken).ConfigureAwait(false);
 
         // A resume offset below the earliest still-retained sequence means
         // the missed changes have been trimmed: surface an explicit expiry

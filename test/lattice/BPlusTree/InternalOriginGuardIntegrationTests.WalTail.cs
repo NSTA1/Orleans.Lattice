@@ -12,4 +12,13 @@ public sealed partial class InternalOriginGuardIntegrationTests
         Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
             async () => await wal.GetTailOffsetAsync(CancellationToken.None));
     }
+
+    [Test]
+    public void Wal_GetResumeFloorAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var wal = _cluster.GrainFactory.GetGrain<IWalShardGrain>("origin-guard-wal-resume/0");
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await wal.GetResumeFloorAsync(CancellationToken.None));
+    }
 }

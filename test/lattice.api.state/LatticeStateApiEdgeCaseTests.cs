@@ -203,6 +203,7 @@ public sealed partial class LatticeStateApiEdgeCaseTests
         var wal = Substitute.For<IWalShardGrain>();
         wal.GetNextSequenceAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<long>(nextSequence));
         wal.GetLiveEntryCountAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(liveEntries));
+        wal.GetResumeFloorAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(nextSequence - liveEntries));
         wal.ReadAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(new ValueTask<WalShardPage>(page));
 
         var grainFactory = Substitute.For<IGrainFactory>();

@@ -34,6 +34,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Structure routing.** Whole-tree structure queries reuse the forced routing response's physical identity, removing a registry call while retaining targeted-shard and subtree ownership checks. ([#5093](https://github.com/NSTA1/Orleans.Lattice/pull/5093)) (`Orleans.Lattice.Api.State`)
+
 - **Performance - Resize mirror idle cost.** A write to a shard with no online resize in progress no longer builds the resize mirror's key set, removing about 30 KB per 1,000-key `SetManyAsync`. ([#5078](https://github.com/NSTA1/Orleans.Lattice/pull/5078)) (`Orleans.Lattice`)
 
 - **Performance - Atomic prepare-stamp copies.** A committed saga no longer copies each key's original prepare stamp into unsized intermediate maps; a 64-key saga allocates about 16 KB less. The stamps read, persisted and carried are unchanged. ([#5078](https://github.com/NSTA1/Orleans.Lattice/pull/5078)) (`Orleans.Lattice`)
@@ -46,7 +48,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Tenant usage sampling.** Owned-tree usage reports overlap in settled waves of up to 32, preserving cached footprints on failure and sampling-before-publication accounting barriers. ([#5041](https://github.com/NSTA1/Orleans.Lattice/pull/5041)) (`Orleans.Lattice.Tenancy`)
 
-- **Performance - WAL polling.** Idle subscribers skip empty page reads, and retention-tail reads combine metadata into one grain call while retaining trim and late-flush safeguards. ([#5038](https://github.com/NSTA1/Orleans.Lattice/pull/5038)) (`Orleans.Lattice`)
+- **Performance - WAL polling.** Idle subscribers skip empty pages. Cold activations share metadata reads, and resume validation and retention tails each use one grain call, retaining placement fences, trim checks and late-flush safeguards. ([#5038](https://github.com/NSTA1/Orleans.Lattice/pull/5038), [#5093](https://github.com/NSTA1/Orleans.Lattice/pull/5093)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
 
 - **Performance - View alias notifications.** Independent maintainers rebind in settled waves of up to 32 instead of serially, retaining best-effort failure isolation. ([#5038](https://github.com/NSTA1/Orleans.Lattice/pull/5038)) (`Orleans.Lattice`)
 

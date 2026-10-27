@@ -26,6 +26,7 @@ public sealed class LatticeStateQueryStructureRoutingTests
         public required LatticeStateQuery Query { get; init; }
         public required ILattice Lattice { get; init; }
         public required Dictionary<int, IShardRootGrain> Shards { get; init; }
+        public required ILatticeRegistry Registry { get; init; }
     }
 
     private static Harness CreateQuery(ShardMap map, int pinnedShardCount, params int[] shardsWithRoots)
@@ -76,7 +77,7 @@ public sealed class LatticeStateQueryStructureRoutingTests
             new ServiceCollection().BuildServiceProvider(),
             new NullTenantContextResolver());
 
-        return new Harness { Query = query, Lattice = lattice, Shards = shards };
+        return new Harness { Query = query, Lattice = lattice, Shards = shards, Registry = registry };
     }
 
     [Test]
@@ -94,6 +95,8 @@ public sealed class LatticeStateQueryStructureRoutingTests
             Assert.That(result.Roots.Select(r => r.ShardIndex), Is.EqualTo(new[] { 0, 1, 5 }));
             Assert.That(result.Roots.Single(r => r.ShardIndex == 5).SubtreeKeyCount, Is.EqualTo(15));
         });
+        _ = h.Lattice.Received(1).GetRoutingAsync(true, Arg.Any<CancellationToken>());
+        await h.Registry.DidNotReceiveWithAnyArgs().ResolveAsync(default!);
     }
 
     [Test]
@@ -103,10 +106,12 @@ public sealed class LatticeStateQueryStructureRoutingTests
         // serves any key, so it is not a root of the tree's structure.
         var map = new ShardMap { Slots = [0, 2, 0, 2], Version = 7 };
         var h = CreateQuery(map, pinnedShardCount: 3, 0, 2);
+        h.Registry.ResolveAsync(Tree).Returns(Task.FromResult("stale-alias-target"));
 
         var result = await h.Query.GetTreeStructureAsync(new StructureRequest { TreeId = Tree });
 
         Assert.That(result.Roots.Select(r => r.ShardIndex), Is.EqualTo(new[] { 0, 2 }));
+        await h.Registry.DidNotReceiveWithAnyArgs().ResolveAsync(default!);
     }
 
     [Test]
@@ -121,5 +126,6 @@ public sealed class LatticeStateQueryStructureRoutingTests
         _ = h.Lattice.DidNotReceive().GetRoutingAsync(Arg.Any<CancellationToken>());
         _ = h.Lattice.DidNotReceive().GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
         await h.Shards[0].DidNotReceive().GetTopologySnapshotAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await h.Registry.Received(1).ResolveAsync(Tree);
     }
 }
