@@ -10,7 +10,7 @@ Identity and subject-resolution add-on for [Orleans.Lattice](../../README.md).
 
 `Orleans.Lattice.Membership` turns the raw credential a caller presents into the **subject** the authorization layer reasons about. It owns these pieces:
 
-- **A directory** of groups and their membership edges (with transitive group membership), persisted in ordinary, dogfooded `ILattice` trees (the reserved `sys-membership-*` trees: one for group records, one for membership edges) so it is fully introspectable through the standard read / scan / change-feed surface.
+- **A directory** of groups and their membership edges (with transitive group membership), persisted in ordinary, dogfooded `ILattice` trees (the reserved `sys-membership-*` trees: one for group records, one for membership edges) so it is fully introspectable through the standard read / scan / change-feed surface. With `Orleans.Lattice.Auth` registered those trees are control plane: only a bootstrap administrator or a caller holding a rule scoped at the tree may read them, and neither a default effect of allow nor a cluster-wide all-trees grant exposes them.
 - **A credential-to-subject resolution pipeline** that maps an incoming credential (an opaque scheme + token, or an anonymous request) onto a stable subject id plus the flat closure of every group that subject belongs to.
 
 It is the identity foundation the [`Orleans.Lattice.Auth`](../lattice.auth/README.md) package builds its policy and enforcement on. Registering membership alone adds identity resolution and the directory; it does **not** enforce anything on its own. Enforcement arrives only when `Orleans.Lattice.Auth` is also registered.
