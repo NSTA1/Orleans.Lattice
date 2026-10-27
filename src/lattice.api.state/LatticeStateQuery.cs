@@ -1391,8 +1391,13 @@ internal sealed class LatticeStateQuery(
         {
             return TreeStructureResult.NotFound(request.TreeId);
         }
-        var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(bindTreeId).ConfigureAwait(false);
+        // Whole-tree routing supplies identity and map from the same observation.
+        // Targeted reads still need only alias resolution, not a full map.
+        var routing = string.IsNullOrEmpty(request.SubPathNodeId) && request.ShardIndex is null
+            ? await tree.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false)
+            : null;
+        var physicalTreeId = routing?.PhysicalTreeId
+            ?? await _grainFactory.GetLatticeRegistry().ResolveAsync(bindTreeId).ConfigureAwait(false);
         var depthLimit = request.EffectiveDepthLimit;
         var budget = new NodeBudget { Remaining = request.EffectiveMaxNodes };
 
@@ -1443,9 +1448,7 @@ internal sealed class LatticeStateQuery(
         }
         else
         {
-            // Forced for the same reason as GetPhysicalShardCountAsync (#4180).
-            var routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
-            shardIndices = routing.Map.GetPhysicalShardIndices();
+            shardIndices = routing!.Map.GetPhysicalShardIndices();
         }
 
         // One root summary per scanned shard (budget permitting), so the scanned

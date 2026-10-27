@@ -74,6 +74,7 @@ if (!string.IsNullOrWhiteSpace(filterRaw))
 
 var config = (IConfig)new HarnessConfig(resultsPath);
 
+// The readfusion suite models WAL activation, resume and structure read dispatch.
 // The maintenanceelisions suite selects the reshard, consolidation and options
 // lanes of autonomicprobes.
 // Opt-in alternate suite: the producer-side commit-observer microbench
@@ -87,6 +88,12 @@ var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
+}
+
+if (string.Equals(suite, "readfusion", StringComparison.OrdinalIgnoreCase))
+{
+    var readSummary = BenchmarkRunner.Run<ReadFusionCallBenchmarks>(config);
+    return readSummary.HasCriticalValidationErrors || readSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "maintenancecalls", StringComparison.OrdinalIgnoreCase))

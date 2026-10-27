@@ -222,6 +222,15 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the state observer's resume floor in one grain call: the next
+    /// assigned sequence sampled before the trim-aware live count is read.
+    /// Retains that read order and the live-count provider semantics; this is
+    /// not an atomic retention snapshot or a transaction-purge watermark.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<long> GetResumeFloorAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the lowest sequence number this shard still stores, or
     /// <c>-1</c> when it stores nothing (empty, or trimmed through its last
     /// entry). Read from the storage provider, so it reflects every
