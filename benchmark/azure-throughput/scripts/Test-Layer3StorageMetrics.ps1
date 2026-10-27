@@ -235,9 +235,11 @@ Assert-Case 'without -TransientRetries a transient fault is not retried (non-ide
 $script:azScript = @($crash); $script:azCalls = 0
 $null = Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 1 -AllowFailure 3>$null
 Assert-Case '-AllowFailure after exhausted retries returns with the failing exit code' ($LASTEXITCODE -eq 1 -and $script:azCalls -eq 2)
-Assert-Case 'the producer job update, and only it, retries' (
-	[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run-cohort-aca.ps1')).Contains("'--set-env-vars') + `$prodEnv + @('-o', 'none')) -TransientRetries 3") -and
-	@(Select-String -Path (Join-Path $PSScriptRoot '*.ps1') -Pattern '-TransientRetries \d' | Where-Object { $_.Path -notmatch 'Test-' -and $_.Line -notmatch '^\s*#|\.PARAMETER|-TransientRetries N' }).Count -eq 1)
+$runCohortText = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run-cohort-aca.ps1'))
+$jobStart = [regex]::Match($runCohortText, "(?s)'containerapp', 'job', 'start'.*?\)[^\r\n]*").Value
+$siloCount = @($common.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-AcaSiloCount' }, $true))[0].Extent.Text
+Assert-Case 'the idempotent producer job update retries' ($runCohortText.Contains("'--set-env-vars') + `$prodEnv + @('-o', 'none')) -TransientRetries 3"))
+Assert-Case 'job start and the silo update never retry (a hidden success would duplicate them)' ($jobStart -and $jobStart -notmatch 'TransientRetries' -and $siloCount -notmatch 'TransientRetries')
 Remove-Item Function:\az, Function:\Start-Sleep
 # --- child process argument rendering ---------------------------------------
 Assert-Case 'int arrays render as a PowerShell list' ((ConvertTo-ChildArgumentText @(1, 2, 4)) -eq '1,2,4')

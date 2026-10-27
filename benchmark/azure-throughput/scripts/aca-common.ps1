@@ -1106,7 +1106,7 @@ function Get-AcaJobLog {
 			'--workspace', $Context.workspaceId,
 			'--analytics-query', $kql,
 			'-o', 'json'
-		) -AllowFailure
+		) -AllowFailure -TransientRetries 2
 		# FAIL FAST on a query that never once succeeded. A malformed KQL
 		# (a mistyped or non-existent column) returns a semantic error on
 		# EVERY poll, and -AllowFailure turns that into an empty result -
@@ -1125,7 +1125,9 @@ function Get-AcaJobLog {
 			$everSucceeded = $true
 			try {
 				$rows = @($json | ConvertFrom-Json)
-				$cohort = & $sliceToCohort @($rows | ForEach-Object { $_.Log_s })
+				# @() because an empty slice, returned through `&`, arrives as
+				# $null, whose .Count throws under strict mode.
+				$cohort = @(& $sliceToCohort @($rows | ForEach-Object { $_.Log_s }))
 				if ($cohort.Count -gt $best.Count) { $best = $cohort }
 				# NOT -like. PowerShell wildcards treat [...] as a character
 				# class, so '*[producer] DONE*' asks for one character from
@@ -1222,9 +1224,13 @@ function Get-AcaSiloLog {
 			'--workspace', $Context.workspaceId,
 			'--analytics-query', $kql,
 			'-o', 'json'
-		) -AllowFailure
+		) -AllowFailure -TransientRetries 3
 		if ($LASTEXITCODE -ne 0) { throw "[aca] silo log query failed. Query: $kql" }
-		$page = if ($json -and $json.Trim()) { @($json | ConvertFrom-Json -ErrorAction Stop) } else { @() }
+		# @() around the whole if: an if-statement assignment unrolls its
+		# value, so an empty page ('[]', the page after a harvest whose row
+		# count is an exact multiple of the page size) arrives as $null, and
+		# $null.Count throws under strict mode, failing the cohort's harvest.
+		$page = @(if ($json -and $json.Trim()) { $json | ConvertFrom-Json -ErrorAction Stop })
 		foreach ($row in $page) { $rows.Add($row) }
 		if ($page.Count -lt $pageSize) { break }
 		if ($rows.Count -ge 200000) { throw '[aca] silo log query reached its row limit; diagnostics may be truncated.' }
@@ -1232,9 +1238,9 @@ function Get-AcaSiloLog {
 	$suppressed = @()
 	if ($IncludeDiagnostics) {
 		$countQuery = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ingestion_time() <= datetime($snapshot) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter | where $noise | summarize n = count(), t0 = min(TimeGenerated), t1 = max(TimeGenerated) by ContainerGroupName_s | order by ContainerGroupName_s asc"
-		$json = Invoke-Az @('monitor', 'log-analytics', 'query', '--workspace', $Context.workspaceId, '--analytics-query', $countQuery, '-o', 'json') -AllowFailure
+		$json = Invoke-Az @('monitor', 'log-analytics', 'query', '--workspace', $Context.workspaceId, '--analytics-query', $countQuery, '-o', 'json') -AllowFailure -TransientRetries 3
 		if ($LASTEXITCODE -ne 0) { throw "[aca] silo log count query failed. Query: $countQuery" }
-		$counts = if ($json -and $json.Trim()) { @($json | ConvertFrom-Json -ErrorAction Stop) } else { @() }
+		$counts = @(if ($json -and $json.Trim()) { $json | ConvertFrom-Json -ErrorAction Stop })
 		$suppressed = @($counts | Where-Object { $_ -and [long]$_.n -gt 0 } | ForEach-Object {
 			"[aca-silo time=$($_.t0) replica=$($_.ContainerGroupName_s)] suppressed $([long]$_.n) 'Failed to address message' lines (Orleans.Messaging[100071]) up to $($_.t1); counted, not harvested"
 		})

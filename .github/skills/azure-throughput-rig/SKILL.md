@@ -325,12 +325,15 @@ same load per silo.
 **Transient `az` faults.** `Invoke-Az -TransientRetries N` re-runs a call whose output names a
 transient CLI or service fault (`Test-AzTransientFailure`: the CLI's "unexpected error" crash on a
 malformed response, a dropped connection, 429/500/502/503/504, a read timeout), 10 s apart and
-growing. Only the producer `job update` uses it (3 retries), because it only sets env vars; one
-such crash dropped a cohort before. Never add it to `containerapp update` (each call mints a
+growing. Only idempotent calls use it: the producer `job update` (it only sets env vars; one such
+crash dropped a cohort before) and the Log Analytics queries of the job-log and silo-log
+harvests (one failed query dropped another). Never add it to `containerapp update` (each call mints a
 revision, so a retry after a hidden success tears down the cohort's cluster) or `job start` (a
 second execution). A cohort that still throws is skipped, and `-Resume` tops its cell up: new
 cohorts are tagged after the highest recorded tag (`c4` after `c2`, `c3`), never by count, which
-would overwrite an existing log.
+would overwrite an existing log. The harvests wrap every `if`-assigned query result in `@()`: an
+`if` assignment turns an empty array into `$null`, whose `.Count` throws under strict mode, so a
+silo log whose row count was an exact multiple of the 200-row page once failed a cohort's harvest.
 
 **Silo env does not persist between cohorts.** Each cohort applies its silo env with one
 `az containerapp update --set-env-vars`, which merges into the app's existing environment, so

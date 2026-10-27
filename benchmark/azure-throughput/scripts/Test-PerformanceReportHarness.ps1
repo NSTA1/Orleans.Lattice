@@ -132,7 +132,7 @@ try {
     ) | ConvertTo-Json
     $script:countQuery = ''
     function Invoke-Az {
-        param([string[]] $Arguments, [switch] $AllowFailure)
+        param([string[]] $Arguments, [switch] $AllowFailure, [int] $TransientRetries)
         $kql = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
         $global:LASTEXITCODE = 0
         if ($kql.Contains('summarize n = count()')) {
@@ -159,7 +159,7 @@ try {
     Assert-Case 'malformed diagnostics never silently disappear' $threw
     $script:pages = [System.Collections.Generic.List[string]]::new()
     function Invoke-Az {
-        param([string[]] $Arguments, [switch] $AllowFailure)
+        param([string[]] $Arguments, [switch] $AllowFailure, [int] $TransientRetries)
         $kql = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
         $global:LASTEXITCODE = 0
         if ($kql.Contains('summarize n = count()')) { return '[]' }
@@ -172,6 +172,20 @@ try {
     $lines = Get-AcaSiloLog $ctx ([datetime]::UtcNow.AddHours(-1)) ([datetime]::UtcNow) -RevisionName 'current' -IncludeDiagnostics
     Assert-Case 'diagnostics page beyond first bounded response' ($lines.Count -eq 201 -and $script:pages.Count -eq 2 -and $script:pages[1].Contains('row > 200 and row <= 400'))
     $snapshots = @($script:pages | ForEach-Object { [regex]::Match($_, 'ingestion_time\(\) <= datetime\(([^)]+)\)').Groups[1].Value } | Sort-Object -Unique)
+    # A harvest whose row count is an exact multiple of the page size ends on
+    # an empty page; under strict mode that once failed the cohort's harvest.
+    $script:pages = [System.Collections.Generic.List[string]]::new()
+    function Invoke-Az {
+        param([string[]] $Arguments, [switch] $AllowFailure, [int] $TransientRetries)
+        $kql = $Arguments[$Arguments.IndexOf('--analytics-query') + 1]
+        $global:LASTEXITCODE = 0
+        if ($kql.Contains('summarize n = count()')) { return '[]' }
+        $script:pages.Add($kql)
+        if ($script:pages.Count -gt 1) { return '[]' }
+        return (@(1..200 | ForEach-Object { @{ TimeGenerated = '2026-10-13T12:00:00Z'; ContainerGroupName_s = 'replica'; Log_s = "error $_" } }) | ConvertTo-Json -Compress)
+    }
+    $lines = Get-AcaSiloLog $ctx ([datetime]::UtcNow.AddHours(-1)) ([datetime]::UtcNow) -RevisionName 'current' -IncludeDiagnostics
+    Assert-Case 'a harvest ending on an empty page completes' ($lines.Count -eq 200 -and $script:pages.Count -eq 2)
     Assert-Case 'diagnostic pagination uses one ingestion snapshot' ($snapshots.Count -eq 1 -and $snapshots[0].Length -gt 0)
 
     function New-MetaHeaderForLayer2 { param($State, $RowsAgg, $Existing) return @{ cohortN = '1'; date = 'today' } }
