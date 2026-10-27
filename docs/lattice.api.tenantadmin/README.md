@@ -141,8 +141,10 @@ lifecycle, quota, and region-residency verbs and the
   tenant-scoped admission can race the delete, then cascades the delete to every tree
   the tenant owns (each `t/{tenantId}/*` tree is soft-deleted), then purges the
   tenant's access data - its tenant-tier rules, its tenant groups and their
-  membership edges in both directions - before the registry record, and the member
-  set with it, is removed. The purge runs whether or not delegated tenant access
+  membership edges in both directions - and removes every cross-tenant grant other
+  tenants issued to it, active or still offered, before the registry record, and the
+  member set with it, is removed. Grants are matched by tenant id, so without that a
+  tenant later created under the same id would inherit them. The purge runs whether or not delegated tenant access
   administration is enabled. An interrupted delete therefore leaves a suspended,
   retriable record rather than orphaned trees or access data.
 - **Quota authoring.** `SetTenantQuotasAsync` replaces a tenant's resource quotas and

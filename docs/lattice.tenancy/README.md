@@ -579,7 +579,7 @@ write contention on one tenant.
 
 | Exception | Raised by | What happens |
 |---|---|---|
-| `TenantRegistryConcurrencyException` | `ITenantRegistry.PutAsync`, which every record change the [tenant-administration facades](../lattice.api.tenantadmin/README.md) make is written through (`DeleteAsync` removes a record outright and never raises it) | The change is not applied and the exception reaches the caller, which may retry. The tenant-administration gRPC binding has no arm for it, so a remote caller sees `Internal`. |
+| `TenantRegistryConcurrencyException` | `ITenantRegistry.PutAsync`, which every record change the [tenant-administration facades](../lattice.api.tenantadmin/README.md) make is written through (`DeleteAsync` removes the deleted tenant's record outright, and raises it only while removing the grants other tenants issued to that tenant, before the record is removed, so retrying the delete completes it) | The change is not applied and the exception reaches the caller, which may retry. The tenant-administration gRPC binding has no arm for it, so a remote caller sees `Internal`. |
 | `TenantUsageConcurrencyException` | The metering cycle's usage-slot publish | Caught and logged for that tenant: its overage accrual is skipped for the tick too, the rest of the pass continues, and the next tick retries. |
 | `TenantOverageConcurrencyException` | The metering cycle's overage accrual | Caught and logged for that tenant: that tick's overage is not recorded - the tally is a per-tick sum, so it is not recovered later - and the next tick accrues as normal. |
 
@@ -919,7 +919,10 @@ left over the cap withdraws its own addition and is refused the same way (see
 Deleting a tenant (`ITenantRegistry.DeleteAsync`, which the tenant-admin facade's
 delete calls after cascading the tenant's trees) first purges the tenant's access
 data: its tenant-tier rules, then its tenant groups with their membership edges in
-both directions. Only then is the registry record removed, taking the member set with
+both directions. It then removes every cross-tenant grant other tenants issued to the
+tenant - active, still offered, or closed - from their records: a grant is matched by
+its grantee's id alone, so a tenant later created under the same id would otherwise
+inherit them. Only then is the registry record removed, taking the member set with
 it. The purge runs whether or not the feature is enabled, and is idempotent: a delete
 that fails part-way leaves the record in place, and running it again completes the
 purge. A host that replaced the membership directory or the authorization policy

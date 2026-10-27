@@ -102,6 +102,48 @@ public sealed class TenantDeletionAccessPurgeIntegrationTests
         await AssertPurgedAsync(seeded);
     }
 
+    [Test]
+    public async Task Deleting_a_tenant_removes_the_grants_issued_to_it_so_a_recreated_tenant_inherits_none()
+    {
+        var deleted = TenantId.Parse("delgrant");
+        var granter = TenantId.Parse("delgrant-owner");
+        var bystander = TenantId.Parse("delgrant-other");
+
+        await Registry.PutAsync(TenantRecord.Create(deleted, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test"));
+        await Registry.PutAsync(TenantRecord.Create(bystander, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test"));
+        var owner = TenantRecord.Create(granter, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test");
+        var approved = CrossTenantGrant.Create(deleted.Value, TenantGranteeKind.Tenant, "t/delgrant-owner/orders", TenantGrantOperations.Read);
+        owner.OfferGrant(approved, Clock(11), "test");
+        owner.TransitionGrant(approved.GrantId, TenantGrantState.Active, Clock(12), "test");
+        owner.OfferGrant(
+            CrossTenantGrant.Create(deleted.Value, TenantGranteeKind.Tenant, "t/delgrant-owner/invoices", TenantGrantOperations.Read),
+            Clock(13),
+            "test");
+        owner.AddGrant(
+            CrossTenantGrant.Create(bystander.Value, TenantGranteeKind.Tenant, "t/delgrant-owner/orders", TenantGrantOperations.Read),
+            Clock(14),
+            "test");
+        await Registry.PutAsync(owner);
+
+        Assert.That(await Registry.DeleteAsync(deleted), Is.True);
+
+        // An unrelated customer is later provisioned under the freed id.
+        await Registry.PutAsync(TenantRecord.Create(deleted, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(20), "test"));
+        var remaining = (await Registry.GetAsync(granter))!.Grants;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                remaining.Where(g => g.Grantee == deleted.Value),
+                Is.Empty,
+                "neither the approved nor the still-offered grant survives the grantee's deletion");
+            Assert.That(
+                remaining.Select(g => g.Grantee),
+                Is.EquivalentTo(new[] { bystander.Value }),
+                "a grant issued to another tenant is untouched");
+        });
+    }
+
     private sealed record Seeded(string Name, TenantId Tenant, string AdminsGroup, string OpsGroup, string ClusterGroup);
 
     /// <summary>
