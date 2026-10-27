@@ -188,7 +188,7 @@ committed sources.
 | PinMonotone | action safety | core | Base, TwoLeaf, ShareOne |
 | FloorHolderEventuallyDriven | liveness | core | Base, TwoLeaf, ShareOne |
 | FloorAdvances | liveness | core | Base, TwoLeaf, ShareOne |
-| TurnNotHeldAcrossDrive | liveness | witness, with `TurnReleased` in the core | witness at one leaf; `TurnReleased` in every core instance |
+| TurnNotHeldAcrossDrive | liveness | witness, with `TurnReleased` in the core | TLC: witness at one leaf, `TurnReleased` in every core instance; argued at any constants via the CallServe transfer below |
 
 No property is dropped or weakened, and no temporal property is replaced by a
 safety monitor. `TurnNotHeldAcrossDrive` mentions the call queue, which only the
@@ -218,25 +218,130 @@ fairness implies the core's under the refinement mapping.
 
 ### Composition for any leaf count
 
-The witness differs from the core only in the per-leaf stall clock, the call
-queue and the `fresh` initial-state marker.
-`WalGcStarvationDriveCompositionTests` checks this syntactically: every action
-other than `TimerTick`, `ReArm`, `CallArrive` and `CallServe` is byte-identical
-between the two modules, and the witness-only fields are read or written only
-by those four actions. Those four actions change the state of their own leaf
-`l` and no other. The refinement mapping is therefore a per-leaf projection, so
-a witness step projects onto a core step, or a stutter, for any `LeafCount` if
-it does so for every leaf state. That per-leaf lemma depends only on the state
-of one leaf and on the shared fields, which a one-leaf instance ranges over
-completely, and TLC checks it there as `CoreStepRefined`. The fairness transfer
-is per-leaf in the same way: the stall clock grows only while the timer is
-`"new"`, and `WF(CallServe)` discharges `TurnNotHeldAcrossDrive`. This argument
-is a syntactic decomposition plus a checked per-leaf lemma, not a mechanised
-proof at two leaves; a two-leaf witness run did not finish within the CI cap and
-carries no claim.
+The argument below is stated for arbitrary constants. It does not rest on a
+finite TLC run covering the shared state. The one-leaf witness check
+(`LeafCount = 1`, `Ceiling = 1`, `StallTicks = 1`) is supporting evidence only:
+it does not range over two-leaf rank, running or credit states, and its
+`Ceiling = 1` does not range over the core's `Ceiling = 4`.
 
-`CoreInitRefined` is an invariant over the explicit `fresh` marker, which is
-true only in initial states, rather than over TLC's search depth.
+**Witness versus the original model (checked by diff).** The witness module
+differs from the accepted original model (inventory CC2E78FC, model
+97327F94...) only in: the module name; `CONSTANTS Leaves` replaced by
+`LeafCount` with `Leaves == 1..LeafCount`; the `fresh` variable with
+`wvars == <<vars, fresh>>`, `MarkedInit` and `MarkedStep`; and the appended
+`AbsLeaf`, `Core` instance and the three `CoreInitRefined`, `CoreStepRefined`
+and `CoreFairnessRefined` definitions. Every action body, `Next`, every
+property and every fairness conjunct is byte-identical to the original. A
+statement about the witness at `Leaves = 1..n` is therefore a statement about
+the original model at `Leaves = {1, ..., n}`.
+
+**Refinement mapping.** `AbsLeaf` maps each leaf record to the same record
+without `stall` and `call`; every other variable maps to itself and `fresh` is
+dropped. `WalGcStarvationDriveCompositionTests` checks, for the committed
+sources, that every action other than `TimerTick`, `ReArm`, `CallArrive` and
+`CallServe` is byte-identical between the two modules and that `stall` and
+`call` are read or written only by those four actions. The lemmas below rely
+on those two syntactic facts and on nothing about the size of `Leaves`.
+
+1. **Init (argued; checked at the witness bound as `CoreInitRefined`).** The
+   witness `Init` is the core `Init` with `stall` and `call` added to each leaf
+   record. Applying `AbsLeaf` removes exactly those fields, so the projection
+   of every witness initial state satisfies `Core!Init`, for any constants.
+2. **The nine identical actions (argued).** `GcPass`, `PassRearm`,
+   `TimerDispatchDrive(l)`, `DriveOpportunity(l)`, `RefusalWindowTick`,
+   `ColdReturn`, `WalAppend`, `DeleteTree` and `Stutter` have the same text in
+   both modules. Their guards, choices and next-state expressions read only
+   projected fields, and each update of `leaf` is either an `EXCEPT` on
+   projected fields or, in `DriveOpportunity`, a comprehension over `Leaves`
+   whose body is such an `EXCEPT`. Projection commutes with those updates, so a
+   witness step of the action projects to the core step of the same action with
+   the same parameters, and the action is enabled in a witness state exactly
+   when it is enabled in the projected core state. This holds for every
+   `LeafCount` and `Ceiling`, including two-leaf rank, running and credit
+   states, because it is a property of the expressions, not of any reachable
+   set.
+3. **`TimerTick(l)` (argued).** Its guard is the core guard. When
+   `stall < StallTicks` it changes only `leaf[l].stall`, so it projects to a core
+   stutter. Otherwise its effect on the projected fields is exactly the core
+   `TimerTick(l)`.
+4. **`ReArm(l)` (argued).** Its guard is the core guard. The choice
+   `jitter \in 0..2` is non-empty, so it is enabled exactly when the core
+   action is, and every choice has the core `ReArm(l)` effect on the projected
+   fields.
+5. **`CallArrive(l)` and `CallServe(l)` (argued).** They change only
+   `leaf[l].call`, so they project to core stutters.
+
+Lemmas 1 to 5 give `Init_w => Core!Init` and `[Next_w]_wvars => [Next_c]_vars`
+under the mapping, for any constants. `CoreStepRefined` checks the step lemma
+at the witness bound; it is a test of the lemma, not its proof.
+
+**Fairness transfer (argued; checked at the witness bound as
+`CoreFairnessRefined`).** Take a fair witness behaviour and its projection.
+
+- `GcPass`, `PassRearm`, `RefusalWindowTick`, `TimerDispatchDrive(l)`,
+  `DriveOpportunity(l)` and `ReArm(l)`: by lemmas 2 and 4 the core action is
+  enabled exactly when the witness action is, and a witness step of the action
+  that changes `vars` changes a projected field (none of these actions writes
+  only `stall` or `call`). Witness weak fairness therefore gives core weak
+  fairness.
+- `TimerTick(l)`, finite stall progress: suppose the core `TimerTick(l)` is
+  continuously enabled from some point, so `timer = "new"`, `turn = "idle"` and
+  `~deleted` hold from then on. Then the witness `TimerTick(l)` is
+  continuously enabled. While `timer = "new"`, the only action that writes
+  `leaf[l].stall` is `TimerTick(l)` (`ReArm(l)` needs `timer = "rearm"`), and
+  it only increments. `stall` lies in `-2..StallTicks`, so after at most
+  `StallTicks + 2` witness ticks the full branch fires, which is a core
+  `TimerTick(l)` step that changes `timer`. Core weak fairness of
+  `TimerTick(l)` follows for every `StallTicks`.
+- `CallServe(l)` has no core counterpart; its fairness is used below.
+
+**Properties of the original model.** Every original property except
+`TurnNotHeldAcrossDrive` mentions only projected fields, and `TypeOK` also
+constrains `stall` and `call`.
+
+- State properties and the projected part of `TypeOK` hold on every projected
+  state because they hold on every reachable core state.
+- Each action property has the form `[][P]_vars` with `P` over projected
+  fields, and each `P` holds for any pair of equal projected states (every
+  antecedent requires a field to change, or the consequent is `>=` or
+  `\subseteq` on an unchanged value). Witness steps that project to a core
+  stutter, such as a stall tick or a call step, therefore satisfy `P`; every
+  other step is a core step.
+- `FloorHolderEventuallyDriven`, `FloorAdvances` and `TurnReleased` are
+  stuttering-insensitive formulas over projected fields, and the projection is
+  a fair core behaviour.
+- The witness-only part of `TypeOK` (`stall \in -2..StallTicks`,
+  `call \in {"new", "queued", "done"}`) is inductive for any constants:
+  `TimerTick` increments only below `StallTicks`, `ReArm` writes `-2..0` or `0`,
+  and only `CallArrive` and `CallServe` write `call`, each to a member.
+- `TurnNotHeldAcrossDrive`, CallServe transfer: when `leaf[l].call = "queued"`,
+  only `CallServe(l)` changes it. `TurnReleased` holds on the projection, so
+  from some point `leaf[l].turn = "idle"` forever, `CallServe(l)` is then
+  continuously enabled, and `WF_vars(CallServe(l))` serves the call.
+
+So whenever the core satisfies its properties at given `LeafCount`, `Ceiling`,
+`Withheld`, `DriveBudget` and `RefusedSweepHold`, the original model satisfies
+all 17 of its properties at those constants with any `StallTicks`.
+
+**Where each claim is checked.**
+
+| Claim | Status |
+|-------|--------|
+| witness equals the original up to `LeafCount` and `fresh` | diff against 97327F94 |
+| byte-identical actions; witness-only fields confined to four actions | `WalGcStarvationDriveCompositionTests` on committed sources |
+| lemmas 1 to 5 and fairness transfer at any constants | argued above |
+| the same lemmas at `LeafCount = 1`, `Ceiling = 1`, `StallTicks = 1` | TLC, witness cfg |
+| core properties at one leaf, `TwoLeaf` and `ShareOne` | TLC, core cfgs |
+| original properties at the original BASE constants | core `TwoLeaf` (TLC) plus the argument above |
+
+The direction is one way: every witness behaviour projects to a core
+behaviour. The converse is not claimed and is not needed, because the core
+admits more timer schedules than the witness. No mechanised refinement proof
+exists at two leaves; a two-leaf witness run did not finish within the CI cap
+and carries no claim.
+
+`CoreInitRefined` is a state invariant over the explicit `fresh` marker, which
+is true only in initial states, rather than a property of TLC's search depth.
 `CoreInitRefinedRefusalWindowOpen` is its paired bad-initial-state mutant.
 
 ### Leaf count and the larger-bound variants
@@ -245,47 +350,80 @@ The core base is one leaf, the fast gate. One leaf cannot exercise rank order
 between leaves, sibling credit, or two leaves contending for the shared slot.
 These are covered by:
 
-- `TwoLeaf`: two leaves at the original BASE bounds, with every property.
-- `ShareOne`: two leaves with three floor permits withheld, with every property.
-- six mutants bounded to `LeafCount = 2`: `NearestFirstNoNearestFirst`,
-  `NearestFirstLivePinResort`, `FirstTouchAloneConcurrentLead`,
-  `ShareRespectedSweepIgnoresReservation` (also `Ceiling = 2`),
-  `TimerReservedSlotTimerTakesLastSlot` and
-  `RetryAfterSiblingRetryWithoutCredit`. Each gets a clean control at its own
-  bounds as well as the base control.
+- `TwoLeaf`: two leaves at the original BASE bounds (`Ceiling = 4`,
+  `Withheld = 0`, `DriveBudget = 2`, `RefusedSweepHold = 2`), with every
+  property. With the argument above this carries every original obligation at
+  its original bound.
+- `ShareOne`: two leaves with three floor permits withheld, with every
+  property. It covers a single-slot share, which `TwoLeaf` does not reach; it
+  is not a larger state space.
+- six mutants bounded to `LeafCount = 2`, listed in the table below. Each gets
+  a clean control at its own bounds as well as the base control.
 
-`TwoLeaf` holds the original BASE constants and so carries every original
-cross-leaf obligation at its original bound. The three-leaf bound of the
-earlier model is not enrolled. Its liveness run did not finish within the CI
-cap and carries no claim.
+The three-leaf bound of the rejected `SingleSlotShare` variant is not enrolled.
+Its liveness run did not finish within the CI cap and carries no claim.
 
 ### Mutations and arms
 
-All 24 original mutations keep their names and targets.
+The 24 original mutations, with the intent, target and perturbed action
+recorded in inventory CC2E78FC, and their new arms. Every original arm ran at
+`Leaves = {1, 2}`, `Ceiling = 4`, `Withheld = 0`, `DriveBudget = 2`,
+`StallTicks = 1`, `RefusedSweepHold = 2`, except rows 18 and 19, which ran at
+`Ceiling = 2` with an extra same-bound control.
 
-- 22 are in the core.
-- `TurnNotHeldAcrossDriveCallNeverServed` and `TypeOKCallOutsideDomain` perturb
-  the call queue, so they are in the witness.
-- Every original mutation ran at `Leaves = {1, 2}`. Sixteen core mutants now run
-  at the one-leaf base, or at `Ceiling = 2` for
-  `TimerReservedSlotSingleSlotNoHold`. The six listed above keep two leaves.
-- Each one-leaf mutant is expected to fire at one leaf; the gate fails the pair
-  if any one does not.
+| # | Mutation | Target | Perturbs | Intent | New arm |
+|---|----------|--------|----------|--------|---------|
+| 1 | BudgetReleasesNoAbandon | BudgetReleases | DriveOpportunity | budget expiry fails to return drive ownership | core, one leaf |
+| 2 | FirstTouchAloneConcurrentLead | FirstTouchAlone | GcPass | the next sweep touch starts before the floor lead finishes | core, two leaves |
+| 3 | FloorAdvancesNeverBanks | FloorAdvances | DriveOpportunity | a drive with timely storage never banks any pin progress | core, one leaf |
+| 4 | FloorHolderEventuallyDrivenSkipFloorHolder | FloorHolderEventuallyDriven | GcPass | every delivered sweep excludes the actual floor holder | core, one leaf |
+| 5 | NearestFirstLivePinResort | NearestFirst | GcPass | pin changes re-sort an already frozen pass list | core, two leaves |
+| 6 | NearestFirstNoNearestFirst | NearestFirst | GcPass | a sweep launches a higher-offset leaf before the floor holder | core, two leaves |
+| 7 | NoAskWithoutWalAheadNoWalHeadTest | NoAskWithoutWalAhead | TimerTick | a caught-up checkpoint still dispatches a timer drive | core, one leaf |
+| 8 | NoAwaitedDriveTimerAwaitsDrive | NoAwaitedDrive | TimerDispatchDrive | the timer retains its exclusive turn across replay | core, one leaf |
+| 9 | NoDeletedTreeReactivationSweepIgnoresDeletion | NoDeletedTreeReactivation | GcPass | a delivered GC pass ignores tree deletion | core, one leaf |
+| 10 | PermitConservationColdReturnLosesPermit | PermitConservation | ColdReturn | ordinary owner return loses physical capacity | core, one leaf |
+| 11 | PinMonotoneAppendRewindsPin | PinMonotone | WalAppend | an environment append erases a banked durable pin | core, one leaf |
+| 12 | RearmRefreshesReArmNoJitter | RearmRefreshes | ReArm | terminal rearm reuses the old phase without requesting a new offset | core, one leaf; skips the refresh, since the core has no jitter |
+| 13 | RearmRefreshesSecondRefreshSkipped | RearmRefreshes | ReArm | only the first rearm refreshes its phase | core, one leaf |
+| 14 | RefusalNotChargedChargeRefusal | RefusalNotCharged | GcPass | a refusal spends the consumer attempt budget | core, one leaf |
+| 15 | RefusalNotChargedRearmChargesUndelivered | RefusalNotCharged | PassRearm | the next pass charges a touch that was never delivered | core, one leaf |
+| 16 | RefusalNotChargedRefusalAfterSuccessCharged | RefusalNotCharged | GcPass | a prior successful drive disables the admission-refusal refund | core, one leaf |
+| 17 | RetryAfterSiblingRetryWithoutCredit | RetryAfterSibling | GcPass | a refused touch retries without a non-refused sibling completion | core, two leaves |
+| 18 | ShareRespectedSweepIgnoresReservation | ShareRespected | GcPass | a sweep takes physical capacity without checking its share | core, two leaves, `Ceiling = 2` (the original bound) |
+| 19 | TimerReservedSlotSingleSlotNoHold | TimerReservedSlot | TimerDispatchDrive | a single-slot timer ignores an outstanding sweep refusal | core, one leaf, `Ceiling = 2` |
+| 20 | TimerReservedSlotTimerTakesLastSlot | TimerReservedSlot | TimerDispatchDrive | timer admission uses the sweep limit | core, two leaves |
+| 21 | TurnNotHeldAcrossDriveCallNeverServed | TurnNotHeldAcrossDrive | CallServe | a delivered foreground call never acknowledges completion | witness |
+| 22 | TypeOKCallOutsideDomain | TypeOK | CallArrive | an arriving call installs an invalid lifecycle state | witness |
+| 23 | TypeOKDeletionOutsideDomain | TypeOK | DeleteTree | environment deletion corrupts the bounded head witness | core, one leaf |
+| 24 | TypeOKWindowOutsideDomain | TypeOK | RefusalWindowTick | clock advancement corrupts the bounded refusal window | core, one leaf |
+
+That is 16 core mutants at one leaf, 6 at two leaves and 2 in the witness. No
+mutation is renamed or dropped and every target is unchanged. Moving a mutant
+to one leaf changes the detection experiment, not the guarantee: the property
+it targets is still checked at the original bound in `TwoLeaf`. The gate fails
+the pair if any mutant does not fire at its bound.
 
 The 50 original arms map as follows.
 
-- **24 clean full-bound controls:** the core base and witness base controls.
-- **24 mutants:** run under the same names.
-- **2 extra matching controls** (`Ceiling = 2` for
-  `ShareRespectedSweepIgnoresReservation` and
-  `TimerReservedSlotSingleSlotNoHold`): each becomes the matching-bound control
-  the gate runs for any mutant whose bounds differ from the base.
+- **24 clean full-bound controls:** the core base control (22 core rows), the
+  witness base control (rows 21 and 22) and the `TwoLeaf` control, which runs
+  the original BASE constant point.
+- **24 mutants:** rows 1 to 24 above, under the same names.
+- **2 extra matching controls** at `Ceiling = 2` for rows 18 and 19: row 18's
+  is the exact original matching point (`LeafCount = 2`, `Ceiling = 2`); row
+  19's runs at one leaf. Each is the matching-bound control the gate runs for
+  any mutant whose bounds differ from the base.
 
-New experiments:
+New experiments, beyond the original 50 arms:
 
 - `TurnReleasedTimerRefusalKeepsTurn`, in the core.
-- 12 refinement mutants in the witness.
-
+- 12 refinement mutants in the witness: `CoreFairnessRefinedReArmUnfair`,
+  `CoreInitRefinedRefusalWindowOpen` and ten `CoreStepRefined` mutants
+  (`AppendWithoutHead`, `ColdReturnDropsPermit`, `DeleteMarksAppend`,
+  `PinWithoutTimelyStorage`, `RearmKeepsLead`, `ReArmSkipsRefresh`,
+  `SweepAfterDeletion`, `TickKeepsRefresh`, `TimerRefusalAsSweep`,
+  `WindowCollapses`).
 ### Premises kept
 
 The redesign keeps every premise of the original model:

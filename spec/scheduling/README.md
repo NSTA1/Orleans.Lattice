@@ -364,8 +364,10 @@ queue, and states turn release as `TurnReleased`.
 small bound. The witness checks the original `TurnNotHeldAcrossDrive`
 obligation, checks the marked initial state as the `CoreInitRefined`
 invariant, and checks, as TLC properties, that its steps and fairness project
-onto the core. That refinement is checked at one leaf; the per-leaf
-composition argument for any leaf count is in the witness refinement note.
+onto the core. TLC checks that refinement at one leaf only, as supporting
+evidence; the parametric argument that it holds at any constants, and the
+table of checked versus argued claims, are in the core
+[refinement](WalGcStarvationDriveRefinement.md) note.
 
 The leaf count is the `LeafCount` constant. The one-leaf base is the fast
 gate; the cross-leaf ordering, credit and shared-slot paths are checked by the

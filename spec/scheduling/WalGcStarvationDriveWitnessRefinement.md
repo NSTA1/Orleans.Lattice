@@ -64,19 +64,19 @@ by dropping the stall and call fields. See the core's
 
 ## Property classification
 
-TypeOK is state safety. CoreInitRefined and CoreStepRefined are action
-safety: the first level maps to a core initial state, and every step maps to a
-core step or a core stutter. CoreFairnessRefined checks the core's fairness
-conditions on the projected behaviour, and TurnNotHeldAcrossDrive is temporal
-liveness. CoreInitRefined is stated as an action property guarded on the first
-level; it relies on Stutter always being enabled so that the first level has a
-successor.
+TypeOK and CoreInitRefined are state safety. CoreInitRefined is the invariant
+`fresh => Core!Init` over the explicit `fresh` marker, which `MarkedInit` sets
+and every `MarkedStep` clears, so it constrains exactly the initial states and
+does not depend on TLC's search depth. CoreStepRefined is action safety: every
+step maps to a core step or a core stutter. CoreFairnessRefined checks the
+core's fairness conditions on the projected behaviour, and
+TurnNotHeldAcrossDrive is temporal liveness.
 
 ### Mutation classification
 
 Every mutation is an **action perturbation**: an anchored edit of the action
 named in its `PERTURBS` header, or of a definition for the domain check. None
-is a transition splice. TurnNotHeldAcrossDriveNeverServed is the historical
+is a transition splice. TurnNotHeldAcrossDriveCallNeverServed is the historical
 experiment for the relocated obligation. The CoreStepRefined experiments each
 break one action of this module so that it no longer projects to a core step;
 CoreInitRefinedRefusalWindowOpen starts in a state the core does not admit;
@@ -90,8 +90,15 @@ no production detector.
 
 ## Deliberate abstraction gaps
 
-The refinement is checked only at this module's small bound. A larger
-refinement instance was measured outside CI and did not finish within the
-twenty-minute cap, so no refinement claim is made beyond the enrolled bound.
-The core's own guarantees at its larger bound rest on the core abstracting the
-stall clock and call queue soundly, which this module witnesses at its bound.
+TLC checks the refinement only at this module's small bound (`LeafCount = 1`,
+`Ceiling = 1`, `StallTicks = 1`). That run does not range over two-leaf rank,
+running or credit states, or over the core's `Ceiling = 4`, and is supporting
+evidence only. A larger refinement instance was measured outside CI and did
+not finish within the twenty-minute cap; it carries no claim.
+
+The refinement at any constants is argued, not checked: the parametric action,
+enabledness and fairness argument, including finite stall progress and the
+CallServe transfer, is in the core note's "Composition for any leaf count"
+section, together with a table of which claims are checked by TLC, by the
+composition test or by argument. The core's guarantees at its larger bounds
+transfer to this module, and so to the original model, through that argument.
