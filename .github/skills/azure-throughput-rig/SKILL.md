@@ -369,10 +369,16 @@ Layer 3 (`BENCH_INGEST_MODE=cluster`) the silo returns before its seed step, and
 producer seeds the same keys after warm-up instead, logging `[producer] preseed treeId=.. entries=N`;
 `performance-report.ps1` marks a Layer 3 read cohort whose log lacks that line (or reports
 `entries=0`) `UNSEEDED`, re-runs it at the same rung up to twice, and never publishes it, because
-an unseeded cohort measures only the miss path (#3474). Layer 3 seeds in bounded slices,
-allowing eight attempts per unlanded slice and 300 seconds overall (including outstanding
-RPCs); progress resets attempts but never the deadline. Failure logs retain the offset,
-exception and budget. Layer 2 does not retry unseeded cohorts: it excludes them from the
+an unseeded cohort measures only the miss path (#3474). The Layer 3 seed is a bulk load, not
+`SetManyAsync`: the cohort's tree and tables are fresh, so every shard is empty, and
+`BenchPreseed.SeedAsync` sorts the keys ordinally and drives `ILattice.BulkAppendChunkAsync` in
+chunks of `BenchPreseed.ChunkSize` (16,384) under a per-chunk operation id
+(`preseed-<treeId>-<offset>`), so a retried chunk is an idempotent no-op on shards that applied
+it. It packs leaves to capacity with no splits and about one WAL append per leaf; the
+`SetManyAsync` seed it replaced stalled part-way through the 768,000-key six-silo `get-many`
+seed. The success line adds `method=bulk-append chunkSize=..`. It allows eight attempts per
+unlanded chunk and the scaled budget overall (including outstanding RPCs); progress resets
+attempts but never the deadline. Failure logs retain the offset, exception and budget. Layer 2 does not retry unseeded cohorts: it excludes them from the
 table. Tables state the usable throughput cohort count per row, and a failed attempted row
 cannot preserve an older result under the new run's metadata.
 
@@ -595,9 +601,13 @@ Key lines in the silo log:
   rig's accounts). `throttled` counts `ServerBusyError` + `ClientThrottlingError` transactions;
   the gap between `e2eLatencyMs` and `serverLatencyMs` is time outside the storage service.
   `wal0` also carries clustering and grain-state traffic. An account whose metrics never
-  landed reads `unavailable=<reason>`, never zeros. `performance-report.ps1` takes per cohort
-  the throttled share across accounts and the worst account's peak TPS and latencies, and per
-  cell the median, rendered in the multi-silo doc's `perf-storage:layer3` table. Not part of
+  landed reads `unavailable=<reason>`, never zeros. `timeouts` counts `ServerTimeoutError` +
+  `ClientTimeoutError`; `minuteTotals=<utc-minute>/<n>,...` is the account's per-minute series,
+  which lets accounts be summed minute by minute. `performance-report.ps1` takes per cohort the
+  timed-out and throttled totals and shares across accounts, the busiest minute of all accounts
+  combined (rendered as "Storage transactions"), and the worst account's latencies, and per
+  cell the median, rendered in the multi-silo doc's `perf-storage:layer3` table: a timed-out
+  column, and one sentence under it giving the worst cohort's throttled share. Not part of
   the grade.
 
 The CPU, RSS, and diagnostics lines appear only in the printed summary, not in the log:

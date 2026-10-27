@@ -564,7 +564,7 @@ static async Task PreseedWithRetryAsync(ILattice lattice, IngestSettings setting
     var overrideSec = ReadIntAllowZero("BENCH_PRESEED_BUDGET_SEC", 0);
     var budget = overrideSec > 0 ? TimeSpan.FromSeconds(overrideSec) : BenchPreseed.BudgetFor(settings.PreseedKeyCount);
     await BenchPreseed.SeedWithRetryAsync(lattice, settings.PreseedKeyCount,
-        Math.Max(1, settings.BatchSize), settings.TreeId, budget, ct).ConfigureAwait(false);
+        BenchPreseed.ChunkSize, settings.TreeId, budget, ct).ConfigureAwait(false);
 }
 static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, int shardCount, CancellationToken ct)
 {

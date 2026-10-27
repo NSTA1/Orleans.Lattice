@@ -5,9 +5,9 @@ using VehicleFleetSimulator.AzureThroughput.Engine;
 namespace VehicleFleetSimulator.AzureThroughput.Silo.Tests;
 
 /// <summary>
-/// Pins the read-mode preseed shared by the single-VM silo and the Layer 3
-/// producer (#3474): it must write exactly the keys the producer's generator
-/// reads, only for the read modes, in bounded slices.
+/// Pins the read-mode preseed (#3474): it must write exactly the keys the
+/// producer's generator reads, only for the read modes, and the Layer 3 seed
+/// must bulk-append them in ascending, bounded, re-drivable chunks.
 /// </summary>
 [TestFixture]
 public class BenchPreseedTests
@@ -74,56 +74,81 @@ public class BenchPreseedTests
     }
 
     [Test]
-    public async Task SeedAsync_writes_every_key_in_bounded_slices()
+    public void BuildSortedEntries_holds_every_key_in_ascending_ordinal_order()
     {
-        var lattice = Substitute.For<ILattice>();
-        var sliceSizes = new List<int>();
-        var keys = new List<string>();
-        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
-            .Returns(ci =>
-            {
-                var slice = ci.Arg<List<KeyValuePair<string, byte[]>>>();
-                sliceSizes.Add(slice.Count);
-                keys.AddRange(slice.Select(e => e.Key));
-                return Task.CompletedTask;
-            });
+        var sorted = BenchPreseed.BuildSortedEntries(500);
 
-        var written = await BenchPreseed.SeedAsync(lattice, count: 10, sliceSize: 4, CancellationToken.None);
-
-        Assert.That(written, Is.EqualTo(10));
-        Assert.That(sliceSizes, Is.EqualTo(new[] { 4, 4, 2 }));
-        Assert.That(keys, Is.EqualTo(Enumerable.Range(0, 10).Select(GeneratorKey).ToArray()));
+        Assert.That(sorted.Select(e => e.Key), Is.EqualTo(Enumerable.Range(0, 500).Select(GeneratorKey).Order(StringComparer.Ordinal)));
+        Assert.That(sorted.All(e => e.Value.SequenceEqual(BenchPreseed.PayloadFor(Index(e.Key)))), Is.True, "each key keeps its own payload");
     }
 
     [Test]
-    public async Task SeedAsync_resumes_from_the_last_landed_slice_after_a_failure()
+    public void ChunkOperationId_is_stable_per_chunk_and_distinct_across_chunks()
+    {
+        Assert.That(BenchPreseed.ChunkOperationId("t", 16_384), Is.EqualTo(BenchPreseed.ChunkOperationId("t", 16_384)));
+        Assert.That(BenchPreseed.ChunkOperationId("t", 0), Is.Not.EqualTo(BenchPreseed.ChunkOperationId("t", 16_384)));
+        Assert.That(BenchPreseed.ChunkOperationId("a", 0), Is.Not.EqualTo(BenchPreseed.ChunkOperationId("b", 0)));
+    }
+
+    [Test]
+    public async Task SeedAsync_bulk_appends_every_key_in_ascending_bounded_chunks()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var chunkSizes = new List<int>();
+        var keys = new List<string>();
+        var operationIds = new List<string>();
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var chunk = ci.Arg<IReadOnlyList<KeyValuePair<string, byte[]>>>();
+                operationIds.Add(ci.Arg<string>());
+                chunkSizes.Add(chunk.Count);
+                keys.AddRange(chunk.Select(e => e.Key));
+                return Task.FromResult(chunk.Count);
+            });
+
+        var written = await BenchPreseed.SeedAsync(lattice, count: 10, chunkSize: 4, "t", CancellationToken.None);
+
+        Assert.That(written, Is.EqualTo(10));
+        Assert.That(chunkSizes, Is.EqualTo(new[] { 4, 4, 2 }));
+        Assert.That(keys, Is.EqualTo(SortedKeys(10)), "keys ascend within and across chunks");
+        Assert.That(operationIds, Is.EqualTo(new[] { "preseed-t-0", "preseed-t-4", "preseed-t-8" }));
+        await lattice.DidNotReceiveWithAnyArgs().SetManyAsync(default!, default);
+    }
+
+    [Test]
+    public async Task SeedAsync_resumes_by_re_driving_the_failed_chunk_under_its_operation_id()
     {
         var lattice = Substitute.For<ILattice>();
         var keys = new List<string>();
+        var operationIds = new List<string>();
         var calls = 0;
-        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
+                operationIds.Add(ci.Arg<string>());
                 if (++calls == 2)
                 {
-                    return Task.FromException(new InvalidOperationException("saturated"));
+                    return Task.FromException<int>(new InvalidOperationException("saturated"));
                 }
 
-                keys.AddRange(ci.Arg<List<KeyValuePair<string, byte[]>>>().Select(e => e.Key));
-                return Task.CompletedTask;
+                var chunk = ci.Arg<IReadOnlyList<KeyValuePair<string, byte[]>>>();
+                keys.AddRange(chunk.Select(e => e.Key));
+                return Task.FromResult(chunk.Count);
             });
         var landed = 0;
 
         Assert.ThrowsAsync<InvalidOperationException>(() =>
-            BenchPreseed.SeedAsync(lattice, count: 10, sliceSize: 4, CancellationToken.None, landed, o => landed = o));
+            BenchPreseed.SeedAsync(lattice, count: 10, chunkSize: 4, "t", CancellationToken.None, landed, o => landed = o));
         Assert.That(landed, Is.EqualTo(4));
 
         var reported = new List<int>();
-        var written = await BenchPreseed.SeedAsync(lattice, 10, 4, CancellationToken.None, landed, o => { landed = o; reported.Add(o); });
+        var written = await BenchPreseed.SeedAsync(lattice, 10, 4, "t", CancellationToken.None, landed, o => { landed = o; reported.Add(o); });
 
         Assert.That(written, Is.EqualTo(10));
         Assert.That(reported, Is.EqualTo(new[] { 8, 10 }));
-        Assert.That(keys, Is.EqualTo(Enumerable.Range(0, 10).Select(GeneratorKey).ToArray()), "no landed slice is re-written");
+        Assert.That(keys, Is.EqualTo(SortedKeys(10)), "no landed chunk is re-written");
+        Assert.That(operationIds, Is.EqualTo(new[] { "preseed-t-0", "preseed-t-4", "preseed-t-4", "preseed-t-8" }), "the failed chunk is re-driven under the same id");
     }
 
     [Test]
@@ -131,10 +156,10 @@ public class BenchPreseedTests
     {
         var lattice = Substitute.For<ILattice>();
 
-        var written = await BenchPreseed.SeedAsync(lattice, 10, 4, CancellationToken.None, startOffset: 10);
+        var written = await BenchPreseed.SeedAsync(lattice, 10, 4, "t", CancellationToken.None, startOffset: 10);
 
         Assert.That(written, Is.EqualTo(10));
-        await lattice.DidNotReceiveWithAnyArgs().SetManyAsync(default!, default);
+        await lattice.DidNotReceiveWithAnyArgs().BulkAppendChunkAsync(default!, default!, default);
     }
 
     [TestCase(-1)]
@@ -143,50 +168,51 @@ public class BenchPreseedTests
     {
         var lattice = Substitute.For<ILattice>();
 
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => BenchPreseed.SeedAsync(lattice, 10, 4, CancellationToken.None, startOffset));
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => BenchPreseed.SeedAsync(lattice, 10, 4, "t", CancellationToken.None, startOffset));
     }
 
     [Test]
-    public void SeedAsync_rejects_non_positive_slice_size()
+    public void SeedAsync_rejects_non_positive_chunk_size_and_empty_tree_id()
     {
         var lattice = Substitute.For<ILattice>();
 
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => BenchPreseed.SeedAsync(lattice, 1, 0, CancellationToken.None));
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => BenchPreseed.SeedAsync(lattice, 1, 0, "t", CancellationToken.None));
+        Assert.ThrowsAsync<ArgumentException>(() => BenchPreseed.SeedAsync(lattice, 1, 1, "", CancellationToken.None));
     }
 
     [Test]
-    public async Task SeedWithRetryAsync_progress_resets_attempt_budget_for_each_slice()
+    public async Task SeedWithRetryAsync_progress_resets_attempt_budget_for_each_chunk()
     {
         var lattice = Substitute.For<ILattice>();
         var attempts = new Dictionary<string, int>();
         var written = new List<string>();
-        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
-                var key = ci.Arg<List<KeyValuePair<string, byte[]>>>()[0].Key;
+                var key = ci.Arg<IReadOnlyList<KeyValuePair<string, byte[]>>>()[0].Key;
                 attempts.TryGetValue(key, out var previous);
                 attempts[key] = previous + 1;
-                if (previous == 0) return Task.FromException(new TimeoutException("transient slice"));
+                if (previous == 0) return Task.FromException<int>(new TimeoutException("transient chunk"));
                 written.Add(key);
-                return Task.CompletedTask;
+                return Task.FromResult(1);
             });
 
         await BenchPreseed.SeedWithRetryAsync(lattice, 9, 1, "test", TimeSpan.FromSeconds(60), CancellationToken.None);
 
-        Assert.That(written, Is.EqualTo(Enumerable.Range(0, 9).Select(GeneratorKey)));
+        Assert.That(written, Is.EqualTo(SortedKeys(9)));
         Assert.That(attempts.Values, Is.All.EqualTo(2));
     }
 
     [Test]
-    public void SeedWithRetryAsync_persistently_failing_slice_stops_at_eight_attempts()
+    public void SeedWithRetryAsync_persistently_failing_chunk_stops_at_eight_attempts()
     {
         var lattice = Substitute.For<ILattice>();
         var calls = 0;
-        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 calls++;
-                return Task.FromException(new TimeoutException("persistent slice"));
+                return Task.FromException<int>(new TimeoutException("persistent chunk"));
             });
 
         Assert.ThrowsAsync<TimeoutException>(() =>
@@ -198,8 +224,8 @@ public class BenchPreseedTests
     public void SeedWithRetryAsync_wall_clock_budget_bounds_a_hung_call()
     {
         var lattice = Substitute.For<ILattice>();
-        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+        var pending = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
             .Returns(pending.Task);
 
         try
@@ -207,7 +233,7 @@ public class BenchPreseedTests
             Assert.CatchAsync<OperationCanceledException>(() =>
                 BenchPreseed.SeedWithRetryAsync(lattice, 1, 1, "test", TimeSpan.FromMilliseconds(100), CancellationToken.None));
         }
-        finally { pending.SetResult(); }
+        finally { pending.SetResult(0); }
     }
 
     [Test]
@@ -215,15 +241,21 @@ public class BenchPreseedTests
     {
         var lattice = Substitute.For<ILattice>();
         var calls = 0;
-        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 calls++;
-                return Task.FromException(new InvalidOperationException("terminal"));
+                return Task.FromException<int>(new InvalidOperationException("terminal"));
             });
 
         Assert.ThrowsAsync<InvalidOperationException>(() =>
             BenchPreseed.SeedWithRetryAsync(lattice, 1, 1, "test", TimeSpan.FromSeconds(60), CancellationToken.None));
         Assert.That(calls, Is.EqualTo(1));
     }
+
+    private static string[] SortedKeys(int count) =>
+        Enumerable.Range(0, count).Select(GeneratorKey).Order(StringComparer.Ordinal).ToArray();
+
+    private static int Index(string key) =>
+        Enumerable.Range(0, 500).First(i => GeneratorKey(i) == key);
 }
