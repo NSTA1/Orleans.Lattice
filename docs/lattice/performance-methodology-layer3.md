@@ -67,7 +67,10 @@ first cohort completes at least 90% of what it was offered, the cluster has
 not reached its limit. The harness discards that cohort, doubles the per-silo
 load and tries again, up to three times. The load a workload settles on is
 carried to the larger silo counts, so demand never falls as the cluster
-grows. A cell still keeping up after the last doubling is published as a
+grows. A sweep can also start a workload at the load an earlier sweep settled
+on, recorded as `carryVehiclesPerSilo` in the table's metadata; escalation
+still raises it if the cluster keeps up. The current results do this for the
+two read workloads. A cell still keeping up after the last doubling is published as a
 lower bound, marked `>=`. So is a cell whose client could not generate the
 load it was asked for: that measures the client, not the cluster.
 
