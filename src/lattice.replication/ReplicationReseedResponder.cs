@@ -126,8 +126,10 @@ internal static class ReplicationReseedResponder
         catch (Exception ex)
         {
             // An already-running bootstrap, or one that failed: the sender's next
-            // stamped push asks again.
-            logger.LogDebug(ex, "Tree '{TreeName}': re-seed bootstrap from '{Source}' did not complete.", treeName, sourceClusterId);
+            // stamped push asks again. Logged at Warning so a persistent refusal
+            // (for example a foreign source refused by the local-only bootstrap
+            // source, issue #5109) is visible rather than silently retried.
+            logger.LogWarning(ex, "Tree '{TreeName}': re-seed bootstrap from '{Source}' did not complete.", treeName, sourceClusterId);
         }
     }
 }

@@ -377,4 +377,7 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="LatticeReplicationPeerStillConfiguredException"/>.</summary>
     internal const string LatticeReplicationPeerStillConfiguredException = "olr.dx";
+
+    /// <summary>Alias for <see cref="LatticeBootstrapSourceMismatchException"/>.</summary>
+    internal const string LatticeBootstrapSourceMismatchException = "olr.bm";
 }
