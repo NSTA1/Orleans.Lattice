@@ -185,4 +185,35 @@ public class WarmUpRetryClassifierTests
     {
         Assert.That(WarmUpRetryClassifier.IsTransientRequestTimeout(null), Is.False);
     }
+
+    // The message a bulk-load chunk surfaced on the Layer 3 rig, verbatim.
+    [TestCase("Operation could not be completed within the specified time.\nRequestId:abc\nStatus: 500 (Operation could not be completed within the specified time.)\nErrorCode: OperationTimedOut")]
+    [TestCase("ErrorCode: OperationTimedOut")]
+    [TestCase("The server is busy.\nStatus: 503\nErrorCode: ServerBusy")]
+    public void Azure_storage_server_timeout_or_busy_is_a_transient_storage_timeout(string message)
+    {
+        Assert.That(WarmUpRetryClassifier.IsTransientStorageTimeout(new InvalidOperationException(message)), Is.True);
+    }
+
+    [Test]
+    public void Storage_timeout_wrapped_in_an_outer_exception_is_recognised()
+    {
+        var ex = new InvalidOperationException("outer", new InvalidOperationException("ErrorCode: OperationTimedOut"));
+
+        Assert.That(WarmUpRetryClassifier.IsTransientStorageTimeout(ex), Is.True);
+    }
+
+    [TestCase("Status: 409 (The specified entity already exists.)\nErrorCode: EntityAlreadyExists")]
+    [TestCase("Status: 403\nErrorCode: AuthorizationPermissionMismatch")]
+    [TestCase("")]
+    public void Other_storage_failures_are_not_transient_storage_timeouts(string message)
+    {
+        Assert.That(WarmUpRetryClassifier.IsTransientStorageTimeout(new InvalidOperationException(message)), Is.False);
+    }
+
+    [Test]
+    public void Null_exception_is_not_a_transient_storage_timeout()
+    {
+        Assert.That(WarmUpRetryClassifier.IsTransientStorageTimeout(null), Is.False);
+    }
 }

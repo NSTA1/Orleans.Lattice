@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Going durable</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      .frame {
+        position: absolute;
+        inset: 0;
+      }
+      .split {
+        position: absolute;
+        top: 240px;
+        left: 160px;
+        right: 160px;
+        display: grid;
+        grid-template-columns: 1080px 1fr;
+        gap: 80px;
+        align-items: start;
+      }
+      .split .lv-code {
+        margin: 0;
+        font-size: var(--lv-type-label);
+      }
+      .wide {
+        position: absolute;
+        top: 240px;
+        left: 160px;
+        right: 160px;
+      }
+      .wide .lv-code {
+        margin: 0;
+        font-size: var(--lv-type-label);
+      }
+      .facts {
+        display: grid;
+        gap: 40px;
+        padding-top: 12px;
+      }
+      .facts-row {
+        position: absolute;
+        left: 160px;
+        right: 160px;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 80px;
+        padding-top: 0;
+      }
+      .facts-row.two {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .facts p {
+        margin: 0;
+        padding: 0 0 26px;
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        line-height: 1.25;
+      }
+      .facts .lv-label {
+        display: block;
+        margin-bottom: 12px;
+      }
+      .cards {
+        position: absolute;
+        top: 480px;
+        left: 160px;
+        right: 160px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 80px;
+      }
+      .card {
+        padding: 32px 0;
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+      }
+      .card h3 {
+        margin: 0 0 20px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+      }
+      .card p {
+        margin: 0 0 12px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+        line-height: 1.3;
+      }
+      .card .lost {
+        margin: 0;
+        color: var(--lt-ink);
+      }
+      .note {
+        position: absolute;
+        top: 720px;
+        left: 160px;
+        right: 160px;
+        padding-top: 28px;
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+        line-height: 1.3;
+      }
+      .places {
+        position: absolute;
+        top: 245px;
+        left: var(--lv-safe-x);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .pages {
+        top: 480px;
+        right: var(--lv-safe-x);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        column-gap: 80px;
+      }
+      .place {
+        position: relative;
+        margin-bottom: 54px;
+        padding-left: 76px;
+      }
+      .place .lv-node {
+        position: absolute;
+        top: 10px;
+        left: 0;
+      }
+      .place-next .lv-node {
+        background: var(--lt-ink);
+      }
+      .place-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: 1.1;
+      }
+      .place-what {
+        margin: 12px 0 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-caption);
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="going-durable"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="115.91"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="going-durable"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Build","title":"Going durable","subtitle":"Durable grain storage and a durable write-ahead log","beats":"0.5,8.294","end":15.95}'
+        data-start="0"
+        data-duration="15.95"
+      ></div>
+
+      <div id="memory" class="clip lv-scene frame" data-scene="two-halves-both-in-memory" data-track-index="0" data-start="15.95" data-duration="22.501">
+        <h2 class="lv-heading">Two halves, both in memory</h2>
+      </div>
+      <div id="memory-layout" class="clip wide" data-scene="two-halves-both-in-memory" data-from-beat="0" data-track-index="2" data-start="16.55" data-duration="21.901">
+        <pre class="lv-code"><code data-snippet="going-durable/memory-defaults">siloBuilder.AddLattice((silo, name) =&gt; silo.AddMemoryGrainStorage(name));</code></pre>
+      </div>
+      <div id="memory-halves" class="clip cards" data-scene="two-halves-both-in-memory" data-from-beat="1" data-track-index="3" data-start="22.656" data-duration="15.795">
+        <section class="card">
+          <h3>Grain storage</h3>
+          <p>Leaves and their snapshots</p>
+          <p class="lost">In memory: lost on restart</p>
+        </section>
+        <section class="card">
+          <h3>Write-ahead log</h3>
+          <p>Every committed write, in order</p>
+          <p class="lost">In memory: lost on restart</p>
+        </section>
+      </div>
+
+      <div id="grain" class="clip lv-scene frame" data-scene="durable-grain-storage" data-track-index="0" data-start="38.451" data-duration="24.866">
+        <h2 class="lv-heading">Durable grain storage</h2>
+      </div>
+      <div id="grain-layout" class="clip wide" data-scene="durable-grain-storage" data-from-beat="0" data-track-index="2" data-start="39.051" data-duration="24.266">
+        <pre class="lv-code"><code data-snippet="going-durable/grain-storage">using Azure.Data.Tables;
+using Microsoft.Extensions.DependencyInjection;
+
+var connectionString = "UseDevelopmentStorage=true";
+siloBuilder.AddLattice((services, storageName) =&gt;
+{
+    services.AddAzureTableGrainStorage(storageName, options =&gt;
+        options.TableServiceClient = new TableServiceClient(connectionString));
+});</code></pre>
+      </div>
+      <div id="grain-provider" class="clip facts facts-row" style="top: 790px" data-scene="durable-grain-storage" data-from-beat="0" data-track-index="3" data-start="39.051" data-duration="24.266">
+        <p><span class="lv-label">Provider</span>Any durable Orleans provider</p>
+      </div>
+      <div id="grain-etags" class="clip facts facts-row" style="top: 790px" data-scene="durable-grain-storage" data-from-beat="1" data-track-index="4" data-start="49.147" data-duration="14.17">
+        <div></div>
+        <p><span class="lv-label">ETags</span>A stale ETag must fail the write</p>
+        <p><span class="lv-label">At silo start</span>One that accepts it stops the silo</p>
+      </div>
+
+      <div id="disk" class="clip lv-scene frame" data-scene="a-durable-log-on-disk" data-track-index="0" data-start="63.317" data-duration="17.692">
+        <h2 class="lv-heading">A durable log on disk</h2>
+      </div>
+      <div id="disk-layout" class="clip wide" data-scene="a-durable-log-on-disk" data-from-beat="0" data-track-index="2" data-start="63.917" data-duration="17.092">
+        <pre class="lv-code"><code data-snippet="going-durable/file-wal">using Orleans.Lattice.Storage.File;
+
+siloBuilder.AddFileWalStorage(options =&gt;
+{
+    options.RootDirectory = "/data/wal";
+});</code></pre>
+      </div>
+      <div id="disk-local" class="clip facts facts-row" style="top: 640px" data-scene="a-durable-log-on-disk" data-from-beat="0" data-track-index="3" data-start="63.917" data-duration="17.092">
+        <p><span class="lv-label">Local disk</span>No cloud dependency, under a root directory</p>
+      </div>
+      <div id="disk-fit" class="clip facts facts-row" style="top: 640px" data-scene="a-durable-log-on-disk" data-from-beat="1" data-track-index="4" data-start="71.964" data-duration="9.045">
+        <div></div>
+        <p><span class="lv-label">Suits</span>A single container with a mounted volume</p>
+        <p><span class="lv-label">Each batch</span>All or nothing: a crash before commit rolls it back</p>
+      </div>
+
+      <div id="table" class="clip lv-scene frame" data-scene="or-in-azure-table-storage" data-track-index="0" data-start="81.009" data-duration="25.169">
+        <h2 class="lv-heading">Or in Azure Table storage</h2>
+      </div>
+      <div id="table-layout" class="clip wide" data-scene="or-in-azure-table-storage" data-from-beat="0" data-track-index="2" data-start="81.609" data-duration="24.569">
+        <pre class="lv-code"><code data-snippet="going-durable/azure-table-wal">using Orleans.Lattice.Storage.AzureTable;
+
+siloBuilder.AddAzureTableWalStorage(options =&gt;
+{
+    options.ConnectionString = "UseDevelopmentStorage=true";
+});</code></pre>
+      </div>
+      <div id="table-facts" class="clip facts facts-row two" style="top: 640px" data-scene="or-in-azure-table-storage" data-from-beat="0" data-track-index="3" data-start="81.609" data-duration="24.569">
+        <p><span class="lv-label">Production</span>Replicated across regions</p>
+        <p><span class="lv-label">Either call</span>Replaces the in-memory log, before or after <code>AddLattice</code></p>
+      </div>
+      <p id="table-half" class="clip note" style="top: 860px" data-scene="or-in-azure-table-storage" data-from-beat="1" data-track-index="3" data-start="94.641" data-duration="11.537">The log is only half of a durable tree. It is trimmed once a snapshot in grain storage covers it, so pair it with durable grain storage too.</p>
+
+      <div id="where-next" class="clip lv-scene frame" data-scene="where-next" data-track-index="0" data-start="106.178" data-duration="9.732">
+        <h2 class="lv-heading">Where next</h2>
+      </div>
+      <ol id="where-next-list" class="clip places" data-scene="where-next" data-from-beat="0" data-track-index="2" data-start="106.778" data-duration="9.132">
+        <li class="place place-next">
+          <span class="lv-node"></span>
+          <h3 class="place-name">Moving in from another store</h3>
+          <p class="place-what">Next on Build</p>
+        </li>
+      </ol>
+      <ol id="where-next-pages" class="clip places pages" data-scene="where-next" data-from-beat="0" data-track-index="3" data-start="106.778" data-duration="9.132">
+        <li class="place">
+          <span class="lv-node"></span>
+          <h3 class="place-name">Configuration</h3>
+          <p class="place-what">The documentation page</p>
+        </li>
+        <li class="place">
+          <span class="lv-node"></span>
+          <h3 class="place-name">WAL storage providers</h3>
+          <p class="place-what">The documentation page</p>
+        </li>
+        <li class="place">
+          <span class="lv-node"></span>
+          <h3 class="place-name">File WAL</h3>
+          <p class="place-what">The package's documentation</p>
+        </li>
+        <li class="place">
+          <span class="lv-node"></span>
+          <h3 class="place-name">Azure Table storage</h3>
+          <p class="place-what">The package's documentation</p>
+        </li>
+      </ol>
+
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/going-durable/narration.wav" data-start="0" data-duration="115.91" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      (function () {
+        const { duration } = window.LatticeMotion;
+        window.LatticeCode.highlightAll(document);
+        const byId = (id) => document.getElementById(id);
+        const start = (element) => Number(element.dataset.start);
+        const end = (element) => start(element) + Number(element.dataset.duration);
+        const tl = gsap.timeline({ paused: true });
+        const ease = "lattice-out";
+
+        function arrive(element, delay = 0.1, rise = 20) {
+          tl.fromTo(element, { opacity: 0, y: rise }, { opacity: 1, y: 0, duration: duration.slow, ease }, start(element) + delay);
+          tl.to(element, { opacity: 0, duration: duration.fast, ease: "power1.in" }, end(element) - duration.fast);
+        }
+
+        for (const id of ["memory", "grain", "disk", "table", "where-next"]) {
+          arrive(byId(id), 0, 0);
+        }
+        for (const id of ["memory-layout", "grain-layout", "disk-layout", "table-layout", "where-next-list", "where-next-pages"]) {
+          arrive(byId(id));
+        }
+        for (const id of ["memory-halves", "grain-etags", "disk-fit", "table-half"]) {
+          arrive(byId(id), 0.1, 16);
+        }
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["going-durable"] = tl;
+      })();
+    </script>
+  </body>
+</html>

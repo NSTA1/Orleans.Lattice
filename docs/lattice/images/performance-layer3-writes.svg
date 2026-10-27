@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="510" viewBox="0 0 820 510" role="img" aria-labelledby="t d" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<title id="t">Point and batched writes: sustained throughput vs silo count</title>
+<desc id="d">Point and batched writes: sustained throughput vs silo count. Line chart over 1, 2, 4, 6, 8 silos. Series: SetAsync (point write); SetAsync (point write + async materialised view); SetManyAsync (4,096 keys/call). The exact values are in the grid below.</desc>
+<defs><clipPath id="plot"><rect x="74" y="52" width="722" height="342"/></clipPath></defs>
+<rect x="0" y="0" width="820" height="510" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+<text x="74" y="32" font-size="17" font-weight="600" fill="#1f2328">Point and batched writes: sustained throughput vs silo count</text>
+<line x1="74" y1="388" x2="796" y2="388" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="388" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">0</text>
+<line x1="74" y1="322" x2="796" y2="322" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="322" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">5</text>
+<line x1="74" y1="256" x2="796" y2="256" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="256" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">10</text>
+<line x1="74" y1="190" x2="796" y2="190" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="190" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">15</text>
+<line x1="74" y1="124" x2="796" y2="124" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="124" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">20</text>
+<line x1="74" y1="58" x2="796" y2="58" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="58" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">25</text>
+<line x1="74" y1="58" x2="74" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="74" y="406" font-size="12" fill="#424a53" text-anchor="middle">1</text>
+<line x1="177.1" y1="58" x2="177.1" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="177.1" y="406" font-size="12" fill="#424a53" text-anchor="middle">2</text>
+<line x1="383.4" y1="58" x2="383.4" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="383.4" y="406" font-size="12" fill="#424a53" text-anchor="middle">4</text>
+<line x1="589.7" y1="58" x2="589.7" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="589.7" y="406" font-size="12" fill="#424a53" text-anchor="middle">6</text>
+<line x1="796" y1="58" x2="796" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="796" y="406" font-size="12" fill="#424a53" text-anchor="middle">8</text>
+<line x1="74" y1="388" x2="796" y2="388" stroke="#57606a" stroke-width="1"/>
+<line x1="74" y1="58" x2="74" y2="388" stroke="#57606a" stroke-width="1"/>
+<text x="435" y="428" font-size="13" fill="#1f2328" text-anchor="middle">Silos</text>
+<text x="18" y="223" font-size="13" fill="#1f2328" text-anchor="middle" transform="rotate(-90 18 223)">Thousand keys/s</text>
+<polyline points="74,344.7 177.1,336.7 383.4,295.6 589.7,290.5 796,236.7" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write)</title></polyline>
+<circle cx="74" cy="344.7" r="4" fill="#0072B2"/>
+<circle cx="177.1" cy="336.7" r="4" fill="#0072B2"/>
+<circle cx="383.4" cy="295.6" r="4" fill="#0072B2"/>
+<circle cx="589.7" cy="290.5" r="4" fill="#0072B2"/>
+<circle cx="796" cy="236.7" r="4" fill="#0072B2"/>
+<polyline points="74,344.2 177.1,340 383.4,311.7 589.7,300.1 796,291.9" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write + async materialised view)</title></polyline>
+<rect x="70" y="340.2" width="8" height="8" fill="#D55E00"/>
+<rect x="173.1" y="336" width="8" height="8" fill="#D55E00"/>
+<rect x="379.4" y="307.7" width="8" height="8" fill="#D55E00"/>
+<rect x="585.7" y="296.1" width="8" height="8" fill="#D55E00"/>
+<rect x="792" y="287.9" width="8" height="8" fill="#D55E00"/>
+<polyline points="74,221.4 177.1,237.7 383.4,198.6 589.7,204.5 796,102.7" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAsync (4,096 keys/call)</title></polyline>
+<polygon points="74,216.4 69,225.4 79,225.4" fill="#009E73"/>
+<polygon points="177.1,232.7 172.1,241.7 182.1,241.7" fill="#009E73"/>
+<polygon points="383.4,193.6 378.4,202.6 388.4,202.6" fill="#009E73"/>
+<polygon points="589.7,199.5 584.7,208.5 594.7,208.5" fill="#009E73"/>
+<polygon points="796,97.7 791,106.7 801,106.7" fill="#009E73"/>
+<line x1="74" y1="450" x2="104" y2="450" stroke="#0072B2" stroke-width="2.2"/>
+<circle cx="89" cy="450" r="4" fill="#0072B2"/>
+<text class="legend" x="112" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">SetAsync (point write)</text>
+<line x1="435" y1="450" x2="465" y2="450" stroke="#D55E00" stroke-width="2.2"/>
+<rect x="446" y="446" width="8" height="8" fill="#D55E00"/>
+<text class="legend" x="473" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">SetAsync (point write + async materialised view)</text>
+<line x1="74" y1="472" x2="104" y2="472" stroke="#009E73" stroke-width="2.2"/>
+<polygon points="89,467 84,476 94,476" fill="#009E73"/>
+<text class="legend" x="112" y="472" font-size="12" fill="#1f2328" dominant-baseline="middle">SetManyAsync (4,096 keys/call)</text>
+</svg>

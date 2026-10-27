@@ -130,8 +130,9 @@ try {
     Assert-Case 'producer-bound anchor disables scaling claims' ($null -eq $rows.GetManyAsync['2'].speedup -and $null -eq $rows.GetManyAsync['2'].efficiency)
     $table = Render-Layer3Table -RowsAgg $rows
     Assert-Case 'table marks lower bound' ($table.Contains('>= ') -and $table.Contains('not cluster ceilings'))
-    $chart = Render-Layer3Chart -RowsAgg $rows
-    Assert-Case 'chart cannot publish producer ceiling' (-not $chart.Contains('```mermaid'))
+    $chartOut = Render-Layer3Chart -RowsAgg $rows
+    $chart = $chartOut.Markdown
+    Assert-Case 'chart cannot publish producer ceiling' (-not $chart.Contains('![') -and $chartOut.Files.Count -eq 0)
     Assert-Case 'omitted curves are explained' ($chart -match 'producer-bound')
 
     [IO.File]::WriteAllText($log, "[producer] preseed treeId=t entries=1200 payloadBytes=245 attempts=1 elapsedMs=10`n[producer] DONE total=1 elapsed=1s avg=400,000 msg/s genBlockedFrac=0.010 slipMaxMs=10.0")
@@ -139,9 +140,10 @@ try {
     Assert-Case 'resume reparses retained logs instead of stale grading' (-not $rows.GetManyAsync['1'].producerBound)
     Assert-Case 'healthy speedup unchanged' ($rows.GetManyAsync['2'].speedup -eq 2)
     Assert-Case 'healthy table is not a lower bound' (-not (Render-Layer3Table -RowsAgg $rows).Contains('>= '))
-    Assert-Case 'healthy chart still renders' ((Render-Layer3Chart -RowsAgg $rows).Contains('```mermaid'))
-    Assert-Case 'healthy chart has no omission note' (-not (Render-Layer3Chart -RowsAgg $rows).Contains('Producer-bound workload curves are omitted'))
-    Assert-Case 'empty chart has no omission claim' (-not (Render-Layer3Chart -RowsAgg @{}).Contains('producer-bound'))
+    $healthyChart = Render-Layer3Chart -RowsAgg $rows
+    Assert-Case 'healthy chart still renders' ($healthyChart.Markdown.Contains('![') -and $healthyChart.Files.Count -gt 0)
+    Assert-Case 'healthy chart has no omission note' (-not (Render-Layer3Chart -RowsAgg $rows).Markdown.Contains('Producer-bound workload curves are omitted'))
+    Assert-Case 'empty chart has no omission claim' (-not (Render-Layer3Chart -RowsAgg @{}).Markdown.Contains('producer-bound'))
     $healthy.offerBound = $true
     $cells['get-many']['1'] = @($healthy)
     $rows = Aggregate-Layer3Cells -Cells $cells

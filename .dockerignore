@@ -100,6 +100,16 @@ docs
 docs/**
 test
 test/**
+# The documentation site's tracked media and its local build output (_site,
+# src, obj): about 300 MB after one local site build, uploaded twice per rig
+# by deploy-aca.ps1. Nine rigs building at once pushed ~5 GB and some uploads
+# were reset by the remote host.
+docs-site
+docs-site/**
+videos
+videos/**
+spec
+spec/**
 *.log
 **/*.log
 

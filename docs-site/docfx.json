@@ -18,7 +18,8 @@
           "llms-full.txt",
           "docs/*/llms-full.txt",
           "docs/agents/**/*.json",
-          "docs/agents/**/*.yaml"
+          "docs/agents/**/*.yaml",
+          "docs/**/*.svg"
         ],
         "src": "src"
       }

@@ -91,7 +91,7 @@ byte[]? value = await tree.GetAsync("customer-123");
 
 <!-- where-next:begin -->
 
-- **Next on Build:** Going durable
+- **Next on Build:** [Going durable](going-durable.md)
 - **The pages it introduces:** [TTL](../lattice/ttl.md)
 
 <!-- where-next:end -->

@@ -15,20 +15,58 @@ harness when a throughput claim needs to be backed by real-Azure numbers.
 
 ## Topology
 
+The rig has two shapes. Layers 1 and 2 run on one Linux VM:
+
 ```mermaid
 flowchart LR
-	subgraph VM["Linux VM (single host)"]
+	subgraph VM["Linux VM: Layers 1 and 2"]
 		direction LR
-		P[lattice-producer.service<br/>synthetic fleet emitter]
-		S[lattice-silo.service<br/>BENCH_WORKLOAD_MODE operation<br/>(default ILattice.SetManyAsync)]
-		P -- loopback TCP<br/>127.0.0.1:7000 --> S
+		B["Layer 1: BenchmarkDotNet<br/>in-process, in-memory storage"]
+		P["lattice-producer.service<br/>synthetic fleet emitter"]
+		S["lattice-silo.service<br/>one silo, BENCH_WORKLOAD_MODE operation"]
+		P -- "loopback TCP 127.0.0.1:7000" --> S
 	end
-	S -- AzureTableWalStorage<br/>managed identity --> AZ[(Azure Storage Account<br/>Tables)]
+	ST[("Storage account<br/>Azure Tables: WAL and grain state")]
+	WX[("Extra WAL-only accounts<br/>when -WalAccountCount is above 1")]
+	S -- "managed identity" --> ST
+	S -.-> WX
 ```
 
 Both processes run as systemd units on the same Linux VM and share a loopback hop
 to `127.0.0.1:7000`. The silo authenticates to Azure Tables via the VM's
-system-assigned managed identity (no keys, no connection strings).
+system-assigned managed identity (no keys, no connection strings). Layer 1 runs
+BenchmarkDotNet on the same VM and touches no Azure storage. `performance-report.ps1`
+reaches the VM over ssh: through its public IP, or through a Bastion tunnel when it
+was deployed with `-PrivateNetwork`.
+
+Layer 3 runs on Azure Container Apps, one rig per resource group
+(`deploy-aca.ps1`; `-Layer3Rigs K` runs K of them in parallel):
+
+```mermaid
+flowchart LR
+	OP["Operator workstation<br/>performance-report.ps1 -Layer 3"]
+	subgraph ENV["Container Apps environment: Layer 3"]
+		direction LR
+		J["Producer job<br/>Orleans client, one execution per cohort"]
+		A["Silo app<br/>N replicas, 4 vCPU and 8 GiB each"]
+		J -- "Orleans gateway calls" --> A
+	end
+	ST[("Storage account<br/>Azure Tables: WAL, grain state, clustering")]
+	WX[("Extra WAL-only accounts<br/>when -Layer3WalAccounts is above 1")]
+	LA[("Log Analytics<br/>producer and silo logs")]
+	OP -- "scale silos, start the job" --> ENV
+	A -- "managed identity or connection string" --> ST
+	J -- "clustering table" --> ST
+	A -.-> WX
+	ENV -- "stdout" --> LA
+	OP -- "harvest logs; Azure Monitor storage metrics" --> LA
+```
+
+The producer joins the cluster as an Orleans client through the same clustering
+table and calls the silo gateways directly. With `-PrivateNetwork` the
+environment is internal-only on a VNet, storage is reachable only through a
+private endpoint, and the silo and producer authenticate with a user-assigned
+identity; without it they use a connection string.
 
 ## Why a single VM (not ACI)
 
@@ -66,7 +104,7 @@ journald-backed log capture with no scraper indirection.
 | `scripts/_vm-access.ps1` | SSH target resolution shared by the VM-path scripts: direct to the public FQDN, or through an Azure Bastion tunnel on a `-PrivateNetwork` rig. |
 | `scripts/_run-cohort-helpers.ps1` | Verdict-computation and progress-line helpers `run-cohort.ps1` dot-sources (`run-cohort-aca.ps1` reuses its verdict-block writer and its mid-run freeze detector, and `performance-report.ps1` its steady-state mean). |
 | `scripts/Test-CohortVerdict.ps1` | Regression tests for those helpers against literal log fixtures (pure pwsh, no Azure). |
-| `scripts/Test-PerformanceReportHarness.ps1`, `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1`, `scripts/Test-Layer3StorageMetrics.ps1`, `scripts/Test-Layer3OverlapHarvest.ps1` | Offline regressions for report grading and replay, VM seed wiring, revision-scoped diagnostic paging, the read-mode preseed gates, the re-run of an `UNSEEDED` read cohort, and producer-bound parsing and rendering. They load only the report's function definitions, so they need no Azure. |
+| `scripts/Test-PerformanceReportHarness.ps1`, `scripts/Test-Layer3PreseedReport.ps1`, `scripts/Test-Layer3UnseededRetry.ps1`, `scripts/Test-ProducerBoundReport.ps1`, `scripts/Test-Layer3StorageMetrics.ps1`, `scripts/Test-Layer3OverlapHarvest.ps1`, `scripts/Test-Layer3Chart.ps1` | Offline regressions for report grading and replay, VM seed wiring, revision-scoped diagnostic paging, the read-mode preseed gates, the re-run of an `UNSEEDED` read cohort, producer-bound parsing and rendering, and the Layer 3 charts, which drop a workload missing a cell rather than truncating every curve. They load only the report's function definitions, so they need no Azure. |
 | `scripts/deploy-aca.ps1` | Layer 3: provisions the multi-silo Azure Container Apps rig and builds its images remotely with `az acr build`. |
 | `scripts/run-cohort-aca.ps1` | Layer 3: one cohort - by default empties the rig's storage first (`-ResetStorage`), pins the silos to exactly N, runs the producer job, parks the silos at zero, then harvests the producer and silo logs from Log Analytics into one cohort log. |
 | `scripts/complete-cohort-aca.ps1` | Layer 3: the second half of a cohort - harvests its producer and silo logs, appends its storage-side metrics, grades it and writes the cohort log from the pending-harvest descriptor `run-cohort-aca.ps1` leaves; run inline, or later with `run-cohort-aca.ps1 -DeferHarvest`. |
@@ -189,11 +227,15 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `cross-tree-atomic-64` | The same cross-tree saga with 64 keys (32 per tree). |
 | `set-point` | One `SetAsync` per key. |
 | `set-point-mv` | `set-point` with an asynchronous materialised view attached to the tree - the A/B partner that shows whether maintaining a view perturbs the source write path. |
-| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo-side default of 0 skips the pre-seed, but `run-cohort.ps1 -Vehicles` sets the same fleet size on both processes (including when `ExtraSiloEnv` contains a conflicting count). Layer 2 aggregation requires retained `[silo] preseed ... entries=N` evidence covering the offered fleet; legacy miss-path cohorts and missing logs are excluded. In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
+| `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo-side default of 0 skips the pre-seed, but `run-cohort.ps1 -Vehicles` sets the same fleet size on both processes (including when `ExtraSiloEnv` contains a conflicting count). Layer 2 aggregation requires retained `[silo] preseed ... entries=N` evidence covering the offered fleet; legacy miss-path cohorts and missing logs are excluded. In cluster ingest mode (Layer 3) the silo skips this step and the producer bulk-loads the same keys into the cohort's empty tree after warm-up instead (`ILattice.BulkAppendChunkAsync`, ascending chunks of 16,384, packed leaves), logging `[producer] preseed ... entries=N method=bulk-append`. |
 | `get-many` | `GetManyAsync` over the same keyspace, with the same pre-seed caveats. |
 
-Layer 3 preseed retries are bounded to eight attempts per unlanded slice and 300 seconds
-for the entire seed, including outstanding RPCs. Successful slices reset the attempt
+Layer 3 preseed retries are bounded to eight attempts per unlanded chunk (re-driven under the
+same operation id, so a retry is idempotent) and a wall-clock
+budget for the entire seed, including outstanding RPCs: 300 seconds, or one second per
+1,000 keys when that is longer (`BenchPreseed.BudgetFor`; `BENCH_PRESEED_BUDGET_SEC`
+overrides it). The keyspace is vehicles per silo x silos, so a flat budget failed the
+larger read cells. `run-cohort-aca.ps1` widens its execution ceiling by the same excess. Successful chunks reset the attempt
 counter, not the deadline; failures retain offset, exception and budget diagnostics.
 The `set-point-mv` view name is `bench-{treeId}`, shared by registration and lag reporting,
 so a fresh cohort cannot resume an earlier source tree's view checkpoints.
@@ -511,9 +553,10 @@ in a `finally` as well, so a failed cohort does not leave replicas billing. Last
 `[storage-metrics]` line per storage account the cohort used, and appends the same
 verdict block Layer 2 writes: `HEALTHY`, or `WEDGE` when the producer printed no DONE
 marker, no window was productive, the cumulative `ops` count stopped advancing for
-`-FreezeWedgeSec` seconds while work was in flight, `FINAL` reported unresolved entries,
-or a multi-account cohort's WAL placement was not confirmed. A saturated cohort that kept
-completing work stays `HEALTHY`, with its failures carried as data. `-DeferHarvest` returns
+`-FreezeWedgeSec` seconds while work was in flight, or a multi-account cohort's WAL
+placement was not confirmed. A saturated cohort that kept completing work stays
+`HEALTHY`, with its failures and any `FINAL` unresolved entries (its backlog when the
+in-flight-tail budget expired) carried as data; Layer 2 grades unresolved entries `WEDGE`. `-DeferHarvest` returns
 before that step and leaves it to `complete-cohort-aca.ps1 -PendingHarvestPath <path>`.
 
 | Parameter | Default | Meaning |

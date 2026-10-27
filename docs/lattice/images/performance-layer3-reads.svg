@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="488" viewBox="0 0 820 488" role="img" aria-labelledby="t d" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<title id="t">Reads: sustained throughput vs silo count</title>
+<desc id="d">Reads: sustained throughput vs silo count. Line chart over 1, 2, 4, 6, 8 silos. Series: GetAsync (point read); GetManyAsync (4,096 keys/call). The exact values are in the grid below.</desc>
+<defs><clipPath id="plot"><rect x="74" y="52" width="722" height="342"/></clipPath></defs>
+<rect x="0" y="0" width="820" height="488" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+<text x="74" y="32" font-size="17" font-weight="600" fill="#1f2328">Reads: sustained throughput vs silo count</text>
+<line x1="74" y1="388" x2="796" y2="388" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="388" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">0</text>
+<line x1="74" y1="322" x2="796" y2="322" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="322" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">100</text>
+<line x1="74" y1="256" x2="796" y2="256" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="256" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">200</text>
+<line x1="74" y1="190" x2="796" y2="190" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="190" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">300</text>
+<line x1="74" y1="124" x2="796" y2="124" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="124" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">400</text>
+<line x1="74" y1="58" x2="796" y2="58" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="58" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">500</text>
+<line x1="74" y1="58" x2="74" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="74" y="406" font-size="12" fill="#424a53" text-anchor="middle">1</text>
+<line x1="177.1" y1="58" x2="177.1" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="177.1" y="406" font-size="12" fill="#424a53" text-anchor="middle">2</text>
+<line x1="383.4" y1="58" x2="383.4" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="383.4" y="406" font-size="12" fill="#424a53" text-anchor="middle">4</text>
+<line x1="589.7" y1="58" x2="589.7" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="589.7" y="406" font-size="12" fill="#424a53" text-anchor="middle">6</text>
+<line x1="796" y1="58" x2="796" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="796" y="406" font-size="12" fill="#424a53" text-anchor="middle">8</text>
+<line x1="74" y1="388" x2="796" y2="388" stroke="#57606a" stroke-width="1"/>
+<line x1="74" y1="58" x2="74" y2="388" stroke="#57606a" stroke-width="1"/>
+<text x="435" y="428" font-size="13" fill="#1f2328" text-anchor="middle">Silos</text>
+<text x="18" y="223" font-size="13" fill="#1f2328" text-anchor="middle" transform="rotate(-90 18 223)">Thousand keys/s</text>
+<polyline points="74,347.8 177.1,347.9 383.4,317.2 589.7,301.6 796,293.1" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>GetAsync (point read)</title></polyline>
+<circle cx="74" cy="347.8" r="4" fill="#0072B2"/>
+<circle cx="177.1" cy="347.9" r="4" fill="#0072B2"/>
+<circle cx="383.4" cy="317.2" r="4" fill="#0072B2"/>
+<circle cx="589.7" cy="301.6" r="4" fill="#0072B2"/>
+<circle cx="796" cy="293.1" r="4" fill="#0072B2"/>
+<polyline points="74,162.8 177.1,213.2 383.4,170.9 589.7,94.5 796,96.2" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>GetManyAsync (4,096 keys/call)</title></polyline>
+<rect x="70" y="158.8" width="8" height="8" fill="#D55E00"/>
+<rect x="173.1" y="209.2" width="8" height="8" fill="#D55E00"/>
+<rect x="379.4" y="166.9" width="8" height="8" fill="#D55E00"/>
+<rect x="585.7" y="90.5" width="8" height="8" fill="#D55E00"/>
+<rect x="792" y="92.2" width="8" height="8" fill="#D55E00"/>
+<line x1="74" y1="450" x2="104" y2="450" stroke="#0072B2" stroke-width="2.2"/>
+<circle cx="89" cy="450" r="4" fill="#0072B2"/>
+<text class="legend" x="112" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">GetAsync (point read)</text>
+<line x1="435" y1="450" x2="465" y2="450" stroke="#D55E00" stroke-width="2.2"/>
+<rect x="446" y="446" width="8" height="8" fill="#D55E00"/>
+<text class="legend" x="473" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">GetManyAsync (4,096 keys/call)</text>
+</svg>

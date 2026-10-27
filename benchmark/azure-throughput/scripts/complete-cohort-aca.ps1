@@ -116,8 +116,15 @@ $productive = @($lines | Where-Object {
 }).Count
 $longestFreeze = Get-SiloProgressLongestStall -Lines @($lines)
 # Flushes still unsettled when FINAL was emitted (the in-flight-tail
-# budget expired). They are in neither ops= nor failed=, so a cell that
-# abandoned work used to read failed=0 and grade HEALTHY.
+# budget expired). They are in neither ops= nor failed=, so FINAL's
+# completed-ops throughput already excludes them. On Layer 3 they are the
+# saturation backlog of a cell offered several times what it sustains -
+# the 8-silo point-write cells end with 100k-500k entries queued while
+# completing work every second - so, like failures, they are carried as
+# data rather than graded WEDGE: grading them WEDGE dropped exactly the
+# saturated cells this layer exists to measure. A cell that stopped
+# completing work is still caught by the freeze rule above. Layer 2's rungs
+# are sub-saturation, so Resolve-CohortVerdict keeps grading it WEDGE there.
 $unresolvedAtFinal = 0L
 $finalLine = @($lines | Where-Object { $_.Contains('[silo] FINAL ') }) | Select-Object -Last 1
 if ($finalLine -and ($finalLine -match '\bunresolved=([\d,]+)')) {
@@ -140,15 +147,15 @@ if (-not $producerDone) {
 } elseif ($FreezeWedgeSec -gt 0 -and $longestFreeze -ge $FreezeWedgeSec) {
 	$verdictState = 'WEDGE'
 	$verdictDetail = (' (mid-run freeze: no completion for {0:N0}s with work in flight)' -f $longestFreeze)
-} elseif ($unresolvedAtFinal -gt 0) {
-	$verdictState = 'WEDGE'
-	$verdictDetail = (' (unresolved tail: {0:N0} entries still in flight when the in-flight-tail budget expired)' -f $unresolvedAtFinal)
 } elseif ($walAccounts -gt 1 -and -not $placementConfirmed) {
 	# The producer spreads the WAL before load and throws if the spread fails,
 	# so this only fires on a stale producer image that never attempted it. A
 	# multi-account cell measured on one account must not publish as one.
 	$verdictState = 'WEDGE'
 	$verdictDetail = " (WAL placement across $walAccounts accounts not confirmed: no '[producer] wal-placement' line)"
+}
+if ($verdictState -eq 'HEALTHY' -and $unresolvedAtFinal -gt 0) {
+	$verdictDetail = (' (saturation backlog: {0:N0} entries still in flight at FINAL; carried as data, not completed throughput)' -f $unresolvedAtFinal)
 }
 
 # Storage-side telemetry for every account the cohort used, appended as
