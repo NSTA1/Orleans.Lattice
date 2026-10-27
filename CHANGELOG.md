@@ -82,6 +82,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Leaf - Cluster stop no longer floods placement errors.** Once a stopping silo sees the replay coordinator or WAL pin grain type withdrawn cluster-wide, leaves stop calling it: replay ends cancelled and pins go straight to durable storage. ([#5100](https://github.com/NSTA1/Orleans.Lattice/issues/5100)) (`Orleans.Lattice`)
+- **WAL - Orphan-pin sweep read amplification.** The WAL GC orphan-pin sweep now reads each leaf once per sweep rather than once per WAL partition pin, and runs once per tree across the cluster instead of on every silo. ([#5097](https://github.com/NSTA1/Orleans.Lattice/issues/5097)) (`Orleans.Lattice`)
 - **Core - Tag-index repair and mirror recovery.** A transient repair failure no longer advances the repair cursor past a tree, and a key-major mirror left behind by a partial orphan deletion is recovered on the next reconcile. ([#4976](https://github.com/NSTA1/Orleans.Lattice/issues/4976), [#4977](https://github.com/NSTA1/Orleans.Lattice/issues/4977)) (`Orleans.Lattice`)
 - **Replication - Receiver feedback while pipelining.** Pipelined shipping now honours receiver shrink and pause feedback rather than discarding it. ([#4998](https://github.com/NSTA1/Orleans.Lattice/issues/4998)) (`Orleans.Lattice.Replication`)
 - **Indexing - Vector-count snapshot age.** A background refresh no longer replaces a newer vector-count snapshot with an older one. ([#4981](https://github.com/NSTA1/Orleans.Lattice/issues/4981)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
@@ -91,6 +93,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Explorer - Replication submission ownership.** Pending validation prevents duplicate enables, edited merge modes require a fresh confirmation, and late enable or disable replies cannot post messages or reload a page that has been left. ([#5072](https://github.com/NSTA1/Orleans.Lattice/issues/5072)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Atomic - Cross-tree sagas no longer exhaust the transaction registry.** A host without replication records no cross-tree membership, restoring about 100 cross-tree sagas/s per registry shard. Replicated hosts keep it; their lower cross-tree ceiling is now documented. ([#5073](https://github.com/NSTA1/Orleans.Lattice/issues/5073)) (`Orleans.Lattice`)
+
+- **Explorer - Backup form consistency.** Captures require a new submission if details change during tree validation. Switching to a set validates the carried tree, and pending schedule cancellation blocks conflicting changes. ([#5099](https://github.com/NSTA1/Orleans.Lattice/issues/5099)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Backup catalogue and health.** Catalogue rows, inventory, schedules and health discard superseded replies and errors. Pending checks no longer block the next backup or replace its progress, and monitoring-save results stay with their backup. ([#5036](https://github.com/NSTA1/Orleans.Lattice/issues/5036), [#5042](https://github.com/NSTA1/Orleans.Lattice/issues/5042)) (`Orleans.Lattice.Explorer.UI`)
 

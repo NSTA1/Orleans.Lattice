@@ -6612,6 +6612,10 @@ internal sealed partial class BPlusLeafGrain
 
         for (var p = 0; p < partitionCount; p++)
         {
+            // Outside the try, which would otherwise absorb it as a probe fault
+            // and fall through to a doomed ReplayPartitionAsync (issue #5100).
+            ThrowIfReplayCoordinatorWithdrawn();
+
             try
             {
                 var head = await ReplaySliceReader.AwaitProviderReadAsync(
@@ -6652,6 +6656,7 @@ internal sealed partial class BPlusLeafGrain
                 // natural position, and log it.
                 (unprobed ??= []).Add(p);
                 firstProbeFault ??= ex;
+                ObserveReplayCoordinatorFault(ex);
             }
         }
 
@@ -6810,6 +6815,9 @@ internal sealed partial class BPlusLeafGrain
         // one, so ordering the sweep costs no extra grain call. A head probed
         // moments ago can only be behind the true head, which simply leaves
         // the newest entries for the materialiser or the next replay.
+        // Every step below is a coordinator call; skip them all once the
+        // coordinator type is gone from a stopping cluster (issue #5100).
+        ThrowIfReplayCoordinatorWithdrawn();
         var head = probedHead ?? await ReplaySliceReader.AwaitProviderReadAsync(
             coordinator.GetHeadOffsetAsync(cancellationToken), cancellationToken);
 

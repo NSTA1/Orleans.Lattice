@@ -997,7 +997,22 @@ internal sealed partial class BPlusLeafGrain
 
             var coordinator = _checkpointStallCoordinators[p] ??=
                 grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{state.State.TreeId}/{p}");
-            var head = await coordinator.GetHeadOffsetAsync(cancellationToken);
+
+            // Declining a drive is always safe; a doomed probe during a cluster
+            // stop is an Error-level placement log line (issue #5100).
+            if (IsReplayCoordinatorWithdrawn())
+                return false;
+
+            long head;
+            try
+            {
+                head = await coordinator.GetHeadOffsetAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                ObserveReplayCoordinatorFault(ex);
+                throw;
+            }
             // WAL heads are exclusive; checkpoints are inclusive. Subtract
             // from the head rather than add to the checkpoint to avoid overflow.
             if (head - 1 > GetCurrentCheckpointForPartition(p))

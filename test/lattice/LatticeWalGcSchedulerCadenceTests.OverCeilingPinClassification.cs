@@ -119,12 +119,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // diagnostic into a storage-read storm on a tree that is already
         // unhealthy, and would dwarf the trimming work the pass exists to do.
         //
-        // The bound is asserted through the read counter rather than through the
-        // recorded sample, because the read is the cost. The sweep itself reads
-        // every pin once to decide what to retire - that is issue #3105's
-        // behaviour and is not what is under test - so an unbounded
-        // classification would exactly double the count. Removing the cap turns
-        // 68 reads into 128.
+        // The sweep itself reads every leaf once to decide what to retire - that
+        // is issue #3105's behaviour - and since issue #5097 the classification
+        // shares that sweep's per-leaf read, so it adds no durable reads of its
+        // own. The read count therefore pins the sharing (an unshared
+        // classification would add up to its cap again), and the recorded sample
+        // pins the cap itself: removing it turns 8 classifications into 60.
         const int Population = 60;
 
         var time = new VirtualTimeProvider();
@@ -145,13 +145,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(storage.Reads, Is.EqualTo(Population + FloorHolderCap),
-                "the classification must add exactly its cap in durable reads, not one per pin. This is the "
-                    + "assertion that fails if the bound is removed: the sweep's own per-pin read is already "
-                    + "counted, so an uncapped classification reads the population a second time.");
+            Assert.That(storage.Reads, Is.EqualTo(Population),
+                "the classification must reuse the sweep's per-leaf read rather than reading the leaf again; "
+                    + "each leaf costs one durable read per sweep.");
             Assert.That(classifications, Is.EqualTo(FloorHolderCap),
-                "and must record exactly the sample it paid for, so the recorded population and the read "
-                    + "budget cannot drift apart.");
+                "the classification must record exactly its capped sample, not one per pin. This is the "
+                    + "assertion that fails if the bound is removed.");
         });
     }
 

@@ -706,6 +706,11 @@ internal static class TypeAliases
     internal const string WalMaterialiserPinState = "ol.wps";
     internal const string WalMaterialiserPinReport = "ol.wpr";
 
+    // Cluster-wide WAL GC orphan-pin sweep coordinator (#5097): one sweep per
+    // tree per interval instead of one per silo.
+    internal const string IWalOrphanPinSweepGrain = "ol.wos";
+    internal const string WalOrphanPinSweepOutcome = "ol.woo";
+
     // Decision-purge hold (#4533, #4534): a per-tree record of replication
     // consumers that need every saga decision kept, which suspends the
     // transaction registry's decision purges until each removes its hold.

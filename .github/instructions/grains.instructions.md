@@ -46,6 +46,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `LatticeCrossTreeReceiverGrain` | Length-prefixed `{originClusterId}`+`{operationId}` via `ComputeKey` (storage-safe; see below) | `"16_cluster-eus2op-1op-42"` |
 | `ViewMaintainerGrain` | `{viewName}`, tenant-scoped to `t/{tenant}/{viewName}` when tenancy is on | `"orders-open"` |
 | `WalMaterialiserPinGrain` | `{treeId}` (single shard) or `{treeId}~s{shard}` via `ShardKey` | `"my-tree~s3"` |
+| `WalOrphanPinSweepGrain` | `{treeId}` (one cluster-wide orphan-pin sweep per tree) | `"my-tree"` |
 | `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
 | `LatticeLockGrain` | `{lockName}` (any non-empty string) | `"inventory/sku-42"` |

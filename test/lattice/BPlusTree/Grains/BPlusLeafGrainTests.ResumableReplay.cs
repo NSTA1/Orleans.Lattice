@@ -125,7 +125,8 @@ public partial class BPlusLeafGrainTests
         ITxRegistryGrain? registry = null,
         int? registryShardCount = null,
         string? registryKey = null,
-        ShardMap? registryShardMap = null)
+        ShardMap? registryShardMap = null,
+        SiloStopRoutingLatch? stopLatch = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
@@ -145,6 +146,8 @@ public partial class BPlusLeafGrainTests
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(Substitute.For<ILeafCursorReporter>());
+        if (stopLatch is not null)
+            sc.AddSingleton(stopLatch);
         if (registryShardCount is { } shardCount)
         {
             var registryOptions = Substitute.For<IOptionsMonitor<LatticeOptions>>();

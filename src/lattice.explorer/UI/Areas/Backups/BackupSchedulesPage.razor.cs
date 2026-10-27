@@ -241,6 +241,11 @@ public partial class BackupSchedulesPage : IDisposable
 
     private void AskCancel(bool incremental)
     {
+        if (_busy)
+        {
+            return;
+        }
+
         _cancelIncremental = incremental;
         _confirmCancel = true;
     }
@@ -248,7 +253,7 @@ public partial class BackupSchedulesPage : IDisposable
     private async Task CancelScheduleAsync()
     {
         _confirmCancel = false;
-        if (Tree is not { } tree)
+        if (Tree is not { } tree || _busy)
         {
             return;
         }
@@ -257,6 +262,7 @@ public partial class BackupSchedulesPage : IDisposable
         _scheduleError = null;
         var token = _load.Token;
         var incremental = _cancelIncremental;
+        _busy = true;
         try
         {
             await Control.CancelScheduleAsync(BackupScopeSelector.WholeTree(tree), incremental, token);
@@ -276,6 +282,13 @@ public partial class BackupSchedulesPage : IDisposable
             if (!token.IsCancellationRequested)
             {
                 _scheduleError = BackupsFaults.Describe(exception);
+            }
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
             }
         }
     }

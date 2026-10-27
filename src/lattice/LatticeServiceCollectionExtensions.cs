@@ -372,6 +372,12 @@ public static class LatticeServiceCollectionExtensions
         // instance resolves the lifetime lazily at first log-time (never at
         // logging-options build time) so it cannot perturb host startup.
         builder.Services.TryAddSingleton<LatticeShutdownLogFilter>();
+
+        // Errors are deliberately not demoted above, so the calls behind them
+        // must not be sent: once a grain type is proven withdrawn cluster-wide
+        // during a stop, leaves and the pin reporter skip calls to it rather
+        // than flood the log with placement errors (issue #5100).
+        builder.Services.TryAddSingleton<BPlusTree.Grains.SiloStopRoutingLatch>();
         builder.Services.AddOptions<LoggerFilterOptions>()
             .Configure<LatticeShutdownLogFilter>(static (options, filter) =>
             {
@@ -651,6 +657,10 @@ public static class LatticeServiceCollectionExtensions
         // "lattice" storage provider (a pre-WAL / bare-IServiceProvider setup)
         // simply gets null and the reporter degrades to its prior swallow-and-log
         // behaviour. TryAdd still lets a host-supplied reporter win.
+        // The stop-routing latch lets the reporter stop sending pin writes once
+        // the pin grain type is withdrawn cluster-wide during a stop, writing
+        // them straight to storage instead (issue #5100).
+        builder.Services.TryAddSingleton<BPlusTree.Grains.SiloStopRoutingLatch>();
         builder.Services.TryAddSingleton<ILeafCursorReporter>(sp =>
             new LeafCursorReporter(
                 sp.GetRequiredService<IWalCursorRegistry>(),
@@ -658,7 +668,8 @@ public static class LatticeServiceCollectionExtensions
                 sp.GetService<IOptionsMonitor<LatticeOptions>>(),
                 sp.GetService<ILogger<LeafCursorReporter>>(),
                 sp.GetKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName),
-                optionsResolver: sp.GetService<LatticeOptionsResolver>()));
+                optionsResolver: sp.GetService<LatticeOptionsResolver>(),
+                stopLatch: sp.GetService<BPlusTree.Grains.SiloStopRoutingLatch>()));
 
         // Flush durable materialiser-pin advances the reporter's debounce
         // coalesced but never wrote, at silo stop, after grain deactivation and
@@ -712,6 +723,14 @@ public static class LatticeServiceCollectionExtensions
         // this method.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, LatticeWalGcScheduler>());
+
+        // The orphan-pin sweep runs once per tree for the whole cluster on a
+        // tree-keyed coordinator grain (issue #5097). The grain borrows this
+        // silo's scheduler instance to run it, so the runner resolves the hosted
+        // singleton rather than constructing a second scheduler.
+        builder.Services.TryAddSingleton<IWalOrphanPinSweepCoordinator, WalOrphanPinSweepCoordinator>();
+        builder.Services.TryAddSingleton<IWalOrphanPinSweepRunner>(
+            sp => sp.GetServices<IHostedService>().OfType<LatticeWalGcScheduler>().First());
         return builder;
     }
 

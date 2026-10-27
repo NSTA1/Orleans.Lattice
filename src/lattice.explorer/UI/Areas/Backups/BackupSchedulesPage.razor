@@ -55,7 +55,7 @@ else
                 <LtColumn TItem="ScheduleRow" Title="Actions">
                     @if (context.Registered && CanChange(context.Incremental))
                     {
-                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => AskCancel(context.Incremental)" aria-label="@("Cancel the " + context.Kind.ToLowerInvariant() + " schedule")">Cancel schedule</LtButton>
+                        <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_busy" OnClick="() => AskCancel(context.Incremental)" aria-label="@("Cancel the " + context.Kind.ToLowerInvariant() + " schedule")">Cancel schedule</LtButton>
                     }
                 </LtColumn>
             </ChildContent>
@@ -69,7 +69,7 @@ else
             <DetailActions>
                 @if (context.Registered && CanChange(context.Incremental))
                 {
-                    <LtButton OnClick="() => AskCancel(context.Incremental)">Cancel schedule</LtButton>
+                    <LtButton Disabled="@_busy" OnClick="() => AskCancel(context.Incremental)">Cancel schedule</LtButton>
                 }
             </DetailActions>
         </LtTable>

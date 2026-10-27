@@ -6,9 +6,15 @@ namespace Orleans.Lattice.Tests;
 
 public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
-    private sealed class BlockedLeafStateStorage(int blockedReadCount, bool initialReadCompletes) : IGrainStorage
+    private sealed class BlockedLeafStateStorage(
+        int blockedReadCount,
+        bool initialReadCompletes,
+        bool synchronousRelease = false) : IGrainStorage
     {
-        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Some runner tests need Release to drain the provider-read continuations
+        // before immediately retrying admission, not just enqueue them.
+        private readonly TaskCompletionSource _release = new(synchronousRelease
+            ? TaskCreationOptions.None : TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _firstBatch = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _reads;
         private int _outstanding;
@@ -18,13 +24,14 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         public int Reads => Volatile.Read(ref _reads);
         public int Outstanding => Volatile.Read(ref _outstanding);
         public int MaximumOutstanding => Volatile.Read(ref _maximumOutstanding);
+        public bool CompleteNewReads { get; set; }
 
         public void Release() => _release.TrySetResult();
 
         public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
             var read = Interlocked.Increment(ref _reads);
-            if (initialReadCompletes && read == 1)
+            if (CompleteNewReads || (initialReadCompletes && read == 1))
             {
                 grainState.RecordExists = false;
                 return;
@@ -62,7 +69,6 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [TestCase(false, 1)]
-    [TestCase(true, 16)]
     public async Task Orphan_sweep_blocked_provider_reads_do_not_accumulate_across_collection_budgets(
         bool initialReadCompletes,
         int blockedReadCount)

@@ -313,10 +313,61 @@ internal static class WalFloorHolderReader
             return (WalGcBlockingPinState.Unreadable, null);
         }
 
+        var snapshot = await ReadLeafCheckpointSnapshotAsync(storage, leafGrainId);
+        return Classify(snapshot, partition);
+    }
+
+    /// <summary>
+    /// Reads one leaf's persisted row once and keeps only what classifying any
+    /// of its partitions needs, so a caller holding pins for several partitions
+    /// of the same leaf classifies all of them from a single storage read
+    /// (issue #5097). Never activates the leaf.
+    /// </summary>
+    /// <remarks>
+    /// A storage fault propagates, exactly as in
+    /// <see cref="ReadLeafCheckpointAsync"/>; the caller maps it to
+    /// <see cref="WalGcBlockingPinState.Unreadable"/>.
+    /// </remarks>
+    /// <param name="storage">The leaf state storage provider.</param>
+    /// <param name="leafGrainId">The leaf to read.</param>
+    /// <returns>The checkpoint-relevant projection of the leaf's durable row.</returns>
+    internal static async Task<LeafCheckpointSnapshot> ReadLeafCheckpointSnapshotAsync(
+        IGrainStorage storage,
+        GrainId leafGrainId)
+    {
+        ArgumentNullException.ThrowIfNull(storage);
+
         var grainState = new GrainState<LeafNodeState>(new LeafNodeState());
         await storage.ReadStateAsync(LeafStateName, leafGrainId, grainState);
 
         if (!grainState.RecordExists || grainState.State is null)
+        {
+            return new LeafCheckpointSnapshot(RecordExists: false, HasTreeId: false, 0, null, null);
+        }
+
+        var state = grainState.State;
+        return new LeafCheckpointSnapshot(
+            RecordExists: true,
+            HasTreeId: !string.IsNullOrEmpty(state.TreeId),
+            state.ProjectionCheckpointOffset,
+            state.ProjectionCheckpointOffsetAssigned,
+            state.ProjectionCheckpointOffsetsByPartition);
+    }
+
+    /// <summary>
+    /// Classifies one partition of a leaf from a snapshot taken by
+    /// <see cref="ReadLeafCheckpointSnapshotAsync"/>, returning the same
+    /// classification and checkpoint <see cref="ReadLeafCheckpointAsync"/> would
+    /// for that partition.
+    /// </summary>
+    /// <param name="snapshot">The leaf's durable checkpoint projection.</param>
+    /// <param name="partition">The WAL partition whose checkpoint to classify.</param>
+    /// <returns>The classification and the persisted checkpoint behind it.</returns>
+    internal static (WalGcBlockingPinState State, long? Checkpoint) Classify(
+        in LeafCheckpointSnapshot snapshot,
+        int partition)
+    {
+        if (!snapshot.RecordExists)
         {
             return (WalGcBlockingPinState.NoDurableState, null);
         }
@@ -325,13 +376,16 @@ internal static class WalFloorHolderReader
         // exist if the leaf carried a tree id when it was written, so finding none
         // proves the state was cleared afterwards and the pin outlived its
         // publisher.
-        if (string.IsNullOrEmpty(grainState.State.TreeId))
+        if (!snapshot.HasTreeId)
         {
             return (WalGcBlockingPinState.Orphaned, null);
         }
 
-        return (
-            LatticeWalGcScheduler.ClassifyCheckpoint(grainState.State, partition),
-            LatticeWalGcScheduler.ReadPersistedCheckpoint(grainState.State, partition));
+        var checkpoint = LatticeWalGcScheduler.ReadPersistedCheckpoint(
+            snapshot.ProjectionCheckpointOffset,
+            snapshot.ProjectionCheckpointOffsetAssigned,
+            snapshot.ProjectionCheckpointOffsetsByPartition,
+            partition);
+        return (LatticeWalGcScheduler.ClassifyCheckpoint(checkpoint), checkpoint);
     }
 }
