@@ -1,0 +1,12 @@
+MODULE: PermitConservationColdReturnLosesPermit
+TARGET: PermitConservation
+CLASS: Invariant
+SUMMARY: ordinary owner return loses physical capacity
+PERTURBS: ColdReturn
+
+--- FIND
+    /\ cold > 0 /\ cold' = cold - 1 /\ free' = free + 1
+--- REPLACE
+\* MUTATION: ordinary owner lost its permit.
+    /\ cold > 0 /\ cold' = cold - 1 /\ free' = free
+--- END

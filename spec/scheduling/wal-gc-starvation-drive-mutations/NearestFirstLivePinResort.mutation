@@ -1,0 +1,12 @@
+MODULE: NearestFirstLivePinResort
+TARGET: NearestFirst
+CLASS: Action
+SUMMARY: pin changes re-sort an already frozen pass list
+PERTURBS: GcPass
+
+--- FIND
+    /\ \E l \in Nearest :
+--- REPLACE
+\* MUTATION: change only launch policy; the oracle retains frozen rank.
+    /\ \E l \in {q \in Eligible : \A r \in Eligible : leaf[q].pin <= leaf[r].pin} :
+--- END

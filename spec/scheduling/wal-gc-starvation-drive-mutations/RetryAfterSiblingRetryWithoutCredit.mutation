@@ -1,0 +1,27 @@
+MODULE: RetryAfterSiblingRetryWithoutCredit
+TARGET: RetryAfterSibling
+CLASS: Action
+SUMMARY: a refused touch retries without a non-refused sibling completion
+PERTURBS: GcPass
+
+--- FIND
+    /\ ~deleted /\ Eligible # {}
+    /\ leadDone \/ Sweeps = {}
+    /\ Cardinality(Sweeps) < Share
+    /\ \E l \in Nearest :
+--- REPLACE
+\* MUTATION: refusal spins rather than waiting for the observed sibling return.
+    /\ ~deleted /\ SpinEligible # {}
+    /\ leadDone \/ Sweeps = {}
+    /\ Cardinality(Sweeps) < Share
+    /\ \E l \in SpinNearest :
+--- FIND
+Nearest == {l \in Eligible : \A q \in Eligible : rank[l] <= rank[q]}
+--- REPLACE
+Nearest == {l \in Eligible : \A q \in Eligible : rank[l] <= rank[q]}
+SpinEligible == {l \in Leaves :
+    /\ leaf[l].pin < head /\ leaf[l].drive = "none" /\ leaf[l].attempts < 2
+    /\ (leaf[l].touch = "queued" \/
+        (leaf[l].touch = "refused" /\ leaf[l].retries < 2))}
+SpinNearest == {l \in SpinEligible : \A q \in SpinEligible : rank[l] <= rank[q]}
+--- END

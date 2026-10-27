@@ -1,0 +1,12 @@
+MODULE: FloorHolderEventuallyDrivenSkipFloorHolder
+TARGET: FloorHolderEventuallyDriven
+CLASS: Temporal
+SUMMARY: every delivered sweep excludes the actual floor holder
+PERTURBS: GcPass
+
+--- FIND
+    /\ \E l \in Nearest :
+--- REPLACE
+\* MUTATION: repeated sweep opportunities are not fair admission of the skipped floor holder.
+    /\ \E l \in Eligible \ {1} :
+--- END

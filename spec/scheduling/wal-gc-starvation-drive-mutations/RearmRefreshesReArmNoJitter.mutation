@@ -1,0 +1,12 @@
+MODULE: RearmRefreshesReArmNoJitter
+TARGET: RearmRefreshes
+CLASS: Invariant
+SUMMARY: terminal rearm reuses the old phase without requesting a new offset
+PERTURBS: ReArm
+
+--- FIND
+            ![l].refreshed = TRUE, ![l].round = @ + 1,
+--- REPLACE
+\* MUTATION: skip the phase refresh, not an invented randomness-fairness promise.
+            ![l].refreshed = FALSE, ![l].round = @ + 1,
+--- END

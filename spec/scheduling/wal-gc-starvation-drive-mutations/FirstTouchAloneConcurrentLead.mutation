@@ -1,0 +1,12 @@
+MODULE: FirstTouchAloneConcurrentLead
+TARGET: FirstTouchAlone
+CLASS: Action
+SUMMARY: the next sweep touch starts before the floor lead finishes
+PERTURBS: GcPass
+
+--- FIND
+    /\ leadDone \/ Sweeps = {}
+--- REPLACE
+\* MUTATION: the floor holder no longer runs first and alone.
+    /\ TRUE
+--- END

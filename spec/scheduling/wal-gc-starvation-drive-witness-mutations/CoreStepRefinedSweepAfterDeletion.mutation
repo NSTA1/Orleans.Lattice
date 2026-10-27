@@ -1,0 +1,14 @@
+MODULE: CoreStepRefinedSweepAfterDeletion
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness sweep admits a leaf of a deleted tree
+PERTURBS: GcPass
+
+--- FIND
+    /\ ~deleted /\ Eligible # {}
+    /\ leadDone \/ Sweeps = {}
+--- REPLACE
+\* MUTATION: drop the deletion guard the core pass keeps.
+    /\ Eligible # {}
+    /\ leadDone \/ Sweeps = {}
+--- END

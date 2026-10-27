@@ -1,0 +1,15 @@
+{
+  "mutations": "wal-gc-starvation-drive-witness-mutations",
+  "refinement": "WalGcStarvationDriveWitnessRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 1,
+    "properties": 4,
+    "actions": 13,
+    "mutations": 14,
+    "behaviourRows": 13,
+    "distinctStates": 7902
+  }
+}

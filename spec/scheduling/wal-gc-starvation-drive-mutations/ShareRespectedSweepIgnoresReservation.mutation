@@ -1,0 +1,13 @@
+MODULE: ShareRespectedSweepIgnoresReservation
+TARGET: ShareRespected
+CLASS: Invariant
+SUMMARY: a sweep takes physical capacity without checking its share
+PERTURBS: GcPass
+BOUNDS: Ceiling = 2
+
+--- FIND
+        IF CanAdmit("sweep") THEN DriveStart(l, "sweep") ELSE DriveRefused(l, "sweep")
+--- REPLACE
+\* MUTATION: physical capacity is not a GC reservation.
+        IF free > 0 THEN DriveStart(l, "sweep") ELSE DriveRefused(l, "sweep")
+--- END

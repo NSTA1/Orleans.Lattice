@@ -1,0 +1,12 @@
+MODULE: CoreStepRefinedReArmSkipsRefresh
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness rearm does not refresh its phase
+PERTURBS: ReArm
+
+--- FIND
+            ![l].refreshed = TRUE, ![l].round = @ + 1,
+--- REPLACE
+\* MUTATION: jittered rearm forgets the refresh the core rearm records.
+            ![l].refreshed = FALSE, ![l].round = @ + 1,
+--- END

@@ -1,0 +1,14 @@
+MODULE: CoreStepRefinedDeleteMarksAppend
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness deletion also marks the WAL appended
+PERTURBS: DeleteTree
+
+--- FIND
+    /\ ~deleted /\ deleted' = TRUE
+    /\ UNCHANGED <<leaf, free, cold, hold, head, appended, timely, admitted, leadDone, rank>>
+--- REPLACE
+\* MUTATION: deletion touches state the core deletion leaves alone.
+    /\ ~deleted /\ deleted' = TRUE /\ appended' = TRUE
+    /\ UNCHANGED <<leaf, free, cold, hold, head, timely, admitted, leadDone, rank>>
+--- END

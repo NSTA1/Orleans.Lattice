@@ -1,0 +1,32 @@
+MODULE: TurnReleasedTimerRefusalKeepsTurn
+TARGET: TurnReleased
+CLASS: Temporal
+SUMMARY: a refused timer dispatch keeps the leaf turn
+PERTURBS: TimerDispatchDrive
+
+--- FIND
+       ELSE DriveRefused(l, "timer")
+--- REPLACE
+\* MUTATION: the refused timer never hands its turn back.
+       ELSE DriveRefusedWith(l, "timer", "timer")
+--- FIND
+DriveRefused(l, origin) ==
+--- REPLACE
+DriveRefusedWith(l, origin, keptTurn) ==
+--- FIND
+        ![l].retries = IF origin = "sweep" THEN @ + 1 ELSE @,
+        ![l].turn = "idle",
+--- REPLACE
+        ![l].retries = IF origin = "sweep" THEN @ + 1 ELSE @,
+        ![l].turn = keptTurn,
+--- FIND
+    /\ UNCHANGED <<free, cold, head, appended, deleted, timely, admitted, rank>>
+
+GcPass ==
+--- REPLACE
+    /\ UNCHANGED <<free, cold, head, appended, deleted, timely, admitted, rank>>
+
+DriveRefused(l, origin) == DriveRefusedWith(l, origin, "idle")
+
+GcPass ==
+--- END

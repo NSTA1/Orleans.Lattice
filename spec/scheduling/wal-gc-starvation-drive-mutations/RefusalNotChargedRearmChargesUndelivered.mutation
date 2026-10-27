@@ -1,0 +1,12 @@
+MODULE: RefusalNotChargedRearmChargesUndelivered
+TARGET: RefusalNotCharged
+CLASS: Action
+SUMMARY: the next pass charges a touch that was never delivered
+PERTURBS: PassRearm
+
+--- FIND
+        !.attempts = IF @ = 2 THEN 0 ELSE @]]
+--- REPLACE
+\* MUTATION: pass rearm spends an undelivered consumer's budget.
+        !.attempts = IF @ = 2 THEN 0 ELSE @ + 1]]
+--- END
