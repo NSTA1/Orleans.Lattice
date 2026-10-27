@@ -105,6 +105,41 @@ public sealed partial class LatticeTenantAdminTests
         });
     }
 
+    [Test]
+    public void CreateTenantAsync_refuses_to_seed_another_tenants_group_as_an_admin()
+    {
+        var registry = new FakeTenantRegistry();
+        var facade = Create(registry);
+
+        Assert.That(
+            async () => await facade.CreateTenantAsync(Tenant, ["ops@acme.example", "t/globex/admins"]),
+            Throws.TypeOf<TenantAccessConfinementException>());
+        Assert.That(registry.Puts, Is.EqualTo(0), "a refused create writes nothing");
+    }
+
+    [Test]
+    public void CreateTenantAsync_refuses_to_seed_a_group_of_the_tenant_it_is_creating()
+    {
+        var registry = new FakeTenantRegistry();
+        var facade = Create(registry);
+
+        Assert.That(
+            async () => await facade.CreateTenantAsync(Tenant, [$"t/{Tenant}/admins"]),
+            Throws.InstanceOf<ArgumentException>().With.Message.Contains("cannot exist before its tenant does"));
+        Assert.That(registry.Puts, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task CreateTenantAsync_still_seeds_users_and_cluster_groups()
+    {
+        var registry = new FakeTenantRegistry();
+        var facade = Create(registry);
+
+        var result = await facade.CreateTenantAsync(Tenant, ["ops@acme.example", "entra-acme-admins"]);
+
+        Assert.That(result.AdminSubjects, Is.EquivalentTo(new[] { "ops@acme.example", "entra-acme-admins" }));
+    }
+
     // ----- Suspend -----
 
     [Test]

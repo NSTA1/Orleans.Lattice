@@ -109,6 +109,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
 
         var requested = ValidateSubjects(adminSubjects);
+        EnsureSeedableAdminEntries(tenant, requested);
         await ValidateDirectorySubjectsAsync(requested, cancellationToken).ConfigureAwait(false);
 
         if (await _registry.ExistsAsync(tenant, cancellationToken).ConfigureAwait(false))
@@ -313,6 +314,33 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         }
 
         return unique;
+    }
+
+    /// <summary>
+    /// Applies the admin-set confinement to the entries a create seeds, as
+    /// <c>ILatticeTenantAccessAdmin.AddAdminSubjectAsync</c> does to an added
+    /// one, so create cannot be used to record what add would refuse. Another
+    /// tenant's group or a malformed <c>t/</c> id is refused with
+    /// <see cref="TenantAccessConfinementException"/>; the new tenant's own group is
+    /// refused too, because no group of a tenant can exist before the tenant does and
+    /// add requires the group to exist. Allocation-free on the accepted path.
+    /// </summary>
+    /// <param name="tenant">The tenant being created.</param>
+    /// <param name="requested">The validated, de-duplicated admin subjects.</param>
+    /// <exception cref="TenantAccessConfinementException">An entry names another tenant's group or is a malformed <c>t/</c> id.</exception>
+    /// <exception cref="ArgumentException">An entry names one of the new tenant's own groups.</exception>
+    private static void EnsureSeedableAdminEntries(TenantId tenant, IReadOnlyList<string> requested)
+    {
+        for (var i = 0; i < requested.Count; i++)
+        {
+            if (LatticeTenantAccessAdmin.EnsureAdmissibleAdminEntry(tenant, requested[i]))
+            {
+                throw new ArgumentException(
+                    $"Tenant group '{requested[i]}' cannot be seeded as an admin of tenant '{tenant}': the group cannot "
+                        + "exist before its tenant does. Create the tenant, create the group, then add it to the admin set.",
+                    "adminSubjects");
+            }
+        }
     }
 
     /// <summary>

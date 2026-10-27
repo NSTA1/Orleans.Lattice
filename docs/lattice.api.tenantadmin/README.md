@@ -110,7 +110,10 @@ lifecycle, quota, and region-residency verbs and the
   creator can always see what it created; supply a non-empty one and it is used
   **verbatim** (the caller is not added on top), which is how you hand a tenant to
   its delegated admins in a single call. Every entry must be a non-blank subject id, a blank or `null`
-  entry fails closed with an `ArgumentException`, and duplicates collapse. A
+  entry fails closed with an `ArgumentException`, and duplicates collapse. An entry in the reserved
+  `t/` tenant-group namespace is refused just as `AddAdminSubjectAsync` refuses it: another tenant's
+  group or a malformed `t/` id with `TenantAccessConfinementException`, and a group of the tenant being
+  created - which cannot exist before the tenant does - with an `ArgumentException`; nothing is written. A
   caller that cannot be resolved to a subject (an anonymous or system-origin
   create) seeds nothing rather than inventing an owner; grant access explicitly
   in that case. When a real identity directory provider is registered (anything
