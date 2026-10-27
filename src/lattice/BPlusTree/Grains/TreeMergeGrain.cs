@@ -227,17 +227,7 @@ internal sealed class TreeMergeGrain(
 
         var recorded = state.State.SourcePhysicalShards;
         var generationStart = Math.Clamp(state.State.SourceGenerationStart, 0, recorded.Length);
-        var anyRetired = false;
-        for (var i = generationStart; i < recorded.Length; i++)
-        {
-            if (!current.Contains(recorded[i]))
-            {
-                anyRetired = true;
-                break;
-            }
-        }
-
-        if (!anyRetired) return false;
+        if (!HasRetiredSourceShard(recorded, generationStart, current)) return false;
 
         var prevShards = state.State.SourcePhysicalShards;
         var prevGenerationStart = state.State.SourceGenerationStart;
@@ -264,6 +254,42 @@ internal sealed class TreeMergeGrain(
             "Merge of tree {SourceTreeId} into {TargetTreeId} re-drains {ShardCount} source shard(s): a shard it recorded was retired by a shard consolidation while it ran.",
             sourceTreeId, TargetTreeId, current.Count);
         return true;
+    }
+
+    /// <summary>
+    /// Tests only the current generation against the sorted, distinct indices
+    /// returned by <see cref="ShardMap.GetPhysicalShardIndices"/>.
+    /// </summary>
+    internal static bool HasRetiredSourceShard(int[] recorded, int generationStart, IReadOnlyList<int> current)
+    {
+        // Array-backed Contains is vectorized and wins on small maps; above
+        // this measured crossover, repeated linear scans become quadratic.
+        if (current.Count <= 256)
+        {
+            for (var i = generationStart; i < recorded.Length; i++)
+                if (!current.Contains(recorded[i])) return true;
+            return false;
+        }
+
+        for (var i = generationStart; i < recorded.Length; i++)
+        {
+            var low = 0;
+            var high = current.Count - 1;
+            while (low <= high)
+            {
+                var middle = low + ((high - low) / 2);
+                var index = current[middle];
+                if (index == recorded[i]) break;
+                if (index < recorded[i])
+                    low = middle + 1;
+                else
+                    high = middle - 1;
+            }
+
+            if (low > high) return true;
+        }
+
+        return false;
     }
 
     public async Task ReceiveReminder(string reminderName, TickStatus status)

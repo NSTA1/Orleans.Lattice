@@ -12,7 +12,8 @@ public sealed class ShardRootGrainPartitionHeadCaptureTests
 {
     private const string TreeId = "partition-heads";
 
-    private static (ShardRootGrain Grain, ILeafReplayCoordinatorGrain[] Coordinators) CreateGrain(int partitions)
+    private static (ShardRootGrain Grain, ILeafReplayCoordinatorGrain[] Coordinators, ILatticeRegistry Registry) CreateGrain(
+        int partitions, int? configuredPartitions = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", TreeId + "/0"));
@@ -37,20 +38,29 @@ public sealed class ShardRootGrainPartitionHeadCaptureTests
         }
         var options = new LatticeOptions
         {
-            WalPartitions = partitions,
+            WalPartitions = configuredPartitions ?? partitions,
             MaxScanPageStallDuration = Timeout.InfiniteTimeSpan,
         };
-        var grain = new ShardRootGrain(context, state, factory,
-            TestOptionsResolver.Create(options, factory: factory),
+        var resolver = TestOptionsResolver.Create(options, factory: factory);
+        var registry = factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        if (configuredPartitions is not null)
+            registry.GetEntryAsync(TreeId).Returns(new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = 1,
+                WalPartitions = partitions,
+            });
+        var grain = new ShardRootGrain(context, state, factory, resolver,
             NullLogger<ShardRootGrain>.Instance, TestMutationObservers.NoObservers());
-        return (grain, coordinators);
+        return (grain, coordinators, registry);
     }
 
     [TestCase(false)]
     [TestCase(true)]
     public async Task Head_capture_overlaps_reads_and_preserves_partition_order(bool lag)
     {
-        var (grain, coordinators) = CreateGrain(3);
+        var (grain, coordinators, _) = CreateGrain(3);
         var gates = Enumerable.Range(0, 3).Select(_ => new TaskCompletionSource<long>()).ToArray();
         for (var p = 0; p < gates.Length; p++)
             coordinators[p].GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(gates[p].Task);
@@ -71,7 +81,7 @@ public sealed class ShardRootGrainPartitionHeadCaptureTests
     [Test]
     public async Task Head_capture_preserves_the_single_partition_fast_path()
     {
-        var (grain, coordinators) = CreateGrain(1);
+        var (grain, coordinators, _) = CreateGrain(1);
         coordinators[0].GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(42L);
 
         Assert.That(await grain.SnapshotWalHeadAsync(CancellationToken.None), Is.EqualTo(new[] { 42L }));
@@ -81,7 +91,7 @@ public sealed class ShardRootGrainPartitionHeadCaptureTests
     [Test]
     public async Task Lag_continuation_does_not_capture_partition_heads_again()
     {
-        var (grain, coordinators) = CreateGrain(3);
+        var (grain, coordinators, _) = CreateGrain(3);
 
         var page = await grain.GetShardMaterialiserLagBoundedAsync("continued", CancellationToken.None);
 
@@ -90,10 +100,52 @@ public sealed class ShardRootGrainPartitionHeadCaptureTests
             _ = coordinator.DidNotReceive().GetHeadOffsetAsync(Arg.Any<CancellationToken>());
     }
 
+    [TestCase(false, 1)]
+    [TestCase(false, 3)]
+    [TestCase(true, 1)]
+    [TestCase(true, 3)]
+    public async Task Head_capture_reuses_pinned_partition_count_but_reads_fresh_heads(bool lag, int partitions)
+    {
+        var (grain, coordinators, registry) = CreateGrain(partitions, configuredPartitions: partitions + 4);
+        foreach (var coordinator in coordinators)
+            coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(42L);
+
+        var first = lag ? await CaptureLagHeadsAsync(grain) : await grain.SnapshotWalHeadAsync(CancellationToken.None);
+        Assert.That(first, Is.EqualTo(Enumerable.Repeat(42L, partitions)));
+        _ = registry.Received(1).GetEntryAsync(TreeId);
+        registry.ClearReceivedCalls();
+        foreach (var coordinator in coordinators)
+            coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(99L);
+
+        var second = lag ? await CaptureLagHeadsAsync(grain) : await grain.SnapshotWalHeadAsync(CancellationToken.None);
+        Assert.That(second, Is.EqualTo(Enumerable.Repeat(99L, partitions)));
+        _ = registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
+        _ = registry.DidNotReceive().RegisterAndGetEntryAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Legacy_partition_fallback_is_shared_between_both_capture_sites(bool lagFirst)
+    {
+        var (grain, _, registry) = CreateGrain(3);
+        if (lagFirst)
+            await CaptureLagHeadsAsync(grain);
+        else
+            await grain.SnapshotWalHeadAsync(CancellationToken.None);
+        registry.ClearReceivedCalls();
+
+        var heads = lagFirst
+            ? await grain.SnapshotWalHeadAsync(CancellationToken.None)
+            : await CaptureLagHeadsAsync(grain);
+
+        Assert.That(heads, Has.Length.EqualTo(3));
+        _ = registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
+    }
+
     [Test]
     public async Task Head_capture_bounds_wide_trees()
     {
-        var (grain, coordinators) = CreateGrain(BoundedFanOut.DefaultWidth + 1);
+        var (grain, coordinators, _) = CreateGrain(BoundedFanOut.DefaultWidth + 1);
         var gate = new TaskCompletionSource<long>();
         for (var p = 0; p < BoundedFanOut.DefaultWidth; p++)
             coordinators[p].GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(gate.Task);
@@ -113,7 +165,7 @@ public sealed class ShardRootGrainPartitionHeadCaptureTests
     [Test]
     public async Task Head_capture_propagates_fault_only_after_other_reads_settle()
     {
-        var (grain, coordinators) = CreateGrain(2);
+        var (grain, coordinators, _) = CreateGrain(2);
         var gate = new TaskCompletionSource<long>();
         coordinators[0].GetHeadOffsetAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromException<long>(new InvalidOperationException("head unavailable")));
@@ -130,7 +182,7 @@ public sealed class ShardRootGrainPartitionHeadCaptureTests
     [Test]
     public void Head_capture_observes_pre_cancelled_tokens()
     {
-        var (grain, _) = CreateGrain(3);
+        var (grain, _, _) = CreateGrain(3);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         Assert.ThrowsAsync<OperationCanceledException>(() => grain.SnapshotWalHeadAsync(cancellation.Token));
