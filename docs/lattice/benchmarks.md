@@ -539,7 +539,9 @@ The same harness also has a multi-silo tier on Azure Container Apps:
 `scripts/deploy-aca.ps1` provisions the rig and `scripts/run-cohort-aca.ps1`
 runs one cohort at a given silo count. It is normally driven end to end by
 `benchmark/performance-report.ps1 -Layer3`; see
-[Performance: multi-silo scaling guide](performance-multi-silo.md).
+[Performance: multi-silo scaling](performance-multi-silo.md) for the results
+and [how Layer 3 is measured](performance-methodology-layer3.md) for the
+method.
 A Layer 3 run can also sweep a rig you provisioned yourself. Provision one
 first, using a prefix of three to nine lowercase letters or digits (the form
 `-ReuseAca` normalises a prefix to), then point the report at it:
@@ -552,7 +554,7 @@ pwsh benchmark/performance-report.ps1 -Layer3 -ReuseAca <prefix>
 `-Layer3Rigs <K>` instead runs the sweep on K identical rigs in parallel,
 splitting the workloads between them and merging the results itself, and
 `-Layer3WalAccounts <N>` spreads each cohort's WAL across N storage accounts;
-see [Re-running it yourself](performance-multi-silo.md#re-running-it-yourself).
+see [Re-running it](performance-methodology-layer3.md#re-running-it).
 
 `-DryRun` re-renders the published tables from the last `state.json`
 without touching Azure. A Layer 3 replay accepts either `-DryRun -Layer3` or

@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="576" viewBox="0 0 820 576" role="img" aria-labelledby="t d" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<title id="t">Speedup over one silo, by workload</title>
+<desc id="d">Speedup over one silo for each workload, against ideal linear scaling. Line chart over 1, 2, 4, 6, 8 silos. Series: Ideal: speedup = silos; GetAsync (point read); SetAsync (point write); SetAsync (point write + async materialised view); SetManyAsync (4,096 keys/call); SetManyAtomicAsync (64 keys/saga); SetManyAtomicAsync (2 keys/saga, single-tree); BeginAtomicWrite cross-tree (2 keys/saga, 2 trees); BeginAtomicWrite cross-tree (64 keys/saga, 2 trees). The exact values are in the grid below.</desc>
+<defs><clipPath id="plot"><rect x="74" y="52" width="722" height="342"/></clipPath></defs>
+<rect x="0" y="0" width="820" height="576" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+<text x="74" y="32" font-size="17" font-weight="600" fill="#1f2328">Speedup over one silo, by workload</text>
+<line x1="74" y1="388" x2="796" y2="388" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="388" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">0</text>
+<line x1="74" y1="305.5" x2="796" y2="305.5" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="305.5" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">1</text>
+<line x1="74" y1="223" x2="796" y2="223" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="223" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">2</text>
+<line x1="74" y1="140.5" x2="796" y2="140.5" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="140.5" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">3</text>
+<line x1="74" y1="58" x2="796" y2="58" stroke="#d8dee4" stroke-width="1"/>
+<text class="y-tick" x="66" y="58" font-size="12" fill="#424a53" text-anchor="end" dominant-baseline="middle">4</text>
+<line x1="74" y1="58" x2="74" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="74" y="406" font-size="12" fill="#424a53" text-anchor="middle">1</text>
+<line x1="177.1" y1="58" x2="177.1" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="177.1" y="406" font-size="12" fill="#424a53" text-anchor="middle">2</text>
+<line x1="383.4" y1="58" x2="383.4" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="383.4" y="406" font-size="12" fill="#424a53" text-anchor="middle">4</text>
+<line x1="589.7" y1="58" x2="589.7" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="589.7" y="406" font-size="12" fill="#424a53" text-anchor="middle">6</text>
+<line x1="796" y1="58" x2="796" y2="388" stroke="#eef1f4" stroke-width="1"/>
+<text class="x-tick" x="796" y="406" font-size="12" fill="#424a53" text-anchor="middle">8</text>
+<line x1="74" y1="388" x2="796" y2="388" stroke="#57606a" stroke-width="1"/>
+<line x1="74" y1="58" x2="74" y2="388" stroke="#57606a" stroke-width="1"/>
+<text x="435" y="428" font-size="13" fill="#1f2328" text-anchor="middle">Silos</text>
+<text x="18" y="223" font-size="13" fill="#1f2328" text-anchor="middle" transform="rotate(-90 18 223)">Speedup over 1 silo (x)</text>
+<polyline points="74,305.5 177.1,223 383.4,58 589.7,-107 796,-272" fill="none" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 4" stroke-linejoin="round" clip-path="url(#plot)"><title>Ideal: speedup = silos</title></polyline>
+<polyline points="74,305.5 177.1,303.9 383.4,248.6 589.7,217.2 796,192.5" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>GetAsync (point read)</title></polyline>
+<circle cx="74" cy="305.5" r="4" fill="#0072B2"/>
+<circle cx="177.1" cy="303.9" r="4" fill="#0072B2"/>
+<circle cx="383.4" cy="248.6" r="4" fill="#0072B2"/>
+<circle cx="589.7" cy="217.2" r="4" fill="#0072B2"/>
+<circle cx="796" cy="192.5" r="4" fill="#0072B2"/>
+<polyline points="74,305.5 177.1,304.7 383.4,250.2 589.7,178.5 796,129.8" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write)</title></polyline>
+<rect x="70" y="301.5" width="8" height="8" fill="#D55E00"/>
+<rect x="173.1" y="300.7" width="8" height="8" fill="#D55E00"/>
+<rect x="379.4" y="246.2" width="8" height="8" fill="#D55E00"/>
+<rect x="585.7" y="174.5" width="8" height="8" fill="#D55E00"/>
+<rect x="792" y="125.8" width="8" height="8" fill="#D55E00"/>
+<polyline points="74,305.5 177.1,288.2 383.4,203.2 589.7,194.1 796,174.3" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write + async materialised view)</title></polyline>
+<polygon points="74,300.5 69,309.5 79,309.5" fill="#009E73"/>
+<polygon points="177.1,283.2 172.1,292.2 182.1,292.2" fill="#009E73"/>
+<polygon points="383.4,198.2 378.4,207.2 388.4,207.2" fill="#009E73"/>
+<polygon points="589.7,189.1 584.7,198.1 594.7,198.1" fill="#009E73"/>
+<polygon points="796,169.3 791,178.3 801,178.3" fill="#009E73"/>
+<polyline points="74,305.5 177.1,284.9 383.4,260.1 589.7,278.3 796,256" fill="none" stroke="#CC79A7" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAsync (4,096 keys/call)</title></polyline>
+<polygon points="74,300.5 79,305.5 74,310.5 69,305.5" fill="#CC79A7"/>
+<polygon points="177.1,279.9 182.1,284.9 177.1,289.9 172.1,284.9" fill="#CC79A7"/>
+<polygon points="383.4,255.1 388.4,260.1 383.4,265.1 378.4,260.1" fill="#CC79A7"/>
+<polygon points="589.7,273.3 594.7,278.3 589.7,283.3 584.7,278.3" fill="#CC79A7"/>
+<polygon points="796,251 801,256 796,261 791,256" fill="#CC79A7"/>
+<polyline points="74,305.5 177.1,299.7 383.4,233.7 589.7,205.7 796,178.5" fill="none" stroke="#E69F00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (64 keys/saga)</title></polyline>
+<circle cx="74" cy="305.5" r="4" fill="#E69F00"/>
+<circle cx="177.1" cy="299.7" r="4" fill="#E69F00"/>
+<circle cx="383.4" cy="233.7" r="4" fill="#E69F00"/>
+<circle cx="589.7" cy="205.7" r="4" fill="#E69F00"/>
+<circle cx="796" cy="178.5" r="4" fill="#E69F00"/>
+<polyline points="74,305.5 177.1,287.4 383.4,200.7 589.7,160.3 796,133.9" fill="none" stroke="#56B4E9" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (2 keys/saga, single-tree)</title></polyline>
+<rect x="70" y="301.5" width="8" height="8" fill="#56B4E9"/>
+<rect x="173.1" y="283.4" width="8" height="8" fill="#56B4E9"/>
+<rect x="379.4" y="196.7" width="8" height="8" fill="#56B4E9"/>
+<rect x="585.7" y="156.3" width="8" height="8" fill="#56B4E9"/>
+<rect x="792" y="129.9" width="8" height="8" fill="#56B4E9"/>
+<polyline points="74,305.5 177.1,292.3 383.4,261.8 589.7,237 796,232.1" fill="none" stroke="#000000" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (2 keys/saga, 2 trees)</title></polyline>
+<polygon points="74,300.5 69,309.5 79,309.5" fill="#000000"/>
+<polygon points="177.1,287.3 172.1,296.3 182.1,296.3" fill="#000000"/>
+<polygon points="383.4,256.8 378.4,265.8 388.4,265.8" fill="#000000"/>
+<polygon points="589.7,232 584.7,241 594.7,241" fill="#000000"/>
+<polygon points="796,227.1 791,236.1 801,236.1" fill="#000000"/>
+<polyline points="74,305.5 177.1,270.9 383.4,193.3 589.7,204 796,110" fill="none" stroke="#8C564B" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (64 keys/saga, 2 trees)</title></polyline>
+<polygon points="74,300.5 79,305.5 74,310.5 69,305.5" fill="#8C564B"/>
+<polygon points="177.1,265.9 182.1,270.9 177.1,275.9 172.1,270.9" fill="#8C564B"/>
+<polygon points="383.4,188.3 388.4,193.3 383.4,198.3 378.4,193.3" fill="#8C564B"/>
+<polygon points="589.7,199 594.7,204 589.7,209 584.7,204" fill="#8C564B"/>
+<polygon points="796,105 801,110 796,115 791,110" fill="#8C564B"/>
+<line x1="74" y1="450" x2="104" y2="450" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text class="legend" x="112" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">Ideal: speedup = silos</text>
+<line x1="435" y1="450" x2="465" y2="450" stroke="#0072B2" stroke-width="2.2"/>
+<circle cx="450" cy="450" r="4" fill="#0072B2"/>
+<text class="legend" x="473" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">GetAsync (point read)</text>
+<line x1="74" y1="472" x2="104" y2="472" stroke="#D55E00" stroke-width="2.2"/>
+<rect x="85" y="468" width="8" height="8" fill="#D55E00"/>
+<text class="legend" x="112" y="472" font-size="12" fill="#1f2328" dominant-baseline="middle">SetAsync (point write)</text>
+<line x1="435" y1="472" x2="465" y2="472" stroke="#009E73" stroke-width="2.2"/>
+<polygon points="450,467 445,476 455,476" fill="#009E73"/>
+<text class="legend" x="473" y="472" font-size="12" fill="#1f2328" dominant-baseline="middle">SetAsync (point write + async materialised view)</text>
+<line x1="74" y1="494" x2="104" y2="494" stroke="#CC79A7" stroke-width="2.2"/>
+<polygon points="89,489 94,494 89,499 84,494" fill="#CC79A7"/>
+<text class="legend" x="112" y="494" font-size="12" fill="#1f2328" dominant-baseline="middle">SetManyAsync (4,096 keys/call)</text>
+<line x1="435" y1="494" x2="465" y2="494" stroke="#E69F00" stroke-width="2.2"/>
+<circle cx="450" cy="494" r="4" fill="#E69F00"/>
+<text class="legend" x="473" y="494" font-size="12" fill="#1f2328" dominant-baseline="middle">SetManyAtomicAsync (64 keys/saga)</text>
+<line x1="74" y1="516" x2="104" y2="516" stroke="#56B4E9" stroke-width="2.2"/>
+<rect x="85" y="512" width="8" height="8" fill="#56B4E9"/>
+<text class="legend" x="112" y="516" font-size="12" fill="#1f2328" dominant-baseline="middle">SetManyAtomicAsync (2 keys/saga, single-tree)</text>
+<line x1="435" y1="516" x2="465" y2="516" stroke="#000000" stroke-width="2.2"/>
+<polygon points="450,511 445,520 455,520" fill="#000000"/>
+<text class="legend" x="473" y="516" font-size="12" fill="#1f2328" dominant-baseline="middle">BeginAtomicWrite cross-tree (2 keys/saga, 2 trees)</text>
+<line x1="74" y1="538" x2="104" y2="538" stroke="#8C564B" stroke-width="2.2"/>
+<polygon points="89,533 94,538 89,543 84,538" fill="#8C564B"/>
+<text class="legend" x="112" y="538" font-size="12" fill="#1f2328" dominant-baseline="middle">BeginAtomicWrite cross-tree (64 keys/saga, 2 trees)</text>
+</svg>

@@ -2252,7 +2252,7 @@ capabilities:
       - statement: "The multi-silo guide reports Layer 3 throughput across 1, 2, 4, 6, and 8 silos on Azure Container Apps."
         source: "docs/lattice/performance-multi-silo.md"
       - statement: "Layer 3 publishes completed work divided by active elapsed time."
-        source: "docs/lattice/performance-multi-silo.md"
+        source: "docs/lattice/performance-methodology-layer3.md"
     non_guarantees:
       - statement: "The performance guides are approximate guides, not per-deployment service-level objectives."
         source: "docs/lattice/performance-single-silo.md"
@@ -2270,13 +2270,16 @@ capabilities:
         source: "docs/lattice/performance-single-silo.md"
     concurrency_rules:
       - statement: "Layer 3 offered load scales by silo count so a flat curve means extra hosts absorbed no additional cluster demand."
-        source: "docs/lattice/performance-multi-silo.md"
+        source: "docs/lattice/performance-methodology-layer3.md"
       - statement: "For a single tree, fixed resources such as WAL partitions, shards, and the transaction registry do not grow with the silo count."
         source: "docs/lattice/performance-multi-silo.md"
     sources:
       - "FEATURES.md"
       - "docs/lattice/performance-single-silo.md"
       - "docs/lattice/performance-multi-silo.md"
+      - "docs/lattice/performance-methodology-layer1.md"
+      - "docs/lattice/performance-methodology-layer2.md"
+      - "docs/lattice/performance-methodology-layer3.md"
   - id: predicate-operations
     name: "Predicate operations"
     packages:
