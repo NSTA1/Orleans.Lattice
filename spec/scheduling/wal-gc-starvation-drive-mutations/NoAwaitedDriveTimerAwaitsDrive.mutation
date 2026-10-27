@@ -11,10 +11,12 @@ PERTURBS: TimerDispatchDrive
     /\ IF ~deleted /\ leaf[l].drive = "none" /\ CanAdmit("timer")
 \* MUTATION: timer holds the non-interleaving turn across the external drive.
        THEN DriveStartWith(l, "timer", "timer")
+--- END
 --- FIND
 DriveStart(l, origin) ==
 --- REPLACE
 DriveStartWith(l, origin, heldTurn) ==
+--- END
 --- FIND
         ![l].turn = "idle",
         ![l].timer = IF origin = "timer" THEN "rearm" ELSE @]
@@ -23,6 +25,7 @@ DriveStartWith(l, origin, heldTurn) ==
         ![l].turn = heldTurn,
         ![l].timer = IF origin = "timer" THEN "rearm" ELSE @]
     /\ free' = free - 1
+--- END
 --- FIND
     /\ UNCHANGED <<cold, head, appended, deleted, timely, leadDone>>
 

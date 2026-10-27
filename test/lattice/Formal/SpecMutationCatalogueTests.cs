@@ -442,6 +442,70 @@ public sealed class SpecMutationCatalogueTests
     }
 
     /// <summary>
+    /// Every <c>--- FIND</c> / <c>--- REPLACE</c> block needs its own
+    /// <c>--- END</c>. A file with several blocks and one final terminator still
+    /// parses: the first REPLACE collects everything up to that END, so the
+    /// later blocks - markers included - become literal replacement text. The
+    /// edit anchors cleanly and changes something, so the two gates above pass,
+    /// and the fault surfaces only as a TLC parse error. Four GC
+    /// starvation-drive mutants failed that way (exit 150) in a model-checking
+    /// batch before this gate existed.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void No_mutation_edit_carries_a_block_marker(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var mutations = module.LoadMutations();
+
+        Assert.That(mutations, Is.Not.Empty, $"expected at least one mutation in {module.Describe(module.MutationDirectory)}/.");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var mutation in mutations)
+            {
+                Assert.That(
+                    mutation.Edits.Any(e => CarriesBlockMarker(e.Find) || CarriesBlockMarker(e.Replace)),
+                    Is.False,
+                    $"mutation '{mutation.Name}' has an edit whose text contains a '--- FIND', '--- REPLACE' "
+                    + "or '--- END' line, so a block is missing its own '--- END' and later blocks were "
+                    + "swallowed as literal TLA+.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// The marker check itself: a file that terminates only its last block is
+    /// caught, and the same edits each terminated are not.
+    /// </summary>
+    [Test]
+    public void A_missing_block_terminator_is_detected_as_a_carried_marker()
+    {
+        const string Header = "MODULE: TerminatorControl\nTARGET: Termination\nCLASS: Temporal\nSUMMARY: control\n\n";
+
+        var unterminated = SpecMutationCatalogue.Parse(
+            "TerminatorControl",
+            Header + "--- FIND\na\n--- REPLACE\nb\n--- FIND\nc\n--- REPLACE\nd\n--- END\n");
+        var terminated = SpecMutationCatalogue.Parse(
+            "TerminatorControl",
+            Header + "--- FIND\na\n--- REPLACE\nb\n--- END\n--- FIND\nc\n--- REPLACE\nd\n--- END\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unterminated.Edits, Has.Count.EqualTo(1));
+            Assert.That(unterminated.Edits.Any(e => CarriesBlockMarker(e.Replace)), Is.True);
+            Assert.That(terminated.Edits, Has.Count.EqualTo(2));
+            Assert.That(terminated.Edits.Any(e => CarriesBlockMarker(e.Find) || CarriesBlockMarker(e.Replace)), Is.False);
+        });
+    }
+
+    private static bool CarriesBlockMarker(string text) =>
+        text.Split('\n').Any(line =>
+            line.StartsWith("--- FIND", StringComparison.Ordinal)
+            || line.StartsWith("--- REPLACE", StringComparison.Ordinal)
+            || line.StartsWith("--- END", StringComparison.Ordinal));
+
+    /// <summary>
     /// Encodes the trap that issue #2323 asks the harness to control for: a cfg
     /// authored by prepending a property to an existing PROPERTIES block rather
     /// than replacing it, which yielded six conjuncts instead of the intended

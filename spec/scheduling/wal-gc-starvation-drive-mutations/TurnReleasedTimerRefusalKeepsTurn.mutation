@@ -9,16 +9,19 @@ PERTURBS: TimerDispatchDrive
 --- REPLACE
 \* MUTATION: the refused timer never hands its turn back.
        ELSE DriveRefusedWith(l, "timer", "timer")
+--- END
 --- FIND
 DriveRefused(l, origin) ==
 --- REPLACE
 DriveRefusedWith(l, origin, keptTurn) ==
+--- END
 --- FIND
         ![l].retries = IF origin = "sweep" THEN @ + 1 ELSE @,
         ![l].turn = "idle",
 --- REPLACE
         ![l].retries = IF origin = "sweep" THEN @ + 1 ELSE @,
         ![l].turn = keptTurn,
+--- END
 --- FIND
     /\ UNCHANGED <<free, cold, head, appended, deleted, timely, admitted, rank>>
 

@@ -9,6 +9,7 @@ PERTURBS: GcPass
 --- REPLACE
 \* MUTATION: charge a refusal only after a previously admitted sweep drive.
         IF CanAdmit("sweep") THEN DriveStart(l, "sweep") ELSE DriveRefusedWith(l, "sweep", TRUE)
+--- END
 --- FIND
 DriveRefused(l, origin) ==
     /\ leaf' = [leaf EXCEPT
@@ -18,6 +19,7 @@ DriveRefusedWith(l, origin, charged) ==
     /\ leaf' = [leaf EXCEPT
         ![l].attempts = IF charged /\ @ > 0 THEN @ + 1 ELSE @,
         ![l].touch = IF origin = "sweep" THEN "refused" ELSE @,
+--- END
 --- FIND
     /\ UNCHANGED <<free, cold, head, appended, deleted, timely, admitted, rank>>
 
