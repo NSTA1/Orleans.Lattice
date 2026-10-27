@@ -204,6 +204,25 @@ public class BenchPreseedTests
     }
 
     [Test]
+    public async Task SeedWithRetryAsync_retries_a_storage_server_timeout_under_the_same_operation_id()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var operationIds = new List<string>();
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                operationIds.Add(ci.Arg<string>());
+                return operationIds.Count == 2
+                    ? Task.FromException<int>(new InvalidOperationException("Operation could not be completed within the specified time.\nErrorCode: OperationTimedOut"))
+                    : Task.FromResult(ci.Arg<IReadOnlyList<KeyValuePair<string, byte[]>>>().Count);
+            });
+
+        await BenchPreseed.SeedWithRetryAsync(lattice, 3, 1, "t", TimeSpan.FromSeconds(60), CancellationToken.None);
+
+        Assert.That(operationIds, Is.EqualTo(new[] { "preseed-t-0", "preseed-t-1", "preseed-t-1", "preseed-t-2" }));
+    }
+
+    [Test]
     public void SeedWithRetryAsync_persistently_failing_chunk_stops_at_eight_attempts()
     {
         var lattice = Substitute.For<ILattice>();

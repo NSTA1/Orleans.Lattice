@@ -389,7 +389,10 @@ chunks of `BenchPreseed.ChunkSize` (16,384) under a per-chunk operation id
 (`preseed-<treeId>-<offset>`), so a retried chunk is an idempotent no-op on shards that applied
 it. It packs leaves to capacity with no splits and about one WAL append per leaf; the
 `SetManyAsync` seed it replaced stalled part-way through the 768,000-key six-silo `get-many`
-seed. The success line adds `method=bulk-append chunkSize=..`. It allows eight attempts per
+seed. The success line adds `method=bulk-append chunkSize=..`. A bulk-load chunk surfaces an Azure
+Tables server timeout or busy response unwrapped (`TableTransactionFailedException` ...
+`OperationTimedOut`), so the seed also retries those (`WarmUpRetryClassifier.IsTransientStorageTimeout`);
+before it did, one such timeout crashed the producer on its first attempt. It allows eight attempts per
 unlanded chunk and the scaled budget overall (including outstanding RPCs); progress resets
 attempts but never the deadline. Failure logs retain the offset, exception and budget. Layer 2 does not retry unseeded cohorts: it excludes them from the
 table. Tables state the usable throughput cohort count per row, and a failed attempted row

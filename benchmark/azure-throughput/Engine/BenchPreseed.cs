@@ -205,7 +205,8 @@ internal static class BenchPreseed
                         || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
                         || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
                         || WarmUpRetryClassifier.IsTransientSaturation(ex)
-                        || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)))
+                        || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)
+                        || WarmUpRetryClassifier.IsTransientStorageTimeout(ex)))
                 {
                     var backoffMs = WarmUpRetryClassifier.IsTransientSaturation(ex)
                         ? Math.Min(2500 * sliceAttempt, 20000)
