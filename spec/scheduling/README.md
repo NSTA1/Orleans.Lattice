@@ -17,8 +17,8 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | SagaReadProgress | 3 | 5 | 6 | 11 | 12 | 2451 |
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
 | ReplicationShipping | 4 | 12 | 19 | 26 | 33 | 527689 |
-| WalGcStarvationDrive | 5 | 12 | 11 | 23 | 26 | 849286 |
-| WalGcStarvationDriveWitness | 2 | 3 | 13 | 14 | 13 | 7902 |
+| WalGcStarvationDrive | 5 | 12 | 11 | 23 | 26 | 7160 |
+| WalGcStarvationDriveWitness | 2 | 3 | 13 | 14 | 13 | 7906 |
 
 ## Instances and progress premises
 
@@ -376,14 +376,12 @@ two-leaf `TwoLeaf` and `ShareOne` variants and by the six mutants that carry a
 
 | Instance | Distinct states | Checked boundary |
 | --- | ---: | --- |
-| WalGcStarvationDrive Base | not yet measured | One leaf, all safety and temporal checks. |
+| WalGcStarvationDrive Base | 7,160 | One leaf, all safety and temporal checks. |
 | WalGcStarvationDrive TwoLeaf | 849,286 | Two leaves, all safety and temporal checks. |
 | WalGcStarvationDrive ShareOne | 171,308 | Two leaves, single-slot share and refusal window, all checks. |
-| WalGcStarvationDriveWitness Base | not yet measured | Stall clock and call queue, one leaf, refinement onto the core. |
+| WalGcStarvationDriveWitness Base | 7,906 | Stall clock and call queue, one leaf, refinement onto the core. |
 
-The counts above are predecessor counts from the earlier draft and have not
-been re-measured on the committed sources. The TLC gate compares each run with
-its manifest and fails on any mismatch.
+The TLC gate compares each run with its manifest and fails on any mismatch.
 
 A three-leaf core and a larger refinement instance were measured outside CI.
 The liveness and refinement runs did not finish within the twenty-minute cap,

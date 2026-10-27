@@ -10,7 +10,7 @@
     "actions": 11,
     "mutations": 23,
     "behaviourRows": 26,
-    "distinctStates": 849286
+    "distinctStates": 7160
   },
   "variants": {
     "ShareOne": {
