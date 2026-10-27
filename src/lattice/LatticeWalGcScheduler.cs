@@ -489,6 +489,9 @@ internal sealed class LatticeWalGcScheduler(
     private readonly SemaphoreSlim _orphanSweepGate = new(1, 1);
     private readonly SemaphoreSlim _orphanLeafReadSlots = new(OrphanSweepReadConcurrency, OrphanSweepReadConcurrency);
 
+    /// <summary>Whether all orphan leaf reads have completed and returned their admission slots.</summary>
+    internal bool OrphanLeafReadsDrained => _orphanLeafReadSlots.CurrentCount == OrphanSweepReadConcurrency;
+
     /// <summary>
     /// How many durable materialiser pins one sweep may classify onto
     /// <see cref="LatticeMetrics.WalGcBlockingPinStates"/> when no floor-blocked

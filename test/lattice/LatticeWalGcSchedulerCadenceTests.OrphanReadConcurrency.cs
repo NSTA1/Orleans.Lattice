@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 using Orleans.Storage;
@@ -9,12 +10,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private sealed class BlockedLeafStateStorage(
         int blockedReadCount,
         bool initialReadCompletes,
-        bool synchronousRelease = false) : IGrainStorage
+        bool synchronousRelease = false,
+        bool queueReleaseContinuations = false) : IGrainStorage
     {
-        // Some runner tests need Release to drain the provider-read continuations
-        // before immediately retrying admission, not just enqueue them.
         private readonly TaskCompletionSource _release = new(synchronousRelease
             ? TaskCreationOptions.None : TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly QueuedReleaseContext? _releaseContext = queueReleaseContinuations ? new() : null;
         private readonly TaskCompletionSource _firstBatch = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _reads;
         private int _outstanding;
@@ -27,6 +28,42 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         public bool CompleteNewReads { get; set; }
 
         public void Release() => _release.TrySetResult();
+
+        public void ResumeReleaseContinuations() => _releaseContext?.Resume();
+
+        private Task AwaitReleaseAsync()
+        {
+            if (_releaseContext is null)
+                return _release.Task;
+
+            var previous = SynchronizationContext.Current;
+            try
+            {
+                SynchronizationContext.SetSynchronizationContext(_releaseContext);
+                return CaptureReleaseAsync();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
+        }
+
+        private async Task CaptureReleaseAsync() => await _release.Task;
+
+        // Hold posted continuations until the test explicitly resumes them, so
+        // Release cannot accidentally act as a provider-completion barrier.
+        private sealed class QueuedReleaseContext : SynchronizationContext
+        {
+            private readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _pending = new();
+
+            public override void Post(SendOrPostCallback d, object? state) => _pending.Enqueue((d, state));
+
+            public void Resume()
+            {
+                while (_pending.TryDequeue(out var work))
+                    ThreadPool.QueueUserWorkItem(static item => item.Callback(item.State), work, preferLocal: false);
+            }
+        }
 
         public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
@@ -47,12 +84,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             }
             while (Interlocked.CompareExchange(ref _maximumOutstanding, outstanding, maximum) != maximum);
 
-            if (read == blockedReadCount + (initialReadCompletes ? 1 : 0))
-                _firstBatch.TrySetResult();
-
             try
             {
-                await _release.Task;
+                var release = AwaitReleaseAsync();
+                if (read == blockedReadCount + (initialReadCompletes ? 1 : 0))
+                    _firstBatch.TrySetResult();
+
+                await release;
                 grainState.RecordExists = false;
             }
             finally
@@ -66,6 +104,16 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 
         public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
             throw new NotSupportedException();
+    }
+
+    private static void ReleaseAndDrainOrphanReads(BlockedLeafStateStorage storage, LatticeWalGcScheduler scheduler)
+    {
+        storage.Release();
+        storage.ResumeReleaseContinuations();
+        Assert.That(SpinWait.SpinUntil(
+            () => storage.Outstanding == 0 && scheduler.OrphanLeafReadsDrained,
+            TimeSpan.FromSeconds(5)), Is.True,
+            "Released provider calls and their scheduler admission-slot continuations must both drain.");
     }
 
     [TestCase(false, 1)]
