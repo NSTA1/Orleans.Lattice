@@ -80,6 +80,38 @@ public class LatticeAuthOptionsValidatorTests
         Assert.That(result.Succeeded, Is.True);
     }
 
+    [TestCase("anonymous")]
+    [TestCase("system")]
+    [TestCase("t/acme/admins")]
+    [TestCase("t/")]
+    public void A_reserved_bootstrap_administrator_id_fails_validation(string subjectId)
+    {
+        // "anonymous" would make every unauthenticated caller a cluster-wide
+        // administrator; none of these ids names an authenticated principal.
+        var options = new LatticeAuthOptions
+        {
+            BootstrapAdministrators = new HashSet<string>(StringComparer.Ordinal) { "root", subjectId },
+        };
+
+        var result = Validator.Validate(null, options);
+
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("reserved"));
+    }
+
+    [TestCase("root")]
+    [TestCase("Anonymous")]
+    [TestCase("T/acme/admins")]
+    public void An_ordinary_bootstrap_administrator_id_validates_successfully(string subjectId)
+    {
+        var options = new LatticeAuthOptions
+        {
+            BootstrapAdministrators = new HashSet<string>(StringComparer.Ordinal) { subjectId },
+        };
+
+        Assert.That(Validator.Validate(null, options).Succeeded, Is.True);
+    }
+
     [Test]
     public void Default_effect_is_deny_and_user_beats_group_by_default()
     {

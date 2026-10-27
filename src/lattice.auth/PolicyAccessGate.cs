@@ -45,8 +45,9 @@ internal sealed class PolicyAccessGate(
         // Root-of-trust: a bootstrap administrator is always Admin on every tree
         // and operation, so a policy misconfiguration can never lock every
         // operator out of the authorization tree itself. Checked before the
-        // engine so it holds even against a cold snapshot.
-        if (IsBootstrapAdministrator(request.Subject.SubjectId))
+        // engine so it holds even against a cold snapshot. An anonymous caller is
+        // never one, whatever the configured set holds.
+        if (!request.Subject.IsAnonymous && IsBootstrapAdministrator(request.Subject.SubjectId))
         {
             var allow = LatticeAccessDecision.Allow();
             observer.Observe(in request, in allow, default, maintainer.CurrentEpoch, start);
