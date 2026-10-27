@@ -14,10 +14,18 @@ namespace Orleans.Lattice.Replication.Tests;
 
 public partial class CrossTreeSiblingBoundaryIntegrationTests
 {
-    internal async Task AssertMissingPrefixRequiresReseedAsync()
+    internal Task AssertMissingPrefixRequiresReseedAsync() =>
+        RunTrimBeforeReverseRegistrationAsync(recoveryEnabled: false, "xtsb-gap-tree", "xtsb-gap-sibling");
+
+    /// <summary>
+    /// Drives a real covered prefix trim on site B's physical shadow copy before the reverse
+    /// reader registers, then the original drain traffic. With automatic recovery off the gap
+    /// must stay a persistent reseed requirement; with it on, site A must actually re-seed the
+    /// sibling from site B's snapshot service and every link must return to health.
+    /// </summary>
+    private async Task RunTrimBeforeReverseRegistrationAsync(bool recoveryEnabled, string tree, string sibling)
     {
-        const string tree = "xtsb-gap-tree";
-        const string sibling = "xtsb-gap-sibling";
+        var mode = recoveryEnabled ? "recovery" : "negative";
         const string eastWriteKey = "east-write";
         const string westWriteKey = "west-write";
         var samples = new List<string>();
@@ -28,9 +36,11 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         services.GetRequiredService<ILoggerFactory>().AddProvider(warnings);
         RequireMissingPrefixEligible(services.GetRequiredService<IOptionsMonitor<LatticeOptions>>()
             .CurrentValue.WalGcInterval > TimeSpan.Zero, "background GC must remain enabled");
-        RequireMissingPrefixEligible(!NaturalServices(_siteA)
-                .GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>().Get(sibling).AutoBootstrapOnFallOffLog,
-                "a persistent pending-reseed conformance case requires the separate automatic-recovery-off receiver configuration");
+        RequireMissingPrefixEligible(NaturalServices(_siteA)
+                .GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>().Get(sibling).AutoBootstrapOnFallOffLog == recoveryEnabled,
+                recoveryEnabled
+                    ? "a reverse-recovery case requires the default automatic-recovery-on receiver configuration"
+                    : "a persistent pending-reseed conformance case requires the separate automatic-recovery-off receiver configuration");
 
         await WriteAsync(tree, sibling);
         LatticeBootstrapCoordinatorGrain.SiblingBoundaryReseedAfter = TimeSpan.FromSeconds(10);
@@ -54,7 +64,7 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         var physical = binding!.PhysicalTreeId!;
         var reverse = _siteB.Client.GetGrain<IReplicationShipperGrain>($"{sibling}/{SiteAClusterId}");
         await RequireMissingPrefixReaderAbsentAsync(sibling, physical, reverse.GetGrainId());
-        var initial = await CaptureNaturalLogAsync(services, _siteB.Client, trace, "negative-before-materialisation", physical);
+        var initial = await CaptureNaturalLogAsync(services, _siteB.Client, trace, $"{mode}-before-materialisation", physical);
         RequireMissingPrefixEligible(initial.All(partition => !partition.CaptureLimitReached
                 && partition.Watermark == -1 && partition.ProviderWatermark == -1),
             "the bounded initial log must be complete and untrimmed");
@@ -67,7 +77,7 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
 
         await EstablishProtectedMaterialiserCoverageAsync(sibling, physical, initial);
         await RequireMissingPrefixReaderAbsentAsync(sibling, physical, reverse.GetGrainId());
-        var before = await CaptureNaturalLogAsync(services, _siteB.Client, trace, "negative-before-explicit-gc", physical);
+        var before = await CaptureNaturalLogAsync(services, _siteB.Client, trace, $"{mode}-before-explicit-gc", physical);
         RequireMissingPrefixEligible(JsonSerializer.Serialize(initial) == JsonSerializer.Serialize(before),
             "a natural collection or append changed the log during materialisation");
         var beforeBinding = await registry.GetEntryAsync(sibling);
@@ -75,8 +85,8 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
                 && beforeBinding.Lineage == binding.Lineage, "binding changed during materialisation");
 
         var report = await services.GetRequiredService<ILatticeWalGc>().RunOnceAsync(physical);
-        trace.Record("negative-explicit-gc-report", new { report });
-        var after = await CaptureNaturalLogAsync(services, _siteB.Client, trace, "negative-after-gc-before-reader", physical);
+        trace.Record($"{mode}-explicit-gc-report", new { report });
+        var after = await CaptureNaturalLogAsync(services, _siteB.Client, trace, $"{mode}-after-gc-before-reader", physical);
         var afterBinding = await registry.GetEntryAsync(sibling);
         await RequireMissingPrefixReaderAbsentAsync(sibling, physical, reverse.GetGrainId());
         RequireMissingPrefixEligible(afterBinding is not null && afterBinding.PhysicalTreeId == physical
@@ -98,14 +108,14 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
                 Assert.That(retained.Watermark, Is.Not.Null.And.GreaterThanOrEqualTo(row.Sequence));
                 Assert.That(retained.ProviderWatermark, Is.Not.Null.And.GreaterThanOrEqualTo(row.Sequence));
             }
-            trace.Record("negative-removed-prefix", new { partition = partition.Partition, absent, retained });
+            trace.Record($"{mode}-removed-prefix", new { partition = partition.Partition, absent, retained });
         }
         RequireMissingPrefixEligible(removedCount > 0 && removedCount == report.EntriesTrimmed
                 && after[seedPartition].Rows.All(row => row.Sequence != seeds[0].Sequence)
                 && after[seedPartition].Watermark >= seeds[0].Sequence
                 && after[seedPartition].ProviderWatermark >= seeds[0].Sequence,
             "actual removed rows and both watermarks must prove the real seed prefix is gone");
-        TestContext.WriteLine("negative-control-setup:ELIGIBLE;real covered prefix trimmed before reverse registration");
+        TestContext.WriteLine($"{mode}-control-setup:ELIGIBLE;real covered prefix trimmed before reverse registration");
 
         foreach (var treeName in new[] { tree, sibling })
         {
@@ -130,6 +140,10 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         await _siteB.Client.GetGrain<ILattice>(sibling).SetAsync(westWriteKey, [2]);
         await SignalShipperAsync(_siteB.Client, sibling, SiteAClusterId);
         var westReturned = await WaitForValueAsync(_siteA.Client, sibling, westWriteKey, [2], TimeSpan.FromSeconds(40));
+        if (recoveryEnabled)
+        {
+            await WaitForReverseRecoveryAsync(tree, sibling, TimeSpan.FromSeconds(60));
+        }
 
         var finalBinding = await registry.GetEntryAsync(sibling);
         var stable = await CaptureDrainStateAsync(tree, sibling);
@@ -150,11 +164,15 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         var requests = LoopbackDeliveringTransport.Sent.Where(batch => batch.TreeName == sibling
                 && batch.OriginClusterId == SiteBClusterId && batch.TargetClusterId == SiteAClusterId)
             .Select(batch => batch.ReseedAfterEpoch).ToArray();
-        trace.Record("negative-final-contract", new
+        trace.Record($"{mode}-final-contract", new
         {
             stable, health, affected, markerCalls, strictGaps, markerEpochs, finalBinding, requests
         });
-        await ObserveNaturalBoundaryAsync("negative-after-health-snapshot", tree, sibling);
+        await ObserveNaturalBoundaryAsync($"{mode}-after-health-snapshot", tree, sibling);
+        var reverseCompleted = await _siteA.Client.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling)
+            .GetCompletedExportEpochAsync(SiteBClusterId);
+        var reverseCalls = ReadReverseSnapshotCalls(sibling);
+        trace.Record($"{mode}-reverse-source", new { reverseCompleted, reverseCalls });
         Assert.Multiple(() =>
         {
             Assert.That(drainingArrived, Is.True);
@@ -165,12 +183,28 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
             Assert.That(finalBinding?.PhysicalTreeId, Is.EqualTo(physical));
             Assert.That(finalBinding?.Lineage, Is.EqualTo(binding.Lineage));
             Assert.That(stable, Does.Contain($"{tree}:A=Idle,B=LiveIncremental"));
-            Assert.That(stable, Does.Contain($"{sibling}:A=Idle,B=LiveIncremental"));
             Assert.That(health, Has.Length.EqualTo(4));
-            Assert.That(otherLinks, Has.Length.EqualTo(3).And.All.Contains("healthy=True"));
-            Assert.That(health.Single(row => row.StartsWith($"{sibling}->{SiteAClusterId}:", StringComparison.Ordinal)),
-                Does.Contain("healthy=False"));
-            Assert.That(affected.ReseedRequiredSeconds, Is.Not.Null);
+            if (recoveryEnabled)
+            {
+                Assert.That(stable, Does.Contain($"{sibling}:A=LiveIncremental,B=LiveIncremental"),
+                    "site A must have re-seeded the sibling in response to the real reseed request");
+                Assert.That(health, Is.All.Contains("healthy=True"), string.Join(Environment.NewLine, health));
+                Assert.That(affected.ReseedRequiredSeconds, Is.Null);
+                Assert.That(reverseCalls.Metadata, Is.GreaterThan(0),
+                    "the re-seed must read site B's real snapshot metadata, not a local self-sourced export");
+                Assert.That(reverseCalls.Items, Is.GreaterThan(0),
+                    "the re-seed must stream site B's real snapshot entries");
+                Assert.That(reverseCompleted, Is.Not.Null.And.GreaterThan(markerEpochs.DefaultIfEmpty(long.MaxValue).Max()),
+                    "site A's completed export from site B must postdate the marker epoch it consumed");
+            }
+            else
+            {
+                Assert.That(stable, Does.Contain($"{sibling}:A=Idle,B=LiveIncremental"));
+                Assert.That(otherLinks, Has.Length.EqualTo(3).And.All.Contains("healthy=True"));
+                Assert.That(health.Single(row => row.StartsWith($"{sibling}->{SiteAClusterId}:", StringComparison.Ordinal)),
+                    Does.Contain("healthy=False"));
+                Assert.That(affected.ReseedRequiredSeconds, Is.Not.Null);
+            }
             Assert.That(affected.EntriesBehind, Is.Zero);
             Assert.That(affected.ConsecutiveErrors, Is.Zero);
             Assert.That(affected.InFlight, Is.Zero);
@@ -184,6 +218,23 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
             Assert.That(requests.Any(epoch => epoch is { } actual && markerEpochs.Contains(actual)), Is.True,
                 "the wire request must carry the epoch reported after the real marker's durable state write");
         });
+    }
+
+    private async Task WaitForReverseRecoveryAsync(string tree, string sibling, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var phase = await _siteA.Client.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling)
+                .GetStatusAsync(CancellationToken.None);
+            if (phase.Phase == LatticeBootstrapState.LiveIncremental
+                && ReadOutboundHealth(tree, sibling).All(row => row.Contains("healthy=True", StringComparison.Ordinal)))
+            {
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+        }
     }
 
     private async Task RequireMissingPrefixReaderAbsentAsync(string logical, string physical, GrainId shipper)

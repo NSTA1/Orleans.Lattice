@@ -27,7 +27,8 @@ namespace Orleans.Lattice.Replication.Tests;
 /// passes is re-seeded automatically. Two real clusters: site A exports through
 /// the real remote snapshot service under its real cross-tree gate; site B imports
 /// through the real bootstrap coordinator and records shipped positions in its
-/// real tree frontier.
+/// real tree frontier. Site B in turn ships the sibling back, so site A bootstraps
+/// and re-seeds from site B's real snapshot service, never from its own view.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -77,6 +78,20 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         _siteB = bBuilder.Build();
         await _siteB.DeployAsync();
 
+        SiteBTransports[SiteBClusterId] = new LatticeRemoteSnapshotService(
+            new LatticeSnapshotProvider(
+                _siteB.Client,
+                new InMemoryWalCursorRegistry(),
+                LatticeSnapshotProviderUnitTests.TestOptions()),
+            new StubReplicationContext(SiteBClusterId, LatticeMergeMode.LwwRegister),
+            NullLogger<LatticeRemoteSnapshotService>.Instance)
+        {
+            ExportGate = new CrossTreeExportGate(_siteB.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services)
+            {
+                SiblingFilterForTesting = static tree => Siblings.ContainsKey(tree),
+            },
+        };
+
         LoopbackDeliveringTransport.RegisterCluster(
             SiteAClusterId, _siteA.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services);
         LoopbackDeliveringTransport.RegisterCluster(
@@ -100,6 +115,8 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         }
 
         SiteATransports.TryRemove(SiteAClusterId, out _);
+        SiteBTransports.TryRemove(SiteBClusterId, out _);
+        ReverseSnapshotCounters.Clear();
         LoopbackDeliveringTransport.UnregisterCluster(SiteAClusterId);
         LoopbackDeliveringTransport.UnregisterCluster(SiteBClusterId);
         LoopbackDeliveringTransport.Reset();
@@ -841,6 +858,8 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = SiteAClusterId);
             AddNaturalObservations(siloBuilder.Services, SiteAClusterId);
             siloBuilder.Services.AddSingleton<IReplicationTransport, LoopbackDeliveringTransport>();
+            // Site A replicates the sibling back from site B, so its bootstrap source is site B.
+            siloBuilder.Services.AddSingleton<IRemoteSnapshotTransport, SiteBSnapshotRelay>();
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllResolver>();
         }
     }
