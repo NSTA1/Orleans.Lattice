@@ -66,8 +66,8 @@ provider, and for disaster recovery a durable external sink.
 
 For operator-facing backup and restore, the API facade offers accept-then-poll
 operations with durable progress and cancellation. Engine service interfaces in
-this package remain current; the facade's older blocking verbs are deprecated and
-will be removed in the next major version. Migration guide:
+this package remain current; the facade's older blocking verbs were removed in
+version 10.0.0. Migration guide:
 https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-removed-blocking-verbs.
 
 Must be registered after `AddLattice(...)`. For a remotely-drivable control

@@ -35,8 +35,8 @@ This package is the seam between them. It carries:
   aliases.
 - **Shared operation tracking** - `Orleans.Lattice.Api.Operations` provides the
   accept-then-poll handle, status, list-page, and cancel contract used by backup,
-  schema, tree-administration, and other long-running facades. Backup's blocking verbs are deprecated and
-  will be removed in the next major version; migrate at
+  schema, tree-administration, and other long-running facades. Backup's blocking
+  verbs were removed in version 10.0.0; migrate at
   https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-removed-blocking-verbs.
 
 The facade packages reference this package and implement the interfaces; the
