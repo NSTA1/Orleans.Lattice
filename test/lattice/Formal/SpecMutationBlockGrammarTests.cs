@@ -59,13 +59,12 @@ public sealed class SpecMutationBlockGrammarTests
     [Test]
     public void A_replace_block_missing_its_end_is_refused([Values] bool crlf)
     {
-        var refusal = Assert.Throws<InvalidOperationException>(() => Parse(
-            "--- FIND\nA == 1\n--- REPLACE\nA == 3\n--- FIND\nB == 2\n--- REPLACE\nB == 4\n--- END\n",
-            crlf));
-
         Assert.That(
-            refusal!.Message,
-            Does.StartWith("TerminatorMutant.mutation line 10 is the marker '--- FIND' inside a '--- REPLACE' block; expected '--- END' first."));
+            () => Parse(
+                "--- FIND\nA == 1\n--- REPLACE\nA == 3\n--- FIND\nB == 2\n--- REPLACE\nB == 4\n--- END\n",
+                crlf),
+            Throws.TypeOf<InvalidOperationException>().With.Message.StartsWith(
+                "TerminatorMutant.mutation line 10 is the marker '--- FIND' inside a '--- REPLACE' block; expected '--- END' first."));
     }
 
     /// <summary>
@@ -81,10 +80,10 @@ public sealed class SpecMutationBlockGrammarTests
         {
             foreach (var crlf in new[] { false, true })
             {
-                var refusal = Assert.Throws<InvalidOperationException>(() => Parse(body, crlf));
                 Assert.That(
-                    refusal!.Message,
-                    Does.StartWith($"TerminatorMutant.mutation line {line} is the marker '{marker}' inside a '{open}' block; expected '{close}' first."),
+                    () => Parse(body, crlf),
+                    Throws.TypeOf<InvalidOperationException>().With.Message.StartsWith(
+                        $"TerminatorMutant.mutation line {line} is the marker '{marker}' inside a '{open}' block; expected '{close}' first."),
                     crlf ? "CRLF" : "LF");
             }
         });
@@ -127,15 +126,17 @@ public sealed class SpecMutationBlockGrammarTests
         {
             foreach (var crlf in new[] { false, true })
             {
-                var refusal = Assert.Throws<InvalidOperationException>(() => Parse(body, crlf));
-                Assert.That(refusal!.Message, Is.EqualTo($"TerminatorMutant.mutation {expected}"), crlf ? "CRLF" : "LF");
+                Assert.That(
+                    () => Parse(body, crlf),
+                    Throws.TypeOf<InvalidOperationException>().With.Message.EqualTo($"TerminatorMutant.mutation {expected}"),
+                    crlf ? "CRLF" : "LF");
             }
         });
     }
 
     /// <summary>
-    /// The five GC starvation mutations that shipped with a single shared
-    /// <c>--- END</c> now carry one per block. Pinning each block count, target
+    /// The five GC starvation mutations previously had a single shared
+    /// <c>--- END</c> and now carry one per block. Pinning each block count, target
     /// and bound keeps the repair from being undone by merging blocks back
     /// together, which the grammar alone would accept if done consistently.
     /// </summary>
