@@ -106,6 +106,43 @@ public sealed partial class LatticeAuthAdminTenantTierTests
             Arg.Is<MembershipGroup>(g => g.GroupId == groupId && g.DisplayName == "Ops"), Arg.Any<CancellationToken>());
     }
 
+    // ----- RemoveGroupAsync: a tenant group is removed only by the tenant cascade (D2) -----
+
+    [TestCase("t/acme/readers")]
+    [TestCase("t/default/readers")]
+    [TestCase("t/acme")]
+    [TestCase("t/")]
+    public void RemoveGroupAsync_refuses_every_id_in_the_reserved_tenant_namespace(string groupId)
+    {
+        // Deleting only the record left the group's edges, the tenant's admin and
+        // member entries, and its tenant rules in force, and the tenant facade then
+        // treated the group as already removed, so nothing could clean them up.
+        var directory = Substitute.For<ILatticeMembershipDirectory>();
+        var admin = CreateAdmin(directory);
+
+        var ex = Assert.ThrowsAsync<LatticeTenantOwnedGroupException>(() => admin.RemoveGroupAsync(groupId));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.GroupId, Is.EqualTo(groupId));
+            Assert.That(ex.ParamName, Is.EqualTo("groupId"));
+            Assert.That(ex.Message, Does.Contain("ILatticeTenantDirectoryAdmin.RemoveGroupAsync"));
+        });
+        directory.DidNotReceiveWithAnyArgs().RemoveGroupAsync(default!, default);
+    }
+
+    [TestCase("g-ops")]
+    [TestCase("T/acme/readers")]
+    public async Task RemoveGroupAsync_removes_a_cluster_group(string groupId)
+    {
+        var directory = Substitute.For<ILatticeMembershipDirectory>();
+        var admin = CreateAdmin(directory);
+
+        await admin.RemoveGroupAsync(groupId);
+
+        await directory.Received(1).RemoveGroupAsync(groupId, Arg.Any<CancellationToken>());
+    }
+
     // ----- AddMemberAsync: the nesting invariant surfaces unchanged (D3) -----
 
     [Test]

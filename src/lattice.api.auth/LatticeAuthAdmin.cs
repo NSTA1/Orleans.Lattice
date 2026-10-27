@@ -137,6 +137,15 @@ internal sealed class LatticeAuthAdmin(
         ArgumentException.ThrowIfNullOrEmpty(groupId);
         await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
 
+        // D2: a tenant group is removed only by the tenant directory facade's
+        // cascade. Deleting just its record here would leave its edges, registry
+        // entries and rules in force, and the tenant facade treats a group without
+        // a record as already removed, so nothing could clean them up.
+        if (IsTenantTierGroupId(groupId))
+        {
+            throw LatticeTenantOwnedGroupException.RemovalRejected(groupId, nameof(groupId));
+        }
+
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             await _directory.RemoveGroupAsync(groupId, cancellationToken).ConfigureAwait(false);

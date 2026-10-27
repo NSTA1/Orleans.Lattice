@@ -34,7 +34,7 @@ It is the authorization sibling of the read-only [`Orleans.Lattice.Api.State`](.
 |---|---|
 | Create / replace a group | `UpsertGroupAsync` |
 | Read a group | `GetGroupAsync` |
-| Remove a group | `RemoveGroupAsync` |
+| Remove a group | `RemoveGroupAsync` (record only; edges naming the group stay, so remove them with `RemoveMemberAsync`) |
 | List groups (paged) | `ListGroupsAsync` |
 | Add a membership edge | `AddMemberAsync` |
 | Remove a membership edge | `RemoveMemberAsync` |
@@ -116,7 +116,11 @@ feature is enabled.
 - **The `t/` group namespace is reserved.** `UpsertGroupAsync` refuses any group id
   starting with `t/` with `LatticeTenantOwnedGroupException` (an `ArgumentException`
   carrying `GroupId`), after the administrator check and before directory
-  validation. `AddMemberAsync` skips identity-directory validation for a `t/` id, so
+  validation. `RemoveGroupAsync` refuses one the same way: this facade could delete
+  only the group record, leaving the group's edges, the tenant's admin and member
+  entries, and the tenant rules naming it in force, so a tenant group is removed
+  through `ILatticeTenantDirectoryAdmin.RemoveGroupAsync`, which removes all of them.
+  `AddMemberAsync` skips identity-directory validation for a `t/` id, so
   an edge that would nest a tenant group outside its tenant reaches the membership
   directory and fails there with `LatticeTenantGroupNestingException`.
 - **Group listings show cluster groups by default.** `ListGroupsAsync` lists only
