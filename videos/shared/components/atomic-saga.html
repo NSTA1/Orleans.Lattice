@@ -1,0 +1,217 @@
+<template id="atomic-saga-template">
+  <div
+    data-composition-id="atomic-saga"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"Prepare, decide, apply"},
+      {"id":"keyOne","type":"string","label":"First key","default":"order/status"},
+      {"id":"keyTwo","type":"string","label":"Second key","default":"order/tracking"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading as-heading"></h2>
+    <p class="as-context">One tree, two leaves, one transaction outcome</p>
+    <div class="as-flow">
+      <section class="as-card as-coordinator">
+        <h3 class="as-card-title">Saga coordinator</h3>
+        <p class="as-card-copy">Prepare the batch</p>
+      </section>
+      <div class="as-wire as-prepare-wire"><span>prepare</span></div>
+      <section class="as-card as-leaf">
+        <h3 class="as-card-title">Leaf A</h3>
+        <p class="as-key"></p>
+        <p class="as-pending">Prepared value: hidden</p>
+      </section>
+      <section class="as-card as-leaf">
+        <h3 class="as-card-title">Leaf B</h3>
+        <p class="as-key"></p>
+        <p class="as-pending">Prepared value: hidden</p>
+      </section>
+      <div class="as-wire as-decision-wire"><span>decision</span></div>
+      <section class="as-card as-registry">
+        <h3 class="as-card-title">Transaction registry</h3>
+        <p class="as-decision-pending">In flight</p>
+        <p class="as-decision-commit">Commit recorded</p>
+      </section>
+    </div>
+    <div class="as-reader">
+      <p class="as-reader-label">Reader view</p>
+      <p class="as-reader-before">No batch effect</p>
+      <p class="as-reader-after">Whole batch</p>
+      <p class="as-drained">Terminal marks drain the buckets</p>
+    </div>
+
+    <style>
+      [data-composition-id="atomic-saga"] .as-context {
+        position: absolute;
+        top: 170px;
+        left: var(--lv-safe-x);
+        margin: 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+      [data-composition-id="atomic-saga"] .as-flow {
+        position: absolute;
+        top: 280px;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      [data-composition-id="atomic-saga"] .as-card {
+        box-sizing: border-box;
+        min-height: 270px;
+        padding: 32px;
+        border: var(--lv-hairline) solid var(--lt-rule);
+        border-radius: var(--lv-radius);
+        background: var(--lt-surface-sunken);
+      }
+      [data-composition-id="atomic-saga"] .as-coordinator {
+        width: 304px;
+      }
+      [data-composition-id="atomic-saga"] .as-leaf {
+        width: 340px;
+        background: var(--lt-surface);
+      }
+      [data-composition-id="atomic-saga"] .as-registry {
+        width: 300px;
+        background: var(--lt-surface);
+      }
+      [data-composition-id="atomic-saga"] .as-card-title {
+        margin: 0 0 36px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-heading);
+        line-height: var(--lt-leading-tight);
+      }
+      [data-composition-id="atomic-saga"] .as-card-copy,
+      [data-composition-id="atomic-saga"] .as-key,
+      [data-composition-id="atomic-saga"] .as-pending,
+      [data-composition-id="atomic-saga"] .as-decision-pending,
+      [data-composition-id="atomic-saga"] .as-decision-commit {
+        margin: 0 0 18px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+        line-height: var(--lt-leading-body);
+      }
+      [data-composition-id="atomic-saga"] .as-key {
+        color: var(--lt-ink);
+        font-family: var(--lv-font-mono);
+      }
+      [data-composition-id="atomic-saga"] .as-decision-commit {
+        color: var(--lt-success);
+      }
+      [data-composition-id="atomic-saga"] .as-wire {
+        position: relative;
+        width: 144px;
+        height: var(--lv-hairline);
+        flex: 0 0 144px;
+        background: var(--lt-rule-strong);
+      }
+      [data-composition-id="atomic-saga"] .as-wire::after {
+        position: absolute;
+        top: calc(-1 * var(--lv-node-sm) / 2);
+        right: 0;
+        width: var(--lv-node-sm);
+        height: var(--lv-node-sm);
+        border-radius: 50%;
+        background: var(--lt-ink);
+        content: "";
+      }
+      [data-composition-id="atomic-saga"] .as-wire span {
+        position: absolute;
+        left: 0;
+        bottom: 20px;
+        color: var(--lt-ink-3);
+        font-size: var(--lv-type-label);
+        white-space: nowrap;
+      }
+      [data-composition-id="atomic-saga"] .as-reader {
+        position: absolute;
+        top: 670px;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        align-items: baseline;
+        column-gap: 48px;
+        row-gap: 18px;
+        padding: 36px 0;
+        border-top: var(--lv-rule-heavy) solid var(--lt-ink);
+      }
+      [data-composition-id="atomic-saga"] .as-reader p {
+        margin: 0;
+      }
+      [data-composition-id="atomic-saga"] .as-reader-label {
+        color: var(--lt-ink-3);
+        font-size: var(--lv-type-label);
+      }
+      [data-composition-id="atomic-saga"] .as-reader-before,
+      [data-composition-id="atomic-saga"] .as-reader-after,
+      [data-composition-id="atomic-saga"] .as-drained {
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-strong);
+      }
+      [data-composition-id="atomic-saga"] .as-reader-after,
+      [data-composition-id="atomic-saga"] .as-drained {
+        grid-column: 2;
+      }
+      [data-composition-id="atomic-saga"] .as-drained {
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="atomic-saga"]');
+        const q = (selector) => root.querySelector(selector);
+        const all = (selector) => Array.from(root.querySelectorAll(selector));
+        const scene = window.LatticeScene;
+        const { duration } = window.LatticeMotion;
+        const timing = scene.cue(vars);
+        const ease = "lattice-out";
+
+        q(".as-heading").textContent = vars.heading;
+        const keys = all(".as-key");
+        keys[0].textContent = vars.keyOne;
+        keys[1].textContent = vars.keyTwo;
+
+        const tl = gsap.timeline({ paused: true });
+        const cards = all(".as-card");
+        tl.from(q(".as-heading"), { opacity: 0, duration: duration.slow, ease }, 0);
+        tl.from(q(".as-context"), { opacity: 0, duration: duration.base, ease }, 0.3);
+        tl.from(cards, { opacity: 0, y: 18, duration: duration.slow, stagger: 0.12, ease }, 0.5);
+        tl.set(all(".as-pending"), { opacity: 0 }, 0);
+        tl.set(q(".as-decision-commit"), { opacity: 0 }, 0);
+        tl.set(q(".as-reader-after"), { opacity: 0 }, 0);
+        tl.set(q(".as-drained"), { opacity: 0 }, 0);
+
+        const prepareAt = timing.at(1, 2);
+        tl.to(all(".as-pending"), { opacity: 1, duration: duration.base, ease }, prepareAt);
+
+        const commitAt = timing.at(3, 8);
+        tl.to(q(".as-decision-pending"), { opacity: 0, duration: duration.fast, ease: "power1.in" }, commitAt);
+        tl.to(q(".as-decision-commit"), { opacity: 1, duration: duration.base, ease }, commitAt + duration.fast);
+
+        const visibleAt = timing.at(6, 16);
+        tl.to(q(".as-reader-before"), { opacity: 0, duration: duration.fast, ease: "power1.in" }, visibleAt);
+        tl.to(q(".as-reader-after"), { opacity: 1, duration: duration.base, ease }, visibleAt + duration.fast);
+
+        const drainedAt = timing.at(8, 24);
+        tl.to(all(".as-pending"), { opacity: 0, duration: duration.base, ease }, drainedAt);
+        tl.to(q(".as-drained"), { opacity: 1, duration: duration.base, ease }, drainedAt + duration.base);
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["atomic-saga"] = tl;
+      })();
+    </script>
+  </div>
+</template>
