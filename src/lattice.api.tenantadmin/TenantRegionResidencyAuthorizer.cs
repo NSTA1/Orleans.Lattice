@@ -282,8 +282,21 @@ public sealed class TenantRegionResidencyAuthorizer
             return record.IsAdmin(subject.SubjectId, subject.GroupIds ?? Array.Empty<string>());
         }
 
-        return record.HasAdminSubject(subject.SubjectId);
+        return IsExactIdAdmin(record, subject.SubjectId);
     }
+
+    /// <summary>
+    /// The exact-id tenant-admin test: <paramref name="subjectId"/> is itself a live
+    /// admin-set entry and is not shaped like a tenant group. A subject id in the
+    /// reserved <c>t/</c> namespace can never be an admin by exact id, or a host whose
+    /// subject mapper let such an id through would make its holder an admin of every
+    /// tenant whose admin set names that group. Allocation-free.
+    /// </summary>
+    /// <param name="record">The tenant record.</param>
+    /// <param name="subjectId">The caller's subject id.</param>
+    /// <returns><c>true</c> when the subject is an admin by exact id.</returns>
+    internal static bool IsExactIdAdmin(TenantRecord record, string subjectId) =>
+        !TenantAccessEntries.IsGroupShapedSubject(subjectId) && record.HasAdminSubject(subjectId);
 
     private async ValueTask<bool> IsPlatformOperatorAsync(LatticeSubject subject, CancellationToken cancellationToken)
     {

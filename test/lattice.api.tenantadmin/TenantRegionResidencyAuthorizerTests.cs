@@ -260,6 +260,39 @@ public sealed class TenantRegionResidencyAuthorizerTests
     }
 
     [Test]
+    public void AuthorizeTenantAdminAsync_a_subject_id_shaped_like_a_tenant_group_never_matches_by_exact_id()
+    {
+        // With delegated access off the check is by exact id. A host-supplied subject
+        // mapper that let a t/ id through must not make that id an admin of every
+        // tenant whose admin set names the matching group entry.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Record(adminSubject: "t/acme/admins"));
+        var authorizer = Authorizer(new FixedGate(allow: false), registry, new LatticeSubject("t/acme/admins"));
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(
+                async () => await authorizer.AuthorizeTenantAdminAsync(Acme),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(await authorizer.TryAuthorizeTenantAdminAsync(Acme), Is.Null);
+        });
+    }
+
+    [Test]
+    public void IsExactIdAdmin_matches_a_plain_admin_entry_only()
+    {
+        var record = Record(adminSubject: "alice");
+        record.AddAdminSubject("t/acme/admins", HybridLogicalClock.Tick(HybridLogicalClock.Zero), "seed");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenantRegionResidencyAuthorizer.IsExactIdAdmin(record, "alice"), Is.True);
+            Assert.That(TenantRegionResidencyAuthorizer.IsExactIdAdmin(record, "t/acme/admins"), Is.False);
+            Assert.That(TenantRegionResidencyAuthorizer.IsExactIdAdmin(record, "mallory"), Is.False);
+        });
+    }
+
+    [Test]
     public async Task AuthorizeTenantAdminAsync_a_resumed_tenant_restores_its_admins()
     {
         var registry = new FakeTenantRegistry();
