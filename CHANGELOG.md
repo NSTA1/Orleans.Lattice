@@ -80,6 +80,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Tag-index workspaces.** Catalogue, coverage, tags and paged members ignore superseded replies. Retrying reloads the selection, stale page errors clear, and reconcile confirmations and late results stay with their workspace. ([#5090](https://github.com/NSTA1/Orleans.Lattice/pull/5090)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Replication submission ownership.** Pending validation prevents duplicate enables, edited merge modes require a fresh confirmation, and late enable or disable replies cannot post messages or reload a page that has been left. ([#5072](https://github.com/NSTA1/Orleans.Lattice/issues/5072)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Atomic - Cross-tree sagas no longer exhaust the transaction registry.** A host without replication records no cross-tree membership, restoring about 100 cross-tree sagas/s per registry shard. Replicated hosts keep it; their lower cross-tree ceiling is now documented. ([#5073](https://github.com/NSTA1/Orleans.Lattice/issues/5073)) (`Orleans.Lattice`)
