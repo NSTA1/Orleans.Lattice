@@ -20,7 +20,9 @@ public interface ILatticeAuthorizationPolicyStore
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentNullException"><paramref name="rule"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException">
-    /// The rule's scope targets the reserved <c>sys-auth-*</c> namespace; or the rule breaks tenant
+    /// The rule is malformed: an empty rule or subject id, an undefined effect, subject kind or scope
+    /// kind, or a key or prefix missing from a key or prefix scope or present on a whole-tree scope
+    /// (raised before anything is read); or the rule's scope targets the reserved <c>sys-auth-*</c> namespace; or the rule breaks tenant
     /// confinement: a tenant-tier rule outside its own tenant's non-app trees or tenant-wide scope, or
     /// with operations outside <see cref="LatticeAuthOperations.All"/>, or naming another tenant's group;
     /// a tenant-wide scope on a rule that is not tenant-tier; or a tenant group (<c>t/{tenant}/{name}</c>)
