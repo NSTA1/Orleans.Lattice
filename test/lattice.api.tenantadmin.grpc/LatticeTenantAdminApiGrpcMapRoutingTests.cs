@@ -153,4 +153,37 @@ public sealed class LatticeTenantAdminApiGrpcMapRoutingTests
 
         await host.StopAsync();
     }
+
+    [TestCase("Orleans.Lattice.Api.TenantAdmin")]
+    [TestCase("ORLEANS.LATTICE.API.TENANTADMIN")]
+    public async Task A_lifecycle_rpc_on_a_recased_service_path_is_still_denied(string serviceName)
+    {
+        // ASP.NET Core routing matches the path case-insensitively, so the re-cased
+        // call reaches the DeleteTenant handler; the interceptor must still refuse it.
+        var facade = new FakeTenantAdmin();
+        using var host = await StartHostAsync(facade, new FakeTenantSelfService(), permissive: false);
+        var (channel, invoker) = Connect(host);
+        using (channel)
+        {
+            var canonical = host.Services.GetRequiredService<LatticeTenantAdminGrpcMethods>().DeleteTenant;
+            var recased = new Method<TenantAdminTenantRequest, TenantDeletionResult>(
+                MethodType.Unary,
+                serviceName,
+                canonical.Name.ToUpperInvariant(),
+                canonical.RequestMarshaller,
+                canonical.ResponseMarshaller);
+
+            using var call = invoker.AsyncUnaryCall(
+                recased, host: null, new CallOptions(), new TenantAdminTenantRequest { TenantId = "acme" });
+            var ex = Assert.ThrowsAsync<RpcException>(async () => await call.ResponseAsync);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+                Assert.That(facade.LastTenantId, Is.Null, "a denied call must never reach the facade");
+            });
+        }
+
+        await host.StopAsync();
+    }
 }

@@ -57,6 +57,14 @@ gate will tell you if you forget.
    security paths allocate nothing avoidable: static/cached header value sets, a
    cached denied `Task`, span-based matching over substring allocation. Allocate
    only on the cold reject/diagnostic path, and comment any intentional allocation.
+7. **Classify a gRPC call by the method it was routed to, never by its raw path.**
+   ASP.NET Core endpoint routing matches a request path case-insensitively, so a call
+   sent to a re-cased path reaches the canonical handler while
+   `ServerCallContext.Method` reports the path as sent. An ordinal test of that raw
+   path let such a call skip a server interceptor's authentication or authorization
+   entirely. Every server interceptor resolves the method through its package's
+   `GrpcRoutedMethod.Resolve` (the routed endpoint's `GrpcMethodMetadata`) before it
+   scopes, exempts or describes a call.
 
 ## Surface-specific invariants
 
