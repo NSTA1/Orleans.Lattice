@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>TTL and soft delete</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      .frame {
+        position: absolute;
+        inset: 0;
+      }
+      .split {
+        position: absolute;
+        top: 240px;
+        left: 160px;
+        right: 160px;
+        display: grid;
+        grid-template-columns: 1080px 1fr;
+        gap: 80px;
+        align-items: start;
+      }
+      .split .lv-code {
+        margin: 0;
+        font-size: var(--lv-type-label);
+      }
+      .wide {
+        position: absolute;
+        top: 240px;
+        left: 160px;
+        right: 160px;
+      }
+      .wide .lv-code {
+        margin: 0;
+        font-size: var(--lv-type-label);
+      }
+      .facts-row {
+        position: absolute;
+        top: 640px;
+        left: 160px;
+        right: 160px;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 80px;
+        padding-top: 0;
+      }
+      .facts {
+        display: grid;
+        gap: 40px;
+        padding-top: 12px;
+      }
+      .facts p {
+        margin: 0;
+        padding: 0 0 26px;
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        line-height: 1.25;
+      }
+      .facts .lv-label {
+        display: block;
+        margin-bottom: 12px;
+      }
+      .note {
+        position: absolute;
+        top: 560px;
+        left: 160px;
+        right: 160px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+      .reads {
+        position: absolute;
+        top: 660px;
+        left: 160px;
+        right: 160px;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 40px;
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+      }
+      .reads div {
+        padding: 24px 0;
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+      }
+      .reads code {
+        display: block;
+        margin-bottom: 10px;
+        color: var(--lt-ink);
+        font-family: var(--lv-font-mono);
+        font-size: var(--lv-type-code);
+      }
+      .cards {
+        position: absolute;
+        top: 260px;
+        left: 240px;
+        right: 240px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 80px;
+      }
+      .card {
+        min-height: 260px;
+        padding: 36px;
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+      }
+      .card h3 {
+        margin: 0 0 28px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+      }
+      .card p {
+        margin: 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+        line-height: 1.3;
+      }
+      .reap {
+        position: absolute;
+        top: 720px;
+        left: 276px;
+        right: 240px;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+      .places {
+        position: absolute;
+        top: 245px;
+        left: var(--lv-safe-x);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .place {
+        position: relative;
+        margin-bottom: 54px;
+        padding-left: 76px;
+      }
+      .place .lv-node {
+        position: absolute;
+        top: 10px;
+        left: 0;
+      }
+      .place-next .lv-node {
+        background: var(--lt-ink);
+      }
+      .place-name {
+        margin: 0;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+        line-height: 1.1;
+      }
+      .place-what {
+        margin: 12px 0 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-caption);
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="ttl-and-soft-delete"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="110.32"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="ttl-and-soft-delete"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Build","title":"TTL and soft delete","subtitle":"Entries that expire, trees that can come back","beats":"0.5,9.078","end":17.416}'
+        data-start="0"
+        data-duration="17.416"
+      ></div>
+
+      <div id="expire" class="clip lv-scene frame" data-scene="entries-that-expire" data-track-index="0" data-start="17.416" data-duration="23.763">
+        <h2 class="lv-heading">Entries that expire</h2>
+      </div>
+      <div id="expire-layout" class="clip wide" data-scene="entries-that-expire" data-from-beat="0" data-track-index="2" data-start="18.016" data-duration="23.163">
+        <pre class="lv-code"><code data-snippet="ttl-and-soft-delete/set-with-ttl">var session = new User("alice", 1);
+
+await lattice.SetAsync("session:42", session, TimeSpan.FromMinutes(30));</code></pre>
+      </div>
+      <p id="expire-note" class="clip note" data-scene="entries-that-expire" data-from-beat="1" data-track-index="3" data-start="24.237" data-duration="16.942">The silo stamps an absolute expiry, so client clock skew does not move it.</p>
+      <div id="expire-reads" class="clip reads" data-scene="entries-that-expire" data-from-beat="2" data-track-index="3" data-start="31.652" data-duration="9.527">
+        <div><code>GetAsync</code>returns null</div>
+        <div><code>ExistsAsync</code>returns false</div>
+        <div><code>scans</code>skip it</div>
+        <div><code>counts</code>skip it</div>
+      </div>
+
+      <div id="refresh" class="clip lv-scene frame" data-scene="refresh-and-reaping" data-track-index="0" data-start="41.179" data-duration="27.907">
+        <h2 class="lv-heading">Refresh and reaping</h2>
+      </div>
+      <div id="refresh-plain" class="clip cards" data-scene="refresh-and-reaping" data-from-beat="0" data-track-index="2" data-start="41.779" data-duration="27.307">
+        <section class="card">
+          <h3>Plain write</h3>
+          <p>The winning write decides. A winning write without a time to live clears the expiry.</p>
+        </section>
+      </div>
+      <div id="refresh-crdt" class="clip cards" data-scene="refresh-and-reaping" data-from-beat="1" data-track-index="3" data-start="51.639" data-duration="17.447">
+        <section class="card" style="visibility: hidden"></section>
+        <section class="card">
+          <h3>CRDT write</h3>
+          <p>Expiries merge by the later one, so a refresh only ever extends it.</p>
+        </section>
+      </div>
+      <p id="refresh-reap" class="clip reap" data-scene="refresh-and-reaping" data-from-beat="2" data-track-index="4" data-start="59.368" data-duration="9.718">Compaction reaps an expired entry after the tombstone grace period, so a lagging peer cannot bring it back.</p>
+
+      <div id="delete" class="clip lv-scene frame" data-scene="soft-delete" data-track-index="0" data-start="69.086" data-duration="17.099">
+        <h2 class="lv-heading">Soft delete</h2>
+      </div>
+      <div id="delete-layout" class="clip split" data-scene="soft-delete" data-from-beat="0" data-track-index="2" data-start="69.686" data-duration="16.499">
+        <pre class="lv-code"><code data-snippet="ttl-and-soft-delete/delete">var tree = grainFactory.GetGrain&lt;ILattice&gt;("my-tree");
+await tree.DeleteTreeAsync();</code></pre>
+        <div class="facts">
+          <p><span class="lv-label">At once</span>Reads and writes throw</p>
+        </div>
+      </div>
+      <div id="delete-window" class="clip split" data-scene="soft-delete" data-from-beat="1" data-track-index="3" data-start="78.324" data-duration="7.861">
+        <div></div>
+        <div class="facts" style="padding-top: 160px">
+          <p><span class="lv-label">Retention window</span>Data kept for 72 hours by default, then purged</p>
+        </div>
+      </div>
+
+      <div id="recovery" class="clip lv-scene frame" data-scene="recovery" data-track-index="0" data-start="86.185" data-duration="15.373">
+        <h2 class="lv-heading">Recovery</h2>
+      </div>
+      <div id="recovery-layout" class="clip wide" data-scene="recovery" data-from-beat="0" data-track-index="2" data-start="86.785" data-duration="14.773">
+        <pre class="lv-code"><code data-snippet="ttl-and-soft-delete/recover">var tree = grainFactory.GetGrain&lt;ILattice&gt;("my-tree");
+await tree.RecoverTreeAsync();
+
+// Tree is accessible again - all data from before the delete is restored.
+byte[]? value = await tree.GetAsync("customer-123");</code></pre>
+      </div>
+      <div id="recovery-inside" class="clip facts facts-row" data-scene="recovery" data-from-beat="0" data-track-index="3" data-start="86.785" data-duration="14.773">
+        <p><span class="lv-label">Inside the window</span>Accessible again, with all its data</p>
+      </div>
+      <div id="recovery-late" class="clip facts facts-row" data-scene="recovery" data-from-beat="1" data-track-index="4" data-start="93.754" data-duration="7.804">
+        <div></div>
+        <p><span class="lv-label">Purge in progress</span>Too late to recover</p>
+        <p><span class="lv-label">Purge complete</span>The data is gone</p>
+      </div>
+
+      <div id="where-next" class="clip lv-scene frame" data-scene="where-next" data-track-index="0" data-start="101.558" data-duration="8.762">
+        <h2 class="lv-heading">Where next</h2>
+      </div>
+      <ol id="where-next-list" class="clip places" data-scene="where-next" data-from-beat="0" data-track-index="2" data-start="102.158" data-duration="8.162">
+        <li class="place place-next">
+          <span class="lv-node"></span>
+          <h3 class="place-name">Going durable</h3>
+          <p class="place-what">Next on Build</p>
+        </li>
+      </ol>
+      <ol id="where-next-pages" class="clip places" style="top: 500px" data-scene="where-next" data-from-beat="0" data-track-index="3" data-start="102.158" data-duration="8.162">
+        <li class="place">
+          <span class="lv-node"></span>
+          <h3 class="place-name">TTL</h3>
+          <p class="place-what">The documentation page</p>
+        </li>
+      </ol>
+
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/ttl-and-soft-delete/narration.wav" data-start="0" data-duration="110.32" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      (function () {
+        const { duration } = window.LatticeMotion;
+        window.LatticeCode.highlightAll(document);
+        const byId = (id) => document.getElementById(id);
+        const start = (element) => Number(element.dataset.start);
+        const end = (element) => start(element) + Number(element.dataset.duration);
+        const tl = gsap.timeline({ paused: true });
+        const ease = "lattice-out";
+
+        function arrive(element, delay = 0.1, rise = 20) {
+          tl.fromTo(element, { opacity: 0, y: rise }, { opacity: 1, y: 0, duration: duration.slow, ease }, start(element) + delay);
+          tl.to(element, { opacity: 0, duration: duration.fast, ease: "power1.in" }, end(element) - duration.fast);
+        }
+
+        for (const id of ["expire", "refresh", "delete", "recovery", "where-next"]) {
+          arrive(byId(id), 0, 0);
+        }
+        for (const id of ["expire-layout", "refresh-plain", "delete-layout", "recovery-layout", "recovery-inside", "where-next-list"]) {
+          arrive(byId(id));
+        }
+        for (const id of ["expire-note", "expire-reads", "refresh-crdt", "refresh-reap", "delete-window", "recovery-late", "where-next-pages"]) {
+          arrive(byId(id), 0.1, 16);
+        }
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["ttl-and-soft-delete"] = tl;
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,136 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:04.875
+Atomic writes showed how related
+changes become visible as a whole.
+
+2
+00:00:04.875 --> 00:00:08.728
+Here, we ask how data goes away:
+on its own, or by mistake.
+
+3
+00:00:09.078 --> 00:00:12.952
+This is TTL and soft delete:
+entries can expire on their own,
+
+4
+00:00:12.952 --> 00:00:17.016
+and a deleted tree can be recovered
+inside its retention window.
+
+5
+00:00:18.016 --> 00:00:20.433
+A session should not live for ever.
+
+6
+00:00:20.433 --> 00:00:23.887
+Write it with a time to live,
+here thirty minutes.
+
+7
+00:00:24.237 --> 00:00:28.067
+The silo turns that duration
+into an absolute expiry time,
+
+8
+00:00:28.067 --> 00:00:31.302
+so a client
+with a skewed clock does not move it.
+
+9
+00:00:31.652 --> 00:00:35.368
+Once that time passes,
+the entry is gone from every read.
+
+10
+00:00:35.368 --> 00:00:40.779
+A get returns nothing, an existence check
+says false, and scans and counts skip it.
+
+11
+00:00:41.779 --> 00:00:44.090
+Expiry follows the write that wins.
+
+12
+00:00:44.090 --> 00:00:46.864
+A later write replaces the entry as usual,
+
+13
+00:00:46.864 --> 00:00:51.289
+and a winning plain write
+without a time to live clears the expiry.
+
+14
+00:00:51.639 --> 00:00:56.230
+On a CRDT entry,
+expiries merge by taking the later one,
+
+15
+00:00:56.230 --> 00:00:59.018
+so a refresh only ever extends it.
+
+16
+00:00:59.368 --> 00:01:02.474
+An expired entry is
+not deleted straight away.
+
+17
+00:01:02.474 --> 00:01:06.053
+Compaction reaps it after
+the tombstone grace period,
+
+18
+00:01:06.053 --> 00:01:08.686
+so a lagging peer cannot bring it back.
+
+19
+00:01:09.686 --> 00:01:12.764
+Deleting a whole tree is a soft delete.
+
+20
+00:01:12.764 --> 00:01:17.974
+The tree becomes inaccessible at once:
+its reads and writes throw.
+
+21
+00:01:18.324 --> 00:01:20.035
+But its data is not gone.
+
+22
+00:01:20.035 --> 00:01:24.416
+It is kept for a retention window,
+seventy-two hours by default,
+
+23
+00:01:24.416 --> 00:01:25.785
+before it is purged.
+
+24
+00:01:26.785 --> 00:01:30.756
+Inside that window, recovering
+the tree makes it accessible again,
+
+25
+00:01:30.756 --> 00:01:33.404
+with all the data it
+held before the delete.
+
+26
+00:01:33.754 --> 00:01:35.692
+Once the purge has started,
+
+27
+00:01:35.692 --> 00:01:40.358
+it is too late; and once the purge
+is complete, the data is gone.
+
+28
+00:01:42.158 --> 00:01:44.212
+Next on Build: Going durable.
+
+29
+00:01:44.212 --> 00:01:48.320
+The links are on this episode's page
+in the documentation.

@@ -85,7 +85,7 @@ await grainFactory
 
 <!-- where-next:begin -->
 
-- **Next on Build:** TTL and soft delete
+- **Next on Build:** [TTL and soft delete](ttl-and-soft-delete.md)
 - **The deep dive:** [Atomic commit without consensus](atomic-commit-without-consensus.md)
 - **The pages it introduces:** [Atomic writes](../lattice/atomic-writes.md)
 
