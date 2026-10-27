@@ -723,6 +723,14 @@ public static class LatticeServiceCollectionExtensions
         // this method.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, LatticeWalGcScheduler>());
+
+        // The orphan-pin sweep runs once per tree for the whole cluster on a
+        // tree-keyed coordinator grain (issue #5097). The grain borrows this
+        // silo's scheduler instance to run it, so the runner resolves the hosted
+        // singleton rather than constructing a second scheduler.
+        builder.Services.TryAddSingleton<IWalOrphanPinSweepCoordinator, WalOrphanPinSweepCoordinator>();
+        builder.Services.TryAddSingleton<IWalOrphanPinSweepRunner>(
+            sp => sp.GetServices<IHostedService>().OfType<LatticeWalGcScheduler>().First());
         return builder;
     }
 

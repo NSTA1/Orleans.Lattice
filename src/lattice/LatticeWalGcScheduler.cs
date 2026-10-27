@@ -90,7 +90,8 @@ internal sealed class LatticeWalGcScheduler(
     BPlusTree.Grains.SnapshotPinCensus? snapshotPins = null,
     [FromKeyedServices(LatticeOptions.StorageProviderName)] IGrainStorage? leafStateStorage = null,
     BPlusTree.Grains.ILeafCursorReporter? cursorReporter = null,
-    BPlusTree.LatticeOptionsResolver? optionsResolver = null) : BackgroundService
+    BPlusTree.LatticeOptionsResolver? optionsResolver = null,
+    IWalOrphanPinSweepCoordinator? orphanSweepCoordinator = null) : BackgroundService, IWalOrphanPinSweepRunner
 {
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
@@ -479,7 +480,7 @@ internal sealed class LatticeWalGcScheduler(
     /// tree's cadence floor. It is only ever entered for a tree whose floor is
     /// actually blocked, so an unblocked tree pays nothing for it at all.
     /// </remarks>
-    private static readonly TimeSpan OrphanSweepInterval = TimeSpan.FromMinutes(2);
+    internal static readonly TimeSpan OrphanSweepInterval = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// How many durable materialiser pins one sweep may classify onto
@@ -610,7 +611,13 @@ internal sealed class LatticeWalGcScheduler(
     /// been zero-primed in this process, so a reader sees a measured zero on
     /// every status rather than an absence they must interpret.
     /// </summary>
-    private readonly HashSet<string> _primedOrphanSweepTrees = new(StringComparer.Ordinal);
+    /// <remarks>
+    /// Concurrent because the sweep body also runs on the tree's
+    /// <see cref="BPlusTree.Grains.IWalOrphanPinSweepGrain"/> activation through
+    /// <see cref="IWalOrphanPinSweepRunner"/>, alongside this service's own loop.
+    /// </remarks>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _primedOrphanSweepTrees =
+        new(StringComparer.Ordinal);
 
     /// <summary>
     /// Per tree, the repairable dormant pins the most recent classifying sweep
@@ -685,7 +692,7 @@ internal sealed class LatticeWalGcScheduler(
     /// did before this change.
     /// </para>
     /// </remarks>
-    private readonly Dictionary<string, int> _floorHolderPinPopulation =
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _floorHolderPinPopulation =
         new(StringComparer.Ordinal);
 
     /// <summary>
@@ -693,10 +700,31 @@ internal sealed class LatticeWalGcScheduler(
     /// partition, used to size each partition's candidate sample on the next
     /// classifying sweep.
     /// </summary>
-    private readonly Dictionary<string, Dictionary<int, int>> _floorHolderPinPopulationByPartition =
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyDictionary<int, int>> _floorHolderPinPopulationByPartition =
         new(StringComparer.Ordinal);
 
-    private readonly Dictionary<string, int> _floorHolderOffsetPinPopulation =
+    /// <summary>
+    /// The most recently measured offset-bearing pin population per tree, the
+    /// sum of <see cref="_floorHolderPinPopulationByPartition"/>.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _floorHolderOffsetPinPopulation =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per tree, the (activation epoch, generation) of the last coordinated
+    /// orphan-sweep outcome whose measured populations this silo applied
+    /// (issue #5097).
+    /// </summary>
+    private readonly Dictionary<string, (Guid Epoch, long Generation)> _appliedOrphanSweep =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per tree, the (activation epoch, generation) of the last coordinated
+    /// classifying outcome whose repair set this silo handed to a caller, so one
+    /// classification is reported as fresh exactly once - the same contract the
+    /// local rate limit gave <see cref="SweepOrphanedMaterialiserPinsAsync"/>.
+    /// </summary>
+    private readonly Dictionary<string, (Guid Epoch, long Generation)> _returnedOrphanSweep =
         new(StringComparer.Ordinal);
 
     /// <summary>
@@ -6092,6 +6120,33 @@ internal sealed class LatticeWalGcScheduler(
             return null;
         }
 
+        // One sweep per tree per interval for the whole cluster, not one per silo
+        // (issue #5097). Every silo runs this scheduler and reaches this point for
+        // the same blocked tree, so the sweep - a durable leaf-state read per pin -
+        // is delegated to the tree's coordinator grain, which runs it at most once
+        // per OrphanSweepInterval and hands every silo the same outcome. A silo
+        // that cannot reach the coordinator falls back to sweeping locally under
+        // its own rate limit, which is the historical behaviour and still safe:
+        // the sweep is idempotent and fail-closed.
+        if (orphanSweepCoordinator is not null)
+        {
+            PrimeOrphanPinSweep(treeId, treeTag, tenantTag);
+            try
+            {
+                var outcome = await orphanSweepCoordinator
+                    .RequestSweepAsync(treeId, classifyFloorHolders, stoppingToken)
+                    .ConfigureAwait(false);
+                return ApplyCoordinatedOrphanSweep(treeId, outcome, classifyFloorHolders);
+            }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogDebug(
+                    ex,
+                    "WAL GC orphan sweep could not reach the coordinator for tree {Tree}; sweeping locally instead.",
+                    treeId);
+            }
+        }
+
         var now = _time.GetUtcNow();
         if (_lastOrphanSweep.TryGetValue(treeId, out var last) && now - last < OrphanSweepInterval)
         {
@@ -6099,6 +6154,113 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         _lastOrphanSweep[treeId] = now;
+        return await SweepOrphanedMaterialiserPinsCoreAsync(
+                treeId, treeTag, tenantTag, stoppingToken, classifyFloorHolders)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Folds a coordinated orphan-sweep outcome into this silo's caches and
+    /// converts it to the three-valued result
+    /// <see cref="SweepOrphanedMaterialiserPinsAsync"/> returns (issue #5097).
+    /// </summary>
+    /// <remarks>
+    /// Measured populations are applied once per outcome. A repair set is
+    /// returned only to a classifying caller, only for an outcome that was
+    /// itself classified, and only the first time this silo sees it, so one
+    /// classification is reported as fresh exactly once - as the local rate
+    /// limit did - and a non-classifying caller can never consume it.
+    /// </remarks>
+    private FloorHolderRepairSet? ApplyCoordinatedOrphanSweep(
+        string treeId,
+        WalOrphanPinSweepOutcome? outcome,
+        bool classifyFloorHolders)
+    {
+        if (outcome is null)
+        {
+            return null;
+        }
+
+        var marker = (outcome.Epoch, outcome.Generation);
+        if (!_appliedOrphanSweep.TryGetValue(treeId, out var applied) || applied != marker)
+        {
+            _appliedOrphanSweep[treeId] = marker;
+            _floorHolderPinPopulation[treeId] = outcome.PinPopulation;
+            if (outcome.PartitionPopulations is { } partitions)
+            {
+                _floorHolderPinPopulationByPartition[treeId] = partitions;
+                _floorHolderOffsetPinPopulation[treeId] = outcome.OffsetPopulation;
+            }
+        }
+
+        if (!classifyFloorHolders || !outcome.Classified)
+        {
+            return null;
+        }
+
+        if (_returnedOrphanSweep.TryGetValue(treeId, out var returned) && returned == marker)
+        {
+            return null;
+        }
+
+        _returnedOrphanSweep[treeId] = marker;
+        return new FloorHolderRepairSet(
+            outcome.RepairConsumerIds ?? [],
+            outcome.RequireOffsetAdvance is { Length: > 0 } advance
+                ? new HashSet<string>(advance, StringComparer.Ordinal)
+                : NoOffsetAdvanceRequired);
+    }
+
+    /// <inheritdoc/>
+    async Task<WalOrphanPinSweepOutcome?> IWalOrphanPinSweepRunner.RunAsync(
+        string treeId,
+        bool classifyFloorHolders,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (leafStateStorage is null)
+        {
+            return null;
+        }
+
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+        await RefreshPinnedWalPartitionsAsync(treeId).ConfigureAwait(false);
+        var swept = await SweepOrphanedMaterialiserPinsCoreAsync(
+                treeId, treeTag, tenantTag, cancellationToken, classifyFloorHolders)
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        Dictionary<int, int>? partitions = null;
+        var offsetPopulation = 0;
+        if (_floorHolderPinPopulationByPartition.TryGetValue(treeId, out var measured))
+        {
+            partitions = new Dictionary<int, int>(measured);
+            offsetPopulation = _floorHolderOffsetPinPopulation.GetValueOrDefault(treeId);
+        }
+
+        return new WalOrphanPinSweepOutcome
+        {
+            Classified = swept.HasValue,
+            RepairConsumerIds = swept is { } set ? [.. set.ConsumerIds] : null,
+            RequireOffsetAdvance = swept is { } advance ? [.. advance.RequireOffsetAdvance] : null,
+            PinPopulation = _floorHolderPinPopulation.GetValueOrDefault(treeId),
+            PartitionPopulations = partitions,
+            OffsetPopulation = offsetPopulation,
+        };
+    }
+
+    /// <summary>
+    /// The body of <see cref="SweepOrphanedMaterialiserPinsAsync"/> without its
+    /// rate limit, shared by the local path and the tree's coordinator grain.
+    /// </summary>
+    private async Task<FloorHolderRepairSet?> SweepOrphanedMaterialiserPinsCoreAsync(
+        string treeId,
+        KeyValuePair<string, object?> treeTag,
+        KeyValuePair<string, object?> tenantTag,
+        CancellationToken stoppingToken,
+        bool classifyFloorHolders)
+    {
         PrimeOrphanPinSweep(treeId, treeTag, tenantTag);
 
         var shardCount = BPlusTree.Grains.WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
@@ -6299,6 +6461,11 @@ internal sealed class LatticeWalGcScheduler(
         // than the floor this sweep is about to leave behind. Sited above the
         // empty-population return so that a tree holding no pins at all still
         // records a measured (0, 0) coverage rather than an absence.
+        // One durable read per leaf for the whole sweep (issue #5097): the census
+        // and the retirement batch below share it, so a leaf holding pins on
+        // every WAL partition is read once rather than once per partition.
+        var leafReads = new Dictionary<GrainId, Task<LeafCheckpointSnapshot?>>();
+
         FloorHolderRepairSet? repairable = null;
         if (unusableHolders is not null && offsetHolders is not null)
         {
@@ -6311,6 +6478,7 @@ internal sealed class LatticeWalGcScheduler(
                 located.Count,
                 treeTag,
                 tenantTag,
+                leafReads,
                 stoppingToken)
                 .ConfigureAwait(false);
         }
@@ -6413,7 +6581,7 @@ internal sealed class LatticeWalGcScheduler(
                 var consumerId = batch[i].Key;
                 resolvable[i] = TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition);
                 classifications[i] = resolvable[i]
-                    ? ReadBlockingPinStateAsync(leafGrainId, partition, stoppingToken)
+                    ? ReadStateOnlyAsync(ReadBlockingPinStateMemoisedAsync(leafReads, leafGrainId, partition, stoppingToken))
                     : Task.FromResult(WalGcBlockingPinState.Unreadable);
             }
 
@@ -6510,6 +6678,10 @@ internal sealed class LatticeWalGcScheduler(
 
             batch.Clear();
         }
+
+        static async Task<WalGcBlockingPinState> ReadStateOnlyAsync(
+            Task<(WalGcBlockingPinState State, long? Checkpoint)> read)
+            => (await read.ConfigureAwait(false)).State;
 
         return repairable;
     }
@@ -6651,7 +6823,7 @@ internal sealed class LatticeWalGcScheduler(
         in KeyValuePair<string, object?> treeTag,
         in KeyValuePair<string, object?> tenantTag)
     {
-        if (!_primedOrphanSweepTrees.Add(treeId))
+        if (!_primedOrphanSweepTrees.TryAdd(treeId, 0))
         {
             return;
         }
@@ -7030,6 +7202,7 @@ internal sealed class LatticeWalGcScheduler(
         int population,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
+        Dictionary<GrainId, Task<LeafCheckpointSnapshot?>> leafReads,
         CancellationToken stoppingToken)
     {
         var classified = 0;
@@ -7121,7 +7294,7 @@ internal sealed class LatticeWalGcScheduler(
                 : LatticeMetrics.PartitionUnknown;
 
             var (state, durableCheckpoint) = resolved
-                ? await ReadBlockingPinStateWithCheckpointAsync(leafGrainId, partition, stoppingToken).ConfigureAwait(false)
+                ? await ReadBlockingPinStateMemoisedAsync(leafReads, leafGrainId, partition, stoppingToken).ConfigureAwait(false)
                 : (WalGcBlockingPinState.Unreadable, (long?)null);
 
             // Withdraw the one conclusion this arm has no premise for (issue
@@ -7670,6 +7843,86 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// As <see cref="ReadBlockingPinStateWithCheckpointAsync"/>, but reads each
+    /// leaf at most once per orphan sweep (issue #5097).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A leaf publishes one durable pin per WAL partition, so a sweep that read
+    /// the leaf once per pin paid one storage read per (leaf, partition) pair -
+    /// the partition count times more than the information required, because
+    /// every partition's checkpoint lives on the same durable row. The first
+    /// pin of a leaf starts the read; every later pin of the same leaf in the
+    /// same sweep, whether in the floor-holder census or the retirement batch,
+    /// awaits that read and classifies its own partition from the snapshot.
+    /// </para>
+    /// <para>
+    /// The memo is scoped to one sweep and owned by its single logical flow, so
+    /// it needs no synchronisation, and a read is never reused across sweeps:
+    /// every sweep observes durable state at least as fresh as it did before.
+    /// A failed read is memoised as <see langword="null"/> and classifies every
+    /// partition of that leaf as <see cref="WalGcBlockingPinState.Unreadable"/>,
+    /// exactly as the per-pin read did, so the safety of the retirement gate is
+    /// unchanged.
+    /// </para>
+    /// </remarks>
+    private Task<(WalGcBlockingPinState State, long? Checkpoint)> ReadBlockingPinStateMemoisedAsync(
+        Dictionary<GrainId, Task<LeafCheckpointSnapshot?>> memo,
+        GrainId leafGrainId,
+        int partition,
+        CancellationToken stoppingToken)
+    {
+        if (leafStateStorage is null)
+        {
+            return Task.FromResult<(WalGcBlockingPinState, long?)>((WalGcBlockingPinState.Unreadable, null));
+        }
+
+        if (!memo.TryGetValue(leafGrainId, out var read))
+        {
+            read = ReadLeafSnapshotOrNullAsync(leafStateStorage, leafGrainId, stoppingToken);
+            memo[leafGrainId] = read;
+        }
+
+        return ClassifyMemoisedAsync(read, partition);
+
+        static async Task<(WalGcBlockingPinState State, long? Checkpoint)> ClassifyMemoisedAsync(
+            Task<LeafCheckpointSnapshot?> read,
+            int partition)
+        {
+            var snapshot = await read.ConfigureAwait(false);
+            return snapshot is { } value
+                ? WalFloorHolderReader.Classify(value, partition)
+                : (WalGcBlockingPinState.Unreadable, null);
+        }
+    }
+
+    /// <summary>
+    /// Reads one leaf's checkpoint snapshot for
+    /// <see cref="ReadBlockingPinStateMemoisedAsync"/>, mapping a storage fault
+    /// to <see langword="null"/> (unreadable) and logging it once per leaf.
+    /// </summary>
+    private async Task<LeafCheckpointSnapshot?> ReadLeafSnapshotOrNullAsync(
+        IGrainStorage storage,
+        GrainId leafGrainId,
+        CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await WalFloorHolderReader.ReadLeafCheckpointSnapshotAsync(storage, leafGrainId)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not read durable state for leaf {Leaf} to classify its blocking pins; counting them as unreadable. The pass is unaffected - this read is diagnostic only.",
+                leafGrainId);
+
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Maps a leaf's persisted projection checkpoint for one partition onto the
     /// two states that describe a real leaf.
     /// </summary>
@@ -7719,10 +7972,17 @@ internal sealed class LatticeWalGcScheduler(
     /// blocking set before its pin is ever classified.
     /// </para>
     /// </remarks>
-    internal static WalGcBlockingPinState ClassifyCheckpoint(LeafNodeState state, int partition)
-    {
-        var checkpoint = ReadPersistedCheckpoint(state, partition);
+    internal static WalGcBlockingPinState ClassifyCheckpoint(LeafNodeState state, int partition) =>
+        ClassifyCheckpoint(ReadPersistedCheckpoint(state, partition));
 
+    /// <summary>
+    /// Classifies an already-resolved persisted checkpoint (see
+    /// <see cref="ReadPersistedCheckpoint(LeafNodeState, int)"/>).
+    /// </summary>
+    /// <param name="checkpoint">The partition's persisted checkpoint, or <c>-1</c>.</param>
+    /// <returns>The classification for that checkpoint.</returns>
+    internal static WalGcBlockingPinState ClassifyCheckpoint(long checkpoint)
+    {
         // >= 0 means the leaf durably applied up to that offset, so there is a
         // WAL offset it could honestly claim and the unusable pin is the
         // coverage half of min(checkpoint, covered) being absent - repairable.
@@ -7748,23 +8008,43 @@ internal sealed class LatticeWalGcScheduler(
     /// offset <c>0</c>.
     /// </para>
     /// </summary>
-    internal static long ReadPersistedCheckpoint(LeafNodeState state, int partition)
+    internal static long ReadPersistedCheckpoint(LeafNodeState state, int partition) =>
+        ReadPersistedCheckpoint(
+            state.ProjectionCheckpointOffset,
+            state.ProjectionCheckpointOffsetAssigned,
+            state.ProjectionCheckpointOffsetsByPartition,
+            partition);
+
+    /// <summary>
+    /// Reads one partition's persisted checkpoint from the raw durable fields,
+    /// with the same semantics as <see cref="ReadPersistedCheckpoint(LeafNodeState, int)"/>.
+    /// Lets a <see cref="LeafCheckpointSnapshot"/> be classified without holding
+    /// the whole leaf row (issue #5097).
+    /// </summary>
+    /// <param name="scalarOffset">Partition 0's scalar checkpoint slot.</param>
+    /// <param name="scalarAssigned">Whether partition 0's scalar slot was ever assigned.</param>
+    /// <param name="byPartition">The per-partition checkpoint array, or <see langword="null"/>.</param>
+    /// <param name="partition">The partition to read.</param>
+    /// <returns>The persisted checkpoint, or <c>-1</c> when never checkpointed.</returns>
+    internal static long ReadPersistedCheckpoint(
+        long scalarOffset,
+        bool? scalarAssigned,
+        long[]? byPartition,
+        int partition)
     {
         if (partition == 0)
         {
             // An unassigned 0 is the type default, not progress. Resolve it the
             // conservative way and report the sentinel, exactly as
             // BPlusLeafGrain.GetPersistedCheckpointForPartition does.
-            if (state.ProjectionCheckpointOffset == 0
-                && state.ProjectionCheckpointOffsetAssigned != true)
+            if (scalarOffset == 0 && scalarAssigned != true)
             {
                 return -1L;
             }
 
-            return state.ProjectionCheckpointOffset;
+            return scalarOffset;
         }
 
-        var byPartition = state.ProjectionCheckpointOffsetsByPartition;
         if (byPartition is null || partition < 0 || partition >= byPartition.Length)
         {
             return -1L;
