@@ -111,6 +111,54 @@ public class ReplicationMutationObserverSamplingTests
     }
 
     [Test]
+    public async Task Tenant_tree_value_is_never_sampled_into_the_shared_dictionary()
+    {
+        // The trained dictionary is served to any authenticated replication
+        // peer with no tree in the request, so it cannot apply the tenant
+        // export gate; sampling a named tenant's values would disclose them.
+        var provider = new RecordingProvider();
+        var observer = new ReplicationMutationObserver(
+            new CapturingSink(),
+            Monitor(new LatticeReplicationOptions { ClusterId = "site-a", AutoSharedDictionaryEnabled = true }),
+            new AllowAllResolver(),
+            provider);
+
+        var tenantTree = LatticeTenantTrees.Compose(TenantId.Parse("acme"), "orders");
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = tenantTree,
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 7, 7, 7 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        }, CancellationToken.None);
+
+        Assert.That(provider.Observed, Is.Empty);
+    }
+
+    [Test]
+    public async Task Platform_tree_value_is_sampled_when_enabled()
+    {
+        var provider = new RecordingProvider();
+        var observer = new ReplicationMutationObserver(
+            new CapturingSink(),
+            Monitor(new LatticeReplicationOptions { ClusterId = "site-a", AutoSharedDictionaryEnabled = true }),
+            new AllowAllResolver(),
+            provider);
+
+        await observer.OnMutationAsync(new LatticeMutation
+        {
+            TreeId = "sys-catalogue",
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 4, 5 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        }, CancellationToken.None);
+
+        Assert.That(provider.Observed, Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public async Task Sampling_is_inert_when_provider_is_not_a_sampler()
     {
         // The default operator-supplied provider does not implement the

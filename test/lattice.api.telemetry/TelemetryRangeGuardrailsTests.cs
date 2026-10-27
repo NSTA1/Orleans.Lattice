@@ -189,6 +189,64 @@ public sealed class TelemetryRangeGuardrailsTests
     }
 
     [Test]
+    public void A_step_yielding_too_many_evaluation_points_is_rejected()
+    {
+        var admitted = TelemetryRangeGuardrails.TryValidateRange(
+            Budgets(), Start, Start.AddHours(24), TimeSpan.FromMilliseconds(1), out var message);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.False, "A full-budget range at a 1ms step asks for ~86 million points per series.");
+            Assert.That(message, Does.Contain("evaluation points"));
+        });
+    }
+
+    [Test]
+    public void A_one_tick_step_over_the_full_range_is_rejected()
+    {
+        var admitted = TelemetryRangeGuardrails.TryValidateRange(
+            Budgets(), Start, Start.AddHours(24), TimeSpan.FromTicks(1), out var message);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.False);
+            Assert.That(message, Does.Contain("evaluation points"));
+        });
+    }
+
+    [Test]
+    public void A_request_exactly_at_the_point_budget_is_admitted()
+    {
+        var step = TimeSpan.FromSeconds(1);
+        var end = Start + (step * (TelemetryRangeGuardrails.MaxEvaluationPoints - 1));
+
+        var admitted = TelemetryRangeGuardrails.TryValidateRange(
+            Budgets(), Start, end, step, out var message);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.True, "The point budget is inclusive.");
+            Assert.That(message, Is.Null);
+        });
+    }
+
+    [Test]
+    public void A_request_one_point_over_the_budget_is_rejected()
+    {
+        var step = TimeSpan.FromSeconds(1);
+        var end = Start + (step * TelemetryRangeGuardrails.MaxEvaluationPoints);
+
+        var admitted = TelemetryRangeGuardrails.TryValidateRange(
+            Budgets(), Start, end, step, out var message);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.False);
+            Assert.That(message, Does.Contain("evaluation points"));
+        });
+    }
+
+    [Test]
     public void Null_options_are_rejected()
         => Assert.Throws<ArgumentNullException>(
             () => TelemetryRangeGuardrails.TryValidateRange(

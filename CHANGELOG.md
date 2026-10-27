@@ -192,6 +192,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - Telemetry range queries cap evaluation points.** A range query whose window and step would yield more than 11,000 points is refused before reaching the backend, so a tiny step can no longer force an unbounded evaluation. ([#5091](https://github.com/NSTA1/Orleans.Lattice/pull/5091)) (`Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Api.Mcp.Telemetry`)
+
+- **Security - Shared dictionaries never train on tenant data.** Auto-trained compression dictionaries, served to any authenticated peer, no longer sample values from named-tenant trees, so they cannot carry one tenant's data to another. ([#5091](https://github.com/NSTA1/Orleans.Lattice/pull/5091)) (`Orleans.Lattice.Replication`)
+
+- **Security - Ingestion reads refuse symbolic links.** Content, symbol and embedding passes no longer follow a file or directory swapped for a link after the walk, so files outside the workspace cannot be indexed and served. ([#5091](https://github.com/NSTA1/Orleans.Lattice/pull/5091)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
+
 - **Security - MCP origin gate holds under a path base.** Foreign-Origin requests are now refused at the MCP transport endpoint too, so mounting it under a path base or route group no longer bypasses the gate. ([#5070](https://github.com/NSTA1/Orleans.Lattice/pull/5070)) (`Orleans.Lattice.Api.Mcp`)
 
 - **Security - Operation ids join only matching scope.** Re-beginning an operation id joins only when kind, trees and attributes match, and the refusal no longer reveals the existing operation. ([#5070](https://github.com/NSTA1/Orleans.Lattice/pull/5070)) (`Orleans.Lattice`)
