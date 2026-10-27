@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
@@ -30,7 +31,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class CrossTreeSiblingBoundaryIntegrationTests
+public partial class CrossTreeSiblingBoundaryIntegrationTests
 {
     private const string SiteAClusterId = "xtsb-site-a";
     private const string SiteBClusterId = "xtsb-site-b";
@@ -45,11 +46,14 @@ public class CrossTreeSiblingBoundaryIntegrationTests
     private TimeSpan _savedReseedAfter;
 
     [OneTimeSetUp]
-    public async Task SetUp()
+    public Task SetUp() => SetUpAsync();
+
+    internal async Task SetUpAsync(Action<TestClusterBuilder>? configureSiteA = null)
     {
         _savedReseedAfter = LatticeBootstrapCoordinatorGrain.SiblingBoundaryReseedAfter;
         var aBuilder = new TestClusterBuilder(initialSilosCount: 1);
         aBuilder.AddSiloBuilderConfigurator<SiteASiloConfigurator>();
+        configureSiteA?.Invoke(aBuilder);
         _siteA = aBuilder.Build();
         await _siteA.DeployAsync();
 
@@ -541,8 +545,10 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         const string offline = "Offline";
         const string removed = "Removed";
         var samples = new List<string>();
+        using var observation = BeginNaturalObservation(tree, sibling);
 
         await WriteAsync(tree, sibling);
+        await ObserveNaturalBoundaryAsync("after-natural-writes", tree, sibling);
         LatticeBootstrapCoordinatorGrain.SiblingBoundaryReseedAfter = TimeSpan.FromSeconds(10);
 
         var bootstrapTasks = new[]
@@ -565,6 +571,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         Assert.That(recovered, Is.True,
             $"Both imports should leave the mutual sibling hold within two minutes. Samples:{Environment.NewLine}{string.Join(Environment.NewLine, samples)}");
 
+        await ObserveNaturalBoundaryAsync("after-natural-bootstrap-before-explicit-activation", tree, sibling);
         foreach (var treeName in new[] { tree, sibling })
         {
             await Task.WhenAll(
@@ -573,6 +580,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
                 _siteB.Client.GetGrain<IReplicationShipperGrain>($"{treeName}/{SiteAClusterId}")
                     .EnsureActiveAsync(CancellationToken.None));
         }
+        await ObserveNaturalBoundaryAsync("after-explicit-activation-not-a-registration-barrier", tree, sibling);
 
         await _siteA.Client.GetGrain<ILattice>(tree).SetAsync(statusKey, System.Text.Encoding.UTF8.GetBytes(draining));
         await SignalShipperAsync(_siteA.Client, tree, SiteBClusterId);
@@ -596,6 +604,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
 
         var stable = await CaptureDrainStateAsync(tree, sibling);
         var healthyLinks = ReadOutboundHealth(tree, sibling);
+        await ObserveNaturalBoundaryAsync("after-original-health-snapshot", tree, sibling);
 
         Assert.Multiple(() =>
         {
@@ -826,9 +835,11 @@ public class CrossTreeSiblingBoundaryIntegrationTests
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
+            siloBuilder.Services.AddLogging(logging => logging.AddConsole().SetMinimumLevel(LogLevel.Warning));
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = SiteAClusterId);
+            AddNaturalObservations(siloBuilder.Services, SiteAClusterId);
             siloBuilder.Services.AddSingleton<IReplicationTransport, LoopbackDeliveringTransport>();
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllResolver>();
         }
@@ -838,6 +849,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
+            siloBuilder.Services.AddLogging(logging => logging.AddConsole().SetMinimumLevel(LogLevel.Warning));
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeReplication(opts =>
@@ -845,6 +857,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
                 opts.ClusterId = SiteBClusterId;
                 opts.AutoBootstrapOnFallOffLog = true;
             });
+            AddNaturalObservations(siloBuilder.Services, SiteBClusterId);
             siloBuilder.Services.AddSingleton<IReplicationTransport, LoopbackDeliveringTransport>();
             if (SiteATransports.TryGetValue(SiteAClusterId, out var transport))
             {
