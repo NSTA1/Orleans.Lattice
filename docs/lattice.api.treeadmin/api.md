@@ -46,6 +46,8 @@ The following inventory includes directly declared public members and overloads,
 
 ## Shared contract declaration reference
 
+These types are declared in the shared contract package, where the [`Orleans.Lattice.Api.Abstractions` public API](../lattice.api.abstractions/api.md#orleanslatticeapitreeadmin) places the `Orleans.Lattice.Api.TreeAdmin` namespace among every other facade namespace.
+
 The following inventory includes directly declared public members and overloads, enum values, and record positional members. Inherited framework members and compiler-generated record equality helpers are not additional package operations. Each source link identifies the declaration that defines its signature.
 
 ### `Orleans.Lattice.Api.TreeAdmin.ApiTreeAdminTypeAliases`
