@@ -75,6 +75,36 @@ public class ReplicationPeerStatsInboundBoundTests
     }
 
     [Test]
+    public void A_recorder_losing_the_race_for_one_pair_never_refuses_a_different_pair_below_the_cap()
+    {
+        // While a recorder of pair X is inside X's admission window, another recorder admits X
+        // and then a different pair Y arrives. Both pairs fit under the cap, so Y must be
+        // admitted: the losing recorder of X must not hold a slot that refuses Y.
+        var stats = new ReplicationPeerStats(maxInboundRows: 2);
+        var interleaved = false;
+        stats.InboundAdmissionWindowForTesting = () =>
+        {
+            if (interleaved)
+            {
+                return;
+            }
+
+            interleaved = true;
+            stats.RecordInboundSuccess("tree", "origin-x");
+            stats.RecordInboundSuccess("tree", "origin-y");
+        };
+
+        stats.RecordInboundSuccess("tree", "origin-x");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interleaved, Is.True);
+            Assert.That(stats.InboundRowCount, Is.EqualTo(2));
+            Assert.That(stats.Snapshot().Select(s => s.Peer), Is.EquivalentTo(new[] { "origin-x", "origin-y" }));
+        });
+    }
+
+    [Test]
     public void The_default_instance_is_bounded_by_the_default_cap()
     {
         var stats = new ReplicationPeerStats();
