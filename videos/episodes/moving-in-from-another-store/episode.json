@@ -1,0 +1,16 @@
+{
+  "path": "build",
+  "order": 7,
+  "items": [
+    "B7"
+  ],
+  "poster": {
+    "scene": "move-then-verify",
+    "beat": 2,
+    "offset": -0.5
+  },
+  "published": {
+    "cut": "f25d838d6f21",
+    "bytes": 6627835
+  }
+}

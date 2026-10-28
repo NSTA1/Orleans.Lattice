@@ -1,0 +1,142 @@
+<template id="migration-flow-template">
+  <div
+    data-composition-id="migration-flow"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"A one-way import"},
+      {"id":"caption","type":"string","label":"Short context","default":"Seed a tree; keep the source readable"},
+      {"id":"steps","type":"string","label":"JSON list of title, detail and beat","default":"[]"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading mf-heading"></h2>
+    <p class="mf-caption"></p>
+    <ol class="mf-flow"></ol>
+
+    <style>
+      [data-composition-id="migration-flow"] {
+        width: 1920px;
+        height: 1080px;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      [data-composition-id="migration-flow"] .mf-caption {
+        position: absolute;
+        top: 170px;
+        left: var(--lv-safe-x);
+        margin: 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+      [data-composition-id="migration-flow"] .mf-flow {
+        position: absolute;
+        top: 330px;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 32px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      [data-composition-id="migration-flow"] .mf-flow::before {
+        position: absolute;
+        top: calc(var(--lv-node-sm) / 2);
+        left: 10%;
+        right: 10%;
+        height: var(--lv-hairline);
+        background: var(--lt-diagram-edge);
+        content: "";
+      }
+      [data-composition-id="migration-flow"] .mf-step {
+        position: relative;
+        text-align: center;
+      }
+      [data-composition-id="migration-flow"] .mf-node {
+        position: relative;
+        z-index: 1;
+        width: var(--lv-node-sm);
+        height: var(--lv-node-sm);
+        margin: 0 auto;
+      }
+      [data-composition-id="migration-flow"] .mf-title {
+        margin: 42px 0 16px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-heading);
+        line-height: var(--lt-leading-tight);
+      }
+      [data-composition-id="migration-flow"] .mf-detail {
+        margin: 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+        line-height: var(--lt-leading-body);
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="migration-flow"]');
+        const q = (selector) => root.querySelector(selector);
+        const scene = window.LatticeScene;
+        const timing = scene.cue(vars);
+        const { duration } = window.LatticeMotion;
+        const steps = JSON.parse(vars.steps);
+        if (!Array.isArray(steps) || steps.length !== 5) {
+          throw new Error("migration-flow: supply five steps");
+        }
+        for (const step of steps) {
+          if (typeof step.title !== "string" || typeof step.detail !== "string" ||
+              !Number.isInteger(step.beat) || step.beat < 0 ||
+              (timing.beats.length > 0 && step.beat >= timing.beats.length)) {
+            throw new Error("migration-flow: each step needs a title, detail and an in-range beat");
+          }
+        }
+
+        q(".mf-heading").textContent = scene.site(vars.heading);
+        q(".mf-caption").textContent = scene.site(vars.caption);
+        const list = q(".mf-flow");
+        const nodes = [];
+        for (const step of steps) {
+          const item = document.createElement("li");
+          item.className = "mf-step";
+          const node = document.createElement("span");
+          node.className = "lv-node mf-node";
+          const title = document.createElement("h3");
+          title.className = "mf-title";
+          title.textContent = scene.site(step.title);
+          const detail = document.createElement("p");
+          detail.className = "mf-detail";
+          detail.textContent = scene.site(step.detail);
+          item.append(node, title, detail);
+          list.appendChild(item);
+          nodes.push(node);
+        }
+
+        const tl = gsap.timeline({ paused: true });
+        const marker = getComputedStyle(root).getPropertyValue("--lt-marker").trim();
+        const ink = getComputedStyle(root).getPropertyValue("--lt-ink").trim();
+        const surface = getComputedStyle(root).getPropertyValue("--lt-surface").trim();
+        tl.from(q(".mf-heading"), { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0);
+        tl.from(q(".mf-caption"), { opacity: 0, duration: duration.base, ease: "lattice-out" }, 0.25);
+        tl.from(".mf-step", { opacity: 0, y: 18, duration: duration.slow, stagger: 0.12, ease: "lattice-out" }, 0.4);
+        steps.forEach((step, index) => {
+          const at = timing.at(step.beat, index * 3 + 0.6);
+          nodes.forEach((node, nodeIndex) => {
+            const color = nodeIndex < index ? ink : nodeIndex === index ? marker : surface;
+            tl.to(node, { backgroundColor: color, duration: duration.base }, at);
+          });
+        });
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["migration-flow"] = tl;
+      })();
+    </script>
+  </div>
+</template>

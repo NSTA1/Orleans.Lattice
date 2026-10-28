@@ -1,0 +1,172 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:06.155
+Going durable gave the tree durable grain
+storage and a durable write-ahead log.
+
+2
+00:00:06.155 --> 00:00:09.336
+Now we can bring an existing dataset
+into it.
+
+3
+00:00:09.686 --> 00:00:14.823
+A move from Redis, a relational database
+or Cosmos DB is a one-way import.
+
+4
+00:00:14.823 --> 00:00:19.751
+Bulk load seeds a tree; it does
+not keep the source and target in sync.
+
+5
+00:00:20.751 --> 00:00:25.833
+Before the first entry, settle three
+things: the ingest path, the key you
+
+6
+00:00:25.833 --> 00:00:31.540
+compose from each source record, and the
+encoding that turns its value into bytes.
+
+7
+00:00:31.540 --> 00:00:36.622
+Changing keys later is another migration;
+values stay opaque to the core.
+
+8
+00:00:37.622 --> 00:00:39.575
+If the dataset fits in memory,
+
+9
+00:00:39.575 --> 00:00:42.896
+the list-based BulkLoadAsync sorts entries
+for you.
+
+10
+00:00:42.896 --> 00:00:43.938
+For larger sets,
+
+11
+00:00:43.938 --> 00:00:48.886
+stream them in strictly ascending ordinal
+key order from inside the cluster.
+
+12
+00:00:48.886 --> 00:00:50.449
+It does not check order:
+
+13
+00:00:50.449 --> 00:00:54.616
+out-of-order input is accepted
+and leaves the tree out of order.
+
+14
+00:00:54.616 --> 00:00:55.397
+Redis scans,
+
+15
+00:00:55.397 --> 00:01:00.020
+database collations and Cosmos ordering
+may not match the tree's order.
+
+16
+00:01:00.370 --> 00:01:05.103
+If the loader runs outside the cluster,
+use the tree-administration session.
+
+17
+00:01:05.103 --> 00:01:09.587
+It acknowledges chunks and lets you
+resume the last unacknowledged chunk
+
+18
+00:01:09.587 --> 00:01:11.891
+with the same operation id and index.
+
+19
+00:01:11.891 --> 00:01:15.192
+It checks order within each chunk,
+not across chunks,
+
+20
+00:01:15.192 --> 00:01:17.372
+so keep the whole stream ascending.
+
+21
+00:01:17.372 --> 00:01:18.929
+When the source is paged,
+
+22
+00:01:18.929 --> 00:01:22.977
+persist its cursor with the chunk index
+and resume both together.
+
+23
+00:01:23.977 --> 00:01:26.088
+Design keys for the tree's order:
+
+24
+00:01:26.088 --> 00:01:30.503
+compare ordinally, and zero-pad
+numeric segments so ten follows nine.
+
+25
+00:01:30.503 --> 00:01:33.126
+Choose the value encoding before loading.
+
+26
+00:01:33.126 --> 00:01:37.157
+Bulk load does not enforce configured key
+or value size bounds,
+
+27
+00:01:37.157 --> 00:01:39.076
+so check them in the producer.
+
+28
+00:01:39.426 --> 00:01:42.853
+Use the source store's own
+rules to take a consistent cut,
+
+29
+00:01:42.853 --> 00:01:45.335
+then load those entries into a fresh tree.
+
+30
+00:01:45.685 --> 00:01:50.048
+Compare the loaded count with the cut
+and spot-check range boundaries.
+
+31
+00:01:50.398 --> 00:01:55.374
+Apply changes since that cut with
+SetManyAsync; handle deletions separately.
+
+32
+00:01:55.374 --> 00:01:57.011
+That delta is not atomic.
+
+33
+00:01:57.011 --> 00:02:00.874
+Move readers only when the checks
+and changes are complete,
+
+34
+00:02:00.874 --> 00:02:03.493
+and keep the source readable until then.
+
+35
+00:02:04.493 --> 00:02:06.788
+That is the end of the Build path.
+
+36
+00:02:06.788 --> 00:02:09.758
+Next, the Samples page
+in the documentation.
+
+37
+00:02:09.758 --> 00:02:13.673
+The links are on this episode's page
+in the documentation.
