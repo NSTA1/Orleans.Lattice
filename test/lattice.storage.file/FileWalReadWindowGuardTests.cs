@@ -12,11 +12,10 @@ namespace Orleans.Lattice.Storage.File.Tests;
 /// <para>
 /// Each of the three shard-level read overloads
 /// (<c>SnapshotAsync</c>, <c>SnapshotDecodedAsync</c>,
-/// <c>SnapshotFilteredAsync</c>) carries its own private copy of the
-/// <c>maxEntries</c> and <c>maxBytes</c> guards, and the provider's
-/// <c>ReadFilteredAsync</c> carries a fourth copy of the entry guard. They are
-/// separate claims: a guard removed from one overload leaves the other three
-/// passing, so each is asserted where it lives rather than once by proxy.
+/// <c>SnapshotFilteredAsync</c>) uses shared read-limit validation, while the
+/// provider's <c>ReadFilteredAsync</c> also guards the entry limit. Each entry
+/// point is asserted directly so bypassing validation in one overload cannot
+/// leave the fixture passing by proxy.
 /// </para>
 /// <para>
 /// The same reasoning applies to the resumption guards. A reader resumes from
@@ -352,8 +351,8 @@ public sealed class FileWalReadWindowGuardTests
     /// <summary>
     /// <c>IWalReadPressureGovernor</c> is an injectable seam, so the shard cannot
     /// assume its narrowing stays positive. The clamp is observable because
-    /// <c>Narrow</c> admits a further entry only while the running payload total
-    /// does not EXCEED the budget: a zero-byte entry followed by a one-byte entry
+    /// <c>LimitPageByPayloadBytes</c> admits a further entry only while the running
+    /// payload total does not EXCEED the budget: a zero-byte entry followed by a one-byte entry
     /// totals exactly one byte, which fits a clamped budget of 1 and does not fit
     /// the raw 0 the governor returned. Without the clamp the second entry is
     /// dropped, so this pins the clamp itself rather than merely executing it.
@@ -387,8 +386,8 @@ public sealed class FileWalReadWindowGuardTests
     /// is narrowed, a page is never empty. Every reader on this path treats an
     /// empty page as end-of-stream, so a starved page would wedge replay at that
     /// offset permanently. This is pinned by the always-take-one floor in
-    /// <c>Narrow</c> rather than by the budget clamp above, which is why it is a
-    /// separate test: the two fail independently and have different remedies.
+    /// <c>LimitPageByPayloadBytes</c> rather than by the budget clamp above, which
+    /// is why it is a separate test: the two fail independently and have different remedies.
     /// </summary>
     [TestCase(0L)]
     [TestCase(-1L)]
