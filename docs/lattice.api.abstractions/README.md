@@ -29,7 +29,9 @@ The `Orleans.Lattice.Api.Region` namespace carries the transport-agnostic region
 - `LatticeRegionGroupReachability` - whether a facade group is reachable in a region and the endpoint it is served at.
 - `LatticeRegionTenantScope` - one tenant's standing in one region: the tenant id, whether an operator has allowed the region for it, its per-region residency lifecycle status, and whether it is resident there.
 
-The package has no implementation, no registration extension, and no background work. Facade packages reference it and implement the interfaces; binding and MCP packages reference it and consume them.
+Full signatures: [`Orleans.Lattice.Api.Region` in the Public API](api.md#orleanslatticeapiregion).
+
+The package implements none of its service interfaces and has no registration extension and no background work; beyond the declarations it carries only small helpers on its models and one internal mapping shared by the backup, schema and tree-administration facades (see [Architecture](architecture.md)). Facade packages reference it and implement the interfaces; binding and MCP packages reference it and consume them.
 
 ## Why it exists
 
@@ -78,3 +80,7 @@ For a remote surface, add the matching binding (which consumes the same contract
 - [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) / [`.Grpc`](../lattice.api.tenantadmin.grpc/README.md)
 - [`Orleans.Lattice.Api.Apps`](../lattice.api.apps/README.md) / [`.Grpc`](../lattice.api.apps.grpc/README.md)
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)
+
+## Reference
+
+- [Public API](api.md), [architecture](architecture.md), and [long-running operations](operations.md). The package has no options, so it has no configuration page.
