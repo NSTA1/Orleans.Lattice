@@ -29,6 +29,7 @@ No option grants access. The tools are offered and served only to a caller holdi
 
 ## Source map
 
+- [Telemetry configuration](../lattice.api.telemetry/configuration.md) - every inherited `LatticeTelemetryOptions` setting, its default and its validation
 - [Options](../../src/lattice.api.mcp.telemetry/LatticeApiMcpTelemetryOptions.cs) and the inherited [neutral options](../../src/lattice.api.telemetry/LatticeTelemetryOptions.cs)
 - [Validation rules](../../src/lattice.api.telemetry/LatticeTelemetryOptionsValidator.cs)
 - [Registration](../../src/lattice.api.mcp.telemetry/LatticeMcpTelemetryServiceCollectionExtensions.cs)

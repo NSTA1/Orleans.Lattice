@@ -83,8 +83,8 @@ The following inventory includes directly declared public members and overloads,
 
 - `public const string PlatformOperatorScope`
 - `public TenantAdminAccessAuthorizer(ILatticeAccessGate gate, ILatticeMembershipContext? membership = null)`
-- `public async ValueTask AuthorizeTenantAdminAsync(CancellationToken cancellationToken = default)`
-- `public async ValueTask<bool> IsTenantAdminAuthorizedAsync(CancellationToken cancellationToken = default)`
+- `public ValueTask AuthorizeTenantAdminAsync(CancellationToken cancellationToken = default)`
+- `public ValueTask<bool> IsTenantAdminAuthorizedAsync(CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionResidencyAuthorizer`
 
@@ -93,10 +93,10 @@ The following inventory includes directly declared public members and overloads,
 `public sealed class TenantRegionResidencyAuthorizer`
 
 - `public TenantRegionResidencyAuthorizer( ILatticeAccessGate gate, ITenantRegistry registry, ILatticeMembershipContext? membership = null)`
-- `public async ValueTask AuthorizeOperatorAsync(CancellationToken cancellationToken = default)`
+- `public ValueTask AuthorizeOperatorAsync(CancellationToken cancellationToken = default)`
 - `public ValueTask<TenantRecord> AuthorizeTenantAdminAsync( TenantId tenant, CancellationToken cancellationToken = default)`
-- `public async ValueTask<TenantRecord> AuthorizeTenantAdminAsync( TenantId tenant, string action, CancellationToken cancellationToken)`
-- `public async ValueTask<TenantRecord?> TryAuthorizeTenantAdminAsync( TenantId tenant, CancellationToken cancellationToken = default)`
+- `public ValueTask<TenantRecord> AuthorizeTenantAdminAsync( TenantId tenant, string action, CancellationToken cancellationToken)`
+- `public ValueTask<TenantRecord?> TryAuthorizeTenantAdminAsync( TenantId tenant, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantScopeRequiredException`
 
