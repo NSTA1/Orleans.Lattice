@@ -1,10 +1,19 @@
 # Replay permit ownership, independent cold lifetime and resumable banking
 
+## Model scope in one paragraph
+
+A finite replay-owner population shares physical, held and memory-withheld
+capacity. Admission observes class-specific queue and wait bounds; clients have
+deadlines distinct from the shared cold lifetime. Drive budget opportunities
+return outer ownership, while completed slices bank a finite durable prefix.
+The conditional progress premises and intentional hung-cold behavior are
+specified below; neither admission nor fairness is a wall-time SLA.
+
 ## Guarantee correction and verification status
 
 The original #4967 draft promised bounded residency for every permit, including
 hung cold replay. That conflicts with intentional #2871 survival of background
-cold replay across request and activation deadlines. The user explicitly chose
+cold replay across request and activation deadlines. The parent coordinator chose under delegated autopilot (not a direct user selection)
 "Preserve cold replay behavior; explicitly correct the formal guarantee";
 the [public correction](https://github.com/NSTA1/Orleans.Lattice/issues/4967#issuecomment-6389976747)
 is part of this refinement, not an exclusion disguised as a proved guarantee.
@@ -156,7 +165,67 @@ reservation difference is `min(circulating, interactive - 1)`, not always
 independently preserve one circulating permit. Ignoring withholding cannot
 violate that floor. Memory restoration cannot return a service-owned permit.
 
-## Banking and historical attribution
+<a id="banking-and-historical-attribution"></a>
+
+## Defect mutations whose fixes have landed
+
+The closed incidents below motivate distinct mechanisms; a closed issue or a
+merged omnibus is not itself a reproduced root cause. The production negative
+controls in [Detectors](#detectors) establish the mapped seams, not the original
+deployment's throughput, heap size or complete ANN recovery loop.
+
+- [#2781](https://github.com/NSTA1/Orleans.Lattice/issues/2781) introduced the
+  missing memory dimension, repaired by
+  [PR #2804](https://github.com/NSTA1/Orleans.Lattice/pull/2804).
+  `MemoryWithholdingIgnoredUnderPressure` removes pressure withholding while
+  preserving the floor; `FloorOneClampRemoved` independently removes that floor.
+  `ReplayPermitsCoyoteTests.Memory_returns_and_priority_observations_preserve_the_gate_contract`
+  exercises the real withholding/restoration methods and physical accounting;
+  the retained memory-withhold/floor controls reject their production bypasses.
+  [PR #2866](https://github.com/NSTA1/Orleans.Lattice/pull/2866) subsequently
+  added proactive heap observation when slice narrowing swallowed reactive
+  faults. Pressure is an input here: the heap-observation/classifier path and
+  the reported deployment's reclamation chain are not reproduced by this model.
+- [#3284](https://github.com/NSTA1/Orleans.Lattice/issues/3284) was repaired by
+  [PR #3285](https://github.com/NSTA1/Orleans.Lattice/pull/3285), with the
+  harmful-queue refinement in
+  [PR #3295](https://github.com/NSTA1/Orleans.Lattice/pull/3295).
+  `QueueBoundedEnqueueIgnoresRefusal`, `QueueBoundedRefuseDepthQueues` and
+  `SmoothedWaitRefusalAdmits` restore omitted refusal decisions, not a hard
+  queue-cardinality cap. The real admission detectors, including
+  `BPlusLeafGrainTests.A_no_progress_queue_at_the_circulating_bound_is_refused`,
+  assert refusal on harmful observed depth; the retained excessive-wait bypass
+  below independently fails both Interactive and Bulk cases. This matches the gate
+  mechanism, not the separate ANN `OpenSliceBudget` accounting and circuit
+  breaker; no exact model-mutation/production-detector pair for that full loop
+  is claimed here.
+- [#3065](https://github.com/NSTA1/Orleans.Lattice/issues/3065)'s uncancellable
+  starvation-drive frame was repaired by
+  [PR #3078](https://github.com/NSTA1/Orleans.Lattice/pull/3078).
+  `DriveResidencyBoundedBudgetNeverAbandons` removes the budget opportunity that
+  returns the outer drive's ownership. The real detector
+  `BPlusLeafGrainTests.DriveStarvedCheckpointAsync_releases_its_replay_permit_while_the_slice_read_is_still_parked`
+  first establishes actual acquisition, then requires permit return while the
+  provider is still parked. PR #3078 records a budget-removal perturbation that
+  times out rather than returning; the current retained release-control below
+  independently fails at free capacity 1 rather than 2 while storage is parked.
+  This does not identify the host provider's original blocking cause, cancel
+  an independent cold lifetime on a caller deadline, or make eventual banking
+  into a wall-time bound.
+- [#2951](https://github.com/NSTA1/Orleans.Lattice/issues/2951) is design lineage
+  for self-reinforcing cold-replay demand, not a separately certified ANN fix.
+  It was closed by the integration
+  [PR #2482](https://github.com/NSTA1/Orleans.Lattice/pull/2482); that closure
+  does not isolate a root-cause repair. The
+  `NoSelfSustainingBacklogReplacementQueuesAgain` experiment duplicates a
+  shared owner's queue lineage, and
+  `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner`
+  rejects replacement-owner duplication in production. Neither executes the
+  ANN corpus-open/breaker retry loop or establishes why the historical leaf
+  read timed out. That exact end-to-end pairing remains absent.
+
+The banking lineage below is separate from those admission and owner-lifetime
+repairs; in particular, its first sweep reorder was not a complete banking fix.
 
 A completed `ReplaySlice` represents a durably banked slice boundary. Only its
 reached partition advances. An unreached partition must not acquire coverage
@@ -186,7 +255,9 @@ completing the focal leaf. Client replacements preserve their live owner;
 a satisfied barrier never creates a fresh replay attempt. A partial-prefix
 configuration distinguishes a slice advance from whole-window completion.
 
-## Real production negative controls
+<a id="real-production-negative-controls"></a>
+
+## Detectors
 
 Every perturbation below was applied to actual production source, run against
 the named detector and restored before the passing control run. Counts are
@@ -234,6 +305,14 @@ free/withheld capacity, queue, status, role and cancellation membership. Both th
 original cancellation-coupling control and the direct-abandonment control now
 fire independently against clean controls. No Next action or bound changed.
 
+## Property classification (issue #2321)
+
+The [mutation catalogue](replay-permits-mutations/README.md#classification)
+classifies every anchored action, helper and read-definition perturbation.
+There are no added-transition splices. Helper edits are not credited as direct
+Next-action coverage. The target's invariant/action/temporal classification
+does not convert the explicit environment premises into guarantees.
+
 ## Single-target detector corrections
 
 The first final exact-hash sweep executed all 29 Replay pairs and 21 harness
@@ -275,7 +354,9 @@ clean complete-state controls and temporal counterexamples, including
 with the before/after probe source. No target recognition or outcome assertion
 was relaxed, and no Replay model, bound, premise or launch policy changed.
 
-## Non-circular temporal premises and limits
+<a id="non-circular-temporal-premises-and-limits"></a>
+
+## Deliberate abstraction gaps
 
 `ClassNonStarvation` covers both actual queued ambient classes. The external
 load eventually stops offering attempts or replacements; pressure is absent

@@ -10,7 +10,10 @@ as did the complete base and both enrolled larger-bound configurations.
 Each file is an anchored edit against the current base, never a copied model.
 The filename and `MODULE` begin with the target property. The harness generates
 one-target configurations and carries TypeOK beside every non-TypeOK target.
-`BOUNDS` changes only the mutant arm; the clean control retains the base bounds.
+`BOUNDS` leaves the full-bound clean control unchanged. When the generated
+mutant cfg differs, the clean source must additionally hold under that exact
+cfg and the same TLC options before the targeted mutant runs. These controls
+check TypeOK plus the named target, not the complete property set.
 
 ## Classification
 

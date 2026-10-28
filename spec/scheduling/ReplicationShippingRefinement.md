@@ -1,6 +1,8 @@
 # Refinement note: replication shipping opportunities
 
-## Contract and scope
+<a id="contract-and-scope"></a>
+
+## Model scope in one paragraph
 
 This is a finite physical-source shipping window, not the cross-cluster saga
 atomicity protocol. The queue records launch order; accepted acknowledgements
@@ -28,6 +30,8 @@ omit a positive pause, and the real held-terminal regression already exercises
 this shape. The finite first-head opportunity is explicit; it does not claim
 arbitrary custom-policy histories. A later real Healthy/null acknowledgement
 can clear the offered cap, but must not clear this pump's observed-feedback stop.
+
+## Deliberate abstraction gaps
 
 `EveryDeferralBounded` is conditional, retry-driven progress, not a wall-time
 deadline. This is the parent-autopilot scope decision, not a direct user selection, in
@@ -141,7 +145,9 @@ after a window drains, not a measured latency bound.
 | --- | --- |
 | `TypeOK` | Model-domain sanity, not a production representation. Independently targeted by paired mutations; no behavioural action is exempted. |
 
-## Property classification and bounds
+<a id="property-classification-and-bounds"></a>
+
+## Property classification (issue #2321)
 
 Both configurations retain all four invariants and twelve properties, including
 the conditional temporal `EveryDeferralBounded` and `StreamProgresses` checks.
@@ -150,7 +156,40 @@ not an unused constant. Every Next/environment action except Stutter has its
 own production mapping and perturbation. The TypeOK mutation corrupts the clock
 domain; other mutations retain TypeOK and target one property only.
 
-## Real-code evidence
+## Defect mutations whose fixes have landed
+
+[#4692](https://github.com/NSTA1/Orleans.Lattice/issues/4692)'s
+deterministically failing saga terminal lacked an expiry escalation.
+[PR #4695](https://github.com/NSTA1/Orleans.Lattice/pull/4695) added terminal
+timeout/poison and separately repaired cross-tree wait-set drift.
+`ExpiredDeferralNeverPoisons` suppresses the eligible expired terminal's
+`Escalate` arm. The real
+`DeadLetterTrackingReplicationApplierTests.Failing_saga_retry_expires_to_poison_then_quarantine_without_reseed_loop`
+detector executes prepare/commit/abort failures; the retained production expiry
+bypass rejects the lifecycle assertions and Coyote reachability probe.
+This models the receiver escalation mechanism, not the core cross-tree barrier's
+wait-set-freezing protocol.
+
+The first fix was insufficient when the failure survived reseeding.
+[PR #4704](https://github.com/NSTA1/Orleans.Lattice/pull/4704) introduced retained
+retirement and quarantine. `RetiredSagaReentersPoison` restores the second
+poison/reseed cycle, while the same real lifecycle detector requires quarantine
+and no reseed debt after retirement. The original PR records real two-site
+reproduction and production perturbations; this note's later controls exercise
+the current expiry-qualified path, not unconditional immediate quarantine.
+[PR #4709](https://github.com/NSTA1/Orleans.Lattice/pull/4709) made full
+quarantine fail closed and strengthened persisted-state and distinct-record
+detectors. The current capacity mutations and full-queue detectors reject
+acknowledging a record that was not retained.
+
+These are mechanism-level historical attributions. Progress still requires
+eligibility, actual expiry/retry opportunities, capacity, completed reseeding
+and a stable receiver lifetime; an unrepaired decided prepare is intentionally
+held. Retired-history eviction is outside the permanent no-reseed claim.
+
+<a id="real-code-evidence"></a>
+
+## Detectors
 
 #4998 retains the three original assertion-red feedback cases and the later
 held-terminal/mixed-ack counterexample. The Coyote reachability probe executes

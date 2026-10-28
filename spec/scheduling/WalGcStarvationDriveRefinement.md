@@ -1,6 +1,8 @@
 # Refinement note: WAL GC starvation-drive scheduling (CI core)
 
-## Model scope
+<a id="model-scope"></a>
+
+## Model scope in one paragraph
 
 A finite cohort of live, checkpointed leaves shares one sized silo replay gate.
 Repeated GC passes consume a floor-nearest list in its frozen per-pass order.
@@ -79,7 +81,9 @@ checks, as TLC properties, that it refines this core; see its
 |---------------|--------|
 | `TypeOK` | Finite-domain representation sanity, not a production representation. It retains its own paired experiments. |
 
-## Property classification
+<a id="property-classification"></a>
+
+## Property classification (issue #2321)
 
 TypeOK, PermitConservation, ShareRespected, NoAwaitedDrive and RearmRefreshes
 are state safety. TimerReservedSlot, NoDeletedTreeReactivation,
@@ -115,6 +119,63 @@ no production or Coyote obligation, so the production negative controls
 recorded for the original model apply to the same mapped seams.
 
 ## Defect mutations whose fixes have landed
+
+The earlier admission repairs are lineage for the current origin-aware policy,
+not claims that the initial configured-ceiling policy is still sufficient.
+[#3480](https://github.com/NSTA1/Orleans.Lattice/issues/3480) led to
+[PR #3553](https://github.com/NSTA1/Orleans.Lattice/pull/3553)'s non-queueing
+shared physical acquire and bounded GC reservations.
+`ShareRespectedSweepIgnoresReservation` removes the reservation check while
+still requiring physical capacity. The mapped
+`StarvationReplayAdmissionTests.Acquisition_reserves_only_the_gc_share` and
+`WalGcStarvationDriveCoyoteTests.Sweep_timer_and_cold_returns_preserve_reservations_and_conditional_headroom`
+exercise the actual admission/release policy; the retained share-bypass control
+rejects excess reservations. Ordinary cold owners consume physical capacity,
+not GC reservations, as also covered by ReplayPermits' independent
+`ClassPriorityDriveCountsColdOwners` mutation.
+
+[#3575](https://github.com/NSTA1/Orleans.Lattice/issues/3575) was repaired by
+[PR #3582](https://github.com/NSTA1/Orleans.Lattice/pull/3582)'s timer/sweep
+origin split, conditional headroom and uncharged refusal handling.
+`TimerReservedSlotTimerTakesLastSlot` and
+`TimerReservedSlotSingleSlotNoHold` restore the timer's ability to consume that
+headroom. The single-slot and Coyote detectors above exercise the real policy.
+`RefusalNotChargedChargeRefusal` and
+`RefusalNotChargedRefusalAfterSuccessCharged` target consumer budget accounting;
+`LatticeWalGcSchedulerCadenceTests.ExecuteAsync_refunds_admission_refusals_after_a_prior_completed_drive`
+rejects the real refund bypass even after earlier successful debt. These
+controls reproduce those mechanisms, not the historical refusal percentage or
+every timer logging/exception path.
+
+[#3610](https://github.com/NSTA1/Orleans.Lattice/issues/3610)'s
+[PR #3626](https://github.com/NSTA1/Orleans.Lattice/pull/3626) repaired both
+circulating-share sizing and the first floor-holder ordering.
+`NearestFirstNoNearestFirst` and `FirstTouchAloneConcurrentLead` undo the latter
+at `GcPass`. The real
+`LatticeWalGcSchedulerCadenceTests.A_pass_with_one_free_replay_slot_spends_it_on_the_floor_holder_not_a_leaf_above_it`
+enters through the hosted scheduler and rejects the ordering bypasses.
+The share uses `Ceiling - Withheld`; ShareOne checks a smaller circulating
+pool. Withheld capacity is fixed per execution, however, and
+`ShareRespectedSweepIgnoresReservation` removes admission enforcement rather
+than reinstating the historical omitted-withholding call-site argument.
+There is no exact one-target model mutation for that arithmetic regression in
+this catalogue; the historical PR's call-site negative control and the real
+`StarvationReplayAdmissionTests.The_gc_share_is_sized_from_the_permits_in_circulation_not_the_configured_ceiling`
+must not be relabelled as that missing experiment.
+
+[#3612](https://github.com/NSTA1/Orleans.Lattice/issues/3612) was repaired by
+[PR #4830](https://github.com/NSTA1/Orleans.Lattice/pull/4830).
+`NoAskWithoutWalAheadNoWalHeadTest` restores requests by caught-up leaves;
+`RearmRefreshesSecondRefreshSkipped` and `RearmRefreshesReArmNoJitter` omit
+per-opportunity refresh. The real
+`BPlusLeafGrainTests.Coverage_stall_timer_caught_up_leaf_never_requests_a_replay_permit`
+checks inclusive checkpoints against the exclusive live head, including later
+append; `Coverage_stall_timer_refreshes_its_phase_on_every_refused_or_deferred_opportunity`
+distinguishes repeated refresh from first-refresh-only behavior. Their retained
+production bypasses reject those mechanisms. The model witnesses refresh, not
+random phase distribution or deterministic desynchronization of arbitrary
+cohorts. Finite timer competition, returned capacity, delivered continuations
+and timely earned banking remain separate liveness premises.
 
 The timer dispatch/interleaving repair is integrated in
 [PR #4950](https://github.com/NSTA1/Orleans.Lattice/pull/4950).

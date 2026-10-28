@@ -49,8 +49,8 @@ be quiet about one.
 | [`scheduling/`](scheduling/README.md#wal-back-pressure) | `WalBackPressure` | Tree-wide cached classification, scoped consumer responses, recovery hysteresis and signal-independent relief under explicit progress premises. |
 | [`scheduling/`](scheduling/README.md#replay-permits) | `ReplayPermits` | Physical and memory-withheld permit ownership, priority admission, bounded warm drives and shared cold-owner lifetime isolation. |
 | [`scheduling/`](scheduling/README.md#replication-shipping) | `ReplicationShipping` | Physical-source FIFO windows, sticky pump feedback, receiver deferral/capacity boundaries and conditional retry progress. |
-| [`scheduling/`](scheduling/README.md#wal-gc-starvation-drive) | `WalGcStarvationDrive` | Cold-permit ownership, GC sweep share and admission, timer turn release across replay drives, rearm refresh and starvation-free tree-wide trim progress under explicit fairness premises. |
-| [`scheduling/`](scheduling/README.md#wal-gc-starvation-drive) | `WalGcStarvationDriveWitness` | Queued-call and stall witness that refines onto `WalGcStarvationDrive`, proving the abstracted leaf call and stall structure preserves its initial state, steps and fairness. |
+| [`scheduling/`](scheduling/README.md#wal-gc-starvation-drive) | `WalGcStarvationDrive` | Cold-permit ownership, frozen floor-first sweep order, share admission, timer turn release and rearm refresh; floor progress requires returned capacity, finite competition and appends, a stable live tree, runtime opportunities and timely earned-prefix banking. |
+| [`scheduling/`](scheduling/README.md#wal-gc-starvation-drive) | `WalGcStarvationDriveWitness` | Bounded queued-call and stall witness with explicit initial-state, step and fairness projection obligations onto `WalGcStarvationDrive`; these model-to-model obligations are not additional production guarantees or a latency bound. |
 | [`scheduling/`](scheduling/README.md#materialiser-drain) | `MaterialiserDrain` | Separate online-copy, leaf-durability and WAL-shutdown drain boundaries, pressure-responsive service and live split routing. |
 | [`scheduling/`](scheduling/README.md#saga-and-reader-progress) | `SagaReadProgress` | Consistent decision cuts, bounded optimistic-to-gated fallback, pressure-independent terminal delivery and original-caller acknowledgement after durable completion. |
 | [`scheduling/`](scheduling/README.md) | `TagIndexReconcile` | Single-sweep probe/repair progress, successful completion and baseline banking, bounded phase callbacks and reminder recovery. |
@@ -217,16 +217,24 @@ discovered module, and each test case is named with the module
 
 - `TlcModelCheckTests` (category `Tlc`): the base model holds with the
   manifest's state count, each variant configuration holds with its own count,
-  and each mutation runs as a two-arm (or, with `DEADLOCK: off`, three-arm)
-  experiment. A mutation's `BOUNDS:` header shrinks only the mutant arm's
-  instance; the control arm always checks the module's own bounds, and
-  mutations that build the same control share one run of it.
+  and each mutation retains a clean full-bound control plus its targeted
+  mutant. If `BOUNDS:` changes the generated cfg, a second clean-source
+  control must hold under that exact mutant cfg. Both controls use the same
+  TLC options as the targeted mutant. `DEADLOCK: off` adds a mutant run with
+  deadlock checking on and `-lncheck final`, which must report deadlock.
+  Thus a mutation has two, three or four arms. The mutation controls check
+  `TypeOK` plus only the named target (once if the target is `TypeOK`), not
+  the module's complete property set; the separate base/variant gates check
+  their own full cfgs. Bounds may shrink, enlarge or otherwise change the
+  instance, for invariant, action or temporal targets alike.
 - `SpecMutationCatalogueTests`: every checked property is paired, the counts
   match, `TypeOK` is checked, temporal properties sit under `PROPERTIES`, every
   mutation applies to the current base and changes something, every generated
   cfg names its target once, every variant and every mutation `BOUNDS:` header
-  assigns only names the specification has, and only the mutant arm carries a
-  mutation's bounds.
+  assigns only names the specification has, and the full-bound generated cfg
+  retains the base assignments while the mutant cfg adds the declared bounds.
+  The TLC pairing gate also uses that mutant cfg for its matching-bound
+  clean-source control.
 - `SpecActionMutationCoverageTests`: the note's action table matches `Next`, and
   every behavioural action is perturbed by a mutation that really edits it.
 - `RefinementNoteTests`, `RefinementPropertyCoverageTests`,
@@ -349,11 +357,13 @@ the failure the atomicity audit (epic #2299) found four times over.
 
 Every property of every module is paired with at least one mutation, every
 protocol action in each module's `Next` is perturbed by at least one (issue
-#2322, gated by `SpecActionMutationCoverageTests`), and each pairing runs as a
-two-arm experiment: the generated single-property model must be **clean**
-against the unmutated specification and **violated** against the mutant. The
-control arm is what makes a red mutant evidence rather than merely a red run,
-and it is the standing proof that the fixture is not vacuous. See
+#2322, gated by `SpecActionMutationCoverageTests`). Each pairing requires a
+**clean** unmutated full-bound control and a **violated** mutant, checking
+`TypeOK` and the single target. A differing mutant cfg additionally requires
+the clean source to hold under that exact cfg and the mutant's TLC options.
+`DEADLOCK: off` adds the separate deadlock-on mutant control. The clean
+controls are what make a red mutant evidence rather than merely a red run,
+and they are the standing proof that the fixture is not vacuous. See
 [`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md).
 
 The local invocation documented above remains supported and is still the fast
@@ -371,18 +381,33 @@ broken pipeline rather than a missing convenience.
 
 ## CI budget
 
-TLC time is dominated by how many TLC processes run, not by state-space size,
-except for temporal mutants, which pay for the whole state graph before TLC
-reports the violation; those declare `BOUNDS:` to run on the smallest instance
-that still exhibits it (see the mutation format in
-[`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md)):
-the atomic-commit base model finishes in about six seconds on an idle machine,
-and most of each run is JVM start-up. A module costs one run for its base model,
-two per mutation (the control arm and the mutant), one more per
-`DEADLOCK: off` mutation and one per variant configuration, so the atomic-commit
-module costs 43 runs. A variant's run is usually the most expensive one of its
-module - it exists to check a larger bound - so measure it on two workers to
-estimate shard cost: `WalDurability.TwoFaults` takes about forty seconds there.
+Price both process launches and reachable-state/liveness cost. JVM startup can
+dominate small models; a temporal check can require the complete state graph.
+`BOUNDS:` may reduce that cost, or enlarge an instance to reach the intended
+counterexample. The clean source must also hold at that matching bound.
+
+For one complete, successful base/variant/mutation selection with no reused
+controls, the launch count is `1 + V + 2*M + B + D`: one full base run, `V`
+variant runs, a full-bound clean control and targeted mutant for each of `M`
+mutations, `B` additional matching-bound clean controls whose generated cfg
+differs, and `D` deadlock-on mutant runs for `DEADLOCK: off`. A mutation with
+both headers therefore costs four launches. This is launch accounting, not
+elapsed-time pricing or a new measured census; early failure can prevent later
+arms from running, and separate smoke/discovery or harness controls cost extra.
+
+`ControlRuns` reuses only an identical complete input within the same test
+process: specification path, base source, full generated cfg text, TLC options
+and sorted sibling module names/text. Its key includes the generated mutation
+name comment, so distinct mutation names do not share controls merely because
+their target, bounds and options match. Repeated requests for the exact same
+key share one lazy result, including failure; there is no cross-process cache.
+Deduct launches only for such actual cache hits, not assumed cross-mutation
+reuse. Base, variant, targeted-mutant and deadlock-on runs bypass this cache.
+
+Measure each selected arm on the intended worker/heap settings rather than
+turning the formula into a runtime guarantee. The historical atomic-commit
+figures below predate matching-bound controls and do not price a current
+selection with changed inputs.
 
 Measured on a 16-core Windows workstation that other builds were loading at the
 time (so treat the figures as an upper bound), for the atomic-commit module's

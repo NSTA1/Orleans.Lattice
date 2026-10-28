@@ -1,6 +1,8 @@
 # Refinement note: activation-local turn occupancy
 
-## Model scope
+<a id="model-scope"></a>
+
+## Model scope in one paragraph
 
 An activation has an exclusive turn, one queued foreground call, one finite
 coverage-lag timer episode, and an external drive. This is the explicit turn
@@ -45,7 +47,9 @@ completion. It is not a general Orleans scheduler or an unbounded request stream
 |---------------|--------|
 | `TypeOK` | Finite-domain model sanity, not a production state representation. Its own paired mutation still executes. |
 
-## Property classification
+<a id="property-classification"></a>
+
+## Property classification (issue #2321)
 
 ExclusiveTurn, NoAwaitedDrive and TurnServedWithinBound are state safety
 predicates. TypeOK is domain safety. EveryCallServed is temporal liveness under

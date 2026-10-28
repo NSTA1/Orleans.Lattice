@@ -242,7 +242,7 @@ This is the right shape when:
 
 ## Formal model
 
-[`WalAdmission`](../../spec/scheduling/README.md) separates the partition's
+[`WalAdmission`](../../spec/scheduling/WalAdmissionRefinement.md) separates the partition's
 parked saturation waits, paced release and admission capacity. A release from
 `WaitForHealthyAsync` completes a gate wait; it does not reserve an admission
 semaphore slot or acknowledge an append. Its bounded residue claim is therefore
@@ -250,6 +250,15 @@ about recovery-release rounds under the module's stated premises, not a
 wall-clock latency or arbitrary offered-load guarantee. See
 [Verified Scheduling and Progress](verified-scheduling.md) for the production
 detector boundary and the limits of fairness assumptions.
+
+[`WalBackPressure`](../../spec/scheduling/WalBackPressureRefinement.md) checks
+classifier scope, recovery hysteresis and the writer, saga, snapshot, receiver
+and view consumers as one bounded control loop. Flush, drain, GC, checkpoint,
+pin and terminal relief do not wait on the saturation signal they relieve;
+terminal writes still require admission capacity and storage completion.
+Recovery requires sampling and relief opportunities, disappearing acute causes
+and, for eventual Healthy, no sustained throttling input and a finite recovery
+window. Fairness does not supply capacity or a finite latency guarantee.
 
 ## See also
 

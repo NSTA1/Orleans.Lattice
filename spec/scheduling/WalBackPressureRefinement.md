@@ -147,6 +147,27 @@ claimed.
 
 ## Defect mutations whose fixes have landed
 
+[#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) included
+tree-wide coupling of an ordinary append to a busy sibling partition.
+[PR #3391](https://github.com/NSTA1/Orleans.Lattice/pull/3391) repaired that
+scope. `PartitionScopedRefusalTreeWideVerdict` restores the tree roll-up at
+`GateCheck`; the mapped real
+`WalSaturationCrossPartitionBlockingTests.AppendAsync_to_idle_partition_is_admitted_while_a_different_partition_is_saturated`
+distinguishes the idle target from the saturated sibling through the real
+append path. This is a source-mapped mechanism, not a new experiment.
+The acute-only admission policy proposed in closed, unmerged
+[PR #3443](https://github.com/NSTA1/Orleans.Lattice/pull/3443) reached main
+through [PR #3455](https://github.com/NSTA1/Orleans.Lattice/pull/3455).
+The current view consumer controls below independently distinguish Throttled
+reduction from admission refusal.
+
+The incident was closed by
+[PR #3455](https://github.com/NSTA1/Orleans.Lattice/pull/3455)'s combined gate,
+WAL-offset allocation and transport path, not by the scoped gate alone.
+`PartitionScopedRefusal` reproduces the gate mechanism; it does not model Azure
+offset-row contention, transport waves or the observed set-many throughput.
+Those are historical fix lineage, not additional certified scheduling claims.
+
 The #4986 terminal relief control reinstates the mechanism repaired in this member:
 prepared writes can pin progress while their terminal waits on the same signal.
 The real writer regression first failed for all four commit/abort point/batch

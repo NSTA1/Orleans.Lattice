@@ -1,6 +1,8 @@
 # Refinement note: WAL signal release and semaphore admission
 
-## Model scope
+<a id="model-scope"></a>
+
+## Model scope in one paragraph
 
 Finite callers park on partition signal queues, recover in oldest-first batches,
 and separately acquire capacity. A finite acute-fault episode can remain on
@@ -60,7 +62,9 @@ assumptions. Per-call and per-wait budget counters are independent observations.
 |---------------|--------|
 | `TypeOK` | Model-domain sanity, not the production representation; still paired with its own violating mutation. |
 
-## Property classification
+<a id="property-classification"></a>
+
+## Property classification (issue #2321)
 
 TypeOK, CapRespected, NoLostWaiter and RefusalOnlyWhenSaturated are state safety.
 OldestFirst, PerPartitionIsolation, UpgradeSound, PacedRecoveryRelease,

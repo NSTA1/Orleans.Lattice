@@ -185,6 +185,24 @@ flowchart LR
 
 ## Formal verification
 
+**Scheduling model.**
+[`ReplicationShipping`](../../spec/scheduling/ReplicationShippingRefinement.md)
+checks in-flight limits, acknowledgement-ordered cursor progress within one
+physical source lineage, observed receiver flow control and safe retry-driven
+deferral recovery. `SagaDeferralTimeout` makes an eligible failed prepare or
+terminal recoverable on a later retry; it does not force acknowledgement of a
+decided prepare or when poison, quarantine or dead-letter capacity is full.
+Progress requires eligibility, safe recovery capacity, finite transient transport
+faults, fair processing/retry and elapsed-time opportunities, completed reseeding
+and a stable receiver lifetime long enough to observe expiry. Retries alone do
+not advance elapsed time. A decided prepare additionally needs its application
+fault to clear. Restarts lose volatile first-deferral history, so this is not an
+across-restart timeout or wall-clock latency guarantee. The no-reseed-cycle result
+requires retained retirement history: the finite model does not cover arbitrary
+histories that evict the bounded production marker. The protocol-safety models
+below remain separate; see also
+[Verified scheduling and progress](../lattice/verified-scheduling.md).
+
 The plain replication protocol has a design-level TLA+ specification,
 [`spec/replication/Replication.tla`](../../spec/replication/README.md), checked
 exhaustively by TLC on every pull request over a bounded instance of three

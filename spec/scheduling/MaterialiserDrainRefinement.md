@@ -76,7 +76,9 @@ ReplayAdmission represents the completed grant/refusal boundary of ReplayPermits
 |---------------|--------|
 | `TypeOK` | Finite-domain model sanity, with its own paired mutations; not production representation. |
 
-## Property classification
+<a id="property-classification"></a>
+
+## Property classification (issue #2321)
 
 The six invariants are state safety. ConsumerBatchesRespond,
 CheckpointAfterApply and SourceReadUsesLiveTopology are action safety.
@@ -188,6 +190,20 @@ already-certified imported consumer-policy module, unchanged from the explicit
 dependency boundary f62ba058f9dab86f587cc9a9dca98d1a1051de4a.
 
 ## Defect mutations whose fixes have landed
+
+[#4905](https://github.com/NSTA1/Orleans.Lattice/issues/4905)'s aliased
+rebuild/reconcile source reads used stale physical topology after a split.
+The live-topology repair landed in
+[PR #4909](https://github.com/NSTA1/Orleans.Lattice/pull/4909).
+`RebuildProgressAcrossAliasFrozenPhysicalMap` reinstates the stale route in
+`RefreshSourceRouting`; `SourceReadUsesLiveTopologyAcceptStaleRoute`
+independently accepts the stale read. The real
+`ViewMaintainerRebuildIdentityTests.Repair_refreshes_the_live_alias_topology_after_a_source_key_moves`
+exercises both rebuild and reconcile: one stale response moves the key, the
+retry must use the live root, and the captured physical WAL identity must not
+change. The retained `frozen-physical-topology` production bypass fails both cases;
+the historical PR's separate scanner bypass stayed green and was not credited
+as evidence for this fix.
 
 The offset-based drain-age repair and starvation-drive interleaving are already
 baseline. The frozen topology mutation captures the stable-identity/live-map

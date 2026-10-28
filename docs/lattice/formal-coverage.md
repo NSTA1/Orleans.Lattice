@@ -49,21 +49,35 @@ its six checked modules.
 
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
-| WAL durability lifecycle | 2 | 60 | 56 | 138 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 2 | 61 | 57 | 140 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 4 | 105 | 100 | 166 | [Verified Shard Ownership](verified-shard-ownership.md) |
-| Cross-cluster atomic visibility | 1 | 59 | 39 | 116 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
-| Replication convergence | 4 | 82 | 64 | 190 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
+| Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
+| Replication convergence | 4 | 82 | 64 | 193 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
-| B+ tree topology | 6 | 100 | 140 | 65 | [B+ tree topology](../../spec/bplustree/README.md) |
+| B+ tree topology | 6 | 100 | 140 | 62 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Scheduling and progress | 8 | 159 | 205 | 107 | [Verified Scheduling and Progress](verified-scheduling.md) |
+| Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
+| Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
+| Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
+| Scheduling and progress | 10 | 196 | 244 | 119 | [Verified Scheduling and Progress](verified-scheduling.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
 rows cite.
+
+The scheduling census includes the GC core and clocked witness. In
+[CI run 40588708711](https://github.com/NSTA1/Orleans.Lattice/actions/runs/40588708711),
+all 221 scheduling cases passed on GC member head `9be5db45`: ten base
+configurations, fifteen variants and 196 paired mutations. All four scheduling
+TRXs report zero failed or unexecuted cases; their 221 unique actual names
+match discovery from the ten exact-head manifests without omission or duplication.
+This is an exact scheduling-only executed certificate, not overall CI success
+or final bucket compatibility: the overall run failed outside those jobs.
+The cases are not 221 JVM launches. Targeted clean controls check TypeOK plus
+their single named target; matching-bound and deadlock controls can add launches.
 
 ## Scheduling foundation and historical controls
 
@@ -225,13 +239,36 @@ an unconditional lifetime bound on shared cold work.
 `ReplicationShipping` adds 26 one-target mutations and 33 behaviour rows.
 Its 20 distinct detector names overlap the prior seven-module census by four,
 including the Healthy receiver method whose source-negative evidence is new.
-The exact eight-module union is 159 mutations/205 rows/107 methods, not a sum
+The prior eight-module union is 159 mutations/205 rows/107 methods, not a sum
 of per-source-evidence ownership counts. The base and FourRecords full
 configurations retain all four invariants and twelve properties at 527689 and
 3306850 distinct states. The
 [area description](../../spec/scheduling/README.md#replication-shipping) records
 the finite FIFO window, shared classifier consumer, conditional deferral and
 fail-closed storage assumptions.
+
+### GC starvation-drive source census and evidence boundary
+
+The GC core adds 23 mutations and 26 behaviour rows. The clocked witness adds
+14 mutations and 13 behaviour rows. It also retains three model-to-model
+refinement obligations outside the production-behaviour census. The core cites
+fourteen distinct production detector members: twelve are new to the prior eight-module
+union and two are shared. The witness cites eleven members of that same set,
+so it adds no further distinct production detectors. The resulting source union
+is 196 mutations, 244 behaviour rows and 119 detector members.
+
+The authenticated CFF B2-B7 evidence covers six paired cases and eighteen
+retained arms: twelve clean controls, five named action violations and one
+ShareRespected invariant violation. Each pair includes its exact matching-bound
+clean control, including the two-leaf, Ceiling-two reservation case. This is
+historical six-pair evidence, not the complete GC selection. The later scheduling
+jobs in run 40588708711 passed all 221 exact-manifest cases on `9be5db45`,
+including the complete GC selection;
+the overall run was red. Neither the six pairs alone nor those member-job
+outcomes establish final bucket compatibility.
+The [GC scope](verified-scheduling.md#gc-starvation-drive-progress) retains the
+finite-load, capacity, runtime and timely-banking premises; jitter and fairness
+do not establish bounded latency.
 
 ## Focused materialised-view companions
 
@@ -490,7 +527,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
 | Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
-| Scheduling and progress | #4976, #4979 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
+| Scheduling and progress | #4976, #4977, #4979, #4985, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 
 ## CI partition and non-vacuity
 

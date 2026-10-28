@@ -63,7 +63,9 @@ checks scheduling, not the membership CRDT or row-level repair algorithm.
 |---------------|--------|
 | `TypeOK` | Finite-domain model sanity, not a production representation. It retains its own paired experiment. |
 
-## Property classification
+<a id="property-classification"></a>
+
+## Property classification (issue #2321)
 
 TypeOK, ProbeOnlyNeverRepairs and ChunkBounded are state safety.
 BaselineOnlyAfterRepair, SingleSweep and RepairCursorOnlyAfterCompletion

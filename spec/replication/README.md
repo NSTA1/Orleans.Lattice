@@ -268,7 +268,8 @@ java -XX:+UseParallelGC -cp C:\path\to\tla2tools.jar tlc2.TLC -workers auto -con
 
 A clean run ends with `Model checking completed. No error has been found.`
 The `TlcModelCheckTests` fixture runs the same check, and every mutation's
-two-arm experiment, in CI; see [the spec README](../README.md#ci-decision).
+controlled experiment, including any matching-bound clean and deadlock-on
+controls, in CI; see [the spec README](../README.md#ci-decision).
 
 ## Last checked
 

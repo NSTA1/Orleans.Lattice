@@ -24,7 +24,7 @@ and admitting an append is not completing its storage flush. Likewise,
 dispatching background work is not awaiting that work inside a non-reentrant
 grain turn. A refinement mapping must preserve these distinctions.
 
-The checked scheduling seams are:
+The scheduling seams are:
 
 | Module | Boundary represented |
 | --- | --- |
@@ -36,6 +36,17 @@ The checked scheduling seams are:
 | `MaterialiserDrain` | Online-copy slots, leaf replay/checkpoint/pin progress, finite-budget WAL shutdown, cooperative view service and stable-identity live routing. |
 | `SagaReadProgress` | Consistent multi-key decision cuts, bounded gated fallback, pressure-independent terminals and original caller acknowledgement after completion durability. |
 | `TagIndexReconcile` | A single durable probe/repair sweep, successful baseline publication, per-phase tree work and timer/reminder recovery. |
+| `WalGcStarvationDrive` | Frozen per-pass floor-first touch order, share admission, refusal accounting, returned drive ownership and conditional durable floor progress. |
+| `WalGcStarvationDriveWitness` | A clocked turn/call witness and bounded projection onto the GC core, including explicit model-to-model refinement obligations. |
+
+The scheduling jobs in [CI run 40588708711](https://github.com/NSTA1/Orleans.Lattice/actions/runs/40588708711)
+passed all 221 scheduling cases on GC member head `9be5db45`: ten bases,
+fifteen variants and 196 paired mutations, including the GC core and witness.
+The actual passing TRX names match discovery from all ten manifests exactly.
+The overall run failed outside those jobs; this is scheduling-job evidence,
+not a green bucket integration certificate. The subsystem documentation
+fixture separately passed all 54 cases, including the three GC target-existence
+checks, against bucket `f732d8f9` combined with that exact GC source.
 
 `TurnOccupancy` uses the turn-holder, queued-call and awaited-completion
 vocabulary of the existing
@@ -229,6 +240,28 @@ The [area description](../../spec/scheduling/README.md#replay-permits) separates
 the full configurations, exact one-target model pairs and actual production
 regressions from the repaired temporal-equivalence probe. Its Coyote case calls
 the production memory/admission seams, rather than implementing a second ledger.
+
+## GC starvation-drive progress
+
+The [GC core refinement](../../spec/scheduling/WalGcStarvationDriveRefinement.md)
+separates admission from durable pin progress. A pass freezes its nearest-floor
+order instead of re-sorting after each pin change. A refused touch does not
+spend the attempt budget; retry credit comes from a non-refused sibling
+completion, not from an arbitrary timer tick. Tree deletion remains a separate
+reactivation gate, and an inclusive pin is compared with the exclusive WAL head.
+
+Dispatch returns the grain turn while the drive remains outstanding. The outer
+drive budget can return ownership while an inner read-only provider is still
+parked; neither event alone proves a durable floor advance. Progress additionally
+requires returned physical capacity, a stable live tree, finite competing timer
+episodes and appends, delivered runtime continuations, and earned-prefix banking
+that completes within a live drive budget.
+
+The [clocked witness](../../spec/scheduling/WalGcStarvationDriveWitnessRefinement.md)
+adds call delivery and checks its projection onto the core at its own bounded
+instance. Its refinement obligations are not additional production guarantees.
+Refreshing a rearm offset is not a deterministic jitter-fairness theorem, and
+neither runtime fairness nor an abstract drive budget bounds wall-clock latency.
 
 ## Replication shipping and receiver progress
 

@@ -1,6 +1,8 @@
 # Refinement note: WAL GC starvation-drive scheduling (refinement witness)
 
-## Model scope
+<a id="model-scope"></a>
+
+## Model scope in one paragraph
 
 This module keeps the two mechanisms the CI core
 [WalGcStarvationDrive](WalGcStarvationDrive.tla) abstracts: the per-leaf stall
@@ -62,7 +64,9 @@ by dropping the stall and call fields. See the core's
 | `CoreStepRefined` | Model-to-model refinement obligation onto WalGcStarvationDrive; no production counterpart. It retains its own paired experiments. |
 | `CoreFairnessRefined` | Model-to-model refinement obligation onto WalGcStarvationDrive; no production counterpart. It retains its own paired experiments. |
 
-## Property classification
+<a id="property-classification"></a>
+
+## Property classification (issue #2321)
 
 TypeOK and CoreInitRefined are state safety. CoreInitRefined is the invariant
 `fresh => Core!Init` over the explicit `fresh` marker, which `MarkedInit` sets
@@ -87,6 +91,26 @@ CoreFairnessRefinedReArmUnfair removes a fairness condition the core requires.
 TurnNotHeldAcrossDrive maps to the same timer detector as the core's
 TurnReleased. The refinement properties are model-to-model obligations and have
 no production detector.
+
+## Defect mutations whose fixes have landed
+
+The production turn-retention defect
+[#4949](https://github.com/NSTA1/Orleans.Lattice/issues/4949) was repaired by
+[PR #4950](https://github.com/NSTA1/Orleans.Lattice/pull/4950).
+The shared real
+`BPlusLeafGrainTests.Coverage_timer_dispatch_releases_the_turn_while_storage_is_pending`
+rejects the production timer's non-interleaving registration. This witness
+retains the original foreground-call obligation:
+`TurnNotHeldAcrossDriveCallNeverServed` suppresses `CallServe` and checks
+foreground progress explicitly. It is not the same edit as restoring timer
+turn retention, and does not establish an independent historical production
+fix. The core's historical section records the shared admission, refusal,
+ordering and rearm lineage.
+
+The `CoreInitRefined`, `CoreStepRefined` and `CoreFairnessRefined` mutations
+test model-to-model projection, not historical production defects. They have
+no production detector or fixing PR of their own; the checked bound and
+parametric argument remain qualified below.
 
 ## Deliberate abstraction gaps
 

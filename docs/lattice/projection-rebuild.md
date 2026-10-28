@@ -599,6 +599,22 @@ when trigger 1 fires, and every value currently fails closed:
 
 ### Starvation-drive admission
 
+**Formal model.**
+[`WalGcStarvationDrive`](../../spec/scheduling/WalGcStarvationDriveRefinement.md)
+models sweep/timer competition for the shared replay-permit budget, uncharged
+refusals, re-arm and timer dispatch outside a held turn. The runner consumes a
+frozen per-pass order, selected nearest-floor first; advancing pins do not
+continuously re-sort that pass. A later non-refused sibling completion, not an
+unobserved timer return, credits an in-pass retry. Admission progress assumes
+returned physical capacity, a stable undeleted tree and recurring GC/runtime
+opportunities. Floor advancement additionally requires timely durable progress
+within the drive budget, including earned checkpoint/coverage/pin banking;
+returning a permit or eventually completing storage is not enough. The finite
+instance assumes finite timer competition and finite WAL append. These runtime
+opportunities do not prove arbitrary-load progress, a wall-clock latency bound
+or deterministic fairness from jitter. The refinement distinguishes those
+premises from executed evidence and resource targets.
+
 Background starvation drives share the same process-wide replay permits as
 leaf activations, but never queue for one. Across all trees, drives may hold
 at most half the replay permits in circulation - the configured replay
@@ -872,6 +888,13 @@ with `LeafProjectionStaleException`, whatever the configured
 fall-off path is a safety net for **active** leaves.
 
 ### Resumable cold replay
+
+**Formal model.**
+[`ReplayPermits`](../../spec/scheduling/ReplayPermitsRefinement.md) checks that
+banked prefixes survive abandonment and that cold-owner cancellation is distinct
+from caller expiry. Completion still requires runtime continuations and durable
+prefix/teardown writes; a caller timing out does not establish a cold-owner
+residency bound or authorize discarding its replay progress.
 
 The activation-time WAL replay that rebuilds a leaf's projection cache
 is **resumable**. A leaf rebuilds its cache from the WAL on every
