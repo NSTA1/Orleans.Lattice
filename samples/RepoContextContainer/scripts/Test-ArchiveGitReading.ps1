@@ -179,6 +179,19 @@ $anchorParenthetical = 'not a git repository (or any of the parent directories)'
 $anchorBare = 'not a git repository:'
 $anchorCorrupt = 'invalid gitfile format'
 
+# Git versions diagnose a dangling worktree gitfile in either of these forms.
+# Match the complete failed reading, not just exit 128 or an arbitrary fatal error.
+function Test-OrphanedRepositoryProbe {
+	param(
+		[int] $ExitCode,
+		[AllowEmptyString()] [string] $StdOut,
+		[AllowEmptyString()] [string] $StdErr
+	)
+
+	return ($ExitCode -eq 128 -and [string]::IsNullOrWhiteSpace($StdOut) -and
+		[regex]::IsMatch($StdErr, '\Afatal: (?:not a git repository: |gitfile does not point to a valid repository: )[^\r\n]+\r?\n?\z'))
+}
+
 # ---------------------------------------------------------------------------
 $script:_PassCount = 0
 $script:_FailCount = 0
@@ -296,6 +309,25 @@ _Section 'Arm 1 of 2: the pinned git-message constants still describe live git'
 # carries the load-bearing anchor the pinned constant carries, and prove live
 # and pinned classify identically through the production predicate.
 
+$gitfileOrphan = 'fatal: gitfile does not point to a valid repository: /tmp/orphan/.git'
+_Assert -Name 'orphan diagnostic guard accepts the pinned bare repository form' `
+	-Condition (Test-OrphanedRepositoryProbe -ExitCode 128 -StdOut '' -StdErr $pinnedOrphan)
+_Assert -Name 'orphan diagnostic guard accepts the gitfile repository form' `
+	-Condition (Test-OrphanedRepositoryProbe -ExitCode 128 -StdOut '' -StdErr $gitfileOrphan)
+_Assert -Name 'both orphan diagnostic forms remain NOT examinable' `
+	-Condition ((-not (Test-GitReadingIsExaminable -ExitCode 128 -StandardError $pinnedOrphan -Toplevel '')) `
+		-and (-not (Test-GitReadingIsExaminable -ExitCode 128 -StandardError $gitfileOrphan -Toplevel '')))
+_Assert -Name 'orphan diagnostic guard rejects unexpected fatal errors' `
+	-Condition (-not (Test-OrphanedRepositoryProbe -ExitCode 128 -StdOut '' -StdErr 'fatal: permission denied'))
+_Assert -Name 'orphan diagnostic guard rejects a genuine discovery miss' `
+	-Condition (-not (Test-OrphanedRepositoryProbe -ExitCode 128 -StdOut '' -StdErr $pinnedMiss))
+_Assert -Name 'orphan diagnostic guard rejects successful reads' `
+	-Condition (-not (Test-OrphanedRepositoryProbe -ExitCode 0 -StdOut '' -StdErr $gitfileOrphan))
+_Assert -Name 'orphan diagnostic guard rejects a nonempty toplevel' `
+	-Condition (-not (Test-OrphanedRepositoryProbe -ExitCode 128 -StdOut '/tmp/checkout' -StdErr $gitfileOrphan))
+_Assert -Name 'orphan diagnostic guard rejects additional unexpected stderr' `
+	-Condition (-not (Test-OrphanedRepositoryProbe -ExitCode 128 -StdOut '' -StdErr ($gitfileOrphan + "`nfatal: permission denied")))
+
 # --- Genuine miss: discovery walked to the root and found nothing -----------
 $missDir = New-ScratchDir; Register-Scratch $missDir
 $miss = Get-ToplevelProbe -Dir $missDir
@@ -326,8 +358,8 @@ _Assert -Name 'PRECONDITION orphaned-worktree state built: exit 128, empty stdou
 	-Condition ($orphan.ExitCode -eq 128 -and [string]::IsNullOrWhiteSpace($orphan.StdOut)) `
 	-Detail ("exit={0} stdout=[{1}] stderr=[{2}]" -f $orphan.ExitCode, $orphan.StdOut, $orphan.StdErr)
 
-_Assert -Name 'live orphaned-worktree stderr carries the BARE phrase but NOT the parenthetical' `
-	-Condition ($orphan.StdErr.Contains($anchorBare) -and -not $orphan.StdErr.Contains($anchorParenthetical)) `
+_Assert -Name 'live orphaned-worktree probe carries a recognised orphan-repository diagnostic' `
+	-Condition (Test-OrphanedRepositoryProbe -ExitCode $orphan.ExitCode -StdOut $orphan.StdOut -StdErr $orphan.StdErr) `
 	-Detail ("live stderr=[{0}]" -f $orphan.StdErr)
 
 _Assert -Name 'the pinned _gitOrphanStderr constant matches that shape: bare, no parenthetical' `
@@ -375,8 +407,8 @@ _Assert -Name 'reader: genuine miss is Exists=true, Examinable=true, Toplevel em
 	-Condition ($rMiss.Exists -and $rMiss.Examinable -and [string]::IsNullOrWhiteSpace($rMiss.Toplevel)) `
 	-Detail ("exists={0} examinable={1} toplevel=[{2}]" -f $rMiss.Exists, $rMiss.Examinable, $rMiss.Toplevel)
 
-# --- Orphaned linked worktree: NOT examinable, though its stderr carries the
-#     bare phrase. This is the fail-open the whole check exists to prevent.
+# --- Orphaned linked worktree: NOT examinable under either supported diagnostic.
+#     Treating the bare phrase as a genuine miss is the fail-open to prevent.
 $rOrphan = Get-ArchiveGitReading -Path $orphanBuild.Worktree
 _Assert -Name 'reader: orphaned linked worktree is Exists=true, Examinable=FALSE' `
 	-Condition ($rOrphan.Exists -and -not $rOrphan.Examinable) `

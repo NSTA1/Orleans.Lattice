@@ -413,7 +413,7 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             {
                 siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
                 siloBuilder.UseInMemoryReminderService();
-                siloBuilder.Services.AddSingleton<IBootstrapSnapshotSource, FixtureBootstrapSnapshotSource>();
+                siloBuilder.Services.AddSingleton<IRemoteSnapshotTransport, FixtureBootstrapSnapshotSource>();
                 siloBuilder.AddLatticeReplication(options =>
                 {
                     options.ClusterId = RegionA;
@@ -433,9 +433,11 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             }
         }
 
-        internal sealed class FixtureBootstrapSnapshotSource : IBootstrapSnapshotSource
+        internal sealed class FixtureBootstrapSnapshotSource : IRemoteSnapshotItemTransport
         {
             private static readonly object Sync = new();
+            private static readonly Guid SourceLineage = Guid.NewGuid();
+            private static long _exportEpoch;
             private static string? _tree;
             private static TaskCompletionSource _firstRowApplied = NewSignal();
             private static TaskCompletionSource _released = NewSignal();
@@ -475,15 +477,48 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
                     "PRECONDITION: the receiver must apply a snapshot row and pause before promotion");
             }
 
-            public Task<SnapshotStream> ExportAsync(
+            private static SnapshotSourceGeneration Generation(string treeName) => new()
+            {
+                PhysicalTreeId = treeName,
+                ShardMapVersion = 0,
+                Lineage = SourceLineage,
+                DeleteEpoch = 0,
+                IsDeleted = false,
+            };
+
+            public Task<RemoteSnapshotMetadata> GetMetadataAsync(
                 string treeName,
-                HybridLogicalClock asOfHlc,
+                string sourceClusterId,
+                HybridLogicalClock fromAsOfHlc,
                 CancellationToken cancellationToken = default) =>
-                Task.FromResult(new SnapshotStream(
-                    treeName,
-                    HybridLogicalClock.Zero,
-                    new VersionVector(),
-                    RowsAsync(treeName)));
+                Task.FromResult(new RemoteSnapshotMetadata
+                {
+                    TreeName = treeName,
+                    SourceClusterId = sourceClusterId,
+                    CausalStableFrontier = new VersionVector(),
+                    ExportEpoch = Interlocked.Increment(ref _exportEpoch),
+                    OpenGeneration = Generation(treeName),
+                });
+
+            public IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
+                string treeName,
+                string sourceClusterId,
+                HybridLogicalClock fromAsOfHlc,
+                CancellationToken cancellationToken = default) => RowsAsync(treeName);
+
+            public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
+                string treeName,
+                string sourceClusterId,
+                HybridLogicalClock fromAsOfHlc,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+            {
+                await foreach (var row in RowsAsync(treeName).WithCancellation(cancellationToken))
+                {
+                    yield return new RemoteSnapshotStreamItem { Entry = row };
+                }
+
+                yield return new RemoteSnapshotStreamItem { CloseGeneration = Generation(treeName) };
+            }
 
             private static async IAsyncEnumerable<SnapshotEntry> RowsAsync(string treeName)
             {

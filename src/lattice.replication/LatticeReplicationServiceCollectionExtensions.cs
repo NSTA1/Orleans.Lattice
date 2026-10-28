@@ -123,13 +123,20 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // etc.), the bootstrap seam resolves to the cross-cluster
         // adapter; when no transport is registered (the single-
         // cluster recovery path) it resolves to a local wrapper that
-        // forwards to the silo's ISnapshotProvider. Hosts that want
+        // forwards to the silo's ISnapshotProvider. The local wrapper
+        // can only read the local tree, so it refuses (fail closed,
+        // LatticeBootstrapSourceMismatchException) any bootstrap that
+        // names a source cluster other than the local ClusterId rather
+        // than recording a self-export as a bootstrap from that peer
+        // (issue #5109). Hosts that want
         // to force the local-only path even with a transport present
         // can pre-register their own IBootstrapSnapshotSource before
         // AddLatticeReplication and the TryAdd below is a no-op.
         builder.Services.TryAddSingleton<IBootstrapSnapshotSource>(sp =>
             sp.GetService<IRemoteSnapshotTransport>() is null
-                ? new LocalBootstrapSnapshotSource(sp.GetRequiredService<ISnapshotProvider>())
+                ? new LocalBootstrapSnapshotSource(
+                    sp.GetRequiredService<ISnapshotProvider>(),
+                    sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>())
                 : ActivatorUtilities.CreateInstance<RemoteSnapshotProvider>(sp));
         // Sender-side handler for IRemoteSnapshotTransport. Registered as
         // a singleton so the concrete cross-cluster bindings (gRPC,

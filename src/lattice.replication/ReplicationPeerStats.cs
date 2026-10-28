@@ -79,6 +79,13 @@ public partial class ReplicationPeerStats
 
     private int inboundRows;
 
+    private readonly Lock inboundAdmissionGate = new();
+    /// <summary>
+    /// Test seam invoked at the start of a new inbound pair's admission window, so a test
+    /// can interleave another recorder there deterministically. Always null in production.
+    /// </summary>
+    internal Action? InboundAdmissionWindowForTesting { get; set; }
+
     /// <summary>
     /// Initialises an instance with a test-chosen inbound-row cap.
     /// </summary>
@@ -337,10 +344,12 @@ public partial class ReplicationPeerStats
     /// <summary>
     /// Returns the row for a contact, creating it when absent - except that a new inbound
     /// row is refused once <see cref="DefaultMaxInboundRows"/> (or the test-chosen cap) is
-    /// reached, returning <see langword="null"/>. The cap is reserved before the row is
-    /// added, so concurrent recorders can never overshoot it. Rows are never removed, so a
-    /// lost add race always finds the winner's row. The steady state (row exists) is one
-    /// lookup with no allocation.
+    /// reached, returning <see langword="null"/>. Admission of a new inbound row is
+    /// serialised on a dedicated gate, so concurrent recorders can neither overshoot the
+    /// cap nor, by speculatively reserving a slot for a pair another recorder is admitting,
+    /// refuse a different pair while below it. Rows are never removed, so the gate is
+    /// taken only on a pair's first sighting. The steady state (row exists) is one
+    /// lookup with no allocation and no lock.
     /// </summary>
     private PeerState? GetOrAddContactState(string tree, string peer, ReplicationContactDirection direction)
     {
@@ -355,20 +364,24 @@ public partial class ReplicationPeerStats
             return state.GetOrAdd(key, static _ => new PeerState());
         }
 
-        if (Interlocked.Increment(ref inboundRows) > maxInboundRows)
+        lock (inboundAdmissionGate)
         {
-            Interlocked.Decrement(ref inboundRows);
-            return null;
-        }
+            InboundAdmissionWindowForTesting?.Invoke();
+            if (state.TryGetValue(key, out existing))
+            {
+                return existing;
+            }
 
-        var created = new PeerState();
-        if (state.TryAdd(key, created))
-        {
+            if (Volatile.Read(ref inboundRows) >= maxInboundRows)
+            {
+                return null;
+            }
+
+            var created = new PeerState();
+            state[key] = created;
+            Interlocked.Increment(ref inboundRows);
             return created;
         }
-
-        Interlocked.Decrement(ref inboundRows);
-        return state.TryGetValue(key, out existing) ? existing : null;
     }
 
     /// <summary>

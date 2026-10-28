@@ -59,7 +59,8 @@ public readonly record struct BootstrapCoordinatorStatus(
     /// The source cluster whose bootstrap most recently reached
     /// <see cref="LatticeBootstrapState.LiveIncremental"/>. Unlike
     /// <see cref="SourceClusterId"/>, this remains available after the in-flight
-    /// coordinator has completed.
+    /// coordinator has completed, but is withheld while that source still owes
+    /// a reconcile.
     /// </summary>
     [Id(5)] public string? CompletedSourceClusterId { get; init; }
 }
