@@ -8,12 +8,16 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// Uses the existing leaf-chain hop model: Yield measures scheduling overhead;
 /// Delay1Ms models latency, not real Orleans throughput. Persist cost inside the
 /// seeding call is modelled as one dispatch per grain call.
-/// Run with --suite internalnodefusion.
+/// Run with --suite internalnodefusion. The --suite internalnodebinding subset
+/// measures tree binding plus initialization at three construction sites. Both
+/// durable writes and child digest seeding are unchanged and excluded from
+/// these dispatch-only measurements. BulkConstruction sums per-node dispatch
+/// work; production uses parallel waves, so this is not bulk-load wall time.
 /// </summary>
 [MemoryDiagnoser]
 public class InternalNodeCallFusionBenchmarks
 {
-    /// <summary>The three optimized call sites.</summary>
+    /// <summary>The optimized call sites.</summary>
     public enum Site
     {
         /// <summary>Seeding a split sibling with 32 children: 32 calls become 1.</summary>
@@ -22,6 +26,12 @@ public class InternalNodeCallFusionBenchmarks
         GraftDescent,
         /// <summary>Binding walk over 40 internal nodes: 80 calls become 40.</summary>
         BindingWalk,
+        /// <summary>Root promotion: bind and initialize, 2 calls become 1.</summary>
+        RootConstruction,
+        /// <summary>Bulk construction of 40 internal nodes: 80 calls become 40.</summary>
+        BulkConstruction,
+        /// <summary>Split sibling recovery: bind and seed, 2 calls become 1.</summary>
+        SiblingConstruction,
     }
 
     /// <summary>The call site under measurement.</summary>
@@ -50,6 +60,7 @@ public class InternalNodeCallFusionBenchmarks
         {
             Site.SplitSeed => (SiblingChildren, 1),
             Site.GraftDescent => (Levels * 2, Levels),
+            Site.RootConstruction or Site.SiblingConstruction => (2, 1),
             _ => (Nodes * 2, Nodes),
         };
         if (before != expectedBefore || _calls != expectedAfter)
@@ -76,6 +87,7 @@ public class InternalNodeCallFusionBenchmarks
     {
         Site.SplitSeed => before ? SiblingChildren : 1,
         Site.GraftDescent => before ? Levels * 2 : Levels,
+        Site.RootConstruction or Site.SiblingConstruction => before ? 2 : 1,
         _ => before ? Nodes * 2 : Nodes,
     };
 

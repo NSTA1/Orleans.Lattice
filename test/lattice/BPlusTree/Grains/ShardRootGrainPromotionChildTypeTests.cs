@@ -82,7 +82,7 @@ public sealed class ShardRootGrainPromotionChildTypeTests
         // every overload the production code might bind to.
         var @internal = Substitute.For<IBPlusInternalGrain>();
         @internal.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
-        @internal.InitializeAsync(Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
+        @internal.InitializeForTreeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
             .Returns(Task.CompletedTask);
         // Default routing-table snapshot stubs the post-fix root-shape
         // re-check inside CompletePromotionAsync / PromoteRootAsync.
@@ -163,7 +163,8 @@ public sealed class ShardRootGrainPromotionChildTypeTests
         await h.Internal.Received(1).AcceptSplitAsync(
             "k-split",
             Arg.Is<GrainId>(id => id == GrainId.Create("leaf", "new-leaf-sibling")));
-        await h.Internal.DidNotReceive().InitializeAsync(
+        await h.Internal.DidNotReceive().InitializeForTreeAsync(
+            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<GrainId>(),
             Arg.Any<GrainId>(),
@@ -199,7 +200,8 @@ public sealed class ShardRootGrainPromotionChildTypeTests
 
         try { await h.Grain.GetAsync("k-any"); } catch { }
 
-        await h.Internal.Received(1).InitializeAsync(
+        await h.Internal.Received(1).InitializeForTreeAsync(
+            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<GrainId>(),
             Arg.Any<GrainId>(),
@@ -256,7 +258,8 @@ public sealed class ShardRootGrainPromotionChildTypeTests
         await h.Internal.DidNotReceive().AcceptSplitAsync(
             Arg.Any<string>(),
             Arg.Any<GrainId>());
-        await h.Internal.DidNotReceive().InitializeAsync(
+        await h.Internal.DidNotReceive().InitializeForTreeAsync(
+            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<GrainId>(),
             Arg.Any<GrainId>(),
@@ -374,7 +377,8 @@ public sealed class ShardRootGrainPromotionChildTypeTests
         // the auto-mock and throws past the try/catch above, so
         // PendingPromotion clearance is not asserted here - matching
         // the existing wrap-path test's coverage shape.)
-        await h.Internal.Received(1).InitializeAsync(
+        await h.Internal.Received(1).InitializeForTreeAsync(
+            Arg.Any<string>(),
             "k-deep-split",
             Arg.Is<GrainId>(id => id == GrainId.Create("internal", "current-internal-root")),
             Arg.Is<GrainId>(id => id == GrainId.Create("internal", "new-internal-sibling")),

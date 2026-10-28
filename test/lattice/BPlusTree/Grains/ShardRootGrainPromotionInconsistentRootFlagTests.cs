@@ -90,7 +90,7 @@ public sealed class ShardRootGrainPromotionInconsistentRootFlagTests
 
         var @internal = Substitute.For<IBPlusInternalGrain>();
         @internal.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
-        @internal.InitializeAsync(Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
+        @internal.InitializeForTreeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
             .Returns(Task.CompletedTask);
         @internal.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
             .Returns(Task.FromResult<SplitResult?>(null));
@@ -175,7 +175,8 @@ public sealed class ShardRootGrainPromotionInconsistentRootFlagTests
 
         try { await h.Grain.GetAsync("k-any"); } catch { }
 
-        await h.Internal.DidNotReceive().InitializeAsync(
+        await h.Internal.DidNotReceive().InitializeForTreeAsync(
+            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<GrainId>(),
             Arg.Any<GrainId>(),
@@ -221,7 +222,8 @@ public sealed class ShardRootGrainPromotionInconsistentRootFlagTests
 
         await h.Grain.GetAsync("k-any");
 
-        await h.Internal.DidNotReceive().InitializeAsync(
+        await h.Internal.DidNotReceive().InitializeForTreeAsync(
+            Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<GrainId>(),
             Arg.Any<GrainId>(),
@@ -264,11 +266,11 @@ public sealed class ShardRootGrainPromotionInconsistentRootFlagTests
 
         try { await h.Grain.GetAsync("k-any"); } catch { }
 
-        await h.Internal.Received(1).InitializeAsync(
+        await h.Internal.Received(1).InitializeForTreeAsync(
+            Arg.Any<string>(),
             "k-deep-split",
             Arg.Is<GrainId>(id => id == InternalRootId),
             Arg.Is<GrainId>(id => id == GrainId.Create("internal", "new-internal-sibling")),
             false);
     }
 }
-

@@ -49,6 +49,16 @@ being propagated.
 
 ## Bounds and abstraction gaps
 
+The internal-node construction calls `InitializeForTreeAsync` (root promotion)
+and `InitializeWithChildrenForTreeAsync` (split siblings and bulk-load levels)
+only fuse dispatch. Each awaits the existing `SetTreeIdAsync` before the
+existing initialization method: the binding write, topology write, split gate,
+child-parent digest seeds and upward publication retain their order and failure
+semantics. The caller still persists split/promotion intent before construction
+and publishes the parent/root only after it succeeds. No modeled transition is
+removed or reordered; activation loss between the two writes still leaves a
+bound, uninitialized node that the same deterministic-id retry initializes.
+
 The checked configuration begins at height three with four leaves and fan-out
 three. It uses keys `1..184`, at most sixty-four leaves, 128 node identities,
 one activation loss, and `MaxHeight = 6`. TLC 1.7.4 exhaustively checks 1,271

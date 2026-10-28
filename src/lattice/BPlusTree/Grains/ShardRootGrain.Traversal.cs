@@ -1876,8 +1876,8 @@ internal sealed partial class ShardRootGrain
             shardKey + "/root-above/" + currentRootId);
 
         var newRoot = grainFactory.GetGrain<IBPlusInternalGrain>(deterministicId);
-        await newRoot.SetTreeIdAsync(TreeId);
-        await newRoot.InitializeAsync(
+        await newRoot.InitializeForTreeAsync(
+            TreeId,
             pending.PromotedKey,
             currentRootId,
             pending.NewSiblingId,

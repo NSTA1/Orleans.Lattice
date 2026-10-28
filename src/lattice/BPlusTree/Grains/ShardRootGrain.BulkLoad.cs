@@ -361,7 +361,7 @@ internal sealed partial class ShardRootGrain
 
             // One level's nodes are siblings: each is a distinct, freshly created
             // grain initialised from a disjoint slice of the level below, and none
-            // reads another, so the two calls that build a node are independent of
+            // reads another, so the call that builds a node is independent of
             // every other node's. Issued one node at a time a level cost N
             // sequential round trips; issued in bounded waves it costs
             // ceil(N / BoundedFanOut.DefaultWidth). The levels themselves stay
@@ -376,8 +376,8 @@ internal sealed partial class ShardRootGrain
                 async plan =>
                 {
                     var node = grainFactory.GetGrain<IBPlusInternalGrain>(plan.Id);
-                    await node.SetTreeIdAsync(levelTreeId);
-                    await node.InitializeWithChildrenAsync(plan.Seps, plan.Ids, levelChildrenAreLeaves);
+                    await node.InitializeWithChildrenForTreeAsync(
+                        levelTreeId, plan.Seps, plan.Ids, levelChildrenAreLeaves);
                 });
 
             currentLevel = nextLevel;

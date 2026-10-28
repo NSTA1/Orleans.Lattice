@@ -106,6 +106,20 @@ internal sealed partial class BPlusInternalGrain(
     private async ValueTask<ResolvedLatticeOptions> ResolveOptionsSlowAsync() =>
         _options = await optionsResolver.ResolveAsync(state.State.TreeId ?? string.Empty);
 
+    public async Task InitializeForTreeAsync(string treeId, string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves)
+    {
+        // Elide dispatch only: binding must still be durable before topology
+        // and child-parent seeding, including when recovery retries this call.
+        await SetTreeIdAsync(treeId);
+        await InitializeAsync(separatorKey, leftChild, rightChild, childrenAreLeaves);
+    }
+
+    public async Task InitializeWithChildrenForTreeAsync(string treeId, List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves)
+    {
+        await SetTreeIdAsync(treeId);
+        await InitializeWithChildrenAsync(separatorKeys, childIds, childrenAreLeaves);
+    }
+
     public async Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves)
     {
         // Serialised against OnChildDigestPublishedAsync, which is
@@ -640,8 +654,6 @@ internal sealed partial class BPlusInternalGrain(
         var rightChildren = state.State.SplitRightChildren!;
 
         var newInternal = grainFactory.GetGrain<IBPlusInternalGrain>(siblingId);
-        await newInternal.SetTreeIdAsync(state.State.TreeId!);
-
         if (rightChildren.Count >= 2)
         {
             // Seed the sibling with its whole right half in one call: one gate
@@ -660,7 +672,12 @@ internal sealed partial class BPlusInternalGrain(
                 childIds.Add(rightChildren[i].ChildId);
             }
 
-            await newInternal.InitializeWithChildrenAsync(separators, childIds, state.State.ChildrenAreLeaves);
+            await newInternal.InitializeWithChildrenForTreeAsync(
+                state.State.TreeId!, separators, childIds, state.State.ChildrenAreLeaves);
+        }
+        else
+        {
+            await newInternal.SetTreeIdAsync(state.State.TreeId!);
         }
 
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
