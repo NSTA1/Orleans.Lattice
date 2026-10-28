@@ -70,9 +70,11 @@ For a complete host that proxies a real Prometheus instance running in Docker an
 - [Setup](setup.md) - registering the tool module, the backend, the credential, and the guardrails.
 - [Tools](tools.md) - the telemetry tools and their arguments and results.
 - [Security](security.md) - the dual-credential trust boundary, the `Telemetry` capability, and the metric-access allow-list.
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md) - the complete public surface, every option with its default and validation, and the request path.
 
 ## See also
 
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) - the MCP server this package extends.
+- [`Orleans.Lattice.Api.Mcp.Telemetry.Azure`](../lattice.api.mcp.telemetry.azure/README.md) - the managed-identity backend token for Azure managed Prometheus (`DynamicBearer`).
 - [Metrics](../lattice/metrics.md) - the `orleans.lattice` meter whose metrics the backend scrapes and these tools read.
 - [Security](../lattice/security.md) - the authorization model the `Telemetry` capability plugs into.

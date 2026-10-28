@@ -122,5 +122,6 @@ The embedding-gap scanner - the maintenance pass that finds sources present in t
 
 ## See also
 
+- [Public API](api.md) and [architecture](architecture.md) - the `EnableRepoContextMultiCluster` contract and what it wires.
 - [`Orleans.Lattice.Api.Mcp.RepoContext`](../lattice.api.mcp.repocontext/README.md) - the repository-context store this add-on replicates.
 - [`Orleans.Lattice.Replication`](../lattice.replication/README.md) - the replication engine, transport, and per-tree merge-mode contract this package builds on.

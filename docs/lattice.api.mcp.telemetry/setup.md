@@ -36,6 +36,8 @@ services.AddTelemetryTools(o =>
 
 ## Options
 
+Validation rules for every option are tabulated in [Configuration](configuration.md).
+
 `LatticeApiMcpTelemetryOptions` (populated through the `AddTelemetryTools` delegate):
 
 | Option | Type | Default | Purpose |
@@ -105,3 +107,5 @@ Wildcard patterns are precompiled once when the policy is built, so a per-call a
 
 - [Tools](tools.md) - the telemetry tools and their arguments and results.
 - [Security](security.md) - the dual-credential trust boundary and the metric-access allow-list.
+- [Configuration](configuration.md) - every option with its default and validation.
+- [Architecture](architecture.md) - the request path from discovery to the backend.

@@ -158,6 +158,8 @@ so an unrecognised tree name is refused rather than defaulted into a bucket.
 
 - [Record model](record-model.md) - the named trees, the key grammar, and the CRDT store-of-record model.
 - [Tools](tools.md) - the tool catalogue, the indexing lifecycle, and the self-index grain.
+- [Public API](api.md) - every public type, including the tool result records.
+- [Configuration](configuration.md) - the registration parameters, options, and package-read environment variables.
 - [Semantic search](semantic-search.md) - the embedding seam, the index planes, and fail-closed degradation.
 - [Retrieval and token economics](retrieval-economics.md) - explainable search, graph navigation, and the budgeted bundle.
 - [Memory and TTL](memory-and-ttl.md) - topics, entries, and per-repository expiry policy.

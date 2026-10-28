@@ -500,3 +500,4 @@ What the client sees is unchanged. A server fault, any fault a tool raises witho
 
 - [Security](security.md) - how tools are gated and how the caller credential flows.
 - [Remote hosting](remote.md) - the same tool modules over gRPC clients.
+- [Public API](api.md#tool-result-and-argument-records) - the structured result records the tools return.

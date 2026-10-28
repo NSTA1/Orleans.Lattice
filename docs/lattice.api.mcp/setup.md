@@ -51,6 +51,8 @@ app.MapLatticeMcp();
 
 ## Options
 
+The complete reference for every option type in this package - including the remote-host and managed-identity options - with types, defaults and validation, is [Configuration](configuration.md).
+
 `LatticeApiMcpOptions` (populated through the `AddLatticeMcp` delegate):
 
 | Option | Type | Default | Purpose |
@@ -125,3 +127,5 @@ builder.Services.AddLatticeMcp(o =>
 - [Tools](tools.md) - the built-in modules and every tool they expose.
 - [Security](security.md) - the fail-closed posture and the credential bridge.
 - [Remote hosting](remote.md) - serving the surface out-of-silo over gRPC.
+- [Configuration](configuration.md) - every option with its default and validation.
+- [Public API](api.md) - the complete public surface.

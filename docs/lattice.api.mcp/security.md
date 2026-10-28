@@ -120,3 +120,4 @@ When a host opts into OAuth 2.0 Protected Resource Metadata ([RFC 9728](https://
 
 - [Tools](tools.md) - the modules, their opt-in flags, and the full catalogue.
 - [Remote hosting](remote.md) - how the credential flows to a cluster over gRPC.
+- [Architecture](architecture.md) - the request pipeline these layers sit in.

@@ -41,6 +41,8 @@ The remote binding keeps the same coarse authorizer seam as the in-silo one: the
 
 ## Options
 
+Types, defaults and validation for every remote option are tabulated in [Configuration](configuration.md#latticeapimcpremoteoptions).
+
 | Option | Purpose |
 |---|---|
 | `State` / `Data` / `Auth` / `Backup` / `Replication` / `TreeAdmin` / `TenantAdmin` / `Telemetry` | The per-group remote endpoint, or `null` to not serve that group. The tree-administration endpoint backs every tree-administration tool - the read-only diagnostics tools, the lifecycle and control tools (`lattice_treeadmin_tree_*` plus the bulk-load, WAL placement / move, orphaned-leaf, view, tag-index, compaction, and retention tools), and the schema tools (`lattice_treeadmin_schema_*`) - since the tree-administration-API and schema-API gRPC services are co-hosted on the same silo address. The `TenantAdmin` endpoint backs both the read-only tenant self-awareness tools (`lattice_tenant_current` / `lattice_tenant_list` / `lattice_tenant_get`) and, when `EnableTenantControl` is set, the tenant-admin control tools (`lattice_tenant_create` / `lattice_tenant_suspend` / `lattice_tenant_resume` / `lattice_tenant_delete` / `lattice_tenant_set_quotas` / `lattice_tenant_authorize_regions` / `lattice_tenant_set_residency` / `lattice_tenant_region_status` / `lattice_tenant_advance_region`), since the self-service read RPCs are co-hosted on the tenant-administration gRPC service address. The same endpoint backs the [delegated tenant access tools](tools.md#delegated-tenant-access-tools): the composition registers one `LatticeTenantAdminApiGrpcClient` as both `ILatticeTenantDirectoryAdmin` and `ILatticeTenantPolicyAdmin` (a host's own registration of either is kept), and, like the other tenant-admin tools, they are contributed only when `EnableTenantControl` is set. The `Telemetry` endpoint is the one group endpoint the binding wires no gRPC adapter or tool module for: it names where the region's telemetry facade is served and feeds only discovery and region routing (`lattice_capabilities`, `lattice_list_regions`). The `lattice_telemetry_*` tools themselves come solely from the co-located telemetry tool module (`AddTelemetryTools`), which queries this head's own configured metrics backend. The current region advertises the telemetry group when either the endpoint or that module is present - at the configured endpoint when one is set, because it is the one another process can route to - and a peer region never inherits this head's co-located module. |
@@ -195,3 +197,5 @@ A few tools back facade operations that have no gRPC method yet, so they cannot 
 
 - [Setup](setup.md) - the in-silo topology.
 - [Security](security.md) - the fail-closed posture the remote host preserves.
+- [Configuration](configuration.md#latticeapimcpremoteoptions) - the remote options with types, defaults and validation.
+- [Architecture](architecture.md#remote-topology) - how the remote topology is wired.

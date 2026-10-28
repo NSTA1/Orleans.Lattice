@@ -64,6 +64,7 @@ For a co-hosted silo that serves the MCP endpoint, see the [`McpServer`](../../s
 - [Tools](tools.md) - the built-in tool modules, their opt-in flags, and the full tool catalogue.
 - [Security](security.md) - the fail-closed posture, the authorizer seam, the credential bridge, and permission-scoped discovery.
 - [Remote hosting](remote.md) - running the server out-of-silo over the gRPC clients with `AddLatticeMcpRemote(...)`.
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md) - the complete public surface, every option with its default and validation, and the request pipeline.
 
 ## See also
 

@@ -76,3 +76,4 @@ A refused call-time capability check comes back as `Success = false` with a fixe
 
 - [Security](security.md) - the dual-credential trust boundary and the metric-access allow-list.
 - [Setup](setup.md) - registering the module, the backend, and the guardrails.
+- [Public API](api.md#tool-results) - the result records these tools return.
