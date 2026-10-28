@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.Operations;
 using Orleans.Lattice.Testing;
+using Orleans.Runtime;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Schema.Tests.Chaos;
@@ -24,6 +25,9 @@ namespace Orleans.Lattice.Schema.Tests.Chaos;
 /// Waits are bounded polls on observable state. A second case injects one lost
 /// status response after the kill, proving the observation retries without
 /// treating the timeout as a failed operation or masking a permanently stuck one.
+/// The restart likewise retries a start that times out while the cluster
+/// reconverges after the kill, within a bounded poll that still fails if the
+/// remediation never resumes.
 /// </remarks>
 [TestFixture]
 [Category("Chaos")]
@@ -92,24 +96,35 @@ public sealed class SchemaOperationSiloLossChaosTests
             "The controlled response-loss case must exercise the timeout branch.");
 
         // Starting it again joins the remediation still recorded in flight and
-        // drives it from its last slice. Membership may still be settling, so a
-        // start that fails on a transient fault is retried with a fresh id.
+        // drives it from its last slice. While the cluster reconverges after the
+        // kill, addressing a fresh operation grain can stall until the response
+        // timeout, so a start that fails on a transient fault - the start call
+        // itself as well as its completion - is retried with a fresh id.
         LatticeOperationRecord? resumed = null;
         await TestPoll.UntilAsync(
             async () =>
             {
                 var retryId = LatticeOperationKey.NewId();
-                var launch = await survivor.StartRemediationAsync("default", retryId, treeId, transform, policy);
                 try
                 {
-                    await launch.Completion!;
+                    var launch = await survivor.StartRemediationAsync("default", retryId, treeId, transform, policy);
+                    try
+                    {
+                        await launch.Completion!;
+                    }
+                    catch (Exception)
+                    {
+                        // Recorded on the operation; the poll starts another.
+                    }
+
+                    resumed = await survivor.Runner.GetAsync("default", retryId);
                 }
-                catch (Exception)
+                catch (Exception ex) when (IsTransientSiloLossFault(ex))
                 {
-                    // Recorded on the operation; the poll starts another.
+                    TestContext.Progress.WriteLine($"Restart attempt hit a transient silo-loss fault; retrying within the poll deadline: {ex.Message}");
+                    return false;
                 }
 
-                resumed = await survivor.Runner.GetAsync("default", retryId);
                 return resumed?.State == LatticeOperationState.Succeeded;
             },
             "a fresh start of the same remediation to resume it and cut the tree over",
@@ -137,6 +152,9 @@ public sealed class SchemaOperationSiloLossChaosTests
             });
         }
     }
+
+    private static bool IsTransientSiloLossFault(Exception ex)
+        => ex is TimeoutException or SiloUnavailableException or OrleansMessageRejectionException;
 
     /// <summary>Holds the first destination write of the armed tree's remediation.</summary>
     private sealed class HeldBuildWrite : IOutgoingGrainCallFilter
