@@ -101,7 +101,7 @@ siloBuilder.AddAzureTableWalStorage(options =>
 
 <!-- where-next:begin -->
 
-- **Next on Build:** Moving in from another store
+- **Next on Build:** [Moving in from another store](moving-in-from-another-store.md)
 - **The pages it introduces:** [Configuration](../lattice/configuration.md), [WAL storage providers](../lattice/wal-storage-providers.md), [File WAL](../lattice.storage.file/README.md) and [Azure Table storage](../lattice.storage.azuretable/README.md)
 
 <!-- where-next:end -->

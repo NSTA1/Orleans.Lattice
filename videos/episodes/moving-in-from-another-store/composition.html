@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Moving in from another store</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      .wide {
+        position: absolute;
+        top: 650px;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+      }
+      .wide .lv-code {
+        margin: 0;
+        font-family: var(--lv-font-mono);
+        font-size: var(--lv-type-label);
+      }
+      .frame {
+        position: absolute;
+        inset: 0;
+      }
+      .decision-grid,
+      .path-grid {
+        position: absolute;
+        top: 350px;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 80px;
+      }
+      .decision,
+      .path {
+        padding: 32px 0;
+        border-top: var(--lv-hairline) solid var(--lt-rule-strong);
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+      }
+      .decision h3,
+      .path h3 {
+        margin: 0 0 20px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-heading);
+        font-weight: var(--lt-weight-heading);
+      }
+      .decision p,
+      .path p {
+        margin: 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="moving-in-from-another-store"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="135.673"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="moving-in-from-another-store"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Build / B7 / Orleans.Lattice","title":"Moving in from another store","subtitle":"Plan the import. Verify it. Then cut over.","beats":"0.5,9.686","end":20.151}'
+        data-start="0"
+        data-duration="20.151"
+      ></div>
+
+      <div id="decisions" class="clip frame" data-scene="decide-before-loading" data-track-index="0" data-start="20.151" data-duration="16.871">
+        <h2 class="lv-heading">Decide before loading</h2>
+        <div class="decision-grid">
+          <section class="decision">
+            <h3>Ingest path</h3>
+            <p>List, ordered stream, or administration session</p>
+          </section>
+          <section class="decision">
+            <h3>Key</h3>
+            <p>Compose it once, in the tree's ordinal order</p>
+          </section>
+          <section class="decision">
+            <h3>Value</h3>
+            <p>Choose an encoding before values become bytes</p>
+          </section>
+        </div>
+      </div>
+
+      <div id="ingest-path" class="clip frame" data-scene="choose-an-ingest-path" data-track-index="0" data-start="37.022" data-duration="46.355">
+        <h2 class="lv-heading">Choose an ingest path</h2>
+        <div class="path-grid">
+          <section class="path">
+            <h3>Fits in memory</h3>
+            <p>Load a list; entries are sorted for you</p>
+          </section>
+          <section class="path">
+            <h3>Inside the cluster</h3>
+            <p>Stream in ascending ordinal key order</p>
+          </section>
+          <section class="path">
+            <h3>Outside the cluster</h3>
+            <p>Resume acknowledged chunks with the source cursor</p>
+          </section>
+        </div>
+      </div>
+
+      <div
+        id="migration"
+        data-composition-id="migration-flow"
+        data-composition-src="shared/components/migration-flow.html"
+        data-scene="move-then-verify"
+        data-track-index="0"
+        data-variable-values='{"heading":"Move, then verify","caption":"Seed the tree; keep the source readable","steps":"[{\"title\":\"Choose\",\"detail\":\"List, stream or session\",\"beat\":0},{\"title\":\"Prepare\",\"detail\":\"Ordinal keys; byte values\",\"beat\":0},{\"title\":\"Load\",\"detail\":\"A consistent source cut\",\"beat\":1},{\"title\":\"Verify\",\"detail\":\"Count and sample ranges\",\"beat\":2},{\"title\":\"Cut over\",\"detail\":\"Apply delta; move readers\",\"beat\":3}]","beats":"0.6,16.049,22.308,27.021","end":40.516}'
+        data-start="83.377"
+        data-duration="40.516"
+      ></div>
+      <div
+        id="load-code"
+        class="clip wide"
+        data-scene="move-then-verify"
+        data-from-beat="1"
+        data-track-index="2"
+        data-start="99.426"
+        data-duration="24.467"
+      >
+        <pre class="lv-code"><code data-snippet="moving-in-from-another-store/one-shot">var entries = new List&lt;KeyValuePair&lt;string, byte[]&gt;&gt;
+{
+    KeyValuePair.Create("order/acme/0000000000000000001", "{}"u8.ToArray()),
+};
+
+await tree.BulkLoadAsync(entries, cancellationToken);</code></pre>
+      </div>
+
+      <div
+        id="where-next"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="where-next"
+        data-track-index="0"
+        data-variable-values='{"heading":"Where next","items":"[{\"title\":\"Samples\",\"detail\":\"Next after the Build path\",\"beat\":0},{\"title\":\"External store migration\",\"detail\":\"The playbook for this episode\",\"beat\":0}]","beats":"0.6","end":11.78}'
+        data-start="123.893"
+        data-duration="11.78"
+      ></div>
+
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/moving-in-from-another-store/narration.wav" data-start="0" data-duration="135.673" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      (function () {
+        window.LatticeCode.highlightAll(document);
+        const code = document.getElementById("load-code");
+        const start = () => Number(code.dataset.start);
+        const end = () => start() + Number(code.dataset.duration);
+        const { duration } = window.LatticeMotion;
+        const tl = gsap.timeline({ paused: true });
+        const byId = (id) => document.getElementById(id);
+        const clipStart = (element) => Number(element.dataset.start);
+        const clipEnd = (element) => clipStart(element) + Number(element.dataset.duration);
+        const arrive = (element) => {
+          tl.fromTo(element, { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: duration.slow, ease: "lattice-out" }, clipStart(element) + 0.1);
+          tl.to(element, { opacity: 0, duration: duration.fast, ease: "power1.in" }, clipEnd(element) - duration.fast);
+        };
+        arrive(byId("decisions"));
+        arrive(byId("ingest-path"));
+        tl.fromTo(code, { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: duration.slow, ease: "lattice-out" }, start() + 0.7);
+        tl.to(code, { opacity: 0, duration: duration.fast, ease: "power1.in" }, end() - duration.fast);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["moving-in-from-another-store"] = tl;
+      })();
+    </script>
+  </body>
+</html>
