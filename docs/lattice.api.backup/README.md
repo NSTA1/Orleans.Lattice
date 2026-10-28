@@ -60,7 +60,7 @@ The facade operations. Long captures, restores, health checks, and catalog rebui
 ## Reference
 
 - [API reference](api.md) - the public options and model types, and the facade operations by name.
-- [Backup operations](operations.md) - accept-then-poll backup and restore, status polling, cancellation, and migration from deprecated blocking verbs.
+- [Backup operations](operations.md) - accept-then-poll backup and restore, status polling, cancellation, and migration from the removed blocking verbs.
 - [Configuration](configuration.md) - the public options properties, their types, and defaults.
 - [Architecture](architecture.md) - how the facade authorizes, walks chains, deletes safely, and pages.
 

@@ -5,7 +5,8 @@ Optional, opt-in **schema-management control facade** add-on for
 transport-agnostic admin surface that drives the
 [`Orleans.Lattice.Schema`](https://www.nuget.org/packages/Orleans.Lattice.Schema)
 engine - set / clear / inspect enforcement policy, dead-letter inspection,
-envelope versioning (set / advance / migrate / clear), background remediation,
+envelope versioning (set / advance / migrate / clear) and its durable runtime
+schema catalog (read / register), background remediation,
 a read-only per-tree compliance audit, and a side-effect-free capability probe -
 from one place. A sibling package projects this facade onto a code-first gRPC
 surface.

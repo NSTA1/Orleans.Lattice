@@ -17,13 +17,13 @@ Each facade's status, list and cancel verbs see only its own kinds. `AddLatticeS
 
 ### Why
 
-A compliance scan reads every value of a tree. The original `ScanComplianceAsync` on `ILatticeSchemaControl` blocks until the last value is read, so on a large tree it is cut off by the caller's request timeout - the Explorer reported "The cluster did not answer in time" while the scan was still running - and it exposes no progress. `StartComplianceScanAsync` returns in milliseconds, the scan survives the caller, and its progress counts the entries it has actually validated.
+A compliance scan reads every value of a tree. The original `ScanComplianceAsync` on `ILatticeSchemaControl` (now removed - see [Migrating from the removed blocking scan](#migrating-from-the-removed-blocking-scan)) blocked until the last value was read, so on a large tree it was cut off by the caller's request timeout - the Explorer reported "The cluster did not answer in time" while the scan was still running - and it exposed no progress. `StartComplianceScanAsync` returns in milliseconds, the scan survives the caller, and its progress counts the entries it has actually validated.
 
 ### Verbs
 
 | Verb | Starts | Authorized as |
 |---|---|---|
-| `StartComplianceScanAsync(treeId, operationId)` | A compliance scan of one tree. | `ScanComplianceAsync`: read over the tree, after the tree name is composed under the caller's tenant. |
+| `StartComplianceScanAsync(treeId, operationId)` | A compliance scan of one tree. | Read over the tree, after the tree name is composed under the caller's tenant. |
 | `GetOperationStatusAsync`, `ListOperationsAsync`, `CancelOperationAsync` | - | Scoped to the compliance-scan kind, the caller's tenant and the trees the caller may read. Cancelling needs read over the scanned tree. |
 
 The optional `operationId` makes a start idempotent: a retried start with the same id returns the existing operation (`Created = false`) and starts nothing.
@@ -42,7 +42,7 @@ Progress is counted in entries, not shards: the scan reads through the tree's ro
 
 ### Results
 
-A succeeded operation's `ResultReference` is the scanned tree id (the effective, tenant-scoped id, as on the blocking report). Its `Result` map uses the `SchemaComplianceScanResults` keys: `treeId`, `hasPolicy`, `compliantCount`, `nonCompliantCount`, `scannedCount`, `ruleCount`, `failureReasonCount`, and one `rule.{i}.reason` / `rule.{i}.count` pair per failure reason. `ruleCount` is the number of configured policy rules, including on a fully compliant tree; it is zero when there is no policy or the policy is empty. `failureReasonCount` sizes the failure breakdown, not the policy. Legacy stored results without `failureReasonCount` retain their breakdown but report an unknown historical policy count as zero. `SchemaComplianceScanResults.TryReadReport` rebuilds the `LatticeSchemaComplianceReport` the blocking scan returns.
+A succeeded operation's `ResultReference` is the scanned tree id (the effective, tenant-scoped id, as on the report's `TreeId`). Its `Result` map uses the `SchemaComplianceScanResults` keys: `treeId`, `hasPolicy`, `compliantCount`, `nonCompliantCount`, `scannedCount`, `ruleCount`, `failureReasonCount`, and one `rule.{i}.reason` / `rule.{i}.count` pair per failure reason. `ruleCount` is the number of configured policy rules, including on a fully compliant tree; it is zero when there is no policy or the policy is empty. `failureReasonCount` sizes the failure breakdown, not the policy. Legacy stored results without `failureReasonCount` retain their breakdown but report an unknown historical policy count as zero. `SchemaComplianceScanResults.TryReadReport` rebuilds the `LatticeSchemaComplianceReport` from the map.
 
 ### Example
 
@@ -88,21 +88,21 @@ After admission, failures are terminal operation outcomes with their reason on s
 
 ### Why
 
-A remediation or migration rewrites every value of a tree, so it can run for minutes. The original verbs on `ILatticeSchemaControl` block until the work completes, so a long run is cut off by the caller's request timeout while the work carries on, and it shows no progress. The start verbs below return as soon as the cluster has accepted the run, the work survives the caller, and its progress is real data: the values the dry run has checked and the build has copied.
+A remediation or migration rewrites every value of a tree, so it can run for minutes. The original verbs on `ILatticeSchemaControl` (now removed - see [Migrating from the removed blocking verbs](#migrating-from-the-removed-blocking-verbs)) blocked until the work completed, so a long run was cut off by the caller's request timeout while the work carried on, and it showed no progress. The start verbs below return as soon as the cluster has accepted the run, the work survives the caller, and its progress is real data: the values the dry run has checked and the build has copied.
 
 ### Verbs
 
 | Verb | Starts | Authorized as |
 |---|---|---|
-| `StartRemediationAsync` | A remediation: every value rewritten by a transform and checked against a target policy, then the tree cut over with the policy installed. | `RemediateAsync`: schema management over the tree. |
-| `StartMigrationAsync` | An eager migration of every value to the tree's current target schema version. | `MigrateToTargetVersionAsync`: schema management over the tree. |
-| `StartAdvanceAndMigrateAsync` | An advance of the target version, then an eager migration to it. | `AdvanceAndMigrateAsync`: schema management over the tree. |
+| `StartRemediationAsync` | A remediation: every value rewritten by a transform and checked against a target policy, then the tree cut over with the policy installed. | Schema management (SchemaAdmin) over the tree. |
+| `StartMigrationAsync` | An eager migration of every value to the tree's current target schema version. | Schema management (SchemaAdmin) over the tree. |
+| `StartAdvanceAndMigrateAsync` | An advance of the target version, then an eager migration to it. | Schema management (SchemaAdmin) over the tree. |
 | `GetOperationStatusAsync`, `ListOperationsAsync` | - | Scoped to the schema kinds, the caller's tenant and the trees the caller may read. An operation outside that scope is not found. |
 | `CancelOperationAsync` | - | Visible as above, and schema management over the tree. A caller who may read but not manage is refused. |
 
 Every start verb takes an optional `operationId`. A retried start with the same id returns the existing operation (`Created = false`) and starts nothing. A start that finds a remediation with the same parameters already in flight on the tree follows that remediation instead of starting another, and a start with different parameters fails in-band with the reason.
 
-The default facade registered by `AddLatticeSchemaApi` implements both `ILatticeSchemaControl` and `ILatticeSchemaOperations` on one singleton, so a start and its blocking twin share one authorization path.
+The default facade registered by `AddLatticeSchemaApi` implements both `ILatticeSchemaControl` and `ILatticeSchemaOperations` on one singleton, so the start verbs and the direct-call verbs share one authorization path.
 
 ### Kinds, phases and units
 

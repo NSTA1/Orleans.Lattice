@@ -24,7 +24,11 @@ extracted production cores, and - just as importantly - what is not.
 Every property is paired with a deliberate defect (a mutation) that must make
 TLC report it, and every protocol step of each specification is perturbed by at
 least one, so a specification that could not notice a broken protocol fails the
-build. TLC runs these checks on every pull request.
+build. TLC runs these checks on every pull request that changes a TLC input (a
+specification, its configuration, the Formal harness, a CI workflow or a build
+file), and on every release-line build, integration-branch push and nightly
+coverage run; a pull request that changes none of those inputs cannot alter
+their verdict.
 
 ## Defects the specifications found
 

@@ -528,11 +528,11 @@ Thrown by `CaptureSetAsync` when a stable cross-tree fence cannot be established
 
 ### `LatticeBackupTenantIsolationException` : `InvalidOperationException`
 
-Thrown by `ILatticeBackupTenantScope.AuthorizeCapture` / `AuthorizeRestoreTarget` when a capture or restore would cross the active tenant's isolation boundary. The operation is refused before any data is read or written. Constructors: `(string message)` and `(string message, Exception innerException)`.
+Thrown by `ILatticeBackupTenantScope.AuthorizeCapture` / `AuthorizeRestoreTarget` when a capture or restore would cross the active tenant's isolation boundary. The operation is refused before any data is read or written. It also implements the core `ILatticeDomainFault` marker, which identifies it as a deliberate domain refusal rather than the framework failure its base type suggests. Constructors: `(string message)` and `(string message, Exception innerException)`.
 
 ### `LatticeRestoreValidationException` : `InvalidOperationException`
 
-Thrown by `RestoreAsync` when a backup fails pre-apply validation (for example an artifact whose bytes do not match its recorded content digest), and by the other restore entry points - `ColdRestoreAsync`, `RestoreSetAsync`'s per-member restores, `RevertRestoreAsync` (a named physical tree that does not belong to the target), and the `ILatticeCoordinatedRestoreEngine` seams. The replication package's coordinated restore path also throws it when a replicated restore is refused before it starts or aborts. Constructors: `(string message)` and `(string message, Exception innerException)`.
+Thrown by `RestoreAsync` when a backup fails pre-apply validation (for example an artifact whose bytes do not match its recorded content digest), and by the other restore entry points - `ColdRestoreAsync`, `RestoreSetAsync`'s per-member restores, `RevertRestoreAsync` (a named physical tree that does not belong to the target), and the `ILatticeCoordinatedRestoreEngine` seams. The replication package's coordinated restore path also throws it when a replicated restore is refused before it starts or aborts. Like the tenant-isolation exception it implements the core `ILatticeDomainFault` marker. Constructors: `(string message)` and `(string message, Exception innerException)`.
 
 ## Public declaration reference
 
@@ -1394,9 +1394,9 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Backup.LatticeBackupTenantIsolationException`
 
-[Source](../../src/lattice.backup/LatticeBackupTenantIsolationException.cs) (line 17).
+[Source](../../src/lattice.backup/LatticeBackupTenantIsolationException.cs) (line 19).
 
-`public sealed class LatticeBackupTenantIsolationException : InvalidOperationException`
+`public sealed class LatticeBackupTenantIsolationException : InvalidOperationException, ILatticeDomainFault`
 
 - `public LatticeBackupTenantIsolationException(string message)`
 - `public LatticeBackupTenantIsolationException(string message, Exception innerException)`
@@ -1445,9 +1445,9 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Backup.LatticeRestoreValidationException`
 
-[Source](../../src/lattice.backup/LatticeRestoreValidationException.cs) (line 12).
+[Source](../../src/lattice.backup/LatticeRestoreValidationException.cs) (line 14).
 
-`public sealed class LatticeRestoreValidationException : InvalidOperationException`
+`public sealed class LatticeRestoreValidationException : InvalidOperationException, ILatticeDomainFault`
 
 - `public LatticeRestoreValidationException(string message)`
 - `public LatticeRestoreValidationException(string message, Exception innerException)`

@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/backup.json"
+---
+
 # Backup and cutover chaos tests
 
 The backup suite exercises restore cutovers against live readers, tags and atomic writers. It checks specific bounded interleavings; it is not a general power-loss simulation or a disaster-recovery certificate for the default in-cluster sink.

@@ -8,7 +8,8 @@ It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
 a strongly-typed `LatticeSchemaApiGrpcClient` that re-exposes the whole control
 surface over the wire: setting, clearing, and reading enforcement policy;
 streaming (bounded-memory) and counting dead letters; opting trees in and out of
-envelope versioning and advancing / migrating their target version; starting and
+envelope versioning and advancing / migrating their target version; reading and
+registering a tree's runtime schema catalog; starting and
 inspecting remediation; starting and polling a read-only per-tree **compliance audit**;
 and a fail-closed **capability probe**. Every wire message rides the Orleans
 serializer, so the contract stays versioned and additive-only.

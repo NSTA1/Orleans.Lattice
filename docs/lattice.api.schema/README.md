@@ -44,6 +44,8 @@ The facade operations (each projected by the gRPC binding as one RPC when the si
 | Get version config | Read a tree's version config, or absent. |
 | Advance target version | Advance the declared target version without migrating existing values. |
 | Clear version config | Remove the tree's version config and report whether one was present. |
+| Get registry | Read the tree's durable runtime schema catalog: version descriptors, migration hops, and the host's supported transform ids. |
+| Register schema | Append version descriptors and migration hops to the tree's runtime catalog (declarative transforms or installed transform ids, never code). |
 | Get remediation status | Read the status or last report of remediation for a tree. |
 | Start a compliance scan | Start the same audit in the background and poll its progress and report (`ILatticeSchemaComplianceOperations`; see [Schema operations](operations.md)). |
 | Start remediation, start migration, start advance and migrate | Start the run in the background and return at once; poll the operation for its phase and values processed (`ILatticeSchemaOperations`; see [Schema operations](operations.md)). |

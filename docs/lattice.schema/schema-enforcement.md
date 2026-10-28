@@ -268,11 +268,12 @@ To measure compliance without rewriting anything, call
 `ILatticeSchemaComplianceAdmin.ScanComplianceAsync(treeId, cancellationToken)`. It is a
 pure read on ordinary read authority: it scans every current value against the tree's
 current compiled policy and returns a `LatticeSchemaComplianceReport` carrying
-the audited `TreeId`, `HasPolicy`, `CompliantCount`, `NonCompliantCount`,
-`ScannedCount`, and a `RuleBreakdown` of `LatticeSchemaComplianceRuleCount`
-(`Reason`, `Count`) rows, grouped by the reason of the first rule each
-non-compliant value failed. An ungoverned tree returns an ungoverned report
-(`HasPolicy` is `false` and every count is zero). Remote callers should start the
+the audited `TreeId`, `HasPolicy`, `RuleCount` (the number of rules in the policy
+scanned against), `CompliantCount`, `NonCompliantCount`, `ScannedCount`, and a
+`RuleBreakdown` of `LatticeSchemaComplianceRuleCount` (`Reason`, `Count`) rows,
+grouped by the reason of the first rule each non-compliant value failed. An
+ungoverned tree returns an ungoverned report (`HasPolicy` is `false` and every
+count is zero). Remote callers should start the
 accept-then-poll compliance operation with
 `ILatticeSchemaComplianceOperations.StartComplianceScanAsync`: it returns a
 `LatticeOperationHandle` immediately, then reports `Counting` and `Scanning` phases

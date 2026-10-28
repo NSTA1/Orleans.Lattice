@@ -12,7 +12,7 @@ The binding defines its RPCs in C# rather than a `.proto`. A method-definition s
 
 RPC request and response contracts are `[GenerateSerializer]` records marshalled with the Orleans binary serializer. Most RPCs wrap facade DTOs in transport records such as `SetPolicyRequest` and `GetPolicyResponse`; the dead-letter stream and capability probe carry shared schema DTOs directly. That is why the client's `Create` factory takes an `IServiceProvider` with `AddSerializer()` registered: the per-message marshallers are built from those serializers, so a client and server that share the Orleans serialization configuration cannot disagree on the wire format.
 
-The operations map to two gRPC shapes: unary for policy, count, versioning, remediation, compliance, capability, and auth-scheme discovery; server-streaming for `StreamDeadLetters`. The streaming RPC is what lets a large dead-letter set move with bounded memory end to end - the facade streams, the service forwards each item as it arrives, and the client re-exposes it as an `IAsyncEnumerable<T>`.
+The operations map to two gRPC shapes: unary for runtime-catalog, policy, count, versioning, remediation, compliance, capability, and auth-scheme discovery; server-streaming for `StreamDeadLetters`. The streaming RPC is what lets a large dead-letter set move with bounded memory end to end - the facade streams, the service forwards each item as it arrives, and the client re-exposes it as an `IAsyncEnumerable<T>`.
 
 ## Two-layer authorization
 
@@ -22,7 +22,7 @@ Every protected call passes through two independent gates. The transport gate is
 
 An authorization interceptor runs first, before the facade is touched. It treats `GetAuthScheme` as the only unauthenticated discovery call; every other schema-control RPC is protected when `RequireAuthorization` is true. The binding defaults to deny, so protected calls are rejected with `PermissionDenied` until the host configures authorization or sets `RequireAuthorization` to `false` behind a trusted boundary. The interceptor is registered globally but scopes its enforcement to the schema control-API service by the method each call was routed to (read from the routed endpoint, not the raw request path, which routing matches case-insensitively), so other gRPC services on the same host are unaffected.
 
-The interceptor decodes each protected call into a `LatticeSchemaApiAuthorizationContext` - the `LatticeSchemaApiOperation`, the governed tree id as `TargetId`, and the underlying `ServerCallContext` - and asks the registered `ILatticeSchemaApiAuthorizer` whether the call may run. An operation the interceptor does not recognise is presented to the authorizer as `Unknown` rather than being waved through, so a deny-by-default policy refuses a future or unmapped RPC. Separately, server faults the binding does not map are returned with safe gRPC status codes rather than leaking implementation details (see [Status mapping](#status-mapping)).
+The interceptor decodes each protected call into a `LatticeSchemaApiAuthorizationContext` - the `LatticeSchemaApiOperation`, the governed tree id as `TargetId` (`null` for an operation status, list, or cancel, which names no tree), and the underlying `ServerCallContext` - and asks the registered `ILatticeSchemaApiAuthorizer` whether the call may run. An operation the interceptor does not recognise is presented to the authorizer as `Unknown` rather than being waved through, so a deny-by-default policy refuses a future or unmapped RPC. Separately, server faults the binding does not map are returned with safe gRPC status codes rather than leaking implementation details (see [Status mapping](#status-mapping)).
 
 ### 2. Facade scope authorization
 
@@ -50,11 +50,11 @@ The binding also translates the facade's other failure shapes into stable gRPC s
 | --- | --- | --- |
 | Authorization denied (transport gate or facade scope check), or a fail-closed tenant resolution (`LatticeTenantAccessDeniedException`) | `PermissionDenied` | The detail is safe to surface; never names a secret. |
 | Entry not found (`KeyNotFoundException`) | `NotFound` | |
-| Admission cap reached (`LatticeQuotaExceededException`) | `ResourceExhausted` | A remediation or version migration rebuilds the tree into a fresh destination one entry at a time, so it runs under the same per-tree admission caps (`LatticeOptions.MaxLiveKeys` / `MaxEstimatedBytes`) as any other write. Mapped ahead of the `InvalidOperationException` row below, which would otherwise shadow it. See [Quota refusals](#quota-refusals). |
-| Precondition failure (`InvalidOperationException`) | `FailedPrecondition` | Most often a versioning operation when the host has not registered `AddLatticeSchemaVersioning(...)` (non-versioning schema operations may still be available); also an unversioned tree, a target version that does not advance, a conflicting remediation already in flight, or a remediation or migration refused because the tree is deleted or a resize or restore holds its alias reservation. |
+| Admission cap reached (`LatticeQuotaExceededException`) | `ResourceExhausted` | Mapped ahead of the `InvalidOperationException` row below, which would otherwise shadow it. A remediation or version migration rebuilds the tree into a fresh destination one entry at a time under the same per-tree admission caps (`LatticeOptions.MaxLiveKeys` / `MaxEstimatedBytes`) as any other write, but that build runs after its start RPC has returned, so a cap it reaches is reported in the operation status's `FailureReason` rather than as this status. See [Quota refusals](#quota-refusals). |
+| Precondition failure (`InvalidOperationException`) | `FailedPrecondition` | Most often a versioning operation when the host has not registered `AddLatticeSchemaVersioning(...)` (non-versioning schema operations may still be available); also an unversioned tree, a target version that does not advance, or an advance-and-migrate start whose target has no registered descriptor and contiguous migration path. A conflicting remediation already in flight, or a remediation or migration refused because the tree is deleted or a resize or restore holds its alias reservation, is decided after the start RPC has returned and is reported in the operation status's `FailureReason`. |
 | Invalid argument (`ArgumentException`) | `InvalidArgument` | For example a policy or remediation target policy the engine cannot compile - a rule incomplete for its kind, a regex the non-backtracking engine rejects, or a `MaxByteLength` encoding rule with a negative limit. |
 | Request cancelled | `Cancelled` | On the server-streaming `StreamDeadLetters` RPC a cancelled call simply ends the stream instead. |
-| Any other fault | `Internal` | The detail is deliberately opaque; the real exception is logged server-side, not returned. This includes a remediation or migration cutover the host's `ITreeOwnershipGuard` refuses (`LatticeTreeOwnershipDeniedException`), which this binding does not map to its own status. |
+| Any other fault | `Internal` | The detail is deliberately opaque; the real exception is logged server-side, not returned. (A remediation or migration cutover the host's `ITreeOwnershipGuard` refuses with `LatticeTreeOwnershipDeniedException` runs after its start RPC has returned, so it is reported in the operation status's `FailureReason`.) |
 
 The server-streaming `StreamDeadLetters` RPC maps a narrower set: an authorization denial or fail-closed tenant resolution to `PermissionDenied`, an invalid argument to `InvalidArgument`, and a cancellation to a clean end of the stream. Any other fault on the stream - including an `InvalidOperationException` or a `KeyNotFoundException` - surfaces as `Internal`.
 
@@ -62,7 +62,7 @@ The `FailedPrecondition` shape is the one an operator most often needs to act on
 
 ### Quota refusals
 
-A `ResourceExhausted` refusal carries the breached dimension - and, where the dimension has one, the observed value and the configured ceiling - as response trailers, so a client can branch without parsing the status message:
+When an RPC does surface a `LatticeQuotaExceededException`, the `ResourceExhausted` refusal carries the breached dimension - and, where the dimension has one, the observed value and the configured ceiling - as response trailers, so a client can branch without parsing the status message:
 
 | Trailer | Value |
 | --- | --- |
@@ -71,7 +71,7 @@ A `ResourceExhausted` refusal carries the breached dimension - and, where the di
 | `lattice-quota-current` | The observed value on the breached dimension. Omitted for a dimension with no numeric ceiling. |
 | `lattice-quota-limit` | The configured ceiling on the breached dimension. Omitted for a dimension with no numeric ceiling. |
 
-No tenant id is echoed back: it is a server-side attribution decision, and the dimension is what the caller needs to act on. The remedy is to reduce the source tree's footprint or raise the cap, then re-run the remediation - it resumes idempotently. See [`LatticeQuotaExceededException`](../lattice/api.md#admission-back-pressure---latticequotaexceededexception) for the full contract.
+No tenant id is echoed back: it is a server-side attribution decision, and the dimension is what the caller needs to act on. For a remediation or migration, whose quota refusal arrives as the operation's `FailureReason`, the remedy is to reduce the source tree's footprint or raise the cap, then start the same remediation again - it resumes idempotently. See [`LatticeQuotaExceededException`](../lattice/api.md#admission-back-pressure---latticequotaexceededexception) for the full contract.
 
 ## Wire compatibility
 

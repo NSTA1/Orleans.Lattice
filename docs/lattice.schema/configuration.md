@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Configuration
 
 Enforcement and versioning are independent opt-ins. Register both after `AddLattice`, and register enforcement **before** versioning when using both. Enforcement installs the validation stage; versioning composes it ahead of envelope stamping. Registering enforcement second replaces that composite with validation alone. The registration APIs do not reject this ordering.

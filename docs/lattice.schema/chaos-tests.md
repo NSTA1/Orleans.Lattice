@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Schema chaos tests
 
 The schema suite exercises policy/version changes and durable operations while data work is in flight. These are bounded, concrete interleavings with assertions, not a proof that every crash schedule is safe.

@@ -12,7 +12,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Schema](../lattice.api.schema/R
 
 It provides:
 
-- **A code-first gRPC service.** One RPC for each facade operation, plus the unauthenticated `GetAuthScheme` discovery RPC - unary for policy, count, versioning, remediation, compliance, capability, and auth-scheme calls, and server-streaming for dead-letter draining - bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** One RPC for each facade operation, plus the unauthenticated `GetAuthScheme` discovery RPC - unary for runtime-catalog, policy, count, versioning, remediation, compliance, capability, and auth-scheme calls, and server-streaming for dead-letter draining - bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeSchemaApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC `CallInvoker`.
 - **Shared Orleans marshalling.** The binding's request and response wrappers are `[GenerateSerializer]` records serialized with the Orleans binary serializer. Shared DTOs streamed or returned directly use their existing Orleans serialization aliases, so client and server stay in lock-step by construction.
 - **Two-layer authorization.** A transport meta-authorizer gates every protected RPC at the edge; `GetAuthScheme` is exempt for unauthenticated discovery, and the facade's own scope authorization re-authorizes the resolved caller. The transport layer defaults to deny. The facade layer denies by default only when `Orleans.Lattice.Auth` is registered, whose `LatticeAuthOptions.DefaultEffect` defaults to `Deny`; without that add-on the core no-op access gate allows every call, so the transport layer is the only barrier.
@@ -32,6 +32,8 @@ The gRPC service name is `orleans.lattice.api.schema`.
 
 | RPC | Kind | Facade operation |
 |---|---|---|
+| `GetRegistry` | unary | Get the tree's runtime schema catalog |
+| `RegisterSchema` | unary | Register descriptors and migration hops in the runtime catalog |
 | `SetPolicy` | unary | Set policy |
 | `ClearPolicy` | unary | Clear policy |
 | `GetPolicy` | unary | Get policy |
