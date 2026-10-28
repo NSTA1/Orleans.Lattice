@@ -1,0 +1,17 @@
+# Pairs with AtomicOnOwner. The split's window opens past its retroactive
+# sweep, so the saga's k2 bucket prepared on the source before the window
+# stays behind there and the destination serves k2 without it.
+MODULE: AtomicOnOwnerSplitBeginSkipsSweep
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: the split opens its window as if the retroactive sweep had run, so a bucket prepared before it never reaches the destination
+PERTURBS: SplitBegin
+
+--- FIND
+    /\ mp' = "shadow"
+    /\ mk' = "split"
+--- REPLACE
+\* MUTATION: the split opens with the sweep already counted as done.
+    /\ mp' = "swept"
+    /\ mk' = "split"
+--- END

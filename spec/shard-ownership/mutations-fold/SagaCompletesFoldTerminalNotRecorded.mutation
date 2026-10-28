@@ -1,0 +1,14 @@
+# Pairs with SagaCompletes. A delivered terminal is not recorded, so the
+# broadcast keeps a target outstanding for ever.
+MODULE: SagaCompletesFoldTerminalNotRecorded
+TARGET: SagaCompletes
+CLASS: Temporal
+SUMMARY: the broadcast does not record the shards it visited, so the saga never completes
+PERTURBS: SagaTerminal
+
+--- FIND
+    /\ told' = told \cup {s}
+--- REPLACE
+\* MUTATION: the visit is not recorded.
+    /\ told' = told
+--- END

@@ -10,14 +10,16 @@ and the transaction registry retires what it knows. It is the deliverable of
 It is one area indexed in [`spec/README.md`](../README.md), which describes the
 layout every module follows, how to run TLC and why TLC runs in CI. This README
 covers only what is particular to shard ownership. The area is specified by
-four modules. Its core is **two modules**, and the seam between them is part of
+five modules. Its core is **two modules**, and the seam between them is part of
 what this README documents. A third, `ShardOwnershipCrdt`, checks the same
 ownership moves for a CRDT-mode key, whose copies must be joined rather than
 overwritten (see
 [`RefinementCrdt.md`](RefinementCrdt.md)). A fourth, `ShardOwnershipCutover`,
 checks a saga bound to the previous copy across a local shadow-cutover restore
 and its revert, the alias move the other modules do not make (see
-[`RefinementCutover.md`](RefinementCutover.md)).
+[`RefinementCutover.md`](RefinementCutover.md)). A fifth, `ShardOwnershipFold`,
+checks a slot that a shard fold returns to the shard an earlier split took it
+from (see [`RefinementFold.md`](RefinementFold.md)).
 
 ## Files
 
@@ -43,6 +45,11 @@ and its revert, the alias move the other modules do not make (see
 | [`ShardOwnershipCutover.manifest.json`](ShardOwnershipCutover.manifest.json) | Its manifest. |
 | [`mutations-cutover/`](mutations-cutover/) | Its mutation catalogue. |
 | [`RefinementCutover.md`](RefinementCutover.md) | Its refinement note. |
+| [`ShardOwnershipFold.tla`](ShardOwnershipFold.tla) | Fold: a slot a split moved away and a shard fold moves back, onto a survivor that still holds the slot sealed and still holds its old rows, with the fold's sweep, reclaim, cancel and retirement, a saga, a later write or delete, and tombstone compaction. |
+| [`ShardOwnershipFold.cfg`](ShardOwnershipFold.cfg) | Its TLC model. |
+| [`ShardOwnershipFold.manifest.json`](ShardOwnershipFold.manifest.json) | Its manifest. |
+| [`mutations-fold/`](mutations-fold/) | Its mutation catalogue. |
+| [`RefinementFold.md`](RefinementFold.md) | Its refinement note. |
 | `README.md` | This file. |
 
 ## Two modules and the seam between them
@@ -240,6 +247,14 @@ Each loses no behaviour the instance can distinguish.
   environment of a saga bound to the previous copy that re-binds, records the
   copy it leaves, and discards its prepares there before it decides (#4689). A
   routed prepare can straggle and land late.
+- **A fold back** (fold module only): a shard fold (`FoldBegin`, `MigSweep`,
+  `MigFreeze`, `MigCommit`, `MigFinish`, `FoldCancel`) of the split's
+  destination back onto its source, whose survivor still holds the slot sealed
+  and still holds the rows it had when the split moved the slot away. The
+  fold's drain resolves those rows by last-writer-wins, and a row whose key the
+  donor no longer holds is tombstoned before the survivor reclaims the slot
+  (#5130); tombstone compaction (`Compact`) and a later delete give it a key to
+  lose.
 
 Each module modelled the **intended** design while production had an open
 defect, with a mutation that reproduced production. Every such defect is now
@@ -269,6 +284,7 @@ them with their issues.
 | `AtomicAcrossCutover` | invariant | cutover | No reader, fresh or stale, is served a copy holding a saga's batch on one key and not the other, across a shadow-cutover restore and its revert (#4689). |
 | `CommittedBatchOnBoundCopy` | invariant | cutover | Once committed, a saga holds prepared buckets only on its bound copy: every copy it re-bound away from was discarded. |
 | `SagaSettles` | liveness | cutover | A saga settles however a restore and its revert interleave with it. |
+| `MigrationCompletes` | liveness | fold | A split or a fold that opened its window finishes. |
 
 Every liveness property can fail on a protocol defect under the fairness the
 spec asserts, shown by a mutation that leaves that fairness intact. Many of
@@ -304,6 +320,11 @@ and `k2`, whose slot an adaptive split moves from `s1` to `s2`. One split, one
 resize, one saga writing `k1` and `k2`, and one later write of `k2`; the
 ownership module adds one reshard and one refused flip, the retention module one
 delayed forward, one mask toggle at a time, one retirement and one reactivation.
+The fold module fixes one copy, the same two shards and keys, one split, one
+fold back with one cancel, one saga, one later write or delete of `k2`, and
+tombstone compaction; `UniqueOwner`, `NoKeyLost`, `NoResurrection`,
+`AtomicOnOwner`, `OwnerMonotonic`, `SagaCompletes` and `RoutingConverges` are
+checked there across the round trip.
 
 ## Defects this area found
 
@@ -328,6 +349,8 @@ standing mutation. The refinement notes record which are fixed.
 | #4618 | A resize neither mirrors a CRDT write nor joins the rows it merges into the resized copy (fixed, #4665) | `NoLostContributionResizeWriteNotMirrored`, `NoLostContributionResizeDrainLastWriterWins` |
 | #4689 | A saga re-bound across a shadow-cutover restore leaves its prepares on the previous copy, which a stale reader before the redirect, or any reader after a revert, is served torn (found by the cutover module; fixed) | `AtomicAcrossCutoverDecideSkipsDiscard`, `AtomicAcrossCutoverRebindForgetsLeftCopy`, `CommittedBatchOnBoundCopyRebindBeforeDecisionForgets` |
 | #4619 | A late forward of a saga whose registry row was retired is bucketed on a leaf that lost its memory of the terminal, stranded for good (found while answering #4619's question; fixed, #4638) | `NoLiveBucketAfterForgetLateForwardBucketed`, `NoLiveBucketAfterForgetForwardRecreatesRow`, `AtomicOnOwnerParticipantRowBestEffort` |
+| #5125 | A shard fold ran no retroactive sweep of the donor's prepares, so a saga prepared on the donor before the fold's window read torn after the swap (found by a reshard chaos test; fixed, #5126) | `AtomicOnOwnerFoldBeginSkipsSweep` |
+| #5130 | A fold back onto the shard a split took the slot from dropped its drain over the rows the survivor kept behind its seal, reverting every write and delete made since the split, and revived a key whose delete compaction had reaped (found while extending this area to the fold; fixed, #5131) | `NoKeyLostFoldImportDroppedOverSealedRow`, `NoKeyLostFoldSkipsReapReconciliation` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
 (#4461); its mutation is `NoResurrectionLatePrepareActivationMemory`, and the
@@ -343,6 +366,7 @@ java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config Shard
 java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config ShardOwnershipRetention.cfg ShardOwnershipRetention.tla
 java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -config ShardOwnershipCrdt.cfg ShardOwnershipCrdt.tla
 java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config ShardOwnershipCutover.cfg ShardOwnershipCutover.tla
+java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config ShardOwnershipFold.cfg ShardOwnershipFold.tla
 ```
 
 `-lncheck final` defers the liveness check to the end of the search, which is
@@ -354,7 +378,7 @@ distinct-state count in [Counts](#counts).
 
 The modules were checked with tla2tools v1.7.4 on a Temurin 17 JDK, liveness
 checked at the end, deadlock checking on, on a 16-core workstation, with two
-TLC workers for `ShardOwnership` and four for the other three (wall clock
+TLC workers for `ShardOwnership` and four for the other four (wall clock
 includes JVM start-up):
 
 ```
@@ -362,6 +386,7 @@ ShardOwnership:          100,666 distinct states, depth 26, clean, 1 min 32 s
 ShardOwnershipRetention: 142,980 distinct states, depth 24, clean, 1 min 18 s
 ShardOwnershipCrdt:        1,573 distinct states, depth 11, clean, 2 s
 ShardOwnershipCutover:     2,088 distinct states, depth 15, clean, 1 s
+ShardOwnershipFold:        4,128 distinct states, depth 23, clean, 3 s
 ```
 
 The current specifications are model-checked in CI by
@@ -380,3 +405,4 @@ TLC's own state counts.
 | `ShardOwnershipRetention` | 7 | 4 | 27 | 36 | 36 | 142,980 |
 | `ShardOwnershipCrdt` | 2 | 0 | 10 | 10 | 10 | 1,573 |
 | `ShardOwnershipCutover` | 3 | 1 | 14 | 15 | 16 | 2,088 |
+| `ShardOwnershipFold` | 6 | 3 | 16 | 18 | 23 | 4,128 |

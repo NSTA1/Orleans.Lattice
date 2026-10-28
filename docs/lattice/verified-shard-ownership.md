@@ -51,7 +51,14 @@ reader is most likely to over-read are these.
   the previous copy before it decides (#4689, fixed).
 - **Other alias moves are not modelled.** An explicit alias change and schema
   remediation move the alias too, and neither is covered here.
-- **Shard consolidation is not modelled.** The reshard here only grows.
+- **A shard fold has its own module.** `ShardOwnershipFold` checks a slot a
+  split moved away and a fold moves back onto the split's source, which still
+  holds the slot in its seal and still holds the rows it had when the split
+  moved it. The fold sweeps the donor's prepares first (#5125, fixed), its
+  drain resolves the survivor's old rows by last-writer-wins, and a row whose
+  key the donor no longer holds is tombstoned before the survivor reclaims the
+  slot (#5130, fixed). A fold onto a shard that never held the slot is a split
+  in reverse; the reshard modelled here only grows.
 - **Cross-cluster replication is not modelled.** Unlike the
   [atomic-commit protocol](verified-atomic-commit.md#the-replicated-half), whose
   replicated half has its own module, shard ownership's has no formal artefact.
@@ -79,6 +86,7 @@ reader is most likely to over-read are these.
 | `AtomicAcrossCutover` | No reader, fresh or stale, is served an atomic write's batch on one key and not the other across a shadow-cutover restore or its revert. | `ShardOwnershipCutover` |
 | `CommittedBatchOnBoundCopy` | A committed atomic write holds prepared buckets only on the copy it is bound to: every copy it re-bound away from was discarded. | `ShardOwnershipCutover` |
 | `SagaSettles` | An atomic write settles however a restore and its revert interleave with it. | `ShardOwnershipCutover` |
+| `MigrationCompletes` | A split or a shard fold that opened its window finishes, across a fold back onto the split's source. | `ShardOwnershipFold`, which also checks `UniqueOwner`, `NoKeyLost`, `NoResurrection`, `AtomicOnOwner`, `OwnerMonotonic`, `SagaCompletes` and `RoutingConverges` across the round trip |
 
 Every property has a mutation that breaks it: the full-bound clean control
 holds and the targeted mutant fails. If the mutant cfg differs, the clean source
@@ -87,7 +95,7 @@ TypeOK plus the named target; separate base/variant runs check their full cfgs.
 A declared deadlock override adds a deadlock-on mutant control. See the
 [controlled-experiment format](../../spec/atomic-commit/mutations/README.md#each-mutation-is-a-controlled-experiment-not-a-red-run).
 Every action in
-each module is perturbed by at least one mutation. All four run in CI through
+each module is perturbed by at least one mutation. All five run in CI through
 `TlcModelCheckTests`.
 
 ## Defects the coverage found
@@ -110,7 +118,11 @@ found by the review of this coverage, a router that cached the old copy reading
 empty and losing writes once that copy is purged (#4503, fixed). The cutover
 module found one more: an atomic write that re-binds across a shadow-cutover
 restore left its prepares on the previous copy, and a revert served them torn
-(#4689, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
+(#4689, fixed). Extending the coverage to the shard fold found another: a fold
+back onto the shard a split took the slot from discarded every write and delete
+made since the split, and revived a key whose delete compaction had reaped
+(#5130, fixed); the fold's missing retroactive sweep (#5125, fixed), found by a
+chaos test, is a standing mutation there too. The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 
 ## The cores production is routed through

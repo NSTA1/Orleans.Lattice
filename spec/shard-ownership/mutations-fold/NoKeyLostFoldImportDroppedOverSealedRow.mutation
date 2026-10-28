@@ -1,0 +1,16 @@
+# Regression check for #5130, its first half. Production's migration-import
+# guard in BPlusLeafGrain.MergeIntoStateAsync dropped an import onto any
+# non-migrated row, and the row the split's source kept behind its seal is
+# one, so a fold back onto it discarded every write made since the split.
+MODULE: NoKeyLostFoldImportDroppedOverSealedRow
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: reproduces production before #5130 was fixed: the fold's drain is dropped over the row the survivor kept behind its seal
+PERTURBS: MigCommit
+
+--- FIND
+    /\ row' = [row EXCEPT ![dst][k2] = Drained]
+--- REPLACE
+\* MUTATION: the import is dropped over the survivor's sealed row.
+    /\ row' = IF sealed[dst] /\ row[dst][k2] # Absent THEN row ELSE [row EXCEPT ![dst][k2] = Drained]
+--- END

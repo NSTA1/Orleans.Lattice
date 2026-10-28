@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-fold",
+  "refinement": "RefinementFold.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 6,
+    "properties": 3,
+    "actions": 16,
+    "mutations": 18,
+    "behaviourRows": 23,
+    "distinctStates": 4128
+  }
+}

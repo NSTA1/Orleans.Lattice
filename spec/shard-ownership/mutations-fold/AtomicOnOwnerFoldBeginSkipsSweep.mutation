@@ -1,0 +1,18 @@
+# Regression check for #5125. The fold's window opens past its retroactive
+# sweep (TreeShardConsolidationGrain did not run one), so the saga's k2 bucket
+# prepared on the donor before the window stays there and the survivor serves
+# k2 without it while k1's bucket surfaces.
+MODULE: AtomicOnOwnerFoldBeginSkipsSweep
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: the fold opens its window as if the retroactive sweep had run, so the donor's bucket never reaches the survivor
+PERTURBS: FoldBegin
+
+--- FIND
+    /\ mp' = "shadow"
+    /\ mk' = "fold"
+--- REPLACE
+\* MUTATION: the fold opens with the sweep already counted as done.
+    /\ mp' = "swept"
+    /\ mk' = "fold"
+--- END
