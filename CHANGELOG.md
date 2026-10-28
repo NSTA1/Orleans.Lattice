@@ -10,10 +10,6 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
-### Fixed
-
-- **Atomic - Batches stay whole across a shard fold.** A shrinking reshard or over-split healing no longer lets a read see an atomic batch on some of its keys and not others when the batch was prepared on the folded shard before the fold began. ([#5125](https://github.com/NSTA1/Orleans.Lattice/issues/5125)) (`Orleans.Lattice`)
-
 ## Released
 
 ## [2026-10-28]
@@ -111,6 +107,8 @@ Coordinated lockstep minor release: 50 packages advance to `10.2.0` - `Orleans.L
 - **Explorer - Replication submission ownership.** Pending validation prevents duplicate enables, edited merge modes require a fresh confirmation, and late enable or disable replies cannot post messages or reload a page that has been left. ([#5072](https://github.com/NSTA1/Orleans.Lattice/issues/5072)) (`Orleans.Lattice.Explorer.UI` 10.2.0)
 
 - **Atomic - Cross-tree sagas no longer exhaust the transaction registry.** A host without replication records no cross-tree membership, restoring about 100 cross-tree sagas/s per registry shard. Replicated hosts keep it; their lower cross-tree ceiling is now documented. ([#5073](https://github.com/NSTA1/Orleans.Lattice/issues/5073)) (`Orleans.Lattice` 10.2.0)
+
+- **Atomic - Batches stay whole across a shard fold.** A shrinking reshard or over-split healing no longer lets a read see an atomic batch on some of its keys and not others when the batch was prepared on the folded shard before the fold began. ([#5125](https://github.com/NSTA1/Orleans.Lattice/issues/5125)) (`Orleans.Lattice` 10.2.0)
 
 - **Explorer - Backup form consistency.** Captures require a new submission if details change during tree validation. Switching to a set validates the carried tree, and pending schedule cancellation blocks conflicting changes. ([#5099](https://github.com/NSTA1/Orleans.Lattice/issues/5099)) (`Orleans.Lattice.Explorer.UI` 10.2.0)
 
