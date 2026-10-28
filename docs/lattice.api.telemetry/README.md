@@ -142,8 +142,8 @@ registers:
 
 - `TelemetryMetricAccessPolicy` - the `MetricAccess` / `AllowedMetrics` posture, compiled once from the bound
   options (`IsReadAll`, and `IsAdmitted(metric)` for one exposition name).
-- `IPrometheusQueryClient` - the read-only backend client: instant query, range query, metric-name listing, and
-  metric metadata. The default `PrometheusQueryClient` runs over an `HttpClient` bound to `BackendAddress` and
+- `IPrometheusQueryClient` - the read-only backend client: instant query and range query (each answering a
+  `PrometheusQueryResponse`), metric-name listing, and metric metadata (a `PrometheusMetadataResponse`). The default `PrometheusQueryClient` runs over an `HttpClient` bound to `BackendAddress` and
   `RequestTimeout` and stamps the configured backend credential; it is registered only when the host has not
   registered its own `IPrometheusQueryClient` first.
 
