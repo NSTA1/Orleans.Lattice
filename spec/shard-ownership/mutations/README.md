@@ -3,8 +3,10 @@
 Each `.mutation` file here, and in [`../mutations-retention/`](../mutations-retention/),
 [`../mutations-crdt/`](../mutations-crdt/) and [`../mutations-cutover/`](../mutations-cutover/),
 is one controlled experiment: a deliberate defect in one module that must make
-one named property fire, run as two arms (the property holds on the unmutated
-module, and fails on the mutant). The file format, and why a mutation is
+one named property fire. The full-bound clean control holds and the mutant
+fails; a differing mutant cfg also requires an exact matching-bound clean
+control under the same options, and a deadlock override adds a deadlock-on
+mutant control. The file format, and why a mutation is
 generated from the base rather than checked in as a copy, are described in
 [`spec/atomic-commit/mutations/README.md`](../../atomic-commit/mutations/README.md#file-format);
 these catalogues use it unchanged, including `PERTURBS:`.

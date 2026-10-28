@@ -1,0 +1,11 @@
+MODULE: QuarantineIgnoresNewExpiry
+TARGET: NoEarlyEscalation
+CLASS: Action
+SUMMARY: a retired saga quarantines before its new deferral clock expires
+PERTURBS: Escalate
+
+--- FIND
+           quarantine == expired /\ mode[r] = "retired" /\ space.quarantine
+--- REPLACE
+           quarantine == mode[r] = "retired" /\ space.quarantine
+--- END

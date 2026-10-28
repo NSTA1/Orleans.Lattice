@@ -1,0 +1,14 @@
+MODULE: ColdCancellationReleasesIgnoresCancelledHolder
+TARGET: ColdCancellationReleases
+CLASS: Temporal
+SUMMARY: actual lifetime cancellation cannot unwind a hung cold holder
+PERTURBS: BudgetOpportunity
+
+--- FIND
+          THEN Return(r, "idle")
+--- REPLACE
+          THEN UNCHANGED <<holders, free, withheld, queue, status, role, observed,
+              pressure, pressurePhase, drain, hung, holdLeft, deadline, frontier,
+              banked, checkpoint, holes, ledger, arrivalsClosed, dispatchEpoch,
+              clientActive, cancelled>>
+--- END

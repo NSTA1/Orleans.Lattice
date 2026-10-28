@@ -12,6 +12,8 @@ These boundaries are separate: an asserted tenant is not proof of authority, tra
 
 Accepted registry changes carry monotonic last-writer-wins timestamps. Tenant deletion composes with the tree-cascade seam, while region-residency changes drive backfill and drain through resumable work. Hosted discovery re-finds owed backfill, and region-status listeners advance the lifecycle as work completes. A recorded target state is not proof that every tree has already moved or been purged.
 
+Backfill discovers logical tenant trees through registry provenance as well as current aliases. A derived physical copy can precede its alias or outlive it; its same-tenant `DerivedFrom` owner remains the backfill candidate unless the copy is independently configured for replication. Discovery does not enroll either tree: an unenrolled logical owner still blocks the region, as does an independent tree or a copy with foreign-tenant provenance. The region remains `Backfilling` until each candidate finishes receiver bootstrap with its read fence released.
+
 Directory member/group operations use the membership-store seam. Tenant policy operations use the policy-store and policy-decision seams, filtering tenant-visible rules and usage rather than exposing unrestricted cluster policy administration.
 
 ## Namespace-confined tree facade

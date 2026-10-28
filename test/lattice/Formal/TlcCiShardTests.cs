@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// needs no JVM and runs in the <c>rest</c> shard, not a TLC one.
 /// </summary>
 [TestFixture]
-public sealed class TlcCiShardTests
+public sealed partial class TlcCiShardTests
 {
     private const string CatchAllShard = "formal-tlc";
 
@@ -182,7 +182,13 @@ public sealed class TlcCiShardTests
                 }
                 else
                 {
-                    var expected = module.Name.StartsWith("Replication", StringComparison.Ordinal)
+                    var expected = Path.GetFileName(module.Directory) == "scheduling"
+                        ? module.Name == "ReplicationShipping" ? "TlcShardSchedulingShippingVariants"
+                            : module.Name == "ReplayPermits" && variant == "TwoPartitions"
+                            ? "TlcShardSchedulingReplayTwoPartitions"
+                            : module.Name is "WalGcStarvationDrive" or "SagaReadProgress" or "TagIndexReconcile"
+                            ? TlcCiShard.SchedulingWorkloadB : TlcCiShard.Scheduling
+                        : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
                         : module.Name == "MaterialisedViewFence"
                         ? TlcCiShard.MaterialisedViewFence

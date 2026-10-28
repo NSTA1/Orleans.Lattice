@@ -1,0 +1,11 @@
+MODULE: ClassPriorityRequestIgnoresClass
+TARGET: ClassPriority
+CLASS: Action
+SUMMARY: every observed queue bound uses the bulk floor
+PERTURBS: Request
+
+--- FIND
+        ELSE [depth |-> Len(queue), bound |-> Bound(c),
+--- REPLACE
+        ELSE [depth |-> Len(queue), bound |-> 1,
+--- END

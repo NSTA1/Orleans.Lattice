@@ -177,7 +177,7 @@ when none is open, makes the next item and opens its pull request to `main`.
 | `npm run packet -- <slug>` | the episode's review packet, the body of its pull request; `--review-copy` makes a copy of the video small enough to attach, and `--upload` attaches it, with `GH_TOKEN` set to the token of the account that raises the pull request |
 | `npm run voice:setup` | make the series voice's Python environment in the state directory |
 | `npm run ascii` | fail on any non-ASCII character in this folder |
-| `npm test` | unit tests for the tools and the browser runtime |
+| `npm test` | unit tests for the tools and the browser runtime, including the conflict-free merges script's preceding-episode source link |
 
 Every command that runs the HyperFrames CLI runs the pinned one from
 `node_modules`, with HyperFrames telemetry, update checks and skill installation

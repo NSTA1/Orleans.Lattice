@@ -1,0 +1,12 @@
+MODULE: FloorAdvancesNeverBanks
+TARGET: FloorAdvances
+CLASS: Temporal
+SUMMARY: a drive with timely storage never banks any pin progress
+PERTURBS: DriveOpportunity
+
+--- FIND
+        ![l].pin = IF timely /\ @ < head THEN @ + 1 ELSE @]
+--- REPLACE
+\* MUTATION: successful replay discards its banked prefix.
+        ![l].pin = @]
+--- END

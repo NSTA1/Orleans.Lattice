@@ -1,0 +1,12 @@
+MODULE: LagBoundedZeroSaturatedBatch
+TARGET: LagBounded
+CLASS: Temporal
+SUMMARY: zero saturated or throttled service produces a feedback wedge
+PERTURBS: Sample
+
+--- FIND
+    /\ batch' = BP!ViewBatch(pressure') /\ phase' = "pull"
+--- REPLACE
+    /\ batch' = IF pressure' > 0 THEN 0 ELSE BP!ViewBatch(pressure')
+    /\ phase' = "pull" \* MUTATION: throttle removes all service.
+--- END

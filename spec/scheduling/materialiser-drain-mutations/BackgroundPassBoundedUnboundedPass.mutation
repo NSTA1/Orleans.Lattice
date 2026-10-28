@@ -1,0 +1,11 @@
+MODULE: BackgroundPassBoundedUnboundedPass
+TARGET: BackgroundPassBounded
+CLASS: Invariant
+SUMMARY: ignore the per-pass leaf limit
+PERTURBS: LeafPass
+
+--- FIND
+    /\ work' = Min(LeavesPerPass, remaining[c])
+--- REPLACE
+    /\ work' = remaining[c] \* MUTATION: unbounded leaf walk.
+--- END

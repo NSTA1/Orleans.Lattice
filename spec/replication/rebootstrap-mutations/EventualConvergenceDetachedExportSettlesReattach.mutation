@@ -1,0 +1,16 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. An export opened
+# while detached cannot settle reattachment: the shipper re-marks the required
+# export epoch when it reattaches (#4533). Omitting the owed successor restores
+# the model gap found by the matching-bound control in #5116.
+MODULE: EventualConvergenceDetachedExportSettlesReattach
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: an export opened while detached settles reattachment without the fresh export its new epoch requires
+PERTURBS: EndExport
+BOUNDS: Third = TRUE, Reattach = FALSE, MaxHlc = 2
+
+--- FIND
+                    \/ detached
+--- REPLACE
+\* MUTATION: the export opened while detached is treated as the final re-seed.
+--- END

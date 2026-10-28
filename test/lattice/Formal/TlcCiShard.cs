@@ -123,6 +123,21 @@ internal static class TlcCiShard
     /// <summary>The leaf split-gate and grain-turn wait-cycle runs.</summary>
     public const string SplitGate = "TlcShardSplitGate";
 
+    /// <summary>The balanced scheduling group with ReplayPermits bases and PartialPrefix.</summary>
+    public const string Scheduling = "TlcShardScheduling";
+
+    /// <summary>The ReplayPermits mutations and the second balanced scheduling workload group.</summary>
+    public const string SchedulingWorkloadB = "TlcShardSchedulingWorkloadB";
+
+    /// <summary>The ReplayPermits TwoPartitions variant configuration, kept in its own shard.</summary>
+    public const string SchedulingReplayTwoPartitions = "TlcShardSchedulingReplayTwoPartitions";
+
+    /// <summary>The ReplicationShipping base and all paired mutations, retaining process-local controls together.</summary>
+    public const string SchedulingShipping = "TlcShardSchedulingShipping";
+
+    /// <summary>The full ReplicationShipping variant configurations, currently FourRecords.</summary>
+    public const string SchedulingShippingVariants = "TlcShardSchedulingShippingVariants";
+
     /// <summary>The BPlusCascade base-model TLC run.</summary>
     public const string BPlusCascadeBase = "TlcShardBPlusCascadeBase";
 
@@ -132,7 +147,7 @@ internal static class TlcCiShard
     /// <summary>The BPlusCascade parent-accounting, recovery, separator-range, and height mutants.</summary>
     public const string BPlusCascadeMutations2 = "TlcShardBPlusCascadeMutations2";
 
-    /// <summary>Every category <see cref="Of"/> and <see cref="OfVariant"/> can return.</summary>
+    /// <summary>Every category <see cref="Of"/>, <see cref="OfModule"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
         [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup,
          BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2,
@@ -140,7 +155,8 @@ internal static class TlcCiShard
          MaterialisedViewAggregation, MaterialisedViewRebind,
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair,
-         AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate];
+         AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
+         Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -156,6 +172,10 @@ internal static class TlcCiShard
         ArgumentNullException.ThrowIfNull(mutation);
 
         var name = module.Name;
+        if (SchedulingCategory(module, mutation: mutation.Name) is { } schedulingCategory)
+        {
+            return schedulingCategory;
+        }
         if (string.Equals(name, "AntiEntropy", StringComparison.Ordinal))
         {
             return mutation.Name switch
@@ -214,7 +234,7 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return LifecycleCategory(module.Name) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
+        return SchedulingCategory(module) ?? LifecycleCategory(module.Name) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
             ? BPlusCascadeBase
             : null);
     }
@@ -228,6 +248,11 @@ internal static class TlcCiShard
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(variant);
+
+        if (SchedulingCategory(module, variant) is { } schedulingCategory)
+        {
+            return schedulingCategory;
+        }
 
         if (string.Equals(module.Name, "AntiEntropy", StringComparison.Ordinal)
             && string.Equals(variant, "Alias", StringComparison.Ordinal))
@@ -280,6 +305,26 @@ internal static class TlcCiShard
     private static bool IsReplicationCompanion(string name) =>
         name.StartsWith("Replication", StringComparison.Ordinal)
         && !string.Equals(name, "Replication", StringComparison.Ordinal);
+
+    private static string? SchedulingCategory(SpecModule module, string? variant = null, string? mutation = null)
+    {
+        if (!string.Equals(Path.GetFileName(module.Directory), "scheduling", StringComparison.Ordinal))
+            return null;
+
+        if (string.Equals(module.Name, "ReplicationShipping", StringComparison.Ordinal))
+            return variant is null ? SchedulingShipping : SchedulingShippingVariants;
+
+        if (string.Equals(module.Name, "ReplayPermits", StringComparison.Ordinal))
+        {
+            if (string.Equals(variant, "TwoPartitions", StringComparison.Ordinal))
+                return SchedulingReplayTwoPartitions;
+            return mutation is null ? Scheduling : SchedulingWorkloadB;
+        }
+
+        return module.Name is "WalGcStarvationDrive" or "SagaReadProgress" or "TagIndexReconcile"
+            ? SchedulingWorkloadB
+            : Scheduling;
+    }
 
     private static string? LifecycleCategory(string name) =>
         name == "MaterialisedViewFence" ? MaterialisedViewFence

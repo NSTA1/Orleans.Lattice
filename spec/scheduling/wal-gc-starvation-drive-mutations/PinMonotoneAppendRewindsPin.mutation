@@ -1,0 +1,13 @@
+MODULE: PinMonotoneAppendRewindsPin
+TARGET: PinMonotone
+CLASS: Action
+SUMMARY: an environment append erases a banked durable pin
+PERTURBS: WalAppend
+
+--- FIND
+    /\ UNCHANGED <<leaf, free, cold, hold, deleted, timely, admitted, leadDone, rank>>
+--- REPLACE
+\* MUTATION: writing the WAL rewinds a consumer's durable progress.
+    /\ leaf' = [l \in Leaves |-> [leaf[l] EXCEPT !.pin = 0]]
+    /\ UNCHANGED <<free, cold, hold, deleted, timely, admitted, leadDone, rank>>
+--- END

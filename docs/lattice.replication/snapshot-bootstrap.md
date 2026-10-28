@@ -104,7 +104,14 @@ before calling `AddLatticeReplication`.
 
   An unknown generation (a sender that predates generations), a generation
   that moved during the export, or a deleted or purging source records a
-  durable owed retry. Maintenance re-enters the normal full bootstrap path
+  durable owed retry. Such a pass may finish its local handoff, but it does
+  not publish a completed export epoch, vouch a drained epoch to sibling
+  imports, or report a completed source while reconciliation remains owed
+  (#5116). The sender therefore retains its re-seed marker and tombstone
+  protection until a successor settles the reconcile. Previously recorded
+  epochs remain stored monotonically but are not echoed while owed; the
+  settled successor publishes its newer epoch normally.
+  Maintenance re-enters the normal full bootstrap path
   with a fresh pre-capture and every gate run again, so an upgraded sender
   reconciles on its first retry. Owed retries back off exponentially from
   one minute to a six-hour cap, so a sender that never reports a
@@ -389,7 +396,7 @@ the registered transport.
 |------|---------|
 | `IBootstrapSnapshotSource` | Receiver-side seam consumed by the bootstrap state machine. Split from `ISnapshotProvider` so sender and receiver roles can coexist on a single silo without one DI slot overwriting the other. |
 | `RemoteSnapshotProvider` | Cross-cluster `IBootstrapSnapshotSource`. Calls `IRemoteSnapshotTransport.GetMetadataAsync` once to capture the sender-side cut-point, then drains `RequestSnapshotAsync` and yields each entry through the existing `SnapshotStream` shape. Stateless and safe for concurrent invocation across distinct `(treeName, sourceClusterId)` pairs. |
-| Local snapshot-source wrapper | Single-cluster default `IBootstrapSnapshotSource`. Forwards both `ExportAsync` overloads to the silo's local `ISnapshotProvider`. |
+| Local snapshot-source wrapper | Single-cluster default `IBootstrapSnapshotSource`. Forwards the two-arg `ExportAsync` overload, and the three-arg overload when its `sourceClusterId` is the silo's own `LatticeReplicationOptions.ClusterId`, to the silo's local `ISnapshotProvider`. Any other source fails closed with `LatticeBootstrapSourceMismatchException`. |
 
 #### Semantics
 
@@ -402,6 +409,18 @@ the registered transport.
   the coordinator's persisted source-cluster id, so this branch is
   unreachable in the normal flow and indicates an integration bug
   when it fires.
+- **The local wrapper never stands in for a peer.** The local
+  snapshot-source wrapper can only export the silo's own tree, so it
+  serves a three-arg export only when `sourceClusterId` equals the
+  silo's own `LatticeReplicationOptions.ClusterId`. A bootstrap that
+  names any other cluster, or any cluster while the local id is
+  unset, is refused with `LatticeBootstrapSourceMismatchException`
+  before the local `ISnapshotProvider` is called. The exception is not
+  a transient fault, so the coordinator pivots to `Failed` without
+  recording a drained lineage or a completed export epoch for that
+  source and without consuming the source's pending re-seed request.
+  A re-seed responder that hits the refusal logs it at Warning. To
+  bootstrap from a peer, register an `IRemoteSnapshotTransport`.
 - **Metadata-then-stream consistency.** The adapter calls
   `GetMetadataAsync` once and pins the returned `AsOfHlc` and
   `CausalStableFrontier` on the `SnapshotStream` it returns; the

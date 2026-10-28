@@ -2,8 +2,9 @@
 
 Each `.mutation` file here is a deliberate defect in
 [`../AtomicCommitCrossCluster.tla`](../AtomicCommitCrossCluster.tla), paired with
-exactly one property it must make TLC report. The file format, the two-arm
-experiment, the generated cfg and the `PERTURBS:` / `DEADLOCK:` headers are the
+exactly one property it must make TLC report. The file format, the controlled
+experiment (including matching-bound and deadlock controls), the generated cfg
+and the `PERTURBS:` / `BOUNDS:` / `DEADLOCK:` headers are the
 same as for the single-cluster module and are described once, in
 [`../mutations/README.md`](../mutations/README.md). This file covers only what is
 particular to this catalogue.

@@ -1,0 +1,12 @@
+MODULE: RefusalSourceAttributedDropsSagaSource
+TARGET: RefusalSourceAttributed
+CLASS: Action
+SUMMARY: saga refusal loses its gate provenance
+PERTURBS: SagaRefuse
+
+--- FIND
+        IF saga.status = "waiting" /\ SagaValue = 2 THEN "AtomicWriteSaga" ELSE @]
+--- REPLACE
+\* MUTATION: report no source despite a real saga refusal.
+        IF saga.status = "waiting" /\ SagaValue = 2 THEN "None" ELSE @]
+--- END

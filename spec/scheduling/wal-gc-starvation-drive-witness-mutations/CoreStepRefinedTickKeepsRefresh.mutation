@@ -1,0 +1,12 @@
+MODULE: CoreStepRefinedTickKeepsRefresh
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness timer tick keeps a stale phase refresh
+PERTURBS: TimerTick
+
+--- FIND
+           ![l].refreshed = FALSE,
+--- REPLACE
+\* MUTATION: the fired tick does not consume its refresh.
+           ![l].refreshed = TRUE,
+--- END

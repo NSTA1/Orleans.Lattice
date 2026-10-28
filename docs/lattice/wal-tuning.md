@@ -35,6 +35,47 @@ therefore `WalPartitions * WalMaxPendingBatches` - at the defaults,
 `8 * 16 = 128` concurrent provider appends. Each tree's WAL
 partitions carry their own caps, so concurrently written trees add up.
 
+## Formal model and tuning limits
+
+[`WalAdmission`](../../spec/scheduling/WalAdmissionRefinement.md) distinguishes the
+`WalMaxPendingBatches` capacity cap from the
+`WalSaturationRecoveryReleaseBatch` signal-release burst and the saturation
+wait/call budgets. Equal defaults do not make these the same resource: releasing
+a signal waiter does not reserve an admission slot. Recovery release depends on
+qualifying samples; admission and completion additionally depend on capacity and
+storage progress. See [Verified Scheduling and Progress](verified-scheduling.md)
+for the bounded-instance assumptions.
+
+The companion resource bounds are separate too:
+
+- [`WalBackPressure`](../../spec/scheduling/WalBackPressureRefinement.md) models
+  sample/recovery windows, acute-only classification, throttle pace and the
+  saga quiesce/dispatch budget, plus receiver and view pressure responses.
+  Relief does not wait on that signal; recovery still needs completing work.
+- [`ReplayPermits`](../../spec/scheduling/ReplayPermitsRefinement.md) models
+  `WalMaterialiserMaxConcurrentReplays`, `WalReplayPermitQueueDepthPerPermit`,
+  queue-wait refusal, memory withholding and slice banking. Admission checks an
+  observed depth and drain verdict, not a hard queue-cardinality cap.
+  `StarvationDriveBudget` bounds drive ownership under runtime continuation
+  opportunities, not wall-clock latency or cold replay across caller deadlines.
+- [`WalGcStarvationDrive`](../../spec/scheduling/WalGcStarvationDriveRefinement.md)
+  separates the drive share and sweep/timer reservation from returned physical
+  capacity. Admission also needs a stable undeleted tree and recurring GC/runtime
+  opportunities. Floor advancement requires timely durable progress within the
+  drive budget, not merely eventual storage completion. The finite instance
+  assumes finite timer competition and finite WAL append. `WalGcMinInterval`,
+  `WalGcInterval` and coverage-lag timer settings provide runtime opportunities,
+  not a wall-time guarantee that a blocked floor lifts.
+- [`MaterialiserDrain`](../../spec/scheduling/MaterialiserDrainRefinement.md)
+  distinguishes `MaxConcurrentDrains`, `BackgroundDrainLeavesPerPass`,
+  `WalDrainBudget` and view `BatchSize`/`SaturatedBatchSize`. Bounded lag assumes
+  offered work does not exceed minimum service per successful service interval;
+  finite WAL shutdown budget expiry may force-fault rather than finish storage.
+
+These checks do not derive throughput, latency percentiles or appropriate knob
+values. The measurements below remain empirical sizing evidence, not a temporal
+guarantee supplied by fairness or by the release batch.
+
 ## Why 16 is the default
 
 The previous default of 8 was picked when the foreground commit path

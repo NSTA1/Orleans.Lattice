@@ -1,0 +1,13 @@
+MODULE: TimerReservedSlotSingleSlotNoHold
+TARGET: TimerReservedSlot
+CLASS: Action
+SUMMARY: a single-slot timer ignores an outstanding sweep refusal
+PERTURBS: TimerDispatchDrive
+BOUNDS: Ceiling = 2
+
+--- FIND
+    /\ IF ~deleted /\ leaf[l].drive = "none" /\ CanAdmit("timer")
+--- REPLACE
+\* MUTATION: no refusal-window headroom in the single-slot corner.
+    /\ IF ~deleted /\ leaf[l].drive = "none" /\ free > 0 /\ Cardinality(Running) < Share
+--- END

@@ -1,0 +1,12 @@
+MODULE: SagaQuiesceWinsDispatchQuiesceExceedsDispatch
+TARGET: SagaQuiesceWinsDispatch
+CLASS: Invariant
+SUMMARY: saga quiesce ignores the shorter dispatch bound
+PERTURBS: SagaQuiesce
+
+--- FIND
+        !.wait = Min(QuiesceBudget, DispatchBudget)]
+--- REPLACE
+\* MUTATION: use the longer independent saga bound.
+        !.wait = QuiesceBudget]
+--- END

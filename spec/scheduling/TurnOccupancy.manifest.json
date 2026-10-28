@@ -1,0 +1,20 @@
+{
+  "mutations": "turn-occupancy-mutations",
+  "refinement": "TurnOccupancyRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 4,
+    "properties": 1,
+    "actions": 8,
+    "mutations": 7,
+    "behaviourRows": 11,
+    "distinctStates": 961
+  },
+  "variants": {
+    "ThreeGrains": {
+      "distinctStates": 29791
+    }
+  }
+}

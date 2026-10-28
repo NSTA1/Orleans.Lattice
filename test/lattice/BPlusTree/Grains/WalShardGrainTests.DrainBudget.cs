@@ -117,6 +117,7 @@ public partial class WalShardGrainTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int AppendInvocations;
         private int _getHighestInvocations;
+        public int HighestInvocations => Volatile.Read(ref _getHighestInvocations);
 
         public async Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
         {
@@ -281,8 +282,18 @@ public partial class WalShardGrainTests
         // The drain budget must fire well before the per-flush
         // WalFlushTimeout would; the deactivation returns within the
         // budget plus a small grace.
-        await grain.OnDeactivateAsync(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "test"), CancellationToken.None)
-            .WaitAsync(TimeSpan.FromSeconds(5));
+        var drain = grain.OnDeactivateAsync(
+            new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "test"), CancellationToken.None);
+        try
+        {
+            Assert.DoesNotThrowAsync(async () => await drain.WaitAsync(TimeSpan.FromSeconds(5)),
+                "a finite drain budget must terminate even when the provider ignores cancellation");
+        }
+        finally
+        {
+            provider.Released.TrySetResult();
+            await drain.WaitAsync(TimeSpan.FromSeconds(5));
+        }
 
         // The append's TCS must be faulted with TimeoutException; the
         // bench's FINAL accounting depends on this surface.
@@ -309,10 +320,6 @@ public partial class WalShardGrainTests
         Assert.That(forceFaulted.Value.Tags.Any(t => t.Key == LatticeMetrics.TagShard && (int?)t.Value == ShardIndex), Is.True,
             "drain-budget gate: force-faulted-slots histogram must be tagged with the affected shard index");
 
-        // Tidy up the parked provider task so it does not leak into
-        // GC's freachable queue beyond the test - releasing the TCS
-        // lets the grain's abandoned WaitAsync complete naturally.
-        provider.Released.TrySetResult();
     }
 
     [Test]

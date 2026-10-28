@@ -1,0 +1,12 @@
+MODULE: CoreStepRefinedTimerRefusalAsSweep
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: a refused timer dispatch is booked as a refused sweep
+PERTURBS: TimerDispatchDrive
+
+--- FIND
+       ELSE DriveRefused(l, "timer")
+--- REPLACE
+\* MUTATION: charge the sweep refusal window for a timer refusal.
+       ELSE DriveRefused(l, "sweep")
+--- END

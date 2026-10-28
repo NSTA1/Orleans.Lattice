@@ -241,6 +241,15 @@ directly-writable data tree `view-something`.)
 
 ## Observing lag and forcing a rebuild
 
+**Formal model.**
+[`MaterialiserDrain`](../../spec/scheduling/MaterialiserDrainRefinement.md)
+checks positive pressure-adjusted view service and rebuild/reconcile routing
+across a split under a stable source identity. Lag stays bounded only when
+offered work per successful service interval does not exceed minimum service;
+repair progress additionally needs finite topology interference and successful
+source reads. The model distinguishes online-copy slots, leaf durability and
+finite-budget WAL shutdown rather than claiming one shared drain deadline.
+
 Inject `ILatticeViewFactory` to create a view handle, query its apply lag (the
 count of committed-but-unapplied source entries), or force a rebuild:
 

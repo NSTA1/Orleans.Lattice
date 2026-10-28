@@ -1,0 +1,15 @@
+MODULE: BankingMonotoneReturnDiscardsPrefix
+TARGET: BankingMonotone
+CLASS: Action
+SUMMARY: the permit-return boundary forgets an already banked prefix
+
+--- FIND
+    /\ role' = [role EXCEPT ![r] = "Interactive"]
+    /\ UNCHANGED <<queue, observed, pressure, pressurePhase, drain,
+        frontier, banked, checkpoint, holes, ledger, arrivalsClosed, dispatchEpoch>>
+--- REPLACE
+    /\ banked' = [p \in Partitions |-> 0]
+    /\ role' = [role EXCEPT ![r] = "Interactive"]
+    /\ UNCHANGED <<queue, observed, pressure, pressurePhase, drain,
+        frontier, checkpoint, holes, ledger, arrivalsClosed, dispatchEpoch>>
+--- END

@@ -282,6 +282,41 @@
         "note": "Six BPlusCascade parent-accounting, recovery, separator-range, and maximum-height mutations in the companion target-property group; measured costs include each mutation control."
       },
       {
+        "shard": "formal-tlc-scheduling-replay-two-partitions",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSchedulingReplayTwoPartitions"],
+        "note": "The ReplayPermits TwoPartitions variant remains in a dedicated one-case shard. Its passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148551) measured 41.14616 minutes; 41.15 is the measured item price, not a future runtime guarantee. It remains separate from the reconstructed scheduling groups."
+      },
+      {
+        "shard": "formal-tlc-scheduling",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardScheduling"],
+        "note": "The 106-case group contains ReplayPermits base/PartialPrefix and the WalBackPressure, MaterialiserDrain, WalAdmission, WalGcStarvationDriveWitness and TurnOccupancy cases; future scheduling modules also fall back here. Its 21.03-minute price is reconstructed with four-worker LPT from the passing 192/192 case TRX in ci.yml run 40658688360 (head 92832b77, job 122717148586), not a measured CI work-item time. The source run passed including rebootstrap job 122717148595. Historical run 40588708711 rebootstrap job 122488444001 failed under #5116 and contributes no timing. Estimates are planning inputs, not runtime guarantees."
+      },
+      {
+        "shard": "formal-tlc-scheduling-workload-b",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSchedulingWorkloadB"],
+        "note": "The 86-case group contains ReplayPermits mutations and the WalGcStarvationDrive, SagaReadProgress and TagIndexReconcile cases. Its 23.04-minute price is reconstructed with four-worker LPT from the passing 192/192 case TRX in ci.yml run 40658688360 (head 92832b77, job 122717148586), not a measured CI work-item time. Estimates are planning inputs, not runtime guarantees."
+      },
+      {
+        "shard": "formal-tlc-scheduling-shipping",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSchedulingShipping"],
+        "note": "ReplicationShipping base and all 26 paired mutations remain together (27 TLC cases), preserving process-local control behavior. The passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148735) measured 6.16476 minutes; 6.17 is the measured item price, not a future runtime guarantee."
+      },
+      {
+        "shard": "formal-tlc-scheduling-shipping-variants",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSchedulingShippingVariants"],
+        "note": "Every full ReplicationShipping variant, currently the one FourRecords case. Its passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148680) measured 18.71505 minutes; 18.72 is the measured item price, not a future runtime guarantee."
+      },
+      {
         "shard": "formal-tlc-smoke",
         "tlcSmoke": true,
         "tiers": ["deterministic"],

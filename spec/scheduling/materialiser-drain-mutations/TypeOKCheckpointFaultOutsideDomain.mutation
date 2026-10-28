@@ -1,0 +1,13 @@
+MODULE: TypeOKCheckpointFaultOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: failed checkpoint enters an invalid retry phase
+PERTURBS: CheckpointFault
+
+--- FIND
+    /\ checkpointFailed' = TRUE
+    /\ UNCHANGED <<mode, phase, queued, active, remaining, work, applied,
+--- REPLACE
+    /\ checkpointFailed' = TRUE /\ phase' = "invalid-retry" \* MUTATION: invalid phase.
+    /\ UNCHANGED <<mode, queued, active, remaining, work, applied,
+--- END

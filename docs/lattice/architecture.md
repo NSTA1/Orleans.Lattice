@@ -167,6 +167,99 @@ Long-running or multi-step operations are managed by dedicated coordination grai
 
 The same pattern backs the rest of the library's multi-step features, each described with its feature: [atomic actions](atomic-action.md), cross-tree [atomic writes](atomic-writes.md) and their receiver-side visibility barrier, the [distributed lock](distributed-lock.md), [materialised-view](materialised-views.md) maintenance and its registry, and tag-index reconciliation.
 
+### WAL back-pressure composition
+
+Cached saturation decisions, partition capacity admission and storage completion
+are separate boundaries. The classifier rolls partition depth up to the tree,
+sums acute trip deltas tree-wide and applies recovery hysteresis only over a raw
+Healthy verdict. Writer and saga decisions are scoped to physical captured work;
+snapshot/receiver logical-name lookups do not silently borrow a physical alias
+copy's signal. Physical view maintainers scale both Throttled and Saturated work.
+
+The relief path must not depend on that cached pressure: flush, leaf
+materialiser drain/checkpoint, GC/pin progress and saga commit/abort tails
+remain signal-independent. The terminal-only writer bypass is operation-wide,
+before fan-out, and retains downstream capacity/storage and shutdown checks.
+Terminal-tail resumption is not an exemption for ordinary resumed data.
+The [scheduling boundary](verified-scheduling.md#wal-back-pressure-progress)
+states the finite-work and stable-input progress premises separately from
+durability and from measured latency.
+
+### Replication shipping and receiver retention
+
+Physical-source shipping windows fold acknowledgements in launch order.
+Receiver feedback controls future offers; it cannot recall an in-flight batch.
+Observed shrink or pause remains effective through the current pump's
+held-terminal release even when a later acknowledgement is healthy.
+
+Receiver deferral keeps authoritative saga decisions and bounded retention
+fail-closed. A decided prepare may remain unacknowledged while application
+fails; timeout alone cannot safely discard it. Conditional retry progress
+requires elapsed-time opportunities, retention capacity and a sufficiently
+stable receiver lifetime, not jitter or a bounded scheduling delay. The
+[scheduling boundary](verified-scheduling.md#replication-shipping-and-receiver-progress)
+states the source-lineage, restart and retirement-history limits.
+
+### Replay permit ownership
+
+Replay admission distinguishes free, held and memory-withheld physical capacity.
+Returning a client wait is not releasing a shared cold owner's permit; that
+owner retains capacity until its replay frame unwinds. Genuine owner-lifetime
+cancellation can end read-only provider awaits without detaching prefix
+banking or durability writes. A warm-drive budget does not impose a deadline
+on the intentionally shared cold owner.
+
+The [scheduling boundary](verified-scheduling.md#replay-permit-ownership-and-progress)
+separates capacity conservation, class-sensitive queue observations and earned
+prefix banking from conditional progress and wall-clock performance.
+
+### Saga and reader completion boundaries
+
+Multi-key readers validate one decision cut and use a bounded optimistic-to-gated
+fallback under sustained writer deliveries. The gate is finite and unrenewed:
+lost lease or coverage must produce an explicit outcome, not a mixed batch.
+Available collaborators and stable routing remain progress premises.
+
+Saga decision durability, arbitrary-order terminal delivery, completion
+checkpoint durability and original caller acknowledgement are distinct
+boundaries. Terminal relief is pressure-independent; completing a decision
+alone cannot settle the caller. The
+[scheduling assurance](verified-scheduling.md#saga-and-reader-progress) and
+[refinement](../../spec/scheduling/SagaReadProgressRefinement.md) distinguish
+these obligations from latency and arbitrary competing-reader fairness.
+
+### Materialiser progress boundaries
+
+Online snapshot copying limits simultaneous shard-copy calls and source leaves
+per pass. Leaf materialisation separately advances replay, persisted checkpoint,
+durable snapshot coverage and trim-entitling pins. WAL shutdown drains have
+per-stage budgets; they do not bound all leaf teardown awaits.
+
+Positive pressure-responsive view service only implies bounded backlog under
+the stated offered-work-per-service-opportunity premise. Split repair keeps
+its physical source identity but refreshes the owning logical row's live map.
+The [scheduling assurance](verified-scheduling.md#materialiser-drain-progress)
+keeps these different drain units and their environment assumptions explicit.
+
+### Tag-index reconciliation
+
+The tag-index coordinator persists its active sweep, probe/repair phase and
+tree cursor. A probe can observe drift without repairing or publishing a
+successful-repair baseline. Repair advances the cursor only after its required
+RPCs succeed; a failed checkpoint restores uncommitted progress, and terminal
+completion is reported only after durable publication. Incomplete gated reads
+are not successful repairs, even when the subject fingerprint is unchanged.
+
+Scheduled phase callbacks bound tree units, not arbitrary row work: probe
+handles at most `max(1, ChunkSize)` trees and repair handles one whole tree.
+The synchronous full-sweep path can drain several callbacks. Reminder and
+on-demand triggers preserve the active cursor; failed initial keepalive
+registration remains recoverable through idempotent coordinator startup.
+The [scheduling assurance](verified-scheduling.md#tag-index-reconciliation-progress)
+and [refinement mapping](../../spec/scheduling/TagIndexReconcileRefinement.md)
+state the finite-subject and eventually successful-delivery premises separately from this
+per-callback work bound.
+
 ### Durability and transport grains
 
 These grains carry the partitioned write-ahead log, leaf-projection replay, cursor-paged enumeration, and ambient counters / metrics:

@@ -1,0 +1,33 @@
+MODULE: RefusalNotChargedChargeRefusal
+TARGET: RefusalNotCharged
+CLASS: Action
+SUMMARY: a refusal spends the consumer attempt budget
+PERTURBS: GcPass
+
+--- FIND
+        IF CanAdmit("sweep") THEN DriveStart(l, "sweep") ELSE DriveRefused(l, "sweep")
+--- REPLACE
+\* MUTATION: an unadmitted drive is charged as an attempt.
+        IF CanAdmit("sweep") THEN DriveStart(l, "sweep") ELSE DriveRefusedWith(l, "sweep", TRUE)
+--- END
+--- FIND
+DriveRefused(l, origin) ==
+    /\ leaf' = [leaf EXCEPT
+        ![l].touch = IF origin = "sweep" THEN "refused" ELSE @,
+--- REPLACE
+DriveRefusedWith(l, origin, charged) ==
+    /\ leaf' = [leaf EXCEPT
+        ![l].attempts = IF charged THEN @ + 1 ELSE @,
+        ![l].touch = IF origin = "sweep" THEN "refused" ELSE @,
+--- END
+--- FIND
+    /\ UNCHANGED <<free, cold, head, appended, deleted, timely, admitted, rank>>
+
+GcPass ==
+--- REPLACE
+    /\ UNCHANGED <<free, cold, head, appended, deleted, timely, admitted, rank>>
+
+DriveRefused(l, origin) == DriveRefusedWith(l, origin, FALSE)
+
+GcPass ==
+--- END

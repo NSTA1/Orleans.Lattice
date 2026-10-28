@@ -50,6 +50,27 @@ public sealed class RefinementSymbolResolverTests
 
     private RefinementSymbolResolver Resolver() => new(_root);
 
+    [TestCase("/// <c>BPlusTree/Grains/*Grain.cs</c> convention\n")]
+    [TestCase("// literal /* inside a line comment\n")]
+    [TestCase("/* a real block containing // before its close */\n")]
+    public void Comment_delimiters_inside_another_comment_do_not_consume_live_members(string comment)
+    {
+        Write("Probe.cs", "internal sealed class Probe\n{\n"
+            + comment
+            + "public void LiveMember() { }\n"
+            + "public void LaterMember() { /* actual block comment */ }\n"
+            + "// public void CommentOnlyMember() { }\n"
+            + "}\n");
+
+        var resolver = Resolver();
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolver.Resolve("Probe", "LiveMember"), Is.EqualTo(RefinementSymbolResolution.TypeMember));
+            Assert.That(resolver.Resolve("Probe", "LaterMember"), Is.EqualTo(RefinementSymbolResolution.TypeMember));
+            Assert.That(resolver.Resolve("Probe", "CommentOnlyMember"), Is.EqualTo(RefinementSymbolResolution.UnknownMember));
+        });
+    }
+
     /// <summary>
     /// The case the issue calls out by name, and the one a naive rewrite gets
     /// wrong. <c>ShardRootGrain.TxTerminal</c> is a FILE, not a member: the

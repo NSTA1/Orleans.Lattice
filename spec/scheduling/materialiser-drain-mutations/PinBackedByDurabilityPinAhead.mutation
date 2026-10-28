@@ -1,0 +1,11 @@
+MODULE: PinBackedByDurabilityPinAhead
+TARGET: PinBackedByDurability
+CLASS: Invariant
+SUMMARY: pin authorises trimming beyond durable coverage
+PERTURBS: PinPublish
+
+--- FIND
+    /\ pin' = Min(checkpoint, covered) /\ phase' = "done"
+--- REPLACE
+    /\ pin' = checkpoint + 1 /\ phase' = "done" \* MUTATION: unbacked pin.
+--- END

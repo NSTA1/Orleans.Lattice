@@ -1,0 +1,11 @@
+MODULE: TypeOKPressureOffOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: pressure clearance leaves its finite phase domain
+PERTURBS: MemoryPressureOff
+
+--- FIND
+    /\ pressurePhase = "on" /\ pressure' = FALSE /\ pressurePhase' = "off"
+--- REPLACE
+    /\ pressurePhase = "on" /\ pressure' = FALSE /\ pressurePhase' = "unknown"
+--- END

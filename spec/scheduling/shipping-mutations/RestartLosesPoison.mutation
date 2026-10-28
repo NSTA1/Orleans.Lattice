@@ -1,0 +1,14 @@
+MODULE: RestartLosesPoison
+TARGET: RestartPreservesDurable
+CLASS: Action
+SUMMARY: receiver reconstruction loses durable poison and quarantine
+PERTURBS: Restart
+
+--- FIND
+    /\ age' = [r \in Ids |-> Timeout + 1]
+    /\ UNCHANGED <<cursor, sent, queue, applied, parked, mode, bad, space,
+--- REPLACE
+    /\ age' = [r \in Ids |-> Timeout + 1]
+    /\ mode' = [r \in Ids |-> "fresh"]
+    /\ UNCHANGED <<cursor, sent, queue, applied, parked, bad, space,
+--- END

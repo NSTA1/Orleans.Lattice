@@ -1,0 +1,11 @@
+MODULE: RebuildProgressAcrossAliasFrozenPhysicalMap
+TARGET: RebuildProgressAcrossAlias
+CLASS: Temporal
+SUMMARY: read stale physical registry topology instead of its active logical owner
+PERTURBS: RefreshSourceRouting
+
+--- FIND
+    /\ route' = split /\ phase' = "read"
+--- REPLACE
+    /\ route' = 0 /\ phase' = "read" \* MUTATION: frozen physical map after split.
+--- END

@@ -1,0 +1,11 @@
+MODULE: SuccessKeepsFailureBudget
+TARGET: BackoffRecovers
+CLASS: Action
+SUMMARY: successful acknowledgement does not clear the failure budget
+PERTURBS: Accept
+
+--- FIND
+    /\ failures' = 0 /\ backoff' = InitialBackoff
+--- REPLACE
+    /\ failures' = failures /\ backoff' = backoff
+--- END

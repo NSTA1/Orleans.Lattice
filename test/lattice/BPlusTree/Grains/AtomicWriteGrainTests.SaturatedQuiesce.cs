@@ -266,6 +266,7 @@ public partial class AtomicWriteGrainTests
         newMap.Slots[virtualSlot] = newShard;
         var oldRouting = new RoutingInfo(TreeId, oldMap);
         var newRouting = new RoutingInfo(TreeId, newMap);
+        var currentRouting = oldRouting;
 
         var signal = Substitute.For<IWalSaturationSignal, IWalPartitionSaturationSignal>();
         var partitionSignal = (IWalPartitionSaturationSignal)signal;
@@ -278,24 +279,34 @@ public partial class AtomicWriteGrainTests
                 Arg.Any<string>(),
                 WalPartitionHash.Compute(key, walPartitions),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(_ =>
+            {
+                currentRouting = newRouting;
+                return Task.CompletedTask;
+            });
 
         var (grain, state, lattice, _) = CreateGrainWithSignal(signal, options: new LatticeOptions
         {
             TxRegistryShardCount = 1,
             WalPartitions = walPartitions,
         });
-        var refreshCount = 0;
         lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
-            .Returns(_ => new ValueTask<RoutingInfo>(
-                ++refreshCount == 1 ? oldRouting : newRouting));
+            .Returns(_ => new ValueTask<RoutingInfo>(currentRouting));
+        bool? freshAtDispatch = null;
         lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
-            .Returns(Task.CompletedTask);
+            .Returns(_ =>
+            {
+                freshAtDispatch = (freshAtDispatch ?? true) && state.State.RoutingEpoch == newMap.Version
+                    && state.State.TouchedShards.Contains(newShard);
+                return Task.CompletedTask;
+            });
 
         await grain.ExecuteAsync(TreeId, MakeEntries((key, [1])));
 
         Assert.Multiple(() =>
         {
+            Assert.That(freshAtDispatch, Is.True,
+                "routing and participants must refresh before dispatch, not merely before final completion");
             Assert.That(state.State.RoutingEpoch, Is.EqualTo(newMap.Version));
             Assert.That(state.State.TouchedShards, Does.Contain(oldShard));
             Assert.That(state.State.TouchedShards, Does.Contain(newShard));

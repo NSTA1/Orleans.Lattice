@@ -180,12 +180,12 @@ internal sealed partial class BPlusLeafGrain
     /// Applies a saga commit on behalf of activation replay outside an apply
     /// scope, with replay stamping (see <see cref="_replayTerminalStamping"/>).
     /// </summary>
-    private void ApplyReplayTxCommit(Guid transactionId)
+    private void ApplyReplayTxCommitLocally(Guid transactionId, IReadOnlySet<string>? skipKeys = null)
     {
         _replayTerminalStamping = true;
         try
         {
-            ApplyTxCommit(transactionId);
+            ApplyTxCommit(transactionId, skipKeys);
         }
         finally
         {
@@ -876,8 +876,8 @@ internal sealed partial class BPlusLeafGrain
 
                 if (Cache.TryGetRow(kvp.Key, out var preExisting))
                 {
-                    // Mirror the orphan-drain skip condition below:
-                    // whose existing HLC dominates the prepared HLC will
+                    // Mirror the LWW orphan-drain skip condition below:
+                    // a CRDT fold always writes, but a newer LWW row will
                     // NOT be written, so its existing.Timestamp must not
                     // pull terminalStamp past where we need it for the
                     // keys we WILL write.
@@ -889,7 +889,8 @@ internal sealed partial class BPlusLeafGrain
                     // its HLC MUST contribute to baseTerminalStamp -
                     // otherwise the drained stamp would lose LWW to
                     // the migrated entry's high HLC.
-                    if (preExisting.Timestamp.CompareTo(kvp.Value.Timestamp) > 0
+                    if ((deltaBucket is null || !deltaBucket.ContainsKey(kvp.Key))
+                        && preExisting.Timestamp.CompareTo(kvp.Value.Timestamp) > 0
                         && !preExisting.IsMigrated)
                     {
 #if LATTICE_DIAG
@@ -1558,7 +1559,7 @@ internal sealed partial class BPlusLeafGrain
             switch (decision)
             {
                 case TxStatus.Committed:
-                    ApplyReplayTxCommit(txid);
+                    await ApplyReplayTxCommitAsync(txid, state.State.Clock);
                     break;
                 case TxStatus.Aborted:
                     ApplyTxAbort(txid);
@@ -1621,7 +1622,7 @@ internal sealed partial class BPlusLeafGrain
         switch (recorded)
         {
             case TxStatus.Committed:
-                ApplyReplayTxCommit(txid);
+                await ApplyReplayTxCommitAsync(txid, state.State.Clock);
                 break;
             case TxStatus.Aborted:
                 ApplyTxAbort(txid);
@@ -2369,46 +2370,7 @@ internal sealed partial class BPlusLeafGrain
                 if (Array.BinarySearch(sortedMovedSlots, slot) < 0)
                     continue;
 
-                // Carry the prepared mutation's typed CRDT delta + merge
-                // mode (when the parallel side-map recorded one) so the
-                // destination leaf's retroactive replay reconstructs the
-                // fold state and the resharded prepared CRDT entry still
-                // converges by the per-replica union on its terminal
-                // commit. A plain LWW prepared write has no side-map entry
-                // and snapshots Delta=null / Mode=LwwRegister.
-                byte[]? delta = null;
-                var mode = LatticeMergeMode.LwwRegister;
-                if (_pendingTxDeltas is not null
-                    && _pendingTxDeltas.TryGetValue(txid, out var deltaBucket)
-                    && deltaBucket.TryGetValue(key, out var dm))
-                {
-                    delta = dm.Delta;
-                    mode = dm.Mode;
-                }
-
-                var membership = _pendingTxBatches is not null
-                    && _pendingTxBatches.TryGetValue(txid, out var batchBucket)
-                    && batchBucket.TryGetValue(key, out var b)
-                    ? b
-                    : default;
-
-                result.Add(new PendingMutationSnapshot
-                {
-                    TransactionId = txid,
-                    Key = key,
-                    Value = value.IsTombstone ? null : value.Value,
-                    Timestamp = value.Timestamp,
-                    IsTombstone = value.IsTombstone,
-                    ExpiresAtTicks = value.ExpiresAtTicks,
-                    OriginClusterId = value.OriginClusterId,
-                    VectorClock = value.VectorClock,
-                    WalOffset = walOffset,
-                    Delta = delta,
-                    Mode = mode,
-                    AtomicBatchSize = membership.Size,
-                    AtomicBatchIndex = membership.Index,
-                    StampIsOriginal = IsPrepareStampOriginal(txid, key),
-                });
+                result.Add(CaptureReplayPrepare(txid, key, value) with { WalOffset = walOffset });
             }
         }
 

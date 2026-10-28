@@ -33,22 +33,28 @@ Issue #2323 is the recommendation. This directory is it.
 
 ## Each mutation is a controlled experiment, not a red run
 
-A mutation is checked in **two arms** against the same generated
-single-property cfg:
+A mutation retains a clean full-bound control and a targeted mutant.
+If its generated mutant cfg differs, the clean source also runs under that
+exact cfg. Every clean control uses the targeted mutant's TLC options and checks
+`TypeOK` plus only its single target, not all the module's properties:
 
 | Arm | Module | Required outcome |
 | --- | --- | --- |
-| Control | the unmutated base | clean |
-| Treatment | the generated mutant | violates the named property |
+| Full-bound control | the unmutated base with its original bounds | clean |
+| Matching-bound control, when the cfg differs | the unmutated base with the exact mutant cfg | clean |
+| Treatment | the generated mutant with the mutant cfg | violates the named property |
 
-Asserting only the second arm would repeat the mistake this directory exists to
+Asserting only the treatment outcome would repeat the mistake this directory exists to
 catch. A mutant can go red for reasons that have nothing to do with the property
 under test: a typo that makes the module unparseable, an accidental
 out-of-domain variable, a cfg naming the wrong thing. A one-armed test cannot
 distinguish "this property caught the defect" from "something went wrong". The
 control arm is what turns a red mutant into evidence, and it is also the
 standing proof that the harness is not vacuous, since the same property, the
-same cfg and the same machinery produce green on one input and red on the other.
+same cfg and the same machinery produce green on clean source and red on the
+mutant. `DEADLOCK: off` adds the deadlock-on mutant run described below, so a
+complete mutation experiment has two, three or four arms. The separate base
+gate checks all properties together; the single-target controls do not replace it.
 
 ## Mutations are generated from the base, never checked in as copies
 
@@ -119,14 +125,18 @@ and it is what the action-coverage gate counts. Leave it off a mutation that
 edits a read definition, the fairness assumption, or that splices in an action
 the protocol does not have.
 
-`DEADLOCK: off` is optional, and `off` is its only accepted value. It runs both
-arms of the experiment with TLC's `-deadlock` switch, which turns the deadlock
-check off. A mutant can be left with no enabled action, and TLC then reports
+`DEADLOCK: off` is optional, and `off` is its only accepted value. It runs the
+full-bound clean control, any matching-bound clean control and the targeted
+mutant with TLC's `-deadlock` switch, which turns the deadlock check off.
+A mutant can be left with no enabled action, and TLC then reports
 `Deadlock reached` before it evaluates a temporal target (those are checked only
 after the state search completes), so the run would be about the deadlock rather
 than the property; with the check off TLC treats the stuck state as stuttering
-forever, which is what the property then has to reject. It is a claim too: the harness runs a declaring mutant a
-third time with the check left on - and with liveness checking deferred to the end of the search (`-lncheck final`), so a periodic mid-search liveness check on a slow machine cannot report the target first - and requires a deadlock, so the switch cannot
+forever, which is what the property then has to reject. It is a claim too: the
+harness runs the mutant once more under the same mutant cfg with deadlock
+checking on and liveness deferred to the end (`-lncheck final`), so a periodic
+mid-search liveness check cannot report the target first. That additional run
+must report deadlock, so the switch cannot
 sit on a mutation that does not need it. Two do. `TerminationCompletionOverAllKeys`'s
 defect IS the stuck state. `MonotonicVisibilityOrphanLosesTerminal`'s mutant has
 always deadlocked, but while `MonotonicVisibility` was a single-step property
@@ -135,18 +145,34 @@ deadlock; the behaviour-level form is checked after the search completes, so
 the deadlock now comes first unless the check is off.
 
 `BOUNDS:` is optional: comma-separated `Name = value` assignments to bounds the
-specification declares or defines (`BOUNDS: MaxFaults = 0, MaxHlc = 1`). They are
-written into the mutant arm's cfg only, so the mutant runs on the smaller instance
-while the control arm still checks the module's own bounds. A mutant has to show
-one counterexample, not hold over the whole instance, and a temporal mutant pays
-for the full state graph before TLC reports it, so the smallest instance that
-still exhibits the violation is the cheapest honest one. The header cannot weaken
-the experiment: the control arm, which decides that the property holds on the
-base, never sees it; a bound below the violation leaves the mutant clean and fails
-the pairing gate; and a name the specification does not have, which TLC would
-silently ignore, is refused by `SpecMutationCatalogueTests`. Mutations that build
-an identical control arm (same module, target and options) share one run of it
-within a test process.
+specification declares or defines (`BOUNDS: MaxFaults = 0, MaxHlc = 1`).
+`BuildConfig` retains the module's original assignments for the full-bound
+clean control. `BuildMutantConfig` adds the header's assignments for the mutant.
+Whenever the generated cfg text differs, the harness additionally runs the
+unmutated source under that exact mutant cfg and the same TLC options before
+running the mutant. A nonempty header adds a cfg block, even if its values
+repeat the base assignments.
+
+This applies to invariant, action and temporal targets, and to smaller, larger
+or otherwise changed instances; it is not restricted to shrinking temporal
+models. A smaller instance can make a counterexample cheaper, while a larger
+one may be necessary to expose it. If the bound breaks the clean source, the
+matching-bound control fails. If it hides the mutation, the mutant stays clean
+and the pairing fails. An undeclared/undefined bound name, which TLC could
+silently ignore, is refused by `SpecMutationCatalogueTests`.
+
+With both `BOUNDS:` and `DEADLOCK: off`, the full-bound and matching-bound clean
+controls and targeted mutant use `-deadlock`; the additional mutant uses the
+same mutant cfg with deadlock checking on and `-lncheck final`. That is four
+launches before any actual control-cache reuse. A complete module selection's
+formula and exclusions are in [CI budget](../../README.md#ci-budget).
+
+Control reuse is process-local and requires the complete cache key to match:
+specification path, base source, generated cfg text, options and sorted sibling
+module names/text. The generated cfg includes its mutation-name comment, so
+different mutation names do not share a control just because their target and
+options match. Repeated identical requests share the same lazy result, including
+failure; this is not cross-process or cross-run reuse.
 
 ## `TypeOK` rides along in every cfg
 
@@ -295,7 +321,7 @@ while the retirement half was covered only at the implementation level, by
 now covers it here too, by dropping that guard, and it is a protocol-level
 perturbation rather than an added action.
 
-For those added-action classifier mutations the two-arm experiment therefore
+For those added-action classifier mutations the controlled experiment therefore
 establishes something weaker than it does for protocol-level mutations. It
 establishes that the property is
 **well-formed**: that it is not a tautology, that it says what its name says,

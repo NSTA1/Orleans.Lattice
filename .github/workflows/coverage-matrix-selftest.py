@@ -34,6 +34,15 @@ def script(name: str) -> str:
     return textwrap.dedent(run["body"])
 
 
+def bash() -> str:
+    # CreateProcess searches System32 before PATH, so a bare "bash" on Windows
+    # can launch the WSL relay instead of the PATH-selected Bash (Git Bash).
+    path = os.environ.get("BASH") or shutil.which("bash")
+    if path is None:
+        raise AssertionError("bash not found on PATH")
+    return path
+
+
 class CoverageMatrixTests(unittest.TestCase):
     def test_every_project_is_planned_once_per_shared_shard(self):
         legs = coverage.plan(ROOT)
@@ -153,13 +162,27 @@ class BrowserInstallTests(unittest.TestCase):
             exec /usr/bin/timeout --kill-after=1s 1s "$@"
         """), encoding="utf-8", newline="\n")
         (tools / "sleep").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8", newline="\n")
+        # These portable contract tests stub privilege/supervision. The native
+        # playwright-install-selftest.py exercises real sudo and descendant cleanup.
+        (tools / "sudo").write_text(
+            '#!/bin/bash\n[ "$1" = --non-interactive ] && [ "$2" = -- ] || exit 96\n'
+            'shift 2\nexec "$@"\n', encoding="utf-8", newline="\n",
+        )
+        (tools / "python3").write_text(
+            '#!/bin/bash\n[[ "$1" = */run-playwright-install.py ]] && '
+            '[ "$2" = 120 ] && [ "$3" = 10 ] || exit 95\n'
+            'shift 3\n'
+            'if [ "$1" = --apt-mirror-step ]; then echo "$2" >> mirrors; shift 2; fi\n'
+            'exec timeout --kill-after=10s 120s "$@"\n',
+            encoding="utf-8", newline="\n",
+        )
         for tool in tools.iterdir():
             tool.chmod(0o755)
         self.env = dict(os.environ, SCENARIO="pass")
 
     def run_install(self, cache: bool | str, *browsers: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [os.environ.get("BASH", "bash"), "-c",
+            [bash(), "-c",
              'export PATH="$PWD/bin:$PATH"; bash install.sh "$@"', "install",
              str(cache).lower(), *browsers],
             cwd=self.root, env=self.env, text=True, capture_output=True, timeout=20,
@@ -213,6 +236,7 @@ class BrowserInstallTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual("3", (self.root / "calls").read_text().strip())
         self.assertIn("failed after three bounded attempts", result.stdout)
+        self.assertEqual(["1", "2"], (self.root / "mirrors").read_text().splitlines())
 
     def test_missing_build_output_or_empty_browser_selection_fails_before_install(self):
         (self.root / "test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1").unlink()
@@ -221,6 +245,14 @@ class BrowserInstallTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("::error::", result.stdout)
             self.assertFalse((self.root / "calls").exists())
+
+    def test_shell_tests_launch_the_path_selected_bash(self):
+        launcher = bash()
+        self.assertTrue(os.path.isabs(launcher), launcher)
+        result = subprocess.run([launcher, "-c", 'echo "$BASH_VERSION"'], text=True,
+                                capture_output=True, timeout=20)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"^\d+\.\d+")
 
     def test_ui_and_coverage_steps_use_the_bounded_installer(self):
         for name in ("ui-tests.yml", "coverage.yml"):
@@ -234,6 +266,8 @@ class BrowserInstallTests(unittest.TestCase):
             self.assertNotIn('pwsh "$script"', block)
         yaml = (WORKFLOWS / "ui-tests.yml").read_text(encoding="utf-8")
         self.assertEqual(2, yaml.count("- '.github/workflows/install-playwright-browsers.sh'"))
+        self.assertEqual(2, yaml.count("- '.github/workflows/run-playwright-install.py'"))
+        self.assertEqual(2, yaml.count("- '.github/workflows/playwright_apt_mirrors.py'"))
         self.assertIn("join(matrix.browsers, '-')", yaml)
         self.assertIn("join(matrix.browsers, ' ')", yaml)
         self.assertIn("key: playwright-chromium-firefox-webkit-", YAML)
@@ -308,7 +342,7 @@ class CoverageShellTests(unittest.TestCase):
         path = self.root / "step.sh"
         path.write_text(self.prefix + body, encoding="utf-8", newline="\n")
         return subprocess.run(
-            [os.environ.get("BASH", "bash"), "step.sh"], cwd=self.root, env=self.env,
+            [bash(), "step.sh"], cwd=self.root, env=self.env,
             text=True, capture_output=True, timeout=30,
         )
 

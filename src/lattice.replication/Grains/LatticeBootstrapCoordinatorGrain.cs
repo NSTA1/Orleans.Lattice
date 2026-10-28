@@ -154,6 +154,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             RedriveAttempts = state.State.RedriveAttempts,
             CompletedSourceClusterId = !state.State.InProgress
                 && state.State.Phase == LatticeBootstrapState.LiveIncremental
+                && !state.State.ReconcileOwedBySource.GetValueOrDefault(state.State.SourceClusterId)
                     ? state.State.SourceClusterId
                     : null,
         });
@@ -163,6 +164,11 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     public Task<long?> GetDrainedExportEpochAsync(string sourceClusterId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        if (state.State.ReconcileOwedBySource.GetValueOrDefault(sourceClusterId))
+        {
+            return Task.FromResult<long?>(null);
+        }
+
         long? drained = state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var completed) ? completed : null;
         if (state.State.InProgress
             && state.State.Phase == LatticeBootstrapState.IncrementalHandoff
@@ -180,7 +186,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
         return Task.FromResult<long?>(
-            state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var epoch) ? epoch : null);
+            !state.State.ReconcileOwedBySource.GetValueOrDefault(sourceClusterId)
+            && state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var epoch) ? epoch : null);
     }
 
     /// <inheritdoc />
@@ -188,7 +195,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
         return Task.FromResult<long?>(
-            receiverLineage != Guid.Empty
+            !state.State.ReconcileOwedBySource.GetValueOrDefault(sourceClusterId)
+            && receiverLineage != Guid.Empty
             && state.State.CompletedExportLineages.TryGetValue(sourceClusterId, out var lineage)
             && lineage == receiverLineage
             && state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var epoch)
@@ -2209,10 +2217,12 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // Record the completed full re-seed for the sender's ack echo (#4534).
         // Not while a re-seed request the drain did not consume is outstanding
         // (recorded after the drain finished): the echo would release the
-        // sender's saga records over stale pending buckets (#4533). The sender's
-        // next request starts the bootstrap that consumes it.
+        // sender's saga records over stale pending buckets (#4533). An owed
+        // reconcile likewise must keep the sender's re-seed/reap protection
+        // until a successor pass settles it (#5116).
         if (state.State.SnapshotExportEpoch > 0
             && !string.IsNullOrEmpty(state.State.SourceClusterId)
+            && !state.State.ReconcileOwedBySource.GetValueOrDefault(state.State.SourceClusterId)
             && !state.State.ReseedAfterEpochs.ContainsKey(state.State.SourceClusterId))
         {
             var source = state.State.SourceClusterId;

@@ -1,0 +1,13 @@
+MODULE: RoutingSnapshotFreshRetainsOldEpoch
+TARGET: RoutingSnapshotFresh
+CLASS: Action
+SUMMARY: routing refresh retains the stale captured epoch
+PERTURBS: SagaReRoute
+BOUNDS: AllowReroute = TRUE
+
+--- FIND
+    /\ saga' = [saga EXCEPT !.capturedEpoch = epoch',
+--- REPLACE
+\* MUTATION: keep the old epoch after the routing change.
+    /\ saga' = [saga EXCEPT !.capturedEpoch = epoch,
+--- END

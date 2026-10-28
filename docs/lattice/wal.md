@@ -252,6 +252,12 @@ becomes cache-warm for subsequent writer calls.
 
 ### Activation-time replay under `WalPartitions > 1`
 
+**Formal model.**
+[`ReplayPermits`](../../spec/scheduling/ReplayPermitsRefinement.md) treats replay
+admission as a process-wide resource, not a new permit pool per partition.
+Its ownership and banking checks do not equate a caller deadline with the
+lifetime of the shared cold-replay owner; see [Recovery and rebuild](#recovery-and-rebuild).
+
 The leaf grain's activation-time materialiser is partition-aware. When
 `LatticeOptions.WalPartitions > 1` the activation hook iterates
 `[0, WalPartitions)` and, for each partition, runs an independent
@@ -704,6 +710,18 @@ batch.
 
 ## Recovery and rebuild
 
+**Formal model.**
+[`ReplayPermits`](../../spec/scheduling/ReplayPermitsRefinement.md) checks permit
+conservation, observed admission decisions, memory withholding and retained replay
+prefixes. Admission observes depth before incrementing the waiter count; this is
+not a hard queue-cardinality cap. Draining fan-out may exceed that observed bound,
+while fresh excessive mean wait can refuse even below it.
+`StarvationDriveBudget` bounds a starvation-drive owner's residency under runtime opportunities,
+not elapsed time or a cold-replay owner's lifetime: caller deadlines do not cancel
+shared cold replay. Cold ownership ends on completion or actual activation-lifetime
+cancellation, with continuation, prefix-banking and teardown completion
+premises; a permanently hung uncancelled owner has no residency guarantee.
+
 
 When a leaf grain activates, it rebuilds its in-memory projection by
 replaying the WAL through a per-partition replay coordinator, seeding the
@@ -1143,6 +1161,20 @@ cadence floor engage. See
 > [`projection-rebuild.md`](projection-rebuild.md).
 
 ### Scheduling
+
+**Formal model.**
+[`WalGcStarvationDrive`](../../spec/scheduling/WalGcStarvationDriveRefinement.md)
+models the shared drive budget, frozen per-pass order, timer reservation,
+refusal accounting, re-arm and turn occupancy. Admission progress assumes
+returned physical capacity, a stable undeleted tree and recurring GC/runtime
+opportunities. Floor advancement additionally requires timely durable progress
+within the drive budget: replay must earn and bank checkpoint/coverage/pin
+progress before expiry; eventual storage completion alone is insufficient.
+Returning the outer drive permit does not itself lift the floor or end shared
+cold replay. The finite instance assumes finite timer competition and finite WAL
+append, not arbitrary ongoing load. Timer dispatch returns the grain turn
+independently of drive completion. These runtime opportunities and storage
+premises do not establish a wall-clock latency bound or fairness from jitter.
 
 `ILatticeWalGc.RunOnceAsync(treeName)` is a single-pass GC invocation.
 

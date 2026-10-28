@@ -1,0 +1,13 @@
+MODULE: BackPressureClearsFlushStopsUnderSaturation
+TARGET: BackPressureClears
+CLASS: Temporal
+SUMMARY: saturation prevents flush relief and traps the control loop
+PERTURBS: Relief
+
+--- FIND
+    /\ phase = 12 /\ actor \in ReliefActors \ reliefDone
+--- REPLACE
+\* MUTATION: a flush must pass the signal whose pressure it relieves.
+    /\ phase = 12 /\ actor \in ReliefActors \ reliefDone
+    /\ (actor = "Flush" => treeVerdict[1] # 2)
+--- END

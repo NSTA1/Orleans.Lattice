@@ -1,0 +1,23 @@
+{
+  "mutations": "replay-permits-mutations",
+  "refinement": "ReplayPermitsRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 9,
+    "properties": 11,
+    "actions": 20,
+    "mutations": 29,
+    "behaviourRows": 38,
+    "distinctStates": 695064
+  },
+  "variants": {
+    "TwoPartitions": {
+      "distinctStates": 2762408
+    },
+    "PartialPrefix": {
+      "distinctStates": 1038664
+    }
+  }
+}

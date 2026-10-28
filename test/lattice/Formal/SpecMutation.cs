@@ -134,7 +134,9 @@ public sealed record SpecMutation
     public IReadOnlyList<CfgAssignment> Bounds { get; init; } = [];
 
     /// <summary>
-    /// The exact text TLC emits when <see cref="Target"/> is violated.
+    /// The normal TLC violation banner for <see cref="Target"/>. An invariant
+    /// violated by the initial state has a distinct suffix, which the pairing
+    /// harness also recognizes without accepting evaluation errors.
     /// <para>
     /// Note the asymmetry in the <see cref="SpecPropertyClass.Temporal"/> case:
     /// TLC does NOT name the property for a temporal violation, only for
@@ -398,17 +400,32 @@ public static class SpecMutationCatalogue
             metadata[line[..separator].Trim()] = line[(separator + 1)..].Trim();
         }
 
+        // Between and after edits only blank lines and '#' comments may appear.
+        // Skipping anything else would let a stray REPLACE/END, or text meant
+        // for a block, vanish without a trace.
         while (index < lines.Length)
         {
-            if (!lines[index].StartsWith(FindMarker, StringComparison.Ordinal))
+            var line = lines[index];
+            if (line.StartsWith(FindMarker, StringComparison.Ordinal))
+            {
+                var find = Collect(lines, ref index, FindMarker, ReplaceMarker, name);
+                var replace = Collect(lines, ref index, ReplaceMarker, EndMarker, name);
+                edits.Add(new SpecEdit(find, replace));
+                index++;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#'))
             {
                 index++;
                 continue;
             }
 
-            var find = Collect(lines, ref index, FindMarker, ReplaceMarker, name);
-            var replace = Collect(lines, ref index, ReplaceMarker, EndMarker, name);
-            edits.Add(new SpecEdit(find, replace));
+            throw new InvalidOperationException(IsBlockMarker(line)
+                ? $"{name}.mutation line {index + 1} is the marker '{line}' outside any block; expected "
+                    + $"'{FindMarker}' to open the next edit."
+                : $"{name}.mutation line {index + 1} is text outside any block; expected '{FindMarker}', a "
+                    + $"blank line or a '#' comment: '{line}'");
         }
 
         if (edits.Count == 0)
@@ -495,6 +512,13 @@ public static class SpecMutationCatalogue
     /// normalised to <c>\n</c> on both sides of the comparison so that a
     /// checkout with CRLF endings (or a mutation file committed with them)
     /// cannot turn an anchor into a silent non-match.
+    /// <para>
+    /// Any other block marker met before <paramref name="close"/> is refused.
+    /// Collecting it as text is how a REPLACE block missing its own
+    /// <c>--- END</c> swallowed every later block, markers included, into its
+    /// replacement: the anchor still matched, the later perturbations were never
+    /// applied, and the mutant reached TLC as unparseable TLA+.
+    /// </para>
     /// </summary>
     private static string Collect(string[] lines, ref int index, string open, string close, string name)
     {
@@ -507,6 +531,14 @@ public static class SpecMutationCatalogue
         var body = new List<string>();
         while (index < lines.Length && !lines[index].StartsWith(close, StringComparison.Ordinal))
         {
+            if (IsBlockMarker(lines[index]))
+            {
+                throw new InvalidOperationException(
+                    $"{name}.mutation line {index + 1} is the marker '{lines[index]}' inside a '{open}' block; "
+                    + $"expected '{close}' first. Every '{FindMarker}' / '{ReplaceMarker}' block needs its own "
+                    + $"'{EndMarker}'.");
+            }
+
             body.Add(lines[index]);
             index++;
         }
@@ -518,6 +550,11 @@ public static class SpecMutationCatalogue
 
         return string.Join("\n", body);
     }
+
+    private static bool IsBlockMarker(string line) =>
+        line.StartsWith(FindMarker, StringComparison.Ordinal)
+        || line.StartsWith(ReplaceMarker, StringComparison.Ordinal)
+        || line.StartsWith(EndMarker, StringComparison.Ordinal);
 
     private static string Require(IDictionary<string, string> metadata, string key, string name) =>
         metadata.TryGetValue(key, out var value) && value.Length > 0

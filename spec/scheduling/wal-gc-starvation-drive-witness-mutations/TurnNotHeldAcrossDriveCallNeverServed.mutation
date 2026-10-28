@@ -1,0 +1,12 @@
+MODULE: TurnNotHeldAcrossDriveCallNeverServed
+TARGET: TurnNotHeldAcrossDrive
+CLASS: Temporal
+SUMMARY: a delivered foreground call never acknowledges completion
+PERTURBS: CallServe
+
+--- FIND
+    /\ leaf' = [leaf EXCEPT ![l].call = "done"]
+--- REPLACE
+\* MUTATION: a runtime service opportunity loses its acknowledgement.
+    /\ leaf' = [leaf EXCEPT ![l].call = "queued"]
+--- END

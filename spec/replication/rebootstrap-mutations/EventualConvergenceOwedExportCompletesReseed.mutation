@@ -1,0 +1,14 @@
+# An unstable export must not acknowledge completion while reconcile is owed.
+# Otherwise P releases the source tombstone before the stable successor scans.
+MODULE: EventualConvergenceOwedExportCompletesReseed
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: an owed export completes the re-seed and releases tombstone protection before its stable successor
+PERTURBS: Reap
+BOUNDS: Third = TRUE, Reattach = FALSE, MaxHlc = 2
+
+--- FIND
+    /\ detached \/ (DeleteShipped /\ ~(fellOff /\ (~booted \/ owed)))
+--- REPLACE
+    /\ detached \/ (DeleteShipped /\ ~(fellOff /\ ~booted))
+--- END

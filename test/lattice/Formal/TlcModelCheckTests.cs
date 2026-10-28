@@ -24,9 +24,10 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </para>
 /// <para>
 /// EACH TEST IS A CONTROLLED EXPERIMENT, NOT AN ASSERTION THAT SOMETHING FAILS.
-/// Every mutation runs TWICE against the same generated single-property cfg:
-/// once on the unmutated base (the control, which must be clean) and once on
-/// the mutant (which must report that property). Asserting only the second half
+/// Every mutation runs a clean full-bound control and a targeted mutant.
+/// When the mutant cfg differs, an additional clean-source control runs under
+/// that exact cfg, so both sides of the pair check the same instance.
+/// The controls must be clean; the mutant must report its target. Asserting only the second half
 /// would be the very mistake this fixture exists to catch - a mutant can go red
 /// for reasons having nothing to do with the property, and a one-armed test
 /// cannot tell the two apart. The control arm is what makes a red mutant
@@ -77,7 +78,7 @@ namespace Orleans.Lattice.Tests.Formal;
 [TestFixture]
 [Category("Tlc")]
 [Parallelizable(ParallelScope.Children)]
-public sealed class TlcModelCheckTests
+public sealed partial class TlcModelCheckTests
 {
     private const string CleanBanner = "Model checking completed. No error has been found.";
 
@@ -124,7 +125,7 @@ public sealed class TlcModelCheckTests
         RegexOptions.Multiline);
 
     private string _java = string.Empty;
-    private string _jar = string.Empty;
+    private string _classpath = string.Empty;
 
     [OneTimeSetUp]
     public void ResolveToolchain()
@@ -157,7 +158,7 @@ public sealed class TlcModelCheckTests
         }
 
         _java = java!;
-        _jar = jar;
+        _classpath = TlcCheckpointToolchain.ResolveClasspath(HygieneRepository.FindRepoRoot(), jar);
     }
 
     /// <summary>
@@ -272,7 +273,8 @@ public sealed class TlcModelCheckTests
     }
 
     /// <summary>
-    /// The paired mutation for one property, run as a two-arm experiment.
+    /// The paired mutation for one property, retaining full-bound coverage
+    /// and checking both clean and mutant sources under identical mutant cfgs.
     /// <para>
     /// Arm 1 (control) runs the generated single-property cfg against the
     /// unmutated base and requires it to be clean. Mutations that build the
@@ -293,10 +295,11 @@ public sealed class TlcModelCheckTests
     /// </para>
     /// <para>
     /// A mutation may declare <c>BOUNDS:</c> to run its mutant on a smaller
-    /// instance (<see cref="SpecMutation.Bounds"/>). Only arms 2 and 3 use it;
-    /// arm 1 is built without it, so the control is unchanged, and an override
-    /// that shrinks the instance below the violation leaves arm 2 clean and
-    /// fails here like any mutation that does not fire.
+    /// instance (<see cref="SpecMutation.Bounds"/>). Arm 1 retains the full
+    /// model's bounds. If the mutant cfg differs, an additional clean-source
+    /// control must hold under that exact cfg before the mutant runs. An
+    /// override that also breaks the clean source fails that control; an
+    /// override that hides the mutation leaves the mutant clean and also fails.
     /// </para>
     /// <para>
     /// Arm 3 runs only for a mutation that declares <c>DEADLOCK: off</c>, and
@@ -315,22 +318,23 @@ public sealed class TlcModelCheckTests
         ArgumentNullException.ThrowIfNull(mutation);
 
         var baseSpec = module.ReadSpecification();
-        var config = mutation.BuildConfig(module.ReadConfig());
+        var baseConfig = module.ReadConfig();
+        var config = mutation.BuildConfig(baseConfig);
 
         // The control arm always runs at the module's own bounds. A mutation's
-        // BOUNDS header shrinks only the mutant arm's instance, so "the property
-        // holds on the base" is still decided over the full model.
+        // BOUNDS header cannot replace this full-model coverage. A different
+        // mutant cfg also needs its own clean-source control below.
         var control = RunControl(module, baseSpec, config, mutation.TlcOptions);
-        Assert.That(
-            control.Output,
-            Does.Contain(CleanBanner),
-            $"CONTROL ARM FAILED for '{mutation.Name}'. Property '{mutation.Target}' must HOLD on the "
-            + $"unmutated {module.Name} specification, otherwise the mutant going red proves nothing about the "
-            + "mutation. Either the base specification is broken or the generated cfg is wrong."
-            + Environment.NewLine + control.Output);
+        AssertCleanControl(control, module, mutation, "FULL-BOUND");
 
         var mutantSpec = mutation.Apply(baseSpec, module.Name);
-        var mutantConfig = mutation.BuildMutantConfig(module.ReadConfig());
+        var mutantConfig = mutation.BuildMutantConfig(baseConfig);
+        if (!string.Equals(config, mutantConfig, StringComparison.Ordinal))
+        {
+            var matchingControl = RunControl(module, baseSpec, mutantConfig, mutation.TlcOptions);
+            AssertCleanControl(matchingControl, module, mutation, "MATCHING-BOUND");
+        }
+
         var mutant = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, mutation.TlcOptions);
 
         Assert.That(
@@ -341,8 +345,8 @@ public sealed class TlcModelCheckTests
             + Environment.NewLine + mutant.Output);
 
         Assert.That(
-            mutant.Output,
-            Does.Contain(mutation.ExpectedBanner),
+            HasExpectedViolation(mutant.Output, mutation),
+            Is.True,
             $"'{mutation.Name}' went red, but not in the expected way. Expected TLC to report "
             + $"'{mutation.ExpectedBanner}'. A red run whose cause is not the named property is not "
             + "evidence for that property."
@@ -377,7 +381,7 @@ public sealed class TlcModelCheckTests
     /// <summary>
     /// The discovery control for the TLC gates: every TLC gate, found by
     /// signature rather than listed, is run over a module built in a temp
-    /// directory and must pass; then each broken copy - a silent mutation, a mutation whose BOUNDS shrink it below its violation, a wrong state count, a drifted variant count, a misspelt variant bound and an unresolved variant override - must fail the gate. A mutation whose BOUNDS would break the base must still pass, which proves the control arm never sees them
+    /// directory and must pass; then each broken copy - a silent mutation, a mutation whose BOUNDS shrink it below its violation, a wrong state count, a drifted variant count, a misspelt variant bound and an unresolved variant override - must fail the gate. A mutation whose BOUNDS also break the clean source must fail its matching-bound control
     /// that owns the fault. The toolchain-free gates have the same control in
     /// <see cref="SpecModuleDiscoveryControlTests"/>.
     /// </summary>
@@ -433,10 +437,9 @@ public sealed class TlcModelCheckTests
 
         using (var controlKeepsBase = SyntheticSpecModule.Create())
         {
-            // A bound under which the BASE violates the target too: with Wrap =
-            // 4 the unmutated step reaches 3, outside TypeOK. The mutant still
-            // fires, and the gate passes only because the control arm never
-            // sees the bound and checks the base at Wrap = 3.
+            // The full-bound control holds, but the clean source under Wrap
+            // = 4 reaches 3, outside TypeOK. Its red mutant is not evidence
+            // for the mutation unless this matching-bound control also holds.
             controlKeepsBase.Replace(
                 $"mutations/{SyntheticSpecModule.MutationName}.mutation",
                 "PERTURBS: Step\n",
@@ -444,9 +447,27 @@ public sealed class TlcModelCheckTests
             var module = controlKeepsBase.Discover();
             var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
             Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
+                Does.Contain("MATCHING-BOUND CONTROL ARM FAILED"),
+                "a mutant passed even though its exact cfg also breaks the unmutated source.");
+        }
+
+        using (var matchingBounds = SyntheticSpecModule.Create())
+        {
+            matchingBounds.Replace(
+                $"{SyntheticSpecModule.ModuleName}.tla",
+                "TypeOK == x \\in 0..2\n\nWrap == 3",
+                "Wrap == 3\n\nTypeOK == x \\in 0..(Wrap - 1)");
+            matchingBounds.Replace(
+                $"mutations/{SyntheticSpecModule.MutationName}.mutation",
+                "PERTURBS: Step\n",
+                "PERTURBS: Step\nBOUNDS: Wrap = 4\n");
+            var module = matchingBounds.Discover();
+            var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
+            Assert.That(
                 SpecModuleGates.Run(gate, module, this),
                 Is.GreaterThan(0),
-                "the pairing gate ran no case for a mutation declaring BOUNDS.");
+                "a valid differing-bound control and its targeted red mutant did not pass the pairing gate.");
         }
 
         using (var miscounted = SyntheticSpecModule.Create())
@@ -510,15 +531,33 @@ public sealed class TlcModelCheckTests
             StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Counts TLC's violation banners. Both wordings are matched because TLC
-    /// names the property for invariants and action properties but not for
-    /// temporal properties.
+    /// Matches the exact target and complete TLC banner, including the distinct
+    /// invariant wording used when the initial state violates it.
     /// </summary>
+    private static bool HasExpectedViolation(string output, SpecMutation mutation)
+    {
+        var pattern = $@"^Error: {Regex.Escape(mutation.ExpectedBanner)}\r?$";
+        if (mutation.PropertyClass == SpecPropertyClass.Invariant)
+            pattern += $@"|^Error: Invariant {Regex.Escape(mutation.Target)} is violated by the initial state:\r?$";
+        return Regex.IsMatch(output, pattern, RegexOptions.Multiline);
+    }
+
+    /// <summary>Counts both invariant wordings and action/temporal violations.</summary>
     private static int CountViolationLines(string output) =>
         Regex.Matches(
             output,
-            @"^Error: (?:Invariant \w+ is violated|Action property \w+ is violated|Temporal properties were violated)\.",
+            @"^Error: (?:Invariant \w+ is violated(?:\.| by the initial state:)|Action property \w+ is violated\.|Temporal properties were violated\.)\r?$",
             RegexOptions.Multiline).Count;
+
+    private static void AssertCleanControl(
+        TlcResult control, SpecModule module, SpecMutation mutation, string arm)
+    {
+        var message = $"{arm} CONTROL ARM FAILED for '{mutation.Name}'. Property '{mutation.Target}' "
+            + $"must HOLD on the unmutated {module.Name} specification under this arm's exact cfg."
+            + Environment.NewLine + control.Output;
+        Assert.That(control.ExitCode, Is.Zero, message);
+        Assert.That(control.Output, Does.Contain(CleanBanner), message);
+    }
 
     private static string? ResolveJava()
     {
@@ -595,35 +634,8 @@ public sealed class TlcModelCheckTests
             File.WriteAllText(Path.Combine(scratch, tla), moduleText);
             File.WriteAllText(Path.Combine(scratch, cfg), configText);
 
-            var info = new ProcessStartInfo(_java)
-            {
-                WorkingDirectory = scratch,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-
-            // Each JVM gets its own temp directory because TLC extracts the
-            // standard modules (Naturals, FiniteSets, ...) into java.io.tmpdir
-            // and parses them from there. With the system temp directory shared,
-            // one concurrent run deletes or rewrites a file another is reading,
-            // and the second fails with "Cannot find source file for module".
-            info.ArgumentList.Add($"-Djava.io.tmpdir={scratch}");
-            info.ArgumentList.Add("-XX:+UseParallelGC");
-            info.ArgumentList.Add("-cp");
-            info.ArgumentList.Add(_jar);
-            info.ArgumentList.Add("tlc2.TLC");
-            foreach (var option in options)
-            {
-                info.ArgumentList.Add(option);
-            }
-
-            info.ArgumentList.Add("-config");
-            info.ArgumentList.Add(cfg);
-            info.ArgumentList.Add("-workers");
-            info.ArgumentList.Add(TlcWorkers.ToString(CultureInfo.InvariantCulture));
-            info.ArgumentList.Add("-cleanup");
-            info.ArgumentList.Add(tla);
+            var info = CreateTlcStartInfo(scratch, tla, cfg, options);
+            var watch = Stopwatch.StartNew();
 
             using var process = Process.Start(info)
                 ?? throw new InvalidOperationException($"could not start '{_java}'");
@@ -638,9 +650,18 @@ public sealed class TlcModelCheckTests
             // timeout bound the process rather than aborting a valid slow run.
             // TLC_UNBOUNDED_WAIT
             process.WaitForExit();
+            watch.Stop();
 
-            var output = string.Concat(stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
-            return new TlcResult(process.ExitCode, output);
+            var stdoutText = stdout.GetAwaiter().GetResult();
+            var stderrText = stderr.GetAwaiter().GetResult();
+            if (TlcEvidenceRetention.ConfiguredRoot is { } evidence)
+            {
+                TlcEvidenceRetention.Retain(
+                    evidence, TestContext.CurrentContext.Test.FullName, moduleName, scratch, info,
+                    process.ExitCode, stdoutText, stderrText, watch.Elapsed);
+            }
+
+            return new TlcResult(process.ExitCode, string.Concat(stdoutText, stderrText));
         }
         finally
         {

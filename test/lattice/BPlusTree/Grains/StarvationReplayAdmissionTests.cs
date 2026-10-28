@@ -62,6 +62,37 @@ public sealed class StarvationReplayAdmissionTests
         Assert.That(gate.CurrentCount, Is.EqualTo(6));
     }
 
+    [TestCase(2, 1)]
+    [TestCase(6, 3)]
+    public void Ordinary_replay_owners_do_not_consume_gc_reservations(int ceiling, int share)
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling, queued: 0);
+        using var gate = new SemaphoreSlim(ceiling, ceiling);
+        var ordinary = ceiling - share;
+        for (var i = 0; i < ordinary; i++)
+            Assert.That(gate.Wait(0), Is.True);
+
+        var drives = 0;
+        try
+        {
+            for (var i = 0; i < share; i++)
+            {
+                Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Sweep), Is.True,
+                    "ordinary owners consume physical permits, not the independent GC reservation ledger");
+                drives++;
+            }
+            Assert.That(gate.CurrentCount, Is.Zero);
+            Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Sweep), Is.False);
+        }
+        finally
+        {
+            for (var i = 0; i < drives; i++)
+                BPlusLeafGrain.ReleaseStarvationReplayPermit(gate);
+            gate.Release(ordinary);
+        }
+        Assert.That(gate.CurrentCount, Is.EqualTo(ceiling));
+    }
+
     /// <summary>
     /// Issue #3575. The coverage-lag timer and the WAL GC sweep drew on one
     /// share first come, first served, and the timer won by volume. A timer

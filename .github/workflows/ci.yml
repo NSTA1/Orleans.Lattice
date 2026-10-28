@@ -1064,6 +1064,9 @@ jobs:
       - name: Self-test the package selector
         run: .github/workflows/select-test-packages-selftest.sh
 
+      - name: Self-test package reporting and build density
+        run: python3 .github/workflows/package-reporting-selftest.py
+
       # The aggregate's vacuity guard is the single point at which a fan-out
       # reporting green over an EMPTY population is caught, and it had no test
       # at all until this self-test landed - an untested guard being
@@ -1088,6 +1091,12 @@ jobs:
 
       - name: Self-test coverage sharding and upload completeness
         run: python3 .github/workflows/coverage-matrix-selftest.py
+
+      - name: Self-test privileged Playwright installer cleanup
+        run: python3 .github/workflows/playwright-install-selftest.py
+
+      - name: Self-test bounded Playwright APT mirror failover
+        run: python3 .github/workflows/playwright-apt-selftest.py
 
       # The closing-keyword gate is an inline heredoc, so nothing in this
       # repository could execute it until this self-test existed: its only
@@ -1449,7 +1458,13 @@ jobs:
             exit 1
           fi
 
-          total=$(find src -mindepth 1 -maxdepth 1 -type d | wc -l)
+          # Count the same validated universe the selector uses, including
+          # test-only packages with no src/ counterpart.
+          total=$(.github/workflows/select-test-packages.sh --list-packages | wc -l)
+          if [ "$total" -eq 0 ]; then
+            echo "::error::The package selector produced an empty universe; refusing to report a green run with no package denominator."
+            exit 1
+          fi
 
           # One whole-solution build beats looping project-by-project once the
           # selection is broad: each per-project `dotnet build` pays its own
@@ -2228,6 +2243,9 @@ jobs:
           # least visible.
           echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tools/tla2tools.jar" \
             | sha256sum --check --strict
+
+      - name: Build and regression-check TLC checkpoint overlay
+        run: python3 tools/tlc/build.py --java-home "$JAVA_HOME" --jar tools/tla2tools.jar --output tools/tlc/build
 
       - name: Run leg
         env:

@@ -329,6 +329,17 @@ bounded step limit. The `Termination`, `EveryCommittedKeyReadable` and
 
 ## The TLA+ specification
 
+**Scheduling composition.**
+[`SagaReadProgress`](../../spec/scheduling/SagaReadProgressRefinement.md)
+abstracts `AtomicCommit` as prepare/decide/terminal steps instead of re-proving
+its protocol safety. It checks a consistent reader decision cut with bounded
+optimistic retries and a finite unrenewed gate, plus caller acknowledgement only
+after terminals and the completion checkpoint are durable. Returning a batch
+requires stable routing and a valid gate; lost certification resolves explicitly
+rather than returning mixed data. Saga progress requires terminal and durability
+completion opportunities, independent of saturation; fairness is not a latency
+bound. See [Verified scheduling and progress](verified-scheduling.md).
+
 Above the code cores sits a TLA+ specification of the protocol design, checked
 exhaustively by TLC over a small bounded instance. It is deliberately abstract -
 keys, participant leaves, and a transaction status, with no serialization,

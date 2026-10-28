@@ -211,7 +211,7 @@ Retry budget before a poison inbound entry is moved to the dead-letter queue. Ra
 
 ### `SagaDeferralTimeout`
 
-Wall-clock bound for a receiver-side deferred saga record. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks the deferred prepare with `reason=poisoned_saga`, withholds the saga's terminals until the re-seed retires the poison, and starts or records an owed full re-seed from the origin. A deferred `TxCommit` or `TxAbort` terminal gets the same bound (#4692): its saga is poisoned and re-seeded the same way, and the terminal itself is withheld, never parked.
+Elapsed-time threshold checked on a retry after `MaxApplyRetries`, not an unconditional wall-clock deadline. An eligible prepare is poisoned and parked with `reason=poisoned_saga` only when bounded storage permits; a prepare whose receiver registry already decided its saga remains deferred. A failing `TxCommit` or `TxAbort` can also poison its saga (#4692), but the terminal stays withheld until re-seeding retires the poison. Progress requires retry opportunities, available poison/quarantine/dead-letter capacity, completed re-seeding where needed, and a stable receiver lifetime long enough to observe expiry. A receiver restart resets volatile first-deferral history, not durable poison or quarantine. Full storage remains fail-closed. See [Receiver-side poisoned sagas](dead-letter-queue.md#receiver-side-poisoned-sagas).
 
 ### `DeadLetterQueueCapacity`
 
@@ -301,7 +301,7 @@ Wall-clock maximum delay before persisting ship cursor progress even if the inte
 
 ### `ShipMaxInFlight`
 
-Maximum concurrent sends per tree and peer. Keep at 1 unless the transport and receiver can tolerate pipelined acks.
+Maximum concurrent sends per tree and peer. Keep at 1 unless the transport and receiver can tolerate pipelined acks. Receiver feedback cannot recall already-launched batches: those settle FIFO, while an observed positive batch hint or active pause stops replenishment for the rest of that pump, including released saga terminals. A later null hint permits re-acceleration on the next pump, never retroactively in the same one.
 
 ### `ShipBackoffInitial`
 

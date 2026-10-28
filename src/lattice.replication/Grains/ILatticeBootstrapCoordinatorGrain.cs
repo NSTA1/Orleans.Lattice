@@ -140,7 +140,8 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// Returns the export epoch of the last full bootstrap from
     /// <paramref name="sourceClusterId"/> that reached
     /// <see cref="LatticeBootstrapState.LiveIncremental"/>, or
-    /// <see langword="null"/> when none has (issue #4534). Interleaves with a
+    /// <see langword="null"/> when none has or that source still owes a
+    /// reconcile (issues #4534, #5116). Interleaves with a
     /// running bootstrap so the receive path never queues behind one.
     /// </summary>
     /// <param name="sourceClusterId">The sending cluster.</param>
@@ -151,7 +152,8 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// Returns the export epoch of the last full bootstrap from
     /// <paramref name="sourceClusterId"/> whose import was installed under
     /// <paramref name="receiverLineage"/>, or <see langword="null"/> when none
-    /// was (issue #4768). The sender adopts the lineage the echoing ack carries
+    /// was or that source still owes a reconcile (issues #4768, #5116).
+    /// The sender adopts the lineage the echoing ack carries
     /// as the one the re-seed produced, so an echo must never vouch for contents
     /// a later replacement of the tree superseded. A completion recorded before
     /// lineages were recorded echoes nothing, which costs one more bootstrap.
@@ -165,7 +167,8 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// Returns the export epoch of the last snapshot from
     /// <paramref name="sourceClusterId"/> whose drain applied every entry -
     /// including one whose bootstrap still holds its read fence - or
-    /// <see langword="null"/> when none has (issue #4684). A drain records the
+    /// <see langword="null"/> when none has or that source still owes a
+    /// reconcile (issues #4684, #5116). A drain records the
     /// arrival of every cross-tree sub-saga it settles at its barrier before it
     /// ends, so a sibling import that waits on this one is served by the drain,
     /// not by the fence lifting: two imports that wait on each other's

@@ -1,0 +1,11 @@
+MODULE: TypeOKHangOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an environment hang attaches to a nonexistent request
+PERTURBS: Hang
+
+--- FIND
+    /\ hung' = hung \cup {r}
+--- REPLACE
+    /\ hung' = hung \cup {0}
+--- END

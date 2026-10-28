@@ -1,0 +1,12 @@
+MODULE: CoreStepRefinedColdReturnDropsPermit
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness cold return drains cold without freeing a permit
+PERTURBS: ColdReturn
+
+--- FIND
+    /\ cold > 0 /\ cold' = cold - 1 /\ free' = free + 1
+--- REPLACE
+\* MUTATION: the returned permit never reaches the free pool.
+    /\ cold > 0 /\ cold' = cold - 1 /\ free' = free
+--- END

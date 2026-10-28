@@ -80,8 +80,13 @@ reader is most likely to over-read are these.
 | `CommittedBatchOnBoundCopy` | A committed atomic write holds prepared buckets only on the copy it is bound to: every copy it re-bound away from was discarded. | `ShardOwnershipCutover` |
 | `SagaSettles` | An atomic write settles however a restore and its revert interleave with it. | `ShardOwnershipCutover` |
 
-Every property has a mutation that breaks it, run as a two-arm experiment: the
-property holds on the unmutated module and fails on the mutant. Every action in
+Every property has a mutation that breaks it: the full-bound clean control
+holds and the targeted mutant fails. If the mutant cfg differs, the clean source
+must also hold under that exact cfg and the same options. The controls check
+TypeOK plus the named target; separate base/variant runs check their full cfgs.
+A declared deadlock override adds a deadlock-on mutant control. See the
+[controlled-experiment format](../../spec/atomic-commit/mutations/README.md#each-mutation-is-a-controlled-experiment-not-a-red-run).
+Every action in
 each module is perturbed by at least one mutation. All four run in CI through
 `TlcModelCheckTests`.
 

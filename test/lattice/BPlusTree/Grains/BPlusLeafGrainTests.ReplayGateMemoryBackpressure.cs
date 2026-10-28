@@ -47,12 +47,17 @@ public partial class BPlusLeafGrainTests
     /// test that withheld against an already-depressed baseline would compare
     /// against the wrong number and could pass for the wrong reason.
     /// </summary>
-    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync()
+    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null)
     {
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(
             preloadedSnapshot: null,
             persistedCheckpoint: 0,
-            walHead: 0);
+            walHead: 0,
+            configureOptions: options =>
+            {
+                if (permitCeiling is { } ceiling)
+                    options.WalMaterialiserMaxConcurrentReplays = ceiling;
+            });
         warmState.State.TreeId = UniqueReplayPermitTree();
         await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
 
@@ -126,61 +131,69 @@ public partial class BPlusLeafGrainTests
     [NonParallelizable]
     public async Task Restoring_withheld_permits_never_exceeds_the_configured_replay_ceiling()
     {
-        var gate = await QuiescentReplayGateAsync();
-        var ceiling = BPlusLeafGrain.ReplayConcurrencyCeilingForTest;
-        Assert.That(ceiling, Is.GreaterThan(3),
-            "this test withholds three permits, so it needs a ceiling that admits them below the floor");
-
-        const int ToWithhold = 3;
-        var withheld = 0;
-        for (var i = 0; i < ToWithhold; i++)
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        try
         {
-            Assert.That(
-                BPlusLeafGrain.TryWithholdReplayPermitOnPressure(
-                    LatticeMetrics.PermitAdaptationTriggerFault),
-                Is.True);
-            Assert.That(gate.Wait(0), Is.True);
-            withheld++;
+            var gate = await QuiescentReplayGateAsync(permitCeiling: 4);
+            var ceiling = BPlusLeafGrain.ReplayConcurrencyCeilingForTest;
+            Assert.That(ceiling, Is.GreaterThan(3),
+                "this test withholds three permits, so it needs a ceiling that admits them below the floor");
+
+            const int ToWithhold = 3;
+            var withheld = 0;
+            for (var i = 0; i < ToWithhold; i++)
+            {
+                Assert.That(
+                    BPlusLeafGrain.TryWithholdReplayPermitOnPressure(
+                        LatticeMetrics.PermitAdaptationTriggerFault),
+                    Is.True);
+                Assert.That(gate.Wait(0), Is.True);
+                withheld++;
+            }
+
+            // Instrument validation: proves the gate really was reduced, so the
+            // restoration assertions below are about permits that were actually
+            // taken out of circulation.
+            Assert.That(gate.CurrentCount, Is.EqualTo(ceiling - withheld),
+                "the withheld permits must be absent from the gate before restoration is tested");
+
+            // Attempt far more restorations than were withheld. This is the arm the
+            // invariant is about: a recovery term that is not bounded by what was
+            // withheld would put permits into circulation that the operator never
+            // granted.
+            var restored = 0;
+            for (var attempt = 0; attempt < withheld + 5; attempt++)
+            {
+                if (!BPlusLeafGrain.TryRestoreWithheldReplayPermit())
+                    continue;
+
+                // Deliberately unguarded. SemaphoreSlim was constructed with a
+                // maximum, so an over-restoration raises SemaphoreFullException here
+                // rather than silently over-admitting - the failure is loud, and
+                // this test is the thing that makes it observable.
+                gate.Release();
+                restored++;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(restored, Is.EqualTo(withheld),
+                    "recovery must return exactly the permits backpressure withheld and no more. More "
+                    + "would raise the gate above the ceiling the operator configured, which is the "
+                    + "#2278/#2279 objection this mechanism must not be vulnerable to");
+
+                Assert.That(gate.CurrentCount, Is.EqualTo(ceiling),
+                    "the gate must return to - and stop at - the configured ceiling");
+
+                Assert.That(BPlusLeafGrain.WithheldReplayPermitsForTest, Is.Zero,
+                    "the withheld count must settle at zero rather than going negative, or the next "
+                    + "pressure event would be measured from the wrong base");
+            });
         }
-
-        // Instrument validation: proves the gate really was reduced, so the
-        // restoration assertions below are about permits that were actually
-        // taken out of circulation.
-        Assert.That(gate.CurrentCount, Is.EqualTo(ceiling - withheld),
-            "the withheld permits must be absent from the gate before restoration is tested");
-
-        // Attempt far more restorations than were withheld. This is the arm the
-        // invariant is about: a recovery term that is not bounded by what was
-        // withheld would put permits into circulation that the operator never
-        // granted.
-        var restored = 0;
-        for (var attempt = 0; attempt < withheld + 5; attempt++)
+        finally
         {
-            if (!BPlusLeafGrain.TryRestoreWithheldReplayPermit())
-                continue;
-
-            // Deliberately unguarded. SemaphoreSlim was constructed with a
-            // maximum, so an over-restoration raises SemaphoreFullException here
-            // rather than silently over-admitting - the failure is loud, and
-            // this test is the thing that makes it observable.
-            gate.Release();
-            restored++;
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         }
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(restored, Is.EqualTo(withheld),
-                "recovery must return exactly the permits backpressure withheld and no more. More "
-                + "would raise the gate above the ceiling the operator configured, which is the "
-                + "#2278/#2279 objection this mechanism must not be vulnerable to");
-
-            Assert.That(gate.CurrentCount, Is.EqualTo(ceiling),
-                "the gate must return to - and stop at - the configured ceiling");
-
-            Assert.That(BPlusLeafGrain.WithheldReplayPermitsForTest, Is.Zero,
-                "the withheld count must settle at zero rather than going negative, or the next "
-                + "pressure event would be measured from the wrong base");
-        });
     }
 
     [Test]

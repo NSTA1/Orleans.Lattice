@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Tests.Wal;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class SingleClusterWalDurabilityTests
+public sealed partial class SingleClusterWalDurabilityTests
 {
     private TestCluster _cluster = null!;
 
@@ -545,9 +545,9 @@ public sealed class SingleClusterWalDurabilityTests
     private static byte[] Bytes(string value) => System.Text.Encoding.UTF8.GetBytes(value);
 
     /// <summary>
-    /// Deactivates the tree's leaves and reads every written key back until each
-    /// partition holding entries is free of block pins, so a pass has writes the
-    /// leaves have made durable to trim (issue #4622).
+    /// Deactivates the tree's leaves and reads every written key back until a
+    /// partition retaining entries is free of block pins and uncovered override
+    /// holds, so a pass has durable writes to trim (issues #4622 and #4641).
     /// </summary>
     private async Task CheckpointLeavesAsync(string treeId, ILattice tree, int keyCount)
     {
@@ -559,6 +559,23 @@ public sealed class SingleClusterWalDurabilityTests
         var attempt = 0;
         while (true)
         {
+            var overrideHolds = new HashSet<string>(StringComparer.Ordinal);
+            // An empty-release HLC stays positive when a later write raises a
+            // hold. Read holds before offsets, matching the GC's coverage census.
+            foreach (var pinKey in pinKeys)
+            {
+                overrideHolds.UnionWith(await _cluster.Client.GetGrain<IWalMaterialiserPinGrain>(pinKey).GetOverrideHoldsAsync());
+            }
+
+            var offsets = new Dictionary<string, long>(StringComparer.Ordinal);
+            foreach (var pinKey in pinKeys)
+            {
+                foreach (var (consumerId, offset) in await _cluster.Client.GetGrain<IWalMaterialiserPinGrain>(pinKey).GetPinOffsetsAsync())
+                {
+                    offsets[consumerId] = offset;
+                }
+            }
+
             var pins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
             foreach (var pinKey in pinKeys)
             {
@@ -568,27 +585,18 @@ public sealed class SingleClusterWalDurabilityTests
                 }
             }
 
-            // At least one partition holding entries must be free of block pins, so
-            // a pass has something it may legitimately trim. Under load a leaf's
-            // snapshot capture can lag, which keeps its own data partition held.
-            var held = new HashSet<int>(pins
-                .Where(static pin => pin.Value <= HybridLogicalClock.Zero)
-                .Select(static pin => int.Parse(pin.Key[(pin.Key.LastIndexOf('_') + 1)..], System.Globalization.CultureInfo.InvariantCulture)));
             var provider = sp.GetRequiredService<IWalStorageProvider>();
             var partitions = (await sp.GetRequiredService<LatticeOptionsResolver>().ResolveAsync(treeId)).WalPartitions;
-            var free = false;
-            for (var partition = 0; partition < partitions && !free; partition++)
-            {
-                free = !held.Contains(partition)
-                    && await provider.GetHighestOffsetAsync(treeId, partition, CancellationToken.None) >= 0;
-            }
-
-            if (pins.Count > 0 && free)
+            if (await HasCheckpointedPartitionAsync(treeId, provider, partitions, pins, offsets, overrideHolds))
             {
                 return;
             }
 
-            Assert.That(Environment.TickCount64, Is.LessThan(deadline), "the tree's leaves did not checkpoint within the deadline: " + string.Join(", ", pins.Select(p => p.Key + "@" + p.Value)));
+            Assert.That(Environment.TickCount64, Is.LessThan(deadline),
+                "the tree's leaves did not checkpoint within the deadline: "
+                + string.Join(", ", pins.Select(p => p.Key + "@" + p.Value))
+                + "; override holds: " + string.Join(", ", overrideHolds)
+                + "; offsets: " + string.Join(", ", offsets.Select(p => p.Key + "@" + p.Value)));
             // Alternate the WAL GC's own bank step (checkpoint, capture recheck and
             // pin publish on the live activation) with a graceful deactivation: under
             // load a deactivation barrier can skip once its deadline is spent, which

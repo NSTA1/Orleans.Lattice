@@ -1,0 +1,14 @@
+MODULE: SealAcknowledgesUnreadWindow
+TARGET: NoSkipWithoutDeadLetter
+CLASS: Invariant
+SUMMARY: closing a read-ahead window acknowledges records before ordered application
+PERTURBS: SealWindow
+
+--- FIND
+    /\ phase' = IF queue # <<>> THEN "receive" ELSE IF cursor = Records THEN "done" ELSE "wait"
+    /\ UNCHANGED <<cursor, sent, queue, applied, parked, mode, age, bad, space,
+--- REPLACE
+    /\ phase' = IF queue # <<>> THEN "receive" ELSE IF cursor = Records THEN "done" ELSE "wait"
+    /\ cursor' = sent
+    /\ UNCHANGED <<sent, queue, applied, parked, mode, age, bad, space,
+--- END

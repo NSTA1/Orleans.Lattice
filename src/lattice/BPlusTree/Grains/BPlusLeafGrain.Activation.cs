@@ -2296,7 +2296,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <param name="partitionCount">The tree's WAL partition count.</param>
     /// <param name="arm">The diagnostic label of the arm that requested the drive.</param>
-    private async Task DispatchTimerDriveAsync(int partitionCount, string arm)
+    internal async Task DispatchTimerDriveAsync(int partitionCount, string arm)
     {
         if (_interleavedTimerDrive is not null)
         {
@@ -4185,8 +4185,9 @@ internal sealed partial class BPlusLeafGrain
         var replayShardMap = await ResolveReplayShardMapAsync(treeId);
 
         // The ownership every partition's slices are judged by AND filtered by
-        // (issue #3565), captured from one read of the leaf's state so the two
-        // cannot diverge mid-replay. See LeafReplayOwnership.
+        // (issue #3565), captured from one read of the leaf's state. A resident
+        // replay can overlap a split, so admission also checks the live span
+        // before applying a key-scoped record. See LeafReplayOwnership.
         var replayOwnership = LeafReplayOwnership.Capture(state.State, replayShardMap);
 
         var anyAdvanced = false;
@@ -4320,7 +4321,8 @@ internal sealed partial class BPlusLeafGrain
             {
                 var trimCoordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                     $"{treeId}/{partition}");
-                var tail = await trimCoordinator.GetTailOffsetAsync(cancellationToken);
+                var tail = await ReplaySliceReader.AwaitProviderReadAsync(
+                    trimCoordinator.GetTailOffsetAsync(cancellationToken), cancellationToken);
                 if (WalFallOffCore.IsPrefixLost(persistedCheckpoint, tail))
                 {
                     _lastStaleReplayPartition = partition;
@@ -4454,9 +4456,9 @@ internal sealed partial class BPlusLeafGrain
             // uses for the same question.
             if (warmReplayProven && !_warmCacheReplayFailed && !replayOwnership.Filter.IsUnbounded)
             {
-                var floor = await grainFactory
-                    .GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
-                    .GetTailOffsetAsync(cancellationToken);
+                var floor = await ReplaySliceReader.AwaitProviderReadAsync(
+                    grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
+                        .GetTailOffsetAsync(cancellationToken), cancellationToken);
                 if (floor > checkpoint + 1)
                     _warmCacheReplayFailed = true;
             }
@@ -4488,7 +4490,7 @@ internal sealed partial class BPlusLeafGrain
 
             using (LatticeApplyOffsetContext.BeginScope(terminal.Partition, terminal.Offset))
             {
-                projection.Apply(terminal.Mutation);
+                await ApplyReplayMutationAsync(terminal.Mutation);
             }
 
             deferredOffsets.Resolve(terminal.Partition, terminal.Offset);
@@ -6616,9 +6618,9 @@ internal sealed partial class BPlusLeafGrain
 
             try
             {
-                var head = await grainFactory
-                    .GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{p}")
-                    .GetHeadOffsetAsync(cancellationToken);
+                var head = await ReplaySliceReader.AwaitProviderReadAsync(
+                    grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{p}")
+                        .GetHeadOffsetAsync(cancellationToken), cancellationToken);
 
                 var checkpoint = checkpointOverride ?? GetPersistedCheckpointForPartition(p);
                 heads[p] = head;
@@ -6816,7 +6818,8 @@ internal sealed partial class BPlusLeafGrain
         // Every step below is a coordinator call; skip them all once the
         // coordinator type is gone from a stopping cluster (issue #5100).
         ThrowIfReplayCoordinatorWithdrawn();
-        var head = probedHead ?? await coordinator.GetHeadOffsetAsync(cancellationToken);
+        var head = probedHead ?? await ReplaySliceReader.AwaitProviderReadAsync(
+            coordinator.GetHeadOffsetAsync(cancellationToken), cancellationToken);
 
         // The offset of the NEWEST entry that actually exists on this partition
         // (issue #2668). These two quantities are measured from different
@@ -7186,7 +7189,17 @@ internal sealed partial class BPlusLeafGrain
                 // foot of the loop carries the checkpoint past it. Deferring it
                 // spent a durable ledger slot per range the leaf can never own
                 // and, once the ledger filled, armed the flush clamp.
+                //
+                // A resident drive may have awaited this slice while a split
+                // transferred and trimmed its right half (#5083). The captured
+                // filter remains the read window; intersect it with the live
+                // span so replay cannot restore those rows to the donor. Do not
+                // broaden admission to the live span alone: filtered-out records
+                // may carry routing metadata only. No await separates this check
+                // from the key-scoped projection apply below.
                 if (replayOwnership.ShouldApply(entry.Mutation)
+                    && (entry.Mutation.Kind is not (MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone)
+                        || DeclaresKey(entry.Mutation.Key))
                     && !replayOwnership.IsDisjointRangeDelete(entry.Mutation))
                 {
                     // This entry is this leaf's own work: it either goes
@@ -7474,7 +7487,7 @@ internal sealed partial class BPlusLeafGrain
                         {
                             using (LatticeApplyOffsetContext.BeginScope(partition, entry.Offset))
                             {
-                                projection.Apply(entry.Mutation);
+                                await ApplyReplayMutationAsync(entry.Mutation);
                             }
                         }
                         catch (Exception applyFailure) when (applyFailure is not OperationCanceledException)

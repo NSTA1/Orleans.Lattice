@@ -1,0 +1,11 @@
+MODULE: ReceiverOmitsPause
+TARGET: ReceiverRegimes
+CLASS: Action
+SUMMARY: throttled or saturated feedback omits its required pause
+PERTURBS: ObserveReceiver
+
+--- FIND
+    /\ pause' = Max(pause, IF aliased THEN 0 ELSE receiverState')
+--- REPLACE
+    /\ pause' = pause
+--- END

@@ -1,0 +1,12 @@
+MODULE: TypeOKCallOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an arriving call installs an invalid lifecycle state
+PERTURBS: CallArrive
+
+--- FIND
+    /\ leaf' = [leaf EXCEPT ![l].call = "queued"]
+--- REPLACE
+\* MUTATION: invalid arrival lifecycle.
+    /\ leaf' = [leaf EXCEPT ![l].call = "lost"]
+--- END

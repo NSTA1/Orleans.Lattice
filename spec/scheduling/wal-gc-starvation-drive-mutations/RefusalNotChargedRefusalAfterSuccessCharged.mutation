@@ -1,0 +1,34 @@
+MODULE: RefusalNotChargedRefusalAfterSuccessCharged
+TARGET: RefusalNotCharged
+CLASS: Action
+SUMMARY: a prior successful drive disables the admission-refusal refund
+PERTURBS: GcPass
+BOUNDS: LeafCount = 2
+
+--- FIND
+        IF CanAdmit("sweep") THEN DriveStart(l, "sweep") ELSE DriveRefused(l, "sweep")
+--- REPLACE
+\* MUTATION: charge a refusal only after a previously admitted sweep drive.
+        IF CanAdmit("sweep") THEN DriveStart(l, "sweep") ELSE DriveRefusedWith(l, "sweep", TRUE)
+--- END
+--- FIND
+DriveRefused(l, origin) ==
+    /\ leaf' = [leaf EXCEPT
+        ![l].touch = IF origin = "sweep" THEN "refused" ELSE @,
+--- REPLACE
+DriveRefusedWith(l, origin, charged) ==
+    /\ leaf' = [leaf EXCEPT
+        ![l].attempts = IF charged /\ @ > 0 THEN @ + 1 ELSE @,
+        ![l].touch = IF origin = "sweep" THEN "refused" ELSE @,
+--- END
+--- FIND
+    /\ UNCHANGED <<free, cold, head, appended, deleted, timely, admitted, rank>>
+
+GcPass ==
+--- REPLACE
+    /\ UNCHANGED <<free, cold, head, appended, deleted, timely, admitted, rank>>
+
+DriveRefused(l, origin) == DriveRefusedWith(l, origin, FALSE)
+
+GcPass ==
+--- END

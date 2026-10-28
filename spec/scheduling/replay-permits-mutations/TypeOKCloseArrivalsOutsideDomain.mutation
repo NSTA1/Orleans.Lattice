@@ -1,0 +1,20 @@
+MODULE: TypeOKCloseArrivalsOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: load closure corrupts the external episode phase
+PERTURBS: CloseArrivals
+
+--- FIND
+CloseArrivals ==
+    /\ ~arrivalsClosed /\ arrivalsClosed' = TRUE
+    /\ UNCHANGED <<holders, free, withheld, queue, status, role, observed, pressure,
+        pressurePhase, drain, hung, holdLeft, deadline, frontier, banked, checkpoint, holes, ledger, opportunity, dispatchEpoch,
+        clientActive, cancelled>>
+--- REPLACE
+CloseArrivals ==
+    /\ ~arrivalsClosed /\ arrivalsClosed' = TRUE
+    /\ pressurePhase' = "closed"
+    /\ UNCHANGED <<holders, free, withheld, queue, status, role, observed, pressure,
+        drain, hung, holdLeft, deadline, frontier, banked, checkpoint, holes, ledger, opportunity, dispatchEpoch,
+        clientActive, cancelled>>
+--- END

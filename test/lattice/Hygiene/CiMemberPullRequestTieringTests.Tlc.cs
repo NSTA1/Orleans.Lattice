@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Tests.Formal;
 
@@ -11,6 +12,98 @@ namespace Orleans.Lattice.Tests.Hygiene;
 public sealed partial class CiMemberPullRequestTieringTests
 {
     private const string MemberBase = "feat/epic/formal-coverage";
+
+    [TestCase(null)]
+    [TestCase(MemberSkippedTiers)]
+    public void Scheduling_shards_price_all_certified_modules_in_full_and_member_plans(string? skippedTiers)
+    {
+        // Item TRX evidence is from ci.yml run 40658688360 (head 92832b77).
+        // The general subgroups are four-worker LPT reconstructions from the
+        // passing 192/192 case TRX, not measured CI work-item times.
+        const double itemOverheadMinutes = 0.04;
+        var evidenceMinutes = new Dictionary<string, double>(StringComparer.Ordinal)
+        {
+            ["formal-tlc-scheduling-replay-two-partitions"] = 41.14616,
+            ["formal-tlc-scheduling"] = 21.02106,
+            ["formal-tlc-scheduling-workload-b"] = 23.03827,
+            ["formal-tlc-scheduling-shipping"] = 6.16476,
+            ["formal-tlc-scheduling-shipping-variants"] = 18.71505,
+        };
+        var scheduling = Plan(["lattice"], skippedTiers)
+            .Where(item => item.Shard.StartsWith("formal-tlc-scheduling", StringComparison.Ordinal)).ToArray();
+
+        Assert.That(scheduling.Select(item => item.Shard), Is.EquivalentTo(evidenceMinutes.Keys));
+        Assert.Multiple(() =>
+        {
+            foreach (var item in scheduling)
+            {
+                Assert.That(item.Skip, Is.Null, item.Shard);
+                Assert.That(item.Tier, Is.EqualTo("deterministic"), item.Shard);
+                var price = item.EstimateMinutes - itemOverheadMinutes;
+                Assert.That(price, Is.GreaterThanOrEqualTo(evidenceMinutes[item.Shard] - 0.000001),
+                    item.Shard + " must not be priced below its measured or reconstructed evidence");
+                Assert.That(price, Is.LessThan(evidenceMinutes[item.Shard] + 0.1),
+                    item.Shard + " rounds its evidence-based allocation up once, to at most a tenth of a minute");
+            }
+            Assert.That(scheduling.MaxBy(item => item.EstimateMinutes)!.Shard,
+                Is.EqualTo("formal-tlc-scheduling-replay-two-partitions"),
+                "TwoPartitions remains the largest indivisible scheduling item");
+        });
+    }
+
+    [TestCase(null)]
+    [TestCase(MemberSkippedTiers)]
+    public void Scheduling_partition_reaches_first_match_filters_and_independently_packed_items(string? skippedTiers)
+    {
+        var (exitCode, _, stderr) = RunPlanner(["lattice"], skippedTiers, out var matrix);
+        Assert.That(exitCode, Is.Zero, stderr);
+        using var document = JsonDocument.Parse(matrix);
+        var legs = document.RootElement.EnumerateArray().ToArray();
+        var scheduling = legs.SelectMany(leg => leg.GetProperty("items").EnumerateArray()
+                .Where(item => item.GetProperty("shard").GetString()!.StartsWith("formal-tlc-scheduling", StringComparison.Ordinal))
+                .Select(item => (Leg: leg, Item: item)))
+            .ToArray();
+        // test-shards.json order, which is the first-match order the planner subtracts in.
+        string[] categories =
+        [
+            "TlcShardSchedulingReplayTwoPartitions", "TlcShardScheduling",
+            "TlcShardSchedulingWorkloadB",
+            "TlcShardSchedulingShipping", "TlcShardSchedulingShippingVariants",
+        ];
+        string[] shards =
+        [
+            "formal-tlc-scheduling-replay-two-partitions", "formal-tlc-scheduling",
+            "formal-tlc-scheduling-workload-b",
+            "formal-tlc-scheduling-shipping", "formal-tlc-scheduling-shipping-variants",
+        ];
+
+        Assert.That(scheduling, Has.Length.EqualTo(5), "five independently priced scheduling work items");
+        Assert.Multiple(() =>
+        {
+            Assert.That(scheduling.Select(entry => entry.Item.GetProperty("shard").GetString()), Is.Unique);
+            for (var index = 0; index < shards.Length; index++)
+            {
+                var filter = scheduling.Single(entry => entry.Item.GetProperty("shard").GetString() == shards[index])
+                    .Item.GetProperty("filter").GetString()!;
+                var terms = filter.Split('&').Select(term => term.Trim('(', ')')).ToArray();
+                Assert.That(terms, Does.Contain("TestCategory=" + categories[index]));
+                foreach (var earlier in categories.Take(index))
+                    Assert.That(terms, Does.Contain("TestCategory!=" + earlier));
+            }
+            Assert.That(scheduling.Single(entry => entry.Item.GetProperty("shard").GetString() == shards[0])
+                .Item.GetProperty("estimate").GetDouble(), Is.GreaterThan(41.14616),
+                "the dedicated single-case TwoPartitions shard keeps its measured item price");
+            var catchAll = legs.SelectMany(leg => leg.GetProperty("items").EnumerateArray())
+                .Single(item => item.GetProperty("shard").GetString() == "formal-tlc"
+                    && item.GetProperty("tier").GetString() == "deterministic");
+            foreach (var category in categories)
+                Assert.That(catchAll.GetProperty("filter").GetString(), Does.Contain("TestCategory!=" + category));
+            foreach (var leg in legs)
+                Assert.That(leg.GetProperty("estimate").GetDouble(),
+                    Is.EqualTo(leg.GetProperty("items").EnumerateArray().Sum(item => item.GetProperty("estimate").GetDouble()))
+                        .Within(0.001), "packing must retain the sum, including each new invocation's overhead");
+        });
+    }
 
     [TestCase("src/lattice/BPlusTree/Grains/LatticeGrain.cs")]
     [TestCase("spec/wal/Refinement.md")]
@@ -62,6 +155,9 @@ public sealed partial class CiMemberPullRequestTieringTests
 
     [TestCase("spec/atomic-commit/AtomicCommit.tla")]
     [TestCase("test/lattice/Formal/TlcModelCheckTests.cs")]
+    [TestCase("tools/tlc/build.py")]
+    [TestCase("tools/tlc/patch.json")]
+    [TestCase("tools/tlc/CheckpointOrderProbe.java")]
     public void A_main_pull_request_that_touches_a_TLC_input_runs_exhaustive_TLC(string changed)
     {
         var decision = DecideTierScope("pull_request", "main", [changed]);
@@ -79,6 +175,9 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase(".github/workflows/test-shards.json")]
     [TestCase("Directory.Packages.props")]
     [TestCase("global.json")]
+    [TestCase("tools/tlc/build.py")]
+    [TestCase("tools/tlc/patch.json")]
+    [TestCase("tools/tlc/CheckpointOrderProbe.java")]
     public void A_member_pull_request_that_touches_a_TLC_input_runs_the_TLC_shards(string changed)
     {
         var decision = DecideTierScope("pull_request", MemberBase, ["src/lattice/X.cs", changed]);

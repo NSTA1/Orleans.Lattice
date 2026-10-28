@@ -49,20 +49,226 @@ its six checked modules.
 
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
-| WAL durability lifecycle | 2 | 60 | 56 | 138 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 2 | 61 | 57 | 140 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 4 | 105 | 100 | 166 | [Verified Shard Ownership](verified-shard-ownership.md) |
-| Cross-cluster atomic visibility | 1 | 59 | 39 | 116 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
-| Replication convergence | 4 | 82 | 64 | 190 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
+| Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
+| Replication convergence | 4 | 82 | 64 | 193 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
-| B+ tree topology | 6 | 100 | 140 | 65 | [B+ tree topology](../../spec/bplustree/README.md) |
+| B+ tree topology | 6 | 100 | 140 | 62 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
+| Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
+| Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
+| Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
+| Scheduling and progress | 10 | 196 | 244 | 119 | [Verified Scheduling and Progress](verified-scheduling.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
 rows cite.
+
+The scheduling census includes the GC core and clocked witness. In
+[CI run 40588708711](https://github.com/NSTA1/Orleans.Lattice/actions/runs/40588708711),
+all 221 scheduling cases passed on GC member head `9be5db45`: ten base
+configurations, fifteen variants and 196 paired mutations. All four scheduling
+TRXs report zero failed or unexecuted cases; their 221 unique actual names
+match discovery from the ten exact-head manifests without omission or duplication.
+This is an exact scheduling-only executed certificate, not overall CI success
+or final bucket compatibility: the overall run failed outside those jobs.
+The cases are not 221 JVM launches. Targeted clean controls check TypeOK plus
+their single named target; matching-bound and deadlock controls can add launches.
+
+## Scheduling foundation and historical controls
+
+The scheduling foundation consists of two separately discovered modules, not an
+unchecked helper plus one module. Its checked census is 23 mutations, 32
+behaviour-asserting refinement rows and ten distinct production detector
+members. `TypeOK` remains a paired model-domain check; it is not counted as a
+production behaviour row.
+
+| Module | Base states | Variant states | Mutations | Behaviour rows | Detector tests |
+|--------|-------------|----------------|-----------|----------------|----------------|
+| `TurnOccupancy` | 961 | 29,791 (`ThreeGrains`) | 7 | 11 | 2 |
+| `WalAdmission` | 86,496 | 370,345 (`ThreeCallers`) | 16 | 21 | 8 |
+
+The two bases, two variants and 23 paired mutation experiments passed as 27 TLC
+harness cases in a measured two-CPU, one-TLC-at-a-time run of 2 minutes 22
+seconds. The WAL base took 18 seconds and its variant 7 seconds. These are
+observations of the checked instances, not CI deadlines or runtime latency
+claims. Base and mutant WAL configurations use the same three-unit wait
+deadlines; a later-tick recovery witness must remain possible in the clean
+control instead of being erased by an earlier budget expiry.
+
+The historical experiments below retain already-fixed mechanisms as negative
+controls. They are not new discoveries of the original incidents and do not
+claim to reproduce every manifestation of the original incidents.
+
+| Module | Historical repair | Mutation / target | Checked boundary |
+|--------|-------------------|-------------------|------------------|
+| `TurnOccupancy` | #4949, fixed by #4950 | `NoAwaitedDriveAwaitDriveOnExclusiveTurn` / `NoAwaitedDrive` | Awaiting the background drive can occupy the non-reentrant turn; dispatch must return the turn while storage remains pending. |
+| `WalAdmission` | #3402, fixed by #3404 | `PacedRecoveryReleaseRecoveryHerd` / `PacedRecoveryRelease` | A recovery sample caps saturation-gate releases; released callers still need partition capacity and storage progress. |
+| `TagIndexReconcile` | Merged member PR #4978; #4976 remains open until integration | `RepairCursorOnlyAfterCompletionCursorFirst` and `RepairCursorOnlyAfterCompletionFailedCheckpoint` / `RepairCursorOnlyAfterCompletion` | A failed repair RPC or checkpoint cannot consume the current tree or certify durable progress. |
+
+The classifier recovery window is tree-wide even though admission capacity and
+waiter queues are partition-scoped. An idle sibling receives the Healthy floor
+only when the raw tree verdict is Healthy. Independent acute inputs in the
+bounded model are a conservative abstraction, not a claim that production
+provider counters or recovery windows are partition-local. The full mappings
+and explicit progress premises live in the
+[scheduling refinement notes](../../spec/scheduling/README.md).
+
+### Tag-index reconciliation scheduling
+
+`TagIndexReconcile` adds 15 mutations, 19 behaviour-asserting rows and eight
+distinct detector members to the scheduling foundation. Its manifest records
+three invariants, six properties and twelve `Next` actions, including stutter.
+The base has 2,784 states; the larger `ThreeTrees` safety instance has 11,930.
+`TypeOK` remains paired domain safety, outside the production behaviour census.
+
+The model separates an idle coordinator from probe and repair work, checks that
+only complete successful repair and checkpoint publication bank a baseline,
+and covers retrying the coordinator after failed keepalive registration.
+Progress assumes finite subject changes, continued runtime/reminder
+opportunities and eventually successful registry/storage/checkpoint operations.
+A phase callback probes at most the configured
+tree count, clamped to at least one, or repairs one whole tree. This is not a
+bound on rows, storage time, caller-turn occupancy or a synchronous full sweep:
+`RunSweepAsync` can drain several phase callbacks.
+
+The real cursor/checkpoint and incomplete-read repairs in #4976/#4977 remain
+part of the checked boundary. #4985 adds recovery after initial keepalive
+registration failure. The exact action/property/mutation and detector mappings
+live in [TagIndexReconcileRefinement](../../spec/scheduling/TagIndexReconcileRefinement.md).
+
+### WAL back-pressure scheduling
+
+`WalBackPressure` adds 34 mutations, 38 behaviour-asserting rows and 36
+distinct detector methods. Five methods are shared with WalAdmission, so the
+four-module scheduling aggregate has 49 distinct methods, not 54. TypeOK keeps
+its independent paired experiment without becoming a production behaviour row.
+The base has 135,464 states; Bursty, BurstyFinite, Sticky and SagaReroute have
+262,606, 368,446, 658,316 and 1,593,944. Every variant retains safety;
+the three temporal checks stay at the base bound.
+
+The cached classifier sums acute trip deltas across the tree, applies cause
+priority independently of refusal provenance, and floors a raw Healthy tree
+during recovery. Physical writer/saga/view consumers differ from supplied
+logical snapshot/receiver names. Healthy, Throttled and Saturated responses,
+captured saga scope, expiry re-reads, routing refresh and seven signal-independent
+relief actors have real production detectors. Coyote executes the actual
+coordinator and writer decision seams, including reminder-driven terminal tails.
+It does not enumerate CLR-thread schedules.
+
+Terminal-only operations bypass signal admission and pacing, not downstream
+capacity, storage acknowledgement, cancellation, deadlines or shutdown.
+Ordinary resumed data remains quiesced. Conditional progress requires finite
+offered work and stopped acute inputs; Healthy additionally needs stopped
+throttling inputs and finite recovery. Neither fairness nor pacing is a
+wall-time guarantee. The [area measurements and premises](../../spec/scheduling/README.md#wal-back-pressure)
+distinguish the 328.81-second five-config measurement from the complete
+39-case paired run's 729.46 seconds. Neither is the combined shard cost.
+
+This member repairs the terminal dependency cycle (#4986) and the refinement
+comment/verdict harness defects (#4990/#4994). Its source/model audit also
+rejected an omitted Throttled view response before certification. The
+[refinement history](../../spec/scheduling/WalBackPressureRefinement.md#defect-mutations-whose-fixes-have-landed)
+records real assertion-red controls and restored source, not just model
+counterexamples or resolvable test identifiers.
+
+### Saga and reader scheduling
+
+`SagaReadProgress` adds eleven paired mutations and twelve behaviour rows.
+Its thirteen distinct production methods reuse two WalBackPressure methods,
+so the five-module aggregate contains sixty distinct methods, not sixty-two.
+The base, ThreeLeaves and LeaseLoss instances have 2,451, 14,076 and 3,585
+states. The larger instance retains every base safety and temporal check;
+lease loss retains explicit resolution and caller completion instead of
+claiming a successful answer after invalidation.
+
+The real LatticeGrain/registry/two-leaf harness retains #4758's shipped
+fallback and rejects historical retry exhaustion (#4563), mixed reads and
+lost coverage. Actual caller controls separately hold terminal delivery and
+the completion checkpoint, observing success or the precise provider fault.
+The original fixed delivery-round model let a mixed-snapshot mutant remain
+green; removing that ordering made the same invariant fail. Review also removed
+least-leaf-first terminals and separated durable checkpoint from caller return.
+These are corrected assurance defects, not newly discovered production bugs.
+
+See the [area boundary](../../spec/scheduling/README.md#saga-and-reader-progress)
+and [refinement](../../spec/scheduling/SagaReadProgressRefinement.md) for all
+ten source perturbations, fourteen assertion-red cases and restored controls.
+The cooperative Coyote cases execute production delivery choices; they do not
+prove CLR-thread fairness, arbitrary reader-queue admission or #3581's
+historical deployment root cause.
+
+### Materialiser drain scheduling
+
+`MaterialiserDrain` adds twenty-one mutations and thirty-three
+behaviour-asserting rows. Its sixteen detector methods share one existing
+WalBackPressure detector and no additional Saga detector, so the six-module
+aggregate has seventy-five distinct methods, not seventy-six.
+The base and Larger instances contain 1,076 and
+3,780 distinct states. The [area boundary](../../spec/scheduling/README.md#materialiser-drain)
+separates online-copy concurrency, admitted leaf durability, finite-budget WAL
+shutdown, service-opportunity backlog and stable-identity live routing.
+
+The Coyote companion executes real WalLogSubscriber/ViewBackpressure cores,
+not a duplicate scheduler. Grain controls cover checkpoint failure, pin
+publication, exclusive-head replay, bounded copy passes and both rebuild and
+reconcile entry points. The old slot-cap detector was false-green under a
+real cap-plus-one perturbation; its strengthened first-wave assertion rejects
+that same source change. The real online-slice entry-point detector also
+rejects an increased LeafWalkBudget that standalone copy/resume tests missed
+(#4999). Finite work and completing collaborators remain
+premises, not conclusions supplied by fairness.
+
+### Replay permit scheduling
+
+`ReplayPermits` adds twenty-nine paired mutations and thirty-eight behaviour
+rows. Its sixteen distinct detector methods do not overlap the prior six-module
+set, so the seven-module aggregate is 133 mutations/172 rows/91 methods.
+The three full configurations retain all temporal branches at 695064,
+2762408 and 1038664 distinct states. The
+[area description](../../spec/scheduling/README.md#replay-permits) states the
+physical-owner, warm-drive and earned-prefix progress premises without imposing
+an unconditional lifetime bound on shared cold work.
+
+### Replication shipping scheduling
+
+`ReplicationShipping` adds 26 one-target mutations and 33 behaviour rows.
+Its 20 distinct detector names overlap the prior seven-module census by four,
+including the Healthy receiver method whose source-negative evidence is new.
+The prior eight-module union is 159 mutations/205 rows/107 methods, not a sum
+of per-source-evidence ownership counts. The base and FourRecords full
+configurations retain all four invariants and twelve properties at 527689 and
+3306850 distinct states. The
+[area description](../../spec/scheduling/README.md#replication-shipping) records
+the finite FIFO window, shared classifier consumer, conditional deferral and
+fail-closed storage assumptions.
+
+### GC starvation-drive source census and evidence boundary
+
+The GC core adds 23 mutations and 26 behaviour rows. The clocked witness adds
+14 mutations and 13 behaviour rows. It also retains three model-to-model
+refinement obligations outside the production-behaviour census. The core cites
+fourteen distinct production detector members: twelve are new to the prior eight-module
+union and two are shared. The witness cites eleven members of that same set,
+so it adds no further distinct production detectors. The resulting source union
+is 196 mutations, 244 behaviour rows and 119 detector members.
+
+The authenticated CFF B2-B7 evidence covers six paired cases and eighteen
+retained arms: twelve clean controls, five named action violations and one
+ShareRespected invariant violation. Each pair includes its exact matching-bound
+clean control, including the two-leaf, Ceiling-two reservation case. This is
+historical six-pair evidence, not the complete GC selection. The later scheduling
+jobs in run 40588708711 passed all 221 exact-manifest cases on `9be5db45`,
+including the complete GC selection;
+the overall run was red. Neither the six pairs alone nor those member-job
+outcomes establish final bucket compatibility.
+The [GC scope](verified-scheduling.md#gc-starvation-drive-progress) retains the
+finite-load, capacity, runtime and timely-banking premises; jitter and fairness
+do not establish bounded latency.
 
 ## Focused materialised-view companions
 
@@ -278,6 +484,16 @@ gaps, states its full scope.
     Physical WAL consumers, atomic visibility and data movement retain the
     view, ownership, anti-entropy and lifecycle companion models' guarantees.
 
+- **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
+  - **Covers:** non-reentrant turn occupancy, partition admission capacity,
+    paced gate-release bursts, queue ordering and wait-budget outcomes in the
+    checked instances, with explicit environment-progress premises. Gate release
+    is distinct from semaphore admission and storage completion.
+  - **Does not cover:** throughput numbers, latency percentiles, default tuning,
+    arbitrary caller counts or a wall-clock service bound. Fairness does not
+    imply bounded latency, and unbounded offered load need not become permanently
+    Healthy. See [Verified Scheduling and Progress](verified-scheduling.md).
+
 Across every area, the instances are bounded: each module checks a small number
 of copies, shards, keys and faults exhaustively, and says which. A clean run is
 a statement about the design over that instance. The integration and
@@ -311,6 +527,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
 | Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
+| Scheduling and progress | #4976, #4977, #4979, #4985, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 
 ## CI partition and non-vacuity
 
@@ -323,6 +540,26 @@ discovery and refinement cases remain
 outside the TLC shards and run even when policy skips exhaustive model checking.
 The #4852 regression prevents a shard category from silently moving those
 structural checks into skipped work.
+
+Scheduling bases, variants and mutations route before the WAL-name fallback to
+five deterministic-only shards: 106 general cases (`formal-tlc-scheduling`), 86
+workload-B cases (`formal-tlc-scheduling-workload-b`), the dedicated
+ReplayPermits TwoPartitions case
+(`formal-tlc-scheduling-replay-two-partitions`), 27 Shipping base/pairs
+(`formal-tlc-scheduling-shipping`) and its FourRecords variant
+(`formal-tlc-scheduling-shipping-variants`), covering all 221 cases exactly
+once. Prices use passing TRX evidence from ci.yml run 40658688360 (head
+92832b77): the three measured item prices are 41.15 minutes (job 122717148551),
+6.17 (job 122717148735) and 18.72 (job 122717148680). The 192/192 general item
+passed in job 122717148586; its 106/86 subgroup prices of 21.03/23.04 minutes
+are four-worker LPT reconstructions from test-case durations, not measured
+work-item times. Four workers is a reconstruction assumption, not an attested
+runner trace. The complete source run passed, including rebootstrap job
+122717148595. Historical run 40588708711's rebootstrap job 122488444001 failed
+under #5116; that failure remains recorded and contributes no timing. Estimates
+are planning inputs, not runtime guarantees. Structural scheduling discovery and
+refinement checks remain outside those shards, so a skipped TLC run does not
+skip the acceptance census.
 
 ## Related
 

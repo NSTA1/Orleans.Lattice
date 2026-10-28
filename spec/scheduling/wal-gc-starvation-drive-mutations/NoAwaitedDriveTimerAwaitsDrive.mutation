@@ -1,0 +1,39 @@
+MODULE: NoAwaitedDriveTimerAwaitsDrive
+TARGET: NoAwaitedDrive
+CLASS: Invariant
+SUMMARY: the timer retains its exclusive turn across replay
+PERTURBS: TimerDispatchDrive
+
+--- FIND
+    /\ IF ~deleted /\ leaf[l].drive = "none" /\ CanAdmit("timer")
+       THEN DriveStart(l, "timer")
+--- REPLACE
+    /\ IF ~deleted /\ leaf[l].drive = "none" /\ CanAdmit("timer")
+\* MUTATION: timer holds the non-interleaving turn across the external drive.
+       THEN DriveStartWith(l, "timer", "timer")
+--- END
+--- FIND
+DriveStart(l, origin) ==
+--- REPLACE
+DriveStartWith(l, origin, heldTurn) ==
+--- END
+--- FIND
+        ![l].turn = "idle",
+        ![l].timer = IF origin = "timer" THEN "rearm" ELSE @]
+    /\ free' = free - 1
+--- REPLACE
+        ![l].turn = heldTurn,
+        ![l].timer = IF origin = "timer" THEN "rearm" ELSE @]
+    /\ free' = free - 1
+--- END
+--- FIND
+    /\ UNCHANGED <<cold, head, appended, deleted, timely, leadDone>>
+
+DriveRefused(l, origin) ==
+--- REPLACE
+    /\ UNCHANGED <<cold, head, appended, deleted, timely, leadDone>>
+
+DriveStart(l, origin) == DriveStartWith(l, origin, "idle")
+
+DriveRefused(l, origin) ==
+--- END

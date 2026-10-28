@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <see cref="LatticeOptions.WalAppendDispatchTimeout"/>.
 /// </summary>
 [TestFixture]
-public class WalCommitLogWriterAdmissionSaturationTests
+public partial class WalCommitLogWriterAdmissionSaturationTests
 {
     private const string TreeId = "tree-admsat";
 
@@ -230,6 +230,7 @@ public class WalCommitLogWriterAdmissionSaturationTests
         {
             Assert.That(ex!.TreeId, Is.EqualTo(TreeId),
                 "the refusal must carry the originating tree id for caller-side attribution");
+            Assert.That(ex.SaturationSource, Is.EqualTo(LatticeSaturationSource.WalAdmission));
             Assert.That(ex.Message, Does.Contain(nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)),
                 "the refusal message must name the budget option so operators can find the lever");
         });

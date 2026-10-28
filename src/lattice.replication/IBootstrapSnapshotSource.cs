@@ -21,6 +21,14 @@ namespace Orleans.Lattice.Replication;
 /// over the local <see cref="ISnapshotProvider"/> otherwise (the
 /// local-only fallback used in single-cluster recovery tests).
 /// </para>
+/// <para>
+/// The local-only fallback can export only this silo's own tree, so
+/// it serves a source-named export only when the named source is the
+/// silo's own <see cref="LatticeReplicationOptions.ClusterId"/>. Any
+/// other source fails closed with
+/// <see cref="LatticeBootstrapSourceMismatchException"/> rather than
+/// presenting the local tree as that peer's contents.
+/// </para>
 /// </summary>
 public interface IBootstrapSnapshotSource : ISnapshotProvider
 {
