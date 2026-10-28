@@ -114,6 +114,16 @@ if (string.Equals(suite, "reseedsampling", StringComparison.OrdinalIgnoreCase))
     return samplingSummary.HasCriticalValidationErrors || samplingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "internalnodebinding", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is InternalNodeCallFusionBenchmarks.Site.RootConstruction
+            or InternalNodeCallFusionBenchmarks.Site.BulkConstruction
+            or InternalNodeCallFusionBenchmarks.Site.SiblingConstruction));
+    var bindingSummary = BenchmarkRunner.Run<InternalNodeCallFusionBenchmarks>(config);
+    return bindingSummary.HasCriticalValidationErrors || bindingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "internalnodefusion", StringComparison.OrdinalIgnoreCase))
 {
     var fusionSummary = BenchmarkRunner.Run<InternalNodeCallFusionBenchmarks>(config);

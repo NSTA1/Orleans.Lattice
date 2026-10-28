@@ -84,7 +84,7 @@ public sealed class ShardRootGrainSetManyInterleavedWritesTests
         // the path we care about.
         var @internal = Substitute.For<IBPlusInternalGrain>();
         @internal.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
-        @internal.InitializeAsync(Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
+        @internal.InitializeForTreeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
             .Returns(Task.CompletedTask);
         @internal.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
             .Returns(Task.FromResult<SplitResult?>(null));

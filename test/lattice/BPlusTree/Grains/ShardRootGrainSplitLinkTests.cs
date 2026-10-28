@@ -208,8 +208,8 @@ public sealed partial class ShardRootGrainSplitLinkTests
         await h.Grain.SetAsync("c", [1]);
 
         await h.Node(RootId).Received(1).AcceptSplitAsync("d", SiblingId);
-        await h.NewRoot.DidNotReceive().InitializeAsync(
-            Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>());
+        await h.NewRoot.DidNotReceive().InitializeForTreeAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>());
         Assert.That(h.State.State.RootNodeId, Is.EqualTo(RootId));
     }
 
@@ -248,7 +248,10 @@ public sealed partial class ShardRootGrainSplitLinkTests
 
         await h.Grain.SetAsync("c", [1]);
 
-        await h.NewRoot.Received(1).InitializeAsync("q", RootId, rootSibling, false);
+        await h.NewRoot.Received(1).InitializeForTreeAsync("split-link-tree", "q", RootId, rootSibling, false);
+        await h.NewRoot.DidNotReceive().SetTreeIdAsync(Arg.Any<string>());
+        await h.NewRoot.DidNotReceive().InitializeAsync(
+            Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>());
         await h.Node(RootId).Received(1).AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
         Assert.Multiple(() =>
         {

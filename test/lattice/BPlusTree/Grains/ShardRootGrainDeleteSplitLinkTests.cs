@@ -284,7 +284,7 @@ public sealed class ShardRootGrainDeleteSplitLinkTests
             .Returns(Task.FromResult(new LeafDeleteResult { Deleted = true, Split = LeafSplit("d") }));
 
         var newRoot = Substitute.For<IBPlusInternalGrain>();
-        newRoot.InitializeAsync(Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
+        newRoot.InitializeForTreeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
             .Returns(Task.CompletedTask);
         newRoot.GetRoutingTableAsync().Returns(new RoutingTableSnapshot
         {
@@ -310,7 +310,7 @@ public sealed class ShardRootGrainDeleteSplitLinkTests
         // is that the split reached the promotion at all.
         try { await grain.DeleteAsync("c"); } catch { }
 
-        await newRoot.Received(1).InitializeAsync("d", rootLeafId, NewSiblingId, true);
+        await newRoot.Received(1).InitializeForTreeAsync(Arg.Any<string>(), "d", rootLeafId, NewSiblingId, true);
     }
 
     [Test]

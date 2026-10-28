@@ -167,7 +167,7 @@ public sealed partial class ShardRootGrainSplitLinkTests
         var captureSibling = GrainId.Create("leaf", "capture-sibling");
         Task? captureLink = null;
         var captureReturnedDuringPromotion = false;
-        h.NewRoot.InitializeAsync(Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
+        h.NewRoot.InitializeForTreeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>())
             .Returns(async _ =>
             {
                 h.Routing[NewRootId] = Table(true, (null, LeftLeafId), ("d", SiblingId));

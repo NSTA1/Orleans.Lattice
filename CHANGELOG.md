@@ -10,6 +10,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
+### Changed
+
+- **Performance - Internal-node construction.** Root promotion, bulk-load internal levels and split-sibling recovery each combine tree binding and initialization into one grain call, preserving durability and recovery ordering. (PR link pending) (`Orleans.Lattice`)
+
 ## Released
 
 ## [2026-10-28]
