@@ -110,6 +110,8 @@ Coordinated lockstep minor release: 50 packages advance to `10.2.0` - `Orleans.L
 
 - **Atomic - Batches stay whole across a shard fold.** A shrinking reshard or over-split healing no longer lets a read see an atomic batch on some of its keys and not others when the batch was prepared on the folded shard before the fold began. ([#5125](https://github.com/NSTA1/Orleans.Lattice/issues/5125)) (`Orleans.Lattice` 10.2.0)
 
+- **Shard - Folding slots back keeps writes made since their split.** A fold onto the shard a split took slots from, as over-split healing or a shrinking reshard can do, no longer reverts keys written, deleted or expired since the split to their pre-split values. ([#5130](https://github.com/NSTA1/Orleans.Lattice/issues/5130)) (`Orleans.Lattice` 10.2.0)
+
 - **Explorer - Backup form consistency.** Captures require a new submission if details change during tree validation. Switching to a set validates the carried tree, and pending schedule cancellation blocks conflicting changes. ([#5099](https://github.com/NSTA1/Orleans.Lattice/issues/5099)) (`Orleans.Lattice.Explorer.UI` 10.2.0)
 
 - **Explorer - Backup catalogue and health.** Catalogue rows, inventory, schedules and health discard superseded replies and errors. Pending checks no longer block the next backup or replace its progress, and monitoring-save results stay with their backup. ([#5036](https://github.com/NSTA1/Orleans.Lattice/issues/5036), [#5042](https://github.com/NSTA1/Orleans.Lattice/issues/5042)) (`Orleans.Lattice.Explorer.UI` 10.2.0)

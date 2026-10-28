@@ -94,6 +94,8 @@ Each fold is the exact inverse of a split. The donor shard shadow-forwards write
 
 As with a split, atomic batches already prepared on the donor's slots when the fold begins are replayed onto the survivor before the drain starts, so a batch that commits across the fold is never visible on some of its keys and not others ([#5125](https://github.com/NSTA1/Orleans.Lattice/issues/5125)).
 
+The survivor is often the shard those slots were originally split away from, and a split leaves its source's rows for the moved slots in place, sealed and unreadable. The fold's drain supersedes them by last-writer-wins, and before the survivor reclaims the slots it tombstones any such row whose key the donor no longer holds at all because it was deleted or expired and then compacted, so every write, delete and expiry since the split survives the fold ([#5130](https://github.com/NSTA1/Orleans.Lattice/issues/5130)).
+
 When a fold commits, the retired donor's storage is released: every leaf and internal node it held is cleared, which also retires those leaves' write-ahead-log materialiser pins. Nothing is lost by this - each drained entry was appended to the survivor's own write-ahead log before the drain moved on - and keeping the leaves would hold the tree's WAL trim horizon back for good, because a retired leaf's pin can never advance. The donor's shard root stays behind as a small routing tombstone that remembers which slots moved where, so a router still holding a pre-shrink shard map is redirected rather than served; it never grows a new root.
 
 A donor that the live map still routes a slot to, or that refuses retirement because another migration or an online resize holds it, keeps its storage, and the fold completes as a routing-only retirement.
