@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Replication;
@@ -147,6 +149,22 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
             return new ReplicationAck { Accepted = false, HighestAppliedHlc = default };
         }
 
+        long? bootstrapEpoch = null;
+        if (batch.ReseedAfterEpoch is { } reseedAfter
+            && dest.GetRequiredService<ILatticeReplicationContext>().ResolveMergeMode(batch.TreeName) is not null)
+        {
+            bootstrapEpoch = await Task.Run(
+                () => ReplicationReseedResponder.RespondAsync(
+                    dest.GetRequiredService<IGrainFactory>(),
+                    batch.TreeName,
+                    batch.OriginClusterId,
+                    reseedAfter,
+                    dest.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()
+                        .Get(batch.TreeName).AutoBootstrapOnFallOffLog,
+                    dest.GetRequiredService<ILogger<LoopbackDeliveringTransport>>()),
+                cancellationToken).ConfigureAwait(false);
+        }
+
         // Empty payload AND no framing-only encoded envelope: this is
         // the heartbeat / no-op tick shape. Accept without invoking
         // the applier so the wire-shape contract for empty batches
@@ -156,7 +174,7 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
         // contract and keeps the routing-failure path narrow.
         if (batch.Payload.IsEmpty && batch.EncodedEnvelope is null)
         {
-            return new ReplicationAck { Accepted = true, HighestAppliedHlc = default };
+            return new ReplicationAck { Accepted = true, HighestAppliedHlc = default, BootstrapEpoch = bootstrapEpoch };
         }
 
         // Steady-state ship path: the shipper writes only
@@ -196,7 +214,21 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
             // Orleans activation scheduler), reproducing the production
             // decoupling.
             var result = await Task.Run(
-                () => applier.ApplyBatchAsync(decoded, cancellationToken),
+                async () =>
+                {
+                    if (dest.GetRequiredService<ILatticeReplicationContext>().ResolveMergeMode(batch.TreeName) is not null
+                        && await ReplicationReseedResponder.RefusesStragglerAsync(
+                            dest.GetRequiredService<IGrainFactory>(),
+                            batch.TreeName,
+                            batch.OriginClusterId,
+                            decoded,
+                            dest.GetRequiredService<ILogger<LoopbackDeliveringTransport>>()).ConfigureAwait(false))
+                    {
+                        return new ApplyResult { Deferred = true };
+                    }
+
+                    return await applier.ApplyBatchAsync(decoded, cancellationToken).ConfigureAwait(false);
+                },
                 cancellationToken).ConfigureAwait(false);
             Deliveries.Enqueue(new DeliveryRecord(
                 batch.TargetClusterId,
@@ -216,6 +248,7 @@ internal sealed class LoopbackDeliveringTransport : IReplicationTransport
                 // normal cursor progress.
                 Accepted = !result.Deferred,
                 HighestAppliedHlc = result.HighWaterMark,
+                BootstrapEpoch = bootstrapEpoch,
             };
         }
         catch (Exception ex)
