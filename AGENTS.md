@@ -110,8 +110,10 @@ closes.
 
 - `src/lattice/` - the core `Orleans.Lattice` library. Grains are `internal`
   under `BPlusTree/Grains/`; persistent state POCOs under `BPlusTree/State/`
-  (the materialised-view grains and their states sit in `Views/`, and the WAL
-  materialiser pin grain keeps its state beside it in `BPlusTree/Grains/`);
+  (the materialised-view grains and their states sit in `Views/`, the
+  tracked-operation grains and theirs in `Operations/`, and the WAL materialiser
+  pin, purge-hold and shard-floor states sit beside their grains in
+  `BPlusTree/Grains/`);
   CRDT and low-level types under `Primitives/`.
 - The optional add-on packages (for example replication, the API facade family
   and their gRPC and MCP bindings, auth and membership, backup, storage

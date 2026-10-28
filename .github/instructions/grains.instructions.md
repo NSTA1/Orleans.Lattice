@@ -17,7 +17,7 @@ internal sealed partial class MyGrain(
 ```
 
 - Grains are `internal`; the test project has `InternalsVisibleTo` access.
-- `WalMaterialiserPinGrain` is the one grain with an explicit constructor rather than a primary one: it also takes an optional keyed `IGrainStorage` handle for its bucketed pin slots.
+- `WalMaterialiserPinGrain` is the one grain with an explicit constructor rather than a primary one: it also takes an optional keyed `IGrainStorage` handle for its bucketed pin slots. `WalTrimWatermarkSupportGrain`, a stateless capability marker with no dependencies, has no constructor at all.
 - Use `partial class` to split large grains across multiple files by concern (e.g. `.Lifecycle.cs`, `.Traversal.cs`, `.BulkLoad.cs`).
 
 ## Grain Key Conventions
@@ -47,6 +47,14 @@ Grain identity is embedded in the string key with `/` as separator:
 | `ViewMaintainerGrain` | `{viewName}`, tenant-scoped to `t/{tenant}/{viewName}` when tenancy is on | `"orders-open"` |
 | `WalMaterialiserPinGrain` | `{treeId}` (single shard) or `{treeId}~s{shard}` via `ShardKey` | `"my-tree~s3"` |
 | `WalOrphanPinSweepGrain` | `{treeId}` (one cluster-wide orphan-pin sweep per tree) | `"my-tree"` |
+| `WalOffsetConsumerRegistryGrain` | `{physicalTreeId}` (the tree whose WAL the registered consumers read) | `"my-tree"` |
+| `WalPurgeHoldGrain` | `{physicalTreeId}` (the tree whose WAL the holding consumers read) | `"my-tree"` |
+| `WalTrimWatermarkSupportGrain` | Integer key (a stateless capability marker resolved from the cluster manifest; never activated by the library) | - |
+| `CopyReceiveFenceGrain` | `{physicalTreeId}` (the restored copy's physical tree) | - |
+| `CrossTreeBarrierIndexGrain` | `{treeId}` (the receiver-side tree id) | `"my-tree"` |
+| `CrossTreePurgeFrontierGrain` | `{originClusterId}` | `"cluster-eus2"` |
+| `LeafRowRecordGrain` | Guid key matching the owning leaf's grain id | - |
+| `LeafTerminalWitnessGrain` | Guid key matching the owning leaf's grain id | - |
 | `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
 | `LatticeLockGrain` | `{lockName}` (any non-empty string) | `"inventory/sku-42"` |
@@ -127,7 +135,7 @@ So when a grain both persists via `[PersistentState]` and is addressed by a
 ## State Management
 
 - A stateful grain usually owns a single `IPersistentState<T>` injected via `[PersistentState]`. Two grains go further: `TreeResizeGrain` owns a second slot (`tree-resize-undo`, its persisted undo intent) beside its `tree-resize` state, and `WalMaterialiserPinGrain` additionally reads and writes its bucketed pin slots through a keyed `IGrainStorage` handle. Many grains hold no grain state at all (for example `LatticeGrain` and `LeafCacheGrain`).
-- All state classes live in `BPlusTree/State/` (the exceptions are `WalMaterialiserPinState`, beside its grain in `BPlusTree/Grains/`, and the view grains' states in `Views/`) and carry `[GenerateSerializer]` + `[Alias]`.
+- All state classes live in `BPlusTree/State/` (the exceptions are `WalMaterialiserPinState`, `WalPurgeHoldState` and `WalShardFloorState`, beside their grains in `BPlusTree/Grains/`, the view grains' states in `Views/`, and the tracked-operation grains' states in `Operations/`) and carry `[GenerateSerializer]` + `[Alias]`.
 - Always call `state.WriteStateAsync()` after mutations - group writes when possible.
 
 ## Options Access
