@@ -56,7 +56,7 @@ Structural sizing and runtime settings resolve differently:
 
 Registry overrides only apply to the properties that are set (non-null). All other properties fall back to the `IOptionsMonitor` chain.
 
-`ShardRootGrain` reads the registry once on activation and caches the effective options for the grain's lifetime. This adds one async call per grain activation but zero overhead on subsequent operations.
+A shard root reads the registry once on activation and caches the effective options for the grain's lifetime. This adds one async call per grain activation but zero overhead on subsequent operations.
 
 Option resolutions reach the singleton registry through a bounded, coalescing path. Concurrent resolves of the same tree on a silo share one in-flight read, and at most 16 registry reads are in flight at once across the whole cluster - each silo takes an equal share of that ceiling, and never less than one, so a cluster of more than 16 silos has one read in flight per silo - with whatever queues behind the bound read together in batches of up to 64 trees. A cold start that activates many trees' background services therefore does not stampede the registry, and a quiet silo, whose reads never queue, pays no added latency.
 
@@ -107,7 +107,7 @@ A tree's registry entry can carry a physical-tree alias that redirects a logical
 
 ### How aliasing works
 
-1. `LatticeGrain` resolves the alias and the shard map together, from one read of the logical tree's registry entry, and caches them as one pair per activation. Every routing invalidation - a stale-tree signal, a stale-shard signal, or a scan's map-version check - drops both, so the next resolve can never pair one physical tree with a map read before or after an alias swap. Every alias swap writes the alias and the map in one registry write (`SwapAliasAsync`) and re-versions the map, so a reader resolving on either side of it sees one physical tree with the map that describes its shards.
+1. The tree router resolves the alias and the shard map together, from one read of the logical tree's registry entry, and caches them as one pair per activation. Every routing invalidation - a stale-tree signal, a stale-shard signal, or a scan's map-version check - drops both, so the next resolve can never pair one physical tree with a map read before or after an alias swap. Every alias swap writes the alias and the map in one registry write (`SwapAliasAsync`) and re-versions the map, so a reader resolving on either side of it sees one physical tree with the map that describes its shards.
 2. If `PhysicalTreeId` is set, all shard routing uses the physical tree ID instead of the logical tree ID.
 3. Only a single level of indirection is allowed - the physical tree must not itself be aliased. `SetAliasAsync` enforces this constraint.
 
@@ -123,7 +123,7 @@ Before touching shards, the registry persists a uniquely owned move intent in it
 
 Recovery does not require a caller retry. An exclusive one-second timer retries pending moves on an active registry; after deactivation or process interruption, the minute reminder reactivates it and resumes from durable intent. The activation hook schedules recovery rather than awaiting shard fan-out, avoiding activation-time registry read deadlocks. Recovery failures are logged and retried while intent remains durable; affected logical traffic can be temporarily refused, but cannot silently write the superseded copy. The reminder remains registered even when no move is pending, with an empty, constant-time tick. Hosts must configure durable grain storage and a durable Orleans reminder provider for recovery across process loss; an in-memory provider cannot preserve intent or reminders across that boundary.
 
-Different physical trees produce different leaf grain IDs, which automatically create fresh `LeafCacheGrain` instances. No explicit cache flush is needed after an alias swap. See [Read Caching](caching.md#cache-invalidation-via-tree-aliasing) for details.
+Different physical trees produce different leaf grain IDs, which automatically get fresh leaf lookup caches. No explicit cache flush is needed after an alias swap. See [Read Caching](caching.md#cache-invalidation-via-tree-aliasing) for details.
 
 ### API
 
@@ -189,4 +189,4 @@ For operators, the [tree-administration facade](../lattice.api.treeadmin/README.
 
 Every shard-map write - a set or a slot reassignment - increments `ShardMap.Version` by one, so the first such write stamps `Version = 1`. The default identity map materialised in memory for never-persisted trees has `Version = 0`, and so does the map an installed app's tree registration persists for a declared `virtualShardCount`, until its first set or reassignment. A resize's alias swap carries the resized copy's map onto the tree's entry, stamped one above the higher of the tree's current version and the copy's, so every cached router sees the change (a tree that never persisted a map has none to carry and keeps routing by the identity map at `Version = 0`); an undo restores the original entry, map and version included.
 
-`LatticeGrain` uses this version as a stability hint for scans (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`): a scan records the version when it starts and re-reads it before returning. If the version moved, the scan retries up to `LatticeOptions.MaxScanRetries` times. Because the registry grain is non-reentrant, the version increment is atomic with the shard-map write, so concurrent splits cannot produce torn maps or out-of-order version stamps. See [Shard Splitting](shard-splitting.md#scan-semantics-during-a-split) for the algorithm and [Consistency](consistency.md) for the resulting per-operation guarantees.
+The tree router uses this version as a stability hint for scans (`CountAsync`, `ScanKeysAsync`, `ScanEntriesAsync`): a scan records the version when it starts and re-reads it before returning. If the version moved, the scan retries up to `LatticeOptions.MaxScanRetries` times. Because the registry grain is non-reentrant, the version increment is atomic with the shard-map write, so concurrent splits cannot produce torn maps or out-of-order version stamps. See [Shard Splitting](shard-splitting.md#scan-semantics-during-a-split) for the algorithm and [Consistency](consistency.md) for the resulting per-operation guarantees.

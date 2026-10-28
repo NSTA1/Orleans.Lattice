@@ -102,7 +102,7 @@ The effective "now" is captured once per leaf call, so every key a single leaf e
 
 ## Read cache
 
-`LeafCacheGrain` (the per-silo `[StatelessWorker]` cache described in [Read Caching](caching.md)) stores the raw `LwwValue<byte[]>` including `ExpiresAtTicks`. On a cache hit it applies `IsExpired(nowUtcTicks)` before returning, so expired entries are never served from cache even if the primary leaf has not yet had them compacted.
+The leaf lookup cache (the per-silo `[StatelessWorker]` cache described in [Read Caching](caching.md)) stores the raw `LwwValue<byte[]>` including `ExpiresAtTicks`. On a cache hit it applies `IsExpired(nowUtcTicks)` before returning, so expired entries are never served from cache even if the primary leaf has not yet had them compacted.
 
 ## Atomic writes
 
@@ -141,10 +141,10 @@ Expired live entries past the configured `TombstoneGracePeriod` are reaped along
 
 Expired entries are **intentionally preserved** on the replication-layer code paths:
 
-- `BPlusLeafGrain.GetDeltaSinceAsync` - returns expired entries to requesting peers.
-- `BPlusLeafGrain.MergeEntriesAsync` / `MergeManyAsync` - stores expired entries received from peers.
+- The leaf's version-vector delta read returns expired entries to requesting peers.
+- The leaf's entry-merge paths store expired entries received from peers.
 
-This is required for CRDT convergence: two replicas with different views of "now" must still agree on the last-writer-wins value for a key, and that resolution needs access to the entry's HLC timestamp even after its `ExpiresAtTicks` has passed. User-facing read paths apply the expiry filter; the replication layer does not. Read-cache deltas (`StateDelta` from the primary to `LeafCacheGrain`) follow the same rule - the cache receives expired entries verbatim and filters them at read time.
+This is required for CRDT convergence: two replicas with different views of "now" must still agree on the last-writer-wins value for a key, and that resolution needs access to the entry's HLC timestamp even after its `ExpiresAtTicks` has passed. User-facing read paths apply the expiry filter; the replication layer does not. Read-cache deltas (from the primary leaf to its lookup caches) follow the same rule - the cache receives expired entries verbatim and filters them at read time.
 
 ## Cross-cluster replication
 
@@ -158,4 +158,4 @@ A replicated last-writer-wins write carries the absolute expiry the source resol
 
 - **Clock skew.** Because expiry is resolved on the silo that accepts the write, TTL consistency depends on reasonably synchronised silo clocks - not client clocks. Two writes with the same `ttl` made simultaneously from different clients will expire at nearly the same instant regardless of client time, provided the silos they land on share the same wall clock.
 - **Grace period.** Tune `LatticeOptions.TombstoneGracePeriod` to be at least the worst-case clock drift plus replication delay you expect between silos. Setting it too low risks a lagging replica resurrecting an expired entry; setting it too high delays physical space reclamation.
-- **`CacheTtl` is independent of entry TTL.** `CacheTtl` controls how long a `LeafCacheGrain` may serve reads without re-polling the primary for a delta; it has no effect on an entry's own expiry. An expired entry is filtered at the cache regardless of `CacheTtl`.
+- **`CacheTtl` is independent of entry TTL.** `CacheTtl` controls how long a leaf lookup cache may serve reads without re-polling the primary for a delta; it has no effect on an entry's own expiry. An expired entry is filtered at the cache regardless of `CacheTtl`.

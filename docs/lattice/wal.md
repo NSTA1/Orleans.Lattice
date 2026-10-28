@@ -770,8 +770,10 @@ Three cases:
   and parent pointers, tree id, shard index, key range, moved-away slots,
   split lifecycle, last-compaction-version), the leaf's hybrid-logical clock
   and version vector, the projection checkpoints, the running projection
-  hash and its publish sequence, a snapshot-size hint and the replay
-  ledger - it is never the source of truth for committed entry values.
+  hash and its publish sequence, a snapshot-size hint, the replay
+  ledger and the discarded-prepare records, the kept-snapshot and
+  row-record flags, and the leaf-reclaim retirement record - it is never
+  the source of truth for committed entry values.
 
 With correctly stamped records, the projection that a reader observes after activation is
 byte-equivalent to the projection at the moment the leaf last deactivated (for

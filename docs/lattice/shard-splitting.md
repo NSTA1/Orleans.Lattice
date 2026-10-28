@@ -475,7 +475,7 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   the correct answer), and so is a saga whose terminal has already settled
   that key on the leaf - drained its prepared bucket there or installed
   its committed value as a backstop. Otherwise the read raises
-  `StaleShardRoutingException` and the deadline-bounded retry loop
+  the internal stale shard-routing signal and the deadline-bounded retry loop
   re-fans once the backstop lands. The check is per key, not per saga: a
   saga's terminal can reach a leaf for one of its keys while its value
   for another key is still on its way, and that other key must stay

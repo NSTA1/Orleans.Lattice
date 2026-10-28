@@ -225,7 +225,7 @@ Because a `Disable()` only tombstones the dots the local replica has actually ob
 
 The four dot-based primitives - `OrSet`, `OrFlag`, `RwSet`, and `RwFlag` - represent a slot's causal history as a list of `OrSetDot`. Left alone, that list grows on every **re-assertion**: enabling an already-enabled flag, or re-adding an element already present, mints a fresh dot and appends it, and a merge is a union that never removes anything. A slot re-asserted N times would carry N dots forever, so every read, merge, and serialisation of that one row would cost O(N) - unbounded in any workload that re-asserts on a schedule, presence marking being the obvious one.
 
-The shared `OrSetDotCompaction` helper bounds it. Each slot keeps **at most one dot per replica per side**, so state is O(replicas), not O(assertions):
+A shared dot-compaction step bounds it. Each slot keeps **at most one dot per replica per side**, so state is O(replicas), not O(assertions):
 
 ```
 before:  Enables = [(A,1), (A,2), (A,3), ... (A,1000)]

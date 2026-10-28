@@ -230,7 +230,7 @@ WAL. An atomic action exists precisely to compose effects that cannot - an exter
 payment, an email, another grain - so it trades isolation for reach.
 
 A useful consequence: a *single* `.TreeWrite` step, in isolation, keeps the full
-atomic-write visibility (it delegates to `IAtomicWriteGrain`) - one instantaneous,
+atomic-write visibility (it delegates to the atomic-write saga) - one instantaneous,
 cross-cluster, all-or-nothing flip. The visibility downgrade appears only *across*
 steps. So:
 

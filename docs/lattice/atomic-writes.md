@@ -27,13 +27,13 @@ step of a larger saga without giving up the atomicity guarantees described here.
 ## Atomicity Guarantees
 
 This section describes the **atomicity** contract of the saga. For the
-reader-visibility model - the per-tree `ITxRegistryGrain` linearization
+reader-visibility model - the per-tree transaction registry's linearization
 point and how each read path consults it - see
 [Consistency: Atomic visibility](consistency.md#atomic-visibility).
 The atomicity guarantee is **universal**: it holds within a single
 tree on the local cluster *and* across every cluster the tree
 replicates to. Receiver-side replication routes prepared writes and
-the per-shard terminal mark through the same `ITxRegistryGrain`
+the per-shard terminal mark through the same transaction-registry
 linearization point used locally, so a remote reader concurrent with
 replication of a `SetManyAtomicAsync` observes either zero or all of
 the saga's keys - never a partial view (see Consistency for details).
@@ -87,8 +87,8 @@ Given a batch `[(k0, v0), (k1, v1), ..., (kN-1, vN-1)]`, a successful
 ### What `SetManyAtomicAsync` does **not** guarantee
 
 - **Cross-tree atomicity (this call).** A `SetManyAtomicAsync` call is
-  bound to a single tree (`ILattice`) and the per-tree
-  `ITxRegistryGrain` is its unit of atomic visibility. To commit a batch
+  bound to a single tree (`ILattice`) and the per-tree transaction
+  registry is its unit of atomic visibility. To commit a batch
   spanning two or more distinct trees all-or-nothing, use
   `IGrainFactory.SetManyAtomicAsync` (or the
   `BeginAtomicWrite` fluent builder) - a two-level saga that layers a
@@ -101,8 +101,8 @@ Given a batch `[(k0, v0), (k1, v1), ..., (kN-1, vN-1)]`, a successful
 - **Abort durability in every failure mode.** If recording the abort
   decision or broadcasting the abort terminals fails, the saga stays in
   `Compensate` and the keepalive reminder keeps re-driving it until it
-  completes; operators can inspect `AtomicWriteState.FailureMessage` via
-  persistent state. This is rare in practice and limited to
+  completes; operators can inspect the failure message the saga records in
+  its persisted state. This is rare in practice and limited to
   total-storage-outage scenarios.
 
 ## Usage
@@ -211,8 +211,8 @@ Each call to `SetManyAtomicAsync` is routed by the tree to a saga
 coordinator grain keyed by `{treeId}/{operationId}`, where `operationId` is
 a GUID generated per call (or the caller-supplied idempotency key - see
 [Caller-supplied idempotency keys](#caller-supplied-idempotency-keys)). The
-grain persists a single `AtomicWriteState` POCO whose phase transitions drive
-the saga lifecycle:
+grain persists a single saga state record whose phase transitions drive the
+saga lifecycle:
 
 ```
 NotStarted --> Prepare --> Execute --> registry.MarkCommitted --> fan-out --> Completed   (success)
@@ -350,7 +350,7 @@ bucketed into each leaf's pending-tx map, so they were never visible to
 readers - and a non-prepared rollback write would itself land as a fresh
 visible entry that overlays the pre-saga state once the abort terminal drops
 the pending bucket. Compensation therefore records the abort decision on the
-per-tree `ITxRegistryGrain` and then broadcasts `MutationKind.TxAbort`
+per-tree transaction registry and then broadcasts `MutationKind.TxAbort`
 terminal marks (see [Tree-wide visibility flip](#tree-wide-visibility-flip)),
 which discard each leaf's pending bucket. Readers resolve against the
 recorded abort in between, so they never observe a partial rollback.
@@ -363,9 +363,8 @@ re-entry simply re-drives them until they complete.
 ### Tree-wide visibility flip
 
 After Execute completes (success path) or after Compensate completes
-(failure path), the saga records its terminal outcome on its
-`ITxRegistryGrain` shard (see [Sharded decision registry](#sharded-decision-registry)) via `MarkCommittedAsync(txid)` or
-`MarkAbortedAsync(txid)`. **This single registry write is the moment
+(failure path), the saga records its terminal outcome - committed or aborted - on its
+decision registry shard (see [Sharded decision registry](#sharded-decision-registry)). **This single registry write is the moment
 of tree-wide visibility flip.** It is the only point in the saga's
 lifecycle at which any reader, anywhere in the tree, can observe the
 saga's effect: every read path that finds a key in a leaf's pending-tx
@@ -631,7 +630,7 @@ are restored verbatim so the same activation can retry and a reactivation
 re-reads the intact pre-terminal record from disk.
 
 `ForgetAsync` does **not** evict the decision record immediately - it
-stamps a tombstone in the saga's `ITxRegistryGrain` shard with a `ForgottenAt`
+stamps a tombstone in the saga's decision registry shard with a forgotten-at
 timestamp and retains the committed/aborted verdict for
 `LatticeOptions.TxDecisionRetention` (default 60 s). During this window
 `GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` continue to
@@ -756,7 +755,7 @@ physical copy.
 Once a tombstone outlives `TxDecisionRetention`, the registry stops
 *reporting* the verdict but the decision row itself is still stored
 until a purge removes it. `GetStatusAsync` / `GetStatusManyAsync` /
-`SnapshotAsync` report that masked row as `TxStatus.Indeterminate` -
+`SnapshotAsync` report that masked row as `Indeterminate` -
 "a decision exists and I am no longer entitled to report it" - and
 **not** as `InFlight`. The distinction is exact: a txid the registry
 has genuinely never recorded still reports `InFlight`.
@@ -806,7 +805,7 @@ another key of the same committed batch, whose terminal already landed,
 is held post-saga ([#4619](https://github.com/NSTA1/Orleans.Lattice/issues/4619)).
 Read paths never read past the mask.
 
-`TxStatus.Indeterminate` is additive by value, so a mixed-version
+The `Indeterminate` status is additive by value, so a mixed-version
 cluster stays wire-compatible: a node that predates the case takes the
 same conservative branch it already took for `InFlight`.
 
@@ -897,7 +896,7 @@ expiry, unavailable storage/transport, unbounded RPC latency, reactivation, and
 continued topology/registry-coverage churn are not unconditional progress cases.
 The counts retain their existing retry policy. An Information-level structured
 log names the tree and optimistic attempt count whenever the fallback is entered.
-A fallback read occupies a `LatticeGrain` stateless-worker activation for up to
+A fallback read occupies a tree-router stateless-worker activation for up to
 the 30-second gate lease, so `MaxLocalWorkers` headroom matters under sustained
 fallback traffic.
 
@@ -1024,7 +1023,7 @@ for the cross-feature contract.
 
 The saga captures the physical tree, shard-map version, touched shard set
 and distinct WAL partitions for its entries together during prepare. Before
-each batched dispatch it uses `IWalPartitionSaturationSignal` to quiesce
+each batched dispatch it uses the per-partition WAL saturation signal to quiesce
 only those captured WAL partitions; a saturated unrelated partition does
 not stall the batch. The wait is capped at the smaller of a 30-second saga
 ceiling and the tree's `LatticeOptions.WalAppendDispatchTimeout`, so the
@@ -1313,11 +1312,9 @@ split the atomicity contract makes impossible.
 
 The producer stamps the saga's authoritative touched-shard count on
 each terminal record via the additive
-`LatticeMutation.AtomicShardCount` slot. The slot is published by
-`AtomicWriteGrain.MarkOneShardAsync` through the ambient
-`LatticeAtomicShardCountContext` and read inside
-`ShardRootGrain.AppendTxTerminalAsync` at the moment the terminal
-mutation is assembled - so a producer-side mid-saga shadow-forward
+`LatticeMutation.AtomicShardCount` slot. The saga publishes the count
+through an ambient scope around each per-shard terminal mark, and the
+shard root reads it at the moment the terminal mutation is assembled - so a producer-side mid-saga shadow-forward
 split that grows the touched-shard set between successive per-shard
 terminals stamps the post-growth count on the later terminals and the
 receiver adopts the larger value (`max(seen, incoming)`) without ever
@@ -1336,19 +1333,19 @@ incoming count. Each arrival returns a verdict carrying:
 | Outcome | The commit-or-abort outcome of the arrival being recorded; every per-source-shard terminal of a saga carries the same outcome. An arrival whose outcome conflicts with a decision the registry has already recorded is rejected with `InvalidOperationException` rather than absorbed. |
 | Observed source shards | The sorted set of source-shard indices seen, returned only on the final arrival (a legacy arrival returns just its own index); empty otherwise, so the non-final path allocates no array. |
 
-`LatticeGrain.ApplyTxTerminalAsync` consults the tally first. A
+The receiver's terminal-apply path consults the tally first. A
 non-final tally leaves the per-tree linearization mark unset and the
 receiver leaves' pending buckets undrained - readers dialling back
-through `ITxRegistryGrain.GetStatusAsync` observe `InFlight` for the
+through the transaction registry observe `InFlight` for the
 whole saga and fall through to the pre-saga value. Only on the final
 arrival does the receiver (for a cross-tree write, only once the
 [receiver barrier](#cross-cluster-cross-tree-visibility-receiver-barrier)
 has also decided):
 
-1. Mark the registry's decision (`MarkCommittedAsync` /
-   `MarkAbortedAsync`) - the single per-tree visibility flip.
+1. Mark the registry's decision (committed or aborted) - the single
+   per-tree visibility flip.
 2. Resolve the transitive split-forward closure of every observed
-   source-shard via `TerminalFanOutResolver` and dispatch the
+   source-shard and dispatch the
    per-shard terminal mark to each destination in a single parallel
    hop, under the saga's source HLC and origin-cluster id.
 
@@ -1403,9 +1400,9 @@ silently drops the entry from the per-key delta and continues
 serving the stale local value indefinitely.
 
 To decouple cache delivery from LWW HLC ordering,
-`LeafCacheGrain.RefreshAsync` pulls from the primary leaf via the
-internal `IBPlusLeafGrain.GetDeltaSinceCursorAsync(LeafDeliveryCursor)`
-seam rather than the legacy HLC-keyed delta. The cursor is an
+a leaf lookup cache's refresh pulls from the primary leaf through an
+internal delivery-cursor delta call rather than the legacy HLC-keyed
+delta. The cursor is an
 activation-scoped `(Epoch, Sequence)` pair: `Sequence` is bumped
 once per `StoreEntry` / `RemoveEntry` on the leaf - regardless of the
 write's LWW HLC - so the cache pulls every write strictly newer than
@@ -1685,7 +1682,7 @@ still pre-saga - a partial cross-tree view the authoring cluster never
 exposes.
 
 The receiver closes this gap with an internal **receiver coordinator
-grain** (`ILatticeCrossTreeReceiverGrain`), distinct from the
+grain**, distinct from the
 authoring-side coordinator and keyed by the compound
 `(originClusterId, operationId)`. Each tree's cross-tree terminal carries
 the operation id and the participant tree-set (`WalRecord`'s
@@ -1709,7 +1706,7 @@ After it decides, every tree
 resolves the same verdict and the receiver flips them **together**,
 mirroring the authoring cluster's single-write flip. The coordinator only
 ever *returns* the decision (it never calls back into a tree grain), so
-the calling `LatticeGrain` performs the per-tree finalizes - itself inline
+the calling tree router performs the per-tree finalizes - itself inline
 and siblings via their apply grains - without any circular wait.
 
 **Partial replication is valid.** The wait set is scoped to the trees
