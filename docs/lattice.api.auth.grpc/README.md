@@ -96,6 +96,8 @@ Response envelopes:
 | `Auth*` request/response records | Public request and response DTOs for the unary RPCs. |
 | `AddLatticeAuthApiGrpc` / `MapLatticeAuthApiGrpc` | Registration and endpoint-routing extensions. |
 
+Every member and signature is listed in the [Public API reference](api.md).
+
 ## Two-layer authorization
 
 Every admin call passes through two independent gates, both fail-closed:
@@ -169,3 +171,10 @@ var explanation = await authClient.ExplainAsync(new AuthExplainQuery
 The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. Transport concerns (address, TLS, deadlines, retries, call credentials) are configured on the channel the caller supplies. An authorization refusal arrives as a `PermissionDenied` `RpcException`; see [Error mapping](#error-mapping) for the other status codes.
 
 `AuthExplainQuery.SubjectKind` (and `AuthSubjectRef.SubjectKind`) select whether `SubjectId` names a user or a group; both default to `LatticeSubjectSelectorKind.User`, so existing messages deserialize unchanged. Set it to `LatticeSubjectSelectorKind.Group` to explain (or resolve the effective permissions of) a group subject - the decision is then evaluated for a principal that is a member of that group and its ancestors, so `group`-scoped rules match exactly as they would for a real member.
+
+## Reference
+
+- [Public API](api.md) - every public type and member, with source links.
+- [Configuration](configuration.md) - every `LatticeAuthApiGrpcOptions` property, its type, and its default.
+- [Architecture](architecture.md) - method classification, the transport gate, the identity bridge, and error mapping.
+- [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the facade this binding projects.

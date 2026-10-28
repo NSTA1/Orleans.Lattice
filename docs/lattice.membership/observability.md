@@ -59,4 +59,5 @@ How many of the members this package resolves actually have an authorization pol
 ## See also
 
 - [`Orleans.Lattice.Membership`](README.md) - the identity directory and subject-resolution pipeline these instruments observe.
+- [Architecture](architecture.md#resolving-a-subject) - where the resolution cache sits in the subject-resolution pipeline.
 - [Authorization observability](../lattice.auth/observability.md) - the `orleans.lattice.auth` decision, snapshot, and audit surface built on the subjects this package resolves.

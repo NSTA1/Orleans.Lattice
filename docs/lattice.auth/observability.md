@@ -136,4 +136,5 @@ The per-silo subject-resolution cache is owned by `Orleans.Lattice.Membership`, 
 
 - [Membership observability](../lattice.membership/observability.md) - the subject-resolution cache hit / miss counters on the `orleans.lattice.membership` meter.
 - [Security posture](security-posture.md) - the threat model, fail-closed guarantees, and trust boundary of the gate these instruments observe.
+- [Architecture](architecture.md#observation-and-audit) - where the decision observer and audit sinks sit in the gate's pipeline.
 - [`Orleans.Lattice.Auth`](README.md) - the authorization concepts these instruments observe.

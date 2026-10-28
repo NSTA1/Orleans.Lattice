@@ -143,7 +143,7 @@ Every authorization decision, the decision latency, the compiled-snapshot rebuil
 
 ## Public API
 
-Every type below is in the `Orleans.Lattice.Auth` namespace. The operation vocabulary (`LatticeOperation`) and the access-gate seam the package plugs into are core types.
+Every type below is in the `Orleans.Lattice.Auth` namespace. The operation vocabulary (`LatticeOperation`) and the access-gate seam the package plugs into are core types. Every member and signature is listed in the [Public API reference](api.md).
 
 | Type | Purpose |
 |---|---|
@@ -167,7 +167,9 @@ Every type below is in the `Orleans.Lattice.Auth` namespace. The operation vocab
 
 ## Reference
 
+- [Public API](api.md) - every public type and member, with source links.
 - [Configuration](configuration.md) - every public options property, its type, and its default.
+- [Architecture](architecture.md) - the policy store, compiled snapshot, epoch propagation, and the enforcing gate's decision order.
 - [The tenant rule layer](tenant-layer.md) - how tenant-tier rules are evaluated beneath operator rules, and the guards that confine them to their tenant.
 - [Security posture](security-posture.md) - threat model, attack surface, fail-closed guarantees, the internal-grain trust boundary, the bootstrap-administrator root of trust, and TLS expectations.
 - [Observability](observability.md) - the `orleans.lattice.auth` meter and the audit sink.

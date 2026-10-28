@@ -77,6 +77,8 @@ The Graph resolver is registered on the silo builder after the Entra authenticat
 
 ## Reference
 
+- [Public API](api.md) - every public type and member, with source links.
 - [Configuration](configuration.md) - every public options property, its type, and its default.
+- [Architecture](architecture.md) - the shared Graph client, app-only token cache, overage resolver, and identity directory.
 - [Entra authenticator](../lattice.membership.entra/README.md) - the authenticator that consumes this resolver.
 - [Membership documentation](../lattice.membership/README.md) - the base identity and authorization add-on.

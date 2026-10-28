@@ -241,3 +241,5 @@ names and the bundled Grafana panels.
 - [Managing access control from the Explorer](../lattice.explorer/managing-access.md) - the Access area that consumes a provider for its typeahead and validated create.
 - [Entra setup](../lattice.membership.entra/entra-setup.md) - the Entra app registration shared by the authenticator and the Graph provider.
 - [Observability](observability.md) - the `orleans.lattice.membership` meter, including the identity-directory-search instruments.
+- [Public API](api.md) - the `ILatticeIdentityDirectory` seam and the built-in providers' declarations.
+- [Entra Graph architecture](../lattice.membership.entra.graph/architecture.md#identity-directory) - how the Graph-backed provider searches, resolves and degrades.
