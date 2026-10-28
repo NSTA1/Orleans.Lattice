@@ -1,0 +1,17 @@
+# Pairs with NoKeyLost, and checks the model's assumption on compaction. A
+# tombstone written while the saga was deciding is reaped before the saga
+# completes; the terminal's backstop then finds no row to lose to and
+# installs the batch over the acknowledged delete.
+MODULE: NoKeyLostCompactReapsYoungTombstone
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: compaction reaps a delete while the saga it raced is still broadcasting, so the terminal's backstop revives the key
+PERTURBS: Compact
+
+--- FIND
+    /\ ~young
+    /\ row' = [row EXCEPT ![s][k2] = Reaped]
+--- REPLACE
+\* MUTATION: a young tombstone is reaped too.
+    /\ row' = [row EXCEPT ![s][k2] = Reaped]
+--- END

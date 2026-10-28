@@ -1,0 +1,16 @@
+# Pairs with AtomicOnOwner. The decision needs only one prepared key, so one
+# key surfaces the batch while the other has no bucket yet.
+MODULE: AtomicOnOwnerFoldDecideBeforeDispatch
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: the saga records its commit before every entry is dispatched
+PERTURBS: SagaDecide
+
+--- FIND
+    /\ prepped = Keys
+    /\ dec' = "committed"
+--- REPLACE
+\* MUTATION: one dispatched entry is enough.
+    /\ prepped # {}
+    /\ dec' = "committed"
+--- END

@@ -1,0 +1,16 @@
+# Pairs with AtomicOnOwner. The write gate does not refuse a sealed slot, so
+# a router still holding the pre-split map prepares k2 on the split's source,
+# where the owner's read never sees the bucket.
+MODULE: AtomicOnOwnerFoldPrepareIgnoresSeal
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: a prepare through a stale map lands on a shard whose seal should refuse it
+PERTURBS: SagaPrepare
+
+--- FIND
+       IN /\ ~Refused(s, k)
+          /\ PrepareLandable(s, k)
+--- REPLACE
+\* MUTATION: the seal does not refuse the prepare.
+       IN /\ PrepareLandable(s, k)
+--- END

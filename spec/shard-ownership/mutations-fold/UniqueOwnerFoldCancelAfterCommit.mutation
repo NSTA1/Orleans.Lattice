@@ -1,0 +1,17 @@
+# Pairs with UniqueOwner. A cancel accepted after the map moved closes the
+# window without sealing the donor, while the survivor has already reclaimed
+# the slot, so a stale router and a fresh one reach different owners.
+MODULE: UniqueOwnerFoldCancelAfterCommit
+TARGET: UniqueOwner
+CLASS: Invariant
+SUMMARY: a fold is cancelled after its commit, leaving both shards serving the slot
+PERTURBS: FoldCancel
+
+--- FIND
+    /\ mp \in {"shadow", "swept"}
+    /\ mk = "fold"
+--- REPLACE
+\* MUTATION: a cancel accepted at any phase.
+    /\ mp \in {"shadow", "swept", "frozen", "flipped"}
+    /\ mk = "fold"
+--- END

@@ -1,0 +1,15 @@
+# Pairs with RoutingConverges. The survivor still carries the slot in its
+# permanent moved-away seal, so the shard the map now routes k2 to refuses
+# it for ever.
+MODULE: RoutingConvergesFoldSkipsReclaim
+TARGET: RoutingConverges
+CLASS: Temporal
+SUMMARY: the fold moves the map back onto the survivor without reclaiming the slot from its seal
+PERTURBS: MigCommit
+
+--- FIND
+    /\ sealed' = IF mk = "fold" THEN [sealed EXCEPT ![dst] = FALSE] ELSE sealed
+--- REPLACE
+\* MUTATION: no reclaim.
+    /\ sealed' = sealed
+--- END

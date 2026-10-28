@@ -1,0 +1,16 @@
+# Regression check for #5130, its second half. Without the reconciliation
+# (TreeShardConsolidationGrain.TombstoneRowsTheDonorReapedAsync), a key deleted
+# on the donor after the split and then compacted has nothing left to drain,
+# so the survivor's pre-split row reappears when it reclaims the slot.
+MODULE: NoKeyLostFoldSkipsReapReconciliation
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: reproduces production before #5130 was fixed: a key the donor reaped comes back from the survivor's pre-split row
+PERTURBS: MigCommit
+
+--- FIND
+    /\ row' = [row EXCEPT ![dst][k2] = Drained]
+--- REPLACE
+\* MUTATION: the drain alone, with no reconciliation.
+    /\ row' = [row EXCEPT ![dst][k2] = LWW(@, row[src][k2])]
+--- END
