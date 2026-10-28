@@ -93,4 +93,5 @@ siloBuilder.AddLatticeOidc(options =>
 ## See also
 
 - [Package overview](README.md) - what the authenticator does and how it differs from the Entra sibling.
+- [Architecture](architecture.md) - how these options drive selection, validation, and claim mapping.
 - [Membership configuration](../lattice.membership/configuration.md) - the base membership options this add-on plugs into.

@@ -59,7 +59,8 @@ The helper also registers a default `ZstdLatticeCompressor` fallback at `Default
 | Retained bytes | Reports retained payload size for capacity and trimming decisions. |
 | Physical bytes | Not overridden: returns the contract's `-1` "unsupported" sentinel, so callers fall back to the retained total. Trim deletes rows outright, so the provider holds no dead bytes. |
 | Compaction evaluation | Not overridden: the contract's default is a no-op, because trim already deletes the storage it releases and there is nothing to reclaim by rewriting. |
-| Trim | Removes retained entries at or below the supplied offset without moving the committed tail backward. |
+| Trim | Removes retained entries at or below the supplied offset without moving the committed tail backward. Before it deletes anything it durably raises the WAL partition's trim watermark to the supplied offset, capped at the committed tail. |
+| Trim watermark | Returns the highest trimmed offset - the larger of the recorded watermark and the offset just below the lowest stored entry, or the committed tail when no entry is retained - so a reader can tell a trimmed range from a hole. |
 | Reconcile | Repairs interrupted append state before normal operation relies on the stored tail. |
 | Flush | Drains the commit completions outstanding at the moment of the call, across every shard the instance has appended to, so already-appended batches become readable. Rethrows a failed completion instead of swallowing it, and leaves it observable to the next append. A no-op when commit completions are synchronous. |
 | Disposal | `DisposeAsync` is idempotent: it awaits every outstanding pipelined commit completion and swallows its fault (a configured `PipelinedPhaseTwoFaultHandler` has already observed it), then stops each shard's completion worker, faulting any queued completion not yet written with `ObjectDisposedException`. |

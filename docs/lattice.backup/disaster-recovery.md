@@ -42,8 +42,9 @@ holds is unique to the catalog; every row can be re-derived from the sink.
 Four capabilities follow from that model, each exposed through the
 `Orleans.Lattice.Api.Backup` control facade. Restores, catalog maintenance, and
 on-demand health checks use the accept-then-poll `ILatticeBackupOperations` start
-verbs; the control facade still exposes deprecated blocking twins and the
-advisory health availability, health read, and health configuration verbs. Every
+verbs (their blocking predecessors were removed); the advisory health
+availability, health read, and health configuration verbs remain direct calls on
+the `ILatticeBackupControl` facade. Every
 operation below authorizes fail-closed except the advisory
 `IsHealthMonitoringAvailableAsync` flag:
 

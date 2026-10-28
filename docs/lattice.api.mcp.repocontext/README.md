@@ -63,6 +63,8 @@ The manifest declares every RepoContext tree under an app-local name that **adop
 - [Architecture](architecture.md) - a map of the constituent parts, the ingest, retrieval, and convergence flows, and the store-of-record versus rebuildable-projection distinction the design rests on.
 - [Record model](record-model.md) - the named trees, the key grammar, the record families, and the CRDT store-of-record model.
 - [Tools](tools.md) - the full `repocontext_*` tool catalogue and each tool's contract.
+- [Public API](api.md) - every public type: the registration methods, the embedding and host-integration seams, and the tool result records.
+- [Configuration](configuration.md) - the `AddRepoContextTools` parameters, the options classes, and the environment variables the package itself reads.
 - [Retrieval and token economics](retrieval-economics.md) - explainable search, the graph-navigation tools, the budgeted context bundle, reuse economics, usage accounting, and the shared token counter.
 - [Memory and TTL](memory-and-ttl.md) - agent memory, topics, and per-repository time-to-live policy.
 - [Memory durability](memory-durability.md) - what survives destroying a deployment's state, why memory and the index cannot be split across volumes, and the memory archive that makes `docker compose down -v` survivable.

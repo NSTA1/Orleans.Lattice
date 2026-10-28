@@ -1599,51 +1599,6 @@
       ]
     },
     {
-      "id": "approve-cross-tenant-grant",
-      "in_process": "ILatticeTenantGrantAdmin.ApproveGrantAsync",
-      "grpc_method": "/orleans.lattice.api.tenantadmin/ApproveCrossTenantGrant",
-      "transport_scope": "both",
-      "request": "TenantAdminGrantRequest",
-      "response": "TenantGrantChangeResult",
-      "errors": [
-        {
-          "error_id": "not-found",
-          "condition": "No such grant was offered."
-        },
-        {
-          "error_id": "failed-precondition",
-          "condition": "Grant is not pending."
-        },
-        {
-          "error_id": "permission-denied",
-          "condition": "Caller is not platform operator and not an admin of the grantee tenant."
-        },
-        {
-          "error_id": "unimplemented",
-          "condition": "Cross-tenant grant facade is not registered."
-        }
-      ],
-      "retry": {
-        "safe": true,
-        "policy": "No facade retry policy is defined; repeated approval of an active grant is idempotent.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
-      },
-      "idempotency": {
-        "idempotent": true,
-        "basis": "Idempotent on an already-active grant.",
-        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
-      },
-      "concurrency": {
-        "rule": "Concurrent grant transitions converge on the more restrictive outcome.",
-        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
-      },
-      "sources": [
-        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
-        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
-        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
-      ]
-    },
-    {
       "id": "advance-tenant-region",
       "in_process": "ILatticeTenantRegionAdmin.AdvanceRegionAsync",
       "grpc_method": "/orleans.lattice.api.tenantadmin/AdvanceTenantRegion",
@@ -1688,6 +1643,51 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "approve-cross-tenant-grant",
+      "in_process": "ILatticeTenantGrantAdmin.ApproveGrantAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ApproveCrossTenantGrant",
+      "transport_scope": "both",
+      "request": "TenantAdminGrantRequest",
+      "response": "TenantGrantChangeResult",
+      "errors": [
+        {
+          "error_id": "not-found",
+          "condition": "No such grant was offered."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "Grant is not pending."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not platform operator and not an admin of the grantee tenant."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "Cross-tenant grant facade is not registered."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "No facade retry policy is defined; repeated approval of an active grant is idempotent.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Idempotent on an already-active grant.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "concurrency": {
+        "rule": "Concurrent grant transitions converge on the more restrictive outcome.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
       ]

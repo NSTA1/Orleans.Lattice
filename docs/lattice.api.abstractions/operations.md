@@ -1,5 +1,5 @@
 ---
-agent_spec: "docs/agents/api/state.json"
+agent_spec: "docs/agents/api/treeadmin.json"
 ---
 
 # Long-running operations
@@ -19,6 +19,8 @@ Every such facade exposes the same shapes and the same read surface, so a client
 | `LatticeOperationListRequest` / `LatticeOperationPage` | One newest-first page of the caller's operations and its continuation token. `PageSize` defaults to 50 and is clamped to 500. |
 | `ILatticeOperations` | The shared read-and-cancel surface: `GetOperationStatusAsync`, `ListOperationsAsync` and `CancelOperationAsync`. A facade that starts operations implements it, scoped to the kinds it owns. |
 | `ApiOperationTypeAliases` | The stable `oio.` serialization aliases of the types above. |
+
+Full signatures: [`Orleans.Lattice.Api.Operations` in the Public API](api.md#orleanslatticeapioperations).
 
 ### Status fields
 
@@ -82,7 +84,7 @@ Work that runs inside a grain in one long call adopts the contract as a **tracke
 
 ## See also
 
-- [Backup operations](../lattice.api.backup/operations.md) - accept-then-poll backup and restore, and migrating from the deprecated blocking verbs.
+- [Backup operations](../lattice.api.backup/operations.md) - accept-then-poll backup and restore, and migrating from the removed blocking verbs.
 - [Tree-administration operations](../lattice.api.treeadmin/operations.md) - accept-then-poll view, tag-index, WAL-move, orphaned-leaf and fresh storage-usage operations.
 - [Schema compliance operations](../lattice.api.schema/operations.md) - the accept-then-poll compliance scan.
-- [`Orleans.Lattice.Api.Abstractions`](README.md) - the contract package this namespace lives in.
+- [`Orleans.Lattice.Api.Abstractions`](README.md) - the contract package this namespace lives in; see also its [Public API](api.md) and [Architecture](architecture.md).

@@ -242,8 +242,11 @@ Membership produces subjects; [`Orleans.Lattice.Auth`](../lattice.auth/README.md
 
 ## See also
 
+- [Public API](api.md) - every public type and member, including the `JwtCredentialAuthenticator` extension points, with source links.
 - [Configuration](configuration.md) - every public options property, its type, and its default.
+- [Architecture](architecture.md) - the directory, the credential-to-subject resolution pipeline, and the resolution cache.
 - [Identity-directory providers](identity-directory-providers.md) - the provider-agnostic identity source (static, Entra Graph, or custom) that backs subject search and fail-closed validation in the Explorer Access area.
 - [Observability](observability.md) - the `orleans.lattice.membership` meter and the subject-resolution cache hit / miss counters.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the policy store, decision engine, and enforcing access gate that consume the subjects this package resolves.
 - [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) - the transport-agnostic control facade for administering this directory and the policy store.
+- Provider packages: [`Orleans.Lattice.Membership.Entra`](../lattice.membership.entra/README.md), [`Orleans.Lattice.Membership.Entra.Graph`](../lattice.membership.entra.graph/README.md), and [`Orleans.Lattice.Membership.Oidc`](../lattice.membership.oidc/README.md).

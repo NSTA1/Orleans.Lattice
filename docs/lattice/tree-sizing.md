@@ -52,7 +52,7 @@ Resize runs **online**: reads and writes remain available throughout. A whole-tr
 
 The tree-admin resize status (`ILatticeTreeAdmin.GetResizeStatusAsync`, the `tree_resize_status` tool) reports the step a running resize has reached - `Copy`, `Swap`, `RejectOldShards` or `RetireOldCopy`, or `Undo` while an accepted undo unwinds - and its progress in work units: one per shard the copy drains, then one for each of the three steps after the copy. An unwind reports no units.
 
-Each phase transition is persisted. If the silo crashes mid-resize, reminder-anchored `TreeResizeGrain` and `TreeSnapshotGrain` reactivate and resume from the last completed phase; source shards retain their `ShadowForwardState` across activations, so live forwards continue uninterrupted.
+Each phase transition is persisted. If the silo crashes mid-resize, the reminder-anchored resize and snapshot coordinators reactivate and resume from the last completed phase; source shards keep their shadow-forwarding state in their persisted state across activations, so live forwards continue uninterrupted.
 
 ### LWW convergence - why shadow forwarding is safe
 
@@ -63,7 +63,7 @@ Every entry carries a hybrid-logical-clock timestamp and all writes flow through
 
 ### Cache invalidation
 
-Different physical trees produce different leaf grain IDs, which automatically create fresh `LeafCacheGrain` instances. No explicit cache flush is needed after the alias swap. See [Read Caching](caching.md#cache-invalidation-via-tree-aliasing) for details.
+Different physical trees produce different leaf grain IDs, which automatically get fresh leaf lookup caches. No explicit cache flush is needed after the alias swap. See [Read Caching](caching.md#cache-invalidation-via-tree-aliasing) for details.
 
 ### Undo resize
 
@@ -123,7 +123,7 @@ Either way the destination is discarded rather than merely deleted: its shards a
 - **Availability:** reads and writes continue throughout. The rejecting window at swap is absorbed by the routing tier, which re-resolves the alias and retries a call that reaches a rejecting shard - callers observe internal retries for the moment between the fence and the alias flip, not an error. Bulk loads and appends are the exception (see the swap step above).
 - **Storage:** both the old and new physical trees exist simultaneously until the old tree is purged. Plan for approximately 2× the tree's storage usage during this window. See [Tree Storage](tree-storage.md) for per-provider capacity considerations.
 - **Hot-path cost during drain:** every write between `BeginShadowForwardAsync` and swap pays one extra grain hop for the parallel forward. For same-cluster destinations this is in the millisecond range. Prefer off-peak windows for large resizes even though they are online.
-- **Concurrency cap:** `LatticeOptions.MaxConcurrentDrains` (default 4) bounds the number of concurrent per-shard drains `TreeSnapshotGrain` dispatches. Mirrors `MaxConcurrentMigrations` for reshard.
+- **Concurrency cap:** `LatticeOptions.MaxConcurrentDrains` (default 4) bounds the number of concurrent per-shard drains the snapshot coordinator dispatches. Mirrors `MaxConcurrentMigrations` for reshard.
 - **Idempotency:** calling `ResizeAsync` again with the same parameters while a resize is in progress is a no-op. Calling with different parameters throws `InvalidOperationException`.
 - **Registry is the source of truth:** the new sizing is persisted in the tree registry - on the new physical tree's entry when the resize creates it, and on the logical tree's entry at the swap - and every structural grain reads its sizing from the registry. You do not need to update `LatticeOptions` in silo configuration separately - `LatticeOptions` no longer exposes `MaxLeafKeys` / `MaxInternalChildren` / `ShardCount`.
 - **Empty-tree fast-path:** if the tree has no live entries yet - as an emptiness probe bounded by `LatticeOptions.EmptyTreeProbeBudget` (default 10 seconds) observes it; an inconclusive probe reads as not empty - `ResizeAsync` and `ReshardAsync` update the registry pin in-place and return immediately without activating the coordinator machinery. This is the recommended way to start a tree with non-default sizing.

@@ -9,8 +9,8 @@ strongly-typed clients. `LatticeTenantAdminApiGrpcClient` binds the
 administrative surface: the tenant lifecycle operations - **create**,
 **suspend**, **resume**, and **delete** (which cascades the tenant's trees) -
 plus **set quotas** and the **quota-usage** read, the per-tenant region-residency
-operations (**authorize allowed regions**, **set residency**, and **get region
-status**), the tenant-admin subject operations (**list**, **add**, and **remove**),
+operations (**authorize allowed regions**, **set residency**, **get region
+status**, and the operator-only **advance region** override), the tenant-admin subject operations (**list**, **add**, and **remove**),
 and the cross-tenant grant operations (**list**, **offer**, **approve**,
 **reject**, and **revoke**), plus delegated tenant access administration for
 tenant groups, group members, the member set, tenant rules, explanations,

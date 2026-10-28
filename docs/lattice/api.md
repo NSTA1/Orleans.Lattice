@@ -1327,6 +1327,8 @@ catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
 
 The marker does **not** mean "never handle this". Catching a domain fault *by its own type* remains the correct way to handle it and is unaffected - `catch (LatticeSaturatedException)` behaves exactly as documented below, and an internal retry loop that catches `ShardActivationTimeoutException` by name still absorbs and retries it. The marker constrains only a broad catch of the **base** type.
 
+`ILatticeValueValidationFault` extends `ILatticeDomainFault` for one family: an expected refusal of a value before it is committed, raised by a package that validates values (the schema package's `LatticeSchemaViolationException` implements it). It carries `Code` (a stable machine-readable validation category), `TreeId`, `Key` and `Reason`, and never the submitted value, so a transport can recognise and report a validation refusal - by `catch (Exception ex) when (ex is ILatticeValueValidationFault)` - without referencing the package that performed the validation.
+
 A reflection gate enumerates each enrolled package's assembly at run time and fails if a public exception with a foreign base does not implement the marker, so the set cannot drift as exceptions are added. The gate is the shared `DomainFaultMarkerContractTestsBase` in the testing library, enrolled today for `Orleans.Lattice` and `Orleans.Lattice.Replication`; it fails loudly if a scan examines no public exceptions, so a broken enumeration cannot pass as a clean one.
 
 ## Shutdown back-pressure - `LatticeShuttingDownException`
@@ -2406,6 +2408,7 @@ though tenancy did not exist.
 | `ITenantRegionVisibilityResolver` | Resolves a tenant's per-region standing as a `TenantRegionVisibilityMap` (`IsActive`, `ResolveAsync`). |
 | `ITreePlacementResolver` | Resolves a tree's `TreePhysicalPlacement` when it is first registered (`TryResolveForRegistration`, `ResolveForRegistrationAsync`). |
 | `TenantId` | A DNS-label-like tenant token (`Value`, `MaxLength` 63, `Default` / `DefaultId` `default`, `IsDefault`) with `Parse` and `TryParse`. |
+| `LatticeTenantGroupId` | The identity of a tenant group - a membership group a tenant's administrators manage inside their own tenant - with the reserved grammar `t/{tenant}/{name}` (`Tenant`, `Name`, `Value`, `MaxNameLength` 63). Built with `Compose(tenant, name)`, `Parse` or `TryParse`; `IsTenantGroupId(id)` tests the grammar. The reserved `default` tenant has no tenant groups, so `t/default/{name}` is rejected; `default(LatticeTenantGroupId)` means "no group", and equality is ordinal. |
 | `TreeOwnership` | A tree's ownership, always re-derived from its id and never stored (`IsTenantOwned`, `IsPlatformOwned`, `Tenant`; built with the static `Platform` or `ForTenant(tenant)`). |
 | `TreePhysicalPlacement` | `WalProviderKey` and the optional `PlacementFilter` seeded into a new tree's WAL placement; `Default`. |
 | `TenantRegionVisibility` / `TenantRegionVisibilityMap` / `TenantRegionResidencyStatus` | One tenant's standing in a region (`IsAllowed`, `Status`, and the derived `IsResident` and `IsVisible`), the immutable per-region map of it (`Create`, `TryGet`, `Count`, `IsResolved`, `Empty`, `Unresolved`), and the residency lifecycle (`None`, `Provisioning`, `Backfilling`, `Online`, `Draining`, `Offline`, `Removed`). |
@@ -2440,7 +2443,7 @@ the full contract.
 | `ILatticeOriginClusterIdResolver` | Supplies the local cluster id stamped on a WAL record when the mutation carries no origin (`Resolve(treeId)`). See [WAL - Origin cluster id stamping](wal.md#origin-cluster-id-stamping). |
 | `LatticeVectorClockContext` / `LatticeHlcOverrideContext` | Ambient scopes (`Current`, `With`) that stamp a `VersionVector` frontier, or a source HLC verbatim, onto the mutations the current logical call authors. |
 | `LatticeReplayAdmissionContext` / `LatticeReplayAdmissionClass` | Declares a call chain `Bulk` (`BeginBulkScope()`) rather than the default `Interactive` when it must queue for a WAL replay permit, so the per-silo replay queue can bound and prioritise bulk walks. |
-| `CrdtShapeRegistry` | The typed CRDT shapes a tree's writes and receiver-side applies resolve (`Register`, `TryGet`), with a global fallback for every closed-shape mode; only OR-Map needs per-tree registration (`AddOrMapShape`). |
+| `CrdtShapeRegistry` / `CrdtShape` | The typed CRDT shapes a tree's writes and receiver-side applies resolve (`Register`, `TryGet`), with a global fallback for every closed-shape mode; only OR-Map needs per-tree registration (`AddOrMapShape`). A `CrdtShape` is the type-erased descriptor for one mode (`Mode`, `DeserializeState`, `DeserializeDelta`, `MergeDelta`, `MergeStates`, `CreateEmpty`, `SerializeState`, and the optional `SerializeDelta` and `CombineDeltas`), built by the per-mode factories `ForOrSet`, `ForPnCounter`, `ForVersionVector`, `ForMvRegister`, `ForGCounter`, `ForOrFlag`, `ForRwFlag`, `ForGSet`, `ForMaxRegister`, `ForMinRegister`, `ForRwSet`, `ForRga` and `ForOrMap<TKey, TValue>`; it is not intended for direct host construction. |
 
 ### CRDT support types
 
@@ -2546,7 +2549,7 @@ carries an `ol.` alias too.
 | `TreeRegistryEntry` | `ol.tre` | internal | Per-tree metadata record. |
 | `SnapshotMode` | `ol.snm` | public | Enum: `Offline`, `Online`. |
 | `TreeResizeState` | `ol.trs` | internal | Persistent state tracking resize progress. |
-| `ResizePhase` | `ol.rp` | internal | Enum: `Snapshot`, `Swap`, `Cleanup`, `Reject`. |
+| `ResizePhase` | `ol.rp` | internal | Enum: `Snapshot`, `Swap`, `Cleanup`, `Reject`, `BootstrapHold`. |
 | `TreeSnapshotState` | `ol.tss` | internal | Persistent state tracking snapshot progress. |
 | `SnapshotPhase` | `ol.snp` | internal | Enum: `Lock`, `Copy`, `Unmark`, `ShadowBegin`. |
 | `TreeDeletionState` | `ol.tds` | internal | Persistent state for soft-delete / purge tracking. |

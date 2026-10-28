@@ -171,7 +171,7 @@ capabilities:
         source: "src/lattice.api.apps/LatticeAppCatalog.Listing.cs#LatticeAppCatalog.ToSummaryAsync"
       - statement: "AppSourceSet resolves without a source key only when exactly one source offers the slug."
         source: "src/lattice.apps/Sources/AppSourceSet.cs#AppSourceSet.ResolveAsync"
-      - statement: "GetIconAsync serves an icon only after AppsAssetReader verifies the manifest-pinned digest."
+      - statement: "GetIconAsync serves an icon only after the asset reader verifies the manifest-pinned digest."
         source: "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog.GetIconAsync"
     non_guarantees:
       - statement: "Describing an app from a source does not activate app code."
@@ -189,7 +189,7 @@ capabilities:
       - sequence:
           - "serve bytes whose digest differs from the manifest digest"
           - "expect the catalog or workspace to return the asset"
-        hazard: "AppsAssetReader logs the mismatch and returns null instead of bytes."
+        hazard: "The asset reader logs the mismatch and returns null instead of bytes."
         source: "src/lattice.api.apps/AppsAssetReader.cs#AppsAssetReader.OpenAsync"
     concurrency_rules:
       - statement: "ListAvailableAsync fetches initial source pages in batches of at most four."
@@ -772,7 +772,7 @@ capabilities:
         source: "src/lattice/CrdtShapeRegistry.cs#CrdtShapeRegistry"
       - statement: "A local tree can mix CRDT primitives and plain LWW values."
         source: "docs/crdt/readme.md"
-      - statement: "LwwValue merge picks the higher HLC timestamp and deterministic tie-breaks."
+      - statement: "The last-writer-wins merge picks the higher HLC timestamp and deterministic tie-breaks."
         source: "docs/lattice/state-primitives.md"
       - statement: "G-Counter and PN-Counter merge by per-replica maxima; a G-Counter value is the sum of the maxima and a PN-Counter value subtracts the decrement maxima from the increment maxima."
         source: "docs/crdt/readme.md"
@@ -1427,7 +1427,7 @@ capabilities:
         hazard: "The cache can answer a silent false miss because the leaf will not re-ship the key until it changes."
         source: "docs/lattice/caching.md"
       - sequence:
-          - "reuse a stale LatticeGrain alias after resize"
+          - "reuse a stale tree-router alias after resize"
           - "route to the old physical tree"
         hazard: "The old tree rejects and the activation must refresh alias and retry."
         source: "docs/lattice/caching.md"
@@ -1829,7 +1829,7 @@ capabilities:
         source: "src/lattice.api.mcp/Discovery/AuthAdminMcpPermissionResolver.cs#AuthAdminMcpPermissionResolver.ClusterWideOnlyOperations"
       - statement: "With tenancy active, region discovery scopes to an asserted tenant only after ITenantContextResolver validates it; an unvalidated assertion yields the current region alone with no tenantScope annotation."
         source: "src/lattice.api.mcp/Remote/LatticeApiMcpRegionCatalog.cs#LatticeApiMcpRegionCatalog.ResolveTenantScopeAsync"
-      - statement: "A built-in MCP tool is offered only when the granted operations intersect ILatticeApiMcpToolGroup.RequiredOperationsFor(toolName), and a tool withheld at tools/list is unreachable at tools/call."
+      - statement: "A built-in MCP tool is offered only when the granted operations intersect the tool's per-tool operation minimum, and a tool withheld at tools/list is unreachable at tools/call."
         source: "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.AddPermittedGroupToolsAsync"
       - statement: "A caller mistake (a missing, invalid or unknown argument, refused content, or an unknown record) is answered as an MCP error result and counted rather than thrown; the echoed message is sanitized and length-capped, and an authorization denial is never classified as a client error."
         source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors.SanitizeForEcho"
@@ -2122,7 +2122,7 @@ capabilities:
         source: "docs/lattice/online-reshard.md"
       - statement: "Writes arriving during a migrating slot's drain phase are shadow-forwarded to the target shard."
         source: "docs/lattice/online-reshard.md"
-      - statement: "From a split swap phase onward, the source emits StaleShardRoutingException and the tree router retries against the new owner."
+      - statement: "From a split swap phase onward, the source signals stale shard routing and the tree router retries against the new owner."
         source: "docs/lattice/online-reshard.md"
       - statement: "A shrink fold defers its finalise step, which releases the donor's storage, while a snapshot of or merge into the same tree is in flight; it does not wait for a resize."
         source: "src/lattice/BPlusTree/Grains/TreeShardConsolidationGrain.cs#TreeShardConsolidationGrain.FinaliseAsync"
@@ -2707,7 +2707,7 @@ capabilities:
         source: "docs/lattice/retry-policy.md"
       - statement: "A retried LWW write under the same key stamps the same HLC, so LWW resolution treats it as a tie rather than a new write."
         source: "docs/lattice/retry-policy.md"
-      - statement: "Every retry-policy attempt re-enters the captured LatticeGrain activation scheduler before running mutation code, so a policy that resumes off-turn cannot execute the activation's mutation code in parallel."
+      - statement: "Every retry-policy attempt re-enters the captured tree-router activation scheduler before running mutation code, so a policy that resumes off-turn cannot execute the activation's mutation code in parallel."
         source: "src/lattice/BPlusTree/Grains/LatticeGrain.Idempotency.cs#LatticeGrain.OnTurn"
       - statement: "PnCounter retry dedup uses a delta carrying the resulting per-replica total, so re-applying the same delta is a no-op."
         source: "docs/lattice/retry-policy.md"
@@ -2817,9 +2817,9 @@ capabilities:
         hazard: "A global range scan scatter-gathers across shards and merges because different shards have no inherent ordering relationship."
         source: "docs/lattice/architecture.md"
     concurrency_rules:
-      - statement: "LatticeGrain is a stateless-worker router with many concurrent activations."
+      - statement: "The tree router is a stateless worker with many concurrent activations."
         source: "docs/lattice/architecture.md"
-      - statement: "ShardRootGrain wraps structural dispatch writes in a bounded retry loop for up to three total attempts on transient Orleans, timeout, or I/O faults."
+      - statement: "The shard root wraps structural dispatch writes in a bounded retry loop for up to three total attempts on transient Orleans, timeout, or I/O faults."
         source: "docs/lattice/architecture.md"
       - statement: "Writes refused by an empty-leaf reclaim are retried with jitter until LeafRetirementRetryDeadline expires."
         source: "docs/lattice/architecture.md"
@@ -3120,7 +3120,7 @@ capabilities:
         source: "docs/lattice/tree-deletion.md"
       - statement: "Failed shards during purge are retried once before being skipped, and a skipped shard is not revisited in that purge pass; a shard purge that does not answer within the response timeout is retried without spending that budget."
         source: "docs/lattice/tree-deletion.md"
-      - statement: "LeafCacheGrain activations are not notified when a tree is deleted."
+      - statement: "Leaf cache activations are not notified when a tree is deleted."
         source: "docs/lattice/tree-deletion.md"
       - statement: "A delete is refused, rather than applied through the wrong name, when the alias targets a tree whose DerivedFrom is not this tree or that another logical tree also aliases."
         source: "docs/lattice/tree-registry.md"
@@ -3401,7 +3401,7 @@ capabilities:
     guarantees:
       - statement: "Deleted keys are represented as tombstone LWW entries until compaction reaps them."
         source: "docs/lattice/tombstone-compaction.md"
-      - statement: "A single TombstoneCompactionGrain per tree owns the reminder and timer that drive passes."
+      - statement: "A single compaction coordinator per tree owns the reminder and timer that drive passes."
         source: "docs/lattice/tombstone-compaction.md"
       - statement: "Each reaped tombstone or expired live entry is written to the WAL as a maintenance Tombstone mutation before in-memory removal."
         source: "docs/lattice/tombstone-compaction.md"
@@ -3717,7 +3717,7 @@ capabilities:
     concepts:
       - atomic-action-saga
     guarantees:
-      - statement: "Atomic-action sequencing and crash-resume decisions are driven by the pure deterministic AtomicActionPlanCore."
+      - statement: "Atomic-action sequencing and crash-resume decisions are driven by a pure deterministic decision core."
         source: "docs/lattice/verified-atomic-action.md"
       - statement: "NextForwardIndex chooses the lowest-indexed pending step."
         source: "docs/lattice/verified-atomic-action.md"
@@ -3753,9 +3753,9 @@ capabilities:
     guarantees:
       - statement: "Atomic-commit decision points are extracted into pure deterministic cores used by production grains and verification models."
         source: "docs/lattice/verified-atomic-commit.md"
-      - statement: "AtomicVisibilityGate.ResolveKey owns how a pending mutation is answered against the recorded decision."
+      - statement: "A single visibility gate decides how a pending mutation is answered against the recorded decision."
         source: "docs/lattice/verified-atomic-commit.md"
-      - statement: "SagaCoordinatorCore.Decide commits only when every participant acknowledged and aborts on the first nack or unreachable leaf."
+      - statement: "The saga coordinator decision commits only when every participant acknowledged and aborts on the first nack or unreachable leaf."
         source: "docs/lattice/verified-atomic-commit.md"
       - statement: "The Coyote tier model-checks cores under cooperative orderings of protocol steps."
         source: "docs/lattice/verified-atomic-commit.md"
@@ -3772,9 +3772,9 @@ capabilities:
         source: "docs/lattice/verified-atomic-commit.md"
     unsafe_sequences: []
     concurrency_rules:
-      - statement: "ReaderStabilityGate decides whether a snapshot read is stable against the registry revision."
+      - statement: "A reader stability gate decides whether a snapshot read is stable against the registry revision."
         source: "docs/lattice/verified-atomic-commit.md"
-      - statement: "TerminalArrivalTally flips a receiver decision only when distinct terminal arrivals reach the expected count."
+      - statement: "A terminal-arrival tally flips a receiver decision only when distinct terminal arrivals reach the expected count."
         source: "docs/lattice/verified-atomic-commit.md"
       - statement: "Checked safety properties include AllOrNothing, VisibilityMatchesDecision, StrictIsolation, CommitIntegrity, LinearizedTerminals, and NoMixedTerminals."
         source: "docs/lattice/verified-atomic-commit.md"
@@ -3789,7 +3789,7 @@ capabilities:
       - distributed-lock-lease
       - fencing-token
     guarantees:
-      - statement: "Distributed-lock admission and fencing decisions are driven by the pure deterministic LockAdmissionCore."
+      - statement: "Distributed-lock admission and fencing decisions are driven by a pure deterministic admission core."
         source: "docs/lattice/verified-lock.md"
       - statement: "NextFencingToken returns the strict successor of the last issued token and throws on overflow."
         source: "docs/lattice/verified-lock.md"
@@ -3836,13 +3836,13 @@ capabilities:
     guarantees:
       - statement: "WAL concurrency decisions are extracted into pure deterministic cores used by production grains and Coyote models."
         source: "docs/lattice/verified-wal.md"
-      - statement: "WalShippingWatermark prevents cursor readers from observing offsets above an unfilled prefix hole."
+      - statement: "The WAL shipping watermark prevents cursor readers from observing offsets above an unfilled prefix hole."
         source: "docs/lattice/verified-wal.md"
-      - statement: "WalGcTrimCore decides trim eligibility from cursor, retention, materialiser floor, causal-stable, and blocked-floor inputs."
+      - statement: "A pure trim-decision core decides trim eligibility from cursor, retention, materialiser floor, causal-stable, and blocked-floor inputs."
         source: "docs/lattice/verified-wal.md"
-      - statement: "WalMoveFenceCore owns append admission while a shard move has fenced the log."
+      - statement: "A move-fence core owns append admission while a shard move has fenced the log."
         source: "docs/lattice/verified-wal.md"
-      - statement: "WalOffsetAllocationCore owns atomic per-shard offset assignment and counter advance."
+      - statement: "An offset-allocation core owns atomic per-shard offset assignment and counter advance."
         source: "docs/lattice/verified-wal.md"
       - statement: "Every WAL model includes a guard test that removes the fix and must find a violation."
         source: "docs/lattice/verified-wal.md"
@@ -3992,7 +3992,7 @@ capabilities:
     concurrency_rules:
       - statement: "With WalMaxPendingBatches above one, providers must accept out-of-order concurrent batches and reject offset overlap."
         source: "docs/lattice/wal-storage-providers.md"
-      - statement: "ExecuteWalMoveAsync fences the WAL grain, copies the retained range, flips the pin under compare-and-swap, and deactivates the WAL grain."
+      - statement: "ILatticeAdmin.ExecuteWalMoveAsync fences the partition's WAL writer, copies the retained range, flips the placement pin under compare-and-swap, and deactivates the writer."
         source: "docs/lattice/wal-storage-providers.md"
       - statement: "Batch WAL moves run copy phases under MaxConcurrentPartitionMoves and flip placement once."
         source: "docs/lattice/wal-storage-providers.md"

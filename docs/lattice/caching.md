@@ -123,7 +123,7 @@ memory against one leaf RPC on the evicted fraction of value reads.
 
 ## Cache Invalidation via Tree Aliasing
 
-When a tree is **resized** (via `ResizeAsync`), the data is copied into a new physical tree with different leaf grain IDs. After the alias swap, reads route to the new physical tree's leaf grains - which have entirely different `GrainId` values. Because `LeafCacheGrain` instances are keyed by the primary leaf's `GrainId.ToString()`, the new physical tree automatically gets **fresh cache grains** with no stale data.
+When a tree is **resized** (via `ResizeAsync`), the data is copied into a new physical tree with different leaf grain IDs. After the alias swap, reads route to the new physical tree's leaf grains - which have entirely different `GrainId` values. Because each leaf lookup cache is keyed by its primary leaf's grain identity, the new physical tree automatically gets **fresh caches** with no stale data.
 
 This means cache invalidation after a resize is **free** - no explicit cache flush or broadcast is needed:
 
@@ -135,11 +135,11 @@ After resize + alias swap:
   LatticeGrain("my-tree") → resolves alias → ShardRootGrain("my-tree/resized/op1/0") → LeafCacheGrain("leaf-xyz")
 ```
 
-The old `LeafCacheGrain("leaf-abc")` is never called again and will be garbage-collected by Orleans when it deactivates due to inactivity. The new `LeafCacheGrain("leaf-xyz")` starts fresh, fetching a full delta from the new primary leaf on its first read.
+The old cache for `leaf-abc` is never called again and is garbage-collected by Orleans when it deactivates due to inactivity. The new cache for `leaf-xyz` starts fresh, fetching a full delta from the new primary leaf on its first read.
 
-### Stale `LatticeGrain` activations
+### Stale tree-router activations
 
-`LatticeGrain` is a `[StatelessWorker]` that resolves the alias once per activation and caches the result. After an alias swap, existing activations still hold a cached alias pointing to the old physical tree. The resize moves the old tree's shards into its rejecting phase immediately before the swap - so a stale activation can never read the old tree after the new one has taken a write - and the phase stays in force after the old tree is soft-deleted; they refuse every request with an internal stale tree-routing signal. The activation then discards its cached alias and shard map, re-resolves the alias from the registry, and retries the operation within the same call, for up to a 60-second wall-clock budget. A cached alias that instead points at a physical tree deleted without a rejecting phase - the discarded copy after an `UndoResizeAsync` - makes the shard throw `InvalidOperationException`, which the activation handles the same way, once (a Lattice domain exception such as `LatticeSaturatedException` propagates instead of being absorbed). Either way the caller sees a brief retry delay, not a failure.
+The tree router is a `[StatelessWorker]` that resolves the alias once per activation and caches the result. After an alias swap, existing activations still hold a cached alias pointing to the old physical tree. The resize moves the old tree's shards into its rejecting phase immediately before the swap - so a stale activation can never read the old tree after the new one has taken a write - and the phase stays in force after the old tree is soft-deleted; they refuse every request with an internal stale tree-routing signal. The activation then discards its cached alias and shard map, re-resolves the alias from the registry, and retries the operation within the same call, for up to a 60-second wall-clock budget. A cached alias that instead points at a physical tree deleted without a rejecting phase - the discarded copy after an `UndoResizeAsync` - makes the shard throw `InvalidOperationException`, which the activation handles the same way, once (a Lattice domain exception such as `LatticeSaturatedException` propagates instead of being absorbed). Either way the caller sees a brief retry delay, not a failure.
 
 ## Read performance
 

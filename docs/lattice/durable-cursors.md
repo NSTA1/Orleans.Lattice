@@ -117,7 +117,7 @@ on every step.
 |-------|------|---------|
 | `TreeId` | `string` | Target tree grain key |
 | `Spec` | `LatticeCursorSpec` | Kind, start/end bounds, direction, `PointInTime`, `ZeroObservableWrites` (snapshot cursors), and the optional server-side `Predicate` of a `*WherePredicateAsync` cursor - frozen when the cursor opens |
-| `Phase` | `LatticeCursorPhase` | `NotStarted` / `Open` / `Exhausted` / `Closed` |
+| `Phase` | cursor phase | `NotStarted` / `Open` / `Exhausted` / `Closed` |
 | `LastYieldedKey` | `string?` | Last key returned or tombstoned. `null` before the first step. |
 | `DeletedTotal` | `int` | Cumulative tombstone count (delete-range cursors only) |
 | `PointInTimeSnapshot` | `Dictionary<Guid, TxStatus>?` | The per-tree transaction-registry snapshot captured at `OpenAsync` time. Persisted only for point-in-time cursors; `null` for live-mode cursors. |
@@ -243,8 +243,8 @@ finally
    mask is pin-aware the pin also restores the recorded outcome to this
    cursor.
 3. **Per-step replay.** Every `NextKeysAsync` / `NextEntriesAsync`
-   re-enters the captured snapshot via
-   `LatticeRegistrySnapshotContext.BeginScope(...)` before fanning out
+   re-enters the captured registry snapshot through an ambient scope
+   before fanning out
    to leaves. Every leaf RPC for the step reads the same registry view
    - identical to the steady-state behaviour of
    `GetManyAsync` / `CountAsync` / `CountPerShardAsync`, just held

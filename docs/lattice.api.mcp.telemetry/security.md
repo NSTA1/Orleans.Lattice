@@ -73,3 +73,4 @@ Every fault path returns a structured result rather than throwing: a capability 
 - [Tools](tools.md) - the telemetry tools and their results.
 - [Setup](setup.md) - configuring the backend credential and the metric-access allow-list.
 - [MCP security](../lattice.api.mcp/security.md) - the fail-closed discovery model this capability plugs into.
+- [Architecture](architecture.md) - where each check runs on the request path.

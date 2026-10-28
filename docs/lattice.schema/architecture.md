@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Architecture
 
 The package attaches to core `ILatticeWriteInterceptor`, `ILatticeValueDecoder`, `ILatticeEnvelopeCodec` and optional `ILatticeMergeObserver` seams. Enforcement and versioning have separate durable per-tree configuration and cached providers; unregistered stages retain the core null behavior.

@@ -44,3 +44,4 @@ Metrics sampling is best-effort and yields to write pressure. When a tree is rep
 
 - [Surfaces](surfaces.md#metrics) - the metrics request shape and the snapshot / observe split.
 - [Client](client.md) - consuming the live feeds.
+- [Architecture](architecture.md#metrics-observation-facade) - the shared sampler and per-subscriber diff in the facade pipeline.

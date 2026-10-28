@@ -184,6 +184,20 @@ A Max-register keeps the candidate with the greatest `OrderKey`; a Min-register 
 
 **Example use case:** high-water marks, version ceilings, max-seen sensor readings, min-seen latency floors, first-seen timestamps, or lowest-price watermarks. Use `MvRegister` instead when concurrent values must all be preserved for application-level resolution.
 
+### Where the direction lives
+
+A `MaxRegister` and a `MinRegister` are the same primitive pointed in opposite
+directions. That direction is owned by the **merge mode registered for the key**
+(`LatticeMergeMode.MaxRegister` or `LatticeMergeMode.MinRegister`), which is what
+the accessor you used selects. The `IsMin` bit you can see on the decoded
+`BoundedRegister` state is a copy of that decision carried on the wire, not a
+second source of truth: every decode re-stamps it from the registered mode.
+
+This matters if you ever write register state as raw bytes rather than through
+`tree.MaxRegister(...)` / `tree.MinRegister(...)` - a hand-authored payload whose
+`IsMin` disagrees with the key's mode is corrected on read rather than silently
+folding the wrong way for the rest of the key's life.
+
 ## Observed-Remove Set (OR-Set)
 
 `OrSet` is an **add-wins, observed-remove set** of `byte[]` elements. Every `Add(element, replicaId, counter)` mints a fresh causal dot `(replicaId, counter)` and attaches it to the element under `Adds`; `Remove(element)` copies every currently-observed dot for that element into `Tombstones` (the add dots themselves are kept). An element is present in the set whenever its `Adds` set contains at least one dot that `Tombstones` does not cancel (cancellation is coverage-based; see [Dot-history compaction](#dot-history-compaction-bounded-state-under-re-assertion)):
@@ -225,7 +239,7 @@ Because a `Disable()` only tombstones the dots the local replica has actually ob
 
 The four dot-based primitives - `OrSet`, `OrFlag`, `RwSet`, and `RwFlag` - represent a slot's causal history as a list of `OrSetDot`. Left alone, that list grows on every **re-assertion**: enabling an already-enabled flag, or re-adding an element already present, mints a fresh dot and appends it, and a merge is a union that never removes anything. A slot re-asserted N times would carry N dots forever, so every read, merge, and serialisation of that one row would cost O(N) - unbounded in any workload that re-asserts on a schedule, presence marking being the obvious one.
 
-The shared `OrSetDotCompaction` helper bounds it. Each slot keeps **at most one dot per replica per side**, so state is O(replicas), not O(assertions):
+A shared dot-compaction step bounds it. Each slot keeps **at most one dot per replica per side**, so state is O(replicas), not O(assertions):
 
 ```
 before:  Enables = [(A,1), (A,2), (A,3), ... (A,1000)]
@@ -350,6 +364,45 @@ interface ICrdt<TSelf> where TSelf : ICrdt<TSelf>
 Every built-in primitive implements `ICrdt<TSelf>` so they can compose recursively as values inside container CRDTs without the container needing to know their internal layout.
 
 **Example use case:** building a custom container CRDT (say, a typed dictionary) whose values are any of the existing primitives, without having to write per-value-type merge logic. The container just calls `value.MergeFrom(other)` and trusts the primitive to do the right thing.
+
+### Byte ownership
+
+Every primitive that carries caller values handles them as opaque `byte[]`
+payloads - the sets, the registers and the sequence, and an OR-Map whose values
+carry bytes; the counters, the flags and the version vector carry no bytes of yours
+at all. The library follows one rule for who owns a given array, and ownership is
+decided by where the array came from, not by which type is holding it:
+
+| Seam | Rule | What it means for you |
+|---|---|---|
+| **You hand a value in** (a register's `Set`, the sequence's `InsertAfter`) | The array is taken over, not copied - a set's `Add` and `OrMap.Set` keep no array of yours (see below) | Do not keep writing into an array after you pass it in. Author it, hand it over, forget it. |
+| **A peer or a delta is folded in** (`MergeFrom`, `MergeDelta`) | The incoming array is copied | A replica never ends up sharing a buffer with the peer it merged from. |
+| **A value comes back out** (`Clone`, `OrMap.Get`, materialised projections) | The array is copied | A value you read is yours to mutate; doing so can never reach back into stored state. |
+
+The first rule is why writing to a register or the sequence never pays to copy the payload it is
+handed, and the last two are why a read or a merge can never corrupt somebody else's
+state. A value you pass to the tree itself - `SetAsync`, or an accessor method such
+as `AddAsync` - is copied or encoded on the way in, so the store never keeps your
+array. If you are implementing a CRDT against `ICrdt<TSelf>`, all three legs are
+part of the contract.
+
+Two things keep the cost of the copying legs down. An empty payload reuses the
+shared `Array.Empty<byte>()` singleton, so copying it never allocates. And the set
+primitives (`GSet`, `OrSet`, `RwSet`) never retain a caller's array at all: an
+element is encoded to a string key on the way in and decoded fresh on the way out,
+so they satisfy all three legs by construction.
+
+One ingress copies instead of taking over: `OrMap.Set`. Its value is itself a
+CRDT rather than a byte array, and the map snapshots it with `Clone` on the way in,
+so you may keep mutating your own instance after the call without reaching into
+the map.
+
+The rule is enforced structurally rather than by review. A contract test walks
+every registered CRDT's object graph and compares `byte[]` instances by reference
+identity across a clone, a state fold, a delta fold, and each public projection.
+It also fails when a CRDT type has no specimen registered, or grows a new public
+`byte[]`-bearing projection that nothing covers - so a new primitive cannot join
+the family without picking up the contract.
 
 ## Observed-Remove Map (OR-Map)
 

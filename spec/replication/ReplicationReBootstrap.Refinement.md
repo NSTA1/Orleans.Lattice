@@ -255,7 +255,7 @@ write and runs with `MaxHlc = 2` instead of the variant's write bound.
 retained tombstone, was retired: with the any-origin reconcile in the model, a
 missing tombstone is repaired by the reconcile, so the mutation no longer
 reproduces a reachable failure here. The export's tombstone rows stay checked
-by the main module's `SnapshotDropsDeletes` mutation and by the `ExportRow`
+by the main module's `EventualConvergenceSnapshotDropsDeletes` mutation and by the `ExportRow`
 detectors.
 
 ### What writing the module changed in the design

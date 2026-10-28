@@ -12,7 +12,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Backup](../lattice.api.backup/R
 
 It provides:
 
-- **A code-first gRPC service.** RPCs for the remote-safe facade subset - accept-then-poll start, status, list, and cancel operations for backup, restore, health checks, and catalog rebuild / scrub; deprecated blocking capture and restore calls kept until the next major version; unary list, describe, delete, revert, auth-scheme, schedule / cancel, scope status, capability, and health operations; plus server-streaming whole-catalog draining and artifact export - bound from C# definitions rather than a `.proto`. Some facade and engine operations remain in-process-only and have no RPC, including inventory, blocking catalog rebuild / scrub, and backup-set restore.
+- **A code-first gRPC service.** RPCs for the remote-safe facade subset - accept-then-poll start, status, list, and cancel operations for backup, restore, health checks, and catalog rebuild / scrub; unary list, describe, delete, revert, auth-scheme, schedule / cancel, scope status, capability, and health operations; plus server-streaming whole-catalog draining and artifact export - bound from C# definitions rather than a `.proto`. Some facade and engine operations remain in-process-only and have no RPC, including inventory and backup-set restore.
 - **A public typed client.** `LatticeBackupApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC `CallInvoker`.
 - **Shared Orleans marshalling.** Wire messages are the package's `[GenerateSerializer]` request / response records, serialized with the Orleans binary serializer and wrapping facade DTOs where needed, so client and server stay in lock-step by construction.
 - **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge except the unauthenticated `GetAuthScheme` discovery RPC, and the facade's own scope authorization re-authorizes the resolved caller. The transport gate defaults to deny for protected operations; the facade gate refuses an unauthorized or anonymous caller whenever an authorization add-on is registered, and with only the core no-op gate it allows at zero cost.
@@ -43,14 +43,10 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `GetBackupOperationStatus` | unary | Read tracked operation status |
 | `ListBackupOperations` | unary | List tracked backup operations |
 | `CancelBackupOperation` | unary | Request tracked operation cancellation |
-| `CreateBackup` | unary | Deprecated blocking create backup |
-| `CreateIncrementalBackup` | unary | Deprecated blocking create incremental backup |
-| `CreateBackupSet` | unary | Deprecated blocking create backup set |
 | `ListBackups` | unary | List backups (paged) |
 | `StreamBackups` | server-streaming | Stream backups (whole catalog) |
 | `DescribeBackup` | unary | Describe backup |
 | `DeleteBackup` | unary | Delete backup |
-| `RestoreBackup` | unary | Deprecated blocking restore backup |
 | `RevertRestore` | unary | Revert restore |
 | `ExportArtifact` | server-streaming | Export artifact |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes |
@@ -59,11 +55,10 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `CancelSchedule` | unary | Remove a runtime recurring schedule |
 | `GetScopeStatus` | unary | Read scope schedule and last-run status |
 | `IsHealthMonitoringAvailable` | unary | Report whether health monitoring applies |
-| `CheckBackupHealth` | unary | Deprecated blocking verify of one backup that persists the report |
 | `GetBackupHealth` | unary | Read the latest stored health report |
 | `ConfigureBackupHealth` | unary | Override one backup's health-monitor settings |
 
-The start RPC request messages (`BackupCaptureRequestMessage`, `BackupIncrementalCaptureRequestMessage`, `BackupSetCaptureRequestMessage`, and `RestoreRequestMessage`) carry optional `TrackingOperationId`, the idempotency id of the tracked operation. `RestoreRequestMessage.OperationId` keeps its existing meaning as the restore engine's own key; pass `TrackingOperationId` separately for the tracked operation. `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, and `RestoreBackup` stay on the wire but are deprecated and will be removed in the next major version. A server registered only with `ILatticeBackupControl` still serves the old RPCs; if that control does not also implement `ILatticeBackupOperations`, the new RPCs return gRPC `Unimplemented`.
+The start RPC request messages (`BackupCaptureRequestMessage`, `BackupIncrementalCaptureRequestMessage`, `BackupSetCaptureRequestMessage`, `RestoreRequestMessage`, `BackupHealthCheckRequestMessage`, `BackupCatalogRebuildRequestMessage`, and `BackupCatalogScrubRequestMessage`) carry optional `TrackingOperationId`, the idempotency id of the tracked operation. `RestoreRequestMessage.OperationId` keeps its meaning as the restore engine's own key; pass `TrackingOperationId` separately for the tracked operation. The blocking `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `RestoreBackup`, and `CheckBackupHealth` RPCs were removed in this major version; see [Backup operations](../lattice.api.backup/operations.md#migrating-from-the-removed-blocking-verbs). A server registered only with `ILatticeBackupControl` still serves the direct-call RPCs; if that control does not also implement `ILatticeBackupOperations`, the start and operation RPCs return gRPC `Unimplemented`.
 
 ## Quick Start
 
@@ -109,7 +104,7 @@ await foreach (var manifest in backupClient.StreamBackupsAsync(cancellationToken
 }
 ```
 
-The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. A call the server rejects arrives as a `PermissionDenied` `RpcException`; other failures map to stable status codes (notably `FailedPrecondition` for a restore that fails pre-apply validation, such as a backup store not shared across every cluster). See [Architecture](architecture.md#status-mapping) for the full mapping.
+The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. A call the server rejects arrives as a `PermissionDenied` `RpcException`; other failures map to stable status codes (for example `FailedPrecondition` when `RevertRestore` names a physical tree that does not belong to the target). A started restore that later fails pre-apply validation - such as a coordinated restore whose backup store is not shared across every cluster - is reported in the operation status's `FailureReason`, not as an RPC error. See [Architecture](architecture.md#status-mapping) for the full mapping.
 
 ## Reference
 

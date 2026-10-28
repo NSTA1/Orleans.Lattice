@@ -4,7 +4,7 @@ agent_spec: "docs/agents/api/state.json"
 
 # Orleans.Lattice.Api.State configuration
 
-The state facade and its gRPC binding expose public options types. `LatticeApiStateOptions` carries the read-bounding knobs the read-only cluster state facade honours and is bound through `AddLatticeStateApi`. `LatticeStateApiGrpcOptions` carries the server-side gRPC binding knobs and is bound through `AddLatticeStateApiGrpc`. `EnvVarCredentialAuthorizerOptions` carries the reference environment-variable credential authorizer knobs and is bound through `AddEnvVarCredentialAuthorizer`.
+The state facade exposes one options type. `LatticeApiStateOptions` carries the read-bounding knobs the read-only cluster state facade honours and is bound through `AddLatticeStateApi`. The gRPC binding's `LatticeStateApiGrpcOptions` and `EnvVarCredentialAuthorizerOptions` are documented in the [gRPC binding configuration](../lattice.api.state.grpc/configuration.md).
 
 ## `LatticeApiStateOptions`
 
@@ -36,24 +36,12 @@ The authorization posture selected by `ReadVisibility`.
 | `Enforced` | Force auth-backed visibility on. Identical to `Auto` in practice, because visibility filtering still requires a real access gate to have anything to enforce; provided so a deployment can make the intent explicit. |
 | `Disabled` | Turn auth-backed visibility off even when a real access gate is registered. The state API then performs no per-tree read filtering and no caller-subject resolution, restoring the pre-authorization behaviour. Intended for trusted-network deployments where an outer boundary already governs who may read cluster state. |
 
-## `LatticeStateApiGrpcOptions`
+## Binding options
 
-Server-side options for the code-first gRPC binding. Bind them through `AddLatticeStateApiGrpc(configure)`.
+`LatticeStateApiGrpcOptions` (bound by `AddLatticeStateApiGrpc`) and `EnvVarCredentialAuthorizerOptions` (bound by `AddEnvVarCredentialAuthorizer`) belong to the gRPC binding and are documented, with the seams those methods register, in the [gRPC binding configuration](../lattice.api.state.grpc/configuration.md).
 
-| Property | Type | Default | Meaning |
-|---|---|---|---|
-| `RequireAuthorization` | `bool` | `true` | Whether the authorization interceptor enforces `ILatticeStateApiAuthorizer` on inbound protected state-API calls. The binding fails closed by default; set this to `false` only when an outer authentication boundary already guards the endpoint. |
-| `CredentialHeaderName` | `string` | `"authorization"` | Inbound request-header (gRPC metadata) name that carries the caller credential token bridged into the ambient Lattice credential. |
-| `CredentialScheme` | `string` | `"Bearer"` | Authentication scheme stamped on the bridged `LatticeCredential`; a matching case-insensitive scheme prefix on the header value is stripped before the token is used. |
-| `ActiveTenantHeaderName` | `string` | `"lattice-active-tenant"` | Inbound request-header (gRPC metadata) name carrying the caller's asserted active tenant, lifted onto the ambient active-tenant context for the duration of the call so this facade's tenant-scoped name resolution sees the caller's tenant. The assertion is a caller claim, re-validated against the caller's membership by the tenancy add-on; it grants no access. Set to `null` or empty to disable it. |
-| `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | Empty `List<AuthSchemeDescriptor>` | Auth schemes advertised from the unauthenticated `GetAuthScheme` RPC, in preference order. Populate with public configuration only - never secrets. |
+## Related
 
-## `EnvVarCredentialAuthorizerOptions`
-
-Options for the reference environment-variable credential authorizer. Bind them through `AddEnvVarCredentialAuthorizer(configure)`.
-
-| Property | Type | Default | Meaning |
-|---|---|---|---|
-| `EnvironmentVariablePrefix` | `string` | `"LATTICE_STATE_USER_"` | Prefix prepended to a username to form the environment-variable name that holds that user's encoded password hash. |
-| `MaxFailedAttempts` | `int` | `5` | Number of consecutive failed authentication attempts for a single username that triggers temporary lockout. |
-| `LockoutDuration` | `TimeSpan` | `1 minute` | How long a username stays locked out after `MaxFailedAttempts` consecutive failures; attempts are denied during the lockout even with the correct password. |
+- [Public API](api.md)
+- [Architecture](architecture.md)
+- [Setup](setup.md)

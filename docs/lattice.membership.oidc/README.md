@@ -93,7 +93,9 @@ siloBuilder.AddLatticeOidc(options =>
 
 ## Reference
 
+- [Public API](api.md) - every public type and member, with source links.
 - [Configuration](configuration.md) - every public options property, its type, and its default.
+- [Architecture](architecture.md) - exact-issuer selection, discovery-driven validation, algorithm pinning, and claim mapping.
 - [Membership documentation](../lattice.membership/README.md) - the base identity and authorization add-on this package extends.
 - [Entra authenticator](../lattice.membership.entra/README.md) - the Microsoft Entra ID sibling.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the policy store and access gate that consume the subjects this package resolves.

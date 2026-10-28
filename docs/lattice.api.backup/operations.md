@@ -8,25 +8,25 @@ Accept-then-poll backup and restore for [`Orleans.Lattice.Api.Backup`](README.md
 
 ## Why
 
-A capture or restore can run for minutes. The original verbs on `ILatticeBackupControl` block until the work completes, so a long capture or restore is cut off by the caller's request timeout, exposes no progress, and - for an interactive client - dies with the browser circuit that started it. The start verbs below return in milliseconds, the work survives the caller, and its progress is real data: entries, shards, members and manifests the engine has actually processed.
+A capture or restore can run for minutes. The original verbs on `ILatticeBackupControl` (now removed - see [Migrating from the removed blocking verbs](#migrating-from-the-removed-blocking-verbs)) blocked until the work completed, so a long capture or restore was cut off by the caller's request timeout, exposed no progress, and - for an interactive client - died with the browser circuit that started it. The start verbs below return in milliseconds, the work survives the caller, and its progress is real data: entries, shards, members and manifests the engine has actually processed.
 
 ## Verbs
 
 | Verb | Starts | Authorized as |
 |---|---|---|
-| `StartBackupAsync` | A full capture of one scope. | `CreateBackupAsync`: the backup grant over the scope. |
-| `StartIncrementalBackupAsync` | An incremental capture layered on a base backup. | `CreateIncrementalBackupAsync`. |
-| `StartBackupSetAsync` | One full capture per member scope under a set manifest. | `CreateBackupSetAsync`: every member scope, all or nothing. |
-| `StartRestoreAsync` | A restore of a catalogued backup. | `RestoreBackupAsync`: the restore grant over the target. |
-| `StartColdRestoreAsync` | A catalog-free disaster restore from the sink alone. | `ColdRestoreAsync`. |
-| `StartBackupHealthCheckAsync` | A health verification of one backup against the sink; the fresh report is persisted as the backup's latest health state. | `CheckBackupHealthAsync`: the backup grant over the backup's own scope. |
-| `StartCatalogRebuildAsync` | A rebuild of the catalog from every manifest the sink holds. | `RebuildCatalogFromSinkAsync`: the restore grant over the reserved catalog tree. |
-| `StartCatalogScrubAsync` | A scrub of every catalog row against the sink, optionally pruning orphans. | `ScrubCatalogAgainstSinkAsync`: the restore grant over the reserved catalog tree. |
+| `StartBackupAsync` | A full capture of one scope. | The backup grant over the scope. |
+| `StartIncrementalBackupAsync` | An incremental capture layered on a base backup. | The backup grant over the request's scope. |
+| `StartBackupSetAsync` | One full capture per member scope under a set manifest. | The backup grant over every member scope, all or nothing. |
+| `StartRestoreAsync` | A restore of a catalogued backup. | The restore grant over the target (the request's target tree, else the tree the catalogued backup was captured from, else the reserved catalog tree). |
+| `StartColdRestoreAsync` | A catalog-free disaster restore from the sink alone. | As a restore, with the captured tree read from the sink-held manifest rather than the catalog. |
+| `StartBackupHealthCheckAsync` | A health verification of one backup against the sink; the fresh report is persisted as the backup's latest health state. | The backup grant over the backup's own scope. |
+| `StartCatalogRebuildAsync` | A rebuild of the catalog from every manifest the sink holds. | The restore grant over the reserved catalog tree. |
+| `StartCatalogScrubAsync` | A scrub of every catalog row against the sink, optionally pruning orphans. | The restore grant over the reserved catalog tree. |
 | `GetOperationStatusAsync`, `ListOperationsAsync`, `CancelOperationAsync` | - | Scoped to the backup kinds, the caller's tenant and the trees the caller may read (or, for a restore or a catalog rebuild or scrub, restore into). Cancelling needs the grant that starting needed. |
 
 Every start verb takes an optional `operationId`. A retried start with the same id returns the existing operation (`Created = false`) and starts nothing. A restore's own `LatticeRestoreRequest.OperationId` - the idempotency key of the restore engine, which names its shadow tree - is a separate value.
 
-The default facade registered by `AddLatticeBackupApi` implements both `ILatticeBackupControl` and `ILatticeBackupOperations` on one singleton, so a start and its blocking twin share one authorization path and one engine path.
+The default facade registered by `AddLatticeBackupApi` implements both `ILatticeBackupControl` and `ILatticeBackupOperations` on one singleton, so the start verbs and the direct-call verbs share one authorization path and one engine.
 
 ## Kinds, phases and units
 

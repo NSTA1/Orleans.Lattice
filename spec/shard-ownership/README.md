@@ -52,9 +52,10 @@ and its revert, the alias move the other modules do not make (see
 The area was first written as one module. Once the registry's retention, the
 saga's abort path and leaf reactivation were added to it, it reached 693,228
 distinct states, and checking its liveness properties took over eight minutes on
-two TLC workers. `TlcModelCheckTests` gives each TLC run five minutes and runs a
+two TLC workers. `TlcModelCheckTests` then gave each TLC run five minutes (a
+per-run limit since removed; see [CI budget](../README.md#ci-budget)) and runs a
 control arm per mutation, so one module of that size would have cost CI the
-better part of an hour and still breached the per-run limit. It was split along
+better part of an hour and still breached that limit. It was split along
 the line where its concerns stop interacting, not shrunk.
 
 ### What each owns
@@ -153,8 +154,8 @@ against its own target alone, and thirteen went red:
 The fourteenth is the wider-gate probe above, which is meant to stay clean.
 
 So in this instance nothing else is lost by the split. The composition is not a
-CI gate because (d) exceeds the five-minute per-run limit on two workers by a
-wide margin, and every mutation would pay it twice. It is the measured cost of
+CI gate because (d) takes over nineteen minutes on two workers, and every
+mutation would pay it twice. It is the measured cost of
 composing the two modules, and the reason they are separate; anyone changing
 either module's shared machinery should re-run (d). The compositions are
 mechanical, and each is built from the previous one:
@@ -188,8 +189,8 @@ mechanical, and each is built from the previous one:
 
 ### Budget
 
-Each module's full configuration, liveness included, runs on two TLC workers
-inside the per-run limit, with headroom; the figures are under
+Each module's full configuration, liveness included, runs well within the TLC
+budget; the figures are under
 [Last checked](#last-checked). Three choices in the retention module are
 budget-driven and argued where they are made: `Reactivate` is offered on the
 split destination only, `NoStrandedBucket` is one leads-to rather than one per
@@ -353,7 +354,7 @@ distinct-state count in [Counts](#counts).
 
 The modules were checked with tla2tools v1.7.4 on a Temurin 17 JDK, liveness
 checked at the end, deadlock checking on, on a 16-core workstation, with two
-TLC workers for `ShardOwnership` and four for the other two (wall clock
+TLC workers for `ShardOwnership` and four for the other three (wall clock
 includes JVM start-up):
 
 ```

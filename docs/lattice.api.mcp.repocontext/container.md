@@ -88,7 +88,7 @@ Run `report` first and read the `SQLite snapshot sweep` line in the startup log,
 
 ## Configuration
 
-The host is configured entirely by environment variables. The common ones:
+The host is configured entirely by environment variables. The in-process options, and the subset of these variables the repository-context package itself reads, are summarised in [Configuration](configuration.md). The common ones:
 
 | Variable | Default | Purpose |
 |---|---|---|

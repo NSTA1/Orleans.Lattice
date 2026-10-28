@@ -80,3 +80,4 @@ The [`StateExplorer`](../../samples/StateExplorer) sample shows this wiring as a
 - [gRPC Contract](grpc-contract.md) - the service, RPCs, and wire records the binding exposes.
 - [Security](security.md) - configuring the authorization seam and the transport.
 - [Client](client.md) - consuming the surface remotely or in-process.
+- [Architecture](architecture.md) - what the three registered facades do on each request.

@@ -109,13 +109,7 @@ for `GetCatalog`.
 
 ### Server options (`LatticeTelemetryApiGrpcOptions`)
 
-| Property | Type | Default | Meaning |
-|---|---|---|---|
-| `RequireAuthorization` | `bool` | `true` | Whether the interceptor enforces `ILatticeTelemetryApiAuthorizer` on every inbound call. Set `false` only when an outer authentication boundary already guards the endpoint. |
-| `CredentialHeaderName` | `string` | `authorization` | Request header carrying the caller's credential token, bridged into the ambient Lattice credential. The default header bridge reads it on every `GetCatalog` and `Query` call, whether or not the `Orleans.Lattice.Auth` add-on is registered; the facade's own gate resolves the caller's subject from it. |
-| `CredentialScheme` | `string` | `Bearer` | Scheme stamped on the bridged credential; a matching case-insensitive prefix on the header value is stripped. |
-| `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` | Request header carrying the tenant the caller is acting as, lifted onto the ambient active-tenant context per call. Only carried: it is re-validated downstream and the facade derives the effective tenant server-side, so it can never widen a caller's scope. |
-| `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | empty | Auth schemes the unauthenticated `GetAuthScheme` RPC advertises, in preference order; public configuration only. |
+`LatticeTelemetryApiGrpcOptions`, bound by `AddLatticeTelemetryApiGrpc(configure)`, exposes `RequireAuthorization` (default `true`), `CredentialHeaderName` (default `authorization`), `CredentialScheme` (default `Bearer`), `ActiveTenantHeaderName` (default `lattice-active-tenant`), and `AdvertisedAuthSchemes` (empty by default). Their full semantics, and the seams the registration installs, are in [Configuration](configuration.md).
 
 ## The binding derives no tenant
 
@@ -163,4 +157,5 @@ wire format: never rename or remove one.
 
 ## See also
 
-- [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) - the facade this binding exposes.
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
+- [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) - the facade this binding exposes. Its [public API](../lattice.api.telemetry/api.md), [configuration](../lattice.api.telemetry/configuration.md) and [architecture](../lattice.api.telemetry/architecture.md) cover the facade side.

@@ -302,10 +302,13 @@ The following are **not** in v1 and are deliberately left out so a caller cannot
 
 ## Reference
 
+- [Public API](api.md) - every public type and member, including the shared `ILatticeAuthAdmin` contract, with source links.
 - [Configuration](configuration.md) - every public options property, its type, and its default.
+- [Architecture](architecture.md) - the administrator-gated request path and how introspection reuses the access gate.
 
 ## See also
 
+- [`Orleans.Lattice.Api.Auth.Grpc`](../lattice.api.auth.grpc/README.md) - the code-first gRPC binding over this facade.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the policy store and enforcing access gate this facade administers.
 - [`Orleans.Lattice.Membership`](../lattice.membership/README.md) - the user / group directory backing subject resolution.
 - [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) and [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) - the read-only and read-write data-plane facades this control facade is modelled on.

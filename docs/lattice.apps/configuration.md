@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/app-lifecycle.yaml"
+---
+
 # Configuration
 
 `Orleans.Lattice.Apps` has two option objects. `LatticeAppsOptions` controls startup reconciliation; `InImageAppSourceOptions` holds registrations. See the [manifest guide](README.md#validation) for format validation rules.

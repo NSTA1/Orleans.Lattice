@@ -265,7 +265,7 @@ invariants:
         name: "InvalidOperationException"
         source: "src/lattice.api.apps/AppsControlExceptionSanitizer.cs#AppsControlExceptionSanitizer.TryRewrite"
     remediation:
-      - step: "Route facade exceptions through AppsControlExceptionSanitizer before crossing the app-control boundary."
+      - step: "Sanitize facade exceptions before they cross the app-control boundary."
         source: "src/lattice.api.apps/AppsControlExceptionSanitizer.cs#AppsControlExceptionSanitizer.TryRewrite"
       - step: "Return app-local tree names and AppExceptionScope logical shapes instead of composed physical ids."
         source: "docs/lattice.api.apps/README.md"
@@ -297,9 +297,9 @@ invariants:
         name: "AppRoleGrantEvaluator.EvaluateAsync"
         source: "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator.EvaluateAsync"
     remediation:
-      - step: "Use AppRoleGrantEvaluator for workspace, MCP and bridge-facing role decisions."
+      - step: "Use the single app role-grant evaluation for workspace, MCP and bridge-facing role decisions."
         source: "src/lattice.apps/Registry/AppRoleGrantEvaluator.cs#AppRoleGrantEvaluator"
-      - step: "Ask the access gate only after AppRoleGate.IsHeld returns true."
+      - step: "Ask the access gate only after the caller is shown to hold the app role by binding."
         source: "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate.IsHeldAsync"
     sources:
       - "src/lattice.apps/Registry/AppRoleGate.cs#AppRoleGate"
@@ -918,7 +918,7 @@ invariants:
     remediation:
       - step: "Use a grain storage provider that enforces ETags, such as Orleans memory, Azure Table, Azure Blob, Cosmos DB, or ADO.NET storage."
         source: "src/lattice/LatticeServiceCollectionExtensions.cs#LatticeServiceCollectionExtensions.AddLattice"
-      - step: "Set LatticeGrainStorageFencingOptions.Mode to Reject to fail silo start when the provider accepts a stale ETag."
+      - step: "Keep LatticeGrainStorageFencingOptions.Mode at its default, Reject, so silo start fails when the provider accepts a stale ETag; Warn only logs the finding."
         source: "src/lattice/Storage/LatticeGrainStorageFencingMode.cs#LatticeGrainStorageFencingMode.Reject"
       - step: "Leave Disabled only for deliberately non-durable deployments where the probe writes are unwanted."
         source: "src/lattice/Storage/LatticeGrainStorageFencingMode.cs#LatticeGrainStorageFencingMode.Disabled"
@@ -981,7 +981,7 @@ invariants:
         name: "CredentialStampingTool.ReportClientError"
         source: "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs#CredentialStampingTool.ReportClientError"
     remediation:
-      - step: "Route caller mistakes through McpToolClientErrors.InvalidArgument, RejectedContent, NotFound, or ReportClientError so they are sanitized, capped, counted, and returned as MCP error results."
+      - step: "Classify caller mistakes as MCP client errors (invalid argument, rejected content or not found) so they are sanitized, capped, counted, and returned as MCP error results."
         source: "src/lattice.api.mcp/Tools/McpToolClientErrors.cs#McpToolClientErrors"
       - step: "When logging repo-context tool-level McpException failures before the outer client-error seam runs, log SanitizeForEcho(ex.Message) without attaching the exception."
         source: "src/lattice.api.mcp.repocontext/Logging/RepoContextToolInvocationLogger.cs#RepoContextToolInvocationLogger"
@@ -1332,7 +1332,7 @@ invariants:
         name: "ReplicationAccessAuthorizer.IsAuthorizedAsync"
         source: "src/lattice.api.replication/ReplicationAccessAuthorizer.cs#ReplicationAccessAuthorizer.IsAuthorizedAsync"
     remediation:
-      - step: "Filter every status row through ReplicationAccessAuthorizer before returning it."
+      - step: "Filter every status row through the replication access check before returning it."
         source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.IsVisibleAsync"
       - step: "Return an empty page for an unauthorized tree filter before reading telemetry."
         source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
@@ -2040,7 +2040,7 @@ invariants:
     violation_modes:
       - "A write during drain reaches only the old tree and is not captured later."
       - "The destination is bulk-loaded after shadow-forwarded writes populated it."
-      - "The alias swap leaves callers observing StaleTreeRoutingException."
+      - "The alias swap leaves callers observing a stale tree-routing fault."
       - "The first resize purges the logical tree registry entry that now carries the live alias and configuration."
       - "Resize and reshard run concurrently on one tree."
     detection_signals:

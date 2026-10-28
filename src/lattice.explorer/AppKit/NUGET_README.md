@@ -13,8 +13,6 @@ path segment, so a breaking change ships beside the old version rather than
 over it. You do not reference this package directly; the Explorer web head
 brings it in.
 
-This package is in progress and has not shipped a release.
-
 ## What is in `appkit/v1/`
 
 | File | Role |

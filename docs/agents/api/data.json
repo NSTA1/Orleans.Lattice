@@ -1639,6 +1639,14 @@
       "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
     },
     {
+      "id": "schema-policy",
+      "type": "ILatticeValueValidationFault",
+      "grpc_status": "InvalidArgument",
+      "retryable": false,
+      "meaning": "Write rejected by the tree's schema policy. Correct the value or policy; no invalid mutation is committed. Trailers carry code=schema-policy, tree, key and policy-derived reason, never the submitted value.",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
       "id": "tenant-access-denied",
       "type": "LatticeTenantAccessDeniedException",
       "grpc_status": "PermissionDenied",
@@ -1653,14 +1661,6 @@
       "retryable": false,
       "meaning": "The coarse gRPC authorizer denied the call before it reached the facade.",
       "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
-    },
-    {
-      "id": "schema-policy",
-      "type": "ILatticeValueValidationFault",
-      "grpc_status": "InvalidArgument",
-      "retryable": false,
-      "meaning": "Write rejected by the tree's schema policy. Correct the value or policy; no invalid mutation is committed. Trailers carry code=schema-policy, tree, key and policy-derived reason, never the submitted value.",
-      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
     }
   ]
 }

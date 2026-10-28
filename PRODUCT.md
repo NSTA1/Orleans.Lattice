@@ -72,7 +72,8 @@ Three positions, taken from the README's "Why it exists":
   `samples/`, `spec/`, and `reference-architecture/`. The `docs/` tree is
   several megabytes of markdown, dense with tables and with compiled C#
   snippets (` ```csharp verify ` fences checked by a Roslyn harness), and it
-  carries mermaid diagrams, blockquotes and callouts, but no images.
+  carries mermaid diagrams, blockquotes and callouts, and only a handful of
+  images (the SVG charts in `docs/lattice/performance-multi-silo.md`).
 - The pipeline: `docs-site/stage.ps1` stages the untouched repository markdown
   into a DocFX source tree, rewrites links that have no site counterpart to
   github.com, and generates the navigation from the groupings in PACKAGES.md
@@ -118,8 +119,9 @@ Three positions, taken from the README's "Why it exists":
 
 - A chaos test suite against a live cluster (`docs/lattice/chaos-tests.md`).
 - A verification tier: Coyote concurrency testing over deterministic protocol
-  cores, and a TLA+ specification for atomic commit (`spec/`,
-  `docs/lattice/verified-*.md`).
+  cores, and TLA+ specifications checked by TLC across atomic commit, WAL
+  durability, shard ownership, replication, backup/restore and further areas
+  (`spec/`, `docs/lattice/formal-coverage.md`, `docs/lattice/verified-*.md`).
 - Published NuGet packages and a codecov coverage badge on the README.
 - Measured single-silo throughput and latency against real Azure Tables
   (`docs/lattice/performance-single-silo.md`), multi-silo scaling on Azure

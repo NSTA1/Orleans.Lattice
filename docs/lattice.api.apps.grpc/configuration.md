@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Configuration
 
 `AddLatticeAppsApiGrpc(options => ...)` configures transport behavior. The credential bridge reads the metadata credential header and forwards it to the facade call context. The active-tenant header is an assertion for the facade's tenant-resolution path, not an unchecked tenant override. `AdvertisedAuthSchemes` is a get-only list populated through the options object.

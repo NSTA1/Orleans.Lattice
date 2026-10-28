@@ -36,6 +36,23 @@ The service name on the wire is `orleans.lattice.api.state` (so each method's fu
 
 `GetAuthScheme` is the one **unauthenticated** RPC: it returns the endpoint's advertised authentication schemes (an ordered set of `AuthSchemeDescriptor`) so a client can discover how to sign in before it holds any credential. Each descriptor carries a required `SchemeId` (the stable id a client matches to a login provider, for example `basic` or `entra`), a `DisplayName` (empty by default), and `Parameters` - the public values the provider needs to run the challenge (empty by default). The authorization interceptor exempts this RPC; every other RPC is authorized.
 
+## Status mapping
+
+The service maps facade outcomes onto explicit gRPC statuses rather than letting them fall through to a generic fault. The unary query RPCs share one mapping; `GetMetricsSnapshot` and the two streaming RPCs map a narrower set:
+
+| Exception | gRPC status | Applies to |
+|---|---|---|
+| `ArgumentException` | `InvalidArgument` | Every RPC: a malformed request, including a continuation or resume token that is malformed or names an unknown, drained, or closed cursor. |
+| `LatticeTenantAccessDeniedException` | `PermissionDenied` | Every RPC: fail-closed tenant resolution refused the call. |
+| `LatticeSaturatedException` | `ResourceExhausted` | The unary query RPCs other than `GetMetricsSnapshot`: the tree is WAL-saturated and shed the operation (for example a snapshot scan open); back off and retry. |
+| `LatticeTreeBootstrappingException` | `Unavailable` | The unary query RPCs other than `GetMetricsSnapshot`: the tree's replica is being bootstrapped from a snapshot and its reads are fenced until the import completes; back off and retry. |
+| `LatticeStateCursorExpiredException` | `FailedPrecondition` | `ObserveChanges`: the resume token fell outside the write-ahead-log retention window. |
+| `KeyNotFoundException` | `NotFound` | `ObserveChanges`: an unknown, system, or unreadable tree. The unary RPCs do not map it, so there it arrives as `Internal`. |
+| `OperationCanceledException` | `Cancelled` | The unary RPCs. On `ObserveChanges` and `ObserveMetrics` a cancellation ends the stream cleanly instead. |
+| anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
+
+The authorization interceptor's refusal is a `PermissionDenied` as well.
+
 ## Messages
 
 Every request and response is a `[GenerateSerializer]` record with a stable `[Alias]` and sequential `[Id]`s, exactly like the core library's wire types. Some records are the public facade DTOs from `Orleans.Lattice.Api.Abstractions`; binding-owned envelopes such as `DeadLetterCountRequest` / `DeadLetterCountResponse` wrap scalar facade arguments and results so the wire contract can grow additively. The binding-owned records carry the `olag.` aliases held in the public `GrpcStateTypeAliases` class; the facade DTOs keep their `ApiStateTypeAliases` aliases. The marshallers serialize them with the Orleans binary serializer, so the client and the server must share an Orleans serializer registration (`AddSerializer()`). The records are public; the service implementation and method binding are internal.
@@ -61,14 +78,6 @@ The client carries **no transport policy of its own**. Address, TLS, retries, de
 
 ## Server options
 
-`LatticeStateApiGrpcOptions` is populated by `AddLatticeStateApiGrpc(configure)` and controls the server-side binding.
-
-| Property | Type | Default | Meaning |
-|---|---|---|---|
-| `RequireAuthorization` | `bool` | `true` | Enforce `ILatticeStateApiAuthorizer` on inbound protected state-API calls. The default is fail-closed; set to `false` only behind an outer authentication boundary. |
-| `CredentialHeaderName` | `string` | `"authorization"` | Request-header (gRPC metadata) name carrying the caller credential token to bridge into the ambient Lattice credential. |
-| `CredentialScheme` | `string` | `"Bearer"` | Authentication scheme stamped on the bridged `LatticeCredential`; a matching scheme prefix on the header value is stripped before the token is used. |
-| `ActiveTenantHeaderName` | `string` | `"lattice-active-tenant"` | Request-header (gRPC metadata) name carrying the caller's asserted active tenant, lifted onto the ambient active-tenant context for the call. The assertion is re-validated against the caller's membership by the tenancy add-on and grants no access; set it to `null` or empty to disable it. |
-| `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | Empty `List<AuthSchemeDescriptor>` | Public auth-scheme descriptors advertised by the unauthenticated `GetAuthScheme` RPC, in preference order. |
+`LatticeStateApiGrpcOptions` is populated by `AddLatticeStateApiGrpc(configure)` and controls the server-side binding: `RequireAuthorization`, `CredentialHeaderName`, `CredentialScheme`, `ActiveTenantHeaderName` and `AdvertisedAuthSchemes`. Types, defaults and semantics are in the [gRPC binding configuration](../lattice.api.state.grpc/configuration.md); every public type of the binding is listed in its [public API](../lattice.api.state.grpc/api.md), and the request path through the interceptor and service is described in its [architecture](../lattice.api.state.grpc/architecture.md).
 
 See [Client](client.md) for the full set of calls and [Surfaces](surfaces.md) for what each request and response carries.

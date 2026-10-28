@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Architecture
 
 `Orleans.Lattice.Api.Apps` is the in-process, transport-independent facade over the apps engine. It composes lifecycle, consent, catalogue, workspace, role-binding, and bridge contracts. See the [facade guide](README.md) for details of each operation.

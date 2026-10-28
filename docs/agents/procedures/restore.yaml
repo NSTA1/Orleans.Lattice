@@ -6,7 +6,7 @@ surfaces:
     api: "ILatticeTreeAdmin.RestoreTreeAsync and ILatticeBackupOperations.StartRestoreAsync"
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
   grpc:
-    api: "/orleans.lattice.api.treeadmin/RestoreTree and orleans.lattice.api.backup/StartRestore"
+    api: "/orleans.lattice.api.treeadmin/RestoreTree and /orleans.lattice.api.backup/StartRestore"
     source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RestoreTreeMethodName"
   mcp_tool:
     api: "lattice_treeadmin_tree_restore and lattice_backup_start_restore"
@@ -50,7 +50,7 @@ steps:
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartRestoreAsync"
   - n: 5
     action: "For catalog-free disaster recovery, start a tracked cold restore from the durable sink."
-    api: "ILatticeBackupOperations.StartColdRestoreAsync / StartColdRestore / lattice_backup_start_cold_restore"
+    api: "ILatticeBackupOperations.StartColdRestoreAsync / StartColdRestore (no MCP tool)"
     expects: "Returns an operation handle; poll status for validation, apply, replay and cataloguing progress."
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartColdRestoreAsync"
   - n: 6

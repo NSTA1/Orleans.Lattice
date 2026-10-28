@@ -33,7 +33,7 @@ The package is **read-only** and has no external broker and no `.proto` file to 
 | **Code-first service** | Unary and server-streaming RPCs bound from C# - no `.proto` to author or keep in sync. | [gRPC Contract](../lattice.api.state/grpc-contract.md) |
 | **Public typed client** | `LatticeStateApiGrpcClient` over a caller-supplied channel, one method per RPC. | [Client](../lattice.api.state/client.md) |
 | **Fail-closed authorization** | Per-call `ILatticeStateApiAuthorizer` seam, default-deny. | [Security](../lattice.api.state/security.md) |
-| **Credential bridge and sign-in discovery** | `LatticeStateApiGrpcOptions` names the request header (`CredentialHeaderName`, default `authorization`) and scheme (`CredentialScheme`, default `Bearer`) bridged onto the ambient Lattice credential, and the `AdvertisedAuthSchemes` (empty by default) the unauthenticated `GetAuthScheme` RPC returns. | [Configuration](../lattice.api.state/configuration.md#latticestateapigrpcoptions) |
+| **Credential bridge and sign-in discovery** | `LatticeStateApiGrpcOptions` names the request header (`CredentialHeaderName`, default `authorization`) and scheme (`CredentialScheme`, default `Bearer`) bridged onto the ambient Lattice credential, and the `AdvertisedAuthSchemes` (empty by default) the unauthenticated `GetAuthScheme` RPC returns. | [Configuration](configuration.md#latticestateapigrpcoptions) |
 
 ## Quick Start
 
@@ -71,4 +71,5 @@ The header carries only an *assertion*: the tenancy add-on re-validates it again
 - [Client](../lattice.api.state/client.md) - building and driving `LatticeStateApiGrpcClient`.
 - [Security](../lattice.api.state/security.md) - the authorization seam and transport story.
 - [Setup](../lattice.api.state/setup.md) - registration and route mapping.
-- [Configuration](../lattice.api.state/configuration.md) - every `LatticeStateApiGrpcOptions` and `EnvVarCredentialAuthorizerOptions` property, its type, and its default.
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md) - every public declaration, every `LatticeStateApiGrpcOptions` and `EnvVarCredentialAuthorizerOptions` property with its type and default, and the request path through the binding.
+- [State facade configuration](../lattice.api.state/configuration.md) - `LatticeApiStateOptions`, the facade's read bounds and read-visibility posture.

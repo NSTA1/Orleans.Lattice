@@ -217,8 +217,8 @@ admission slot whose downstream dispatches are themselves parked in
 the SDK retry loop), the silo cannot finish its bounded deactivation
 drain without releasing those parked callers.
 
-The library handles this automatically: `WalCommitLogWriter` exposes
-a per-silo drain entry that the host's `StopAsync` lifecycle stage
+The library handles this automatically: the per-silo WAL writer exposes
+a drain entry that the host's `StopAsync` lifecycle stage
 invokes via a registered `IHostedService`. The drain signals every
 parked `AcquireAsync` caller on the owning silo's writer; each
 parked caller surfaces a typed `LatticeShuttingDownException` (a
@@ -236,10 +236,10 @@ blocking on a drained admission gate. See
 for the caller contract.
 
 The drain is **per-silo, local-only**. Each silo process in a
-multi-silo cluster has its own `WalCommitLogWriter` singleton with
+multi-silo cluster has its own WAL writer singleton with
 its own drain state; a drain on silo A does not touch silo B's
 admission semaphore and does not interrupt any in-flight
-`IWalShardGrain` activation that silo B is dispatching to. Rolling
+WAL shard activation that silo B is dispatching to. Rolling
 restarts settle cleanly because each silo drains its own writer
 independently when its turn arrives.
 

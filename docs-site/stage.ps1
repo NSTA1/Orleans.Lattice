@@ -29,7 +29,8 @@
 #      markdown alternate of every page (lib/agent.ps1), llms.txt generated from
 #      the same catalogue as the documentation map, llms-full.txt, and each
 #      package's pages in one file of their own; and lists docs/agents, the
-#      agent-only specifications published as raw YAML and JSON, in llms.txt.
+#      agent-only specifications published as raw YAML and JSON, in llms.txt and
+#      on the Agent Docs page (docs-site/pages/agents.md).
 #
 # Runs on Windows and Linux; keep it free of platform-specific path literals.
 
@@ -1235,7 +1236,9 @@ $index.Add('')
 $index.Add('Every package''s documentation, grouped by the seam it fills. A filled node is')
 $index.Add('published on NuGet; a hollow node is unreleased or in progress and builds from')
 $index.Add('source. For installation see the [package inventory](../PACKAGES.md); for what')
-$index.Add('each capability does, see the [capability catalogue](../FEATURES.md).')
+$index.Add('each capability does, see the [capability catalogue](../FEATURES.md). Agents')
+$index.Add('operating a deployment start from the [Agent Docs](../agents.md), the')
+$index.Add('machine-readable specifications of its API surfaces, MCP tools and procedures.')
 $index.Add('')
 $index.Add('<ul class="lt-legend" aria-hidden="true"><li>Published</li><li class="lt-unreleased">Unreleased or in progress</li></ul>')
 $index.Add('')
@@ -1604,6 +1607,8 @@ $rootToc.AddRange([string[]]@(
     '  href: PACKAGES.md',
     '- name: Architecture',
     '  href: reference-architecture.md',
+    '- name: Agent Docs',
+    '  href: agents.md',
     '- name: Changelog',
     '  href: CHANGELOG.md'
 ))
@@ -1635,6 +1640,54 @@ function Get-SeamSummary {
     return $html -join "`n"
 }
 
+# The Agent Docs page's catalogue of docs/agents, generated from its manifest so
+# the page lists every specification and cannot drift from the set: one table per
+# group of kinds, each specification linked to its raw file with its format and
+# what it describes. A procedure is described by its own name, which says what
+# it does; every other specification by its manifest summary. A kind with no
+# group fails the build, so a new kind is given a place rather than dropped.
+function Get-AgentSpecCatalogue {
+    $manifest = Get-Content (Join-Path $RepoRoot 'docs/agents/index.json') -Raw | ConvertFrom-Json
+    $groups = [ordered]@{
+        'Concepts and invariants' = @{ Kinds = @('concepts', 'invariants'); Lede = 'What Lattice is made of, and what must stay true while it runs.' }
+        'Capabilities'            = @{ Kinds = @('capabilities'); Lede = 'What each capability guarantees, what it does not, and which sequences of operations are unsafe.' }
+        'API surfaces'            = @{ Kinds = @('api'); Lede = 'One file per specified API surface - the core in-process API, each facade family, and the MCP tools - with every operation, its types and errors, and how it behaves under retry and concurrency. The manifest''s coverage names the surfaces described only in the concepts and capabilities.' }
+        'Procedures'              = @{ Kinds = @('procedure'); Lede = 'Operational runbooks: preconditions, steps, postconditions, failure modes, rollback and concurrency.' }
+        'Governance'              = @{ Kinds = @('governance-authorization', 'governance-policies', 'governance-identity-propagation', 'governance-audit-events'); Lede = 'Who may do what, how identity reaches a grain call, and what is audited.' }
+        'Deployment'              = @{ Kinds = @('deployment'); Lede = 'Reference topologies, and the options configuration schema, including the options bound to environment variables.' }
+        'JSON Schemas'            = @{ Kinds = @('json-schema'); Lede = 'The format of each kind of specification, including the manifest.' }
+    }
+    $grouped = @($groups.Values | ForEach-Object { $_.Kinds })
+    $orphans = @($manifest.artifacts | Where-Object { $grouped -notcontains [string]$_.kind } | ForEach-Object { "$($_.path) ($($_.kind))" })
+    if ($orphans.Count -gt 0) { throw "docs/agents/index.json lists specifications of a kind the Agent Docs page has no group for: $($orphans -join ', '). Add the kind to Get-AgentSpecCatalogue in stage.ps1." }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $groups.Keys) {
+        $group = $groups[$name]
+        $members = @($manifest.artifacts | Where-Object { $group.Kinds -contains [string]$_.kind } | Sort-Object { [string]$_.path })
+        if ($members.Count -eq 0) { continue }
+        $lines.Add("### $name")
+        $lines.Add('')
+        $lines.Add($group.Lede)
+        $lines.Add('')
+        $lines.Add('| Specification | Format | Describes |')
+        $lines.Add('| --- | --- | --- |')
+        foreach ($artifact in $members) {
+            $path = [string]$artifact.path
+            $describes = [string]$artifact.summary
+            if ($artifact.kind -eq 'procedure') {
+                $yaml = Get-Content (Join-Path $RepoRoot "docs/agents/$path") -Raw
+                $procedure = [regex]::Match($yaml, '(?m)^name:\s*"?(?<name>[^"\r\n]+?)"?\s*$')
+                if ($procedure.Success) { $describes = $procedure.Groups['name'].Value + '.' }
+            }
+            $format = ([string]$artifact.format).ToUpperInvariant()
+            $lines.Add("| [$path](docs/agents/$path) | $format | $($describes.Replace('|', '\|')) |")
+        }
+        $lines.Add('')
+    }
+    return ($lines -join "`n").TrimEnd()
+}
+
 # The authored home page's own labels get the same separators as the generated
 # lists. Applied to the staged copy only: docs-site/pages/index.md keeps the
 # exact markup the video series reads it by (videos/tools/lib/home.js).
@@ -1660,6 +1713,7 @@ if (Test-Path $pagesSource) {
         'seams'        = (Get-SeamSummary)
         'join-figure'  = (Get-JoinFigure -Spec $homeSpec -Width 460 -CaptionHtml $homeCaption)
         'introduction' = (Get-IntroductionSection)
+        'agent-specs'  = (Get-AgentSpecCatalogue)
     }
     Get-ChildItem $pagesSource -Recurse -File | ForEach-Object {
         $relative = ConvertTo-SiteRelative $_.FullName $pagesSource
@@ -2126,9 +2180,10 @@ if ($episodes.Count -gt 0) {
 # Machine-readable specifications (concept graph, invariants, API schemas,
 # capability envelopes, procedures, governance rules, deployment) for agents
 # operating Lattice. They are YAML and JSON, which docfx.json publishes as
-# resources, so they are never rendered: no page, no navigation entry, no search
-# result, no sitemap entry. llms.txt and each page's head (build.ps1) are the
-# only ways to them. The manifest, docs/agents/index.json, must list every file
+# resources, so they are never rendered: no page of their own, no search result,
+# no sitemap entry. The Agent Docs page (docs-site/pages/agents.md, in the
+# navbar), llms.txt and each page's head (build.ps1) are the ways to them. The
+# manifest, docs/agents/index.json, must list every file
 # in the set and nothing else, so neither can drift from the other.
 $agentSpecSource = Join-Path $Staging 'docs/agents'
 $agentSpecNote = ''
@@ -2148,6 +2203,7 @@ if (Test-Path $agentSpecSource) {
 
     $llms.Add('## Agent specifications')
     $llms.Add('')
+    Add-LlmsLink 'agents.md' 'Agent Docs' 'What the machine-readable specifications for agents operating Orleans.Lattice hold, where an agent starts, and every specification in the set.'
     $llms.Add("- [Manifest]($($site.Url)docs/agents/index.json): Every machine-readable specification for agents operating Orleans.Lattice, with its kind, format and schema. JSON.")
     foreach ($artifact in @($manifest.artifacts | Sort-Object { [string]$_.path })) {
         if (-not $artifact.summary) { throw "docs/agents/index.json gives $($artifact.path) no summary, which is its line in llms.txt." }

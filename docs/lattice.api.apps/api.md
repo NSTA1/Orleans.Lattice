@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Public API
 
 `Orleans.Lattice.Api.Apps` implements transport-independent contracts declared by `Orleans.Lattice.Api.Abstractions`. The [facade guide](README.md) covers authorization, tenant handling, lifecycle behavior, and bridge limits.
@@ -86,6 +90,8 @@ The following inventory includes directly declared public members and overloads,
 - `public static IServiceCollection AddLatticeAppsApi(this IServiceCollection services)`
 
 ## Shared contract declaration reference
+
+These types are declared in the shared contract package, where the [`Orleans.Lattice.Api.Abstractions` public API](../lattice.api.abstractions/api.md#orleanslatticeapiapps) places the `Orleans.Lattice.Api.Apps` namespace among every other facade namespace.
 
 The following inventory includes directly declared public members and overloads, enum values, and record positional members. Inherited framework members and compiler-generated record equality helpers are not additional package operations. Each source link identifies the declaration that defines its signature.
 
@@ -439,7 +445,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.Apps.AppSourceSummaryCapabilities`
 
-[Source](../../src/lattice.api.abstractions/Apps/Model/AppSourceSummaryCapabilities.cs) (line 4).
+[Source](../../src/lattice.api.abstractions/Apps/Model/AppSourceSummaryCapabilities.cs) (line 5).
 
 `public enum AppSourceSummaryCapabilities`
 

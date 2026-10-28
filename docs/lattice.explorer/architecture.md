@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Orleans.Lattice.Explorer architecture
 
 The Explorer is a Blazor Server administration head, not an Orleans silo

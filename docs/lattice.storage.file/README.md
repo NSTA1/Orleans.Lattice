@@ -29,6 +29,8 @@ Core WAL semantics, the provider seam, and placement are covered in [WAL Storage
 
 ## Public surface
 
+The table summarises each public type's role; the [Public API](api.md) reference lists every public member and signature.
+
 | Type or member | Role |
 |---|---|
 | `FileWalStorageProvider` | Public `IWalStorageProvider` implementation (also `IDisposable`) that stores one `wal.log` per tree/WAL-partition stream under `FileWalStorageOptions.RootDirectory`. Its public constructor, `FileWalStorageProvider(IOptions<FileWalStorageOptions>, Serializer<WalRecord>)`, builds a provider without the routing reader, so its filtered replay reads decode every record they examine; `AddFileWalStorage` is the registration that supplies one. |
@@ -56,6 +58,7 @@ Register it alongside `AddLattice(...)` on the silo that owns the WAL. The regis
 
 ## Reference
 
+- [Public API](api.md) - every public type, member and signature, and what `AddFileWalStorage` registers.
 - [Configuration](configuration.md) - every `FileWalStorageOptions` knob, default, and validation rule.
 - [Architecture](architecture.md) - the on-disk layout, the append/commit framing, the durability contract, compaction, and recovery behaviour.
 

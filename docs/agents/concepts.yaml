@@ -1294,7 +1294,7 @@ concepts:
       - "Orleans.Lattice"
     capability_boundary:
       in_scope:
-        - statement: "Leaf entries are wrapped in LwwValue<byte[]> and merge by higher HLC."
+        - statement: "Leaf entries are stored as last-writer-wins values and merge by higher HLC."
           source: "docs/lattice/state-primitives.md"
       out_of_scope:
         - statement: "LWW is safe only when concurrent writes to one key can be lost."
@@ -1802,7 +1802,7 @@ concepts:
       - "Orleans.Lattice"
     capability_boundary:
       in_scope:
-        - statement: "ShardRootGrain is keyed by tree id and shard index."
+        - statement: "Each shard root activation is keyed by tree id and shard index."
           source: "docs/lattice/architecture.md"
       out_of_scope:
         - statement: "It does not store per-key leaf entries."
@@ -2435,7 +2435,7 @@ concepts:
       - "Orleans.Lattice"
     capability_boundary:
       in_scope:
-        - statement: "WalShardGrain is keyed by tree id and partition."
+        - statement: "Each WAL shard activation is keyed by tree id and partition."
           source: "docs/lattice/architecture.md"
       out_of_scope:
         - statement: "The WAL partition hash is stable and non-cryptographic."
@@ -2483,10 +2483,10 @@ concepts:
       - "Orleans.Lattice"
     capability_boundary:
       in_scope:
-        - statement: "WalShardGrain appends directly to IWalStorageProvider and recovers its next offset from the provider on activation."
+        - statement: "The WAL shard appends directly to IWalStorageProvider and recovers its next offset from the provider on activation."
           source: "docs/lattice/architecture.md"
       out_of_scope:
-        - statement: "WalShardGrain has no Orleans grain state of its own."
+        - statement: "The WAL shard has no Orleans grain state of its own."
           source: "docs/lattice/architecture.md"
     operational_envelope:
       limits:

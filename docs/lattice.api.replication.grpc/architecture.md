@@ -35,11 +35,12 @@ The service maps facade outcomes to stable gRPC status codes so a client sees a 
 | `LatticeTenantAccessDeniedException` (an asserted tenant the caller may not act as, or a `sys-` / malformed `t/` tree name under one) | `PermissionDenied` |
 | `LatticeReplicationPreconditionFailedException` | `FailedPrecondition` |
 | `LatticeReplicationModeChangeRejectedException` | `FailedPrecondition` |
+| `LatticeReplicationPeerStillConfiguredException` (`DecommissionPeer` while the peer is still in `ReplicationPeers`) | `FailedPrecondition` |
 | `ArgumentException` (for example a null / empty tree id) | `InvalidArgument` |
 | `OperationCanceledException` | `Cancelled` |
 | Any other exception | `Internal` (logged server-side; the client sees a non-leaking message) |
 
-`GetPeerStatus` maps the same way, without the two precondition outcomes: a negative page size or a malformed continuation token is an `ArgumentException`, so it surfaces as `InvalidArgument`.
+`GetPeerStatus` maps the same way, without the precondition outcomes: a negative page size or a malformed continuation token is an `ArgumentException`, so it surfaces as `InvalidArgument`.
 
 An already-thrown `RpcException` is rethrown unchanged so an inner status is preserved. A transport meta-authorizer denial never reaches the service: the interceptor raises it directly as `PermissionDenied` (and a cancelled authorization check as `Cancelled`).
 

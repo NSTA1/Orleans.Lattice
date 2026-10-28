@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/treeadmin.json"
+---
+
 # Public API
 
 The package implements the shared `ILatticeTreeAdmin`, `ILatticeTreeAdminOperations`, `ILatticeStorageUsageOperations` and `ILatticeWalReclamation` contracts. Their model types live in `Orleans.Lattice.Api.Abstractions`; the declarations below include that shared tree-administration family. The [facade guide](README.md) explains scope, authorization and request behavior.
@@ -19,6 +23,7 @@ Use `StorageUsageRefreshResults.TryReadSummary` for cluster totals and the publi
 - [Configuration](configuration.md)
 - [Architecture](architecture.md)
 - [Operations](operations.md)
+- [gRPC binding](../lattice.api.treeadmin.grpc/README.md) - its [public API](../lattice.api.treeadmin.grpc/api.md), [configuration](../lattice.api.treeadmin.grpc/configuration.md) and [architecture](../lattice.api.treeadmin.grpc/architecture.md)
 
 ## Public declaration reference
 
@@ -40,6 +45,8 @@ The following inventory includes directly declared public members and overloads,
 - `public static ISiloBuilder AddLatticeTreeAdminApi( this ISiloBuilder builder, Action<LatticeApiTreeAdminOptions>? configure = null)`
 
 ## Shared contract declaration reference
+
+These types are declared in the shared contract package, where the [`Orleans.Lattice.Api.Abstractions` public API](../lattice.api.abstractions/api.md#orleanslatticeapitreeadmin) places the `Orleans.Lattice.Api.TreeAdmin` namespace among every other facade namespace.
 
 The following inventory includes directly declared public members and overloads, enum values, and record positional members. Inherited framework members and compiler-generated record equality helpers are not additional package operations. Each source link identifies the declaration that defines its signature.
 

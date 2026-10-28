@@ -443,5 +443,5 @@ the authoritative [TLC running instructions](../README.md#how-to-run-tlc), then
 run only this area's bases, variants and paired mutation experiments:
 
 ```powershell
-dotnet test test\lattice\Orleans.Lattice.Tests.csproj -c Release --filter "TestCategory=TlcShardScheduling|TestCategory=TlcShardSchedulingReplayTwoPartitions|TestCategory=TlcShardSchedulingShipping|TestCategory=TlcShardSchedulingShippingVariants"
+dotnet test test\lattice\Orleans.Lattice.Tests.csproj -c Release --filter "TestCategory=TlcShardScheduling|TestCategory=TlcShardSchedulingWorkloadB|TestCategory=TlcShardSchedulingReplayTwoPartitions|TestCategory=TlcShardSchedulingShipping|TestCategory=TlcShardSchedulingShippingVariants"
 ```

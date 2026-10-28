@@ -108,7 +108,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "Backup facade (Orleans.Lattice.Api.Backup, .Grpc): blocking and accept-then-poll operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+      "summary": "Backup facade (Orleans.Lattice.Api.Backup, .Grpc): catalog reads and accept-then-poll capture, restore, health-check and catalog-maintenance operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
     },
     {
       "path": "api/data.json",
@@ -129,7 +129,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .RepoContext, .Apps): registration, authorization gate, every tool including backup operation tools and deprecated aliases, parameters, results, errors, tool annotations and the facade operation it delegates to."
+      "summary": "MCP tool surface (Orleans.Lattice.Api.Mcp, .Telemetry, .Telemetry.Azure, .RepoContext, .RepoContext.Replication, .Apps): registration, authorization gate, session tool discovery, and every tool with the module and opt-in that contribute it, parameters, results, errors, tool annotations and the facade operation it delegates to."
     },
     {
       "path": "api/replication.json",
@@ -171,7 +171,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "Tree administration facade (Orleans.Lattice.Api.TreeAdmin, .Grpc): blocking and accept-then-poll operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+      "summary": "Tree administration facade (Orleans.Lattice.Api.TreeAdmin, .Grpc): tree lifecycle, diagnostics, sharding, WAL placement, view and tag-index maintenance, synchronous calls and accept-then-poll operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
     },
     {
       "path": "capabilities.yaml",
@@ -234,21 +234,21 @@
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (app-lifecycle): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Install an app pinned to a reviewed manifest with role bindings and a version-pinned capability ceiling, then enable it, verify consent, re-bind roles, and disable or uninstall it."
     },
     {
       "path": "procedures/backup.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (backup): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Capture a live tree snapshot or a durable catalogued backup (full, incremental or backup set) as a tracked operation, validate artifacts with a health check, and rebuild or scrub the backup catalog."
     },
     {
       "path": "procedures/compaction.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (compaction): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Trigger an out-of-cycle tombstone compaction pass on one physical shard and read diagnostics when the pass is not accepted."
     },
     {
       "path": "procedures/region-backfill.yaml",
@@ -262,14 +262,14 @@
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (replication-dead-letters): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Triage the per-tree replication dead-letter queue: count and list parked entries, fix the cause their reason names, then replay or discard them."
     },
     {
       "path": "procedures/replication-enrollment.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (replication-enrollment): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Enable runtime replication for a tree under a fixed merge mode, optionally naming a bootstrap source, confirm the configuration, and disable it again."
     },
     {
       "path": "procedures/replication-peer-management.yaml",
@@ -283,56 +283,56 @@
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (replication-peer-status): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Page permission-scoped replication peer status, read health and lag per link, diagnose unhealthy outbound links, and hand persistent gaps to re-seed."
     },
     {
       "path": "procedures/replication-reseed.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (replication-reseed): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Confirm a replication retention gap, request a routine or forced re-seed from a peer snapshot, and poll bootstrap status until the tree is live and unfenced."
     },
     {
       "path": "procedures/reshard.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (reshard): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Grow or shrink a tree to a target physical shard count with an online reshard and poll until the fan-out is reached."
     },
     {
       "path": "procedures/resize.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (resize): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Change a tree's B+ node capacity with an online resize, poll it to completion, and undo it while in flight or while the prior tree is recoverable."
     },
     {
       "path": "procedures/restore.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (restore): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Restore a tree or backup set through shadow cutover, run a tracked in-place, shadow-cutover or cold restore from the backup catalog, and revert a wrong cutover."
     },
     {
       "path": "procedures/retention.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (retention): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Read, set or clear a tree's durable-history retention mode and age window, and confirm the applied policy."
     },
     {
       "path": "procedures/tag-index-reconcile.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (tag-index-reconcile): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Run a tracked digest-gated reconcile of a tag index and confirm its background sweep is idle again."
     },
     {
       "path": "procedures/tenant-access.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (tenant-access): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Delegate access administration to a tenant: create a tenant group, add members, admit it to the tenant, grant it a tenant-tier rule, and confirm the resulting decision."
     },
     {
       "path": "procedures/tenant-region-drain.yaml",
@@ -346,28 +346,28 @@
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (tree-delete-recover): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Soft-delete a tree, recover it within the recovery window, or hard-purge it with explicit confirmation."
     },
     {
       "path": "procedures/view-rebuild.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (view-rebuild): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Repair a materialised view with a tracked reconcile, or rebuild a full generation with a tracked shadow-swap rebuild."
     },
     {
       "path": "procedures/wal-move.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (wal-move): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Inspect, audit and plan a WAL partition move to another storage provider key, run it as a tracked operation, roll it back by moving again, and reclaim the source tail."
     },
     {
       "path": "procedures/wal-tuning.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Operational procedure (wal-tuning): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+      "summary": "Read WAL storage and reclamation posture, audit placement, and tune the per-tree retained-byte ceiling and the host WAL partition, garbage-collection and saturation options."
     },
     {
       "path": "schemas/api.schema.json",

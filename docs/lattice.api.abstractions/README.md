@@ -12,7 +12,7 @@ The Orleans.Lattice API surface is built in layers. Each **facade** package (`Or
 
 `Orleans.Lattice.Api.Abstractions` is the seam between the facades and their consumers. It carries only the contract:
 
-- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` and `ILatticeBackupOperations` (backup); `ILatticeSchemaControl`, `ILatticeSchemaOperations`, and `ILatticeSchemaComplianceOperations` (schema); `ILatticeReplicationControl` and `ILatticeReplicationStatus` (replication); `ILatticeTelemetry` (telemetry); `ILatticeTreeAdmin` (tree administration); `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, `ILatticeTenantDirectoryAdmin`, and `ILatticeTenantPolicyAdmin` (tenant administration); `ILatticeAppsControl`, `ILatticeAppRoleBindings`, `ILatticeAppCatalog`, `ILatticeAppWorkspace`, and `ILatticeAppBridge` (installable apps: control, role re-binding, catalogue, workspace, and the app UI bridge); and `ILatticeRegionCatalog` (region discovery).
+- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` and `ILatticeBackupOperations` (backup); `ILatticeSchemaControl`, `ILatticeSchemaOperations`, and `ILatticeSchemaComplianceOperations` (schema); `ILatticeReplicationControl`, `ILatticeReplicationStatus`, and `ILatticeReplicationPeerAdmin` (replication); `ILatticeTelemetry` (telemetry); `ILatticeTreeAdmin`, `ILatticeTreeAdminOperations`, `ILatticeStorageUsageOperations`, and `ILatticeWalReclamation` (tree administration); `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, `ILatticeTenantDirectoryAdmin`, and `ILatticeTenantPolicyAdmin` (tenant administration); `ILatticeAppsControl`, `ILatticeAppRoleBindings`, `ILatticeAppCatalog`, `ILatticeAppWorkspace`, and `ILatticeAppBridge` (installable apps: control, role re-binding, catalogue, workspace, and the app UI bridge); and `ILatticeRegionCatalog` (region discovery). The operation-tracking interfaces (`ILatticeBackupOperations`, `ILatticeSchemaOperations`, `ILatticeSchemaComplianceOperations`, `ILatticeTreeAdminOperations`, and `ILatticeStorageUsageOperations`) all extend the shared `ILatticeOperations` contract described below.
 - **Their request / response models** - the results, pages, records, and requests those interfaces exchange, each with its stable Orleans serialization alias.
 - **Their typed exceptions** - the faults the interfaces document, for example `LatticeStateCursorExpiredException` (state), `TelemetryBackendException`, `TelemetryQueryBoundsException` and `TelemetryQueryNotFoundException` (telemetry), `TenantNotFoundException` and its tenant-administration siblings, and `TreeNotEmptyException` and `BulkLoadOrderException` (tree administration).
 
@@ -29,7 +29,9 @@ The `Orleans.Lattice.Api.Region` namespace carries the transport-agnostic region
 - `LatticeRegionGroupReachability` - whether a facade group is reachable in a region and the endpoint it is served at.
 - `LatticeRegionTenantScope` - one tenant's standing in one region: the tenant id, whether an operator has allowed the region for it, its per-region residency lifecycle status, and whether it is resident there.
 
-The package has no implementation, no registration extension, and no background work. Facade packages reference it and implement the interfaces; binding and MCP packages reference it and consume them.
+Full signatures: [`Orleans.Lattice.Api.Region` in the Public API](api.md#orleanslatticeapiregion).
+
+The package implements none of its service interfaces and has no registration extension and no background work; beyond the declarations it carries only small helpers on its models and one internal mapping shared by the backup, schema and tree-administration facades (see [Architecture](architecture.md)). Facade packages reference it and implement the interfaces; binding and MCP packages reference it and consume them.
 
 ## Why it exists
 
@@ -78,3 +80,7 @@ For a remote surface, add the matching binding (which consumes the same contract
 - [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) / [`.Grpc`](../lattice.api.tenantadmin.grpc/README.md)
 - [`Orleans.Lattice.Api.Apps`](../lattice.api.apps/README.md) / [`.Grpc`](../lattice.api.apps.grpc/README.md)
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)
+
+## Reference
+
+- [Public API](api.md), [architecture](architecture.md), and [long-running operations](operations.md). The package has no options, so it has no configuration page.

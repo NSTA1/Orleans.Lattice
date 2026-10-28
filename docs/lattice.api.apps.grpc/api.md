@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Public API
 
 This page indexes the code-first gRPC surface for app control, catalogue, workspace, and bridge facades. Endpoint paths, authorization, credentials, and error mapping are described in [architecture](architecture.md); the facade contracts are described in the [in-process API page](../lattice.api.apps/api.md).
@@ -304,10 +308,10 @@ The following inventory includes directly declared public members and overloads,
 `public sealed class LatticeAppBridgeApiGrpcClient : ILatticeAppBridge`
 
 - `public static LatticeAppBridgeApiGrpcClient Create(CallInvoker callInvoker, IServiceProvider serializerProvider)`
-- `public async Task<AppBridgeValue?> GetAsync(AppBridgeTarget target, string key, CancellationToken cancellationToken = default)`
+- `public Task<AppBridgeValue?> GetAsync(AppBridgeTarget target, string key, CancellationToken cancellationToken = default)`
 - `public Task<AppBridgePage> ScanAsync( AppBridgeTarget target, string prefix, int pageSize, string? continuation = null, CancellationToken cancellationToken = default)`
-- `public async Task SetAsync( AppBridgeTarget target, string key, ReadOnlyMemory<byte> value, CancellationToken cancellationToken = default)`
-- `public async Task<bool> DeleteAsync(AppBridgeTarget target, string key, CancellationToken cancellationToken = default)`
+- `public Task SetAsync( AppBridgeTarget target, string key, ReadOnlyMemory<byte> value, CancellationToken cancellationToken = default)`
+- `public Task<bool> DeleteAsync(AppBridgeTarget target, string key, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.Apps.Grpc.LatticeAppCatalogApiGrpcClient`
 
@@ -316,10 +320,10 @@ The following inventory includes directly declared public members and overloads,
 `public sealed class LatticeAppCatalogApiGrpcClient : ILatticeAppCatalog`
 
 - `public static LatticeAppCatalogApiGrpcClient Create(CallInvoker callInvoker, IServiceProvider serializerProvider)`
-- `public async Task<ImmutableArray<AppSourceSummary>> ListSourcesAsync(CancellationToken cancellationToken = default)`
+- `public Task<ImmutableArray<AppSourceSummary>> ListSourcesAsync(CancellationToken cancellationToken = default)`
 - `public Task<AvailableAppPage> ListAvailableAsync(AvailableAppQuery query, CancellationToken cancellationToken = default)`
-- `public async Task<AppDescriptor?> DescribeFromSourceAsync( string sourceKey, string appSlug, string? version = null, CancellationToken cancellationToken = default)`
-- `public async Task<AppIconAsset?> GetIconAsync( string sourceKey, string appSlug, string? version = null, CancellationToken cancellationToken = default)`
+- `public Task<AppDescriptor?> DescribeFromSourceAsync( string sourceKey, string appSlug, string? version = null, CancellationToken cancellationToken = default)`
+- `public Task<AppIconAsset?> GetIconAsync( string sourceKey, string appSlug, string? version = null, CancellationToken cancellationToken = default)`
 - `public Task<LatticeAppCatalogCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.Apps.Grpc.LatticeAppWorkspaceApiGrpcClient`
@@ -329,10 +333,10 @@ The following inventory includes directly declared public members and overloads,
 `public sealed class LatticeAppWorkspaceApiGrpcClient : ILatticeAppWorkspace`
 
 - `public static LatticeAppWorkspaceApiGrpcClient Create(CallInvoker callInvoker, IServiceProvider serializerProvider)`
-- `public async Task<ImmutableArray<WorkspaceAppSummary>> ListMyAppsAsync(CancellationToken cancellationToken = default)`
-- `public async Task<WorkspaceAppDescriptor?> DescribeMyAppAsync(string appSlug, CancellationToken cancellationToken = default)`
-- `public async Task<AppIconAsset?> GetIconAsync(string appSlug, CancellationToken cancellationToken = default)`
-- `public async Task<AppUiAsset?> GetUiAssetAsync(string appSlug, string path, CancellationToken cancellationToken = default)`
+- `public Task<ImmutableArray<WorkspaceAppSummary>> ListMyAppsAsync(CancellationToken cancellationToken = default)`
+- `public Task<WorkspaceAppDescriptor?> DescribeMyAppAsync(string appSlug, CancellationToken cancellationToken = default)`
+- `public Task<AppIconAsset?> GetIconAsync(string appSlug, CancellationToken cancellationToken = default)`
+- `public Task<AppUiAsset?> GetUiAssetAsync(string appSlug, string path, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.Apps.Grpc.LatticeAppsApiAuthorizationContext`
 
@@ -354,12 +358,12 @@ The following inventory includes directly declared public members and overloads,
 - `public Task<AppLifecycleResult> DisableAsync(string appSlug, CancellationToken cancellationToken = default)`
 - `public Task<AppLifecycleResult> UninstallAsync(string appSlug, CancellationToken cancellationToken = default)`
 - `public Task<AppCatalog> ListAsync(CancellationToken cancellationToken = default)`
-- `public async Task<AppDescriptor?> DescribeAsync(string appSlug, string? version = null, CancellationToken cancellationToken = default)`
-- `public async Task<AppConsentReport?> GetConsentAsync(string appSlug, CancellationToken cancellationToken = default)`
+- `public Task<AppDescriptor?> DescribeAsync(string appSlug, string? version = null, CancellationToken cancellationToken = default)`
+- `public Task<AppConsentReport?> GetConsentAsync(string appSlug, CancellationToken cancellationToken = default)`
 - `public Task<AppConsentReport> UpdateConsentAsync(AppConsentUpdate request, CancellationToken cancellationToken = default)`
 - `public Task<LatticeAppsCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default)`
 - `public Task<AppRoleBindingsReport> UpdateRoleBindingsAsync(AppRoleBindingsUpdate request, CancellationToken cancellationToken = default)`
-- `public async Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)`
+- `public Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.Apps.Grpc.LatticeAppsApiGrpcOptions`
 

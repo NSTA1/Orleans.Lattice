@@ -604,7 +604,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Tenancy.TenantUsageRecord`
 
-[Source](../../src/lattice.tenancy/TenantUsageRecord.cs) (line 31).
+[Source](../../src/lattice.tenancy/TenantUsageRecord.cs) (line 32).
 
 `public sealed class TenantUsageRecord`
 

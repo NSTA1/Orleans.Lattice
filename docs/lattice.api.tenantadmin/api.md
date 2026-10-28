@@ -20,7 +20,7 @@ A lifecycle or grant write is not a distributed transaction across all tenant tr
 
 - [Configuration](configuration.md)
 - [Architecture](architecture.md)
-- [gRPC binding](../lattice.api.tenantadmin.grpc/README.md)
+- [gRPC binding](../lattice.api.tenantadmin.grpc/README.md) - its [public API](../lattice.api.tenantadmin.grpc/api.md), [configuration](../lattice.api.tenantadmin.grpc/configuration.md) and [architecture](../lattice.api.tenantadmin.grpc/architecture.md)
 
 ## Public declaration reference
 
@@ -83,20 +83,20 @@ The following inventory includes directly declared public members and overloads,
 
 - `public const string PlatformOperatorScope`
 - `public TenantAdminAccessAuthorizer(ILatticeAccessGate gate, ILatticeMembershipContext? membership = null)`
-- `public async ValueTask AuthorizeTenantAdminAsync(CancellationToken cancellationToken = default)`
-- `public async ValueTask<bool> IsTenantAdminAuthorizedAsync(CancellationToken cancellationToken = default)`
+- `public ValueTask AuthorizeTenantAdminAsync(CancellationToken cancellationToken = default)`
+- `public ValueTask<bool> IsTenantAdminAuthorizedAsync(CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionResidencyAuthorizer`
 
-[Source](../../src/lattice.api.tenantadmin/TenantRegionResidencyAuthorizer.cs) (line 44).
+[Source](../../src/lattice.api.tenantadmin/TenantRegionResidencyAuthorizer.cs) (line 46).
 
 `public sealed class TenantRegionResidencyAuthorizer`
 
 - `public TenantRegionResidencyAuthorizer( ILatticeAccessGate gate, ITenantRegistry registry, ILatticeMembershipContext? membership = null)`
-- `public async ValueTask AuthorizeOperatorAsync(CancellationToken cancellationToken = default)`
+- `public ValueTask AuthorizeOperatorAsync(CancellationToken cancellationToken = default)`
 - `public ValueTask<TenantRecord> AuthorizeTenantAdminAsync( TenantId tenant, CancellationToken cancellationToken = default)`
-- `public async ValueTask<TenantRecord> AuthorizeTenantAdminAsync( TenantId tenant, string action, CancellationToken cancellationToken)`
-- `public async ValueTask<TenantRecord?> TryAuthorizeTenantAdminAsync( TenantId tenant, CancellationToken cancellationToken = default)`
+- `public ValueTask<TenantRecord> AuthorizeTenantAdminAsync( TenantId tenant, string action, CancellationToken cancellationToken)`
+- `public ValueTask<TenantRecord?> TryAuthorizeTenantAdminAsync( TenantId tenant, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantScopeRequiredException`
 
@@ -109,6 +109,8 @@ The following inventory includes directly declared public members and overloads,
 - `public TenantScopeRequiredException(string message, Exception innerException)`
 
 ## Shared contract declaration reference
+
+These types are declared in the shared contract package, where the [`Orleans.Lattice.Api.Abstractions` public API](../lattice.api.abstractions/api.md#orleanslatticeapitenantadmin) places the `Orleans.Lattice.Api.TenantAdmin` namespace among every other facade namespace.
 
 The following inventory includes directly declared public members and overloads, enum values, and record positional members. Inherited framework members and compiler-generated record equality helpers are not additional package operations. Each source link identifies the declaration that defines its signature.
 
@@ -280,9 +282,9 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantAccessConfinementException`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessConfinementException.cs) (line 27).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessConfinementException.cs) (line 29).
 
-`public sealed class TenantAccessConfinementException : ArgumentException`
+`public sealed class TenantAccessConfinementException : ArgumentException, ILatticeDomainFault`
 
 - `public TenantAccessConfinementException( string tenantId, TenantAccessConfinementRule rule, string message, string? paramName = null)`
 - `public string TenantId { get; }`

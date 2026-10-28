@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Configuration
 
 The package exposes one options type. Configure it with `AddLatticeAppBridgeApi(options => ...)`; this registration also wires the control, catalogue, and workspace facades.

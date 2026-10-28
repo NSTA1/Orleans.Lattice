@@ -40,9 +40,11 @@ The collapsed leaf state row carries only:
 
 - The owning tree id and the topology fields (sibling pointers,
   parent reference, key range, shard index, split lifecycle -
-  including the durable marker of a split still in flight), plus the
-  moved-away slot seal an adaptive shard split records (a later shard
-  consolidation that folds those slots back lifts it).
+  including the durable marker of a split still in flight, and the
+  sibling a completed division created whose link the shard root has
+  not yet acknowledged), plus the moved-away slot seal an adaptive shard
+  split records (a later shard consolidation that folds those slots back
+  lifts it).
 - The projection-digest XOR fold (16 bytes).
 - The scalar projection checkpoint pointing into the WAL, plus a
   per-partition offset array on a multi-partition tree and a flag
@@ -64,6 +66,9 @@ The collapsed leaf state row carries only:
 - A flag recording that the leaf's separate row record is durable.
 - The byte size the leaf's persisted snapshot last occupied, a hint
   the next activation uses to reserve hydration budget up front.
+- The leaf-reclaim retirement record: a flag that reclaim has durably
+  closed the leaf to mutations, and the successor (and the leaf after
+  it) whose reclaim completion this leaf still owes.
 
 The row is not fixed-size. `MaxDurableUnresolvedReplayWork` (default 1 024) bounds deferred terminals, not resident unresolved prepares: prepares remain durable even beyond the cap, so a saga backlog can exceed a storage limit or prevent activation. See [Tree Storage](tree-storage.md) for sizing and this failure mode.
 

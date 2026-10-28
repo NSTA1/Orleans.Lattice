@@ -151,13 +151,13 @@ The request records this package defines, each an Orleans-serialized `[GenerateS
 | `TreeAdminSnapshotRequest` | `required string TreeId`, `required string DestinationTreeId`, `TreeSnapshotMode Mode`, `int? MaxLeafKeys`, `int? MaxInternalChildren` | `SnapshotTree` |
 | `TreeAdminOrphanedLeafRequest` | `required string TreeId`, `string? ResumeFrom`, `bool Survey`, `string? TrackingOperationId` | `AuditOrphanedLeaves` (with `Survey` set for the survey), `RepairOrphanedLeaves`, `StartOrphanedLeavesAudit`, `StartOrphanedLeavesRepair` |
 | `TreeAdminWalMovePlanRequest` | `required string TreeId`, `int Partition`, `required string TargetProviderKey` | `PlanWalMove` |
-| `TreeAdminWalMoveExecuteRequest` | `required string TreeId`, `int Partition`, `required string TargetProviderKey`, `TreeWalMoveOptions? Options`, `string? TrackingOperationId` | `ExecuteWalMove`, `StartWalMove` |
+| `TreeAdminWalMoveExecuteRequest` | `required string TreeId`, `int Partition`, `required string TargetProviderKey`, `TreeWalMoveOptions? Options`, `string? TrackingOperationId` | `StartWalMove` |
 | `TreeAdminWalReclaimRequest` | `required string TreeId`, `int Partition`, `required string SourceProviderKey` | `ReclaimMovedWalSource` |
 | `TreeAdminViewListRequest` | (empty) | `ListViews` |
 | `TreeAdminCreateViewRequest` | `required string ViewName`, `required string SourceTreeId`, `required string ProviderKey`, `byte[] Payload` | `CreateView` |
-| `TreeAdminViewRequest` | `required string ViewName`, `string? TrackingOperationId` | `GetViewStatus`, `RebuildView`, `ReconcileView`, `DropView` (also its response), `StartViewRebuild`, `StartViewReconcile` |
+| `TreeAdminViewRequest` | `required string ViewName`, `string? TrackingOperationId` | `GetViewStatus`, `DropView` (also its response), `StartViewRebuild`, `StartViewReconcile` |
 | `TreeAdminTagIndexListRequest` | (empty) | `ListTagIndexes` |
-| `TreeAdminTagIndexRequest` | `required string IndexName`, `string? TrackingOperationId` | `GetTagIndexStatus`, `ReconcileTagIndex`, `StartTagIndexReconcile` |
+| `TreeAdminTagIndexRequest` | `required string IndexName`, `string? TrackingOperationId` | `GetTagIndexStatus`, `StartTagIndexReconcile` |
 | `TreeAdminSetRetentionRequest` | `required string TreeId`, `TreeHistoryRetentionMode? Mode`, `TimeSpan? Window` | `SetHistoryRetention` |
 | `AuthSchemeAdvertisementRequest` | (empty) | `GetAuthScheme` |
 
@@ -237,6 +237,7 @@ One advertised authentication scheme returned by the unauthenticated discovery R
 
 ## Reference
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
 - [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md) - the transport-agnostic whole-tree administration facade this binding projects, including the operation set and the fail-closed access gate.
 - [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared, versioned API contract the facade and this binding consume.
 - [`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md) - the sibling control-facade binding this one mirrors; the tree-administration facade composes the schema control facade by delegation.

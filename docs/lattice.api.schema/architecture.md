@@ -27,8 +27,8 @@ The facade adds no transport of its own and no bespoke, un-authorized write path
 
 Every facade operation authorizes before it touches the admin plane, through the schema engine's internal authorization component:
 
-- **Policy reads**, **dead-letter reads**, **version-config reads**, **remediation-status reads**, and **compliance scans** require Read authority for the tree.
-- **Policy mutations**, **version-config mutations**, **target-version advances**, **version migrations**, and **remediation** require SchemaAdmin authority for the tree.
+- **Policy reads**, **dead-letter reads**, **version-config reads**, **runtime-catalog reads**, **remediation-status reads**, and **compliance scans** require Read authority for the tree.
+- **Policy mutations**, **version-config mutations**, **runtime-catalog registrations**, **target-version advances**, **version migrations**, and **remediation** require SchemaAdmin authority for the tree.
 - **Capability probes** do not perform the requested operation. They run two fail-closed probes, Read and SchemaAdmin, and translate those results into advisory flags.
 
 Because authorization happens before the admin plane is touched, a denied caller cannot learn policy, dead-letter, versioning, remediation, or compliance details by calling a more specific operation. The capability probe is useful for user interfaces, but it is never a cacheable grant: each real operation re-authorizes immediately before it runs.
@@ -43,7 +43,7 @@ Both operations are read-only and require Read authority for the tree.
 
 Schema versioning is a separate add-on registered with `AddLatticeSchemaVersioning(...)`. The control facade can be registered without it, because policy, dead-letter, remediation, compliance, and capability operations are still useful without versioning.
 
-When a version operation is called and the add-on is not present, the facade throws a clear `InvalidOperationException`. That failure happens at call time rather than during dependency injection, so a host can expose the non-versioned control surface without registering unused versioning services.
+When a version operation - including a runtime-catalog read or registration - is called and the add-on is not present, the facade throws a clear `InvalidOperationException`. That failure happens at call time rather than during dependency injection, so a host can expose the non-versioned control surface without registering unused versioning services.
 
 ## Remediation
 

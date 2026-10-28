@@ -142,53 +142,12 @@ id so concurrent edits are attributed to different causal lineages.
 
 ## Who owns the bytes
 
-Every primitive that carries caller values handles them as opaque `byte[]`
-payloads - the sets, the registers and the sequence, and an OR-Map whose values
-carry bytes; the counters, the flags and the version vector carry no bytes of yours
-at all. The library follows one rule for who owns a given array, and ownership is
-decided by where the array came from, not by which type is holding it:
-
-| Seam | Rule | What it means for you |
-|---|---|---|
-| **You hand a value in** (a register's `Set`, the sequence's `InsertAfter`) | The array is taken over, not copied - a set's `Add` and `OrMap.Set` keep no array of yours (see below) | Do not keep writing into an array after you pass it in. Author it, hand it over, forget it. |
-| **A peer or a delta is folded in** (`MergeFrom`, `MergeDelta`) | The incoming array is copied | A replica never ends up sharing a buffer with the peer it merged from. |
-| **A value comes back out** (`Clone`, `OrMap.Get`, materialised projections) | The array is copied | A value you read is yours to mutate; doing so can never reach back into stored state. |
-
-The first rule is why writing to a register or the sequence never pays to copy the payload it is
-handed, and the last two are why a read or a merge can never corrupt somebody else's
-state. A value you pass to the tree itself - `SetAsync`, or an accessor method such
-as `AddAsync` - is copied or encoded on the way in, so the store never keeps your
-array. If you are implementing a CRDT against `ICrdt<TSelf>`, all three legs are
-part of the contract.
-
-Two things keep the cost of the copying legs down. An empty payload reuses the
-shared `Array.Empty<byte>()` singleton, so copying it never allocates. And the set
-primitives (`GSet`, `OrSet`, `RwSet`) never retain a caller's array at all: an
-element is encoded to a string key on the way in and decoded fresh on the way out,
-so they satisfy all three legs by construction.
-
-One ingress copies instead of taking over: `OrMap.Set`. Its value is itself a
-CRDT rather than a byte array, and the map snapshots it with `Clone` on the way in,
-so you may keep mutating your own instance after the call without reaching into
-the map.
-
-The rule is enforced structurally rather than by review. A contract test walks
-every registered CRDT's object graph and compares `byte[]` instances by reference
-identity across a clone, a state fold, a delta fold, and each public projection.
-It also fails when a CRDT type has no specimen registered, or grows a new public
-`byte[]`-bearing projection that nothing covers - so a new primitive cannot join
-the family without picking up the contract.
+A value you hand to the tree is copied, and a value you read back is yours to change.
+The full ownership rules, for anyone implementing a CRDT of their own, are in
+[byte ownership](../lattice/state-primitives.md#byte-ownership).
 
 ## Where a bounded register's direction lives
 
-A `MaxRegister` and a `MinRegister` are the same primitive pointed in opposite
-directions. That direction is owned by the **merge mode registered for the key**
-(`LatticeMergeMode.MaxRegister` or `LatticeMergeMode.MinRegister`), which is what
-the accessor you used selects. The `IsMin` bit you can see on the decoded
-`BoundedRegister` state is a copy of that decision carried on the wire, not a
-second source of truth: every decode re-stamps it from the registered mode.
-
-This matters if you ever write register state as raw bytes rather than through
-`tree.MaxRegister(...)` / `tree.MinRegister(...)` - a hand-authored payload whose
-`IsMin` disagrees with the key's mode is corrected on read rather than silently
-folding the wrong way for the rest of the key's life.
+Use the `tree.MaxRegister(...)` / `tree.MinRegister(...)` accessors; the key's merge
+mode decides the direction. [Bounded registers](../lattice/state-primitives.md#where-the-direction-lives)
+explains how a register read back always agrees with it.

@@ -102,7 +102,7 @@ See [Replication Apply](replication-apply.md) and [Deltas](deltas.md).
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `IReplicationApplier` | interface | Applies inbound WAL records to the local tree. | `ApplyAsync`, `ApplyBatchAsync` |
-| `ApplyResult` | readonly record struct | Apply outcome and high-water-mark visibility. | `Applied`, `HighWaterMark`, `Deferred` (the batch was held back by an inbound receive fence and must be retried), `SourceLineageRefused` (the sender read it under a source lineage this tree no longer holds; the sender re-resolves its binding, and a refused dead-letter replay stays parked) |
+| `ApplyResult` | readonly record struct | Apply outcome and high-water-mark visibility. | `Applied`, `HighWaterMark`, `Deferred` (the batch was held back by an inbound receive fence and must be retried), `SourceLineageRefused` (the sender read it under a source lineage this tree no longer holds; the sender re-resolves its binding, and a refused dead-letter replay stays parked), `TenantIsolationRefused` (the tenant-isolation gate refused the entry's authenticated direct sender - `RejectSourceNotResident` or `RejectMissingSourceIdentity`; a refused dead-letter replay stays parked, so a sender that is not currently authorized cannot consume it) |
 | `IReplicationLocalVcSeeder` | interface | Rebuilds a tree's local vector clock from the vector-clock slots on its values after an intra-cluster snapshot restore, so inbound dependency checks do not run against a zeroed vector. A no-op for a non-replicated tree. | `SeedFromTreeAsync(string, CancellationToken)` returning `LocalVcSeedReport` |
 | `LocalVcSeedReport` | readonly record struct | Observable result of local version-vector seeding. | `TreeName`, `Frontier`, `EntriesScanned`, `SeedApplied` |
 
@@ -120,13 +120,15 @@ See [Snapshot Bootstrap](snapshot-bootstrap.md), [Auto-Bootstrap](auto-bootstrap
 | `LatticeBootstrapState` | enum | Bootstrap state-machine state. | `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` |
 | `BootstrapCoordinatorStatus` | readonly record struct | Observable bootstrap phase and source cluster. | `Phase`, `SourceClusterId` |
 | `SnapshotEntry` | readonly record struct | One row in a snapshot stream. | Key, value, timestamp, prepared/tombstone flags, transaction id, source-shard index, atomic-batch size/index, TTL expiry, delta, and merge-mode slots |
-| `SnapshotStream` | sealed class | Async snapshot stream wrapper. | `TreeName`, `AsOfHlc`, `CausalStableFrontier`, `Entries` |
+| `SnapshotStream` | sealed class | Async snapshot stream wrapper. | `TreeName`, `AsOfHlc`, `CausalStableFrontier`, `OpenGeneration`, `CloseGeneration`, `Entries` |
 | `IRemoteSnapshotTransport` | interface | Fetches snapshot metadata and stream items from a remote cluster. | `GetMetadataAsync`, `RequestSnapshotAsync` |
-| `LatticeRemoteSnapshotService` | sealed class | Public remote snapshot transport service. | Implements `IRemoteSnapshotTransport` |
+| `IRemoteSnapshotItemTransport` | interface | Optional extension of `IRemoteSnapshotTransport` for bindings that can carry a close-generation trailer after the entry stream. | `RequestSnapshotItemsAsync` |
+| `LatticeRemoteSnapshotService` | sealed class | Public remote snapshot transport service. Tenant trees additionally require an authenticated requesting peer and the tenant export gate's approval before any provider access; the overloads without a requester identity cannot export a tenant tree. | Implements `IRemoteSnapshotItemTransport`; `GetMetadataAsync`, `RequestSnapshotAsync`, `RequestSnapshotItemsAsync`, each also with an overload taking the authenticated requesting peer |
 | `RemoteSnapshotProvider` | sealed class | Snapshot provider backed by a remote transport. | Implements `IBootstrapSnapshotSource` |
-| `RemoteSnapshotMetadata` | readonly record struct | Remote snapshot metadata response. | `TreeName`, `SourceClusterId`, `AsOfHlc`, `CausalStableFrontier` |
+| `RemoteSnapshotMetadata` | readonly record struct | Remote snapshot metadata response. | `TreeName`, `SourceClusterId`, `AsOfHlc`, `CausalStableFrontier`, `ExportEpoch` (`0` from a source that does not number its exports), `OpenGeneration` |
 | `RemoteSnapshotMetadataRequest` | readonly record struct | Remote metadata request. | `TreeName`, `SourceClusterId`, `FromAsOfHlc` (a strict upper-bound filter; `HybridLogicalClock.Zero` disables it) |
-| `RemoteSnapshotStreamItem` | readonly record struct | One item returned by remote snapshot streaming. | `Entry` (one `SnapshotEntry` per streamed message) |
+| `RemoteSnapshotStreamItem` | readonly record struct | One item returned by remote snapshot streaming. | `Entry` (one `SnapshotEntry` per streamed message), `CloseGeneration` (the close-generation trailer) |
+| `SnapshotSourceGeneration` | readonly record struct | The source tree generation observed around a snapshot export; a receiver compares the opening and closing values before synthesising deletes for source-origin keys that disappeared from an in-place re-bootstrap. | `PhysicalTreeId`, `ShardMapVersion`, `Lineage`, `DeleteEpoch`, `IsDeleted` (each `null` when unknown) |
 | `LatticeBootstrapTransientFaultClassifier` | static class | Default transient-fault classifier for the receiver-side bootstrap drain: timeouts, HTTP / socket / IO faults, retryable gRPC statuses (`Unavailable`, `DeadlineExceeded`, `Aborted`), and an expired Orleans enumeration session retry with bounded backoff; anything else pivots the bootstrap to `Failed`. | `IsTransient(Exception)` |
 
 Bootstrap applies snapshot entries through the same public apply seam as incremental replication, then hands off to live shipping at the snapshot frontier.
@@ -138,7 +140,7 @@ See [Dead-Letter Queue](dead-letter-queue.md).
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `ILatticeReplicationDeadLetters` | interface | Lists, discards, and replays quarantined apply failures; host-trusted receiver saga poison and quarantine release. | `ListAsync`, `CountAsync`, `DiscardAsync`, `ReplayAsync`, `PoisonSagaAsync`, `ReleaseQuarantinedSagaAsync` |
-| `DeadLetterEntry` | readonly record struct | Retained failed apply entry. | `EntryId`, `Entry`, `FailureReason`, `RetryCount`, `EnqueuedAtTicks`, `SourceLineageClusterId`, `SourceLineage` (the source lineage the entry's sender stamped, which a replay is checked against; `null` when unstamped) |
+| `DeadLetterEntry` | readonly record struct | Retained failed apply entry. | `EntryId`, `Entry`, `FailureReason`, `RetryCount`, `EnqueuedAtTicks`, `SourceLineageClusterId`, `SourceLineage` (the source lineage the entry's sender stamped, which a replay is checked against; `null` when unstamped), `ReasonTag` (a stable machine-readable reason tag), `AuthenticatedSenderClusterId` (the authenticated direct sender that delivered the entry, separate from its origin lineage; `null` on older entries, which therefore cannot pass source checks during replay) |
 
 Replay runs the parked entry through the canonical applier and removes it on any non-throwing, non-deferred return, whether or not the entry applied. A replay that an in-flight coordinated restore's receive fence defers leaves the entry parked, as does a thrown exception (see [Replay semantics](dead-letter-queue.md#replay-semantics)).
 
@@ -150,6 +152,9 @@ See [Auto-Bootstrap](auto-bootstrap.md), [WAL](wal.md), and [Observability](obse
 |---|---|---|---|
 | `ILatticeReplicationAdmin` | interface | Operator-driven snapshot re-seed controls, and two alarmed overrides: lifting the read fence a failed snapshot bootstrap left up ([Snapshot bootstrap](snapshot-bootstrap.md)), and resolving a prepared coordinated-restore participant whose coordinator is lost ([Coordinated restore](coordinated-restore.md#resolving-a-participant-whose-coordinator-is-lost)). Both overrides are default members that throw `NotSupportedException` on an implementation that does not support them. | `RequestSnapshotAsync`, `ForceRequestSnapshotAsync`, `ForceLiftBootstrapReadFenceAsync`, `ResolveCrossClusterSagaParticipantAsync` |
 | `ILatticeWalIntrospection` | interface | Sender-side view of retained WAL availability. | `GetOldestAvailableHlcAsync`, `GetOldestAvailableHlcByOriginAsync` |
+| `ILatticeReplicationPeerDecommissioner` | interface | Permanently decommissions a peer cluster id: drops it from every tree's durable enrollment (releasing any cross-tree decision hold waiting on it), abandons the undecided cross-tree barriers it originated on this receiver, settles the pending buckets it left, and records a durable decommissioned marker, so a later re-add of the same id bootstraps fresh. Refused while the peer is still configured. | `DecommissionPeerAsync` returning `LatticeReplicationPeerDecommissionOutcome` |
+| `LatticeReplicationPeerDecommissionOutcome` | readonly record struct | Decommission outcome. | `PeerClusterId`, `TreeCount`, `AlreadyDecommissioned` |
+| `LatticeReplicationPeerStillConfiguredException` | exception | Thrown by `DecommissionPeerAsync` while the peer is still in the configured peer set; remove it from `ReplicationPeers` first. Implements `ILatticeDomainFault`. | `PeerClusterId` |
 | `ILatticeFallOffLogDetector` | interface | Receiver-side check of the local per-origin high-water mark against this receiver's local retained WAL for that origin; on local fall-off it records the metric and, when `AutoBootstrapOnFallOffLog` is on, starts a bootstrap. Source WAL trims are detected by the sender shipper and carried as `ReplicationBatch.ReseedAfterEpoch`. | `CheckAndTriggerAsync` returning `FallOffLogDecision` |
 
 The admin surface rate-limits routine re-seeds through `OperatorReseedMinInterval`; the force method bypasses that rate limit for disaster-recovery and scheduled re-seed scenarios.
@@ -292,8 +297,8 @@ The saga service-provider interfaces let a host join the coordinated cross-clust
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `IReplicationTenantIsolationGate` | interface | Evaluates whether an inbound replicated entry is admissible for the tenant its tree id names - the tenant must exist, be resident in this region, and be active - so a peer can never widen tenant or region scope. The replication package's default gate is inactive; the tenancy add-on supplies a real gate. | `IsActive`, `EvaluateAsync(string, CancellationToken)` returning `ReplicationTenantIsolationDecision` |
-| `ReplicationTenantIsolationDecision` | enum | The gate's verdict. | `Admit = 0`, `RejectUnknownTenant = 1`, `RejectOutOfRegion = 2`, `RejectSuspendedTenant = 3` |
+| `IReplicationTenantIsolationGate` | interface | Evaluates whether an inbound replicated entry is admissible for the tenant its tree id names - the tenant must exist, be resident in this region, and be active - so a peer can never widen tenant or region scope. The replication package's default gate is inactive; the tenancy add-on supplies a real gate. | `IsActive`, `EvaluateAsync(string, CancellationToken)` and the sender-aware `EvaluateAsync(string, string?, CancellationToken)` returning `ReplicationTenantIsolationDecision`, and `AuthorizeExportAsync(string, string, CancellationToken)` (a tenant snapshot export to an authenticated requesting peer; the default denies) |
+| `ReplicationTenantIsolationDecision` | enum | The gate's verdict. | `Admit = 0`, `RejectUnknownTenant = 1`, `RejectOutOfRegion = 2`, `RejectSuspendedTenant = 3`, `RejectSourceNotResident = 4`, `RejectMissingSourceIdentity = 5` |
 | `ILatticeReplicationConfigAuthority` | interface | The engine-level authoring seam for runtime per-tree replication config: authors enable / disable onto the `sys-replication-config` tree and reports the reconciled per-tree status (the runtime tree unioned with the static `ReplicatedTrees` map). It performs no authorization - the control facade authorizes first. Registered by `AddLatticeReplication(..., enableRuntimeConfig: true)`. See [Runtime configuration](runtime-config.md). | `EnableReplicationAsync`, `DisableReplicationAsync`, `GetTreeStatusAsync`, `GetAllTreeStatusesAsync` |
 | `LatticeReplicationEnableResult`, `LatticeReplicationDisableResult` | readonly record structs | Authority outcomes. | `TreeId`, `Mode`, `AlreadyEnabled`, `BootstrapRequested` / `TreeId`, `AlreadyDisabled` |
 | `LatticeReplicationTreeStatus` | readonly record struct | One tree's reconciled replication status. | `TreeId`, `Enabled`, `Mode`, `Ambiguous`, `Source` |
@@ -330,6 +335,7 @@ The following inventory includes directly declared public members and overloads,
 - `public HybridLogicalClock HighWaterMark { get; init; }`
 - `public bool Deferred { get; init; }`
 - `public bool SourceLineageRefused { get; init; }`
+- `public bool TenantIsolationRefused { get; init; }`
 
 ### `Orleans.Lattice.Replication.BootstrapCoordinatorStatus`
 
@@ -484,6 +490,7 @@ The following inventory includes directly declared public members and overloads,
 - `public string? SourceLineageClusterId { get; init; }`
 - `public Guid? SourceLineage { get; init; }`
 - `public string? ReasonTag { get; init; }`
+- `public string? AuthenticatedSenderClusterId { get; init; }`
 
 ### `Orleans.Lattice.Replication.DigestProbeComparer`
 
@@ -562,7 +569,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Replication.IBootstrapSnapshotSource`
 
-[Source](../../src/lattice.replication/IBootstrapSnapshotSource.cs) (line 25).
+[Source](../../src/lattice.replication/IBootstrapSnapshotSource.cs) (line 33).
 
 `public interface IBootstrapSnapshotSource : ISnapshotProvider`
 
@@ -751,6 +758,8 @@ The following inventory includes directly declared public members and overloads,
 
 - `bool IsActive { get; }`
 - `ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync( string treeId, CancellationToken cancellationToken = default)`
+- `ValueTask<ReplicationTenantIsolationDecision> EvaluateAsync( string treeId, string? authenticatedSenderClusterId, CancellationToken cancellationToken = default)`
+- `ValueTask<bool> AuthorizeExportAsync( string treeId, string authenticatedRequesterClusterId, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Replication.IReplicationTopology`
 
@@ -833,15 +842,19 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Replication.LatticeRemoteSnapshotService`
 
-[Source](../../src/lattice.replication/LatticeRemoteSnapshotService.cs) (line 52).
+[Source](../../src/lattice.replication/LatticeRemoteSnapshotService.cs) (line 55).
 
 `public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport`
 
 - `public LatticeRemoteSnapshotService( ISnapshotProvider provider, ILogger<LatticeRemoteSnapshotService> logger)`
 - `public LatticeRemoteSnapshotService( ISnapshotProvider provider, ILatticeReplicationContext replicationContext, ILogger<LatticeRemoteSnapshotService> logger)`
-- `public async Task<RemoteSnapshotMetadata> GetMetadataAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
-- `public async IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
-- `public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+- `public LatticeRemoteSnapshotService( ISnapshotProvider provider, ILatticeReplicationContext replicationContext, ILogger<LatticeRemoteSnapshotService> logger, IReplicationTenantIsolationGate? tenantIsolationGate)`
+- `public Task<RemoteSnapshotMetadata> GetMetadataAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+- `public async Task<RemoteSnapshotMetadata> GetMetadataAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, string? authenticatedRequesterClusterId, CancellationToken cancellationToken)`
+- `public IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+- `public async IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, string? authenticatedRequesterClusterId, [EnumeratorCancellation] CancellationToken cancellationToken)`
+- `public IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)`
+- `public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync( string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, string? authenticatedRequesterClusterId, [EnumeratorCancellation] CancellationToken cancellationToken)`
 
 ### `Orleans.Lattice.Replication.LatticeReplicationAcceptedSecrets`
 
@@ -958,6 +971,8 @@ The following inventory includes directly declared public members and overloads,
 - `public const string OutcomeRejectedModeMismatch`
 - `public const string OutcomeRejectedForeignTenant`
 - `public const string OutcomeRejectedTenantOffline`
+- `public const string OutcomeRejectedTenantSourceNotResident`
+- `public const string OutcomeRejectedMissingSourceIdentity`
 - `public const string OutcomeRejectedSuspendedTenant`
 - `public const string TagReason`
 - `public const string TagShard`
@@ -971,6 +986,8 @@ The following inventory includes directly declared public members and overloads,
 - `public const string ReasonModeMismatch`
 - `public const string ReasonForeignTenant`
 - `public const string ReasonTenantOffline`
+- `public const string ReasonTenantSourceNotResident`
+- `public const string ReasonMissingSourceIdentity`
 - `public const string ReasonSuspendedTenant`
 - `public const string ReasonUnknown`
 - `public static readonly Meter Meter`
@@ -1802,7 +1819,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Replication.ReplicationPeerSnapshot`
 
-[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 556).
+[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 569).
 
 `public readonly record struct ReplicationPeerSnapshot( string Tree, string Peer, long EntriesBehind, long BytesBehind, long ConsecutiveErrors, double LastContactSeconds)`
 
@@ -1840,6 +1857,8 @@ The following inventory includes directly declared public members and overloads,
 - `RejectUnknownTenant = 1`
 - `RejectOutOfRegion = 2`
 - `RejectSuspendedTenant = 3`
+- `RejectSourceNotResident = 4`
+- `RejectMissingSourceIdentity = 5`
 
 ### `Orleans.Lattice.Replication.ReplicationTypeAliases`
 
@@ -2038,7 +2057,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Replication.WireVersionNegotiationSnapshot`
 
-[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 752).
+[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 765).
 
 `public readonly record struct WireVersionNegotiationSnapshot( string Tree, string Peer, int NegotiatedVersion, bool DowngradeActive, bool PeerCapabilityKnown)`
 
@@ -2046,7 +2065,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Replication.WireVersionNegotiationState`
 
-[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 605).
+[Source](../../src/lattice.replication/ReplicationPeerStats.cs) (line 618).
 
 `public class WireVersionNegotiationState`
 

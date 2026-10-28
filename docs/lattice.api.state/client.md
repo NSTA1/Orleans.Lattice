@@ -69,3 +69,4 @@ The [`StateExplorer`](../../samples/StateExplorer) sample demonstrates the full 
 
 - [Surfaces](surfaces.md) - each request and response in detail.
 - [Security](security.md) - the channel-side credentials the authorizer validates.
+- [gRPC binding public API](../lattice.api.state.grpc/api.md) - every client method and wire envelope by signature.

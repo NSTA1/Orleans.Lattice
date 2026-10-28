@@ -69,16 +69,9 @@ batched call, mints all the deltas against that snapshot, and applies them throu
 a single batched CRDT write, so a presence- or membership-marking pass costs one
 read and one write per leaf rather than two round trips per key.
 
-The snapshot is treated as possibly incomplete. A batched read reports an absent
-key by omission, so a row it did not return is indistinguishable from a row that
-does not exist, and deriving the dot counter from the snapshot alone would mint
-counter 1 for both. Because OR-Flag cancellation is coverage-based, such a dot is
-cancelled outright by any tombstone the unread row already carries - the write
-would report success while the flag stayed off, permanently, since the next
-attempt would repeat the read and mint the same dead dot. The batched helpers
-therefore mint each dot from a strictly increasing source instead. A dot only has
-to be unused for its replica, never dense, so this costs nothing semantically and
-makes an enable impossible to cancel by a tombstone authored before it.
+Every enable the batch reports as written takes effect. A disable recorded on a
+key before the batch ran cannot quietly cancel it, even for a key the batched read
+did not return, so the batch never reports success while leaving a flag off.
 
 Pass the same non-empty replica identity you would give `EnableAsync`; an empty
 one is rejected, because writers sharing a blank identity could cancel each

@@ -117,5 +117,6 @@ FORM: Order diagram, candidate 7 of 7, seed a5e4ebc3. Staging: one proportional 
 <section class="lt-close" aria-labelledby="lt-close-title">
 <h2 id="lt-close-title">New here?</h2>
 <p>The <a href="README.md">overview</a> explains what the platform is, why it exists, and how a deployment grows from one machine to many regions. Every capability is catalogued in <a href="FEATURES.md">Features</a>, each with its documentation and, where one exists, a runnable sample.</p>
+<p>An agent operating a deployment starts from the <a href="agents.md">Agent Docs</a>: machine-readable specifications of Lattice's API surfaces, MCP tools, procedures and invariants, citing the source code behind them.</p>
 </section>
 </div>

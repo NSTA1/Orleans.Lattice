@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/capabilities.yaml"
+---
+
 # Orleans.Lattice.Explorer API reference
 
 This reference covers the supported host entry points, the sign-in seam used by
@@ -511,7 +515,7 @@ This index lists every effectively public type and each member declared directly
     `TagIndexesLabel`; `TelemetryArea`; `TenantAdministrationArea`; `TenantAdministrationAreaShort`; `TenantGrantAudience`; `TreesLabel`
     `ViewsLabel`; `ViewsLongLabel`
 
-#### `Orleans.Lattice.Explorer.UI` (187 exported types)
+#### `Orleans.Lattice.Explorer.UI` (188 exported types)
 - `Orleans.Lattice.Explorer.UI._Imports`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Areas.Access._Imports`
@@ -707,6 +711,8 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Areas.Schema.SchemaOperationStatus`
   - `constructors (1)`; `Dispose`; `PollInterval`
 - `Orleans.Lattice.Explorer.UI.Areas.Schema.SchemaPolicyPanel`
+  - `constructors (1)`; `Dispose`
+- `Orleans.Lattice.Explorer.UI.Areas.Schema.SchemaRegistryPanel`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Schema.SchemaRemediationPanel`
   - `constructors (1)`; `Dispose`

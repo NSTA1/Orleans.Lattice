@@ -55,3 +55,14 @@ services.AddAzureTelemetryBackendToken(o =>
 | `RefreshSkew` | `TimeSpan` | 5m | How long before expiry the provider proactively re-acquires, so an in-flight query never presents an about-to-expire token. Must be non-negative. |
 
 The options are validated when they are first resolved - on the first token request, since no start-up validation is registered: a credential must be supplied, the scope must be non-empty, and the refresh skew must not be negative.
+
+## Reference
+
+- [Public API](api.md) - the registration method and the options type.
+- [Configuration](configuration.md) - every option with its default and validation.
+- [Architecture](architecture.md) - where the provider sits and how the token is cached and refreshed.
+
+## See also
+
+- [`Orleans.Lattice.Api.Mcp.Telemetry`](../lattice.api.mcp.telemetry/README.md) - the MCP telemetry tool module whose `DynamicBearer` mode this provider serves.
+- [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) - the transport-neutral package that defines `ITelemetryBackendTokenProvider`.

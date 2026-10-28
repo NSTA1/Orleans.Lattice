@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra API reference
 
 The package adds an interactive MSAL-backed `entra` authentication method to

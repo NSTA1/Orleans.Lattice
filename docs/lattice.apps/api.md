@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/app-lifecycle.yaml"
+---
+
 # Public API
 
 This page indexes the public surface declared by `Orleans.Lattice.Apps`. The engine provides the registry, source, activation, ownership, role-compilation, and subscription seams. Transport contracts live in `Orleans.Lattice.Api.Abstractions`; see the [control facade API](../lattice.api.apps/api.md).
@@ -917,7 +921,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Apps.Sources.AppSourceCapabilities`
 
-[Source](../../src/lattice.apps/Sources/AppSourceCapabilities.cs) (line 4).
+[Source](../../src/lattice.apps/Sources/AppSourceCapabilities.cs) (line 5).
 
 `public enum AppSourceCapabilities`
 

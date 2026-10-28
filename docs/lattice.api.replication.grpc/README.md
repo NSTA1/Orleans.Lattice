@@ -35,6 +35,7 @@ The gRPC service name is `orleans.lattice.api.replication`.
 | `EnableReplication` | unary | Enable replication for a tree under a fixed merge mode. |
 | `DisableReplication` | unary | Disable replication for a tree without purging peer data. |
 | `GetReplicationConfig` | unary | Report the permission-scoped per-tree replication config. |
+| `DecommissionPeer` | unary | Permanently decommission a peer cluster id that is no longer in `ReplicationPeers`. |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes. |
 
 ### Peer status service
@@ -95,7 +96,7 @@ foreach (var tree in report.Trees)
 }
 ```
 
-The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. A call the server rejects arrives as a `PermissionDenied` `RpcException`; other failures map to stable status codes (notably `FailedPrecondition` for an in-place mode change or an unmet enable or disable precondition, and `InvalidArgument` for a malformed request). See [Architecture](architecture.md#status-mapping) for the full mapping.
+The `serializerProvider` must have Orleans serialization registered (`AddSerializer()`) so the client and server wire marshallers match exactly. A call the server rejects arrives as a `PermissionDenied` `RpcException`; other failures map to stable status codes (notably `FailedPrecondition` for an in-place mode change, an unmet enable or disable precondition, or a decommission of a peer still in `ReplicationPeers`, and `InvalidArgument` for a malformed request). See [Architecture](architecture.md#status-mapping) for the full mapping.
 
 ## Reference
 

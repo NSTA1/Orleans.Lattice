@@ -79,6 +79,7 @@ auth-scheme advertisement. Each row below is one bound RPC:
 | `AuthorizeAllowedRegions` | `ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync` (operator-only) |
 | `SetTenantResidency` | `ILatticeTenantRegionAdmin.SetResidencyAsync` (operator or tenant admin) |
 | `GetTenantRegionStatus` | `ILatticeTenantRegionAdmin.GetTenantRegionStatusAsync` (operator or tenant admin) |
+| `AdvanceTenantRegion` | `ILatticeTenantRegionAdmin.AdvanceRegionAsync` (operator-only; the caller must acknowledge that the tenant's data is already in the region) |
 | `ListTenantAdminSubjects` | `ILatticeTenantAccessAdmin.ListAdminSubjectsAsync` |
 | `AddTenantAdminSubject` | `ILatticeTenantAccessAdmin.AddAdminSubjectAsync` |
 | `RemoveTenantAdminSubject` | `ILatticeTenantAccessAdmin.RemoveAdminSubjectAsync` |
@@ -116,13 +117,13 @@ The region-residency RPCs bind the
 [`ILatticeTenantRegionAdmin`](../lattice.api.tenantadmin/README.md#ilatticetenantregionadmin)
 facade without widening it. Every one of them is **interceptor-enforced**: none is on
 the self-service exemption list, so `RequireAuthorization` applies, and the facade then
-re-runs its own two-tier gate. `AuthorizeAllowedRegions` stays **operator-only**, while
+re-runs its own two-tier gate. `AuthorizeAllowedRegions` and `AdvanceTenantRegion` stay **operator-only**, while
 `SetTenantResidency` and `GetTenantRegionStatus` stay **operator-or-tenant-admin**,
 exactly as in-process and independent of the data-plane `DefaultEffect`.
 
 `AuthorizeAllowedRegions` and `SetTenantResidency` share the
 `TenantAdminRegionSetRequest` DTO (`TenantId` plus the complete replacement region
-set); `GetTenantRegionStatus` reuses the existing `TenantAdminTenantRequest`. The
+set); `AdvanceTenantRegion` uses the same DTO's `RegionId` and `AcknowledgeDataInPlace` members instead of its region set; `GetTenantRegionStatus` reuses the existing `TenantAdminTenantRequest`. The
 interceptor decodes the authorization target from each, so an audit record names the
 tenant the call acts on.
 
@@ -206,6 +207,7 @@ opaque `Internal`.
 | `AuthorizeAllowedRegionsAsync` | `Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(string tenantId, IReadOnlyCollection<string> allowedRegions, CancellationToken cancellationToken = default)` |
 | `SetTenantResidencyAsync` | `Task<TenantResidencyChangeResult> SetTenantResidencyAsync(string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)` |
 | `GetTenantRegionStatusAsync` | `Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `AdvanceTenantRegionAsync` | `Task<TenantRegionStatusReport> AdvanceTenantRegionAsync(string tenantId, string regionId, bool acknowledgeDataInPlace, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)` |
 | `GetTenantQuotaUsageAsync` | `Task<TenantQuotaUsageReport> GetTenantQuotaUsageAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `ListTenantAdminSubjectsAsync` | `Task<TenantAdminSubjectReport> ListTenantAdminSubjectsAsync(string tenantId, CancellationToken cancellationToken = default)` |
@@ -248,7 +250,7 @@ Properties marked `required` must be set by the caller.
 | `TenantAdminCreateRequest` | `required string TenantId`, `IReadOnlyList<string> AdminSubjects` | `CreateTenant` |
 | `TenantAdminTenantRequest` | `required string TenantId` | `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `GetTenant`, `GetTenantRegionStatus`, `GetTenantQuotaUsage`, `ListTenantAdminSubjects`, `ListCrossTenantGrants`, `GetTenantAccessPosture` |
 | `TenantAdminSetQuotasRequest` | `required string TenantId`, `TenantQuotasDescriptor Quotas` | `SetTenantQuotas` |
-| `TenantAdminRegionSetRequest` | `required string TenantId`, `IReadOnlyList<string> Regions` | `AuthorizeAllowedRegions`, `SetTenantResidency` |
+| `TenantAdminRegionSetRequest` | `required string TenantId`, `IReadOnlyList<string> Regions`, `string? RegionId`, `bool AcknowledgeDataInPlace` | `AuthorizeAllowedRegions`, `SetTenantResidency` (which read `Regions`), `AdvanceTenantRegion` (which reads `RegionId` and `AcknowledgeDataInPlace`) |
 | `TenantAdminSubjectRequest` | `required string TenantId`, `required string SubjectId` | `AddTenantAdminSubject`, `RemoveTenantAdminSubject` |
 | `TenantAdminGrantOfferRequest` | `required string GranterTenantId`, `required string GranteeTenantId`, `required string Scope`, `TenantGrantAccess Operations` | `OfferCrossTenantGrant` |
 | `TenantAdminGrantRequest` | `required string GranterTenantId`, `required string GranteeTenantId`, `required string Scope` | `ApproveCrossTenantGrant`, `RejectCrossTenantGrant`, `RevokeCrossTenantGrant` |
@@ -337,7 +339,7 @@ The public seams a host implements or substitutes to open this surface up:
 | `DenyTenantAdminApiAuthorizer` | class | The **registered default**: refuses every call, so the surface is closed until a host opts in. |
 | `AllowAllTenantAdminApiAuthorizer` | class | Admits every call, deferring entirely to the facade's own gate. For a host whose endpoint is already guarded by an outer boundary. |
 | `LatticeTenantAdminApiAuthorizationContext` | readonly struct | What the authorizer is handed: the `Operation`, the `TargetId` (the tenant id the request names - for every cross-tenant grant call, including the grantee-side approve and reject, the granting tenant - or `null` when not tenant-scoped), and the raw `ServerCallContext` for header / identity / peer inspection. |
-| `LatticeTenantAdminApiOperation` | enum | The per-operation discriminator. Tenant lifecycle and quota: `CreateTenant`, `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `SetTenantQuotas`, `GetTenantQuotaUsage`. Region residency: `AuthorizeAllowedRegions`, `SetTenantResidency`, `GetTenantRegionStatus`. Tenant-admin subjects: `ListTenantAdminSubjects`, `AddTenantAdminSubject`, `RemoveTenantAdminSubject`. Cross-tenant grants: `ListCrossTenantGrants`, `OfferCrossTenantGrant`, `ApproveCrossTenantGrant`, `RejectCrossTenantGrant`, `RevokeCrossTenantGrant`. Delegated tenant access: `ListTenantGroups`, `GetTenantGroup`, `UpsertTenantGroup`, `RemoveTenantGroup`, `ListTenantGroupMembers`, `AddTenantGroupMember`, `RemoveTenantGroupMember`, `ListTenantMembers`, `AddTenantMember`, `RemoveTenantMember`, `ResolveTenantSubject`, `PutTenantRule`, `GetTenantRule`, `RemoveTenantRule`, `ListTenantRules`, `ExplainTenantAccess`, `GetTenantEffectivePermissions`, `GetTenantAccessPosture`. An unrecognised method maps to `Unknown`, never to a permissive default - so a deny-by-default policy refuses an RPC it has never heard of rather than falling through. |
+| `LatticeTenantAdminApiOperation` | enum | The per-operation discriminator. Tenant lifecycle and quota: `CreateTenant`, `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `SetTenantQuotas`, `GetTenantQuotaUsage`. Region residency: `AuthorizeAllowedRegions`, `SetTenantResidency`, `GetTenantRegionStatus`, `AdvanceTenantRegion`. Tenant-admin subjects: `ListTenantAdminSubjects`, `AddTenantAdminSubject`, `RemoveTenantAdminSubject`. Cross-tenant grants: `ListCrossTenantGrants`, `OfferCrossTenantGrant`, `ApproveCrossTenantGrant`, `RejectCrossTenantGrant`, `RevokeCrossTenantGrant`. Delegated tenant access: `ListTenantGroups`, `GetTenantGroup`, `UpsertTenantGroup`, `RemoveTenantGroup`, `ListTenantGroupMembers`, `AddTenantGroupMember`, `RemoveTenantGroupMember`, `ListTenantMembers`, `AddTenantMember`, `RemoveTenantMember`, `ResolveTenantSubject`, `PutTenantRule`, `GetTenantRule`, `RemoveTenantRule`, `ListTenantRules`, `ExplainTenantAccess`, `GetTenantEffectivePermissions`, `GetTenantAccessPosture`. An unrecognised method maps to `Unknown`, never to a permissive default - so a deny-by-default policy refuses an RPC it has never heard of rather than falling through. |
 | `ILatticeTenantAdminApiCredentialBridge` | interface | Lifts the inbound credential (`LatticeCredential? Resolve(ServerCallContext context)`) into the ambient Lattice credential for the duration of one call. The default reads the configured header; substitute it for a bespoke identity source such as a client certificate. |
 | `ILatticeTenantAdminApiAuthSchemeSource` | interface | Supplies what the unauthenticated `GetAuthScheme` RPC advertises (`AuthSchemeAdvertisement GetAdvertisement()`). The default projects `LatticeTenantAdminApiGrpcOptions.AdvertisedAuthSchemes`. |
 | `AuthSchemeDescriptor` | record | One advertised credential scheme: its required `SchemeId`, a friendly `DisplayName`, and the public `Parameters` a client needs to run the sign-in challenge. |
@@ -356,6 +358,7 @@ identity and every credential is isolated to its own call.
 
 ## See also
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
 - [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) - the
   transport-agnostic facade this package binds.
 - [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) - the core multi-tenancy

@@ -34,7 +34,7 @@
         },
         {
           "id": "caller",
-          "check": "The bridge facade resolves a non-anonymous subject, an active tenant, a grain factory, and a serving AppRoleGrantEvaluator.",
+          "check": "The bridge facade resolves a non-anonymous subject, an active tenant, a grain factory, and a serving app role-grant evaluator.",
           "on_true": "rate-limit",
           "on_false": "deny-bridge",
           "source": "src/lattice.api.apps/LatticeAppBridge.cs#LatticeAppBridge.AuthorizeAsync"
@@ -156,21 +156,21 @@
         },
         {
           "id": "probe-authorize",
-          "check": "AppsFacadeAccess.AuthorizeInstallAsync authorizes AppInstall over the cluster-wide scope.",
+          "check": "The apps facade authorizes AppInstall over the cluster-wide scope.",
           "on_true": "allow-probe-granted",
           "on_false": "allow-probe-none",
           "source": "src/lattice.api.apps/LatticeAppCatalog.cs#LatticeAppCatalog.GetCapabilitiesAsync"
         },
         {
           "id": "tenant",
-          "check": "AppsFacadeAccess.ResolveTenantAsync resolves an initialized active tenant.",
+          "check": "The apps facade resolves an initialized active tenant.",
           "on_true": "app-install",
           "on_false": "deny-tenant",
           "source": "src/lattice.api.apps/AppsFacadeAccess.cs#AppsFacadeAccess.ResolveTenantAsync"
         },
         {
           "id": "app-install",
-          "check": "AppsFacadeAccess.AuthorizeInstallAsync authorizes AppInstall over the cluster-wide scope before any source or registry data is read.",
+          "check": "The apps facade authorizes AppInstall over the cluster-wide scope before any source or registry data is read.",
           "on_true": "allow-catalog",
           "on_false": "deny-app-install",
           "source": "src/lattice.api.apps/AppsFacadeAccess.cs#AppsFacadeAccess.AuthorizeInstallAsync"
@@ -233,7 +233,7 @@
         },
         {
           "id": "app-install",
-          "check": "LatticeAccessGateEnforcement authorizes LatticeOperation.AppInstall on LatticeScope.ClusterWideTreeId with no key filter.",
+          "check": "The shared access-gate enforcement authorizes LatticeOperation.AppInstall on LatticeScope.ClusterWideTreeId with no key filter.",
           "on_true": "capability-probe",
           "on_false": "deny-app-install",
           "source": "src/lattice.api.apps/LatticeAppsControl.cs"
@@ -294,7 +294,7 @@
         },
         {
           "id": "system-origin",
-          "check": "LatticeAccessGateContext.IsSystemOrigin is true before the store enters its own system-origin scope.",
+          "check": "The call already carries system origin before the store enters its own system-origin scope.",
           "on_true": "allow",
           "on_false": "deny-app-owned",
           "source": "src/lattice.auth/LatticeAuthorizationPolicyStore.cs"
@@ -350,7 +350,7 @@
         },
         {
           "id": "tenant",
-          "check": "AppsFacadeAccess resolves the active tenant.",
+          "check": "The apps facade resolves the active tenant.",
           "on_true": "app-install",
           "on_false": "deny-tenant",
           "source": "src/lattice.api.apps/LatticeAppsControl.RoleBindings.cs#LatticeAppsControl.UpdateRoleBindingsAsync"
@@ -517,7 +517,7 @@
         },
         {
           "id": "caller",
-          "check": "The workspace resolves a membership context, active tenant, serving AppRoleGrantEvaluator and access gate.",
+          "check": "The workspace resolves a membership context, active tenant, serving app role-grant evaluator and access gate.",
           "on_true": "enabled-install",
           "on_false": "absence",
           "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace.ResolveCallerAsync"
@@ -589,7 +589,7 @@
         },
         {
           "id": "authorize-target",
-          "check": "BackupAccessAuthorizer authorizes Backup or Restore over the resolved scope: whole tree as whole-tree, prefix as the half-open prefix range with filtered allows refused, and key as point.",
+          "check": "The backup access check authorizes Backup or Restore over the resolved scope: whole tree as whole-tree, prefix as the half-open prefix range with filtered allows refused, and key as point.",
           "on_true": "source-needed",
           "on_false": "deny-restore",
           "source": "src/lattice.backup/BackupAccessAuthorizer.cs#BackupAccessAuthorizer.AuthorizeAsync"
@@ -924,7 +924,7 @@
         },
         {
           "id": "secret-accepted",
-          "check": "IReplicationSecretProvider.IsAcceptedAsync accepts the presented secret.",
+          "check": "The replication secret provider accepts the presented secret.",
           "on_true": "origin-binding-option",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs"
@@ -938,7 +938,7 @@
         },
         {
           "id": "origin-credential-bound",
-          "check": "The x-lattice-replication-origin header is non-blank, IReplicationSecretProvider.GetOutboundSecretAsync returns a non-empty secret for that origin, and the presented secret equals it in fixed time.",
+          "check": "The x-lattice-replication-origin header is non-blank, the replication secret provider returns a non-empty outbound secret for that origin, and the presented secret equals it in fixed time.",
           "on_true": "saga-origin-check",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor.EnforceOriginBindingAsync"
@@ -952,7 +952,7 @@
         },
         {
           "id": "origin-authorized",
-          "check": "The x-lattice-replication-origin header is non-blank, agrees ordinally with a non-blank CoordinatorClusterId in the request body, and ISagaPeerAuthorizer.IsAuthorizedAsync accepts it (by default PeerMapSagaPeerAuthorizer: a non-empty key in LatticeReplicationGrpcOptions.Peers).",
+          "check": "The x-lattice-replication-origin header is non-blank, agrees ordinally with a non-blank CoordinatorClusterId in the request body, and ISagaPeerAuthorizer.IsAuthorizedAsync accepts it (by default it accepts an origin that is a non-empty key in LatticeReplicationGrpcOptions.Peers).",
           "on_true": "allow",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.HandleAsync"
@@ -1327,14 +1327,14 @@
         },
         {
           "id": "snapshot-warm",
-          "check": "CompiledPolicySnapshotMaintainer.IsWarm; a cold snapshot (first request on the silo, or an empty snapshot whose first committed rule is still being rebuilt) is warmed with EnsureWarmAsync before evaluation, so the request is never answered from the empty snapshot.",
+          "check": "The compiled policy snapshot is warm; a cold snapshot (first request on the silo, or an empty snapshot whose first committed rule is still being rebuilt) is warmed with EnsureWarmAsync before evaluation, so the request is never answered from the empty snapshot.",
           "on_true": "policy-evaluate",
           "on_false": "policy-evaluate",
           "source": "src/lattice.auth/PolicyAccessGate.cs#PolicyAccessGate"
         },
         {
           "id": "policy-evaluate",
-          "check": "PolicyEvaluator returns allow or filtered allow.",
+          "check": "Policy evaluation returns allow or filtered allow.",
           "on_true": "tenant-enforcer",
           "on_false": "deny",
           "source": "src/lattice.auth/PolicyEvaluator.cs"
@@ -1387,7 +1387,7 @@
         },
         {
           "id": "range-uniform-allow",
-          "check": "CompiledTree.TryResolveUniformRange finds that every key in the requested range resolves to one Allow after folding any all-trees match.",
+          "check": "The compiled policy finds that every key in the requested range resolves to one Allow after folding any all-trees match.",
           "on_true": "allow",
           "on_false": "filtered",
           "source": "src/lattice.auth/CompiledTree.cs#CompiledTree.TryResolveUniformRange"
@@ -1567,42 +1567,42 @@
         },
         {
           "id": "permission-resolver",
-          "check": "ILatticeApiMcpPermissionResolver grants at least one facade group from effective permissions.",
+          "check": "The MCP permission resolver grants at least one facade group from effective permissions.",
           "on_true": "group-registered",
           "on_false": "advertise-capabilities-only",
           "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs"
         },
         {
           "id": "group-registered",
-          "check": "A registered ILatticeApiMcpToolGroup contributes the requested group.",
+          "check": "A registered MCP tool module contributes the requested group.",
           "on_true": "group-granted",
           "on_false": "not-advertised",
           "source": "src/lattice.api.mcp/Discovery/ILatticeApiMcpToolGroup.cs"
         },
         {
           "id": "group-granted",
-          "check": "The session access set contains the group required by LatticeApiMcpGroupCapabilityMap.",
+          "check": "The session access set contains the group, which any one operation in the group's capability mask grants.",
           "on_true": "tool-minimum",
           "on_false": "not-advertised",
           "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpGroupCapabilityMap.cs"
         },
         {
           "id": "tool-minimum",
-          "check": "The granted operations intersect ILatticeApiMcpToolGroup.RequiredOperationsFor(toolName); mutating data tools and mutating repository-context tools require Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad, while read-only tools use each group's coarse mask.",
+          "check": "The granted operations intersect the tool's per-tool operation minimum: mutating data tools and mutating repository-context tools require Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad; tree-admin schema tools require Read (schema reads, schema operation status and list, and compliance scans), Read or SchemaAdmin (probe_capabilities), or SchemaAdmin (every other schema tool); every other tool uses its group's coarse mask.",
           "on_true": "write-opt-in",
           "on_false": "not-advertised",
           "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.AddPermittedGroupToolsAsync"
         },
         {
           "id": "write-opt-in",
-          "check": "Requested data mutation tool was contributed by AddDataTools(enableWrites: true), or the requested tool is not a data mutation.",
+          "check": "The requested mutating tool was contributed because its module was registered with its write opt-in (for example AddDataTools(enableWrites: true)), or the requested tool is read-only.",
           "on_true": "coarse-authorizer",
           "on_false": "not-registered",
           "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs"
         },
         {
           "id": "coarse-authorizer",
-          "check": "McpToolAuthorizationGate resolves HttpContext and ILatticeApiMcpAuthorizer returns true.",
+          "check": "The invocation gate resolves the HttpContext and ILatticeApiMcpAuthorizer returns true.",
           "on_true": "stamp-and-invoke",
           "on_false": "deny-mcp",
           "source": "src/lattice.api.mcp/Discovery/McpToolAuthorizationGate.cs"
@@ -1947,7 +1947,7 @@
         },
         {
           "id": "filter-authorized",
-          "check": "ReplicationAccessAuthorizer admits Replication over the effective tree filter.",
+          "check": "The replication access check admits Replication over the effective tree filter.",
           "on_true": "read-rows",
           "on_false": "allow-empty",
           "source": "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
@@ -2016,7 +2016,7 @@
         },
         {
           "id": "quota-evaluate",
-          "check": "TenantQuotaEvaluator admits every bounded dimension.",
+          "check": "Quota evaluation admits every bounded dimension.",
           "on_true": "allow",
           "on_false": "deny-quota-exceeded",
           "source": "src/lattice.tenancy/LatticeTenantAdmissionController.cs"

@@ -6,7 +6,7 @@ surfaces:
     api: "ILatticeTreeAdmin.SnapshotTreeAsync and ILatticeBackupOperations.StartBackupAsync"
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
   grpc:
-    api: "/orleans.lattice.api.treeadmin/SnapshotTree and orleans.lattice.api.backup/StartBackup"
+    api: "/orleans.lattice.api.treeadmin/SnapshotTree and /orleans.lattice.api.backup/StartBackup"
     source: "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#StartBackupMethodName"
   mcp_tool:
     api: "lattice_treeadmin_tree_snapshot and lattice_backup_start"

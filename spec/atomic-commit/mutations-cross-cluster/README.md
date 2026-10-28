@@ -45,6 +45,7 @@ transport assumption or its read view already does.
 | `RNoStrandedPrepareLatePrepareStaged` | `RNoStrandedPrepare` | Temporal | `DeliverPrepare` | a duplicate prepare trailing its terminal is staged, with neither the settle nor the late-prepare refusal in front of it |
 | `RNoStrandedPrepareBootstrapReshipsPreCut` | `RNoStrandedPrepare` | Temporal | `Bootstrap`, `DeliverPrepare` | re-shipped pre-cut prepares are staged with no decision row to settle them, as before #4510 (regression check for #4482) |
 | `RNoStrandedPrepareDedupeOverPurgedDecision` | `RNoStrandedPrepare` | Temporal | `OriginPurge` | the origin purges a forgotten saga's decision while a prepare of it is still retained, as before #4553, and no replay filter withholds the re-shipped prepare, which has nothing to settle against (regression check for #4508; the guard alone is covered by the filter) |
+| `RNoStrandedPrepareRetireImportedBeforeCut` | `RNoStrandedPrepare` | Temporal | `ReceiverRetireImported` | an imported decision row is retired before the stream passes the export's cut, so a re-shipped pre-cut prepare finds no row to settle against (regression check for #4524) |
 | `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` | `RNoStrandedPrepare` | Temporal (`DEADLOCK: off`) | `OriginPrepare`, `DeliverTerminal` | a terminal waits on every prepare the saga wrote, one of which is never shipped, so it is never released |
 | `RAllOrNothingGapStaysOnLog` | `RAllOrNothing` | Invariant | `ShipperGap` | a shipper that loses a record to a trim or an encode failure stays on the log (before #4577 and #4651) |
 | `RAllOrNothingDetachStaysOnLog` | `RAllOrNothing` | Invariant | `Detach` | a removed peer's shipper detaches without taking the peer off the log (before #4652) |
@@ -67,9 +68,9 @@ transport assumption or its read view already does.
 | `RAllOrNothingCrossTreeImportSettlesLocally` | `RAllOrNothing` | Invariant | `Bootstrap` | a per-tree import settles a cross-tree sub-saga locally, neither telling the receiver barrier nor fencing the tree, as before #4706 (issue #4683) |
 | `RAllOrNothingCrossTreeImportUnfenced` | `RAllOrNothing` | Invariant | `Bootstrap` | a cross-tree import arrives at the barrier but serves the tree with no read fence |
 | `RAllOrNothingUniformArrivalFromExportBeforeDecision` | `RAllOrNothing` | Invariant | `Bootstrap` | the uniform arrival is taken for an import from an export opened before the operation's decision (issue #4684's R2 without its guard) |
-| `RImportFenceLiftsBarrierIgnoresUniformImport` | `RImportFenceLifts` | Temporal | `ReceiverNotify` | the barrier takes a uniform arrival only at import time, so a barrier opened after a bare import waits for it for ever |
+| `RImportFenceLiftsBarrierIgnoresUniformImport` | `RImportFenceLifts` | Temporal (`DEADLOCK: off`) | `ReceiverNotify` | the barrier takes a uniform arrival only at import time, so a barrier opened after a bare import waits for it for ever |
 | `RAllOrNothingFenceLiftsBeforeSiblingPasses` | `RAllOrNothing` | Invariant | `FenceLift` | an imported tree's fence lifts before its sibling has passed the boundary (issue #4684's R1 removed) |
-| `RCommittedEventuallyVisibleReseedWaitsOnSibling` | `RCommittedEventuallyVisible` | Temporal | `TreeReseed` | a tree's import waits for its sibling's boundary, R1 as first designed, so two re-seeds wait on each other for ever |
+| `RCommittedEventuallyVisibleReseedWaitsOnSibling` | `RCommittedEventuallyVisible` | Temporal (`DEADLOCK: off`) | `TreeReseed` | a tree's import waits for its sibling's boundary, R1 as first designed, so two re-seeds wait on each other for ever |
 | `RAllOrNothingMutualReseedUnfenced` | `RAllOrNothing` | Invariant | `TreeReseed` | a tree re-seeded alongside its sibling is served with no read fence |
 | `RAllOrNothingOffLogShipperAcksWithheldRecords` | `RAllOrNothing` | Invariant | `MutualOffLog` | a shipper off the log counts the records it withholds as acknowledged, so its tree reads as past the boundary |
 | `RAllOrNothingCrossTreePurgeBeforeBarrierDecides` | `RAllOrNothing` | Invariant | `OriginPurge` | the origin purges a cross-tree sub-saga's decision before the operation's barrier has decided (issue #4684's hold removed) |
@@ -85,9 +86,9 @@ transport assumption or its read view already does.
 | `RAllOrNothingExportOpenPastEveryDecision` | `RAllOrNothing` | Invariant | `ExportOpen` | the export records no open point and is taken as opened after every decision |
 | `RAllOrNothingExportPassesInterleaveWithSaga` | `RAllOrNothing` | Invariant | `ExportClose` | the export reads the decision before its rows, so a saga deciding between them ships as bare committed rows (issue #4685 before #4694) |
 | `RImportFenceLiftsTombstoneDroppedAtTtl` | `RImportFenceLifts` | Temporal | `BarrierTtlExpire` | a decided barrier's retention clears its verdict, so a later arrival reopens it (issue #4730's third route) |
-| `RImportFenceLiftsStaleIndexEntry` | `RImportFenceLifts` | Temporal | `BarrierTtlExpire` | a cleared barrier stays indexed and a reader counts its entry as undecided (issue #4730 as filed) |
-| `RImportFenceLiftsTombstoneDroppedBeforeFrontier` | `RImportFenceLifts` | Temporal | `TombstoneDrop` | a tombstone is dropped with no purge frontier, and a later arrival reopens the barrier |
-| `RImportFenceLiftsTombstoneDropsOverShippableTerminal` | `RImportFenceLifts` | Temporal | `TombstoneDrop` | a tombstone drops once the origin purged its decision while a terminal of it can still ship, which a decommission and re-add then re-ships |
+| `RImportFenceLiftsStaleIndexEntry` | `RImportFenceLifts` | Temporal (`DEADLOCK: off`) | `BarrierTtlExpire` | a cleared barrier stays indexed and a reader counts its entry as undecided (issue #4730 as filed) |
+| `RImportFenceLiftsTombstoneDroppedBeforeFrontier` | `RImportFenceLifts` | Temporal (`DEADLOCK: off`) | `TombstoneDrop` | a tombstone is dropped with no purge frontier, and a later arrival reopens the barrier |
+| `RImportFenceLiftsTombstoneDropsOverShippableTerminal` | `RImportFenceLifts` | Temporal (`DEADLOCK: off`) | `TombstoneDrop` | a tombstone drops once the origin purged its decision while a terminal of it can still ship, which a decommission and re-add then re-ships |
 
 Each loss-path or join mutation declares `BOUNDS:` to enable its loss path, or a
 joining receiver, on one slice of the instance (`LossPath`, `JoinStart`,
@@ -115,8 +116,9 @@ These mutations are regression checks for defects this module found or
 reproduced and that are now fixed: `RAllOrNothingTerminalOvertakesPrepare`
 (#4480), `RAllOrNothingSnapshotReadsUnresolvableAsInFlight` (#4448),
 `RAllOrNothingExportOverStrandedPrepare` (#4481),
-`RNoStrandedPrepareBootstrapReshipsPreCut` (#4482) and
-`RNoStrandedPrepareDedupeOverPurgedDecision` (#4508), and every loss-path
+`RNoStrandedPrepareBootstrapReshipsPreCut` (#4482),
+`RNoStrandedPrepareDedupeOverPurgedDecision` (#4508) and
+`RNoStrandedPrepareRetireImportedBeforeCut` (#4524), and every loss-path
 mutation above, one per fix (#4577, #4651, #4652, #4633, #4631, #4627, #4533,
 #4534-B and #4666). Each restores what production did before the fix, and the
 refinement note cites the detectors that go red when production does it again.
@@ -145,7 +147,8 @@ All four temporal properties are paired with mutations that leave `Spec`'s
 fairness untouched and change a protocol step instead (issue #2321's
 requirement): a prepare or a terminal the origin never replicates, a fan-out
 that never runs or consumes a bucket without draining it, a late prepare staged,
-a re-shipped pre-cut prepare with nothing to settle it against, a decision
+a re-shipped pre-cut prepare with nothing to settle it against, an imported
+decision row retired before the stream passes the export's cut, a decision
 purged while a prepare of its saga can still be re-shipped, and each loss path's
 re-seed missing a step: a stale bucket left, a decision row not fanned out, a
 replay that withholds a live saga or re-ships a purged one, withheld records

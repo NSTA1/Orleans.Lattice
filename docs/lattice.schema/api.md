@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/schema.json"
+---
+
 # Public API
 
 The package provides opt-in schema enforcement and value versioning, a serializable transform representation, durable schema stores and host-side administration. The [package guide](README.md) introduces the independent opt-ins. The exact public declarations below include every explicitly declared member and overload; policy and versioning semantics are described in their topic guides.
@@ -18,7 +22,7 @@ The public store contracts persist policies, version configuration and dead-lett
 
 ## Version and operation contracts
 
-`LatticeSchemaEnvelope` provides tag inspection and body extraction. The exact [wire format](wire-format.md) is distinct from a schema's JSON layout. `ILatticeSchemaRegistry` and its builder define registered schema versions/upcaster chains. `ILatticeSchemaVersionAdmin` governs each tree's target; advancing the target is monotonic and does not eagerly rewrite every existing value.
+`LatticeSchemaEnvelope` provides tag inspection and body extraction. The exact [wire format](wire-format.md) is distinct from a schema's JSON layout. `ILatticeSchemaRegistry` and its builder define registered schema versions/upcaster chains. `ILatticeSchemaVersionAdmin` governs each tree's target; advancing the target is monotonic and does not eagerly rewrite every existing value. `LatticeSchemaRuntimeRegistration` is the append-only, tree-scoped runtime catalog the [Schema facade](../lattice.api.schema/api.md#runtime-version-catalog) reads and registers: version `Descriptors`, migration hops as `LatticeSchemaRuntimeUpcaster` records (a schema family, a source version, a strictly greater destination version, and exactly one declarative `Transform` or host-installed `TransformId`), and the discovery-only `SupportedTransformIds`. A registered hop is data, never executable code. `LatticeSchemaViolationException` implements the core `ILatticeValueValidationFault`, so a transport can recognise a policy refusal (its `Code` is `schema-policy`) without referencing this package.
 
 Remediation and eager migration use resumable shadow-build/cutover work with reports/phases; caller cancellation of a request is not proof that durable work was undone. Compliance scans and operation result/status helpers expose tracked progress through the public operation contracts. See [enforcement](schema-enforcement.md) and [versioning](schema-versioning.md).
 
@@ -165,6 +169,7 @@ The following inventory includes directly declared public members and overloads,
 - `public required int NonCompliantCount { get; init; }`
 - `public required int ScannedCount { get; init; }`
 - `public required IReadOnlyList<LatticeSchemaComplianceRuleCount> RuleBreakdown { get; init; }`
+- `public int RuleCount { get; init; }`
 - `public static LatticeSchemaComplianceReport Ungoverned(string treeId)`
 
 ### `Orleans.Lattice.Schema.LatticeSchemaComplianceRuleCount`
@@ -393,6 +398,28 @@ The following inventory includes directly declared public members and overloads,
 - `Regex = 1`
 - `Encoding = 2`
 
+### `Orleans.Lattice.Schema.LatticeSchemaRuntimeRegistration`
+
+[Source](../../src/lattice.schema/LatticeSchemaRuntimeRegistration.cs) (line 7).
+
+`public sealed record LatticeSchemaRuntimeRegistration`
+
+- `public LatticeSchemaDescriptor[] Descriptors { get; init; }`
+- `public LatticeSchemaRuntimeUpcaster[] Upcasters { get; init; }`
+- `public string[] SupportedTransformIds { get; init; }`
+
+### `Orleans.Lattice.Schema.LatticeSchemaRuntimeUpcaster`
+
+[Source](../../src/lattice.schema/LatticeSchemaRuntimeUpcaster.cs) (line 4).
+
+`public sealed record LatticeSchemaRuntimeUpcaster`
+
+- `public uint SchemaId { get; init; }`
+- `public uint FromVersion { get; init; }`
+- `public uint ToVersion { get; init; }`
+- `public LatticeValueTransform? Transform { get; init; }`
+- `public string? TransformId { get; init; }`
+
 ### `Orleans.Lattice.Schema.LatticeSchemaServiceCollectionExtensions`
 
 [Source](../../src/lattice.schema/LatticeSchemaServiceCollectionExtensions.cs) (line 14).
@@ -449,10 +476,11 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Schema.LatticeSchemaViolationException`
 
-[Source](../../src/lattice.schema/LatticeSchemaViolationException.cs) (line 25).
+[Source](../../src/lattice.schema/LatticeSchemaViolationException.cs) (line 27).
 
-`public sealed class LatticeSchemaViolationException : InvalidOperationException`
+`public sealed class LatticeSchemaViolationException : InvalidOperationException, ILatticeValueValidationFault`
 
+- `public string Code`
 - `public string TreeId { get; }`
 - `public string Key { get; }`
 - `public string Reason { get; }`
@@ -540,6 +568,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string NonCompliantCountKey`
 - `public const string ScannedCountKey`
 - `public const string RuleCountKey`
+- `public const string FailureReasonCountKey`
 - `public const string RulePrefix`
 - `public static IReadOnlyDictionary<string, string> ToResultMap(LatticeSchemaComplianceReport report)`
 - `public static bool TryReadReport(IReadOnlyDictionary<string, string> result, out LatticeSchemaComplianceReport report)`

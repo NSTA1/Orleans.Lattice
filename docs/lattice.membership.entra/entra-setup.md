@@ -260,5 +260,6 @@ az ad app delete --id $appId
 ## Reference
 
 - [`Orleans.Lattice.Membership.Entra`](README.md) - the authenticator this guide configures.
+- [Architecture](architecture.md) - how the authenticator selects, validates, and maps the tokens this registration issues.
 - [`EntraAuthorization` sample](../../samples/EntraAuthorization/README.md) - the runnable end-to-end demo.
 - [Security overview](../lattice/security.md) - how identity, authorization, and enforcement fit together.
