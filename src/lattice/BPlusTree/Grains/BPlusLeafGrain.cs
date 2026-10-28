@@ -4484,8 +4484,15 @@ internal sealed partial class BPlusLeafGrain(
             }
             else if (isCrossShardMigration
                 && Cache.TryGetRow(key, out existing)
-                && !existing.IsMigrated)
+                && !existing.IsMigrated
+                && !IsKeyMovedAway(key))
             {
+                // A row in a slot this leaf still holds sealed is not a
+                // post-split foreground commit: the shard has refused every
+                // write to that slot since a split took it away, so the row
+                // predates the split. When a fold returns the slot here, the
+                // donor's copy descends from it and must win by last-writer-
+                // wins, or every write since the split reverts (issue #5130).
                 continue;
             }
             else
