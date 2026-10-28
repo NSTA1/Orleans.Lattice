@@ -107,9 +107,10 @@
     },
     {
       "id": "auth-audit-sink-failure-log",
-      "type": "ILogger event 3",
+      "type": "ILogger event 1",
       "fields": [
-        "sink_type"
+        "sink_type",
+        "exception"
       ],
       "emitting_component": "LatticeAuthDecisionObserver",
       "source": "src/lattice.auth/LatticeAuthDecisionObserver.cs"
@@ -290,6 +291,16 @@
   ],
   "metrics": [
     {
+      "id": "api-mcp-tool-client-errors",
+      "name": "orleans.lattice.api.mcp.tool.client_errors",
+      "instrument": "Counter<long>",
+      "tags": [
+        "tool",
+        "reason"
+      ],
+      "source": "src/lattice.api.mcp/LatticeApiMcpMetrics.cs"
+    },
+    {
       "id": "auth-decision-duration",
       "name": "orleans.lattice.auth.decision.duration",
       "instrument": "Histogram<double>",
@@ -417,8 +428,54 @@
       "source": "src/lattice.membership/LatticeMembershipMetrics.cs"
     },
     {
+      "id": "replication-grpc-insecure-channel",
+      "name": "orleans.lattice.replication.grpc.insecure_channel",
+      "instrument": "Counter<long>",
+      "tags": [
+        "peer",
+        "transport"
+      ],
+      "source": "src/lattice.replication.grpc/LatticeReplicationGrpcMetrics.cs"
+    },
+    {
       "id": "tenancy-overage-bytes",
       "name": "orleans.lattice.tenancy.overage.bytes",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-overage-keys",
+      "name": "orleans.lattice.tenancy.overage.keys",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-overage-memory-bytes",
+      "name": "orleans.lattice.tenancy.overage.memory_bytes",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-overage-trees",
+      "name": "orleans.lattice.tenancy.overage.trees",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-quota-burst-percent",
+      "name": "orleans.lattice.tenancy.quota.burst_percent",
       "instrument": "ObservableGauge",
       "tags": [
         "tenant"
@@ -435,8 +492,71 @@
       "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
     },
     {
+      "id": "tenancy-quota-keys",
+      "name": "orleans.lattice.tenancy.quota.keys",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-quota-memory-bytes",
+      "name": "orleans.lattice.tenancy.quota.memory_bytes",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-quota-trees",
+      "name": "orleans.lattice.tenancy.quota.trees",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-tenants",
+      "name": "orleans.lattice.tenancy.tenants",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
       "id": "tenancy-usage-bytes",
       "name": "orleans.lattice.tenancy.usage.bytes",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-usage-keys",
+      "name": "orleans.lattice.tenancy.usage.keys",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-usage-memory-bytes",
+      "name": "orleans.lattice.tenancy.usage.memory_bytes",
+      "instrument": "ObservableGauge",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.tenancy/LatticeTenantMetrics.cs"
+    },
+    {
+      "id": "tenancy-usage-trees",
+      "name": "orleans.lattice.tenancy.usage.trees",
       "instrument": "ObservableGauge",
       "tags": [
         "tenant"

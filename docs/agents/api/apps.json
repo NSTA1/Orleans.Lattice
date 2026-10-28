@@ -2602,7 +2602,7 @@
         "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#DescribeMyAppAsync"
       },
       "concurrency": {
-        "rule": "The facade evaluates the caller through AppRoleGrantEvaluator before any source asset is read, and exposes no consent ceiling, bindings, or physical tree id.",
+        "rule": "The facade evaluates the caller's app role grant before any source asset is read, and exposes no consent ceiling, bindings, or physical tree id.",
         "source": "src/lattice.api.apps/LatticeAppWorkspace.cs#LatticeAppWorkspace"
       },
       "sources": [

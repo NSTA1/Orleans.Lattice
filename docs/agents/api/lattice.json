@@ -1590,7 +1590,7 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#BulkAppendChunkAsync"
       },
       "concurrency": {
-        "rule": "LatticeGrain fans the chunk out by physical shard, and each non-reentrant ShardRootGrain serializes BulkAppendAsync against LastCompletedBulkOperationId and PendingBulkGraft state for that shard.",
+        "rule": "The tree router fans the chunk out by physical shard, and each non-reentrant shard root serializes the append against that shard's last completed bulk operation id and pending graft state.",
         "source": "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs#BulkAppendAsync"
       },
       "sources": [
@@ -1646,7 +1646,7 @@
         "source": "src/lattice/BPlusTree/Grains/LatticeGrain.BulkLoad.cs#BulkLoadAsync"
       },
       "concurrency": {
-        "rule": "LatticeGrain fans out to every physical shard, and each non-reentrant ShardRootGrain serializes BulkLoadAsync on that shard before checking LastCompletedBulkOperationId and RootNodeId.",
+        "rule": "The tree router fans out to every physical shard, and each non-reentrant shard root serializes the bulk load on that shard before checking its last completed bulk operation id and root node.",
         "source": "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs#BulkLoadAsync"
       },
       "sources": [
@@ -1702,7 +1702,7 @@
         "source": "src/lattice/BPlusTree/ILattice.cs#CloseCursorAsync"
       },
       "concurrency": {
-        "rule": "CloseCursorAsync routes to the single non-reentrant LatticeCursorGrain for the tree and cursor id, where CloseAsync serializes cleanup and no-ops when the cursor is not started or already closed.",
+        "rule": "CloseCursorAsync routes to the single non-reentrant cursor activation for the tree and cursor id, which serializes cleanup and no-ops when the cursor is not started or already closed.",
         "source": "src/lattice/BPlusTree/Grains/LatticeCursorGrain.cs#CloseAsync"
       },
       "sources": [
@@ -1754,7 +1754,7 @@
         "source": "src/lattice/BPlusTree/Grains/TombstoneCompactionGrain.cs#TryBeginRequestedCompactionAsync"
       },
       "concurrency": {
-        "rule": "A singleton-per-tree non-reentrant TombstoneCompactionGrain serializes compaction requests and admits only one pass with its _compactionTimer and state.InProgress guard.",
+        "rule": "A single non-reentrant compaction coordinator per tree serializes compaction requests and admits only one pass at a time through its timer and persisted in-progress guard.",
         "source": "src/lattice/BPlusTree/Grains/TombstoneCompactionGrain.cs#TryBeginRequestedCompactionAsync"
       },
       "sources": [
@@ -1912,6 +1912,62 @@
       "sources": [
         "src/lattice/BPlusTree/ILattice.cs#CountAsync",
         "src/lattice/BPlusTree/Grains/LatticeGrain.cs#CountAsync"
+      ]
+    },
+    {
+      "id": "cross-tree-begin-atomic-write",
+      "in_process": {
+        "interface": "LatticeCrossTreeAtomicWriteExtensions",
+        "method": "BeginAtomicWrite",
+        "signature": "LatticeAtomicWriteBuilder BeginAtomicWrite(this IGrainFactory factory, string operationId)"
+      },
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": {
+        "parameters": [
+          {
+            "name": "factory",
+            "type": "IGrainFactory",
+            "required": true
+          },
+          {
+            "name": "operationId",
+            "type": "string",
+            "required": true
+          }
+        ]
+      },
+      "response": {
+        "type": "LatticeAtomicWriteBuilder"
+      },
+      "errors": [
+        {
+          "error_id": "argument-null",
+          "condition": "factory is null."
+        },
+        {
+          "error_id": "argument-exception",
+          "condition": "operationId is null, empty, whitespace, or contains '/'."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Opening the builder has no side effects and may be repeated; the retry semantics that matter belong to CommitAsync, which delegates to SetManyAtomicAsync under the same operationId.",
+        "source": "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#BeginAtomicWrite"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Opening the builder writes nothing. CommitAsync submits the accumulated per-tree slices through SetManyAtomicAsync, so a re-submission under the same operationId re-attaches to the in-flight or completed saga.",
+        "source": "src/lattice/LatticeAtomicWriteBuilder.cs#CommitAsync"
+      },
+      "concurrency": {
+        "rule": "The builder is a local accumulator that is not thread-safe and must be used from one logical flow; CommitAsync runs the same coordinated cross-tree saga as SetManyAtomicAsync, so every participating tree flips visibility at one decision.",
+        "source": "src/lattice/LatticeAtomicWriteBuilder.cs#LatticeAtomicWriteBuilder"
+      },
+      "sources": [
+        "src/lattice/LatticeCrossTreeAtomicWriteExtensions.cs#BeginAtomicWrite",
+        "src/lattice/LatticeAtomicWriteBuilder.cs#LatticeAtomicWriteBuilder",
+        "docs/lattice/atomic-writes.md"
       ]
     },
     {
@@ -4072,7 +4128,7 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Safe to retry only while the same-source merge remains in progress, where TreeMergeGrain returns without starting another merge; after completion, reissuing the call starts a new merge that can copy later source changes.",
+        "policy": "Safe to retry only while the same-source merge remains in progress, where the per-target merge coordinator returns without starting another merge; after completion, reissuing the call starts a new merge that can copy later source changes.",
         "source": "src/lattice/BPlusTree/Grains/TreeMergeGrain.cs#MergeAsync"
       },
       "idempotency": {
@@ -4081,7 +4137,7 @@
         "source": "src/lattice/BPlusTree/Grains/TreeMergeGrain.cs#MergeAsync"
       },
       "concurrency": {
-        "rule": "One non-reentrant TreeMergeGrain activation per target tree serializes merge requests with persisted InProgress and SourceTreeId state before timer-driven shard processing begins.",
+        "rule": "One non-reentrant merge coordinator per target tree serializes merge requests with persisted InProgress and SourceTreeId state before timer-driven shard processing begins.",
         "source": "src/lattice/BPlusTree/Grains/TreeMergeGrain.cs#MergeAsync"
       },
       "sources": [
@@ -4264,7 +4320,7 @@
         "source": "src/lattice/BPlusTree/Grains/LatticeGrain.Cursor.cs#OpenDeleteRangeCursorCoreAsync"
       },
       "concurrency": {
-        "rule": "Each generated cursor id maps to one non-reentrant LatticeCursorGrain; OpenAsync persists the spec once, accepts the same spec for that cursor id, and rejects a different spec.",
+        "rule": "Each generated cursor id maps to one non-reentrant cursor activation; opening it persists the spec once, accepts the same spec for that cursor id, and rejects a different spec.",
         "source": "src/lattice/BPlusTree/Grains/LatticeCursorGrain.cs#OpenAsync"
       },
       "sources": [
@@ -4330,7 +4386,7 @@
         "source": "src/lattice/BPlusTree/Grains/LatticeGrain.Cursor.cs#OpenDeleteRangeCursorCoreAsync"
       },
       "concurrency": {
-        "rule": "Each generated cursor id maps to one non-reentrant LatticeCursorGrain; OpenAsync persists the predicate spec once, accepts the same spec for that cursor id, and rejects a different spec.",
+        "rule": "Each generated cursor id maps to one non-reentrant cursor activation; opening it persists the predicate spec once, accepts the same spec for that cursor id, and rejects a different spec.",
         "source": "src/lattice/BPlusTree/Grains/LatticeCursorGrain.cs#OpenAsync"
       },
       "sources": [
@@ -5111,7 +5167,7 @@
         "source": "src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs#TreeDeletionGrain.SettleRegistryEntryAsync"
       },
       "concurrency": {
-        "rule": "The per-tree TreeDeletionGrain state machine serializes purge through persisted TreeDeletionState, pinning logical alias targets and fencing alias changes with AliasOperationId.",
+        "rule": "The per-tree deletion state machine serializes purge through its persisted deletion state, pinning logical alias targets and fencing alias changes with AliasOperationId.",
         "source": "src/lattice/BPlusTree/State/TreeDeletionState.cs#TreeDeletionState"
       },
       "sources": [
@@ -5552,7 +5608,7 @@
         "source": "src/lattice/BPlusTree/ITreeDeletionGrain.cs#RecoverAsync"
       },
       "concurrency": {
-        "rule": "The per-tree TreeDeletionGrain state machine serializes recovery through persisted TreeDeletionState, pinning logical alias targets and fencing alias changes with AliasOperationId.",
+        "rule": "The per-tree deletion state machine serializes recovery through its persisted deletion state, pinning logical alias targets and fencing alias changes with AliasOperationId.",
         "source": "src/lattice/BPlusTree/State/TreeDeletionState.cs#TreeDeletionState"
       },
       "sources": [
@@ -5778,7 +5834,7 @@
         "source": "src/lattice/BPlusTree/ITreeResizeGrain.cs#ResizeAsync"
       },
       "concurrency": {
-        "rule": "TreeResizeGrain persists a phase state and operation id, runs one keepalive-backed coordinator pump, reserves the alias through ITreeDeletionGrain.BeginAliasChangeAsync, and refuses to start while reshard is not idle.",
+        "rule": "The per-tree resize coordinator persists a phase state and operation id, runs one keepalive-backed coordinator pump, reserves the alias change with the tree's deletion state machine, and refuses to start while reshard is not idle.",
         "source": "src/lattice/BPlusTree/Grains/TreeResizeGrain.cs#ResizeCoreAsync"
       },
       "sources": [
@@ -5919,7 +5975,7 @@
         "source": "src/lattice/LatticeIdempotencyContext.cs#LatticeIdempotencyContext"
       },
       "concurrency": {
-        "rule": "IBPlusLeafGrain.SetAsync is AlwaysInterleave, but Orleans serializes synchronous code between awaits so the per-key LWW merge, HLC tick and projection-hash updates are race-free; the split state machine is serialized by the per-activation split gate.",
+        "rule": "The leaf's set call is AlwaysInterleave, but Orleans serializes synchronous code between awaits so the per-key LWW merge, HLC tick and projection-hash updates are race-free; the split state machine is serialized by the per-activation split gate.",
         "source": "src/lattice/BPlusTree/IBPlusLeafGrain.cs#SetAsync"
       },
       "sources": [
@@ -5980,7 +6036,7 @@
         "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "concurrency": {
-        "rule": "LatticeRegistryGrain is a non-reentrant singleton whose mutating members are not AlwaysInterleave, so each retention upsert serializes and concurrent configuration writes resolve by last writer.",
+        "rule": "The tree registry is a non-reentrant singleton whose mutating members are not AlwaysInterleave, so each retention upsert serializes and concurrent configuration writes resolve by last writer.",
         "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetHistoryRetentionAsync"
       },
       "sources": [
@@ -6620,7 +6676,7 @@
         "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetPublishEventsAsync"
       },
       "concurrency": {
-        "rule": "LatticeRegistryGrain is a non-reentrant singleton whose mutating members are not AlwaysInterleave, so each publish-events upsert serializes and concurrent configuration writes resolve by last writer.",
+        "rule": "The tree registry is a non-reentrant singleton whose mutating members are not AlwaysInterleave, so each publish-events upsert serializes and concurrent configuration writes resolve by last writer.",
         "source": "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SetPublishEventsAsync"
       },
       "sources": [
@@ -6767,7 +6823,7 @@
         "source": "src/lattice/BPlusTree/Grains/TreeSnapshotGrain.cs#StartSnapshotAsync"
       },
       "concurrency": {
-        "rule": "TreeSnapshotGrain is a persistent coordinator keyed by source tree; it rejects different parameters while InProgress and persists InProgress and phase before shard side effects.",
+        "rule": "The snapshot coordinator is a persistent activation keyed by source tree; it rejects different parameters while InProgress and persists InProgress and phase before shard side effects.",
         "source": "src/lattice/BPlusTree/Grains/TreeSnapshotGrain.cs#StartSnapshotAsync"
       },
       "sources": [
@@ -6986,7 +7042,7 @@
         "source": "src/lattice/BPlusTree/Grains/LatticeGrain.WarmUp.cs#WarmUpAsync"
       },
       "concurrency": {
-        "rule": "WarmUpAsync snapshots routing, caps fan-out with SemaphoreSlim to MaxWarmUpParallelism, and each shard probe uses ShardActivationRetry against IShardRootGrain.WarmUpAsync.",
+        "rule": "WarmUpAsync snapshots routing, caps fan-out with SemaphoreSlim to MaxWarmUpParallelism, and each shard probe retries the shard root's warm-up call under the shard activation retry policy.",
         "source": "src/lattice/BPlusTree/Grains/LatticeGrain.WarmUp.cs#WarmUpAsync"
       },
       "sources": [

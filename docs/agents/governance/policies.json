@@ -150,6 +150,11 @@
           "name": "RequireAuthorization",
           "type": "bool",
           "default": true
+        },
+        {
+          "name": "ActiveTenantHeaderName",
+          "type": "string?",
+          "default": "lattice-active-tenant"
         }
       ],
       "source": "src/lattice.api.auth.grpc/LatticeAuthApiGrpcOptions.cs"
@@ -340,6 +345,46 @@
           "name": "TenantIds",
           "type": "IList<string>",
           "default": "empty allow-list"
+        },
+        {
+          "name": "Authority",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "name": "MetadataAddress",
+          "type": "string?",
+          "default": null
+        },
+        {
+          "name": "IssuerTemplate",
+          "type": "string",
+          "default": "https://login.microsoftonline.com/{tenantid}/v2.0"
+        },
+        {
+          "name": "SchemeHint",
+          "type": "string?",
+          "default": null
+        },
+        {
+          "name": "ValidateLifetime",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "name": "ClockSkew",
+          "type": "TimeSpan",
+          "default": "00:05:00"
+        },
+        {
+          "name": "AutomaticRefreshInterval",
+          "type": "TimeSpan",
+          "default": "12:00:00"
+        },
+        {
+          "name": "RefreshInterval",
+          "type": "TimeSpan",
+          "default": "00:05:00"
         }
       ],
       "source": "src/lattice.membership.entra/LatticeEntraAuthenticatorOptions.cs"
@@ -394,6 +439,41 @@
           "name": "ValidateAudience",
           "type": "bool",
           "default": true
+        },
+        {
+          "name": "SchemeHint",
+          "type": "string?",
+          "default": null
+        },
+        {
+          "name": "SigningKeys",
+          "type": "IList<SecurityKey>",
+          "default": "empty"
+        },
+        {
+          "name": "SubjectClaimTypes",
+          "type": "IList<string>",
+          "default": "sub, nameid"
+        },
+        {
+          "name": "GroupClaimTypes",
+          "type": "IList<string>",
+          "default": "groups, roles, role"
+        },
+        {
+          "name": "ValidateLifetime",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "name": "ClockSkew",
+          "type": "TimeSpan",
+          "default": "00:05:00"
+        },
+        {
+          "name": "ValidationParameters",
+          "type": "TokenValidationParameters?",
+          "default": null
         }
       ],
       "source": "src/lattice.membership/JwtAuthenticatorOptions.cs"
@@ -404,7 +484,7 @@
       "properties": [
         {
           "name": "ClaimToGroups",
-          "type": "Func<IReadOnlyDictionary<string,string>,IEnumerable<string>>",
+          "type": "Func<IReadOnlyDictionary<string,string>,IEnumerable<string>>?",
           "default": null
         },
         {
@@ -421,6 +501,16 @@
           "name": "ResolutionCacheTtl",
           "type": "TimeSpan",
           "default": "00:05:00"
+        },
+        {
+          "name": "HistoryRetentionMode",
+          "type": "HistoryRetentionMode",
+          "default": "MetadataOnly"
+        },
+        {
+          "name": "HistoryRetentionWindow",
+          "type": "TimeSpan?",
+          "default": null
         }
       ],
       "source": "src/lattice.membership/LatticeMembershipOptions.cs"
@@ -448,6 +538,46 @@
           "name": "SubjectClaimTypes",
           "type": "IList<string>",
           "default": "sub"
+        },
+        {
+          "name": "Authority",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "name": "MetadataAddress",
+          "type": "string?",
+          "default": null
+        },
+        {
+          "name": "GroupClaimTypes",
+          "type": "IList<string>",
+          "default": "groups, roles, role"
+        },
+        {
+          "name": "SchemeHint",
+          "type": "string?",
+          "default": null
+        },
+        {
+          "name": "ValidateLifetime",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "name": "ClockSkew",
+          "type": "TimeSpan",
+          "default": "00:05:00"
+        },
+        {
+          "name": "AutomaticRefreshInterval",
+          "type": "TimeSpan",
+          "default": "12:00:00"
+        },
+        {
+          "name": "RefreshInterval",
+          "type": "TimeSpan",
+          "default": "00:05:00"
         }
       ],
       "source": "src/lattice.membership.oidc/LatticeOidcAuthenticatorOptions.cs"
@@ -480,6 +610,11 @@
           "name": "PolicySnapshotLeaseDuration",
           "type": "TimeSpan",
           "default": "00:00:10"
+        },
+        {
+          "name": "DelegatedAccessAdministrationEnabled",
+          "type": "bool",
+          "default": false
         }
       ],
       "source": "src/lattice.tenancy/LatticeTenancyOptions.cs"

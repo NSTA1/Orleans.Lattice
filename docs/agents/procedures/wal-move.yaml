@@ -6,7 +6,7 @@ surfaces:
     api: "ILatticeTreeAdmin.PlanWalMoveAsync, ILatticeTreeAdminOperations.StartWalMoveAsync, ReclaimMovedWalSourceAsync"
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
   grpc:
-    api: "/orleans.lattice.api.treeadmin/PlanWalMove, ExecuteWalMove, ReclaimMovedWalSource"
+    api: "/orleans.lattice.api.treeadmin/PlanWalMove, StartWalMove, ReclaimMovedWalSource"
     source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#PlanWalMoveMethodName"
   mcp_tool:
     api: "lattice_treeadmin_wal_move_plan, lattice_treeadmin_wal_move_start, lattice_treeadmin_wal_move_reclaim"
@@ -16,13 +16,13 @@ preconditions:
     check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_wal_move_plan, lattice_treeadmin_wal_move_reclaim, lattice_treeadmin_wal_move_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
     source: "docs/agents/api/treeadmin.json"
   - id: lifecycle-for-move
-    check: "Caller has TreeLifecycle authority for execute and reclaim."
+    check: "Caller has TreeLifecycle authority to start the move and to reclaim."
     source: "docs/lattice.api.treeadmin/README.md"
   - id: read-for-plan
     check: "Caller has Read authority for inspect, audit, and plan."
     source: "docs/lattice.api.treeadmin/README.md"
   - id: target-resolves
-    check: "Target provider key resolves on every silo before execute."
+    check: "Target provider key resolves on every silo before the move starts."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
 steps:
   - n: 1
@@ -37,7 +37,7 @@ steps:
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditWalPlacementAsync"
   - n: 3
     action: "Plan the partition move."
-    api: "ILatticeTreeAdmin.PlanWalMoveAsync / PlanWalMove"
+    api: "ILatticeTreeAdmin.PlanWalMoveAsync / PlanWalMove / lattice_treeadmin_wal_move_plan"
     expects: "Returns copy range, entry estimate, and target resolvability without side effects."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
   - n: 4
@@ -47,7 +47,7 @@ steps:
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"
   - n: 5
     action: "Reclaim only after rollback is no longer needed and the tracked move has succeeded."
-    api: "ILatticeTreeAdmin.ReclaimMovedWalSourceAsync / ReclaimMovedWalSource"
+    api: "ILatticeTreeAdmin.ReclaimMovedWalSourceAsync / ReclaimMovedWalSource / lattice_treeadmin_wal_move_reclaim"
     expects: "Discards the orphaned source tail and returns a reclaim receipt."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
 postconditions:
@@ -78,7 +78,7 @@ rollback:
   supported: true
   mechanism: "Move the partition back to its original provider before ReclaimMovedWalSourceAsync; after reclaim rollback is unsupported."
   steps:
-    - action: "Execute another WAL move to the original provider key."
+    - action: "Start another WAL move to the original provider key."
       api: "ILatticeTreeAdminOperations.StartWalMoveAsync"
       source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"
   source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"

@@ -61,9 +61,9 @@ failure_modes:
     effect: "The evicted entry is preserved but the original delivery was acknowledged."
     response: "Wait for apply.buffered_entries to drain, then replay; raise causal buffer limits if the rate persists."
   - id: tenant-gate
-    signal: "dead_letter.enqueued reason foreign_tenant, tenant_offline or tenant_suspended."
+    signal: "dead_letter.enqueued reason foreign_tenant, tenant_offline, tenant_suspended, tenant_source_not_resident or missing_source_identity."
     effect: "The receiver acknowledged the batch and parked the entry until tenant state permits it."
-    response: "Create, relocate or reinstate the tenant, then replay."
+    response: "Create, relocate or reinstate the tenant, or make the authenticated sender resident for the tenant and supply its identity, then replay."
   - id: schema-or-unknown
     signal: "dead_letter.enqueued reason schema or unknown."
     effect: "The decorator exhausted MaxApplyRetries or a causal-buffer drain failed terminally."
