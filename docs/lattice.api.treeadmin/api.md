@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/treeadmin.json"
+---
+
 # Public API
 
 The package implements the shared `ILatticeTreeAdmin`, `ILatticeTreeAdminOperations`, `ILatticeStorageUsageOperations` and `ILatticeWalReclamation` contracts. Their model types live in `Orleans.Lattice.Api.Abstractions`; the declarations below include that shared tree-administration family. The [facade guide](README.md) explains scope, authorization and request behavior.

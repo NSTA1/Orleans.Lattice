@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/treeadmin.json"
+---
+
 # Configuration
 
 `AddLatticeTreeAdminApi(Action<LatticeApiTreeAdminOptions>?)` registers and binds `LatticeApiTreeAdminOptions`. It is a public **empty options type**: there are no package-specific properties or defaults to tune today.

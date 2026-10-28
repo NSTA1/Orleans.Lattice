@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/treeadmin.json"
+---
+
 # Architecture
 
 The in-process facade validates caller input, authorizes the requested tree or cluster scope and delegates to core administration and schema seams. It does not hold a separate copy of tree topology or implement another storage engine.

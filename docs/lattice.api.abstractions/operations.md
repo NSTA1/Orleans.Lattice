@@ -82,7 +82,7 @@ Work that runs inside a grain in one long call adopts the contract as a **tracke
 
 ## See also
 
-- [Backup operations](../lattice.api.backup/operations.md) - accept-then-poll backup and restore, and migrating from the deprecated blocking verbs.
+- [Backup operations](../lattice.api.backup/operations.md) - accept-then-poll backup and restore, and migrating from the removed blocking verbs.
 - [Tree-administration operations](../lattice.api.treeadmin/operations.md) - accept-then-poll view, tag-index, WAL-move, orphaned-leaf and fresh storage-usage operations.
 - [Schema compliance operations](../lattice.api.schema/operations.md) - the accept-then-poll compliance scan.
 - [`Orleans.Lattice.Api.Abstractions`](README.md) - the contract package this namespace lives in.

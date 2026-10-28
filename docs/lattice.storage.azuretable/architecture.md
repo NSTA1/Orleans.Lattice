@@ -34,6 +34,7 @@ The table is split by behaviour, not by public .NET type:
 | Batch partition | Groups the entry rows for one append batch. Separate batches use separate partitions so concurrent shard work is not forced through one storage partition for the entry payloads. |
 | Commit metadata | Records that a batch is committed and the inclusive offset range it covers. Reads enumerate committed metadata in offset order before fetching entry rows. |
 | Tail metadata | Stores the highest committed offset for a shard. Highest-offset recovery is a point read rather than a scan over all entries. |
+| Trim watermark | Records the highest offset a trim has covered for a shard, so a reader can tell a trimmed range from a hole. It is written durably before a trim deletes any entry and never lowered. |
 | Recovery markers or discoverable batch state | Lets reconciliation find interrupted appends after a crash and either complete the contiguous prefix or remove non-contiguous leftovers. |
 
 Tree ids are encoded for Azure Table key safety. The table is created on first use. Use a non-default `TableName` when multiple deployments share one storage account.
@@ -103,7 +104,7 @@ Reads enumerate committed batch metadata in offset order, then stream entry rows
 
 The filtered replay read (`ReadFilteredAsync`, issue #3565) walks the same metadata, and bounds each batch query above by the window's last row key as well. It classifies each row from the routing prefix of its payload before decoding it: a compressed row is inflated into a pooled buffer rather than a new array, and a row the reader's filter excludes is neither decoded nor retained - except the window's last examined row, which, when excluded, is projected routing-only at the end of the scan so a resuming reader moves past it. The table service still returns every row in the window - the key lives inside the payload, so the service cannot select on it - which makes the saving the per-row decode and its allocations, not the transfer. The classification needs the routing reader `AddAzureTableWalStorage` supplies; a provider built through a public constructor decodes every row it examines, and returns the same rows.
 
-Trim deletes old retained entry rows in bounded Azure Table transactions and removes matching commit metadata in order. A crash during trim can leave a stale retained prefix, but not a gap in the live tail; a later trim can resume cleanup.
+Trim first raises the shard's durable trim watermark to the trimmed offset (capped at the committed tail), then deletes old retained entry rows in bounded Azure Table transactions and removes matching commit metadata in order. A crash during trim can leave a stale retained prefix below the watermark, but not a gap in the live tail; reads on an instance that knows the watermark never return an entry at or below it, and a later trim can resume cleanup. `GetTrimWatermarkAsync` reports the larger of the recorded watermark and the offset just below the lowest stored entry, so a shard trimmed before the watermark row existed still answers exactly.
 
 Capacity planning is shared with core WAL tuning:
 

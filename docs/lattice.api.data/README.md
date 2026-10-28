@@ -174,4 +174,4 @@ This is a write-capable external surface, so its default posture is closed:
 - gRPC registration: `AddLatticeDataApiGrpc()` and `MapLatticeDataApiGrpc()`, configured with `LatticeDataApiGrpcOptions`.
 - Public client: `LatticeDataApiGrpcClient` (`SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync`, `GetAsync`, `ReadRangeAsync`, `CrdtWriteAsync`, `CrdtReadAsync`).
 - Authorization seam: `ILatticeDataApiAuthorizer` (`DenyAllDataApiAuthorizer`, `AllowAllDataApiAuthorizer`).
-- Identity seam: `ILatticeDataApiCredentialBridge`.
+- Identity seams: `ILatticeDataApiCredentialBridge` (caller credential) and `ILatticeDataApiActiveTenantBridge` (asserted active tenant).

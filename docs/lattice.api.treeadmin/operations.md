@@ -8,23 +8,23 @@ Accept-then-poll tree maintenance for [`Orleans.Lattice.Api.TreeAdmin`](README.m
 
 ## Why
 
-These verbs can run for minutes on a large tree. The original verbs on `ILatticeTreeAdmin` block until the work completes, so a caller's request timeout - the Orleans response timeout of 30 seconds by default - cuts them off while the work may still be running, may have stopped part-way, or may still be holding the grain. The start verbs below return in milliseconds, the work survives the caller, and its progress is real data: keys projected, trees probed and repaired, WAL entries copied, shards walked.
+These verbs can run for minutes on a large tree. The original blocking verbs on `ILatticeTreeAdmin` (now removed - see [Migrating from the removed blocking verbs](#migrating-from-the-removed-blocking-verbs)) held the request open until the work completed, so a caller's request timeout - the Orleans response timeout of 30 seconds by default - cuts them off while the work may still be running, may have stopped part-way, or may still be holding the grain. The start verbs below return in milliseconds, the work survives the caller, and its progress is real data: keys projected, trees probed and repaired, WAL entries copied, shards walked.
 
 ## Verbs
 
 | Verb | Starts | Authorized as |
 |---|---|---|
-| `StartViewRebuildAsync` | A shadow-swap rebuild of a materialised view. | `RebuildViewAsync`: whole-tree `Admin` over the view's source tree. |
-| `StartViewReconcileAsync` | A view reconcile (anti-entropy). | `ReconcileViewAsync`: whole-tree `Admin` over the view's source tree. |
-| `StartTagIndexReconcileAsync` | A digest-gated tag-index reconcile sweep. | `ReconcileTagIndexAsync`: whole-tree `Admin` over the index's `tag-{indexName}` tree. |
-| `StartWalMoveAsync` | An online move of one WAL partition to another storage provider key. | `ExecuteWalMoveAsync`: whole-tree `TreeLifecycle`. |
-| `StartOrphanedLeavesAuditAsync` | A whole-tree orphaned-leaf audit, driven batch by batch to the end of the tree. | `AuditOrphanedLeavesAsync`: whole-tree `Read`. |
-| `StartOrphanedLeavesRepairAsync` | A whole-tree orphaned-leaf repair, driven batch by batch to the end of the tree. | `RepairOrphanedLeavesAsync`: whole-tree `TreeLifecycle`. |
+| `StartViewRebuildAsync` | A shadow-swap rebuild of a materialised view. | Whole-tree `Admin` over the view's source tree. |
+| `StartViewReconcileAsync` | A view reconcile (anti-entropy). | Whole-tree `Admin` over the view's source tree. |
+| `StartTagIndexReconcileAsync` | A digest-gated tag-index reconcile sweep. | Whole-tree `Admin` over the index's `tag-{indexName}` tree. |
+| `StartWalMoveAsync` | An online move of one WAL partition to another storage provider key. | Whole-tree `TreeLifecycle`; reserved system tree ids are rejected. |
+| `StartOrphanedLeavesAuditAsync` | A whole-tree orphaned-leaf audit, driven batch by batch to the end of the tree. | As `AuditOrphanedLeavesAsync`: whole-tree `Read`. |
+| `StartOrphanedLeavesRepairAsync` | A whole-tree orphaned-leaf repair, driven batch by batch to the end of the tree. | As `RepairOrphanedLeavesAsync`: whole-tree `TreeLifecycle`; reserved system tree ids are rejected. |
 | `GetOperationStatusAsync`, `ListOperationsAsync`, `CancelOperationAsync` | - | Scoped to the `treeadmin.` kinds, the caller's tenant, and the trees the caller may read. Cancelling needs the grant that starting needed. |
 
 Every start verb takes an optional `operationId`. A retried start with the same id returns the existing operation (`Created = false`) and starts nothing.
 
-The default facade registered by `AddLatticeTreeAdminApi` implements both `ILatticeTreeAdmin` and `ILatticeTreeAdminOperations` on one singleton, so a start and its blocking twin share one authorization path and one engine path.
+The default facade registered by `AddLatticeTreeAdminApi` implements both `ILatticeTreeAdmin` and `ILatticeTreeAdminOperations` on one singleton, so a start shares the facade's authorization and tenant-resolution path.
 
 ## Kinds, phases and units
 
@@ -177,5 +177,5 @@ Over gRPC, use `StartStorageUsageRefresh`, `GetStorageUsageRefreshStatus`, `List
 ## See also
 
 - [Long-running operations](../lattice.api.abstractions/operations.md) - the shared contract this page specialises.
-- [`Orleans.Lattice.Api.TreeAdmin`](README.md) - the facade, its blocking verbs and its storage accounting read.
+- [`Orleans.Lattice.Api.TreeAdmin`](README.md) - the facade, its immediate verbs and its storage accounting read.
 - [Backup operations](../lattice.api.backup/operations.md) - the first adopter of the same contract.

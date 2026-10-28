@@ -102,6 +102,7 @@ The service maps every facade outcome onto an explicit gRPC status rather than l
 | `LatticeReplicationModeMismatchException` | `FailedPrecondition` | A write used a shape that differs from the single merge mode the replicated tree is declared with. |
 | `LatticeSaturatedException` | `ResourceExhausted` | The tree is WAL-saturated and shed the call; back off and retry. |
 | `LatticeQuotaExceededException` | `ResourceExhausted` | An admission cap refused the write; see [Quota refusals](#quota-refusals) for its trailers. |
+| `LatticeTreeBootstrappingException` | `Unavailable` | The tree's replica is being bootstrapped from a snapshot and its reads are fenced until the import completes; transient, so back off and retry. |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
