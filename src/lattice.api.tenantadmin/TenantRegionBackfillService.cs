@@ -292,11 +292,25 @@ internal sealed class TenantRegionBackfillService(
         {
             if (LatticeTenantTrees.TryGetTenant(treeId, out var owner) && owner == tenant)
             {
+                var entry = await latticeRegistry.GetEntryAsync(treeId).ConfigureAwait(false);
+                if (entry?.DerivedFrom is { } logicalOwner
+                    && LatticeTenantTrees.TryGetTenant(logicalOwner, out var logicalTenant)
+                    && logicalTenant == tenant
+                    && !configuredTreeIds.Contains(treeId)
+                    && replicationContext?.ResolveMergeMode(treeId) is null)
+                {
+                    // A shadow copy can precede its alias or outlive it. Its
+                    // durable owner, not the current alias, needs enrollment.
+                    treeSet.Add(logicalOwner);
+                    continue;
+                }
+
                 var aliases = await latticeRegistry.GetAliasesTargetingAsync(treeId).ConfigureAwait(false);
                 var isConfiguredAliasTarget = aliases.Any(alias =>
                     configuredTreeIds.Contains(alias)
                     || replicationContext?.ResolveMergeMode(alias) is not null);
-                if (!isConfiguredAliasTarget || configuredTreeIds.Contains(treeId))
+                if (!isConfiguredAliasTarget || configuredTreeIds.Contains(treeId)
+                    || replicationContext?.ResolveMergeMode(treeId) is not null)
                 {
                     treeSet.Add(treeId);
                 }

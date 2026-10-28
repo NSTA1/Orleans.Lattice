@@ -12,7 +12,7 @@ using static Orleans.Lattice.Api.TenantAdmin.Tests.TenantAdminTestSupport;
 namespace Orleans.Lattice.Api.TenantAdmin.Tests;
 
 [TestFixture]
-public sealed class TenantRegionBackfillServiceTests
+public sealed partial class TenantRegionBackfillServiceTests
 {
     private static readonly TenantId Acme = TenantId.Parse("acme");
 
