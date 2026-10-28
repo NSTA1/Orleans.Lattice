@@ -250,6 +250,10 @@ public partial class TreeShardConsolidationGrainTests
         {
             var index = i;
             var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            // The fold sweeps the donor's prepared buckets before draining
+            // (issue #5125); by default the chain holds none.
+            leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
+                .Returns(_ => Task.FromResult(new List<PendingMutationSnapshot>()));
             leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
                 .Returns(_ =>
                 {

@@ -410,8 +410,8 @@ write and the drain.
 
 - The routing tier names the shard it dispatches each prepared write to, and
   a leaf of that shard knows the stamp it mints is the original.
-- A split's live shadow-forward and its retroactive sweep carry `P` to the
-  destination, which buckets the prepare at `P`.
+- A split's or a shard fold's live shadow-forward and its retroactive sweep
+  carry `P` to the destination, which buckets the prepare at `P`.
 - A committed-values backstop the sweep applies carries `P` too.
 - The saga coordinator's own committed-values backstop carries `P`. Before
   its execute phase ends, the coordinator reads every key's `P` back from

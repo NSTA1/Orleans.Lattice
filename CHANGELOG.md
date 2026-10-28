@@ -10,6 +10,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
+### Fixed
+
+- **Atomic - Batches stay whole across a shard fold.** A shrinking reshard or over-split healing no longer lets a read see an atomic batch on some of its keys and not others when the batch was prepared on the folded shard before the fold began. ([#5125](https://github.com/NSTA1/Orleans.Lattice/issues/5125)) (`Orleans.Lattice`)
+
 ## Released
 
 ## [2026-10-28]

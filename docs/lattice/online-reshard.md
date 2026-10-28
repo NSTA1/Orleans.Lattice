@@ -92,6 +92,8 @@ Because each underlying split is itself an independent online operation, the tre
 
 Each fold is the exact inverse of a split. The donor shard shadow-forwards writes on its slots to an adjacent survivor while a bounded background drain copies its entries across; then, in one freeze-and-flip step, the donor is sealed and frozen, a final drain runs over it, the survivor takes the slots back, and the shard map is re-pointed. The donor then rejects its old slots with the same stale shard-routing signal a split source uses.
 
+As with a split, atomic batches already prepared on the donor's slots when the fold begins are replayed onto the survivor before the drain starts, so a batch that commits across the fold is never visible on some of its keys and not others ([#5125](https://github.com/NSTA1/Orleans.Lattice/issues/5125)).
+
 When a fold commits, the retired donor's storage is released: every leaf and internal node it held is cleared, which also retires those leaves' write-ahead-log materialiser pins. Nothing is lost by this - each drained entry was appended to the survivor's own write-ahead log before the drain moved on - and keeping the leaves would hold the tree's WAL trim horizon back for good, because a retired leaf's pin can never advance. The donor's shard root stays behind as a small routing tombstone that remembers which slots moved where, so a router still holding a pre-shrink shard map is redirected rather than served; it never grows a new root.
 
 A donor that the live map still routes a slot to, or that refuses retirement because another migration or an online resize holds it, keeps its storage, and the fold completes as a routing-only retirement.
