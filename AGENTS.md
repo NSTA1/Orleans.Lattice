@@ -129,7 +129,7 @@ closes.
   video series, neither with a `src/`/`test/` counterpart).
 - `samples/`, `benchmark/` - runnable samples and the throughput rig.
 - `apps/` (the container host apps), `reference-architecture/` (the standalone
-  deployment kit), `spec/` (the TLA+ specifications, one module per area,
+  deployment kit), `spec/` (the TLA+ specifications, one directory per area,
   starting with the atomic-commit protocol), `docs-site/` (the
   documentation-site build), and `tools/`
   (repository scripts, such as the repository-wide gate runner).
