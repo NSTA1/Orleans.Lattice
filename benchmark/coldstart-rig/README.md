@@ -691,8 +691,9 @@ every cohort runs on, so do not run it while that volume holds state you still
 need.
 
 `-Stage all` runs the three stages in order. The corpus is written to
-`<WorkspaceRoot>/<CorpusRepoId>` (default `coldstart-scale-corpus`) unless
-`-TargetPath` names another directory under the mounted workspace root, `-Seed`
+`<WorkspaceRoot>/<CorpusRepoId>` unless `-TargetPath` names another directory
+under the mounted workspace root. `-CorpusRepoId` (default `coldstart-scale-corpus`)
+is also the repository id the index stage registers the corpus under, `-Seed`
 defaults to 18380, and `-IndexTimeoutMinutes` (default 720) bounds how long the
 index stage waits for convergence.
 

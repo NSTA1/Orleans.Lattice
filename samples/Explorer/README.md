@@ -414,13 +414,19 @@ console's sign-in. See
 | File | What it shows |
 |------|---------------|
 | `Program.cs` | The entry point: options, start, the console output and the **P** key. |
+| `ExplorerSampleOptions.cs` | The command-line switches and the identity-directory and group-merge settings read from the environment. |
+| `SamplePorts.cs` | Every loopback port both regions and the console bind, and the `--port-offset` shift. |
+| `SampleBanner.cs` | The console output a started sample prints: every URL, every sample identity and how to drive the estate. |
 | `ExplorerSample.cs` | The estate: both regions, the shared sink, the peer link and the writer. |
 | `SampleRegion.cs` | One region's host: the silo, every facade and gRPC binding, the replication transport and, in `east`, the Explorer console. |
 | `SampleSeeder.cs` | The seeded identities, policy, tenants, data, replication enrolment and the task-board install. |
+| `SampleIdentities.cs` | The fixed names the sample seeds: its sign-in identities, groups, tenants, regions and trees. |
 | `SampleSharedBackupSink.cs` | The backup sink both regions share. |
 | `PeerLink.cs` | The switch that pauses cross-region replication. |
 | `ReplicationWriter.cs` | The bounded background writer. |
 | `DemoBasicAuthenticator.cs` | The trusted-token authenticator behind the Basic sign-in. |
+| `SampleExplorerEnvironment.cs` | The console's first-run endpoint and automatic sign-in, held by the sample rather than the process environment. |
+| `SampleEntraDirectory.cs` | The Entra app registration behind the opt-in Microsoft Graph identity directory. |
 | `SampleCircuitDiagnostics.cs` | The console region's terminal log of circuit faults, and `DetailedErrors` in Development. |
 | `test/` | `Explorer.Tests`: option parsing and the sample's parts, plus smoke tests that start the sample in-process and check that every area but Telemetry (and, with `--minimal`, Tenancy) is visible to the bootstrap administrator. |
 
