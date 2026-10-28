@@ -12,6 +12,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Leaf binding calls.** Root leaf creation and single-key or batched CRDT self-heal each remove one grain call, retaining separate durable binding writes, birth protection and retry behavior. ([#5139](https://github.com/NSTA1/Orleans.Lattice/pull/5139)) (`Orleans.Lattice`)
+
 - **Performance - Internal-node construction.** Root promotion, bulk-load internal levels and split-sibling recovery each combine tree binding and initialization into one grain call, preserving durability and recovery ordering. ([#5133](https://github.com/NSTA1/Orleans.Lattice/pull/5133)) (`Orleans.Lattice`)
 
 ## Released
