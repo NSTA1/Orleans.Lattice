@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Architecture
 
 The binding exposes app facade contracts over code-first unary gRPC methods. Each facade group has a stable service; app slugs are request data, so new apps do not add endpoints. See the [binding guide](README.md) for the RPC matrix and detailed message/error behavior.

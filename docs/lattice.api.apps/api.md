@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Public API
 
 `Orleans.Lattice.Api.Apps` implements transport-independent contracts declared by `Orleans.Lattice.Api.Abstractions`. The [facade guide](README.md) covers authorization, tenant handling, lifecycle behavior, and bridge limits.
@@ -439,7 +443,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.Apps.AppSourceSummaryCapabilities`
 
-[Source](../../src/lattice.api.abstractions/Apps/Model/AppSourceSummaryCapabilities.cs) (line 4).
+[Source](../../src/lattice.api.abstractions/Apps/Model/AppSourceSummaryCapabilities.cs) (line 5).
 
 `public enum AppSourceSummaryCapabilities`
 

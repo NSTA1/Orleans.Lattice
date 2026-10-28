@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/procedures/app-lifecycle.yaml"
+---
+
 # Architecture
 
 The apps add-on composes with Orleans.Lattice's registry, authorization, tenant, tree, and replication seams. It does not add a separate data-plane authorization evaluator. See the [engine guide](README.md) for manifest rules and detailed failure behavior.

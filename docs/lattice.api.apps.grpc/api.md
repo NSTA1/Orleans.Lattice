@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/api/apps.json"
+---
+
 # Public API
 
 This page indexes the code-first gRPC surface for app control, catalogue, workspace, and bridge facades. Endpoint paths, authorization, credentials, and error mapping are described in [architecture](architecture.md); the facade contracts are described in the [in-process API page](../lattice.api.apps/api.md).

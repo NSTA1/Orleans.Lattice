@@ -1,3 +1,7 @@
+---
+agent_spec: "docs/agents/governance/identity-propagation.json"
+---
+
 # Orleans.Lattice.Explorer.Entra architecture
 
 The interactive Entra provider implements the Explorer's auth-method seam for
