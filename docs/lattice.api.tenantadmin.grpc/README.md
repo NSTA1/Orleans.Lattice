@@ -358,6 +358,7 @@ identity and every credential is isolated to its own call.
 
 ## See also
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
 - [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) - the
   transport-agnostic facade this package binds.
 - [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) - the core multi-tenancy

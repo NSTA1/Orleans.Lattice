@@ -761,7 +761,10 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 - [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) - the core multi-tenancy
   companion (isolation, quotas, metering, residency enforcement).
 - [`Orleans.Lattice.Api.TenantAdmin.Grpc`](../lattice.api.tenantadmin.grpc/README.md) -
-  the code-first gRPC binding and remote client for these facades.
+  the code-first gRPC binding and remote client for these facades: its
+  [public API](../lattice.api.tenantadmin.grpc/api.md),
+  [configuration](../lattice.api.tenantadmin.grpc/configuration.md), and
+  [architecture](../lattice.api.tenantadmin.grpc/architecture.md).
 - [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md) - the sibling
   tree-administration facade this one composes and mirrors.
 - [MultiTenancy sample](../../samples/MultiTenancy/README.md).

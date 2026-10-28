@@ -250,3 +250,4 @@ Alongside the request/response records the operations use, the facade publishes 
 - [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) - the schema control facade this surface composes by delegation.
 - [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared control-surface contract package that publishes `ILatticeTreeAdmin`.
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) - the MCP server binding that advertises the tree-administration group.
+- [`Orleans.Lattice.Api.TreeAdmin.Grpc`](../lattice.api.treeadmin.grpc/README.md) - the code-first gRPC binding and typed client for this facade: its [public API](../lattice.api.treeadmin.grpc/api.md), [configuration](../lattice.api.treeadmin.grpc/configuration.md), and [architecture](../lattice.api.treeadmin.grpc/architecture.md).

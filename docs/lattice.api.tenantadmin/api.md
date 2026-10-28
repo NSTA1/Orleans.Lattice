@@ -20,7 +20,7 @@ A lifecycle or grant write is not a distributed transaction across all tenant tr
 
 - [Configuration](configuration.md)
 - [Architecture](architecture.md)
-- [gRPC binding](../lattice.api.tenantadmin.grpc/README.md)
+- [gRPC binding](../lattice.api.tenantadmin.grpc/README.md) - its [public API](../lattice.api.tenantadmin.grpc/api.md), [configuration](../lattice.api.tenantadmin.grpc/configuration.md) and [architecture](../lattice.api.tenantadmin.grpc/architecture.md)
 
 ## Public declaration reference
 

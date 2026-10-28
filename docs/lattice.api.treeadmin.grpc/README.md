@@ -237,6 +237,7 @@ One advertised authentication scheme returned by the unauthenticated discovery R
 
 ## Reference
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
 - [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md) - the transport-agnostic whole-tree administration facade this binding projects, including the operation set and the fail-closed access gate.
 - [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared, versioned API contract the facade and this binding consume.
 - [`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md) - the sibling control-facade binding this one mirrors; the tree-administration facade composes the schema control facade by delegation.

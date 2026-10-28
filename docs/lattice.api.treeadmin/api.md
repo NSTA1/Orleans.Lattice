@@ -23,6 +23,7 @@ Use `StorageUsageRefreshResults.TryReadSummary` for cluster totals and the publi
 - [Configuration](configuration.md)
 - [Architecture](architecture.md)
 - [Operations](operations.md)
+- [gRPC binding](../lattice.api.treeadmin.grpc/README.md) - its [public API](../lattice.api.treeadmin.grpc/api.md), [configuration](../lattice.api.treeadmin.grpc/configuration.md) and [architecture](../lattice.api.treeadmin.grpc/architecture.md)
 
 ## Public declaration reference
 
