@@ -1,0 +1,24 @@
+# Regression check for #5125 (fixed by #5126). A shard fold opens the donor's
+# shadow-write window through the split's primitive but skips the retroactive
+# sweep that the split coordinator runs after it, so a saga prepared on the
+# donor before the window opened reaches the survivor only as the drained
+# pre-saga row. Once the saga decides, a reader served by the survivor sees the
+# batch on k1 and not on k2.
+MODULE: AtomicOnOwnerFoldSkipsSweep
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: a fold opens the window without the retroactive sweep, so the batch reads torn across the fold
+PERTURBS: FoldBegin
+
+--- FIND
+    /\ rz \in {"idle", "purged", "undone"}
+    /\ rmap = s1
+    /\ ~Fenced(alias, s1)
+    /\ sp' = "shadow"
+--- REPLACE
+    /\ rz \in {"idle", "purged", "undone"}
+    /\ rmap = s1
+    /\ ~Fenced(alias, s1)
+\* MUTATION: the fold skips the retroactive sweep the split runs after the window opens.
+    /\ sp' = "swept"
+--- END

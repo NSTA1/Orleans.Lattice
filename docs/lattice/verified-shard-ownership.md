@@ -6,8 +6,9 @@ agent_spec: "docs/agents/invariants.yaml"
 
 Every read and write in Orleans.Lattice is routed to the one shard that owns its
 key, and that owner moves: an adaptive [shard split](shard-splitting.md) moves a
-slot to a new shard, an [online reshard](online-reshard.md) drives splits until
-the tree has the shards it needs, and an online resize copies the tree to a new
+slot to a new shard, a shard fold moves one back onto a neighbour, an
+[online reshard](online-reshard.md) drives splits or folds until the tree has
+the shards it needs, and an online resize copies the tree to a new
 physical copy and moves the logical tree's alias onto it
 ([tree sizing](tree-sizing.md)), with an undo that moves it back. Routing
 activations cache where keys live, and an [atomic write](atomic-writes.md)'s saga
@@ -29,7 +30,7 @@ and what it does not, is stated in the modules' refinement notes; the points a
 reader is most likely to over-read are these.
 
 - **Two modules, not one.** `ShardOwnership` checks who serves a key across
-  split, reshard, resize and undo, with stale routers and the saga's binding,
+  split, fold, reshard, resize and undo, with stale routers and the saga's binding,
   under a transaction registry that always reports the saga's decision.
   `ShardOwnershipRetention` checks what the registry's retention (declining to
   report a decision, retiring its row), a late forwarded prepare and a leaf
@@ -51,7 +52,12 @@ reader is most likely to over-read are these.
   the previous copy before it decides (#4689, fixed).
 - **Other alias moves are not modelled.** An explicit alias change and schema
   remediation move the alias too, and neither is covered here.
-- **Shard consolidation is not modelled.** The reshard here only grows.
+- **A shard fold is modelled in `ShardOwnership` only.** A fold, from
+  over-split healing or a shrinking reshard, opens the split's shadow-write
+  window and takes the split's own sweep, freeze and commit. Until #5125 the
+  fold was left out because it shares that window, which is how a fold that
+  skipped the sweep escaped the model; a standing mutation now reproduces it.
+  `ShardOwnershipRetention` still models only the split.
 - **Cross-cluster replication is not modelled.** Unlike the
   [atomic-commit protocol](verified-atomic-commit.md#the-replicated-half), whose
   replicated half has its own module, shard ownership's has no formal artefact.
