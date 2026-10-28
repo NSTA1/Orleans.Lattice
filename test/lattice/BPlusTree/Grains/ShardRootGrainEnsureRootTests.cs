@@ -45,7 +45,8 @@ public class ShardRootGrainEnsureRootTests
     private const string TreeId = "ensureroot-tree";
     private const string ShardKey = TreeId + "/0";
 
-    private static (ShardRootGrain Grain, FakePersistentState<ShardRootState> State) CreateGrain()
+    private static (ShardRootGrain Grain, FakePersistentState<ShardRootState> State) CreateGrain(
+        Action<IBPlusLeafGrain>? configureLeaf = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
@@ -98,6 +99,7 @@ public class ShardRootGrainEnsureRootTests
         ((IGrainBase)leaf).GrainContext.Returns(leafGrainContext);
         leaf.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
         leaf.SetShardIndexAsync(Arg.Any<int>()).Returns(Task.CompletedTask);
+        configureLeaf?.Invoke(leaf);
         leaf.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.FromResult<SplitResult?>(null));
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
@@ -116,6 +118,40 @@ public class ShardRootGrainEnsureRootTests
             TestMutationObservers.NoObservers());
 
         return (grain, state);
+    }
+
+    [Test]
+    public async Task EnsureRoot_awaits_one_binding_dispatch_under_create_intent_before_publishing_root()
+    {
+        IBPlusLeafGrain leaf = null!;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (grain, state) = CreateGrain(stub =>
+        {
+            leaf = stub;
+            stub.SetBindingAsync(TreeId, 0).Returns(_ =>
+            {
+                Assert.That(LatticeNewLeafIntentContext.IsFor(stub.GetGrainId()), Is.True);
+                return release.Task;
+            });
+        });
+
+        var seed = grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>());
+        try
+        {
+            Assert.That(seed.IsCompleted, Is.False);
+            Assert.That(state.State.RootNodeId, Is.Null);
+            Assert.That(state.WriteCount, Is.Zero);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await seed;
+        }
+
+        await leaf.Received(1).SetBindingAsync(TreeId, 0);
+        await leaf.DidNotReceive().SetTreeIdAsync(Arg.Any<string>());
+        await leaf.DidNotReceive().SetShardIndexAsync(Arg.Any<int>());
+        Assert.That(state.State.RootNodeId, Is.EqualTo(leaf.GetGrainId()));
     }
 
     [Test]

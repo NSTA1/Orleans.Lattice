@@ -1531,8 +1531,7 @@ internal sealed partial class ShardRootGrain
                 TreeId,
                 key);
 
-            await leafGrain.SetTreeIdAsync(TreeId);
-            await leafGrain.SetShardIndexAsync(MyShardIndex);
+            await leafGrain.SetBindingAsync(TreeId, MyShardIndex);
 
             // Single-shot. A second failure is a genuine fault (the shape really
             // is unregistered, or the binding write did not stick) and must stay

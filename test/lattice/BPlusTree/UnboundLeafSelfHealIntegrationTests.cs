@@ -58,8 +58,9 @@ public class UnboundLeafSelfHealIntegrationTests
     /// <c>RecoverTreeAsync</c> cannot pass this test, because nothing here ever
     /// calls it.
     /// </summary>
-    [Test]
-    public async Task CrdtWrite_rebinds_an_unbound_leaf_with_no_recover_call()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task CrdtWrite_rebinds_an_unbound_leaf_with_no_recover_call(bool batch)
     {
         var treeName = $"selfheal-{Guid.NewGuid():N}";
         var router = await CreateSingleShardTreeAsync(treeName);
@@ -77,7 +78,10 @@ public class UnboundLeafSelfHealIntegrationTests
         await UnbindLeafRowAsync(leaf);
         Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the leaf is unbound");
 
-        await router.OrFlag("a").EnableAsync("replica-1");
+        if (batch)
+            await router.EnableManyAsync(new[] { "a" }, "replica-1");
+        else
+            await router.OrFlag("a").EnableAsync("replica-1");
 
         Assert.That(await leaf.GetTreeIdAsync(), Is.EqualTo(treeName), "the write path re-asserted the binding");
         Assert.That(await router.OrFlag("a").IsEnabledAsync(), Is.True, "and the write itself landed");
