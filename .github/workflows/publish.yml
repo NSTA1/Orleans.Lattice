@@ -633,7 +633,7 @@ jobs:
       # only under the earlier attempt, and every leg writes the same file name.
       - name: Download leg results
         if: needs.prepare.outputs.leg_count != '0'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           pattern: leg-results-*
           path: leg-results

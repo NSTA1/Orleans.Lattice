@@ -2530,7 +2530,7 @@ jobs:
       # lets both attempts survive to be compared.
       - name: Download leg results
         if: needs.plan.outputs.leg_count != '0'
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           pattern: leg-results-*
           path: leg-results
