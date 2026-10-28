@@ -1,8 +1,9 @@
 # TLA+ specification of shard ownership
 
 This directory holds the formal coverage of key ownership in Orleans.Lattice
-across an adaptive shard split, an online reshard, and an online resize with its
-fence, alias flip, undo and purge. Routing caches can be stale, an atomic-write
+across an adaptive shard split, an online shard fold, an online reshard that
+grows or shrinks, and an online resize with its fence, alias flip, undo and
+purge. Routing caches can be stale, an atomic-write
 saga is bound to one physical copy, ordinary writes and reads run alongside,
 and the transaction registry retires what it knows. It is the deliverable of
 #4434 under epic #4430.
@@ -23,7 +24,7 @@ and its revert, the alias move the other modules do not make (see
 
 | File | What it is |
 |------|-----------|
-| [`ShardOwnership.tla`](ShardOwnership.tla) | Ownership: who serves a key across split, reshard, resize and undo, with stale routers and the saga's binding and re-binding. |
+| [`ShardOwnership.tla`](ShardOwnership.tla) | Ownership: who serves a key across split, fold, reshard, resize and undo, with stale routers and the saga's binding and re-binding. |
 | [`ShardOwnership.cfg`](ShardOwnership.cfg) | Its TLC model: the bounded instance and the invariants and properties it checks. |
 | [`ShardOwnership.manifest.json`](ShardOwnership.manifest.json) | Its manifest (see [Counts](#counts)). |
 | [`mutations/`](mutations/) | Its mutation catalogue. See [`mutations/README.md`](mutations/README.md), which covers both catalogues. |
@@ -63,6 +64,7 @@ the line where its concerns stop interacting, not shrunk.
 | | `ShardOwnership` | `ShardOwnershipRetention` |
 |---|---|---|
 | Adaptive split (sweep, freeze, commit) | yes | yes |
+| Online shard fold (through the split's sweep, freeze and commit) | yes | no |
 | Online reshard | yes | no |
 | Resize: snapshot, fence, flip, retire, purge | yes | yes |
 | A refused flip | yes | no |
@@ -206,8 +208,14 @@ Each loses no behaviour the instance can distinguish.
   copy once the resize completed, while the old copy still mirrors into it: the
   mirror chases a refusal to the slot's current owner, a mirrored terminal
   reaches the split closure, and an undo abandons the split (#4478).
+- **The fold** (`FoldBegin`; ownership module only): an online shard fold of
+  `k2`'s slot from donor `s1` onto survivor `s2`, from over-split healing or a
+  shrinking reshard. It opens the donor's window through the split's primitive,
+  under the resize's migration hold, and then takes the split's own sweep,
+  freeze and commit (#5125).
 - **The reshard** (`ReshardStart`, `ReshardFinish`; ownership module only): a
-  reshard that drives the split, interlocked with resize in both directions.
+  reshard that drives the split or the fold, interlocked with resize in both
+  directions.
 - **The resize** (`ResizeBegin`, `SnapCopy`, `ResizeFence`, `ResizeFlip`,
   `ResizeFlipRefused`, `ResizeRetire`, `ResizePurge`): an online resize from the
   old copy `T` to the resized copy `R`, index-for-index, fenced before a
@@ -317,6 +325,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4454 | The mid-dispatch re-bind ignores the bound copy's mirror (fixed, #4521) | `SagaBatchOnOneCopyRebindIgnoresMirror` |
 | #4455 | The online snapshot does not copy prepared buckets (fixed, #4506) | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
 | #4473 | The split's sweep treats Indeterminate as InFlight (fixed, #4561) | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
+| #5125 | A shard fold opens the split's window without the split's retroactive sweep, so a batch prepared on the donor before the fold reads torn once it commits (found by `ReshardTopologyTests` in CI, outside this area, which did not then model a fold; fixed, #5126) | `AtomicOnOwnerFoldSkipsSweep` |
 | #4474 | A saga bound to the copy an undo discarded never completes: the discarded copy refuses its terminals and the broadcast does not follow the refusal. Following it to the old copy, the naive fix, lands part of the batch there (fixed, #4516) | `SagaCompletesDiscardedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
 | #4475 | A saga bound to a purged old copy never completes (fixed, #4531 and #4581) | `SagaCompletesPurgedCopyRefusesTerminal` |
 | #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design; fixed, #4566, #4610 and #4629) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |
@@ -376,7 +385,7 @@ TLC's own state counts.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `ShardOwnership` | 7 | 5 | 28 | 44 | 38 | 100,666 |
+| `ShardOwnership` | 7 | 5 | 29 | 45 | 39 | 100,666 |
 | `ShardOwnershipRetention` | 7 | 4 | 27 | 36 | 36 | 142,980 |
 | `ShardOwnershipCrdt` | 2 | 0 | 10 | 10 | 10 | 1,573 |
 | `ShardOwnershipCutover` | 3 | 1 | 14 | 15 | 16 | 2,088 |
