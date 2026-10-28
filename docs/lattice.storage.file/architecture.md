@@ -56,3 +56,8 @@ The two byte figures a shard reports are therefore not interchangeable. `GetReta
 ## Durable WAL garbage collection
 
 `AddFileWalStorage` also registers the same durable-WAL GC wiring the Azure Table provider installs - the WAL cursor registry, the leaf reporter, and the WAL GC. The cursor registry itself stays the process-local `InMemoryWalCursorRegistry` that `AddLattice` installs unless the host registers its own; what the wiring adds is a leaf reporter that also mirrors each leaf's applied frontier into cluster-wide pins persisted through the configured grain storage, which the GC consults, so a restart that wipes the registry cannot let it trim entries a not-yet-reactivated leaf still needs. All three are registered idempotently, so a host that already supplied its own keeps it.
+
+## Related
+
+- [Public API](api.md) - the public types and what `AddFileWalStorage` registers.
+- [Configuration](configuration.md) - every `FileWalStorageOptions` knob, default, and validation rule.

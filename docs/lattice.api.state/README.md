@@ -105,7 +105,8 @@ For a complete, runnable journey - silo + gRPC host, discovery, structure, snaps
 For day-to-day use:
 
 - [Setup](setup.md) - registering the facade, the gRPC binding, and mapping the endpoint routes.
-- [Configuration](configuration.md) - every public options property, its type, and its default.
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md) - every public declaration, every `LatticeApiStateOptions` property with its type and default, and how the facades read the cluster.
+- [`Orleans.Lattice.Api.State.Grpc`](../lattice.api.state.grpc/README.md) - the gRPC binding: [public API](../lattice.api.state.grpc/api.md), [configuration](../lattice.api.state.grpc/configuration.md), and [architecture](../lattice.api.state.grpc/architecture.md).
 - [gRPC Contract](grpc-contract.md) - the code-first service, its RPCs, the wire records, and the public client.
 - [Surfaces](surfaces.md) - discovery, structure, entry inspection, change history, change observation, metrics, and cluster info, request by request.
 - [Security](security.md) - the fail-closed authorization seam, the default-deny posture, and the transport story.

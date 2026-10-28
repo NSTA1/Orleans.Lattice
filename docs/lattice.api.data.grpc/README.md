@@ -110,9 +110,11 @@ A typed counter advance (`CounterIncrement`, `CounterDecrement` or `GCounterIncr
 
 ## Options
 
-`LatticeDataApiGrpcOptions`, bound through `AddLatticeDataApiGrpc(configure)`, exposes `RequireAuthorization` (`bool`, default `true`), `CredentialHeaderName` (`string`, default `"authorization"`), `CredentialScheme` (`string`, default `"Bearer"`), and `ActiveTenantHeaderName` (`string`, default `"lattice-active-tenant"`). Their full semantics are in the [data API configuration reference](../lattice.api.data/configuration.md#latticedataapigrpcoptions).
+`LatticeDataApiGrpcOptions`, bound through `AddLatticeDataApiGrpc(configure)`, exposes `RequireAuthorization` (`bool`, default `true`), `CredentialHeaderName` (`string`, default `"authorization"`), `CredentialScheme` (`string`, default `"Bearer"`), and `ActiveTenantHeaderName` (`string`, default `"lattice-active-tenant"`). Their full semantics, and the seams `AddLatticeDataApiGrpc` registers, are in [Configuration](configuration.md).
 
 ## Public surface
+
+The table summarises each public type's role; the [Public API](api.md) reference lists every public declaration and signature.
 
 | Type | Role |
 |------|------|
@@ -130,5 +132,6 @@ A typed counter advance (`CounterIncrement`, `CounterDecrement` or `GCounterIncr
 
 ## Reference
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
 - [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) - the write-capable data-API facade this binding projects, including the operation set and the fail-closed access gate.
 - [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared, versioned API contract the facade and this binding consume.

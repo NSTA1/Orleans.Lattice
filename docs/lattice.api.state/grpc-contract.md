@@ -78,14 +78,6 @@ The client carries **no transport policy of its own**. Address, TLS, retries, de
 
 ## Server options
 
-`LatticeStateApiGrpcOptions` is populated by `AddLatticeStateApiGrpc(configure)` and controls the server-side binding.
-
-| Property | Type | Default | Meaning |
-|---|---|---|---|
-| `RequireAuthorization` | `bool` | `true` | Enforce `ILatticeStateApiAuthorizer` on inbound protected state-API calls. The default is fail-closed; set to `false` only behind an outer authentication boundary. |
-| `CredentialHeaderName` | `string` | `"authorization"` | Request-header (gRPC metadata) name carrying the caller credential token to bridge into the ambient Lattice credential. |
-| `CredentialScheme` | `string` | `"Bearer"` | Authentication scheme stamped on the bridged `LatticeCredential`; a matching scheme prefix on the header value is stripped before the token is used. |
-| `ActiveTenantHeaderName` | `string` | `"lattice-active-tenant"` | Request-header (gRPC metadata) name carrying the caller's asserted active tenant, lifted onto the ambient active-tenant context for the call. The assertion is re-validated against the caller's membership by the tenancy add-on and grants no access; set it to `null` or empty to disable it. |
-| `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | Empty `List<AuthSchemeDescriptor>` | Public auth-scheme descriptors advertised by the unauthenticated `GetAuthScheme` RPC, in preference order. |
+`LatticeStateApiGrpcOptions` is populated by `AddLatticeStateApiGrpc(configure)` and controls the server-side binding: `RequireAuthorization`, `CredentialHeaderName`, `CredentialScheme`, `ActiveTenantHeaderName` and `AdvertisedAuthSchemes`. Types, defaults and semantics are in the [gRPC binding configuration](../lattice.api.state.grpc/configuration.md); every public type of the binding is listed in its [public API](../lattice.api.state.grpc/api.md), and the request path through the interceptor and service is described in its [architecture](../lattice.api.state.grpc/architecture.md).
 
 See [Client](client.md) for the full set of calls and [Surfaces](surfaces.md) for what each request and response carries.

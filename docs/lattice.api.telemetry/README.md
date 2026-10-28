@@ -53,16 +53,7 @@ transport binding layered on top neither repeats nor reconfigures it.
 
 ## Options
 
-| Property | Type | Default | Meaning |
-|---|---|---|---|
-| `BackendAddress` | `Uri?` | `null` | The Prometheus-compatible endpoint. Must be absolute. Unset means no backend is configured, and every query reports as unoffered. |
-| `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None` | `None`, `Bearer`, `Basic`, `MutualTls`, or `DynamicBearer` (a token resolved per request through `ITelemetryBackendTokenProvider`). |
-| `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The static credential for `Bearer` (`BearerToken`), `Basic` (`BasicUsername` / `BasicPassword`), or `MutualTls` (`ClientCertificate`). Required for those three modes; not consulted under `None` or `DynamicBearer`. |
-| `RequestTimeout` | `TimeSpan` | 30 seconds | Per-request timeout against the backend. Must be strictly positive and no longer than `int.MaxValue` milliseconds (about 24.8 days), the longest finite timeout `HttpClient` accepts. |
-| `MaxRange` | `TimeSpan` | 24 hours | The widest window a range query may evaluate. |
-| `MaxStep` | `TimeSpan` | 1 hour | The coarsest step a range query may request. |
-| `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll` | `ReadAll`, or `DenyAllExceptAllowed` to serve only `AllowedMetrics`. |
-| `AllowedMetrics` | `IList<string>` | empty | The allow-list consulted under `DenyAllExceptAllowed`. Each entry is an exact metric name or a `*` wildcard pattern (for example `orleans_lattice_wal_*`). Matching is whole-name and case-sensitive: a wildcard entry is anchored at both ends, its `*` never matches a newline (so a trailing newline cannot ride past the check), and it is matched without backtracking, in time linear in the name's length. Ignored under `ReadAll`. |
+`LatticeTelemetryOptions` names the backend (`BackendAddress`), how the proxy authenticates to it (`AuthMode`, `Credential`), the per-request timeout (`RequestTimeout`), the deployment-wide range guardrails (`MaxRange`, `MaxStep`), and the metric allow-list (`MetricAccess`, `AllowedMetrics`). Every property, its type, default and validation rule is in [Configuration](configuration.md).
 
 The proxy stamps the configured backend credential on every backend request and
 **never** forwards the caller's Lattice credential to it: the caller-side grant
@@ -70,14 +61,8 @@ and the backend-side credential are two independent halves of the trust boundary
 
 `AddLatticeTelemetryApi()` registers no options validation - the host owns binding
 and validating the options. Register `LatticeTelemetryOptionsValidator` as an
-`IValidateOptions<LatticeTelemetryOptions>` to enforce the rules above (a supplied,
-absolute backend address, defined `AuthMode` and `MetricAccess` values, the
-credential member each static auth mode needs, a strictly positive timeout no
-longer than `int.MaxValue` milliseconds, strictly positive guardrails, and a
-non-empty allow-list with no blank entry under `DenyAllExceptAllowed`) when the
-options are first resolved. Under the validator an
-unset `BackendAddress` fails that resolution rather than degrading to the empty
-catalogue.
+`IValidateOptions<LatticeTelemetryOptions>` to enforce the rules listed in
+[Configuration](configuration.md#validation).
 
 ## The allow-list is enforced on extracted names, not on the raw string
 
@@ -282,4 +267,5 @@ the caller already supplied.
 
 ## See also
 
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
 - [`Orleans.Lattice.Api.Telemetry.Grpc`](../lattice.api.telemetry.grpc/README.md) - the gRPC binding that exposes this facade to a remote head.

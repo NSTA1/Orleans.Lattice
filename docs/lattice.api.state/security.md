@@ -71,3 +71,5 @@ For local development and the [`StateExplorer`](../../samples/StateExplorer) sam
 
 - [Client](client.md) - configuring the channel and credentials.
 - [Setup](setup.md) - where authorization registration sits in the wiring.
+- [gRPC binding configuration](../lattice.api.state.grpc/configuration.md) - the binding options and the `EnvVarCredentialAuthorizerOptions` lockout settings.
+- [gRPC binding architecture](../lattice.api.state.grpc/architecture.md) - where the interceptor and identity bridge sit on the request path.

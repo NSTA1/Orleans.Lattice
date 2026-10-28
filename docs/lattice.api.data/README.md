@@ -169,7 +169,8 @@ This is a write-capable external surface, so its default posture is closed:
 
 ## Reference
 
-- [Configuration](configuration.md) - every public options property, its type, and its default.
+- [Public API](api.md), [configuration](configuration.md), and [architecture](architecture.md).
+- [`Orleans.Lattice.Api.Data.Grpc`](../lattice.api.data.grpc/README.md) - the gRPC binding: [public API](../lattice.api.data.grpc/api.md), [configuration](../lattice.api.data.grpc/configuration.md), and [architecture](../lattice.api.data.grpc/architecture.md).
 - Facade registration: `AddLatticeDataApi()` on the silo builder, configured with `LatticeApiDataOptions`.
 - gRPC registration: `AddLatticeDataApiGrpc()` and `MapLatticeDataApiGrpc()`, configured with `LatticeDataApiGrpcOptions`.
 - Public client: `LatticeDataApiGrpcClient` (`SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync`, `GetAsync`, `ReadRangeAsync`, `CrdtWriteAsync`, `CrdtReadAsync`).
