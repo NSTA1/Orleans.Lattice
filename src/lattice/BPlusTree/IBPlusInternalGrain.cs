@@ -13,6 +13,12 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     Task InitializeAsync(string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves);
 
     /// <summary>
+    /// Binds the tree then initializes a promoted root in one grain call.
+    /// Retains the separate durable binding and topology writes, in that order.
+    /// </summary>
+    Task InitializeForTreeAsync(string treeId, string separatorKey, GrainId leftChild, GrainId rightChild, bool childrenAreLeaves);
+
+    /// <summary>
     /// Routes a key down to the appropriate child grain and returns whether
     /// this node's children are leaves, in a single call. Avoids two
     /// sequential RPCs during tree traversal.
@@ -134,6 +140,12 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// The first separator key must be <c>null</c> (leftmost catch-all).
     /// </summary>
     Task InitializeWithChildrenAsync(List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves);
+
+    /// <summary>
+    /// Binds the tree then initializes a pre-built child list in one grain call.
+    /// Retains the separate durable binding and topology writes, in that order.
+    /// </summary>
+    Task InitializeWithChildrenForTreeAsync(string treeId, List<string?> separatorKeys, List<GrainId> childIds, bool childrenAreLeaves);
 
     /// <summary>
     /// Returns the grain identities of all children of this internal node.

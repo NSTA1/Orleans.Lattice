@@ -167,39 +167,19 @@ internal sealed class FileWalShard : IDisposable
         long maxBytes,
         CancellationToken cancellationToken)
     {
-        if (maxEntries < 1)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maxEntries), maxEntries, "At least one entry must be requested per read.");
-        }
-
-        if (maxBytes < 1L)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maxBytes), maxBytes, "At least one byte must be budgeted per read.");
-        }
+        ValidateReadLimits(maxEntries, maxBytes);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureLoaded();
-            if (fromOffsetExclusive == long.MaxValue)
-            {
-                // No entry can have an offset greater than long.MaxValue;
-                // fromOffsetExclusive + 1 would overflow to long.MinValue
-                // and wrongly snapshot the whole log from the head.
-                return (Array.Empty<long>(), Array.Empty<byte[]>());
-            }
-
-            var startIndex = LowerBound(fromOffsetExclusive + 1);
-            var available = _entries.Count - startIndex;
-            if (available <= 0)
+            var (startIndex, take) = SelectReadWindow(
+                fromOffsetExclusive, long.MaxValue, maxEntries, maxBytes);
+            if (take == 0)
             {
                 return (Array.Empty<long>(), Array.Empty<byte[]>());
             }
 
-            var budget = NarrowBudget(maxBytes);
-            var take = Narrow(startIndex, Math.Min(available, maxEntries), budget);
             return MaterialiseOwnedPage(startIndex, take);
         }
         finally
@@ -237,36 +217,19 @@ internal sealed class FileWalShard : IDisposable
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(decode);
-        if (maxEntries < 1)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maxEntries), maxEntries, "At least one entry must be requested per read.");
-        }
-
-        if (maxBytes < 1L)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(maxBytes), maxBytes, "At least one byte must be budgeted per read.");
-        }
+        ValidateReadLimits(maxEntries, maxBytes);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureLoaded();
-            if (fromOffsetExclusive == long.MaxValue)
+            var (startIndex, take) = SelectReadWindow(
+                fromOffsetExclusive, long.MaxValue, maxEntries, maxBytes);
+            if (take == 0)
             {
                 return (Array.Empty<long>(), Array.Empty<T>());
             }
 
-            var startIndex = LowerBound(fromOffsetExclusive + 1);
-            var available = _entries.Count - startIndex;
-            if (available <= 0)
-            {
-                return (Array.Empty<long>(), Array.Empty<T>());
-            }
-
-            var budget = NarrowBudget(maxBytes);
-            var take = Narrow(startIndex, Math.Min(available, maxEntries), budget);
             return DecodePage(startIndex, take, decode);
         }
         finally
@@ -366,6 +329,29 @@ internal sealed class FileWalShard : IDisposable
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(decode);
+        ValidateReadLimits(maxEntries, maxBytes);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            var (startIndex, take) = SelectReadWindow(
+                fromOffsetExclusive, toOffsetInclusive, maxEntries, maxBytes);
+            if (take == 0)
+            {
+                return (Array.Empty<long>(), Array.Empty<WalRecord>(), 0);
+            }
+
+            return DecodeFilteredPage(startIndex, take, filter, routing, decode);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private static void ValidateReadLimits(int maxEntries, long maxBytes)
+    {
         if (maxEntries < 1)
         {
             throw new ArgumentOutOfRangeException(
@@ -377,34 +363,32 @@ internal sealed class FileWalShard : IDisposable
             throw new ArgumentOutOfRangeException(
                 nameof(maxBytes), maxBytes, "At least one byte must be budgeted per read.");
         }
+    }
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+    // Called with the shard gate held and the index loaded. Materialization
+    // stays separate so each read path retains its buffer ownership policy.
+    private (int StartIndex, int Count) SelectReadWindow(
+        long fromOffsetExclusive, long toOffsetInclusive, int maxEntries, long maxBytes)
+    {
+        // Guard before adding one: overflowing would restart a reader at the head.
+        if (fromOffsetExclusive == long.MaxValue || toOffsetInclusive <= fromOffsetExclusive)
         {
-            EnsureLoaded();
-            if (fromOffsetExclusive == long.MaxValue || toOffsetInclusive <= fromOffsetExclusive)
-            {
-                return (Array.Empty<long>(), Array.Empty<WalRecord>(), 0);
-            }
-
-            var startIndex = LowerBound(fromOffsetExclusive + 1);
-            var endIndex = toOffsetInclusive == long.MaxValue
-                ? _entries.Count
-                : LowerBound(toOffsetInclusive + 1);
-            var available = endIndex - startIndex;
-            if (available <= 0)
-            {
-                return (Array.Empty<long>(), Array.Empty<WalRecord>(), 0);
-            }
-
-            var budget = NarrowBudget(maxBytes);
-            var take = Narrow(startIndex, Math.Min(available, maxEntries), budget);
-            return DecodeFilteredPage(startIndex, take, filter, routing, decode);
+            return default;
         }
-        finally
+
+        var startIndex = LowerBound(fromOffsetExclusive + 1);
+        var endIndex = toOffsetInclusive == long.MaxValue
+            ? _entries.Count
+            : LowerBound(toOffsetInclusive + 1);
+        var available = endIndex - startIndex;
+        if (available <= 0)
         {
-            _gate.Release();
+            return default;
         }
+
+        var budget = NarrowBudget(maxBytes);
+        var take = LimitPageByPayloadBytes(startIndex, Math.Min(available, maxEntries), budget);
+        return (startIndex, take);
     }
 
     private (long[] Offsets, WalRecord[] Records, int Count) DecodeFilteredPage(
@@ -632,7 +616,7 @@ internal sealed class FileWalShard : IDisposable
     /// returned, so truncating a page is a resumption and never a skip.
     /// </para>
     /// </remarks>
-    private int Narrow(int startIndex, int take, long maxBytes)
+    private int LimitPageByPayloadBytes(int startIndex, int take, long maxBytes)
     {
         var accumulated = 0L;
         for (var i = 0; i < take; i++)

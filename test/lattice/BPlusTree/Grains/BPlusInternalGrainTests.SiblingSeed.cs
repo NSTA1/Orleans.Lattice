@@ -15,7 +15,7 @@ public partial class BPlusInternalGrainTests
     public async Task Split_completion_seeds_the_sibling_with_its_whole_right_half_in_one_call()
     {
         var (grain, state, factory) = CreateDigestGrain();
-        await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
+        await grain.InitializeForTreeAsync("sibling-tree", "fox", Child0, Child1, childrenAreLeaves: true);
 
         var siblingId = GrainId.Create("internal", Guid.NewGuid().ToString());
         var right = new List<ChildEntry>
@@ -37,12 +37,16 @@ public partial class BPlusInternalGrainTests
         var result = await grain.AcceptSplitAsync("ant", Child2);
 
         Assert.That(result, Is.Not.Null);
-        await sibling.Received(1).InitializeWithChildrenAsync(
+        await sibling.Received(1).InitializeWithChildrenForTreeAsync(
+            "sibling-tree",
             Arg.Is<List<string?>>(s => s.SequenceEqual(new string?[] { null, "goat", "hog", "ibex" })),
             Arg.Is<List<GrainId>>(i => i.SequenceEqual(right.Select(c => c.ChildId))),
             true);
         await sibling.DidNotReceive().InitializeAsync(
             Arg.Any<string>(), Arg.Any<GrainId>(), Arg.Any<GrainId>(), Arg.Any<bool>());
         await sibling.DidNotReceive().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
+        await sibling.DidNotReceive().SetTreeIdAsync(Arg.Any<string>());
+        await sibling.DidNotReceive().InitializeWithChildrenAsync(
+            Arg.Any<List<string?>>(), Arg.Any<List<GrainId>>(), Arg.Any<bool>());
     }
 }

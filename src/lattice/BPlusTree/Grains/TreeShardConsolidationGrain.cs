@@ -764,6 +764,11 @@ internal sealed class TreeShardConsolidationGrain(
     /// key permanently unreachable: the survivor is usually the shard the
     /// donor was split out of, so until it reclaims, it refuses the very slots
     /// the map is about to send it.</description></item>
+    /// <item><description>Tombstoning, between the final drain and the
+    /// reclaim, every row the survivor kept sealed since that split for a key
+    /// the donor has since deleted and reaped: the reclaim would otherwise
+    /// serve it again (issue #5130). See
+    /// <see cref="TombstoneRowsTheDonorReapedAsync"/>.</description></item>
     /// </list>
     /// <para>
     /// Every action is idempotent, so a crash anywhere inside this step is
@@ -801,6 +806,12 @@ internal sealed class TreeShardConsolidationGrain(
         state.State.DrainSweepComplete = false;
         await DrainToEndAtomicallyAsync("ConsolidationSwapFinalDrain");
 
+        // The survivor's own rows for these slots, kept sealed since a split
+        // took them away, come back into view when it reclaims them. The drain
+        // superseded every one the donor still holds; one the donor reaped would
+        // otherwise be resurrected (issue #5130).
+        await TombstoneRowsTheDonorReapedAsync();
+
         // Lift the survivor's seal only now that its copy is authoritative.
         var survivor = await GetSurvivorAsync();
         await survivor.ReclaimSlotsAsync(slots, vsc);
@@ -834,6 +845,167 @@ internal sealed class TreeShardConsolidationGrain(
         }
 
         await AdvancePhaseAsync(ShardConsolidationPhase.Reject);
+    }
+
+    /// <summary>
+    /// Tombstones every live row the survivor still holds, sealed, for the
+    /// folding slots whose key the frozen donor holds neither a row nor a
+    /// prepared bucket for (issue #5130).
+    /// <para>
+    /// A split leaves its source's rows for the moved slots in place, behind
+    /// the moved-away seal, so a fold back onto that source reclaims slots it
+    /// still holds rows for, written before the split. The final drain
+    /// supersedes each one whose key the donor still holds, live or as a
+    /// tombstone, by last-writer-wins. A key the donor deleted, or that
+    /// expired there, and that tombstone compaction then reaped has nothing
+    /// left to drain, so the survivor's pre-split row would come back as its
+    /// value when the seal lifts. The donor held every such key once (the
+    /// split drained it there), so holding nothing now means it was deleted or
+    /// expired.
+    /// </para>
+    /// <para>
+    /// Only rows on survivor leaves that carry the seal for a folding slot are
+    /// candidates: a fold onto a shard that never gave these slots away has
+    /// none, and ends after one walk. Each tombstone is stamped just above the
+    /// row it supersedes, so it covers that row and nothing written since. It
+    /// lands through the drain's own migration import, which the survivor's
+    /// seal admits. Runs inside the freeze, over a donor that can no longer
+    /// change, and is idempotent: a re-run finds the tombstones and skips them.
+    /// </para>
+    /// </summary>
+    private async Task TombstoneRowsTheDonorReapedAsync()
+    {
+        var slots = DonorSlots;
+        var vsc = VirtualShardCount;
+        var atomicWalk = new AtomicLeafWalk(nameof(TombstoneRowsTheDonorReapedAsync));
+        var leavesVisited = 0;
+        try
+        {
+            var survivor = await GetSurvivorAsync();
+            var candidates = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+            leavesVisited += await WalkSlotRowsAsync(survivor, slots, vsc, page =>
+            {
+                if (page.Delta.MovedAwayVsc != vsc || page.Delta.MovedAwaySlots is not { Length: > 0 } sealedSlots)
+                    return;
+                foreach (var (key, row) in page.Delta.Entries)
+                {
+                    if (row.IsTombstone) continue;
+                    if (Array.BinarySearch(sealedSlots, ShardMap.GetVirtualSlot(key, vsc)) < 0) continue;
+                    candidates[key] = row.Timestamp;
+                }
+            });
+            if (candidates.Count == 0) return;
+
+            var donor = await GetDonorAsync();
+            var held = new HashSet<string>(StringComparer.Ordinal);
+            leavesVisited += await WalkSlotRowsAsync(donor, slots, vsc, page =>
+            {
+                foreach (var key in page.Delta.Entries.Keys) held.Add(key);
+            });
+            leavesVisited += await WalkPreparedKeysAsync(donor, slots, vsc, held);
+
+            var batchSize = Options.ConsolidationDrainBatchSize;
+            if (batchSize <= 0) batchSize = LatticeOptions.DefaultConsolidationDrainBatchSize;
+            var batch = new Dictionary<string, LwwValue<byte[]>>(Math.Min(batchSize, candidates.Count), StringComparer.Ordinal);
+            var tombstoned = 0;
+            foreach (var (key, stamp) in candidates)
+            {
+                if (held.Contains(key)) continue;
+                batch[key] = LwwValue<byte[]>.Tombstone(JustAbove(stamp));
+                tombstoned++;
+                if (batch.Count >= batchSize)
+                {
+                    await survivor.MergeManyAsync(batch, isCrossShardMigration: true);
+                    batch.Clear();
+                }
+            }
+
+            if (batch.Count > 0)
+                await survivor.MergeManyAsync(batch, isCrossShardMigration: true);
+
+            if (tombstoned > 0)
+            {
+                Logger.LogInformation(
+                    "Consolidation {OperationId} on tree {TreeId} tombstoned {Count} key(s) shard {Survivor} still held from before a split but shard {Donor} had deleted and reaped.",
+                    state.State.OperationId, TreeId, tombstoned, state.State.SurvivorShardIndex, state.State.DonorShardIndex);
+            }
+        }
+        finally
+        {
+            atomicWalk.RecordLeavesVisited(leavesVisited);
+            atomicWalk.ReportIfSlow(Logger, Context.GrainId);
+        }
+    }
+
+    /// <summary>
+    /// The stamp just above <paramref name="stamp"/>: the next counter value in
+    /// the same wall-clock tick, or the next tick once the counter is spent.
+    /// </summary>
+    private static HybridLogicalClock JustAbove(HybridLogicalClock stamp) =>
+        stamp.Counter == int.MaxValue
+            ? new HybridLogicalClock { WallClockTicks = stamp.WallClockTicks + 1, Counter = 0 }
+            : stamp with { Counter = stamp.Counter + 1 };
+
+    /// <summary>
+    /// Visits every leaf of <paramref name="shard"/> with its rows, tombstones
+    /// included, for <paramref name="slots"/>, and returns the number of leaves
+    /// visited. A walk that meets a leaf a concurrent topology change retired
+    /// restarts from the shard's first leaf, as the drain does; the visitor
+    /// must therefore be idempotent.
+    /// </summary>
+    private async Task<int> WalkSlotRowsAsync(
+        IShardRootGrain shard, int[] slots, int vsc, Action<LeafDeltaPage> visit)
+    {
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                var walk = await BoundedLeafWalk.StartAsync(grainFactory, shard, null, LeafWalkBudget.Unbounded());
+                while (walk.HasLeaf)
+                {
+                    var page = await walk.CurrentLeaf.GetDeltaSinceForSlotsAndNextSiblingAsync(new VersionVector(), slots, vsc);
+                    visit(page);
+                    if (!walk.MoveNext(page.Link)) break;
+                }
+
+                return walk.LeavesVisited;
+            }
+            catch (LeafStateRowLostException) when (attempt < maxAttempts)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds to <paramref name="keys"/> every key of <paramref name="slots"/>
+    /// that holds a prepared bucket on <paramref name="shard"/>, and returns the
+    /// number of leaves visited.
+    /// </summary>
+    private async Task<int> WalkPreparedKeysAsync(IShardRootGrain shard, int[] slots, int vsc, HashSet<string> keys)
+    {
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            var visited = 0;
+            try
+            {
+                var leafId = await shard.GetLeftmostLeafIdAsync();
+                while (leafId is not null)
+                {
+                    var page = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value)
+                        .GetPendingMutationsForSlotsAndNextSiblingAsync(slots, vsc);
+                    visited++;
+                    foreach (var mutation in page.Mutations) keys.Add(mutation.Key);
+                    leafId = page.NextSibling;
+                }
+
+                return visited;
+            }
+            catch (LeafStateRowLostException) when (attempt < maxAttempts)
+            {
+            }
+        }
     }
 
     /// <summary>
