@@ -1,0 +1,23 @@
+{
+  "mutations": "wal-gc-starvation-drive-mutations",
+  "refinement": "WalGcStarvationDriveRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 5,
+    "properties": 12,
+    "actions": 11,
+    "mutations": 23,
+    "behaviourRows": 26,
+    "distinctStates": 7160
+  },
+  "variants": {
+    "ShareOne": {
+      "distinctStates": 171308
+    },
+    "TwoLeaf": {
+      "distinctStates": 849286
+    }
+  }
+}

@@ -1,0 +1,12 @@
+MODULE: CoreStepRefinedAppendWithoutHead
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness append records an append without moving the head
+PERTURBS: WalAppend
+
+--- FIND
+    /\ ~appended /\ ~deleted /\ head' = head + 1 /\ appended' = TRUE
+--- REPLACE
+\* MUTATION: the append flag moves but the WAL head does not.
+    /\ ~appended /\ ~deleted /\ head' = head /\ appended' = TRUE
+--- END

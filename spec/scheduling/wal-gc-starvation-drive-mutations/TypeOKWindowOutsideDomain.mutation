@@ -1,0 +1,12 @@
+MODULE: TypeOKWindowOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: clock advancement corrupts the bounded refusal window
+PERTURBS: RefusalWindowTick
+
+--- FIND
+    /\ hold > 0 /\ hold' = hold - 1
+--- REPLACE
+\* MUTATION: the clock installs an out-of-domain remaining window.
+    /\ hold > 0 /\ hold' = RefusedSweepHold + 1
+--- END

@@ -1,0 +1,13 @@
+MODULE: NearestFirstNoNearestFirst
+TARGET: NearestFirst
+CLASS: Action
+SUMMARY: a sweep launches a higher-offset leaf before the floor holder
+PERTURBS: GcPass
+BOUNDS: LeafCount = 2
+
+--- FIND
+    /\ \E l \in Nearest :
+--- REPLACE
+\* MUTATION: discard the floor ranking.
+    /\ \E l \in Eligible :
+--- END

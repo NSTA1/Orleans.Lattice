@@ -17,6 +17,8 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | SagaReadProgress | 3 | 5 | 6 | 11 | 12 | 2451 |
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
 | ReplicationShipping | 4 | 12 | 19 | 26 | 33 | 527689 |
+| WalGcStarvationDrive | 5 | 12 | 11 | 23 | 26 | 7160 |
+| WalGcStarvationDriveWitness | 2 | 3 | 13 | 14 | 13 | 7906 |
 
 ## Instances and progress premises
 
@@ -343,6 +345,48 @@ experiments. Coyote executes controlled opportunities through those production
 seams in the replication test package; it is not a replacement protocol or a
 claim to explore every CLR Task schedule.
 
+## WAL GC starvation drive
+
+[`WalGcStarvationDrive`](WalGcStarvationDrive.tla), its
+[manifest](WalGcStarvationDrive.manifest.json) and
+[refinement](WalGcStarvationDriveRefinement.md) model GC passes driving
+starved checkpoints through the shared replay gate against competing coverage
+timers and cold owners. The timer holds a reserved slot, a refused touch is
+never charged, and the floor holder is eventually driven while the WAL head
+stays ahead of its pin.
+
+This core is the CI-bound split of a single model that did not complete within
+the CI budget. It abstracts the per-leaf stall clock and the foreground call
+queue, and states turn release as `TurnReleased`.
+[`WalGcStarvationDriveWitness`](WalGcStarvationDriveWitness.tla), its
+[manifest](WalGcStarvationDriveWitness.manifest.json) and
+[refinement](WalGcStarvationDriveWitnessRefinement.md) keep both mechanisms at a
+small bound. The witness checks the original `TurnNotHeldAcrossDrive`
+obligation, checks the marked initial state as the `CoreInitRefined`
+invariant, and checks, as TLC properties, that its steps and fairness project
+onto the core. TLC checks that refinement at one leaf only, as supporting
+evidence; the parametric argument that it holds at any constants, and the
+table of checked versus argued claims, are in the core
+[refinement](WalGcStarvationDriveRefinement.md) note.
+
+The leaf count is the `LeafCount` constant. The one-leaf base is the fast
+gate; the cross-leaf ordering, credit and shared-slot paths are checked by the
+two-leaf `TwoLeaf` and `ShareOne` variants and by the seven mutants that carry a
+`LeafCount = 2` bound.
+
+| Instance | Distinct states | Checked boundary |
+| --- | ---: | --- |
+| WalGcStarvationDrive Base | 7,160 | One leaf, all safety and temporal checks. |
+| WalGcStarvationDrive TwoLeaf | 849,286 | Two leaves, all safety and temporal checks. |
+| WalGcStarvationDrive ShareOne | 171,308 | Two leaves, single-slot share and refusal window, all checks. |
+| WalGcStarvationDriveWitness Base | 7,906 | Stall clock and call queue, one leaf, refinement onto the core. |
+
+The TLC gate compares each run with its manifest and fails on any mismatch.
+
+A three-leaf core and a larger refinement instance were measured outside CI.
+The liveness and refinement runs did not finish within the twenty-minute cap,
+so neither is enrolled and neither carries a claim.
+
 ## Routing and evidence
 
 TagIndexReconcile snapshots a finite covered set, probes in tree chunks and
@@ -358,7 +402,7 @@ See [the refinement note](TagIndexReconcileRefinement.md) for the exact
 production units, paired counterexamples and cooperative Coyote boundary.
 
 All scheduling-directory bases, variants and mutations route before the broad
-Wal prefix to one of four deterministic-only shards, partitioned 151/1/27/1
+Wal prefix to one of four deterministic-only shards, partitioned 191/1/27/1
 cases. TlcShardScheduling (formal-tlc-scheduling) holds every case without a
 more specific group, TlcShardSchedulingReplayTwoPartitions holds the
 ReplayPermits TwoPartitions variant alone, TlcShardSchedulingShipping holds the
@@ -370,7 +414,9 @@ duration. TwoPartitions held one TLC slot through its 74.47-minute observed case
 interval and set that combined item's critical path; its rounded 74.5-minute
 planning allocation sets an indivisible-case planning floor for the estimate-based
 plan, not a guarantee of future runtimes. The Shipping base/pairs and variant
-retain their own measured item durations of 9.7 and 18.05 minutes. Structural
+retain their own measured item durations of 9.7 and 18.05 minutes. The forty
+WalGcStarvationDrive and witness cases joined TlcShardScheduling after that
+run, so its general allocation does not yet price them. Structural
 gates remain untagged. The checked-in mutation files derive each mutant from the
 live module using exact anchors; the harness runs a clean control and one
 configured target per mutant.

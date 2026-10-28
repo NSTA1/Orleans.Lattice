@@ -1,0 +1,12 @@
+MODULE: CoreStepRefinedWindowCollapses
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness refusal window closes in one tick
+PERTURBS: RefusalWindowTick
+
+--- FIND
+    /\ hold > 0 /\ hold' = hold - 1
+--- REPLACE
+\* MUTATION: one tick clears the whole refusal window.
+    /\ hold > 0 /\ hold' = 0
+--- END

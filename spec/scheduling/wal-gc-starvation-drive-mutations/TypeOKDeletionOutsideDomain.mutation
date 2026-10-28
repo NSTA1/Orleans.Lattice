@@ -1,0 +1,14 @@
+MODULE: TypeOKDeletionOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: environment deletion corrupts the bounded head witness
+PERTURBS: DeleteTree
+
+--- FIND
+    /\ ~deleted /\ deleted' = TRUE
+    /\ UNCHANGED <<leaf, free, cold, hold, head, appended, timely, admitted, leadDone, rank>>
+--- REPLACE
+\* MUTATION: the external deletion event installs an out-of-domain head.
+    /\ ~deleted /\ deleted' = TRUE /\ head' = Cardinality(Leaves) + 2
+    /\ UNCHANGED <<leaf, free, cold, hold, appended, timely, admitted, leadDone, rank>>
+--- END

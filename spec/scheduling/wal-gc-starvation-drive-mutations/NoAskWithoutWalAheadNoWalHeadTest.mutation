@@ -1,0 +1,14 @@
+MODULE: NoAskWithoutWalAheadNoWalHeadTest
+TARGET: NoAskWithoutWalAhead
+CLASS: Action
+SUMMARY: a caught-up checkpoint still dispatches a timer drive
+PERTURBS: TimerTick
+
+--- FIND
+           ![l].timer = IF leaf[l].pin < head /\ leaf[l].drive = "none" THEN "dispatch" ELSE "rearm",
+           ![l].turn = IF leaf[l].pin < head /\ leaf[l].drive = "none" THEN "timer" ELSE "idle"]
+--- REPLACE
+\* MUTATION: the timer asks despite an inclusive checkpoint at the exclusive WAL head.
+           ![l].timer = IF leaf[l].drive = "none" THEN "dispatch" ELSE "rearm",
+           ![l].turn = IF leaf[l].drive = "none" THEN "timer" ELSE "idle"]
+--- END

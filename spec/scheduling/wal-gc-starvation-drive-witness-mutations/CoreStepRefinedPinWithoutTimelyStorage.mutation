@@ -1,0 +1,12 @@
+MODULE: CoreStepRefinedPinWithoutTimelyStorage
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness drive banks a pin without timely storage
+PERTURBS: DriveOpportunity
+
+--- FIND
+        ![l].pin = IF timely /\ @ < head THEN @ + 1 ELSE @]
+--- REPLACE
+\* MUTATION: advance the pin whether or not storage was timely.
+        ![l].pin = IF @ < head THEN @ + 1 ELSE @]
+--- END

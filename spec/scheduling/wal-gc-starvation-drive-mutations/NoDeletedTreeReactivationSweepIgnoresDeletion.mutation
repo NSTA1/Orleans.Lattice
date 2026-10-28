@@ -1,0 +1,12 @@
+MODULE: NoDeletedTreeReactivationSweepIgnoresDeletion
+TARGET: NoDeletedTreeReactivation
+CLASS: Action
+SUMMARY: a delivered GC pass ignores tree deletion
+PERTURBS: GcPass
+
+--- FIND
+    /\ ~deleted /\ Eligible # {}
+--- REPLACE
+\* MUTATION: deletion no longer prevents a new drive.
+    /\ Eligible # {}
+--- END

@@ -1,0 +1,11 @@
+MODULE: CoreInitRefinedRefusalWindowOpen
+TARGET: CoreInitRefined
+CLASS: Invariant
+SUMMARY: the witness may start with a refusal window already open
+
+--- FIND
+    /\ hold = 0 /\ head = Cardinality(Leaves) /\ appended = FALSE
+--- REPLACE
+\* MUTATION: an initial state the core does not admit.
+    /\ hold \in 0..1 /\ head = Cardinality(Leaves) /\ appended = FALSE
+--- END

@@ -1,0 +1,12 @@
+MODULE: RearmRefreshesSecondRefreshSkipped
+TARGET: RearmRefreshes
+CLASS: Invariant
+SUMMARY: only the first rearm refreshes its phase
+PERTURBS: ReArm
+
+--- FIND
+            ![l].refreshed = TRUE, ![l].round = @ + 1,
+--- REPLACE
+\* MUTATION: latch after the first refresh; the next opportunity invalidates it.
+            ![l].refreshed = (leaf[l].round = 0), ![l].round = @ + 1,
+--- END

@@ -1,0 +1,13 @@
+MODULE: TimerReservedSlotTimerTakesLastSlot
+TARGET: TimerReservedSlot
+CLASS: Action
+SUMMARY: timer admission uses the sweep limit
+PERTURBS: TimerDispatchDrive
+BOUNDS: LeafCount = 2
+
+--- FIND
+    /\ IF ~deleted /\ leaf[l].drive = "none" /\ CanAdmit("timer")
+--- REPLACE
+\* MUTATION: timer steals the reserved sweep slot.
+    /\ IF ~deleted /\ leaf[l].drive = "none" /\ CanAdmit("sweep")
+--- END

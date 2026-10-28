@@ -1,0 +1,12 @@
+MODULE: BudgetReleasesNoAbandon
+TARGET: BudgetReleases
+CLASS: Action
+SUMMARY: budget expiry fails to return drive ownership
+PERTURBS: DriveOpportunity
+
+--- FIND
+        ![l].drive = IF leaf[l].left = 1 THEN "none" ELSE @,
+--- REPLACE
+\* MUTATION: outer-frame abandonment retains ownership.
+        ![l].drive = @,
+--- END

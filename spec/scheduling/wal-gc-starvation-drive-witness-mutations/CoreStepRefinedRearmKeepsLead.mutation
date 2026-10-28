@@ -1,0 +1,14 @@
+MODULE: CoreStepRefinedRearmKeepsLead
+TARGET: CoreStepRefined
+CLASS: Action
+SUMMARY: the witness pass rearm keeps the previous pass lead
+PERTURBS: PassRearm
+
+--- FIND
+    /\ leadDone' = FALSE
+    /\ rank' = RankForPass
+--- REPLACE
+\* MUTATION: a new pass inherits the old lead.
+    /\ leadDone' = leadDone
+    /\ rank' = RankForPass
+--- END

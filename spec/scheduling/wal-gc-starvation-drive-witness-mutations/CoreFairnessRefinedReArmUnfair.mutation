@@ -1,0 +1,12 @@
+MODULE: CoreFairnessRefinedReArmUnfair
+TARGET: CoreFairnessRefined
+CLASS: Temporal
+SUMMARY: the witness stops promising rearm opportunities
+
+--- FIND
+        /\ WF_vars(ReArm(l))
+        /\ WF_vars(CallServe(l))
+--- REPLACE
+\* MUTATION: withdraw the weak fairness the core places on ReArm.
+        /\ WF_vars(CallServe(l))
+--- END
