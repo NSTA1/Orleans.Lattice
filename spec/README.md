@@ -133,7 +133,7 @@ nothing is ever defaulted:
     "invariants": 7,
     "properties": 6,
     "actions": 8,
-    "mutations": 20,
+    "mutations": 21,
     "behaviourRows": 17,
     "distinctStates": 31684
   }

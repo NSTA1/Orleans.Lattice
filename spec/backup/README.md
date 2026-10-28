@@ -12,8 +12,7 @@ only what is particular to the backup area.
 ## The five modules, and why five
 
 The area splits along the seam where the state each part needs stops
-overlapping, which also keeps every module's TLC run far inside the five-minute
-CI timeout:
+overlapping, which also keeps every module's TLC run small:
 
 | Module | What it checks | Instance |
 |--------|----------------|----------|

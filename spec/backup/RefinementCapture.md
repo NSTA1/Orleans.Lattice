@@ -109,7 +109,7 @@ restatement keeps only the saga steps a capture can observe:
 
 Per #2321's taxonomy:
 
-- BackupSagaConsistent: reached and falsifiable for both capture kinds. Twelve
+- BackupSagaConsistent: reached and falsifiable for both capture kinds. Thirteen
   mutations targeting it fire it (CaptureStrictIsolationPrepareWritesVisible
   and SetCompleteFaultAccepts fire it as well). Until #4441 the property was
   blind for a set capture: the single-tree saga did not run under a set, and the

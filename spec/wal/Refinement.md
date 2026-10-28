@@ -181,8 +181,8 @@ rather than assumed absent:
   properties; that is the check that reaches issue #4523, which the one-fault
   instance hid. **Bounded-out at two faults, by the TLC budget:** the liveness
   properties `EveryAckedWriteMaterialised` and `ReclamationEventuallyAdvances`. The
-  full configuration at two faults takes about ten minutes, past the five-minute
-  run ceiling, so they are checked at one fault only. A liveness defect that needs
+  full configuration at two faults takes about ten minutes, past the TLC budget,
+  so they are checked at one fault only. A liveness defect that needs
   two faults would not be found here.
 - **Three faults in one behaviour.** Outside every configuration.
 - **More than three offsets, two leaves or one partition.** Per-partition checkpoint

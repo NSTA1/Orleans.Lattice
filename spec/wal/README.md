@@ -17,7 +17,7 @@ cores in the product assembly, and a Coyote model that executes those cores.
 
 They are two modules because a move touches none of the leaf state. Keeping the
 move out of `WalDurability` keeps that module small enough to check its liveness
-properties exhaustively within the CI fixture's per-run ceiling.
+properties exhaustively within the TLC budget.
 
 ## Counts
 
@@ -72,10 +72,12 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `WalDurability.tla` / `.cfg` / `.manifest.json` | The leaf-lifecycle module, its TLC model and its manifest. |
 | `WalDurability.WarmLeaf.cfg` | Permanently active leaves, with no faults and all safety and liveness properties. |
 | `WalDurability.TwoFaults.cfg` | The same module checked against its safety properties at two faults. |
+| `WalDurability.SnapshotLoss.cfg` | Snapshot and state-row loss and an operator purge, at two faults, checked against the safety properties that still apply. |
 | [`mutations/`](mutations/) | One or more deliberate defects per property and per action of `WalDurability`. |
 | [`Refinement.md`](Refinement.md) | `WalDurability` mapped to production: variables, actions, properties, detectors, classification and gaps. |
 | `WalMove.tla` / `.cfg` / `.manifest.json` | The move module, its TLC model and its manifest. |
 | `WalMove.TwoMoves.cfg` | The move module with two moves contending for the stream, checked with every property. |
+| [`move-mutations/`](move-mutations/) | One or more deliberate defects per property and per action of `WalMove`. |
 | [`MoveRefinement.md`](MoveRefinement.md) | `WalMove` mapped to production. |
 
 ## Properties checked
@@ -88,6 +90,8 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `AckedWriteDurable` | Invariant | Every acknowledged write is recoverable by its owner from its durable snapshot and the readable WAL. |
 | `TrimCoveredBySnapshot` | Invariant | The GC never trims an acknowledged write its owner's durable snapshot does not hold. |
 | `ReadPositionHonest` | Invariant | An active leaf's read position never passes an acknowledged write it owns and does not hold. |
+| `LogPrefixApplied` | Invariant | No entry becomes readable below a reader's position: every readable entry a leaf owns at or below its read position is in its projection, acknowledged or not. |
+| `ClearRecorded` | Invariant | Every leaf a purge cleared keeps its own purge marker until recovery re-creates it. |
 | `ShippingNeverSkips` | Invariant | No reader passes an offset still in flight. |
 | `OffsetContiguity` | Invariant | No acknowledged offset is reissued. |
 | `RecoveryNeverFallsOffLog` | Invariant | No leaf ever latches `LeafProjectionStaleException`. |
