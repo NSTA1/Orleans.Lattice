@@ -3,6 +3,7 @@ namespace Orleans.Lattice.Tests.Formal;
 public sealed partial class TlcCiShardTests
 {
     private const string ReplayTwoPartitionsCategory = "TlcShardSchedulingReplayTwoPartitions";
+    private const string SchedulingWorkloadBCategory = "TlcShardSchedulingWorkloadB";
     private const string ShippingCategory = "TlcShardSchedulingShipping";
     private const string ShippingVariantsCategory = "TlcShardSchedulingShippingVariants";
 
@@ -21,7 +22,7 @@ public sealed partial class TlcCiShardTests
             Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.Scheduling));
             Assert.That(mutations, Is.Not.Empty);
             foreach (var mutation in mutations)
-                Assert.That(TlcCiShard.Of(module, mutation), Is.EqualTo(TlcCiShard.Scheduling), mutation.Name);
+                Assert.That(TlcCiShard.Of(module, mutation), Is.EqualTo(SchedulingWorkloadBCategory), mutation.Name);
             var other = Module("ReplicationShipping") with { Name = "SomeFutureScheduling" };
             Assert.That(TlcCiShard.OfVariant(other, "TwoPartitions"), Is.EqualTo(TlcCiShard.Scheduling),
                 "the dedicated shard is keyed by module and variant, not by variant name alone");
@@ -72,7 +73,7 @@ public sealed partial class TlcCiShardTests
     }
 
     [Test]
-    public void Scheduling_categories_form_four_nonempty_disjoint_complete_groups()
+    public void Scheduling_categories_form_five_nonempty_disjoint_complete_groups()
     {
         var cases = SpecModuleCases.TlcModules()
             .Concat(SpecModuleCases.TlcMutations())
@@ -84,7 +85,8 @@ public sealed partial class TlcCiShardTests
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
         var expectedCounts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
-            [TlcCiShard.Scheduling] = 192,
+            [TlcCiShard.Scheduling] = 106,
+            [SchedulingWorkloadBCategory] = 86,
             [ReplayTwoPartitionsCategory] = 1,
             [ShippingCategory] = 27,
             [ShippingVariantsCategory] = 1,
@@ -100,6 +102,8 @@ public sealed partial class TlcCiShardTests
             {
                 var shard = LatticeShards().SingleOrDefault(shard => shard.Categories.Contains(category));
                 Assert.That(shard.Name, Is.Not.Null, $"missing shard for {category}");
+                if (shard.Name is null)
+                    continue;
                 Assert.That(shard.Tlc, Is.True, category);
                 Assert.That(shard.TlcSmoke, Is.False, category);
                 Assert.That(shard.Tiers, Is.EqualTo(new[] { "deterministic" }), category);

@@ -255,19 +255,21 @@ is asserted.
 
 The [area description](../../spec/scheduling/README.md#replication-shipping)
 separates the full state-space measurements, one-target pairs and real
-production/Coyote detector evidence. The revised complete harness passed
-both full configurations and all twenty-six pairs in 2745.4195361 monotonic
-seconds. Its accepted launcher-artifact completion is not a recovered CLI
-terminal event, loaded-DLL attestation or peak-RSS measurement. CI routing
-does not compose those certificates. The matrix prices the area's four
-scheduling items using ci.yml run 40184175158: the ReplayPermits TwoPartitions
-variant's 74.47-minute observed case interval informs its rounded 74.5-minute
-planning allocation; the other 151 general cases have a 52.3-minute reconstructed
-two-slot estimate from the combined 152-case item's TRX timeline in observed
-order, not a separately measured shard duration. The Shipping base and pairs at
-9.7 minutes and FourRecords at 18.05 are measured item durations. The planner
-packs them independently. TwoPartitions' indivisible allocation sets a planning
-floor for the estimate-based lattice plan, not a guarantee of future runtimes.
+production/Coyote detector evidence. The revised complete harness passed both
+full configurations and all twenty-six pairs in 2745.4195361 monotonic seconds.
+Its accepted launcher-artifact completion is not a recovered CLI terminal event,
+loaded-DLL attestation or peak-RSS measurement. CI routing does not compose
+those certificates. The matrix prices the five scheduling items from passing TRX
+evidence in ci.yml run 40658688360 (head 92832b77): the dedicated TwoPartitions
+item is 41.15 minutes (job 122717148551), Shipping base/pairs are 6.17 (job
+122717148735), and FourRecords is 18.72 (job 122717148680). The passing 192/192
+general item (job 122717148586) is split into 106/86-case groups priced at
+21.03/23.04 minutes by four-worker LPT reconstruction of its case durations, not
+measured work-item times. Four workers is a reconstruction assumption, not an
+attested runner trace. The complete source run passed, including rebootstrap job
+122717148595. Historical run 40588708711's rebootstrap job 122488444001 failed
+under #5116; that failure remains recorded and contributes no timing. The
+estimates are planning inputs, not runtime guarantees.
 
 ## Defects found during the bucket
 

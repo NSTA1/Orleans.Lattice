@@ -286,28 +286,35 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingReplayTwoPartitions"],
-        "note": "The ReplayPermits TwoPartitions variant alone (1 TLC case, 2,762,408 distinct states), split out of formal-tlc-scheduling because it is the longest single scheduling case and set that item's critical path. In ci.yml run 40184175158 (#5009 head 65f41ea1) it held one of the leg's two TLC slots for its whole 74.47-minute TRX interval (25.16 to 99.63 minutes): no case completed between 25.22 and 52.28, leaving TwoPartitions and PartialPrefix as the slot holders, as their local process times (4,748 s and 1,058 s) imply. The rounded 74.5-minute planning allocation is based on that observed case interval, not a new split-shard measurement. One case cannot be divided, so its allocation sets a planning floor for the estimate-based makespan however many legs the matrix allows, not a guarantee of future runtimes. Isolation changes no proof obligation, heap, workers or cache."
+        "note": "The ReplayPermits TwoPartitions variant remains in a dedicated one-case shard. Its passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148551) measured 41.14616 minutes; 41.15 is the measured item price, not a future runtime guarantee. It remains separate from the reconstructed scheduling groups."
       },
       {
         "shard": "formal-tlc-scheduling",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardScheduling"],
-        "note": "General scheduling-directory fallback before Wal-prefix routing: seven certified primary modules, 18 configurations and 133 paired mutants (151 TLC cases), plus future scheduling modules without an explicit group. Priced at 52.3 minutes as a reconstructed two-slot estimate from the TRX timeline of the combined 152-case item in ci.yml run 40184175158 (#5009 head 65f41ea1), not a separately measured shard duration. That combined item measured 99.69 minutes on two TLC slots: the general cases had both slots until TwoPartitions took one at 25.16 minutes and the other until the last of them ended at 78.76, at most 103.9 slot-minutes of work. With fixed observed case durations, replaying their measured order on two slots gives 52.3 minutes; the longest is PartialPrefix at 27.1, so the any-order calculation is (103.9 - 27.1) / 2 + 27.1 = 65.5 minutes, not a future throughput bound. The 180 ordinary scheduling cases are partitioned 151/1/27/1 across the general, TwoPartitions, Shipping and Shipping-variant shards. The earlier 154.51-minute figure composed local certificates and is superseded. No proof, heap, workers or cache change."
+        "note": "The 106-case group contains ReplayPermits base/PartialPrefix and the WalBackPressure, MaterialiserDrain, WalAdmission, WalGcStarvationDriveWitness and TurnOccupancy cases; future scheduling modules also fall back here. Its 21.03-minute price is reconstructed with four-worker LPT from the passing 192/192 case TRX in ci.yml run 40658688360 (head 92832b77, job 122717148586), not a measured CI work-item time. The source run passed including rebootstrap job 122717148595. Historical run 40588708711 rebootstrap job 122488444001 failed under #5116 and contributes no timing. Estimates are planning inputs, not runtime guarantees."
+      },
+      {
+        "shard": "formal-tlc-scheduling-workload-b",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSchedulingWorkloadB"],
+        "note": "The 86-case group contains ReplayPermits mutations and the WalGcStarvationDrive, SagaReadProgress and TagIndexReconcile cases. Its 23.04-minute price is reconstructed with four-worker LPT from the passing 192/192 case TRX in ci.yml run 40658688360 (head 92832b77, job 122717148586), not a measured CI work-item time. Estimates are planning inputs, not runtime guarantees."
       },
       {
         "shard": "formal-tlc-scheduling-shipping",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingShipping"],
-        "note": "ReplicationShipping base and all 26 paired mutations together (27 TLC cases), preserving existing process-local control behavior. Priced at 9.7 minutes, its measured item duration in ci.yml run 40184175158 (#5009 head 65f41ea1). The earlier 14.07-minute allocation (a local 28-case invocation's 2745.4195361 monotonic seconds less the FourRecords case's 1901.2196480s) is superseded by that measurement."
+        "note": "ReplicationShipping base and all 26 paired mutations remain together (27 TLC cases), preserving process-local control behavior. The passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148735) measured 6.16476 minutes; 6.17 is the measured item price, not a future runtime guarantee."
       },
       {
         "shard": "formal-tlc-scheduling-shipping-variants",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingShippingVariants"],
-        "note": "Every full ReplicationShipping variant, currently the one FourRecords case. Priced at 18.05 minutes, its measured item duration in ci.yml run 40184175158 (#5009 head 65f41ea1); the earlier 31.69-minute allocation was its local native TRX duration (1901.2196480s) and is superseded. Isolation does not shorten this single case or change any proof obligation; the ten-minute Blame inactivity collector is not a per-leg minute cap."
+        "note": "Every full ReplicationShipping variant, currently the one FourRecords case. Its passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148680) measured 18.71505 minutes; 18.72 is the measured item price, not a future runtime guarantee."
       },
       {
         "shard": "formal-tlc-smoke",

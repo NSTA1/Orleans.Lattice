@@ -327,12 +327,20 @@ The complete revised harness subsequently passed 28/28 cases: both full
 configurations and all twenty-six paired mutations, with fresh process-local
 controls. Its launcher-artifact receipt records 2745.4195361 monotonic seconds
 under the same configured resource policy. CI does not compose these
-certificates: it prices the base and pairs at their measured 9.7-minute item
-duration and FourRecords at its measured 18.05 minutes in ci.yml run
-40184175158, on separate shards. The earlier standalone fulls remain
-diagnostics. Accepted completion binds the fresh TRX, redirected native
-output and immediate exit-code/Stopwatch receipt; it is not a recovered CLI
-terminal event, at-launch loaded-binary attestation or peak-RSS measurement.
+certificates. Its scheduling prices use passing TRX evidence in ci.yml run
+40658688360 (head 92832b77): the dedicated TwoPartitions item is 41.15 minutes
+(job 122717148551), Shipping base/pairs are 6.17 (job 122717148735), and
+FourRecords is 18.72 (job 122717148680). The passing 192/192 general item (job
+122717148586) is split into 106/86-case groups priced at 21.03/23.04 minutes by
+four-worker LPT reconstruction of its case durations, not measured work-item
+times. Four workers is a reconstruction assumption, not an attested runner
+trace. The complete source run passed, including rebootstrap job 122717148595.
+Historical run 40588708711's rebootstrap job 122488444001 failed under #5116;
+that failure remains recorded and contributes no timing. These estimates are
+planning inputs, not runtime guarantees. The earlier standalone fulls remain
+diagnostics. Accepted completion binds the fresh TRX, redirected native output
+and immediate exit-code/Stopwatch receipt; it is not a recovered CLI terminal
+event, at-launch loaded-binary attestation or peak-RSS measurement.
 
 The model declares 26 one-target pairs and 33 behaviour rows, covering every
 Next/environment action except non-behavioural Stutter. Twenty distinct
@@ -402,24 +410,26 @@ See [the refinement note](TagIndexReconcileRefinement.md) for the exact
 production units, paired counterexamples and cooperative Coyote boundary.
 
 All scheduling-directory bases, variants and mutations route before the broad
-Wal prefix to one of four deterministic-only shards, partitioned 191/1/27/1
-cases. TlcShardScheduling (formal-tlc-scheduling) holds every case without a
-more specific group, TlcShardSchedulingReplayTwoPartitions holds the
-ReplayPermits TwoPartitions variant alone, TlcShardSchedulingShipping holds the
-ReplicationShipping base and pairs, and TlcShardSchedulingShippingVariants
-holds its full variants. Pricing uses ci.yml run 40184175158: the general
-allocation is a 52.3-minute reconstructed two-slot estimate from the combined
-152-case item's TRX timeline in observed order, not a separately measured shard
-duration. TwoPartitions held one TLC slot through its 74.47-minute observed case
-interval and set that combined item's critical path; its rounded 74.5-minute
-planning allocation sets an indivisible-case planning floor for the estimate-based
-plan, not a guarantee of future runtimes. The Shipping base/pairs and variant
-retain their own measured item durations of 9.7 and 18.05 minutes. The forty
-WalGcStarvationDrive and witness cases joined TlcShardScheduling after that
-run, so its general allocation does not yet price them. Structural
-gates remain untagged. The checked-in mutation files derive each mutant from the
-live module using exact anchors; the harness runs a clean control and one
-configured target per mutant.
+Wal prefix to five deterministic-only shards, partitioning the ten-module
+population 106/86/1/27/1 (221 cases): TlcShardScheduling holds ReplayPermits
+base/PartialPrefix and WalBackPressure, MaterialiserDrain, WalAdmission,
+WalGcStarvationDriveWitness and TurnOccupancy; TlcShardSchedulingWorkloadB holds
+ReplayPermits mutations plus WalGcStarvationDrive, SagaReadProgress and
+TagIndexReconcile; TlcShardSchedulingReplayTwoPartitions holds the single
+TwoPartitions case; TlcShardSchedulingShipping holds the ReplicationShipping
+base and pairs; and TlcShardSchedulingShippingVariants holds FourRecords.
+Passing item TRX results are from ci.yml run 40658688360 (head 92832b77):
+TwoPartitions 41.15 minutes (job 122717148551), Shipping 6.17 (job
+122717148735), and FourRecords 18.72 (job 122717148680). The passing 192/192
+general item in job 122717148586 is priced as 21.03/23.04-minute groups using
+four-worker LPT reconstruction of its case durations, not measured work-item
+times. Four workers is a reconstruction assumption, not an attested runner
+trace. The complete source run passed, including rebootstrap job 122717148595.
+Historical run 40588708711's rebootstrap job 122488444001 failed under #5116;
+that failure remains recorded and contributes no timing. Estimates are planning
+inputs, not runtime guarantees. Structural gates remain untagged. The checked-in
+mutation files derive each mutant from the live module using exact anchors; the
+harness runs a clean control and one configured target per mutant.
 
 Module-local refinement notes classify every property, identify real production
 detectors, and record the replaced draft assertions and their limitations.

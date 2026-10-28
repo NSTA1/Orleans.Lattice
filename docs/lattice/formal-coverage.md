@@ -504,20 +504,25 @@ outside the TLC shards and run even when policy skips exhaustive model checking.
 The #4852 regression prevents a shard category from silently moving those
 structural checks into skipped work.
 
-Scheduling bases, variants and mutations route to four dedicated
-deterministic-only shards before the WAL-name fallback: the ReplayPermits
-TwoPartitions variant alone (`formal-tlc-scheduling-replay-two-partitions`), the
-ReplicationShipping base and pairs (`formal-tlc-scheduling-shipping`), its full
-variants (`formal-tlc-scheduling-shipping-variants`) and every other scheduling
-case (`formal-tlc-scheduling`). Pricing uses ci.yml run 40184175158: Shipping's
-9.7 and 18.05 minutes are measured item durations; the general allocation is a
-52.3-minute reconstructed two-slot estimate from the combined 152-case item's
-TRX timeline in observed order, not a separately measured shard duration.
-TwoPartitions' 74.47-minute observed case interval informs its rounded
-74.5-minute planning allocation. That indivisible allocation sets a planning floor
-for the estimate-based lattice plan, not a guarantee of future runtimes.
-Structural scheduling discovery and refinement checks remain outside those
-shards, so a skipped TLC run does not skip the acceptance census.
+Scheduling bases, variants and mutations route before the WAL-name fallback to
+five deterministic-only shards: 106 general cases (`formal-tlc-scheduling`), 86
+workload-B cases (`formal-tlc-scheduling-workload-b`), the dedicated
+ReplayPermits TwoPartitions case
+(`formal-tlc-scheduling-replay-two-partitions`), 27 Shipping base/pairs
+(`formal-tlc-scheduling-shipping`) and its FourRecords variant
+(`formal-tlc-scheduling-shipping-variants`), covering all 221 cases exactly
+once. Prices use passing TRX evidence from ci.yml run 40658688360 (head
+92832b77): the three measured item prices are 41.15 minutes (job 122717148551),
+6.17 (job 122717148735) and 18.72 (job 122717148680). The 192/192 general item
+passed in job 122717148586; its 106/86 subgroup prices of 21.03/23.04 minutes
+are four-worker LPT reconstructions from test-case durations, not measured
+work-item times. Four workers is a reconstruction assumption, not an attested
+runner trace. The complete source run passed, including rebootstrap job
+122717148595. Historical run 40588708711's rebootstrap job 122488444001 failed
+under #5116; that failure remains recorded and contributes no timing. Estimates
+are planning inputs, not runtime guarantees. Structural scheduling discovery and
+refinement checks remain outside those shards, so a skipped TLC run does not
+skip the acceptance census.
 
 ## Related
 

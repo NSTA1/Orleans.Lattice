@@ -123,10 +123,13 @@ internal static class TlcCiShard
     /// <summary>The leaf split-gate and grain-turn wait-cycle runs.</summary>
     public const string SplitGate = "TlcShardSplitGate";
 
-    /// <summary>Scheduling-area base, variant and mutation runs without a dedicated measured group.</summary>
+    /// <summary>The balanced scheduling group with ReplayPermits bases and PartialPrefix.</summary>
     public const string Scheduling = "TlcShardScheduling";
 
-    /// <summary>The ReplayPermits TwoPartitions variant configuration, the single longest scheduling TLC case.</summary>
+    /// <summary>The ReplayPermits mutations and the second balanced scheduling workload group.</summary>
+    public const string SchedulingWorkloadB = "TlcShardSchedulingWorkloadB";
+
+    /// <summary>The ReplayPermits TwoPartitions variant configuration, kept in its own shard.</summary>
     public const string SchedulingReplayTwoPartitions = "TlcShardSchedulingReplayTwoPartitions";
 
     /// <summary>The ReplicationShipping base and all paired mutations, retaining process-local controls together.</summary>
@@ -153,7 +156,7 @@ internal static class TlcCiShard
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
-         Scheduling, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants];
+         Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -169,7 +172,7 @@ internal static class TlcCiShard
         ArgumentNullException.ThrowIfNull(mutation);
 
         var name = module.Name;
-        if (SchedulingCategory(module) is { } schedulingCategory)
+        if (SchedulingCategory(module, mutation: mutation.Name) is { } schedulingCategory)
         {
             return schedulingCategory;
         }
@@ -303,7 +306,7 @@ internal static class TlcCiShard
         name.StartsWith("Replication", StringComparison.Ordinal)
         && !string.Equals(name, "Replication", StringComparison.Ordinal);
 
-    private static string? SchedulingCategory(SpecModule module, string? variant = null)
+    private static string? SchedulingCategory(SpecModule module, string? variant = null, string? mutation = null)
     {
         if (!string.Equals(Path.GetFileName(module.Directory), "scheduling", StringComparison.Ordinal))
             return null;
@@ -311,9 +314,15 @@ internal static class TlcCiShard
         if (string.Equals(module.Name, "ReplicationShipping", StringComparison.Ordinal))
             return variant is null ? SchedulingShipping : SchedulingShippingVariants;
 
-        return string.Equals(module.Name, "ReplayPermits", StringComparison.Ordinal)
-            && string.Equals(variant, "TwoPartitions", StringComparison.Ordinal)
-            ? SchedulingReplayTwoPartitions
+        if (string.Equals(module.Name, "ReplayPermits", StringComparison.Ordinal))
+        {
+            if (string.Equals(variant, "TwoPartitions", StringComparison.Ordinal))
+                return SchedulingReplayTwoPartitions;
+            return mutation is null ? Scheduling : SchedulingWorkloadB;
+        }
+
+        return module.Name is "WalGcStarvationDrive" or "SagaReadProgress" or "TagIndexReconcile"
+            ? SchedulingWorkloadB
             : Scheduling;
     }
 

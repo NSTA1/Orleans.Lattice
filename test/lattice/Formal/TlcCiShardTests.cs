@@ -185,7 +185,9 @@ public sealed partial class TlcCiShardTests
                     var expected = Path.GetFileName(module.Directory) == "scheduling"
                         ? module.Name == "ReplicationShipping" ? "TlcShardSchedulingShippingVariants"
                             : module.Name == "ReplayPermits" && variant == "TwoPartitions"
-                            ? "TlcShardSchedulingReplayTwoPartitions" : TlcCiShard.Scheduling
+                            ? "TlcShardSchedulingReplayTwoPartitions"
+                            : module.Name is "WalGcStarvationDrive" or "SagaReadProgress" or "TagIndexReconcile"
+                            ? TlcCiShard.SchedulingWorkloadB : TlcCiShard.Scheduling
                         : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
                         : module.Name == "MaterialisedViewFence"
