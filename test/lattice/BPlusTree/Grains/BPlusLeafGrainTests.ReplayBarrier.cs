@@ -170,7 +170,7 @@ public partial class BPlusLeafGrainTests
         // key range and the suffix under another. Gating is also
         // behaviour-preserving for them, because their callers already blocked on
         // activation before this change.
-        "SetShardIndexAsync", "SetKeyRangeAsync", "SetTreeIdAsync",
+        "SetShardIndexAsync", "SetKeyRangeAsync", "SetTreeIdAsync", "SetBindingAsync",
         "InitializeSiblingAsync", "SetCheckpointOffsetHintsAsync", "SetParentAsync",
 
         // Recovery's birth seam (issue #4700): it re-binds, or re-creates, the leaf

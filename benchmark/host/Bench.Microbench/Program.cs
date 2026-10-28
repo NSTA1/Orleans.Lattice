@@ -114,6 +114,16 @@ if (string.Equals(suite, "reseedsampling", StringComparison.OrdinalIgnoreCase))
     return samplingSummary.HasCriticalValidationErrors || samplingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "leafbinding", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is LeafMaintenanceCallBenchmarks.Site.RootBinding
+            or LeafMaintenanceCallBenchmarks.Site.SingleCrdtRepair
+            or LeafMaintenanceCallBenchmarks.Site.BatchCrdtRepair));
+    var bindingSummary = BenchmarkRunner.Run<LeafMaintenanceCallBenchmarks>(config);
+    return bindingSummary.HasCriticalValidationErrors || bindingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "internalnodebinding", StringComparison.OrdinalIgnoreCase))
 {
     config = config.AddFilter(new SimpleFilter(benchmark =>

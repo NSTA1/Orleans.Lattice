@@ -1520,8 +1520,7 @@ internal sealed partial class ShardRootGrain(
                 TreeId,
                 slice.Count);
 
-            await leaf.SetTreeIdAsync(TreeId);
-            await leaf.SetShardIndexAsync(MyShardIndex);
+            await leaf.SetBindingAsync(TreeId, MyShardIndex);
 
             // Single-shot, matching the single-key path: a second failure is a
             // genuine fault and must stay fail-closed.
@@ -2978,8 +2977,7 @@ internal sealed partial class ShardRootGrain(
         // carries a create intent naming it (issue #4654).
         using (LatticeNewLeafIntentContext.BeginScope(leafGrain.GetGrainId()))
         {
-            await leafGrain.SetTreeIdAsync(TreeId);
-            await leafGrain.SetShardIndexAsync(MyShardIndex);
+            await leafGrain.SetBindingAsync(TreeId, MyShardIndex);
         }
         var prevRootNodeId = state.State.RootNodeId;
         var prevRootIsLeaf = state.State.RootIsLeaf;
@@ -3009,7 +3007,7 @@ internal sealed partial class ShardRootGrain(
             // next retry is safe).
             //
             // The cross-grain calls above (registry.RegisterAsync,
-            // leafGrain.SetTreeIdAsync, leafGrain.SetShardIndexAsync)
+            // leafGrain.SetBindingAsync)
             // are NOT reverted - each is idempotent on retry by its own
             // idempotency guard (cycle 1 for the leaf-init pair, by
             // contract for RegisterAsync), so leaving their side effects
