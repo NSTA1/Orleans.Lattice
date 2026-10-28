@@ -1,7 +1,8 @@
 --------------------------- MODULE ShardOwnership ---------------------------
 (***************************************************************************)
 (* Key ownership in Orleans.Lattice across an adaptive shard split, an     *)
-(* online reshard, and an online resize T -> R (fence, alias flip, undo,   *)
+(* online shard fold, an online reshard that grows or shrinks, and an      *)
+(* online resize T -> R (fence, alias flip, undo,                          *)
 (* purge), concurrent with stale routing caches, an atomic-write saga      *)
 (* bound to one physical copy, and a later plain write. The registry here  *)
 (* always reports the saga's decision; ShardOwnershipRetention models the  *)
@@ -288,6 +289,26 @@ SplitBegin ==
     /\ spCopy' = alias
     /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, mig, pend, term, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, wDone, ackOn>>
 
+\* An online shard fold (TreeShardConsolidationGrain) of donor s1's slot onto
+\* survivor s2, from over-split healing or a shrinking reshard. It opens the
+\* donor's shadow-write window through the split's own primitive and then runs
+\* the same retroactive sweep, Reject freeze, final drain and fenced
+\* reassignment, so it shares every step after this one. Its admission differs:
+\* a fold reads the resize's migration hold itself, inside a reshard or not, and
+\* that hold lasts until no shard of the replaced copy mirrors into the resized
+\* one, so a fold is never admitted while the resize is retired but unpurged.
+\* The sweep is the coordinator's step, not the window's, so a fold that opened
+\* the window without it tore an atomic batch (#5125;
+\* AtomicOnOwnerFoldSkipsSweep).
+FoldBegin ==
+    /\ sp = "idle"
+    /\ rz \in {"idle", "purged", "undone"}
+    /\ rmap = s1
+    /\ ~Fenced(alias, s1)
+    /\ sp' = "shadow"
+    /\ spCopy' = alias
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, mig, pend, term, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, wDone, ackOn>>
+
 \* Retroactive sweep of prepares that predate the window: a bucket whose saga
 \* the registry reports decided is resolved at the destination (with the
 \* committed-values backstop for a commit) instead of being replayed; one the
@@ -355,8 +376,9 @@ SplitAbandon ==
     /\ sp' = "done"
     /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, mig, pend, term, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, wDone, ackOn>>
 -----------------------------------------------------------------------------
-(* Online reshard (TreeReshardGrain): drives splits until the map names the *)
-(* target shard count. Interlocked with resize in both directions.          *)
+(* Online reshard (TreeReshardGrain): drives splits (a grow) or folds (a     *)
+(* shrink) until the map names the target shard count. Interlocked with     *)
+(* resize in both directions.                                                *)
 
 ReshardStart ==
     /\ rs = "idle"
@@ -636,6 +658,7 @@ Stutter ==
 -----------------------------------------------------------------------------
 Next ==
     \/ SplitBegin
+    \/ FoldBegin
     \/ SplitSweep
     \/ SplitFreeze
     \/ SplitCommit

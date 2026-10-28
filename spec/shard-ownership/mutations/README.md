@@ -28,7 +28,7 @@ own name.
   lands, the mutation stays, as the regression check for the behaviour it
   replaced. The refinement notes list them against their issues.
 - **Regression checks for fixed defects.** The #4357, #4358, #4362 and #4369
-  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619 and #4689, are reproduced as standing checks.
+  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 and #5125, are reproduced as standing checks.
 - **Checks against a naive fix.** Where the obvious fix for an open defect
   would break a different property, a mutation stands against it:
   `AtomicOnOwnerDiscardedCopyTerminalRedirects` is #4474's broadcast following
@@ -66,6 +66,7 @@ declare no `PERTURBS`; `NoKeyLostLaterWriteBelowP` breaks property H the same wa
 |----------|--------|-------|----------|----------------|
 | [`AtomicOnOwnerDecideBeforeDispatch`](AtomicOnOwnerDecideBeforeDispatch.mutation) | `AtomicOnOwner` | Invariant | `SagaDecide` | the decision is recorded before every entry is dispatched, so the batch reads torn |
 | [`AtomicOnOwnerDiscardedCopyTerminalRedirects`](AtomicOnOwnerDiscardedCopyTerminalRedirects.mutation) | `AtomicOnOwner` | Invariant | `SagaTerminal` | terminals of a saga bound to an undone resized copy are re-sent to the old copy, landing part of the batch there |
+| [`AtomicOnOwnerFoldSkipsSweep`](AtomicOnOwnerFoldSkipsSweep.mutation) | `AtomicOnOwner` | Invariant | `FoldBegin` | a fold opens the donor's window without the split's retroactive sweep, so a batch prepared before the fold reads torn once it commits (#5125) |
 | [`AtomicOnOwnerRouterIgnoresBinding`](AtomicOnOwnerRouterIgnoresBinding.mutation) | `AtomicOnOwner` | Invariant | `SagaPrepare` | the routing tier ignores the binding, so part of a bound batch lands only on a copy an undo discards |
 | [`AtomicOnOwnerStartSkipsEntry`](AtomicOnOwnerStartSkipsEntry.mutation) | `AtomicOnOwner` | Invariant | `SagaStart` | the saga records an entry as dispatched before dispatching it, so the batch commits torn |
 | [`NoKeyLostAckBeforeDecision`](NoKeyLostAckBeforeDecision.mutation) | `NoKeyLost` | Invariant | `SagaComplete` | the caller is acknowledged before the decision is recorded |
