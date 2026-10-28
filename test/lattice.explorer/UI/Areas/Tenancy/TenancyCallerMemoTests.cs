@@ -19,17 +19,24 @@ public sealed class TenancyCallerMemoTests : TenancyTestContext
     {
         UseTenancyAs(isOperator: true);
         var current = Cluster.Hold(nameof(FakeTenancyCluster.GetCurrentTenantAsync));
+        var operatorVerdict = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Switcher!.IsOperatorAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<bool>(operatorVerdict.Task));
         var catalog = Catalog;
 
         var reading = catalog.GetStandingAsync(CancellationToken.None);
 
-        await Switcher!.Received().IsOperatorAsync(Arg.Any<CancellationToken>());
+        _ = Switcher.Received().IsOperatorAsync(Arg.Any<CancellationToken>());
         Assert.Multiple(() =>
         {
+            Assert.That(Cluster.Calls, Does.Contain(nameof(FakeTenancyCluster.GetCurrentTenantAsync)),
+                "the current-tenant read starts while the operator check is still pending");
             Assert.That(reading.IsCompleted, Is.False);
             Assert.That(catalog.LastStanding, Is.Null, "neither admission nor a memo is published before both reads finish");
         });
         current.SetResult();
+        Assert.That(reading.IsCompleted, Is.False, "the current-tenant reply alone does not publish a standing");
+        operatorVerdict.SetResult(true);
         var standing = await reading;
         Assert.That(standing.IsOperator, Is.True);
         Assert.That(standing.CurrentTenant, Is.EqualTo("acme"));
