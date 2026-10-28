@@ -35,8 +35,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <list type="number">
 /// <item><description>
-/// <see cref="ShardConsolidationPhase.BeginShadowWrite"/> - persist intent and
-/// open the donor's shadow-write window onto the survivor.
+/// <see cref="ShardConsolidationPhase.BeginShadowWrite"/> - persist intent,
+/// open the donor's shadow-write window onto the survivor, and replay onto the
+/// survivor every saga prepare already on the donor's folding slots (see
+/// <see cref="RetroactiveSweepPreparedMutationsAsync"/>).
 /// </description></item>
 /// <item><description>
 /// <see cref="ShardConsolidationPhase.Drain"/> - copy the donor's entries for
@@ -428,6 +430,24 @@ internal sealed class TreeShardConsolidationGrain(
                 $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while a resize of the tree is in progress or can still be undone.");
         }
 
+        // Carry prepares that landed on the donor before the window opened onto
+        // the survivor before the drain may start (issue #5125). A failed sweep
+        // leaves the fold in BeginShadowWrite, whose recovery re-runs the whole
+        // sweep, so it delays the drain rather than letting it start unguarded;
+        // returning instead of throwing lets StartAsync anchor the coordinator
+        // that drives that recovery.
+        try
+        {
+            await RetroactiveSweepPreparedMutationsAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Consolidation {OperationId} of shard {Donor} into shard {Survivor} on tree {TreeId} could not sweep the donor's prepared mutations; the coordinator retries before draining.",
+                state.State.OperationId, donorShardIndex, survivorShardIndex, TreeId);
+            return;
+        }
+
         await AdvancePhaseAsync(ShardConsolidationPhase.Drain);
 
         Logger.LogInformation(
@@ -631,7 +651,77 @@ internal sealed class TreeShardConsolidationGrain(
             return;
         }
 
+        // Re-run the retroactive sweep on crash recovery (issue #5125). It is
+        // idempotent: the survivor's pending bucket merges per (txid, key) under
+        // LWW and a re-installed marker is a no-op.
+        await RetroactiveSweepPreparedMutationsAsync();
+
         await AdvancePhaseAsync(ShardConsolidationPhase.Drain);
+    }
+
+    /// <summary>
+    /// Retroactive shadow-forward of the donor's in-flight prepared mutations on
+    /// the folding slots, onto the survivor (issue #5125).
+    /// <para>
+    /// The shadow-write window mirrors a saga prepare that reaches the donor
+    /// after it opens, together with a shadow marker on the survivor. A prepare
+    /// that landed before it never reached the survivor, yet the drain imports
+    /// the donor's pre-saga value there as a migrated row. Once the map flips, a
+    /// reader reaching the survivor after the saga's decision but before its
+    /// terminal would serve that value against siblings already showing the
+    /// committed batch. This is the split's sweep
+    /// (<see cref="PreparedBucketSweep"/>), which replays each in-flight prepare
+    /// on the survivor and installs its marker, and settles an already-decided
+    /// saga there directly.
+    /// </para>
+    /// <para>
+    /// Deliberately not work-bounded, for the reasons documented on the split's
+    /// <c>TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync</c>: the
+    /// drain must not start with markers for some in-flight sagas and not
+    /// others, and recovery re-runs the whole sweep rather than resuming it.
+    /// </para>
+    /// </summary>
+    private async Task RetroactiveSweepPreparedMutationsAsync()
+    {
+        var donor = await GetDonorAsync();
+        var survivor = await GetSurvivorAsync();
+        var slots = DonorSlots;
+        var vsc = VirtualShardCount;
+        var progress = new PreparedBucketSweepProgress();
+        var atomicWalk = new AtomicLeafWalk(nameof(RetroactiveSweepPreparedMutationsAsync));
+
+        try
+        {
+            // Re-resolve the leftmost leaf on each attempt: a leaf the walk named
+            // can be retired by a concurrent topology change mid-sweep, which
+            // surfaces as LeafStateRowLostException on a stale chain read. Mirrors
+            // the split's bounded retry.
+            const int maxAttempts = 5;
+            for (var attempt = 1; ; attempt++)
+            {
+                var firstLeafId = await donor.GetLeftmostLeafIdAsync();
+                if (firstLeafId is null) return;
+
+                progress.Replayed = 0;
+                progress.LeavesVisited = 0;
+
+                try
+                {
+                    await PreparedBucketSweep.RunAsync(
+                        grainFactory, TreeId, firstLeafId.Value, survivor, slots, vsc,
+                        progress, carryOriginalStamps: true);
+                    return;
+                }
+                catch (LeafStateRowLostException) when (attempt < maxAttempts)
+                {
+                }
+            }
+        }
+        finally
+        {
+            atomicWalk.RecordLeavesVisited(progress.LeavesVisited);
+            atomicWalk.ReportIfSlow(Logger, Context.GrainId);
+        }
     }
 
     /// <summary>
