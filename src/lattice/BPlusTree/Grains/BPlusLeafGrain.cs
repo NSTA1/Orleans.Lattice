@@ -2722,6 +2722,14 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task SetBindingAsync(string treeId, int shardIndex)
+    {
+        // Keep both persistence boundaries and the birth pin before shard binding.
+        await SetTreeIdAsync(treeId);
+        await SetShardIndexAsync(shardIndex);
+    }
+
     public async Task SetTreeIdAsync(string treeId)
     {
         using var routingMutation = EnterLeafRoutingMutation();

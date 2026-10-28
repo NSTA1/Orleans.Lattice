@@ -189,15 +189,19 @@ public partial class BPlusLeafGrainTests
             "Every inherited WAL entry the sibling needs to replay must survive the GC pass.");
     }
 
-    [Test]
-    public async Task SetTreeId_birth_seeds_block_pin_so_wal_gc_does_not_trim_past_root_leaf_frontier()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SetTreeId_birth_seeds_block_pin_so_wal_gc_does_not_trim_past_root_leaf_frontier(bool combinedBinding)
     {
         // A root / bulk-load leaf acquires its tree id via SetTreeIdAsync and is
         // then handed data via MergeEntriesAsync before it ever checkpoints.
         var (leaf, pinGrain, registry, factory) =
             CreateLeafWithDurablePinStore(leafKey: "root-leaf-1", treeId: null);
 
-        await leaf.SetTreeIdAsync(PinSeamTreeId);
+        if (combinedBinding)
+            await leaf.SetBindingAsync(PinSeamTreeId, 0);
+        else
+            await leaf.SetTreeIdAsync(PinSeamTreeId);
 
         var pins = await pinGrain.GetPinsAsync();
         Assert.That(pins, Is.Not.Empty,

@@ -516,6 +516,12 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     Task SetTreeIdAsync(string treeId);
 
+    /// <summary>
+    /// Binds the tree and owning shard in one dispatch. Preserves the ordered,
+    /// idempotent writes and birth pin of the individual setters.
+    /// </summary>
+    Task SetBindingAsync(string treeId, int shardIndex);
+
     /// <summary>Returns the tree ID this leaf is associated with, or <c>null</c> if not yet set.</summary>
     Task<string?> GetTreeIdAsync();
 
