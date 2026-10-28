@@ -1,5 +1,5 @@
 ---
-agent_spec: "docs/agents/api/state.json"
+agent_spec: "docs/agents/api/treeadmin.json"
 ---
 
 # Long-running operations

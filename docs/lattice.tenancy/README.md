@@ -1,5 +1,5 @@
 ---
-agent_spec: "docs/agents/procedures/region-backfill.yaml"
+agent_spec: "docs/agents/api/tenantadmin.json"
 ---
 
 # Orleans.Lattice.Tenancy
