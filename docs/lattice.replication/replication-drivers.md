@@ -63,7 +63,7 @@ a peer does with those entries).
 
 The activation loop is **retry-with-backoff**: a freshly-started silo may
 race the Orleans runtime's own `IHostedService` ordering, so the first
-`EnsureActiveAsync` call can throw transiently. The service starts with a
+shipper activation call can throw transiently. The service starts with a
 250 ms inter-attempt delay, doubles on each consecutive miss up to a 30 s
 cap, and resets the delay on the first successful activation. The loop
 only exits when every pending grain is active or the host's
@@ -270,7 +270,7 @@ therefore keeps shipping only plain writes and withholds every saga
 record, and it keeps the re-seed marker for as long as it is detached.
 Topology removal is the escape hatch for a peer that will never
 re-seed. A detach that loses
-a race with the peer being added back is skipped. `EnsureActiveAsync`
+a race with the peer being added back is skipped. Shipper activation
 (the `Added` path and the startup pass) re-attaches the shipper. A
 peer removed while no silo was running stays attached until it is
 removed again with the cluster up.
@@ -399,7 +399,7 @@ resize discards no write, so the clusters stay in agreement.
 Detection is **event-driven, not polled**. The alias swap is performed by an
 identifiable producer that writes the repoint into the tree registry; the
 registry fires the core `ITreeAliasObserver` hook from inside its single
-alias-mutation choke point (`SetAliasAsync` / `RemoveAliasAsync`), after the
+alias-mutation choke point (setting or removing an alias), after the
 new alias is durably persisted and **only** when the effective physical id
 actually changed. The replication package registers an observer that fans the
 `TreeAliasChange` to the affected per-`(tree, peer)` shipper grains via
@@ -427,7 +427,7 @@ shipping at global completion. A paused shipper does not re-resolve, and the
 backstop interval counts from the last resolve, which may be moments before
 the pause. If the push was lost, a resumed shipper would keep draining the
 retired log and carry a pre-restore write onto the peer's restored copy,
-re-advancing the restored cut for good (issue #4490). So `ResumeShippingAsync`
+re-advancing the restored cut for good (issue #4490). So resuming shipping
 forces the first tick after the resume to resolve the source identity, and to
 rebind with a cursor reset if it moved, before that tick reads or sends
 anything. A shipper reactivated during the pause resolves first anyway.
@@ -506,13 +506,13 @@ and is reduced to a low-latency tree-id nudge that rings shipper
 doorbells so an idle or deactivated shipper is woken to drain the fresh
 append.
 
-In addition to the phase timer, the shipper exposes
-`OnDoorbellAsync(CancellationToken)`. The producer-side doorbell sink
+In addition to the phase timer, the shipper exposes a doorbell
+entry point. The producer-side doorbell sink
 rings the doorbell after every commit for the affected
 `(tree, peer)` activations. The doorbell is a **cheap, edge-triggered
 wake**: it does not run the drain+ship pump inline. Its sole effect is to
 (re)activate the shipper if it had been deactivated - and the shipper's
-phase timer, which is armed on every activation (`OnActivateCoreAsync`)
+phase timer, which is armed on every activation
 and re-armed by the keepalive reminder, is the single authority that
 drains and ships. Running the pump inline on the doorbell turn would hold
 the non-reentrant activation for a full cross-cluster ship round-trip,
@@ -538,7 +538,7 @@ peer)` coalescer and collapses a burst of ring requests into **at most one
 in-flight ring plus one pending follow-up**:
 
 - The first request transitions the coalescer from idle to in-flight and
-  starts a ring loop that calls `OnDoorbellAsync`.
+  starts a ring loop that rings the shipper's doorbell.
 - A request that arrives while a ring is in flight sets a single pending
   flag instead of dispatching its own grain call, and is counted as
   coalesced.
@@ -621,16 +621,16 @@ those sagas whole.
 The shipper maintains activation-scoped buffers reused across pump
 ticks:
 
-- `_drainBuffer` (`List<WalRecord>`) - cleared in place before every
+- The drained-record buffer (a `List<WalRecord>`) - cleared in place before every
   drained batch (a tick can drain several - see *Continuous drain within
   a tick* above). The list drives the shipper's own filtering,
   coalescing, and cursor bookkeeping and is never handed to the
   transport, which receives only the framing header and the pre-encoded
   segments below, so reuse is safe (no aliasing past the call).
-- `_drainEncodedSegments` (`List<ArraySegment<byte>>`) - cleared in
-  lockstep with `_drainBuffer`. Holds the pre-encoded payload bytes
-  the shard grain returned from `ReadShippingAsync`; the segments are
-  owned by the WAL grain's page DTOs and are safe to wrap because
+- The encoded-segment buffer (a `List<ArraySegment<byte>>`) - cleared in
+  lockstep with the drained-record buffer. Holds the pre-encoded payload bytes
+  the WAL partition returned from its shipping read; the segments are
+  owned by the WAL partition's page records and are safe to wrap because
   Orleans serialises grain turns and `SendAsync` awaits inline.
 
 Net effect: zero per-tick heap allocation on the steady-state path
@@ -810,7 +810,7 @@ A host that ran without replication, or before the decision-purge guard ([#4508]
 
 A replay records a horizon, the durable per-partition replay horizon: every partition's next sequence when it began. While it is set, the shipper decides once per saga, on the first record of it that it reads, whether the origin proves the saga forgotten and its decision purged:
 
-1. It reads the saga's **participant row**. A saga registers its participants durably before it appends any prepare (the shard root awaits the registration and fails the write if it fails), and only `ForgetAsync`, after the decision, removes them. A row means the saga is live, or decided and not yet forgotten: it ships.
+1. It reads the saga's **participant row**. A saga registers its participants durably before it appends any prepare (the shard root awaits the registration and fails the write if it fails), and only forgetting the saga, after the decision, removes them. A row means the saga is live, or decided and not yet forgotten: it ships.
 2. With no row, it reads the **stored decision**. A decision means the saga was forgotten but its decision is still stored, which the peer's re-seed carried: it ships. No decision means it was purged: the decision is recorded before the forget and purged after it, so "no participants, then no decision" proves the purge.
 
 The verdict is cached for the replay and applies to every record of the saga, terminals included, so a saga is shipped whole or withheld whole. A failed read fails the tick, so the partition holds and retries rather than guessing. Every record of a purged saga was appended before its purge, so a purged verdict raises the horizon to the log's current next sequences, and the filter clears only once every partition's cursor has passed it. The cache lives only while the filter is set: it holds at most one entry per saga with a record between the cursors and the horizon, which the retained log bounds, and it is cleared when the filter starts, when it clears, and with the activation.
@@ -880,7 +880,7 @@ A peer that is gone for good blocks every reap of its trees until it is removed 
 
 Cursor advances are amortised across `ShipCursorWriteInterval`
 (default 16) successful acks rather than persisted per-ack. The
-`_pendingCursorWrites` counter increments on every advance and the
+shipper's pending-write counter increments on every advance and the
 durable `WriteStateAsync` fires whenever **either** of two thresholds
 is reached - whichever comes first:
 
@@ -927,9 +927,9 @@ change: only flushes that durably advance the HLC cursor produce a new
 registry report.
 
 A registry-side failure during the report does not unwind the durable
-cursor advance and does not retry - the shipper updates
-`_lastReportedCursor` to the durable value regardless. The
-suppression check inside `FlushCursorAsync` then skips the next
+cursor advance and does not retry - the shipper records the durable
+value as its last-reported cursor regardless. The cursor flush's
+suppression check then skips the next
 report attempt until the durable cursor moves further forward, at
 which point the next flush re-reports the new frontier through the
 recovered registry. Operators monitoring the WAL GC trim frontier
@@ -971,7 +971,7 @@ bootstrap.
 
 ### Graceful deactivation
 
-`OnDeactivateCoreAsync` flushes any pending cursor advance before the
+Deactivation flushes any pending cursor advance before the
 activation tears down so a clean shutdown (e.g. operator silo drain)
 eliminates the deferred-persist replay window entirely. A storage
 failure during the flush is logged and swallowed - deactivation must

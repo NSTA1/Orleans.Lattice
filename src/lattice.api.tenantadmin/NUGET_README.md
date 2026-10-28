@@ -25,6 +25,7 @@ through a single seam that every transport binding (gRPC, MCP) adapts over.
 | `AuthorizeAllowedRegionsAsync` | Sets the regions a tenant is permitted to occupy. |
 | `SetResidencyAsync` | Binds the tenant's data to a subset of its allowed regions. |
 | `GetTenantRegionStatusAsync` | Reports the tenant's allowed, resident, and in-flight region state. |
+| `AdvanceRegionAsync` | Operator-only override that advances one step of a region's add lifecycle, after the caller acknowledges the tenant's data is already in the region. |
 
 `ILatticeTenantSelfService` is the read-only surface any caller may invoke, scoped
 fail-closed to that caller: `GetCurrentTenantAsync` answers "which
@@ -63,10 +64,12 @@ tenant can never be suspended, deleted, given quotas, have its admin subjects
 changed, or be named in a cross-tenant grant offer, and a tenant id that shadows a
 reserved namespace is rejected.
 
-`ILatticeTenantScopedTreeAdmin` adds no gate of its own and relies on the facades it
-composes: its tree verbs are authorized by the tree-administration facade, while its
-schema-policy verbs reach the in-process schema admin, which performs no
-authorization.
+`ILatticeTenantScopedTreeAdmin` does not use the two-tier tenant gate. Its tree verbs are
+authorized on the composed tree id by the tree-administration facade it composes
+(tree creation is also checked for whole-tree `Admin` before any quota accounting),
+and it authorizes its schema-policy verbs itself over the whole composed tree -
+`SchemaAdmin` to set or clear a policy, `Read` to get one - before delegating to the
+in-process schema admin, which performs no authorization of its own.
 
 The add-on is **opt-in**: a cluster that does not register it exposes no tenant
 administration and behaves exactly as before.

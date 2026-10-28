@@ -12,9 +12,9 @@ A transport-agnostic control facade for runtime per-tree cross-cluster replicati
 
 It is built the same way as the sibling [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) control facade:
 
-- **A transport-agnostic facade.** A single control surface (`ILatticeReplicationControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes enable, disable, and permission-scoped config reporting over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
+- **A transport-agnostic facade.** A single control surface (`ILatticeReplicationControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes enable, disable, permission-scoped config reporting, and peer decommissioning over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding** (the sibling [`Orleans.Lattice.Api.Replication.Grpc`](../lattice.api.replication.grpc/README.md) package) that projects this facade onto a remotely callable service and typed client.
-- **An MCP tool group** (in [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)) that exposes the same three operations as agent tools, gated by the same access control. The config-inspect tool is offered as soon as the host registers the group (`AddReplicationTools`); the mutating enable and disable tools only once replication control is opted in as well (see [the replication tools](../lattice.api.mcp/tools.md#replication-tools-lattice_replication_)).
+- **An MCP tool group** (in [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)) that exposes enable, disable, and config reporting as agent tools, gated by the same access control; peer decommissioning has no MCP tool. The config-inspect tool is offered as soon as the host registers the group (`AddReplicationTools`); the mutating enable and disable tools only once replication control is opted in as well (see [the replication tools](../lattice.api.mcp/tools.md#replication-tools-lattice_replication_)).
 
 ## How configuration is distributed
 

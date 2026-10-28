@@ -6,8 +6,8 @@ transport-agnostic admin surface that drives runtime per-tree cross-cluster
 replication configuration through the
 [`Orleans.Lattice.Replication`](https://www.nuget.org/packages/Orleans.Lattice.Replication)
 engine: enable replication for a tree (fixing its wire merge mode), disable it,
-and inspect the effective replicated-tree set (runtime and static enrollment
-reconciled) - from one place. Sibling packages
+inspect the effective replicated-tree set (runtime and static enrollment
+reconciled), and permanently decommission a peer cluster - from one place. Sibling packages
 project this facade onto a code-first gRPC surface and an MCP tool group.
 
 ## Design

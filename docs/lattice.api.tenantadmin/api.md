@@ -88,7 +88,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionResidencyAuthorizer`
 
-[Source](../../src/lattice.api.tenantadmin/TenantRegionResidencyAuthorizer.cs) (line 44).
+[Source](../../src/lattice.api.tenantadmin/TenantRegionResidencyAuthorizer.cs) (line 46).
 
 `public sealed class TenantRegionResidencyAuthorizer`
 
@@ -280,9 +280,9 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantAccessConfinementException`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessConfinementException.cs) (line 27).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessConfinementException.cs) (line 29).
 
-`public sealed class TenantAccessConfinementException : ArgumentException`
+`public sealed class TenantAccessConfinementException : ArgumentException, ILatticeDomainFault`
 
 - `public TenantAccessConfinementException( string tenantId, TenantAccessConfinementRule rule, string message, string? paramName = null)`
 - `public string TenantId { get; }`

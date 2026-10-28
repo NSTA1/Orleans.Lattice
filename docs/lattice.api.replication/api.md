@@ -64,8 +64,8 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | Member | Type | Meaning |
 |---|---|---|
 | `PeerClusterId` | `string` | The decommissioned peer cluster id. |
-| `TreeCount` | `int` | The number of registered trees whose durable enrollment the peer was removed from. |
-| `AlreadyDecommissioned` | `bool` | `true` when the peer was already decommissioned and the call was an idempotent no-op. |
+| `TreeCount` | `int` | The number of registered trees the decommission visited, including trees the peer was never enrolled on. |
+| `AlreadyDecommissioned` | `bool` | `true` when an earlier call had already marked the peer decommissioned. The full fan-out still runs, so the repeated call is idempotent rather than skipped. |
 
 ### `ReplicationTreeConfigEntry`
 
