@@ -821,13 +821,13 @@ internal sealed class LatticeBackupRestoreService(
         ArgumentException.ThrowIfNullOrEmpty(shadowPhysicalTreeId);
 
         var registry = grainFactory.GetLatticeRegistry();
-        bool exists;
+        TreeRegistryEntry? shadowEntry;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            exists = await registry.ExistsAsync(shadowPhysicalTreeId).ConfigureAwait(false);
+            shadowEntry = await registry.GetEntryAsync(shadowPhysicalTreeId).ConfigureAwait(false);
         }
 
-        if (!exists)
+        if (shadowEntry is null)
         {
             // Idempotent: a shadow that was never built, or already GC'd, is a no-op.
             return;
@@ -839,13 +839,7 @@ internal sealed class LatticeBackupRestoreService(
         // own registry provenance - never from the caller-supplied id - so this
         // seam can only ever destroy a tree the engine itself stamped as a
         // restore shadow, and only for a caller authorized over its owner.
-        TreeRegistryEntry? shadowEntry;
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            shadowEntry = await registry.GetEntryAsync(shadowPhysicalTreeId).ConfigureAwait(false);
-        }
-
-        if (shadowEntry?.RestoreShadowOfTreeId is not { } shadowOfTreeId)
+        if (shadowEntry.RestoreShadowOfTreeId is not { } shadowOfTreeId)
         {
             throw new LatticeRestoreValidationException(
                 $"Tree '{shadowPhysicalTreeId}' is not a restore shadow, so it cannot be deleted through the "

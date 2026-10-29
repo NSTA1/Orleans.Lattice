@@ -77,6 +77,8 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // The readfusion suite models WAL activation, resume and structure read dispatch.
 // The maintenanceelisions suite selects the reshard, consolidation and options
 // lanes of autonomicprobes.
+// The coordinatorcleanup suite selects shadow cleanup, bootstrap registration
+// and source-confirmation head sampling from reseedsampling.
 // Opt-in alternate suite: the producer-side commit-observer microbench
 // (ReplicationCommitObserverBenchmarks) runs only when explicitly selected
 // via BENCH_MICROBENCH_SUITE=observer (or --suite observer). The default
@@ -112,6 +114,16 @@ if (string.Equals(suite, "reseedsampling", StringComparison.OrdinalIgnoreCase))
 {
     var samplingSummary = BenchmarkRunner.Run<ReseedSamplingBenchmarks>(config);
     return samplingSummary.HasCriticalValidationErrors || samplingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "coordinatorcleanup", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is ReseedSamplingBenchmarks.Site.ShadowCleanup
+            or ReseedSamplingBenchmarks.Site.BootstrapRegistration
+            or ReseedSamplingBenchmarks.Site.ConfirmationHeads));
+    var cleanupSummary = BenchmarkRunner.Run<ReseedSamplingBenchmarks>(config);
+    return cleanupSummary.HasCriticalValidationErrors || cleanupSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "leafbinding", StringComparison.OrdinalIgnoreCase))

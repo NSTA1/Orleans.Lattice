@@ -93,7 +93,9 @@ public partial class ViewMaintainerReplayFlushTests
         IViewCrossTreeCoordinatorGrain? coordinator = null,
         ViewRegistration? registration = null,
         HistoryRowCodec? historyCodec = null,
-        IViewJointRepairAdmissionGate? admissionGate = null)
+        IViewJointRepairAdmissionGate? admissionGate = null,
+        int walPartitions = 1,
+        ICommitLogReader? reader = null)
     {
         var catalog = new StaticCatalog(registration ?? new ViewRegistration(ViewName, SourceTreeId, new IdentityProjection()), peer);
 
@@ -101,7 +103,7 @@ public partial class ViewMaintainerReplayFlushTests
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(Arg.Any<string>()).Returns(SourceTreeId);
         registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 1 }));
+            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 1, WalPartitions = walPartitions }));
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         // The source tree is distinct from the view tree: the maintainer confirms a
         // completed atomic batch against the source's committed state before it
@@ -178,9 +180,12 @@ public partial class ViewMaintainerReplayFlushTests
         // the only partition the stub log populates. Zero unless a test simulates
         // writes appended beyond what the drain has read.
         var headOffset = new StrongBox<long>();
-        var commitLogReader = Substitute.For<ICommitLogReader>();
-        commitLogReader.GetHeadOffsetAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(call => Task.FromResult(call.ArgAt<int>(1) == 0 ? headOffset.Value : 0L));
+        var commitLogReader = reader ?? Substitute.For<ICommitLogReader>();
+        if (reader is null)
+        {
+            commitLogReader.GetHeadOffsetAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(call => Task.FromResult(call.ArgAt<int>(1) == 0 ? headOffset.Value : 0L));
+        }
 
         var grain = new ViewMaintainerGrain(
             context,
