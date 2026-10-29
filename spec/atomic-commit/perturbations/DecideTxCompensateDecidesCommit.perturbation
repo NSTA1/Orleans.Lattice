@@ -1,0 +1,14 @@
+# The compensate path decides as though every participant acked, so a saga
+# whose prepare failed records and broadcasts a commit. DecideTx(t) commits
+# only when every participant acked.
+MODULE: AtomicCommit
+ROW: DecideTx(t)
+FILE: src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs
+DETECTORS: CompensationContinuousReaderTests.Compensation_broadcasts_TxAbort_to_every_touched_shard
+SUMMARY: the compensate path decides commit although a participant's prepare failed
+
+--- FIND
+            var abortCommitted = DecideSagaCommit(everyParticipantPrepared: false);
+--- REPLACE
+            var abortCommitted = DecideSagaCommit(everyParticipantPrepared: true);
+--- END

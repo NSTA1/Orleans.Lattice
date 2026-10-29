@@ -1,0 +1,16 @@
+# The gate's Indeterminate arm falls through to the pre-saga value instead of
+# hiding the key, which is the pre-gate behaviour MonotonicVisibilityMaskReportsAbsent
+# models: a masked committed key reverts to pre-saga.
+MODULE: AtomicCommit
+ROW: RegistryMask(t)
+FILE: src/lattice/BPlusTree/AtomicVisibilityGate.cs
+DETECTORS: AtomicVisibilityGateTests.Indeterminate_hides_key_when_no_terminal_was_applied_here
+SUMMARY: an Indeterminate registry answer serves the pre-saga value instead of hiding the key
+
+--- FIND
+            // registry declined to.
+            return PendingReadOutcome.Hidden;
+--- REPLACE
+            // registry declined to.
+            return PendingReadOutcome.FallThroughToPreSaga;
+--- END

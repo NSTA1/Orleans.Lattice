@@ -1,0 +1,16 @@
+# The coordinator core ignores a nack: a failed prepare no longer decides
+# abort. The decision is then no longer determined by the prepare outcome.
+MODULE: AtomicCommit
+ROW: CommitIntegrity
+FILE: src/lattice/BPlusTree/SagaCoordinatorCore.cs
+DETECTORS: AtomicWriteGrainTests.Aborting_saga_broadcasts_its_single_recorded_abort_verdict_to_every_touched_shard
+SUMMARY: a participant's prepare nack is counted as an ack, so a failed saga commits
+
+--- FIND
+                case SagaParticipantOutcome.PreparedNack:
+                case SagaParticipantOutcome.Unreachable:
+                    return SagaDecision.Abort;
+--- REPLACE
+                case SagaParticipantOutcome.Unreachable:
+                    return SagaDecision.Abort;
+--- END
