@@ -431,10 +431,12 @@ public sealed partial class RefinementPerturbationTests
         if (!process.WaitForExit((int)RunnerTimeout.TotalMilliseconds))
         {
             process.Kill(entireProcessTree: true);
-            Assert.Fail($"'{start.FileName} {string.Join(' ', start.ArgumentList)}' did not exit within {RunnerTimeout}");
+            var reaped = process.WaitForExit(10_000);
+            Assert.Fail(
+                $"'{start.FileName} {string.Join(' ', start.ArgumentList)}' did not exit within {RunnerTimeout}; "
+                + (reaped ? "its process tree was killed." : "killing its process tree did not complete within 10 s."));
         }
 
-        process.WaitForExit();
         return (process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
     }
 }

@@ -33,8 +33,9 @@ WHAT THE RUNNER DOES
 2. CONTROL: builds the detectors' test project(s) on the unperturbed tree and
    runs only the named detectors. Every detector must execute at least one test
    and every executed test must pass.
-3. For each perturbation, in order: applies it, rebuilds, runs only its
-   detectors, records the outcome, and restores the file. A perturbation is
+3. For each perturbation, in order: applies it, stamps the residue marker of
+   the testing instructions on the file's first line, rebuilds, runs only its
+   detectors, records the outcome, and restores the file from git. A perturbation is
    DETECTED when the perturbed tree builds and at least one detector test
    fails, and the control was green for every one of its detectors.
 4. Writes a machine-readable result (`--output`) and exits 0 only when every
@@ -100,6 +101,9 @@ REPLACE_MARKER = "--- REPLACE"
 END_MARKER = "--- END"
 DETECTOR_SHAPE = re.compile(r"^[A-Z][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
 TRX_NS = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+# The residue marker of .github/instructions/testing.instructions.md, assembled
+# from two halves so this file does not itself trip PerturbationResidueHygieneTests.
+MARKER = "LATTICE" + "-PERTURBATION"
 NAMESPACE = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_.]*)\s*[;{]", re.MULTILINE)
 TYPE_DECLARATION = re.compile(r"\b(?:class|struct|record(?:\s+(?:class|struct))?)\s+([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -218,9 +222,10 @@ def parse(name: str, content: str, path: str = "") -> Perturbation:
             raise PerturbationError(f"{label} is missing the required header '{key}:'.")
 
     file = headers["FILE"]
-    if "\\" in file or not file.startswith("src/") or any(s in ("", ".", "..") for s in file.split("/")):
+    if ("\\" in file or not file.startswith("src/") or not file.endswith(".cs")
+            or any(s in ("", ".", "..") for s in file.split("/"))):
         raise PerturbationError(
-            f"{label} declares 'FILE: {file}'. FILE must be a repository-relative path under 'src/', "
+            f"{label} declares 'FILE: {file}'. FILE must be a repository-relative '.cs' path under 'src/', "
             "written with forward slashes and no '.' or '..' segments.")
 
     detectors = [d.strip() for d in headers["DETECTORS"].split(",")]
@@ -349,6 +354,11 @@ def run(command: list[str], cwd: Path, log: Path) -> int:
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def stamp(text: str, name: str) -> str:
+    """Prefix the residue marker, so an interrupted run's edit cannot pass for ordinary work."""
+    return f"// {MARKER} {name}: this file is perturbed; restore it from git.\n" + text
 
 
 def write_perturbed(path: Path, text: str) -> None:
@@ -484,7 +494,7 @@ def execute(repo: Path, perturbations: list[Perturbation], args: argparse.Namesp
                 continue
             target = scratch.path / p.file
             try:
-                write_perturbed(target, apply(p, target.read_text(encoding="utf-8-sig")))
+                write_perturbed(target, stamp(apply(p, target.read_text(encoding="utf-8-sig")), p.name))
                 arm = scratch.arm(p.name, groups_for(p.detectors))
             finally:
                 scratch.restore(p.file)
@@ -556,6 +566,10 @@ def self_test() -> int:
     expect_error("ROW: y\n" + header + block, "header 'ROW' twice")
     expect_error(header.replace("src/a/B.cs", "test/a/B.cs") + block, "FILE must be")
     expect_error(header.replace("src/a/B.cs", "src/../B.cs") + block, "FILE must be")
+    expect_error(header.replace("src/a/B.cs", "src/a/B.json") + block, "FILE must be")
+    stamped = stamp("A\n", "T")
+    expect(stamped.startswith("// ") and MARKER in stamped.splitlines()[0] and stamped.endswith("\nA\n"),
+           f"stamp: {stamped!r}")
     expect_error(header.replace("FTests.One", "FTests") + block, "detector 'FTests'")
     expect_error(header.replace("FTests.two_b", "FTests.One") + block, "'FTests.One' twice")
     expect_error(header + "--- FIND\n--- REPLACE\nB\n--- END\n", "empty FIND block")

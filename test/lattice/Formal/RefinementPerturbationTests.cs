@@ -105,9 +105,10 @@ public sealed partial class RefinementPerturbationTests
     }
 
     /// <summary>
-    /// <c>FILE</c> is one production file, named the way the runner and the
+    /// <c>FILE</c> is one production C# file, named the way the runner and the
     /// gate both resolve it: repository-relative, under <c>src/</c>, forward
-    /// slashes, no relative segments.
+    /// slashes, no relative segments. C# only, because the runner stamps the
+    /// residue marker as a <c>//</c> comment on the file's first line.
     /// </summary>
     [TestCase("test/a/B.cs")]
     [TestCase("src\\a\\B.cs")]
@@ -115,11 +116,12 @@ public sealed partial class RefinementPerturbationTests
     [TestCase("src/./B.cs")]
     [TestCase("src//B.cs")]
     [TestCase("/src/a/B.cs")]
+    [TestCase("src/a/B.json")]
     public void A_file_outside_src_or_not_canonical_is_refused(string file)
     {
         Assert.That(
             () => Parse(Header.Replace("src/a/B.cs", file, StringComparison.Ordinal) + Block),
-            Throws.TypeOf<InvalidOperationException>().With.Message.Contains("FILE must be a repository-relative path under 'src/'"));
+            Throws.TypeOf<InvalidOperationException>().With.Message.Contains("FILE must be a repository-relative '.cs' path under 'src/'"));
     }
 
     /// <summary>

@@ -63,7 +63,7 @@ public sealed record RefinementPerturbation
     /// </summary>
     public required string Row { get; init; }
 
-    /// <summary>The repository-relative, forward-slash path of the one production file edited.</summary>
+    /// <summary>The repository-relative, forward-slash path of the one production C# file edited.</summary>
     public required string File { get; init; }
 
     /// <summary>The cited detectors to run, each <c>Fixture.Method</c>, in declared order.</summary>
@@ -180,10 +180,11 @@ public sealed record RefinementPerturbation
         var file = headers["FILE"];
         if (file.Contains('\\', StringComparison.Ordinal)
             || !file.StartsWith("src/", StringComparison.Ordinal)
+            || !file.EndsWith(".cs", StringComparison.Ordinal)
             || file.Split('/').Any(segment => segment is "" or "." or ".."))
         {
             throw new InvalidOperationException(
-                $"{label} declares 'FILE: {file}'. FILE must be a repository-relative path under 'src/', "
+                $"{label} declares 'FILE: {file}'. FILE must be a repository-relative '.cs' path under 'src/', "
                 + "written with forward slashes and no '.' or '..' segments.");
         }
 
