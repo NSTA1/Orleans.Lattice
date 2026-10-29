@@ -110,6 +110,18 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase("spec/README.md")]
     [TestCase("docs/lattice/api.md")]
     [TestCase("test/lattice/BPlusTree/LatticeGrainTests.cs")]
+    [TestCase("test/lattice/Formal/RefinementDetectorResolverTests.cs")]
+    [TestCase("test/lattice/Formal/TlcCiShardTests.cs")]
+    [TestCase(".github/workflows/coverage.yml")]
+    [TestCase(".github/workflows/videos.yml")]
+    [TestCase("test/lattice/Hygiene/TlcInputClassificationTests.cs")]
+    [TestCase("spec/atomic-commit/perturbations/Any.perturbation")]
+    [TestCase(".github/workflows/test-shards.json")]
+    [TestCase(".github/workflows/plan-test-matrix.py")]
+    [TestCase(".github/workflows/run-test-leg.py")]
+    [TestCase(".github/workflows/tier-scope.py")]
+    [TestCase(".github/workflows/tlc-inputs.json")]
+    [TestCase("test/lattice/Formal/TlcCiShard.cs")]
     public void A_member_pull_request_that_touches_no_TLC_input_skips_the_TLC_shards(string changed)
     {
         var decision = DecideTierScope("pull_request", MemberBase, ["src/lattice.replication/X.cs", changed]);
@@ -155,6 +167,8 @@ public sealed partial class CiMemberPullRequestTieringTests
 
     [TestCase("spec/atomic-commit/AtomicCommit.tla")]
     [TestCase("test/lattice/Formal/TlcModelCheckTests.cs")]
+    [TestCase("test/shared/Orleans.Lattice.Testing/Hygiene/HygieneRepository.cs")]
+    [TestCase(".github/workflows/ci.yml")]
     [TestCase("tools/tlc/build.py")]
     [TestCase("tools/tlc/patch.json")]
     [TestCase("tools/tlc/CheckpointOrderProbe.java")]
@@ -165,14 +179,38 @@ public sealed partial class CiMemberPullRequestTieringTests
         Assert.That(decision["skip_tlc_reason"], Is.Empty, Describe(changed, decision));
     }
 
+    [TestCase("test/lattice/Formal/RefinementDetectorResolverTests.cs")]
+    [TestCase(".github/workflows/coverage.yml;test/lattice/Hygiene/CiMemberPullRequestTieringTests.cs")]
+    [TestCase(".github/workflows/test-shards.json;test/lattice/Formal/TlcCiShard.cs;.github/workflows/tier-scope.py")]
+    public void A_main_pull_request_touching_only_routing_or_neutral_files_skips_exhaustive_TLC_and_keeps_the_smoke_shard(string changedList)
+    {
+        var decision = DecideTierScope("pull_request", "main", changedList.Split(';'));
+
+        Assert.That(decision["skip_tlc_reason"], Does.Contain("smoke shard still runs"), Describe(changedList, decision));
+    }
+
+    [Test]
+    public void The_tier_scope_self_test_passes()
+    {
+        var (exitCode, stdout, stderr) = RunPython([Path.Combine(RepoRoot, TierScopeScript), "--self-test"]);
+
+        Assert.That(exitCode, Is.Zero, stdout + stderr);
+        Assert.That(stderr, Does.Match(@"Ran [1-9]\d* tests").And.Contain("OK"), "the self-test must run tests, not pass vacuously");
+    }
+
     [TestCase("spec/wal/WalMove.tla")]
     [TestCase("spec/wal/WalMove.cfg")]
     [TestCase("spec/wal/WalMove.manifest.json")]
     [TestCase("spec/wal/mutations/AnyMutation.mutation")]
     [TestCase("test/lattice/Formal/TlcModelCheckTests.cs")]
+    [TestCase("test/lattice/Formal/RefinementNote.cs")]
+    [TestCase("test/lattice/Formal/RefinementPropertyCoverageTests.cs")]
     [TestCase("test/lattice/Orleans.Lattice.Tests.csproj")]
+    [TestCase("test/Directory.Build.props")]
+    [TestCase("test/shared/Orleans.Lattice.Testing/Hygiene/HygieneRepository.cs")]
     [TestCase(".github/workflows/ci.yml")]
-    [TestCase(".github/workflows/test-shards.json")]
+    [TestCase(".github/workflows/publish.yml")]
+    [TestCase(".github/actions/tla-toolchain/action.yml")]
     [TestCase("Directory.Packages.props")]
     [TestCase("global.json")]
     [TestCase("tools/tlc/build.py")]

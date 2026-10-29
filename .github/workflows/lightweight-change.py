@@ -7,11 +7,27 @@ import re
 import subprocess
 import unittest
 
+# Workflow files whose change is pinned by .NET tests (TlcCiShardTests,
+# CiMemberPullRequestTieringTests, TlcInputClassificationTests): they route TLC
+# cases or classify TLC verdict inputs, so the lightweight lane, which runs no
+# .NET test, cannot validate them (#5149).
+TLC_ROUTING_FILES = frozenset(
+    ".github/workflows/" + name
+    for name in (
+        "plan-test-matrix.py",
+        "run-test-leg.py",
+        "test-shards.json",
+        "tier-scope.py",
+        "tlc-inputs.json",
+    )
+)
+
 
 def is_lightweight(paths: list[str]) -> bool:
     return bool(paths) and all(
-        path.startswith(("videos/", ".github/workflows/"))
-        or path == ".github/copilot-instructions.md"
+        (path.startswith(("videos/", ".github/workflows/"))
+         or path == ".github/copilot-instructions.md")
+        and path not in TLC_ROUTING_FILES
         for path in paths
     )
 
@@ -23,6 +39,13 @@ class ClassificationTests(unittest.TestCase):
             ".github/workflows/trailer-guard-selftest.py",
             ".github/copilot-instructions.md",
         ]))
+
+    def test_tlc_routing_files_require_full_ci(self):
+        for path in sorted(TLC_ROUTING_FILES):
+            with self.subTest(path=path):
+                self.assertTrue(Path(__file__).with_name(Path(path).name).is_file(), path)
+                self.assertFalse(is_lightweight([path]))
+                self.assertFalse(is_lightweight(["videos/package-lock.json", path]))
 
     def test_source_and_formal_changes_require_full_ci(self):
         for path in ("src/lattice/Tree.cs", "test/lattice/TreeTests.cs",
