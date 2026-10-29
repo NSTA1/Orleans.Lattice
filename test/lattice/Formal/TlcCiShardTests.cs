@@ -237,7 +237,7 @@ public sealed partial class TlcCiShardTests
         {
             Assert.That(Categories(mutation), Is.EqualTo(new[] { TlcCiShard.ReBootstrap }));
             Assert.That(TlcCiShard.AtomicVariantShards.Contains(Categories(variant).Single()), Is.True);
-            Assert.That(Categories(baseCase), Is.Empty);
+            Assert.That(Categories(baseCase), Is.EqualTo(new[] { TlcCiShard.Atomic }), "its base is co-located with its mutations (#5161)");
             Assert.That(ModuleCategories(mutation), Is.EqualTo(new[] { "TlcModule_ReplicationReBootstrap" }));
             Assert.That(ModuleCategories(variant), Is.EqualTo(new[] { "TlcModule_AtomicCommitCrossCluster" }));
             Assert.That(ModuleCategories(baseCase), Is.EqualTo(new[] { "TlcModule_AtomicCommitCrossCluster" }));
