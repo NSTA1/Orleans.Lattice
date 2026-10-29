@@ -720,6 +720,71 @@ jobs:
             --summary-file "$GITHUB_STEP_SUMMARY" \
             --expect-legs "$expect"
 
+  # Receipts WRITTEN, never read (#5165). Every module whose every census case
+  # passed tonight gets a TLC verdict receipt (contract C5) in this run's cache
+  # scope, which on main is the scope every pull request reads, so a module the
+  # night verified is not rerun by the next pull request that touches a verdict
+  # input elsewhere. The legs above never restore one; see the `tlc` job. A
+  # separate job, so a receipt-writing fault never reads as a TLC failure in the
+  # tracking issue. Only this attempt's evidence counts: a receipt must come
+  # from one run.
+  tlc-receipts:
+    needs: [measured, plan, tlc]
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build the TLC test project
+        run: dotnet build test/lattice/Orleans.Lattice.Tests.csproj --configuration Release
+
+      - name: Write the TLC case census
+        run: |
+          set -euo pipefail
+          LATTICE_TLC_CENSUS="$RUNNER_TEMP/tlc-census.json" \
+            dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --nologo \
+              --filter "FullyQualifiedName=Orleans.Lattice.Tests.Formal.TlcCaseCensusTests.The_census_is_written_to_the_file_LATTICE_TLC_CENSUS_names"
+          if [ ! -s "$RUNNER_TEMP/tlc-census.json" ]; then
+            echo "::error::Writing TLC receipts needs the census and it was not written."
+            exit 1
+          fi
+
+      - name: Fingerprint every TLC module
+        run: python3 .github/workflows/tlc-fingerprint.py --output "$RUNNER_TEMP/tlc-fingerprints.json"
+
+      - name: Download TLC leg results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tlc-results-${{ github.run_attempt }}-*
+          path: tlc-results
+          merge-multiple: false
+
+      # No receipt plan: the night ran every module, so every module whose
+      # census cases all passed earns a receipt.
+      - name: Write TLC verdict receipts
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/tlc-receipts.py assemble \
+            --fingerprints "$RUNNER_TEMP/tlc-fingerprints.json" \
+            --census "$RUNNER_TEMP/tlc-census.json" \
+            --evidence-dir tlc-results \
+            --receipts-dir "$RUNNER_TEMP/tlc-receipts" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # The action ci.yml saves receipts with; save only, never lookup.
+      - name: Save TLC verdict receipts
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/tlc-receipts
+        with:
+          operation: save
+          receipts-dir: ${{ runner.temp }}/tlc-receipts
+
   # One open issue tracks a failing night: created on the first red night,
   # commented with the run link on each later one, closed on the first green
   # one. The only job in this workflow that may write issues.

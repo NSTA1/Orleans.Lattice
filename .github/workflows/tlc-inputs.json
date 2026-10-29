@@ -66,6 +66,7 @@
     ".github/workflows/tlc-fingerprint.py",
     ".github/workflows/tlc-receipts.py",
     ".github/actions/tlc-receipts/*",
+    ".github/workflows/formal-receipts.yml",
     "test/lattice/Formal/TlcCaseCensus.cs",
     "test/lattice/Formal/TlcCiShard.cs"
   ],

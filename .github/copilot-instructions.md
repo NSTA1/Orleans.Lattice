@@ -425,8 +425,8 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   prevent GitHub from manufacturing attribution trailers.
 
   PRs confined to `videos/**`, `.github/workflows/**`, and this instruction
-  file use lightweight CI (except the TLC routing files `plan-test-matrix.py`,
-  `run-test-leg.py`, `test-shards.json`, `tier-scope.py` and `tlc-inputs.json`,
+  file use lightweight CI (except the TLC routing files that
+  `lightweight-change.py` lists in `TLC_ROUTING_FILES`,
   which only the .NET suite validates): guard self-tests and video order run, but the
   .NET, formal, and content-fixture suites do not. The required
   `build-and-test` check still reports; any other changed path retains the

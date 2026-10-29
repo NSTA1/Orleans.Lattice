@@ -7,7 +7,8 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// <c>tier-scope.py</c> say nightly coverage runs the exhaustive TLC shards, and these
 /// assertions keep that statement true. The legs run every TLC shard without coverlet,
 /// never restore a verdict receipt, are bounded by a planned per-leg timeout, and only the
-/// tracking job may write issues.
+/// tracking job may write issues. A job of its own writes a receipt for every module the
+/// night verified (#5165), so main's scope stays warm for later pull requests.
 /// </summary>
 public sealed partial class CiCoverageLaneScheduleTests
 {
@@ -67,6 +68,47 @@ public sealed partial class CiCoverageLaneScheduleTests
 
             Assert.That(Job(yaml, "tlc"), Does.Not.Contain("actions/cache"),
                 "the TLC legs must not restore any cache; see the receipt rule above");
+
+            Assert.That(yaml, Does.Not.Contain("tlc-receipts.py candidates")
+                    .And.Not.Contain("tlc-receipts.py plan")
+                    .And.Not.Contain("operation: lookup"),
+                "nothing in coverage.yml may list, restore or plan from receipts: the lane writes "
+                + "them (#5165) and never reads one");
+        });
+    }
+
+    /// <summary>
+    /// The lane writes a receipt for every module whose every census case passed tonight,
+    /// from this attempt's evidence alone, in a job of its own (#5165). On main that is the
+    /// scope every pull request reads, so a module the night verified is not rerun.
+    /// </summary>
+    [Test]
+    public void The_nightly_lane_saves_a_receipt_for_every_module_it_verifies()
+    {
+        var receipts = Job(Read(), "tlc-receipts");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(receipts, Does.Match(@"(?m)^    needs:\s*\[\s*measured,\s*plan,\s*tlc\s*\]\s*$"),
+                "receipts must be written only after the TLC legs");
+
+            Assert.That(receipts, Does.Contain("!cancelled()").And.Contain("needs.measured.outputs.measure != 'false'"),
+                "the receipt job must run after a partly red night, so the modules that passed keep "
+                + "their receipts, and skip with the legs on a quiet night");
+
+            Assert.That(receipts, Does.Contain("pattern: tlc-results-${{ github.run_attempt }}-*"),
+                "a receipt must come from one attempt's evidence, never a mix of attempts");
+
+            Assert.That(receipts, Does.Contain("tlc-receipts.py assemble").And.Not.Contain("--receipt-plan"),
+                "the night runs every module, so assemble must count every module as run rather than "
+                + "read a plan of cached ones");
+
+            Assert.That(receipts, Does.Contain("uses: ./.github/actions/tlc-receipts")
+                    .And.Contain("operation: save"),
+                "the receipts must be saved through the shared C5 action");
+
+            Assert.That(receipts, Does.Not.Contain("tlc-tracking").And.Not.Match(@"(?m)^\s+issues:"),
+                "a receipt-writing fault must not read as a TLC failure in the tracking issue");
         });
     }
 
