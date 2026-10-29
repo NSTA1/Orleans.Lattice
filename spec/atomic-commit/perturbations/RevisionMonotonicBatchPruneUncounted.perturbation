@@ -1,0 +1,14 @@
+# The inline prune in ForgetAsync stops accounting the tombstones it retires
+# into the retirement epoch, so a batch prune lowers the composite revision.
+MODULE: AtomicCommit
+ROW: RevisionMonotonic
+FILE: src/lattice/BPlusTree/Grains/TxRegistryGrain.cs
+DETECTORS: TxRegistryGrainTests.GetDecisionsRevisionAsync_never_decreases_across_a_batch_prune
+SUMMARY: a batch prune of expired tombstones is not compensated, so the revision token falls
+
+--- FIND
+        var retired = pruned.Tombstones?.Count ?? 0;
+        state.State.TombstoneRetirementEpoch += retired;
+--- REPLACE
+        var retired = pruned.Tombstones?.Count ?? 0;
+--- END

@@ -1,0 +1,17 @@
+# The shard root's chain fan-out tells only the first leaf, so every other
+# leaf of the shard keeps its pending bucket. BroadcastStep(t,k) delivers the
+# terminal to every leaf, one at a time.
+MODULE: AtomicCommit
+ROW: BroadcastStep(t,k)
+FILE: src/lattice/BPlusTree/Grains/ShardRootGrain.TxTerminal.cs
+DETECTORS: ShardRootGrainTxTerminalTests.AppendTxTerminalAsync_fans_out_terminal_to_every_leaf
+SUMMARY: the per-leaf terminal fan-out reaches only the first leaf of the shard's chain
+
+--- FIND
+            var chainTasks = new Task[chain.Count];
+            for (var i = 0; i < chain.Count; i++)
+                chainTasks[i] = TimedApplyTxTerminalAsync(chain[i], transactionId, committed, null);
+--- REPLACE
+            var chainTasks = new Task[1];
+            chainTasks[0] = TimedApplyTxTerminalAsync(chain[0], transactionId, committed, null);
+--- END

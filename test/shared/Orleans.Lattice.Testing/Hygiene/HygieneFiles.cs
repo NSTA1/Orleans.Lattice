@@ -41,7 +41,7 @@ public static class HygieneFiles
     {
         ".cs", ".java", ".md", ".csproj", ".razor", ".ps1", ".psm1", ".json", ".yml", ".yaml",
         ".srt", ".vtt", ".jsonl", ".mjs", ".cjs", ".nvmrc", ".npmrc",
-        ".css", ".env", ".bicep", ".bicepparam", ".mutation", ".sql", ".py",
+        ".css", ".env", ".bicep", ".bicepparam", ".mutation", ".perturbation", ".sql", ".py",
         ".proto", ".gitignore", ".dockerignore", ".gitattributes", ".gitmodules",
         ".props", ".targets", ".runsettings", ".js", ".ts", ".svg", ".sh", ".slnx", ".sln",
         ".xaml", ".txt", ".example", ".tsv", ".csv", ".service", ".html", ".tla",

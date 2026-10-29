@@ -1,0 +1,24 @@
+# The commit tail of RunSagaAsync broadcasts the terminals before recording the
+# decision, reopening the window in which a leaf has flipped while the
+# registry still reports the saga in flight.
+MODULE: AtomicCommit
+ROW: LinearizedTerminals
+FILE: src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs
+DETECTORS: AtomicWriteGrainTests.RunSagaAsync_commit_records_the_decision_before_broadcasting_terminals
+SUMMARY: the commit path broadcasts its terminals before it records the commit decision
+
+--- FIND
+                await RecordTerminalDecisionAsync(committed: commitCommitted);
+--- REPLACE
+                await BroadcastTerminalsAsync(committed: commitCommitted); // PERTURBED: broadcast first
+--- END
+
+# The second edit's anchor ends in a newline the first edit's comment does not
+# leave, so it names the original broadcast only.
+--- FIND
+                await BroadcastTerminalsAsync(committed: commitCommitted);
+            }
+--- REPLACE
+                await RecordTerminalDecisionAsync(committed: commitCommitted);
+            }
+--- END

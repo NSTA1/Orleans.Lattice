@@ -1,0 +1,18 @@
+# The split's retroactive sweep no longer replays the source's prepared
+# mutations onto the destination. ShadowForwardOrphan(t,k) abstracts that
+# replay (and the hot-path forward); without it the destination never sees
+# the prepare at all.
+MODULE: AtomicCommit
+ROW: ShadowForwardOrphan(t,k)
+FILE: src/lattice/BPlusTree/Grains/TreeShardSplitGrain.cs
+DETECTORS: TreeShardSplitGrainTests.RetroactiveSweep_replays_prepare_when_saga_in_flight
+SUMMARY: the split's retroactive sweep skips replaying the source's prepared mutations onto the destination
+
+--- FIND
+                    await PreparedBucketSweep.RunAsync(
+                        grainFactory, TreeId, attemptLeafId.Value, target, sortedSlots, virtualShardCount,
+                        progress, carryOriginalStamps: true);
+                    break;
+--- REPLACE
+                    break;
+--- END

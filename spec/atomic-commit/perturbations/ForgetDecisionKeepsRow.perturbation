@@ -1,0 +1,14 @@
+# The zero-retention cleanup reports the row dropped without removing it, so
+# the registry keeps answering for a saga whose cleanup has run.
+MODULE: AtomicCommit
+ROW: ForgetDecision(t)
+FILE: src/lattice/BPlusTree/Grains/TxRegistryGrain.cs
+DETECTORS: TxRegistryGrainTests.ForgetAsync_drops_recorded_decision
+SUMMARY: the zero-retention cleanup never removes the decision row it reports as dropped
+
+--- FIND
+                state.State.Decisions.Remove(txid);
+                droppedDecision = true;
+--- REPLACE
+                droppedDecision = true;
+--- END
