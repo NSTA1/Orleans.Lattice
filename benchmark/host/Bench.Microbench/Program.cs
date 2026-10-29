@@ -75,6 +75,7 @@ if (!string.IsNullOrWhiteSpace(filterRaw))
 var config = (IConfig)new HarnessConfig(resultsPath);
 
 // The readfusion suite models WAL activation, resume and structure read dispatch.
+// The terminalcalls suite isolates chain reuse, clock fusion and no-writer clock elision.
 // The maintenanceelisions suite selects the reshard, consolidation and options
 // lanes of autonomicprobes.
 // The coordinatorcleanup suite selects shadow cleanup, bootstrap registration
@@ -90,6 +91,12 @@ var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
+}
+
+if (string.Equals(suite, "terminalcalls", StringComparison.OrdinalIgnoreCase))
+{
+    var terminalSummary = BenchmarkRunner.Run<TerminalCallReductionBenchmarks>(config);
+    return terminalSummary.HasCriticalValidationErrors || terminalSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "readfusion", StringComparison.OrdinalIgnoreCase))
