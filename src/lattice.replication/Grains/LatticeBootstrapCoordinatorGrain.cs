@@ -1857,8 +1857,12 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     private async Task EnsureTreeRegisteredAsync(string treeName)
     {
         var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
-        if (!await registry.ExistsAsync(physicalTreeId).ConfigureAwait(true))
+        var entry = await registry.GetEntryAsync(treeName).ConfigureAwait(true);
+        var physicalTreeId = entry?.PhysicalTreeId ?? treeName;
+        // The entry proves existence only for this id, not for an alias target.
+        if (entry is null
+            || (!string.Equals(physicalTreeId, treeName, StringComparison.Ordinal)
+                && !await registry.ExistsAsync(physicalTreeId).ConfigureAwait(true)))
         {
             await registry.RegisterAsync(physicalTreeId).ConfigureAwait(true);
         }

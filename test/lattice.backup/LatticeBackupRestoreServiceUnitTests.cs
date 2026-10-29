@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Backup.Tests;
 ///   <see cref="ArgumentOutOfRangeException"/> from BackupScopeRange.Resolve.
 /// </summary>
 [TestFixture]
-public sealed class LatticeBackupRestoreServiceUnitTests
+public sealed partial class LatticeBackupRestoreServiceUnitTests
 {
     private ServiceProvider _services = null!;
     private Serializer _serializer = null!;

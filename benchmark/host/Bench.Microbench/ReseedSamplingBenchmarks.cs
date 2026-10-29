@@ -5,14 +5,15 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 
 /// <summary>
 /// Extends the WalPollingCallBenchmarks dispatch model for reseed probes and
-/// tenant sampling. Yield prices scheduling; Delay1Ms simulates a remote hop
+/// tenant sampling, shadow cleanup, bootstrap registration and confirmation heads.
+/// Yield prices scheduling; Delay1Ms simulates a remote hop
 /// (subject to the Windows timer floor), not real Orleans throughput.
-/// Run with --suite reseedsampling.
+/// Run with --suite reseedsampling, or --suite coordinatorcleanup for the latter three.
 /// </summary>
 [MemoryDiagnoser]
 public class ReseedSamplingBenchmarks
 {
-    /// <summary>The three optimized production call shapes.</summary>
+    /// <summary>The optimized production call shapes.</summary>
     public enum Site
     {
         /// <summary>One undecided transaction: recorded status plus participants becomes one probe.</summary>
@@ -21,6 +22,12 @@ public class ReseedSamplingBenchmarks
         RetainedHeads,
         /// <summary>Eight warm usage reports, applied in input order after settling.</summary>
         TenantUsage,
+        /// <summary>Restore-shadow existence and provenance from one registry entry.</summary>
+        ShadowCleanup,
+        /// <summary>Existing unaliased bootstrap tree registration from one entry.</summary>
+        BootstrapRegistration,
+        /// <summary>Post-source-observation head vector, in partition order.</summary>
+        ConfirmationHeads,
     }
 
     /// <summary>The call site measured.</summary>
@@ -42,8 +49,8 @@ public class ReseedSamplingBenchmarks
         var beforeCalls = _calls;
         _calls = 0;
         var after = AfterAsync().GetAwaiter().GetResult();
-        if (before != after || beforeCalls != (Path == Site.PrepareClamp ? 2 : 8)
-            || _calls != (Path == Site.PrepareClamp ? 1 : 8))
+        if (before != after || beforeCalls != (IsElision ? 2 : 8)
+            || _calls != (IsElision ? 1 : 8))
             throw new InvalidOperationException("Reseed/sampling result or dispatch budget differs.");
     }
 
@@ -51,7 +58,7 @@ public class ReseedSamplingBenchmarks
     [Benchmark(Baseline = true)]
     public async Task<int> BeforeAsync()
     {
-        if (Path == Site.PrepareClamp)
+        if (IsElision)
         {
             await DispatchAsync(0);
             return await DispatchAsync(1);
@@ -66,7 +73,7 @@ public class ReseedSamplingBenchmarks
     [Benchmark]
     public async Task<int> AfterAsync()
     {
-        if (Path == Site.PrepareClamp) return await DispatchAsync(1);
+        if (IsElision) return await DispatchAsync(1);
         var results = await BoundedFanOut.RunAsync(8, BoundedFanOut.DefaultWidth, DispatchAsync);
         var sum = 0;
         foreach (var result in results) sum += result;
@@ -82,4 +89,6 @@ public class ReseedSamplingBenchmarks
             await Task.Delay(1);
         return slot;
     }
+
+    private bool IsElision => Path is Site.PrepareClamp or Site.ShadowCleanup or Site.BootstrapRegistration;
 }

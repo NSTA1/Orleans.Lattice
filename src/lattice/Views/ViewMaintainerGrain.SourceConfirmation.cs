@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Views;
@@ -215,12 +216,17 @@ internal sealed partial class ViewMaintainerGrain
     private async Task<long[]> SampleHeadOffsetsAsync(string walTreeId, int partitions, CancellationToken cancellationToken)
     {
         var count = partitions > 0 ? partitions : 1;
-        var heads = new long[count];
-        for (var partition = 0; partition < count; partition++)
+        if (count == 1)
         {
-            heads[partition] = await commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken);
+            return [await commitLogReader.GetHeadOffsetAsync(walTreeId, 0, cancellationToken)];
         }
 
-        return heads;
+        // Sample only after the source comparison, and retain partition order:
+        // the complete vector is the replay fence, not a simultaneous WAL cut.
+        return await BoundedFanOut.RunAsync(
+            count,
+            BoundedFanOut.DefaultWidth,
+            partition => commitLogReader.GetHeadOffsetAsync(walTreeId, partition, cancellationToken),
+            cancellationToken);
     }
 }
