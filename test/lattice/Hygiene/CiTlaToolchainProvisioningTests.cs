@@ -8,7 +8,9 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// <summary>
 /// The TLA+ toolchain provisioning gate: every workflow lane that runs .NET
 /// tests must either provision the toolchain <c>TlcModelCheckTests</c> needs,
-/// or say in the file itself why it does not.
+/// or say in the file itself why it does not; and every lane that provisions
+/// it must do so through the one composite action, reading every pin from
+/// <c>tools/tlc/toolchain.json</c>.
 /// <para>
 /// <b>What went wrong.</b> <c>TlcModelCheckTests</c> is tagged
 /// <c>[Category("Tlc")]</c>, and the deterministic tier is the complement of
@@ -44,17 +46,22 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// about a value it cannot see.
 /// </para>
 /// <para>
-/// The pinned release and digest are read out of the canonical lane rather than
-/// duplicated here, so this gate cannot become a third copy that drifts. What
-/// it enforces is that every provisioning lane agrees with that one, and that
-/// each verifies the download - a jar on the classpath of a verification gate
-/// is the one dependency where a silent substitution would be least visible.
+/// <b>Why one action and one pin file (#5151).</b> The provisioning used to be
+/// three copied step sequences, each inlining the jar URL, its digest and the
+/// JDK, held together only by this gate asserting that the copies agreed. A
+/// toolchain change was therefore a workflow-only change, which can take the
+/// lightweight lane and run no TLC at all. The pins now live in
+/// <c>tools/tlc/toolchain.json</c> (contract C3 of #5148), the steps live in
+/// <c>.github/actions/tla-toolchain</c>, and this gate refuses any workflow
+/// that inlines a pin or provisions some other way, so there is no second copy
+/// left to drift. A jar on the classpath of a verification gate is the one
+/// dependency where a silent substitution would be least visible.
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class CiTlaToolchainProvisioningTests
+public sealed partial class CiTlaToolchainProvisioningTests
 {
-    /// <summary>The lane whose pinned release and digest every other lane must match.</summary>
+    /// <summary>The workflow the negative controls inject inlined pins into.</summary>
     private const string CanonicalWorkflow = "ci.yml";
 
     /// <summary>
@@ -66,6 +73,14 @@ public sealed class CiTlaToolchainProvisioningTests
     [
         "ci.yml",
         "coverage.yml",
+        "publish.yml",
+    ];
+
+    /// <summary>Lanes that provision the toolchain today; each must use the action.</summary>
+    private static readonly string[] ExpectedProvisioningWorkflows =
+    [
+        "ci-serial-old.yml",
+        "ci.yml",
         "publish.yml",
     ];
 
@@ -83,13 +98,18 @@ public sealed class CiTlaToolchainProvisioningTests
         @"dotnet\s+test\b|run-test-leg\.py",
         RegexOptions.Compiled);
 
-    private static readonly Regex JarFetch = new(
-        @"tlaplus/releases/download/(?<version>v[0-9][0-9A-Za-z.\-]*)/tla2tools\.jar",
+    /// <summary>A step that provisions the toolchain through the composite action.</summary>
+    private static readonly Regex ActionUse = new(
+        @"^\s*(?:-\s+)?uses:\s*\./\.github/actions/tla-toolchain\s*$",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    private static readonly Regex JarReleaseUrl = new(
+        @"tlaplus/tlaplus/releases/download/\S*tla2tools\.jar",
         RegexOptions.Compiled);
 
-    private static readonly Regex JarDigest = new(
-        @"(?<digest>\b[0-9a-f]{64}\b)\s+tools/tla2tools\.jar",
-        RegexOptions.Compiled);
+    private static readonly Regex Digest = new(@"\b[0-9A-Fa-f]{64}\b", RegexOptions.Compiled);
+
+    private static readonly Regex SetupJava = new(@"uses:\s*actions/setup-java@", RegexOptions.Compiled);
 
     [Test]
     public void Every_lane_that_runs_tests_provisions_the_tla_toolchain_or_records_why_it_need_not()
@@ -102,6 +122,11 @@ public sealed class CiTlaToolchainProvisioningTests
         foreach (var workflow in Workflows())
         {
             var text = File.ReadAllText(workflow.Path);
+            if (ActionUse.IsMatch(text))
+            {
+                provisioning.Add(workflow.Name);
+            }
+
             if (!TestRunner.IsMatch(text))
             {
                 continue;
@@ -109,9 +134,9 @@ public sealed class CiTlaToolchainProvisioningTests
 
             running.Add(workflow.Name);
 
-            if (JarFetch.IsMatch(text))
+            if (ActionUse.IsMatch(text))
             {
-                provisioning.Add(workflow.Name);
+                continue;
             }
             else if (OptOutMarker.IsMatch(text))
             {
@@ -138,8 +163,9 @@ public sealed class CiTlaToolchainProvisioningTests
             // shown it can tell a provisioned lane from an exempt one.
             Assert.That(
                 provisioning,
-                Is.Not.Empty,
-                "no workflow provisions the TLA+ toolchain at all; the fetch scan is broken");
+                Is.SupersetOf(ExpectedProvisioningWorkflows),
+                "these lanes provisioned the TLA+ toolchain and no longer reference "
+                    + "./.github/actions/tla-toolchain: the action scan or the workflows are broken");
 
             Assert.That(
                 optedOut,
@@ -155,109 +181,98 @@ public sealed class CiTlaToolchainProvisioningTests
                     + "need not: " + string.Join(", ", silent) + ". The deterministic tier is the complement "
                     + "of Chaos and Coyote, so an ordinary filter SELECTS the Tlc category without naming it, "
                     + "and TlcModelCheckTests fails closed under GITHUB_ACTIONS when the toolchain is absent. "
-                    + "Either copy the 'Setup Java' and 'Fetch TLA+ tools' steps from " + CanonicalWorkflow
-                    + ", or add a '# tla-toolchain: not-required - <reason>' comment stating why this lane "
-                    + "cannot select that category. See spec/README.md.");
+                    + "Either add a 'uses: ./.github/actions/tla-toolchain' step after checkout, or add a "
+                    + "'# tla-toolchain: not-required - <reason>' comment stating why this lane cannot select "
+                    + "that category. See spec/README.md.");
         });
     }
 
     [Test]
-    public void Every_provisioning_lane_pins_the_same_release_and_verifies_its_digest()
+    public void No_workflow_inlines_a_toolchain_pin_or_provisions_outside_the_action()
     {
-        var versions = new Dictionary<string, string>(StringComparer.Ordinal);
-        var digests = new Dictionary<string, string>(StringComparer.Ordinal);
-        var unverified = new List<string>();
+        var pins = LoadToolchainPins();
+        var violations = Workflows()
+            .SelectMany(workflow => InlinedToolchain(File.ReadAllText(workflow.Path), pins)
+                .Select(violation => workflow.Name + ": " + violation))
+            .ToArray();
 
-        foreach (var workflow in Workflows())
-        {
-            var text = File.ReadAllText(workflow.Path);
-            var fetch = JarFetch.Match(text);
-            if (!fetch.Success)
-            {
-                continue;
-            }
+        Assert.That(
+            violations,
+            Is.Empty,
+            "every TLA+ toolchain pin comes from " + ToolchainFile + " and every lane provisions through "
+                + "./.github/actions/tla-toolchain. A pin copied into a workflow is a second source that can "
+                + "drift from the reviewed one, and a workflow-only change can take the lightweight lane and "
+                + "run no TLC. Violations: " + string.Join("; ", violations));
+    }
 
-            versions[workflow.Name] = fetch.Groups["version"].Value;
-
-            var digest = JarDigest.Match(text);
-            if (!digest.Success || !text.Contains("sha256sum --check", StringComparison.Ordinal))
-            {
-                unverified.Add(workflow.Name);
-                continue;
-            }
-
-            digests[workflow.Name] = digest.Groups["digest"].Value;
-        }
+    [TestCase("a different jar digest", "echo \"{0}  tools/tla2tools.jar\" | sha256sum --check --strict")]
+    [TestCase("the pinned jar digest", "echo \"{1}  tools/tla2tools.jar\" | sha256sum --check --strict")]
+    [TestCase("a jar release URL", "curl -o tools/tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar")]
+    [TestCase("a Java setup", "uses: actions/setup-java@v5")]
+    [TestCase("an overlay build", "run: python3 tools/tlc/build.py --java-home \"$JAVA_HOME\" --jar tools/tla2tools.jar --output tools/tlc/build")]
+    public void A_workflow_that_inlines_a_toolchain_pin_is_refused(string kind, string step)
+    {
+        var pins = LoadToolchainPins();
+        var workflow = File.ReadAllText(Workflows().Single(workflow => workflow.Name == CanonicalWorkflow).Path);
+        var different = new string(pins.JarSha256.Select(c => c == '0' ? '1' : '0').ToArray());
+        var injected = workflow + "\n      - name: Inlined " + kind + "\n        "
+            + string.Format(System.Globalization.CultureInfo.InvariantCulture, step, different, pins.JarSha256) + "\n";
 
         Assert.Multiple(() =>
         {
-            Assert.That(
-                versions.Keys,
-                Does.Contain(CanonicalWorkflow),
-                CanonicalWorkflow + " is the lane this gate reads the pinned release from and it no longer "
-                    + "fetches the jar; the scan or the workflow is broken");
-
-            Assert.That(
-                unverified,
-                Is.Empty,
-                "these workflows download tla2tools.jar without checking its sha256: "
-                    + string.Join(", ", unverified)
-                    + ". A release asset can be replaced in place, and this jar is the classpath of a "
-                    + "verification gate. Pipe the pinned digest through 'sha256sum --check --strict'.");
-
-            Assert.That(
-                versions.Values.Distinct(StringComparer.Ordinal).Count(),
-                Is.EqualTo(1),
-                "the lanes pin different TLA+ releases, so they are no longer checking the same model with "
-                    + "the same tool: " + Describe(versions)
-                    + ". A half-landed bump is exactly what this assertion exists to catch.");
-
-            Assert.That(
-                digests.Values.Distinct(StringComparer.Ordinal).Count(),
-                Is.EqualTo(1),
-                "the lanes pin different sha256 digests for tla2tools.jar: " + Describe(digests)
-                    + ". One of them is verifying an artefact the others would reject.");
+            Assert.That(InlinedToolchain(workflow, pins), Is.Empty, "the positive control must be clean");
+            Assert.That(InlinedToolchain(injected, pins), Is.Not.Empty, kind + " must be reported");
         });
     }
 
-    private static string Describe(Dictionary<string, string> byWorkflow) =>
-        string.Join(", ", byWorkflow.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => pair.Key + " = " + pair.Value));
-
-    [Test]
-    public void Every_provisioning_lane_builds_and_regression_checks_the_checkpoint_overlay()
+    /// <summary>
+    /// Everything a workflow must not do itself: name a jar release, carry a jar
+    /// digest, set up Java, or build the checkpoint overlay. Each belongs to the
+    /// action, which reads the pins from <c>toolchain.json</c>.
+    /// </summary>
+    private static List<string> InlinedToolchain(string text, ToolchainPins pins)
     {
-        var workflows = Workflows()
-            .Select(workflow => (workflow.Name, Text: File.ReadAllText(workflow.Path)))
-            .Where(workflow => JarFetch.IsMatch(workflow.Text))
-            .ToArray();
-        Assert.That(workflows.Select(workflow => workflow.Name),
-            Is.SupersetOf(new[] { "ci.yml", "publish.yml", "ci-serial-old.yml" }));
-        foreach (var workflow in workflows)
-            Assert.That(HasOverlayBuild(workflow.Text), Is.True,
-                workflow.Name + " must build the verified overlay after checking the original jar.");
+        var violations = new List<string>();
+        if (JarReleaseUrl.IsMatch(text))
+        {
+            violations.Add("inlines a tla2tools.jar release URL");
+        }
+
+        if (text.Contains(pins.JarSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            violations.Add("inlines the pinned tla2tools.jar digest");
+        }
+
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.Contains("tla2tools", StringComparison.Ordinal) && Digest.IsMatch(line))
+            {
+                violations.Add("inlines a tla2tools.jar digest: " + line.Trim());
+            }
+        }
+
+        if (SetupJava.IsMatch(text))
+        {
+            violations.Add("sets up Java itself instead of through the action");
+        }
+
+        if (text.Contains("tools/tlc/build.py", StringComparison.Ordinal))
+        {
+            violations.Add("builds the checkpoint overlay itself instead of through the action");
+        }
+
+        return violations;
     }
 
-    [TestCase("--java-home \"$JAVA_HOME\"")]
-    [TestCase("--jar tools/tla2tools.jar")]
-    [TestCase("--output tools/tlc/build")]
-    [TestCase("python3 tools/tlc/build.py")]
-    public void Overlay_provisioning_guard_rejects_missing_or_misdirected_build(string removed)
-    {
-        var workflow = File.ReadAllText(Workflows().Single(workflow => workflow.Name == CanonicalWorkflow).Path);
-        Assert.That(HasOverlayBuild(workflow), Is.True, "the positive control must be wired");
-        Assert.That(HasOverlayBuild(workflow.Replace(removed, "", StringComparison.Ordinal)), Is.False);
-    }
-
     [Test]
-    public void Checkpoint_inputs_preserve_reviewed_byte_hashes_and_the_workflow_jar_pin()
+    public void Checkpoint_inputs_preserve_reviewed_byte_hashes_and_the_toolchain_jar_pin()
     {
         var directory = Path.Combine(HygieneRepository.FindRepoRoot(), "tools", "tlc");
         using var metadata = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory, "patch.json")));
         var pin = metadata.RootElement;
-        var canonical = File.ReadAllText(Workflows().Single(workflow => workflow.Name == CanonicalWorkflow).Path);
         Assert.That(pin.GetProperty("originalJarSha256").GetString(),
-            Is.EqualTo(JarDigest.Match(canonical).Groups["digest"].Value.ToUpperInvariant()));
+            Is.EqualTo(LoadToolchainPins().JarSha256.ToUpperInvariant()),
+            "the overlay was reviewed against the jar " + ToolchainFile + " pins");
         var fixtures = pin.GetProperty("fixtureSha256").EnumerateObject().ToArray();
         Assert.That(fixtures.Length, Is.EqualTo(4), "probe and frozen tooling-only model/configurations");
         foreach (var fixture in fixtures)
@@ -268,15 +283,6 @@ public sealed class CiTlaToolchainProvisioningTests
         }
         Assert.That(File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), ".gitattributes")),
             Does.Contain("tools/tlc/** text eol=lf"));
-    }
-
-    private static bool HasOverlayBuild(string text)
-    {
-        const string command = "run: python3 tools/tlc/build.py --java-home \"$JAVA_HOME\" --jar tools/tla2tools.jar --output tools/tlc/build";
-        var build = text.IndexOf(command, StringComparison.Ordinal);
-        var verified = text.IndexOf("sha256sum --check --strict", StringComparison.Ordinal);
-        return verified >= 0 && build > verified
-            && text.IndexOf(command, build + command.Length, StringComparison.Ordinal) < 0;
     }
 
     private sealed record Workflow(string Name, string Path);

@@ -294,9 +294,12 @@ case, for example `--filter "FullyQualifiedName~TerminationNoFairness"`.
 pieces itself. It reads `tla2tools.jar` from the `TLA_TOOLS_JAR` environment
 variable (an absolute path), falling back to `tools/tla2tools.jar` at the
 repository root (a gitignored path), and it runs `java` from `JAVA_HOME/bin`,
-falling back to the first `java` on `PATH`. The CI workflows download the pinned
-tla2tools v1.7.4 release to `tools/tla2tools.jar` and verify its SHA-256 digest
-before the tests run. They then build and regression-check the overlay once per job.
+falling back to the first `java` on `PATH`. The CI workflows provision it through
+the `.github/actions/tla-toolchain` composite action, which reads every pin from
+`tools/tlc/toolchain.json`: it downloads the pinned release to
+`tools/tla2tools.jar` and verifies its SHA-256 digest before the tests run, then
+restores the overlay from the Actions cache, or builds and regression-checks it
+on a miss, and verifies its receipt either way.
 
 The fixture validates the pinned jar and all four overlay class hashes and puts
 `tools/tlc/build/compiled` before the jar on every TLC invocation. A missing
@@ -313,7 +316,7 @@ pull requests keep a base-model smoke check: the `formal-tlc-smoke` shard runs
 one base specification in the deterministic tier. Exhaustive shards check every
 module, variant and mutation, but routine pull requests into `main` or an
 integration branch run them only when the diff touches a TLC verdict input.
-`.github/workflows/tlc-inputs.json` sorts every file that can affect a TLC run into three classes: verdict inputs (`.tla`, `.cfg`, manifest and mutation files under `spec/`, the Formal harness that discovers modules, builds cases and cfgs, and launches and judges TLC, the TLA+ toolchain including the workflows that still pin it, and build inputs); routing (which leg runs which existing case: `test-shards.json`, the planner, `tier-scope.py`, `TlcCiShard.cs`), where a routing-only change runs the smoke shard and a toolchain-free partition check proves every TLC case is still selected by exactly one TLC shard; and neutral (files no TLC run reads). A missing or empty changed-file list fails toward running the
+`.github/workflows/tlc-inputs.json` sorts every file that can affect a TLC run into three classes: verdict inputs (`.tla`, `.cfg`, manifest and mutation files under `spec/`, the Formal harness that discovers modules, builds cases and cfgs, and launches and judges TLC, the TLA+ toolchain (`tools/tlc/`, whose `toolchain.json` holds every pin, and the `tla-toolchain` action), and build inputs); routing (which leg runs which existing case: `test-shards.json`, the planner, `tier-scope.py`, `TlcCiShard.cs`, and the workflows that provision the toolchain through that action and launch legs), where a routing-only change runs the smoke shard and a toolchain-free partition check proves every TLC case is still selected by exactly one TLC shard; and neutral (files no TLC run reads). A missing or empty changed-file list fails toward running the
 exhaustive checks. Release-line pull requests and pushes, integration-branch
 pushes, and nightly coverage run the exhaustive shards. `Publish` verifies that
 the exact tag SHA has a successful release-line `build-and-test` run before it

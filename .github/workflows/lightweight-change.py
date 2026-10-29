@@ -57,6 +57,17 @@ class ClassificationTests(unittest.TestCase):
     def test_empty_diff_is_not_lightweight(self):
         self.assertFalse(is_lightweight([]))
 
+    def test_tla_toolchain_changes_require_full_ci(self):
+        # The toolchain's pins and its provisioning action live outside
+        # .github/workflows/ (#5151), so a toolchain change runs TLC.
+        root = Path(__file__).resolve().parents[2]
+        for path in (".github/actions/tla-toolchain/action.yml",
+                     "tools/tlc/toolchain.json", "tools/tlc/toolchain.py"):
+            with self.subTest(path=path):
+                self.assertTrue((root / path).is_file(), path)
+                self.assertFalse(is_lightweight([path]))
+                self.assertFalse(is_lightweight([".github/workflows/ci.yml", path]))
+
     def test_workflow_wires_both_classifiers_and_gates_expensive_steps(self):
         workflow = Path(__file__).with_name("ci.yml").read_text(encoding="utf-8")
         self.assertIn("lightweight: ${{ steps.lightweight.outputs.only }}", workflow)

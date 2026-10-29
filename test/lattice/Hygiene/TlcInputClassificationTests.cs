@@ -60,9 +60,10 @@ public sealed class TlcInputClassificationTests
 
     /// <summary>
     /// What a routing file must not contain: a TLA+ toolchain pin, whose change
-    /// alters every verdict, or a TLC case of its own. The workflows that still
-    /// pin the toolchain stay verdict inputs until the pins move into the
-    /// toolchain action (#5151).
+    /// alters every verdict, or a TLC case of its own. Every pin lives in
+    /// tools/tlc/toolchain.json and is applied by the toolchain action (#5151),
+    /// both verdict inputs, which is what lets the workflows that call the
+    /// action be routing.
     /// </summary>
     private static readonly (Regex Pattern, string Reason)[] RoutingProhibitions =
     [
@@ -87,6 +88,8 @@ public sealed class TlcInputClassificationTests
         public TlcInputs WithNeutral(params string[] extra) => this with { Neutral = [.. Neutral, .. extra] };
 
         public TlcInputs WithRouting(params string[] extra) => this with { Routing = [.. Routing, .. extra] };
+
+        public TlcInputs WithVerdictInputs(params string[] extra) => this with { VerdictInputs = [.. VerdictInputs, .. extra] };
     }
 
     private static string RepoRoot => HygieneRepository.FindRepoRoot();
@@ -176,8 +179,8 @@ public sealed class TlcInputClassificationTests
     [TestCase("test/lattice/Formal/RefinementNote.cs")]
     [TestCase("test/lattice/Formal/RefinementPropertyCoverageTests.cs")]
     [TestCase("test/shared/Orleans.Lattice.Testing/Hygiene/HygieneRepository.cs")]
-    [TestCase(".github/workflows/ci.yml")]
-    [TestCase(".github/workflows/publish.yml")]
+    [TestCase(".github/actions/tla-toolchain/action.yml")]
+    [TestCase("tools/tlc/toolchain.json")]
     [TestCase("spec/atomic-commit/AtomicCommit.tla")]
     public void A_file_that_can_change_a_verdict_is_a_verdict_input(string path)
     {
@@ -189,6 +192,9 @@ public sealed class TlcInputClassificationTests
     [TestCase(".github/workflows/plan-test-matrix.py")]
     [TestCase(".github/workflows/tier-scope.py")]
     [TestCase(".github/workflows/tlc-inputs.json")]
+    [TestCase(".github/workflows/ci.yml")]
+    [TestCase(".github/workflows/publish.yml")]
+    [TestCase(".github/workflows/ci-serial-old.yml")]
     public void A_routing_file_is_routing_and_not_a_verdict_input(string path)
     {
         var inputs = Load();
@@ -300,10 +306,10 @@ public sealed class TlcInputClassificationTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(ClassificationProblems(ScopedTrackedFiles(), Load().WithNeutral(".github/workflows/ci.yml")),
-                Has.Some.Contains(".github/workflows/ci.yml"));
-            Assert.That(ClassificationProblems(ScopedTrackedFiles(), Load().WithRouting(".github/workflows/ci.yml")),
-                Has.Some.Contains(".github/workflows/ci.yml"));
+            Assert.That(ClassificationProblems(ScopedTrackedFiles(), Load().WithVerdictInputs(".github/workflows/ci.yml")),
+                Has.Some.Contains(".github/workflows/ci.yml is named both as a verdict input and as routing"));
+            Assert.That(ClassificationProblems(ScopedTrackedFiles(), Load().WithVerdictInputs(".github/workflows/coverage.yml")),
+                Has.Some.Contains(".github/workflows/coverage.yml is named both as a verdict input and as neutral"));
         });
     }
 

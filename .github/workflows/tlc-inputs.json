@@ -44,12 +44,12 @@
     "nuget.config",
     "tools/tla*",
     "tools/tlc/**",
-    ".github/actions/tla-toolchain/**",
-    ".github/workflows/ci.yml",
-    ".github/workflows/publish.yml",
-    ".github/workflows/ci-serial-old.yml"
+    ".github/actions/tla-toolchain/**"
   ],
   "routing": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/publish.yml",
+    ".github/workflows/ci-serial-old.yml",
     ".github/workflows/plan-test-matrix.py",
     ".github/workflows/run-test-leg.py",
     ".github/workflows/test-shards.json",
