@@ -57,6 +57,7 @@
     ".github/workflows/select-test-packages.sh",
     ".github/workflows/lightweight-change.py",
     ".github/workflows/tlc-inputs.json",
+    "test/lattice/Formal/TlcCaseCensus.cs",
     "test/lattice/Formal/TlcCiShard.cs"
   ],
   "neutral": [
@@ -66,7 +67,9 @@
     "test/lattice/Formal/RefinementDetectorResolverTests.cs",
     "test/lattice/Formal/SpecMutationBlockGrammarTests.cs",
     "test/lattice/Formal/TlcCheckpointToolchainTests.cs",
+    "test/lattice/Formal/TlcCaseCensusTests.cs",
     "test/lattice/Formal/TlcCiShardTests.cs",
+    "test/lattice/Formal/TlcCiShardTests.Modules.cs",
     "test/lattice/Formal/TlcCiShardTests.Scheduling.cs",
     "test/lattice/Formal/TlcEvidenceRetentionTests.cs",
     "test/lattice/Formal/TlcStructuralRoutingTests.cs",

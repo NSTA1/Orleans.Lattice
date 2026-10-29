@@ -137,7 +137,7 @@ public sealed partial class TlcCiShardTests
             Assert.That(structural, Is.Not.Empty);
             Assert.That(identities, Is.EquivalentTo(structural.Select(Identity)));
             Assert.That(identities, Is.Unique, "partitioning must not duplicate a native invocation");
-            Assert.That(structural.SelectMany(Categories), Is.Empty, "structural gates stay outside TLC shards");
+            Assert.That(structural.SelectMany(AllCategories), Is.Empty, "structural gates stay outside TLC shards and carry no module category");
             foreach (var data in ordinary)
             {
                 var expected = data.Arguments switch

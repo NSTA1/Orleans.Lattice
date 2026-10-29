@@ -147,6 +147,17 @@ internal static class TlcCiShard
     /// <summary>The BPlusCascade parent-accounting, recovery, separator-range, and height mutants.</summary>
     public const string BPlusCascadeMutations2 = "TlcShardBPlusCascadeMutations2";
 
+    /// <summary>
+    /// The prefix of the per-module category every TLC base, variant and
+    /// mutation case carries beside its shard category (contract C2 of #5148),
+    /// so <c>TestCategory=TlcModule_&lt;Module&gt;</c> selects exactly one
+    /// module's cases. The family is disjoint from the <c>TlcShard*</c> routing
+    /// family and no <c>test-shards.json</c> shard claims it, so it moves no
+    /// case between shards. <see cref="TlcCaseCensus"/> lists the cases per
+    /// module.
+    /// </summary>
+    public const string ModuleCategoryPrefix = "TlcModule_";
+
     /// <summary>Every category <see cref="Of"/>, <see cref="OfModule"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
         [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup,
@@ -343,13 +354,43 @@ internal static class TlcCiShard
         : null;
 
     /// <summary>
-    /// Adds <see cref="Of"/>'s category to a mutation case whose arguments are
-    /// <c>(SpecModule, SpecMutation)</c>, and <see cref="OfVariant"/>'s to a
-    /// variant case whose arguments are <c>(SpecModule, string)</c>.
+    /// The per-module category of every TLC case of <paramref name="module"/>:
+    /// <see cref="ModuleCategoryPrefix"/> followed by the module name.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The module name is not a plain identifier, so neither a VSTest filter nor
+    /// the CI matrix planner could select the category.
+    /// </exception>
+    public static string ModuleCategory(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var name = module.Name;
+        if (string.IsNullOrEmpty(name) || !name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'))
+        {
+            throw new InvalidOperationException(
+                $"Module '{name}' cannot carry a {ModuleCategoryPrefix} category: a test filter selects only plain identifiers.");
+        }
+
+        return ModuleCategoryPrefix + name;
+    }
+
+    /// <summary>
+    /// Adds <see cref="OfModule"/>'s category to a base case whose arguments are
+    /// <c>(SpecModule)</c>, <see cref="Of"/>'s to a mutation case whose
+    /// arguments are <c>(SpecModule, SpecMutation)</c>, and
+    /// <see cref="OfVariant"/>'s to a variant case whose arguments are
+    /// <c>(SpecModule, string)</c>. Every case whose first argument is a
+    /// <see cref="SpecModule"/> also gets its <see cref="ModuleCategory"/>.
     /// </summary>
     public static TestCaseData Tag(TestCaseData data)
     {
         ArgumentNullException.ThrowIfNull(data);
+
+        if (data.Arguments is [SpecModule owner, ..])
+        {
+            data.SetCategory(ModuleCategory(owner));
+        }
 
         var category = data.Arguments switch
         {

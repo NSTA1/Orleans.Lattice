@@ -313,7 +313,12 @@ the exact tag SHA has a successful release-line `build-and-test` run before it
 can publish, so its per-package test matrix can skip repeating TLC.
 
 Only the dedicated `SpecModuleCases.TlcModules`, `TlcMutations` and
-`TlcVariants` sources attach TLC shard categories. The generic module sources
+`TlcVariants` sources attach TLC categories: a `TlcShard*` shard category and a
+per-module `TlcModule_<Module>` category, so
+`TestCategory=TlcModule_<Module>` selects exactly one module's base, variant and
+mutation cases. `TlcCaseCensusTests` writes the matching case census,
+`{ "<Module>": ["<FullyQualifiedName>", ...] }`, to the fully qualified path
+`LATTICE_TLC_CENSUS` names, without a JVM. The generic module sources
 remain untagged: structural discovery, mutation and refinement gates must run
 even when policy skips exhaustive JVM work. The regression for #4852 pins both
 the source boundary and equal case populations.
