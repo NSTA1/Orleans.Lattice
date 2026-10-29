@@ -654,7 +654,7 @@ jobs:
 
       - name: Upload TLC leg results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tlc-results-${{ github.run_attempt }}-${{ matrix.leg.id }}
           path: tlc-results/
@@ -662,7 +662,7 @@ jobs:
 
       - name: Upload TLC trx
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tlc-trx-${{ github.run_attempt }}-${{ matrix.leg.id }}
           path: '**/TestResults/*.trx'
@@ -671,7 +671,7 @@ jobs:
 
       - name: Upload TLC diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tlc-diagnostics-${{ github.run_attempt }}-${{ matrix.leg.id }}
           path: |
@@ -695,7 +695,7 @@ jobs:
       # Every attempt: summarise-test-legs.py keeps the latest result per leg,
       # so re-running one failed leg reports on the whole lane.
       - name: Download TLC leg results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: tlc-results-*
           path: tlc-results
@@ -703,7 +703,7 @@ jobs:
 
       - name: Download TLC trx
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: tlc-trx-${{ github.run_attempt }}-*
           path: tlc-trx
@@ -717,7 +717,7 @@ jobs:
             --tlc-case-durations tlc-trx --output tlc-case-durations.tsv
 
       - name: Upload per-case TLC durations
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tlc-case-durations-${{ github.run_attempt }}
           path: tlc-case-durations.tsv
