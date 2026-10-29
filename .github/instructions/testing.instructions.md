@@ -1261,11 +1261,14 @@ does not run again (see `spec/README.md`, CI decision); release lines never use
 receipts.
 `Publish` verifies that the exact tag SHA has a successful release-line
 `build-and-test` run before it can publish, so its per-package test matrix can
-skip repeating TLC.
+skip repeating TLC. `docs/lattice/formal-verification-pipeline.md` describes every
+lane that runs formal checks, with diagrams.
 
-Every CI test leg provisions a Temurin 17 runtime and a digest-pinned
-`tla2tools.jar` first, and `CiTlaToolchainProvisioningTests` requires every
-workflow that runs .NET tests to provision the same toolchain or carry a
+Every CI test leg provisions the toolchain first through the
+`.github/actions/tla-toolchain` action, which reads the JDK and the
+digest-pinned `tla2tools.jar` from `tools/tlc/toolchain.json`, and
+`CiTlaToolchainProvisioningTests` requires every workflow that runs .NET tests to
+provision it through that action or carry a
 `# tla-toolchain: not-required - <reason>` marker. Locally the fixture calls
 `Assert.Ignore` when the toolchain is missing (see "Categorization conventions"
 above). This reverses an earlier decision to keep exhaustive TLC out of routine per-PR CI; the

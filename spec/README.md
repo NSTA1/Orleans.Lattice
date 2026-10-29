@@ -82,9 +82,11 @@ changing with it.
 
 The specifications are intentionally **outside** the compiled solution
 (`Orleans.Lattice.slnx`). They are not C#; they are checked by TLC, which needs
-a Java runtime and the TLA+ tools. TLC **is** run per PR, but through an NUnit
-fixture that shells out to it rather than by building anything here - see
-[CI decision](#ci-decision). This directory contains only `.tla`, `.cfg`,
+a Java runtime and the TLA+ tools. TLC **is** run in CI - a base-model smoke
+case on every pull request that selects `test/lattice`, and the exhaustive
+checks when a verdict input changes - but through an NUnit fixture that shells out to it
+rather than by building anything here - see [CI decision](#ci-decision) and the
+[Formal Verification Pipeline](../docs/lattice/formal-verification-pipeline.md). This directory contains only `.tla`, `.cfg`,
 `.mutation`, `.json` and `.md` files; nothing here is built by `dotnet`.
 
 ## Module layout
@@ -244,6 +246,21 @@ discovered module, and each test case is named with the module
   parses, covers every checked property, names only code that exists and
   detectors that resolve, and states no hand-maintained census count.
 - `SpecModuleDiscoveryTests`: the floor, the counts table and this index.
+- `RefinementDetectorRunnabilityTests`: every detector a note cites is a test
+  some CI lane executes - not `[Ignore]` or `[Explicit]`, and carrying
+  categories the planner's full plan selects.
+- `RefinementGapRegisterTests`: the `## Deliberate abstraction gaps` register
+  format, and every symbol it lists resolves under `src/`.
+- `RefinementPerturbationTests`: every perturbation's anchors apply, and its row
+  and detectors resolve (see the `perturbations/` row of the module layout).
+- `RefinementIndexTests`: the refinement index (rows, production symbols,
+  detectors and gaps) that the formal-impact report reads, written when
+  `LATTICE_REFINEMENT_INDEX` names a file.
+- `FormalCoverageAreaCensusTests` (in `test/lattice/Docs/`, not per module):
+  every figure in the areas table of
+  [Formal Coverage](../docs/lattice/formal-coverage.md#areas) is re-derived from
+  the manifests and notes, and every module is counted exactly once across that
+  table and the materialised-view companions table.
 - `RefinementSurfaceCensusTests` (not per module): every grain implementation
   class under `src/` is named by some refinement note, by its class name or its
   own contract interface, or is listed with a reason in
@@ -311,6 +328,11 @@ limits; none of those results constitutes a full GC model or recovery proof.
 
 ## CI decision
 
+This section records the decision and its rules. The
+[Formal Verification Pipeline](../docs/lattice/formal-verification-pipeline.md)
+page describes the whole process - every lane, the receipt trust model and the
+refinement gates - with diagrams.
+
 TLC runs through the ordinary NUnit fixture
 (`test/lattice/Formal/TlcModelCheckTests.cs`, `[Category("Tlc")]`). Routine CI
 pull requests keep a base-model smoke check: the `formal-tlc-smoke` shard runs
@@ -351,6 +373,14 @@ own scope, so it cannot plant a receipt that its base branch or `main` would
 read. Release-line pull requests and pushes ignore receipts, as does a manual
 `workflow_dispatch` run with `tlc_receipts: off`; both run every module.
 
+Because `ci.yml` does not run on pushes to `main`, two other lanes write receipts
+in `main`'s scope (#5165). `.github/workflows/formal-receipts.yml` runs on every
+push to `main`: it lists the receipts `main` already holds for the pushed
+fingerprints, stops before building anything when every module has one, and
+otherwise runs only the modules without one and saves their receipts. The
+nightly Coverage TLC legs never read a receipt, and its `tlc-receipts` job saves
+one for every module whose every census case passed that night.
+
 Only the dedicated `SpecModuleCases.TlcModules`, `TlcMutations` and
 `TlcVariants` sources attach TLC categories: a `TlcShard*` shard category and a
 per-module `TlcModule_<Module>` category, so
@@ -366,9 +396,8 @@ The materialised-view tail, anti-entropy, tree-lifecycle and alias bases,
 variants and mutants have dedicated deterministic-only shards rather than
 entering the TLC catch-all. Measured item durations feed the existing matrix
 bin-packer; adding a JVM shard must not add empty Coyote or Chaos work items.
-The control cache hashes the complete generated configuration, including its
-mutation-specific header, so distinct mutants currently run separate controls
-even when they target the same property.
+Controls are shared by content within a process, and served from the base run
+where it provably subsumes them; see [CI budget](#ci-budget).
 
 Every lane that runs .NET tests has to do the same, because the `Tlc` category
 is selected by any ordinary filter rather than opted into by name, and the
@@ -376,10 +405,12 @@ fixture fails closed when the toolchain is missing. That obligation was implicit
 once, and the coverage lane duly ran without the toolchain and failed the whole
 core suite at `OneTimeSetUp`. It is now explicit:
 `CiTlaToolchainProvisioningTests` (in `test/lattice/Hygiene/`) requires each
-workflow that runs tests either to provision the toolchain - pinned to the same
-release and digest as the others, and digest-verified - or to carry a
+workflow that runs tests either to provision the toolchain through the
+`.github/actions/tla-toolchain` action, which reads every pin from
+`tools/tlc/toolchain.json` and verifies the jar's digest, or to carry a
 `# tla-toolchain: not-required - <reason>` marker saying why it cannot select
-the category.
+the category. It refuses any workflow that inlines a pin or provisions the
+toolchain some other way.
 
 This reverses the earlier decision to keep exhaustive TLC out of routine per-PR
 CI, which is worth stating plainly rather than quietly overwriting. Routine PRs
@@ -506,11 +537,12 @@ runs sharing one directory corrupt each other's parse. On a four-core CI runner
 that is two processes of two workers each.
 
 The expectation as modules are added is therefore linear in the number of TLC
-runs: at most `(1 + 2 x mutations)` runs per module before control sharing,
-divided by the concurrency. Five more modules of the atomic-commit module's size would add
-about five times its cost - on the order of ten minutes of TLC on a four-core
-runner, which the `test/lattice` leg can absorb but a sixth or seventh area
-would make worth splitting into its own shard. The per-process five-minute
-timeout has been removed: a slow or large TLC run is allowed to finish rather
-than aborting the test job. The enclosing CI job timeout remains the outer bound
-for a process that never exits.
+launches the formula above counts, divided by the concurrency. CI spreads that
+cost over TLC shards rather than one leg: `TlcCiShard` gives grouped cases a
+`TlcShard*` category, `test-shards.json` partitions those categories into shards
+whose measured durations (`.github/workflows/test-durations.tsv`) feed the
+matrix planner, and every ungrouped case - a new module's, until it is routed -
+runs in the catch-all shard, which selects the rest of `TlcModelCheckTests` by
+name. The per-process five-minute timeout has been removed: a slow or large
+TLC run is allowed to finish rather than aborting the test job. The enclosing CI
+job timeout remains the outer bound for a process that never exits.
