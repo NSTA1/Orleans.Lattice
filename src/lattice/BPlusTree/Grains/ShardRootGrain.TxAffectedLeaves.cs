@@ -214,7 +214,7 @@ internal sealed partial class ShardRootGrain
         IReadOnlyCollection<IBPlusLeafGrain> leaves;
         if (exhaustive)
         {
-            leaves = await CollectChainLeavesAsync(CancellationToken.None);
+            leaves = (await CollectChainLeavesAsync(CancellationToken.None)).Leaves;
         }
         else if (_affectedLeavesByTx is not null && _affectedLeavesByTx.TryGetValue(transactionId, out var recorded))
         {

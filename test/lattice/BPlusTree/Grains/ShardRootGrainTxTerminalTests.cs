@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// and flush an empty pending bucket on too-early arrival.
 /// </summary>
 [TestFixture]
-public class ShardRootGrainTxTerminalTests
+public partial class ShardRootGrainTxTerminalTests
 {
     private const string TreeId = "tx-tree";
     private const int ShardIndex = 0;
@@ -29,8 +29,10 @@ public class ShardRootGrainTxTerminalTests
     private sealed class CapturingCommitLogWriter : ICommitLogWriter
     {
         public List<WalRecord> Appended { get; } = [];
+        public Action? OnAppend { get; set; }
         public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
         {
+            OnAppend?.Invoke();
             Appended.Add(entry);
             return Task.FromResult((long)Appended.Count - 1);
         }
@@ -113,13 +115,18 @@ public class ShardRootGrainTxTerminalTests
         {
             for (var i = 0; i < leafClocks.Count; i++)
             {
-                var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+                var leaf = Substitute.For<IBPlusLeafGrain>();
                 leaf.GetClockAsync().Returns(Task.FromResult(leafClocks[i]));
                 leaf.ApplyTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>()).Returns(Task.CompletedTask);
                 var nextId = i + 1 < leafClocks.Count
                     ? (GrainId?)GrainId.Create("leaf", $"{TreeId}-leaf-{i + 1}")
                     : null;
                 leaf.GetNextSiblingAsync().Returns(Task.FromResult(nextId));
+                leaf.GetClockAndNextSiblingAsync().Returns(new LeafClockPage
+                {
+                    Clock = leafClocks[i],
+                    NextSibling = nextId,
+                });
                 leaves.Add(leaf);
 
                 var leafId = i == 0
@@ -135,7 +142,7 @@ public class ShardRootGrainTxTerminalTests
             // so the chain walk completes in one step. Its
             // GetClockAsync returns Zero, so the terminal HLC ticks
             // to a non-Zero value (the existing assertion).
-            var sentinelLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var sentinelLeaf = Substitute.For<IBPlusLeafGrain>();
             sentinelLeaf.GetClockAsync().Returns(Task.FromResult(HybridLogicalClock.Zero));
             sentinelLeaf.ApplyTxTerminalAsync(
                 Arg.Any<Guid>(),
