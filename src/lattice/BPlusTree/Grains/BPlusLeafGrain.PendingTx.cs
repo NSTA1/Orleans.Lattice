@@ -1098,6 +1098,10 @@ internal sealed partial class BPlusLeafGrain
         // drained AND that Entries now carries the post-saga values,
         // and refreshes its own state on the next read.
         BumpLocalRevision();
+
+        // Test-only trace seam, emitted once the drain has taken effect. One
+        // static load and a null test when unused.
+        AtomicCommitTrace.SinkForTest?.OnLeafTerminalApplied(transactionId, bucket.Keys, committed: true, orphan: false);
     }
 
     /// <summary>
@@ -1211,6 +1215,10 @@ internal sealed partial class BPlusLeafGrain
             return;
 
         Dictionary<string, LwwValue<byte[]>>? abortedBucket = null;
+        // Test-only trace seam. Unused, this is one static load and a null test:
+        // the && short-circuits before the dedup-set lookup.
+        var traceSink = AtomicCommitTrace.SinkForTest;
+        var traceOrphan = traceSink is not null && _recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId);
         var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId, out abortedBucket);
         ForgetPrepareStampClassification(transactionId);
         // Drop the parallel CRDT-delta side-map entry for this saga so an
@@ -1236,6 +1244,10 @@ internal sealed partial class BPlusLeafGrain
         // delegating reads for keys this aborted saga had prepared.
         if (hadPending)
             BumpLocalRevision();
+
+        // Test-only trace seam, emitted once the discard has taken effect.
+        if (traceSink is not null && abortedBucket is not null)
+            traceSink.OnLeafTerminalApplied(transactionId, abortedBucket.Keys, committed: false, orphan: traceOrphan);
     }
 
     /// <summary>

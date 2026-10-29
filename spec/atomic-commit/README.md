@@ -37,6 +37,7 @@ the receiver, and the cross-cluster module's properties cover nothing else.
 | [`mutations-cross-cluster/`](mutations-cross-cluster/) | Its mutation catalogue. See [`mutations-cross-cluster/README.md`](mutations-cross-cluster/README.md). |
 | [`RefinementCrossCluster.md`](RefinementCrossCluster.md) | Its refinement note, mapping it to the replication apply seam, the receiver registry and the cross-tree receiver barrier. |
 | [`AtomicCommitCrossCluster.manifest.json`](AtomicCommitCrossCluster.manifest.json) | Its manifest. |
+| [`TraceValidation.md`](TraceValidation.md) | The trace-validation spike (#5159): production saga traces checked against this specification with TLC, its costs and limits, and the go/no-go recommendation. Its trace specification lives in that page, not as a module. |
 | `README.md` | This file. |
 
 ## What is modelled
