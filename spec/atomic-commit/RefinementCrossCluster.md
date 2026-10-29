@@ -130,11 +130,14 @@ pull request, which the gate cannot tell from an open one.
 - **The origin is one saga.** `AtomicCommit`'s second saga never starts, so
   inter-saga last-writer-wins on a shared key is not exercised on the receiver
   either. That is the single-cluster note's per-saga-projection gap, unchanged.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **One source shard per key, and the same layout on both clusters.** Production
   tallies source-shard indices independently of the receiver's layout and fans
   each observed index out through its split-forward closure
   (`TerminalFanOutResolver`); the model identifies a shard with a key, so a
   receiver whose shards have split since is not modelled.
+  Production symbols: `TerminalFanOutResolver`.
 - **Unstamped terminals.** The model's terminals all carry the touched-shard
   count. Production writes a count of 0 on every terminal outside the saga
   coordinator's broadcast, including the split's retroactive-sweep terminals, and
@@ -145,6 +148,8 @@ pull request, which the gate cannot tell from an open one.
   tightening `DeliverTerminal`'s guard to that saga-wide form, under which
   `RAllOrNothing` holds with every terminal unstamped. The base keeps the
   weaker per-shard guard as the minimum contract, so the mutation still fires.
+  Production symbols: `AtomicWriteGrain.BroadcastTerminalsAsync`,
+  `TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync`.
 - **The bootstrap and the re-seed export.** Taken atomically at the drain for a single-tree saga and for the re-seeds of the path that takes both trees off the log, on which the saga is finished and every purge precedes the boundary, so nothing interleaves with the export. A cross-tree import of tree A takes it in three steps - open, close, drain - so the operation can prepare, decide, purge and arrive at the barrier between them; the close is one instant. Production's export is two passes against a frozen
   snap0, and its late-decision pass ships a decision row for any saga it
   carried that decided while it ran (issue #4627), and its completion from the
@@ -163,6 +168,8 @@ pull request, which the gate cannot tell from an open one.
   as committed rows; that is what keeps the settle atomic, and without it a
   reader between two prepare arrivals sees the saga split
   (`RAllOrNothingSettleKeyByKey`).
+  No production symbol: the gap argues the model's atomic export against
+  production's two-pass export and paged drain as a whole.
 - **The origin WAL is derived, and the GC is coarse.** The model keeps no WAL
   of its own: what the origin has appended follows from the saga's state, and
   what it still retains is that minus a record a shipper gap lost and, once the
@@ -170,6 +177,8 @@ pull request, which the gate cannot tell from an open one.
   taken together with the guarded purge that waits for it, and the model never
   trims an acknowledged terminal, so a rewind re-ships it; the registry already
   counted it, so the re-ship is a duplicate the tally absorbs.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Loss paths, one per behaviour.** The transport never loses a record by
   itself. Each way production loses one is an action with its fix: a shipper
   gap (a `WalRetention` trim or an encode failure), a detach and re-add, a
@@ -182,6 +191,8 @@ pull request, which the gate cannot tell from an open one.
   the marker in production
   (`ReplicationShipperGrainTests.A_second_encode_failure_raises_the_marker_so_an_export_opened_past_the_old_epoch_does_not_clear_it`),
   which the model's single loss does not reach.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **The instance is checked in slices.** Every cross-tree slice takes the export in steps (`SplitExport`). The base cfg checks every property
   with no loss path and a receiver that follows the stream, over both shapes; a
   receiver that joins through a bootstrap is checked in the `Join` variants. Each
@@ -215,11 +226,15 @@ pull request, which the gate cannot tell from an open one.
   take no lost acknowledgement (`AckLoss`), because the rewind re-ships every
   retained record and so duplicates every delivery made before the loss; the
   other paths check the transport's own duplicates.
+  No production symbol: the gap describes how the instance is checked, not a
+  production mechanism.
 - **One participant replicated here.** The cross-tree slices replicate both
   trees to the receiver. The `XOne` slices replicate only tree A
   (`OneReplicated`), so its barrier waits on tree A alone and tree B's records
   never reach this receiver. The receiver properties then speak for tree A's
   key only.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **The barrier's retention is checked on slices of its own.** Its retention
   TTL, the tombstone it keeps, the origin's purge frontier that drops it, and
   a failed withdrawal from the trees' barrier indexes (`BarrierTtl`,
@@ -232,6 +247,8 @@ pull request, which the gate cannot tell from an open one.
   and is not tracked. A barrier never opened - an index entry whose open write
   failed - is not modelled; an entry of a barrier with no arrival holds
   nothing, which the settle's production detectors pin.
+  No production symbol: the gap describes how the instance is checked, not a
+  production mechanism.
 - **Mechanisms the model shows to be defence in depth.** Four production
   mechanisms are modelled but are not load-bearing in it, because another fix
   already covers the case: the purge guard behind the replay filter, the
@@ -239,6 +256,8 @@ pull request, which the gate cannot tell from an open one.
   discard of a saga it did not carry behind that saga's withheld terminals, and
   the rewind's own wait for a pre-hold silo behind the drain's. Each is still
   pinned by its production detector, on the row of the action it guards.
+  No production symbol: each mechanism is mapped, with its detector, on the row
+  of the action it guards.
 - **The origin drives only part of `AtomicCommit`.** `PrepareTx`, `DecideTx`,
   `BroadcastStep` and `ForgetDecision` run for the replicated saga;
   `ShadowForwardOrphan`, `OrphanDrain` and `RegistryMask` never do. So no
@@ -247,20 +266,27 @@ pull request, which the gate cannot tell from an open one.
   registry view reaches the origin WAL or the export. A masked view would
   have exported as Indeterminate before #4501; the base's export reads the
   stored verdict, as production now does.
+  No production symbol: the gap restricts which actions of the instanced module
+  run, not a production mechanism.
 - **Key filters.** The shipper drops prepares outside a peer's `KeyFilter` or
   `KeyPrefixes` but always ships terminals, so on a filtered peer a saga is
   applied with its unreplicated keys absent, and `RAllOrNothing` holds only over
   the keys the peer replicates. The model replicates every key.
+  Production symbols: `ReplicationShipperGrain`.
 - **The receiver registry is never masked by retention.** No receiver-side
   `ForgetAsync` runs, so a receiver decision row is never tombstoned; the only
   `Indeterminate` a receiver registry gives is the failed dial.
+  Production symbols: `TxRegistryGrain.ForgetAsync`.
 - **No crash, reactivation or redelivery mechanics.** Production re-drives a
   partially applied terminal by redelivery; the model holds the owed work as
   durable obligations. A receiver leaf's recently-terminal memory is per
   activation, but since #4461 its late-prepare refusal also consults the
   registry's decision (issue #4445's fix), and on the replication path the
   settle stands in front of it. A reactivation is not modelled.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **No snapshot read path as such.** The model has one read view, the point
   path's. Since #4461 the snapshot read paths give the same answer for an
   undiallable delegation (issue #4448); `RAllOrNothingSnapshotReadsUnresolvableAsInFlight`
   is the regression check.
+  Production symbols: `TxRegistryGrain.ResolveAllDelegatedAsync`.

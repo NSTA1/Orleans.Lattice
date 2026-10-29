@@ -236,11 +236,14 @@ model does not impose a new cold-residency deadline.
 
 ## Deliberate abstraction gaps
 
-No second permit-pool model, cross-scenario shared-resource contention, arbitrary
-crash/restart sequence, byte-level snapshot format, saga/CRDT proof, unbounded
-split interference, or absolute time/latency claim. CheckpointFault models one
-transient failed persist; successful subsequent snapshot/pin completions are
-explicit environment premises. Alias cutover to a foreign physical source is
-covered by the physical-source identity regressions, not by this single-split
-scenario. The BP instance reuses the pure consumer operator only; its unrelated
-closed-loop variables are substituted constants, not asserted composition.
+- **One bounded drain scenario.** No second permit-pool model, cross-scenario
+  shared-resource contention, arbitrary crash/restart sequence, byte-level
+  snapshot format, saga/CRDT proof, unbounded split interference, or absolute
+  time/latency claim. CheckpointFault models one transient failed persist;
+  successful subsequent snapshot/pin completions are explicit environment
+  premises. Alias cutover to a foreign physical source is covered by the
+  physical-source identity regressions, not by this single-split scenario. The
+  BP instance reuses the pure consumer operator only; its unrelated closed-loop
+  variables are substituted constants, not asserted composition.
+  No production symbol: the gap states a bound or premise of the scheduling
+  model, not a production mechanism.

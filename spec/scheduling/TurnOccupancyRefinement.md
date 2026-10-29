@@ -104,9 +104,12 @@ guarantee was silently substituted for a latency bound.
 
 ## Deliberate abstraction gaps
 
-One timer episode per activation; no continuously arriving exclusive work,
-runtime scheduling policy, CLR thread schedules, deactivation or call timeout.
-The two local timer steps are modelling opportunities, not production counters.
-The model cannot guarantee a numerical service latency in an unfair runtime.
-The no-runtime inline fallback is outside the deployed-runtime proof; the
-existing fallback detector remains a separate production test.
+- **One timer episode per activation.** One timer episode per activation; no
+  continuously arriving exclusive work, runtime scheduling policy, CLR thread
+  schedules, deactivation or call timeout. The two local timer steps are
+  modelling opportunities, not production counters. The model cannot guarantee a
+  numerical service latency in an unfair runtime. The no-runtime inline fallback
+  is outside the deployed-runtime proof; the existing fallback detector remains
+  a separate production test.
+  No production symbol: the gap states a bound or premise of the scheduling
+  model, not a production mechanism.

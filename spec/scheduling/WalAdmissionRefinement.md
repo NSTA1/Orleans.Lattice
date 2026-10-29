@@ -163,14 +163,17 @@ a reason to floor an idle sibling.
 
 ## Deliberate abstraction gaps
 
-Finite cohort, fixed positive semaphore/release cap and sample-unit clocks.
-No tree roll-up, metric observers, throughput estimate, jitter distribution,
-unbounded offered load, dynamic cap changes, zero-batch opt-out, or runtime timer
-latency. Resolved callers' deadline counters are canonicalized to zero because
-they cannot influence later steps. The sampler/callback phases are finite
-opportunities, not a claim that production callbacks run atomically or in one
-specific CLR schedule. Cancellation/expiry linearize at their winning step.
-Acute inputs are conservatively independently variable per partition; a genuine
-tree-wide trigger is the subset in which every partition's acute input is on.
-The model does not claim that production provider-failure counters are partition
-local. Their internal aggregation is outside this queue/admission abstraction.
+- **Finite cohort and fixed capacity.** Finite cohort, fixed positive
+  semaphore/release cap and sample-unit clocks. No tree roll-up, metric
+  observers, throughput estimate, jitter distribution, unbounded offered load,
+  dynamic cap changes, zero-batch opt-out, or runtime timer latency. Resolved
+  callers' deadline counters are canonicalized to zero because they cannot
+  influence later steps. The sampler/callback phases are finite opportunities,
+  not a claim that production callbacks run atomically or in one specific CLR
+  schedule. Cancellation/expiry linearize at their winning step. Acute inputs
+  are conservatively independently variable per partition; a genuine tree-wide
+  trigger is the subset in which every partition's acute input is on. The model
+  does not claim that production provider-failure counters are partition local.
+  Their internal aggregation is outside this queue/admission abstraction.
+  No production symbol: the gap states a bound or premise of the scheduling
+  model, not a production mechanism.

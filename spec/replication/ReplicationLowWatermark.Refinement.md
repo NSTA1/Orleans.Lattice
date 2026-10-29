@@ -125,24 +125,34 @@ partition with every property. No mutation adds an action, and every
   (`ReplicationSourceFrontierAggregateGrain`); the aggregate is a minimum, so
   one tree stands for it. The per-tree identity record and the per-tree
   causal buffers are one here.
+  Production symbols: `ReplicationSourceFrontierAggregateGrain`.
 - **Lineage.** A receiver re-stamp caps the origin's watermark until it is
   re-seeded, and a source restore re-derives it; both are the re-bootstrap
   companion's ([`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md)),
   and a newer aggregate generation, which may lower the value, is never
   exhibited here: `srcv` only rises.
+  No production symbol: the behaviour is the re-bootstrap companion's, mapped in
+  that module's own refinement note.
 - **The shipper's other clamps and freezes.** A prepare it could not track, a
   batch the cursor passed without delivering, a peer off the log, a replay
   filter, an unreported lineage and a key-filtered tree each clamp or withhold
   the watermark. Each only lowers it, so the model's watermark is an upper
   bound of production's.
+  Production symbols: `ReplicationShipperGrain`.
 - **The drain re-arm.** The model re-arms a drain when a watermark is
   recorded; production re-checks the buffer on every maintenance tick. Both
   are fair, so only timing differs.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Clock and lag.** The floor rises by one per step and is enforced at once;
   production's trails the wall clock by a lag and moves only once it trails
   its target by half a lag. Re-stamping a refused write and the caller-fixed
   stamps (idempotency keys, nested range deletes) are covered by their own
   detectors, not modelled.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Bounds.** Two partitions, two HLCs and two a-writes in the base; sagas,
   transport loss, a second dead letter and the bootstrap each on one partition
   in a variant.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.

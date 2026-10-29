@@ -123,10 +123,15 @@ under-approximations are stated so that they are not mistaken for coverage:
   concurrent-writer caveat on `LatticeStagedCrdtWrite`. The drain loses it as
   much as any other path, so it is not a merge defect; the module's two
   contributions are distinct, as an OR-Set's dots or two replicas' counts are.
+  Production symbols: `LatticeStagedCrdtWrite`.
 - **Last-writer-wins keys.** Every non-CRDT path is `ShardOwnership`'s, which a
   merge outside the join scope keeps
   (`ResizeMirrorCrdtAndBulkIntegrationTests.A_merge_outside_the_mirror_keeps_last_writer_wins_for_a_CRDT_row`).
+  No production symbol: the behaviour is `ShardOwnership`'s, mapped in that
+  module's own refinement note.
 - **Time.** No timers, retention windows or deadlines.
+  No production symbol: the gap is the model's absence of time, not a production
+  mechanism.
 
 ## Territory owned by other open issues
 

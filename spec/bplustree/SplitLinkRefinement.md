@@ -72,7 +72,13 @@ ordering, with a durable marker on the donor.
 
 - **One split, one sibling, one key boundary.** Multiple concurrent splits, cascading
   splits and the parent's own splits are not modelled.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **Root-level splits.** A split of the root leaf is covered by `PendingPromotion`, and
   its marker re-surfaces later; the model does not distinguish it.
+  No production symbol: the root split is distinguished only by the model's
+  promotion marker, which the note's tables map.
 - **Idempotent re-link.** The model lets `Link` run once; production tolerates a
   re-surfaced result being applied again.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.

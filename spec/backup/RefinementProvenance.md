@@ -63,9 +63,13 @@ an action. The module has no liveness property: nothing in it waits on anything.
   per-origin frontier (the restore path re-syncs through replication, not from
   it), so a chain-level per-origin monotonicity property would constrain only
   descriptive metadata. That is stated rather than checked.
+  Production symbols: `BackupConsistencyCut.PerOriginFrontier`.
 - **Keys.** Each write is its own key, so a later write never supersedes an
   earlier one in a capture. Last-writer-wins folding is the capture module's and
   the core's, not the bookkeeping's.
+  No production symbol: the behaviour is the capture module's and the core's,
+  mapped in that module's own refinement note.
 - **The resume points.** The per-partition WAL offsets an increment resumes from
   (`BackupConsistencyCut.WalPartitionOffsets`) and the WAL fall-off fallback are
   not modelled; they are the WAL module's territory.
+  Production symbols: `BackupConsistencyCut.WalPartitionOffsets`.

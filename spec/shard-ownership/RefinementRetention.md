@@ -239,12 +239,17 @@ check inside the harness's per-run budget.
   states, depth 29, 19 min 08 s), and the stamp and import mutations still go
   red in it. Both exceed the per-run budget, which is why the modules are
   separate. See the stamps bullet below and the README.
+  No production symbol: the gap describes how the instance is checked, not a
+  production mechanism.
 - **The post-sweep cleanup and the sweep's non-atomic window.** The sweep is one
   step. Its window (a decision landing between the pre-check and the replay) is
   covered by the late forward, which may arrive at any time; the cleanup that
   closes it is not modelled separately.
+  Production symbols: `TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync`.
 - **Cross-tree delegation.** Only its observable effect, an Indeterminate
   answer at any time before retirement, is modelled.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Reactivation elsewhere than the split destination.** Argued in the
   `Reactivate` row: no step reads the lost memory anywhere else here. In
   production one more step could: a resize-mirror prepare abandoned at its
@@ -255,15 +260,20 @@ check inside the harness's per-run budget.
   registry's decision or on the saga's retired participant row, exactly as a
   `DeliverLate` prepare is refused
   (`ShardRootGrainShadowForwardTests.SetManyAsync_prepare_mirrored_to_the_resize_destination_is_marked_as_a_forwarded_prepare`).
+  Production symbols: `ShardRootGrain.ForwardWithDeadlineAsync`.
 - **Leaves.** A shard is one leaf, except the split destination's `k2`, whose
   leaf can split any number of times (`LeafSplit`), so a shadow marker can
   move to a sibling that never saw the terminal (#4545). Leaf splits elsewhere,
   and a marker on a leaf other than the one that took the prepare, are not
   modelled; the self-verifying gate and the applied-terminal witness cover them
   because they read only the leaf's own row, marker and witness.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **More than one of anything.** One split, one resize with its undo, one saga,
   one later write, one late forward, one reactivation, one mask toggle at a
   time.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **Stamps that disagree with real time, and migrated rows.** This module's
   values are write stamps in commit order, so property H (a write acknowledged
   after a prepare on the same leaf is stamped above it) is built in, and it
@@ -282,7 +292,11 @@ check inside the harness's per-run budget.
   Every safety property holds there, and the wider gate still satisfies
   `ReadableOnceComplete` with stamps present, so the difference loses nothing
   in this instance.
+  Production symbols: `BPlusLeafGrain`,
+  `BPlusLeafGrain.IsShadowedReadSafeAsync`.
 - **Time.** Retention windows, deadlines and the purge's delay are not modelled.
+  No production symbol: the gap is the model's absence of time, not a production
+  mechanism.
 
 ## Territory owned by other open issues
 
