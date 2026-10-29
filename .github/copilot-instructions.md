@@ -508,7 +508,8 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     `content-gates`. Release-line pull requests and pushes, integration-branch pushes, nightly
     coverage, and any relevant or unknown diff run exhaustive TLC. Where
     exhaustive TLC runs, a module with a trusted verdict receipt (#5164, `tlc-receipts.py`) is
-    not rerun, except on release lines. `Publish` verifies successful
+    not rerun, except on release lines and in the nightly run, which ignore receipts.
+    `docs/lattice/formal-verification-pipeline.md` describes every formal lane. `Publish` verifies successful
     release-line `build-and-test` for the exact tag SHA before publishing. The rule lives in
     `.github/workflows/tier-scope.py`; the skipped items are listed as NOT RUN, and
     `CiMemberPullRequestTieringTests` pins the policy. The cost is attribution: an exhaustive

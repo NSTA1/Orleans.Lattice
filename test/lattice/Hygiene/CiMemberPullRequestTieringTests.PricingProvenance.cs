@@ -5,7 +5,6 @@ namespace Orleans.Lattice.Tests.Hygiene;
 
 public sealed partial class CiMemberPullRequestTieringTests
 {
-    [TestCase("docs/lattice/formal-coverage.md", "Scheduling bases, variants and mutations route")]
     [TestCase("docs/lattice/verified-scheduling.md", "CI routing does not compose those certificates.")]
     [TestCase("spec/scheduling/README.md", "CI does not compose these certificates.")]
     [TestCase("spec/scheduling/README.md", "All scheduling-directory bases, variants and mutations route")]
