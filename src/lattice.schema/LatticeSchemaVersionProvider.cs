@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Schema;
 /// dictionary lookup. Also an <see cref="IMutationObserver"/>: a write to the
 /// reserved <c>sys-schema-version</c> tree evicts the affected tree's cache entry,
 /// so a config change is picked up on the next write / read without a restart.
-/// Mirrors <c>LatticeSchemaPolicyProvider</c>.
+/// Shares cache admission and invalidation rules with the policy provider.
 /// </summary>
 internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvider, IMutationObserver
 {
@@ -18,18 +18,8 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
     private readonly ConcurrentDictionary<string, LatticeSchemaVersionConfig?> _cache = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The maximum number of per-tree entries retained. The cache key is a tree id
-    /// a caller supplies freely, and a tree with no version config still caches a
-    /// null sentinel, so an unbounded map let any caller able to name trees grow
-    /// silo memory without limit by writing to an unlimited stream of distinct tree
-    /// ids (CWE-770). The bound is safe because a miss simply reloads from the
-    /// store, so refusing an insert costs a round-trip and never changes the answer.
-    /// </summary>
-    internal const int MaxCachedTrees = 4096;
-
-    /// <summary>
     /// The number of per-tree entries currently cached. Exposed for unit testing
-    /// that the cache honours <see cref="MaxCachedTrees"/>.
+    /// that the cache honours <see cref="SchemaTreeCacheExtensions.MaxCachedTrees"/>.
     /// </summary>
     internal int CachedTreeCount => _cache.Count;
 
@@ -68,20 +58,14 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
             return new ValueTask<LatticeSchemaVersionConfig?>(cached);
         }
 
-        return new ValueTask<LatticeSchemaVersionConfig?>(LoadAsync(treeId, cancellationToken));
+        return new ValueTask<LatticeSchemaVersionConfig?>(LoadAndCacheAsync(treeId, cancellationToken));
     }
 
-    private async Task<LatticeSchemaVersionConfig?> LoadAsync(string treeId, CancellationToken cancellationToken)
+    private async Task<LatticeSchemaVersionConfig?> LoadAndCacheAsync(string treeId, CancellationToken cancellationToken)
     {
         var config = await _store.GetConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
 
-        // Last write wins on a concurrent miss; the load is idempotent.
-        // Refreshing a key already present never grows the map, so it stays
-        // allowed at the cap; only a brand-new key is refused there.
-        if (_cache.Count < MaxCachedTrees || _cache.ContainsKey(treeId))
-        {
-            _cache[treeId] = config;
-        }
+        _cache.CacheIfSpaceAvailable(treeId, config);
 
         return config;
     }
@@ -96,15 +80,7 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
     /// <inheritdoc />
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
-        // Only version-tree writes are relevant; every other tree fast-paths out so
-        // the observer stays cheap on the general write path. The config is keyed by
-        // governed tree id, so the mutation key is the tree to evict.
-        if (string.Equals(mutation.TreeId, SchemaConstants.VersionConfigTree, StringComparison.Ordinal)
-            && !string.IsNullOrEmpty(mutation.Key))
-        {
-            _cache.TryRemove(mutation.Key, out _);
-        }
-
+        _cache.InvalidateForMutation(mutation, SchemaConstants.VersionConfigTree);
         return Task.CompletedTask;
     }
 }

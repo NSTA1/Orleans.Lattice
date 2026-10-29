@@ -44,14 +44,14 @@ public class LatticeSchemaPolicyProviderTests
         // Every miss caches a null sentinel, and the key is a caller-supplied tree
         // id, so an unbounded cache let a caller grow silo memory without limit by
         // naming an unlimited stream of distinct trees (CWE-770).
-        for (var i = 0; i < LatticeSchemaPolicyProvider.MaxCachedTrees + 500; i++)
+        for (var i = 0; i < SchemaTreeCacheExtensions.MaxCachedTrees + 500; i++)
         {
             Assert.That(await provider.GetCompiledPolicyAsync("tree-" + i), Is.Null);
         }
 
         Assert.That(
             provider.CachedTreeCount,
-            Is.LessThanOrEqualTo(LatticeSchemaPolicyProvider.MaxCachedTrees));
+            Is.LessThanOrEqualTo(SchemaTreeCacheExtensions.MaxCachedTrees));
     }
 
     [Test]
@@ -63,7 +63,7 @@ public class LatticeSchemaPolicyProviderTests
         store.GetPolicyAsync("orders", Arg.Any<CancellationToken>()).Returns(JsonPolicy());
         var provider = CreateProvider(store);
 
-        for (var i = 0; i < LatticeSchemaPolicyProvider.MaxCachedTrees + 10; i++)
+        for (var i = 0; i < SchemaTreeCacheExtensions.MaxCachedTrees + 10; i++)
         {
             _ = await provider.GetCompiledPolicyAsync("filler-" + i);
         }
@@ -96,6 +96,33 @@ public class LatticeSchemaPolicyProviderTests
         _ = await provider.GetCompiledPolicyAsync("orders");
         _ = await provider.GetCompiledPolicyAsync("orders");
 
+        await store.Received(1).GetPolicyAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetCompiledPolicyAsync_cached_reads_and_unrelated_mutations_do_not_allocate()
+    {
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync("orders", Arg.Any<CancellationToken>()).Returns(JsonPolicy());
+        var provider = CreateProvider(store);
+        _ = await provider.GetCompiledPolicyAsync("orders");
+        var mutation = new LatticeMutation { TreeId = "orders", Key = "some-key" };
+
+        for (var i = 0; i < 100; i++)
+        {
+            _ = provider.GetCompiledPolicyAsync("orders").GetAwaiter().GetResult();
+            provider.OnMutationAsync(mutation, CancellationToken.None).GetAwaiter().GetResult();
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+        {
+            _ = provider.GetCompiledPolicyAsync("orders").GetAwaiter().GetResult();
+            provider.OnMutationAsync(mutation, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.That(allocated, Is.Zero);
         await store.Received(1).GetPolicyAsync("orders", Arg.Any<CancellationToken>());
     }
 
