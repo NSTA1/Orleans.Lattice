@@ -1172,6 +1172,19 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafLiveRawEntriesPage> GetLiveRawEntriesAndNextSiblingAsync();
 
     /// <summary>
+    /// Captures the replication delta followed by the live-entry page used at
+    /// bootstrap open, preserving both reads' visibility rules in one call.
+    /// </summary>
+    Task<(StateDelta Delta, LeafLiveRawEntriesPage Live)> GetBootstrapCaptureAsync(VersionVector sinceVersion);
+
+    /// <summary>
+    /// Reads live entries and pending prepares for a bootstrap reconcile scan,
+    /// with the next-sibling pointer sampled after both payload reads.
+    /// </summary>
+    Task<(List<LwwEntry> Entries, LeafPendingMutationsPage Pending)> GetLiveRawEntriesAndPendingAsync(
+        int[] sortedSlots, int virtualShardCount);
+
+    /// <summary>
     /// Merges entries into this leaf using LWW semantics, preserving original
     /// timestamps. Unlike <see cref="MergeEntriesAsync"/>, this method checks
     /// for leaf overflow and triggers a split if needed.
