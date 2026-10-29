@@ -1,7 +1,4 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Testing.Hygiene;
@@ -105,17 +102,17 @@ public sealed partial class TlcModelCheckTests
     /// <summary>
     /// Control-arm results, once per distinct input within this test process.
     /// Every mutation of a module that targets the same property with the same
-    /// TLC options builds a byte-identical control run - the unmutated base
-    /// under the same single-property cfg - so it is run once and shared. The
-    /// key is a hash of everything TLC reads (the module and its siblings, the
-    /// cfg and the options), so two inputs that differ in anything are two
-    /// runs. The <see cref="Lazy{T}"/> runs the first request and makes every
-    /// concurrent one wait for it, and a run that fails or throws - a timeout
-    /// included - is cached as such, so every case sharing that control fails
-    /// rather than only the first. Process-local by design: nothing is reused
-    /// across runs.
+    /// TLC options builds a byte-identical full-bound control run - the
+    /// unmutated base under the same single-property cfg, which does not name
+    /// the mutation - so it is run once and shared; a matching-bound control is
+    /// shared the same way when the bounds also match. The key
+    /// (<see cref="TlcControlRunKey"/>) is a hash of everything TLC reads (the
+    /// module and its siblings, the cfg and the options), so two inputs that
+    /// differ in anything are two runs. A run that fails or throws is cached as
+    /// such, so every case sharing that control fails rather than only the
+    /// first. Process-local by design: nothing is reused across runs.
     /// </summary>
-    private static readonly ConcurrentDictionary<string, Lazy<TlcResult>> ControlRuns = new(StringComparer.Ordinal);
+    private static readonly TlcControlRunCache<TlcResult> ControlRuns = new();
 
     /// <summary>TLC's switch that defers every liveness check to the end of the state search.</summary>
     private static readonly string[] LivenessAtEnd = ["-lncheck", "final"];
@@ -327,11 +324,15 @@ public sealed partial class TlcModelCheckTests
         var control = RunControl(module, baseSpec, config, mutation.TlcOptions);
         AssertCleanControl(control, module, mutation, "FULL-BOUND");
 
+        // The matching-bound control checks the mutant cfg's model; its cfg
+        // differs from the mutant's only in not naming the mutation, so it is
+        // shared like the full-bound control.
         var mutantSpec = mutation.Apply(baseSpec, module.Name);
         var mutantConfig = mutation.BuildMutantConfig(baseConfig);
-        if (!string.Equals(config, mutantConfig, StringComparison.Ordinal))
+        var matchingConfig = mutation.BuildMatchingControlConfig(baseConfig);
+        if (!string.Equals(config, matchingConfig, StringComparison.Ordinal))
         {
-            var matchingControl = RunControl(module, baseSpec, mutantConfig, mutation.TlcOptions);
+            var matchingControl = RunControl(module, baseSpec, matchingConfig, mutation.TlcOptions);
             AssertCleanControl(matchingControl, module, mutation, "MATCHING-BOUND");
         }
 
@@ -591,25 +592,10 @@ public sealed partial class TlcModelCheckTests
     /// per distinct input in this process, shared by every case that builds
     /// the same one.
     /// </summary>
-    private TlcResult RunControl(SpecModule module, string baseSpec, string config, IReadOnlyList<string> options)
-    {
-        var key = new StringBuilder()
-            .Append(module.SpecificationPath).Append('\0')
-            .Append(baseSpec).Append('\0')
-            .Append(config).Append('\0')
-            .AppendJoin(' ', options).Append('\0');
-        foreach (var (name, text) in module.ReadSiblingSpecifications().OrderBy(s => s.Key, StringComparer.Ordinal))
-        {
-            key.Append(name).Append('\0').Append(text).Append('\0');
-        }
-
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key.ToString())));
-        return ControlRuns
-            .GetOrAdd(hash, _ => new Lazy<TlcResult>(
-                () => RunTlc(module, baseSpec, config, module.Name, options),
-                LazyThreadSafetyMode.ExecutionAndPublication))
-            .Value;
-    }
+    private TlcResult RunControl(SpecModule module, string baseSpec, string config, IReadOnlyList<string> options) =>
+        ControlRuns.GetOrRun(
+            TlcControlRunKey.For(module, baseSpec, config, options),
+            () => RunTlc(module, baseSpec, config, module.Name, options));
 
     private TlcResult RunTlc(
         SpecModule module,
