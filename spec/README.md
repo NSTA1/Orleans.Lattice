@@ -243,6 +243,13 @@ discovered module, and each test case is named with the module
   parses, covers every checked property, names only code that exists and
   detectors that resolve, and states no hand-maintained census count.
 - `SpecModuleDiscoveryTests`: the floor, the counts table and this index.
+- `RefinementSurfaceCensusTests` (not per module): every grain implementation
+  class under `src/` is named by some refinement note, by its class name or its
+  own contract interface, or is listed with a reason in
+  [`UNMODELLED.md`](UNMODELLED.md), the register of unmodelled grains; a row
+  for a grain that is gone, moved or now named fails it. The register is a
+  second top-level markdown file here, which discovery accepts because only the
+  directories under `spec/` are module directories.
 
 `SpecModuleDiscoveryControlTests` and
 `TlcModelCheckTests.A_synthetic_module_is_model_checked_by_every_TLC_gate` are
