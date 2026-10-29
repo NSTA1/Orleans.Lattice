@@ -1613,6 +1613,14 @@ jobs:
         if: steps.receipts.outputs.on == 'true'
         run: |
           set -euo pipefail
+          # This job runs the privileged Playwright installer self-test, which
+          # starts PowerShell (a .NET host) under sudo and leaves the runner's
+          # $XDG_RUNTIME_DIR/.dotnet owned by root. The first non-root dotnet
+          # call after it then fails creating its NuGet-Migrations named mutex
+          # (EACCES on /run/user/1001/.dotnet). Give this step's dotnet a
+          # private runtime directory instead.
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
           mkdir -p "$RUNNER_TEMP/tlc"
           python3 .github/workflows/tlc-fingerprint.py --output "$RUNNER_TEMP/tlc/fingerprints.json"
           dotnet build test/lattice/Orleans.Lattice.Tests.csproj --configuration Release --nologo
