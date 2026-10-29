@@ -752,9 +752,6 @@ internal sealed partial class BPlusLeafGrain
                 bucket.Remove(key);
         }
 
-        // Test-only trace seam: one static load and a null test when unused.
-        AtomicCommitTrace.SinkForTest?.OnLeafTerminalApplied(transactionId, bucket.Keys, committed: true, orphan: false);
-
         // Branch on the persisted OriginClusterId signal. See the
         // method's XML doc for the full rationale and the replay
         // determinism argument.
@@ -1101,6 +1098,10 @@ internal sealed partial class BPlusLeafGrain
         // drained AND that Entries now carries the post-saga values,
         // and refreshes its own state on the next read.
         BumpLocalRevision();
+
+        // Test-only trace seam, emitted once the drain has taken effect. One
+        // static load and a null test when unused.
+        AtomicCommitTrace.SinkForTest?.OnLeafTerminalApplied(transactionId, bucket.Keys, committed: true, orphan: false);
     }
 
     /// <summary>
@@ -1231,10 +1232,7 @@ internal sealed partial class BPlusLeafGrain
         // The discarded keys keep (abort) or already carry (a late orphan behind a
         // landed terminal) the value the decision implies (issue #4545).
         if (abortedBucket is not null)
-        {
             RecordTerminalWitness(transactionId, abortedBucket.Keys);
-            traceSink?.OnLeafTerminalApplied(transactionId, abortedBucket.Keys, committed: false, orphan: traceOrphan);
-        }
 
 #if LATTICE_DIAG
         // DIAG: abort entry.
@@ -1246,6 +1244,10 @@ internal sealed partial class BPlusLeafGrain
         // delegating reads for keys this aborted saga had prepared.
         if (hadPending)
             BumpLocalRevision();
+
+        // Test-only trace seam, emitted once the discard has taken effect.
+        if (traceSink is not null && abortedBucket is not null)
+            traceSink.OnLeafTerminalApplied(transactionId, abortedBucket.Keys, committed: false, orphan: traceOrphan);
     }
 
     /// <summary>

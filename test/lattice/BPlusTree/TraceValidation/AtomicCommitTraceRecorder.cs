@@ -39,6 +39,7 @@ internal sealed class AtomicCommitTraceRecorder : IAtomicCommitTraceSink
         _events.Enqueue(new TraceEvent(TraceEventKind.Decide, transactionId, null, [], committed));
 
     /// <inheritdoc />
+    /// <remarks>Copies the keys before returning: the leaf passes a live view of its bucket.</remarks>
     public void OnLeafTerminalApplied(Guid transactionId, IEnumerable<string> keys, bool committed, bool orphan) =>
         _events.Enqueue(new TraceEvent(
             orphan ? TraceEventKind.OrphanDrain : TraceEventKind.Terminal,

@@ -22,7 +22,7 @@ costs to run, what it catches, and what it cannot see.
 | Test-only event seam | `src/lattice/BPlusTree/AtomicCommitTrace.cs`, `IAtomicCommitTraceSink.cs` | A static `SinkForTest` field, `null` in production. |
 | Coordinator hook | `AtomicWriteGrain.DecideSagaCommit` | Emits the resolved prepare outcome: the spec's `PrepareTx`. |
 | Registry hooks | `TxRegistryGrain.MarkCommittedAsync` / `MarkAbortedAsync` / `ForgetAsync` | Emit a newly recorded decision (`DecideTx`) and a retired one (`ForgetDecision`), each only after the write is durable. Idempotent repeats emit nothing. |
-| Leaf hooks | `BPlusLeafGrain.ApplyTxCommit` / `ApplyTxAbort` | Emit the keys of a drained or discarded pending bucket: one `BroadcastStep` per key, or one `OrphanDrain` per key when the leaf had already applied the terminal. |
+| Leaf hooks | `BPlusLeafGrain.ApplyTxCommit` / `ApplyTxAbort` | Emit, at the end of the method once the drain or discard has been applied, the keys of the pending bucket: one `BroadcastStep` per key, or one `OrphanDrain` per key when the leaf had already applied the terminal. |
 | Recorder and mapping | `test/lattice/BPlusTree/TraceValidation/AtomicCommitTraceRecorder.cs` | Collects events, keeps one saga's, and maps the transaction id to `t1` and its keys, in ordinal order, to `k1`, `k2`. |
 | Trace specification | the [two blocks below](#the-trace-specification) | Constrains `AtomicCommit`'s behaviours to the recorded steps. |
 | Prototype test | `AtomicCommitTraceValidationTests` | Records one committed two-key saga on a test cluster, checks it, and checks three perturbed copies. |
@@ -35,7 +35,8 @@ the arguments of a null-conditional call, so nothing is allocated and no
 behaviour changes. The one site that needs a value from before the step it
 reports (`ApplyTxAbort`, which must know whether the leaf had already applied
 the terminal) reads the sink into a local and short-circuits on it before the
-dedup-set lookup, so the unused cost is the same load and test.
+dedup-set lookup, and tests the local again where it emits, at the end of the
+method, so its unused cost is the same load and two null tests of a local.
 
 ## The trace specification
 
@@ -311,9 +312,12 @@ about 340 lines of test C#, beside a 170-line prototype fixture.
   concurrent sagas, needs constants generated from the trace.
 - **In-process only.** The seam is a static field, which reaches every silo of an
   in-process test cluster and nothing out of process.
-- **Emission order is a linearisation, not a clock.** Events are appended when
-  emitted, immediately after the step they report and before the emitting turn
-  replies, so causal order is preserved; events with no causal order land in
+- **Emission order is a linearisation, not a clock.** Every hook fires after the
+  step it reports has taken effect - a registry event after its write is durable,
+  a leaf event after the drain or discard has been applied (the terminal mark was
+  made durable earlier, by its WAL append) - and before the emitting turn
+  replies, so no event reports a step a later failure undoes, and causal order is
+  preserved; events with no causal order land in
   either order, which is only sound because the specification admits both.
 
 ## How to run it

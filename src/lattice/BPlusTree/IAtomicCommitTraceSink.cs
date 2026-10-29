@@ -10,8 +10,11 @@ namespace Orleans.Lattice.BPlusTree;
 /// installs one.
 /// <para>
 /// Every method is called synchronously on the emitting grain's turn, after the
-/// step it reports has taken effect, so an implementation must be thread-safe
-/// (several grains emit concurrently) and must not block or throw.
+/// step it reports has taken effect: a registry event after its write is
+/// durable, a leaf event after the drain or discard has been applied to the
+/// leaf's state (the terminal mark itself became durable earlier, when it was
+/// appended to the WAL). An implementation must be thread-safe (several grains
+/// emit concurrently) and must not block or throw.
 /// </para>
 /// </summary>
 internal interface IAtomicCommitTraceSink
@@ -44,7 +47,11 @@ internal interface IAtomicCommitTraceSink
     /// leaf had already applied the terminal before.
     /// </summary>
     /// <param name="transactionId">The saga's transaction id.</param>
-    /// <param name="keys">The keys the drained or discarded bucket held.</param>
+    /// <param name="keys">
+    /// The keys the drained or discarded bucket held. This is a live view of the
+    /// leaf's bucket, valid only for the duration of the call: an implementation
+    /// that keeps the keys must copy them before returning.
+    /// </param>
     /// <param name="committed"><see langword="true"/> when the bucket was drained as a commit.</param>
     /// <param name="orphan"><see langword="true"/> when the bucket was a late orphan behind an applied terminal.</param>
     void OnLeafTerminalApplied(Guid transactionId, IEnumerable<string> keys, bool committed, bool orphan);
