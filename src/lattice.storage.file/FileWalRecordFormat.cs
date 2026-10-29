@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
+using System.Runtime.CompilerServices;
 
 namespace Orleans.Lattice.Storage.File;
 
@@ -41,14 +42,23 @@ internal static class FileWalRecordFormat
     /// <summary>Record-type tag for a trim watermark marker.</summary>
     internal const byte RecordTypeTrim = 3;
 
+    /// <summary>Byte length of the type tag and body-length prefix.</summary>
+    internal const int HeaderLength = sizeof(byte) + sizeof(int);
+
+    /// <summary>Byte length of the trailing CRC-32.</summary>
+    internal const int ChecksumLength = sizeof(uint);
+
     /// <summary>
     /// Fixed per-record framing overhead in bytes: the 1-byte type tag,
     /// the 4-byte body length, and the trailing 4-byte CRC-32.
     /// </summary>
-    internal const int FramingOverhead = 1 + 4 + 4;
+    internal const int FramingOverhead = HeaderLength + ChecksumLength;
 
     /// <summary>Byte length of a Data record body's fixed offset prefix.</summary>
     internal const int DataBodyPrefix = sizeof(long);
+
+    /// <summary>Byte position of the payload within a Data record.</summary>
+    internal const int DataPayloadOffset = HeaderLength + DataBodyPrefix;
 
     /// <summary>Total encoded byte length of a Commit record.</summary>
     internal const int CommitRecordLength = FramingOverhead + sizeof(int);
@@ -71,15 +81,12 @@ internal static class FileWalRecordFormat
     /// </summary>
     internal static int WriteDataRecord(Span<byte> destination, long offset, ReadOnlySpan<byte> payload)
     {
-        var bodyLen = DataBodyPrefix + payload.Length;
-        destination[0] = RecordTypeData;
-        BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(1, 4), bodyLen);
-        BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(5, 8), offset);
-        payload.CopyTo(destination.Slice(13, payload.Length));
-        var crcOver = destination.Slice(0, 5 + bodyLen);
-        var crc = Crc32.HashToUInt32(crcOver);
-        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(5 + bodyLen, 4), crc);
-        return FramingOverhead + bodyLen;
+        var bodyLength = DataBodyPrefix + payload.Length;
+        WriteHeader(destination, RecordTypeData, bodyLength);
+        BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(HeaderLength, sizeof(long)), offset);
+        payload.CopyTo(destination.Slice(DataPayloadOffset, payload.Length));
+        WriteChecksum(destination, bodyLength);
+        return FramingOverhead + bodyLength;
     }
 
     /// <summary>
@@ -89,12 +96,10 @@ internal static class FileWalRecordFormat
     /// </summary>
     internal static int WriteCommitRecord(Span<byte> destination, int count)
     {
-        const int bodyLen = sizeof(int);
-        destination[0] = RecordTypeCommit;
-        BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(1, 4), bodyLen);
-        BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(5, 4), count);
-        var crc = Crc32.HashToUInt32(destination.Slice(0, 5 + bodyLen));
-        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(5 + bodyLen, 4), crc);
+        const int bodyLength = sizeof(int);
+        WriteHeader(destination, RecordTypeCommit, bodyLength);
+        BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(HeaderLength, sizeof(int)), count);
+        WriteChecksum(destination, bodyLength);
         return CommitRecordLength;
     }
 
@@ -105,12 +110,25 @@ internal static class FileWalRecordFormat
     /// </summary>
     internal static int WriteTrimRecord(Span<byte> destination, long throughOffsetInclusive)
     {
-        const int bodyLen = sizeof(long);
-        destination[0] = RecordTypeTrim;
-        BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(1, 4), bodyLen);
-        BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(5, 8), throughOffsetInclusive);
-        var crc = Crc32.HashToUInt32(destination.Slice(0, 5 + bodyLen));
-        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(5 + bodyLen, 4), crc);
+        const int bodyLength = sizeof(long);
+        WriteHeader(destination, RecordTypeTrim, bodyLength);
+        BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(HeaderLength, sizeof(long)), throughOffsetInclusive);
+        WriteChecksum(destination, bodyLength);
         return TrimRecordLength;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WriteHeader(Span<byte> destination, byte recordType, int bodyLength)
+    {
+        destination[0] = recordType;
+        BinaryPrimitives.WriteInt32LittleEndian(destination.Slice(sizeof(byte), sizeof(int)), bodyLength);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WriteChecksum(Span<byte> destination, int bodyLength)
+    {
+        var checksumOffset = HeaderLength + bodyLength;
+        var checksum = Crc32.HashToUInt32(destination.Slice(0, checksumOffset));
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(checksumOffset, ChecksumLength), checksum);
     }
 }
