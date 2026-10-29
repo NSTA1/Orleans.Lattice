@@ -206,6 +206,9 @@ internal sealed partial class TxRegistryGrain(
             RestoreDelegations(txid, delegations);
             RestoreTombstone(txid, tombstoneClear);
         });
+
+        // Test-only trace seam: one static load and a null test when unused.
+        AtomicCommitTrace.SinkForTest?.OnDecisionRecorded(txid, committed: true);
     }
 
     /// <inheritdoc />
@@ -260,6 +263,9 @@ internal sealed partial class TxRegistryGrain(
             RestoreDelegations(txid, delegations);
             RestoreTombstone(txid, tombstoneClear);
         });
+
+        // Test-only trace seam: one static load and a null test when unused.
+        AtomicCommitTrace.SinkForTest?.OnDecisionRecorded(txid, committed: false);
     }
 
     /// <summary>
@@ -1580,6 +1586,12 @@ internal sealed partial class TxRegistryGrain(
                     state.State.DecisionsRevision = core.Revision;
                 }
             });
+
+            if (droppedDecision || addedForgottenAt)
+            {
+                // Test-only trace seam: one static load and a null test when unused.
+                AtomicCommitTrace.SinkForTest?.OnDecisionForgotten(txid);
+            }
         }
         else if (!await WhenDurableAsync(txid))
         {

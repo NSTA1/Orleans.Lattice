@@ -752,6 +752,9 @@ internal sealed partial class BPlusLeafGrain
                 bucket.Remove(key);
         }
 
+        // Test-only trace seam: one static load and a null test when unused.
+        AtomicCommitTrace.SinkForTest?.OnLeafTerminalApplied(transactionId, bucket.Keys, committed: true, orphan: false);
+
         // Branch on the persisted OriginClusterId signal. See the
         // method's XML doc for the full rationale and the replay
         // determinism argument.
@@ -1211,6 +1214,10 @@ internal sealed partial class BPlusLeafGrain
             return;
 
         Dictionary<string, LwwValue<byte[]>>? abortedBucket = null;
+        // Test-only trace seam. Unused, this is one static load and a null test:
+        // the && short-circuits before the dedup-set lookup.
+        var traceSink = AtomicCommitTrace.SinkForTest;
+        var traceOrphan = traceSink is not null && _recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId);
         var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId, out abortedBucket);
         ForgetPrepareStampClassification(transactionId);
         // Drop the parallel CRDT-delta side-map entry for this saga so an
@@ -1224,7 +1231,10 @@ internal sealed partial class BPlusLeafGrain
         // The discarded keys keep (abort) or already carry (a late orphan behind a
         // landed terminal) the value the decision implies (issue #4545).
         if (abortedBucket is not null)
+        {
             RecordTerminalWitness(transactionId, abortedBucket.Keys);
+            traceSink?.OnLeafTerminalApplied(transactionId, abortedBucket.Keys, committed: false, orphan: traceOrphan);
+        }
 
 #if LATTICE_DIAG
         // DIAG: abort entry.

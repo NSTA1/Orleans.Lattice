@@ -3044,6 +3044,10 @@ internal sealed partial class AtomicWriteGrain(
             SagaCoordinatorCore.OnParticipantResult(outcomes, i, vote);
         }
 
+        // Test-only trace seam: one static load and a null test when unused.
+        AtomicCommitTrace.SinkForTest?.OnPrepareResolved(
+            state.State.TreeId, state.State.TransactionId, state.State.Entries, everyParticipantPrepared);
+
         return SagaCoordinatorCore.Decide(outcomes) == SagaDecision.Commit;
     }
 
