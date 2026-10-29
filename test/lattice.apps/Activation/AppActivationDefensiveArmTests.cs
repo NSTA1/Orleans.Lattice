@@ -137,20 +137,26 @@ public sealed class AppActivationDefensiveArmTests
         var options = new InImageAppSourceOptions();
         options.Registrations.Add(new InImageAppRegistration(manifest.Identity.Slug, typeof(object).Assembly, "unused.json"));
 
-        var catalog = Catalog(options, new AsynchronousAppSource(manifest));
+        var completion = new TaskCompletionSource<AppSourceResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new AsynchronousAppSource(completion.Task);
+        var catalog = Catalog(options, source);
 
         Assert.That(catalog.Manifests, Is.Empty);
+        Assert.That(completion.Task.IsCompleted, Is.False,
+            "the source must remain pending throughout the catalog's synchronous load");
+
+        completion.SetResult(ActivationAppSource.ResolvedResult(manifest));
+
+        Assert.That(Catalog(options, source).Manifests, Is.EqualTo(new[] { manifest }),
+            "positive control: the same source and manifest are accepted once resolution is complete");
     }
 
-    /// <summary>An <see cref="IAppSource"/> that never completes synchronously.</summary>
-    private sealed class AsynchronousAppSource(AppManifest manifest) : IAppSource
+    /// <summary>An <see cref="IAppSource"/> whose completion is controlled by the test.</summary>
+    private sealed class AsynchronousAppSource(Task<AppSourceResult> resolution) : IAppSource
     {
-        public async ValueTask<AppSourceResult> ResolveAsync(
-            AppSlug slug, AppVersion? version = null, CancellationToken cancellationToken = default)
-        {
-            await Task.Yield();
-            return ActivationAppSource.ResolvedResult(manifest);
-        }
+        public ValueTask<AppSourceResult> ResolveAsync(
+            AppSlug slug, AppVersion? version = null, CancellationToken cancellationToken = default) =>
+            new(resolution);
     }
 
     // ----- scope coverage and rule-id derivation reject an unknown scope kind -----
