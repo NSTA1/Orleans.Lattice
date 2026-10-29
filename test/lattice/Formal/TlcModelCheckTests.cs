@@ -749,3 +749,4 @@ public sealed partial class TlcModelCheckTests
 
     private sealed record TlcResult(int ExitCode, string Output);
 }
+// Probe for #5166 acceptance criterion 4 (draft PR, never merged).
