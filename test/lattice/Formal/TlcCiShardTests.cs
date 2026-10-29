@@ -231,12 +231,17 @@ public sealed partial class TlcCiShardTests
         var mutation = TlcCiShard.Tag(new TestCaseData(rebootstrap, rebootstrap.LoadMutations()[0]));
         var variant = TlcCiShard.Tag(new TestCaseData(atomic, atomic.Manifest.Variants.Keys.First()));
         var baseCase = TlcCiShard.Tag(new TestCaseData(atomic));
+        var other = TlcCiShard.Tag(new TestCaseData("not a module"));
 
         Assert.Multiple(() =>
         {
             Assert.That(Categories(mutation), Is.EqualTo(new[] { TlcCiShard.ReBootstrap }));
             Assert.That(TlcCiShard.AtomicVariantShards.Contains(Categories(variant).Single()), Is.True);
             Assert.That(Categories(baseCase), Is.Empty);
+            Assert.That(ModuleCategories(mutation), Is.EqualTo(new[] { "TlcModule_ReplicationReBootstrap" }));
+            Assert.That(ModuleCategories(variant), Is.EqualTo(new[] { "TlcModule_AtomicCommitCrossCluster" }));
+            Assert.That(ModuleCategories(baseCase), Is.EqualTo(new[] { "TlcModule_AtomicCommitCrossCluster" }));
+            Assert.That(AllCategories(other), Is.Empty);
         });
     }
 
@@ -337,13 +342,25 @@ public sealed partial class TlcCiShardTests
             Assert.Throws<ArgumentNullException>(() => TlcCiShard.OfVariant(null!, "v"));
             Assert.Throws<ArgumentNullException>(() => TlcCiShard.OfVariant(module, null!));
             Assert.Throws<ArgumentNullException>(() => TlcCiShard.Tag(null!));
+            Assert.Throws<ArgumentNullException>(() => TlcCiShard.ModuleCategory(null!));
         });
     }
 
     private static SpecModule Module(string name) =>
         SpecModuleCatalogue.Repository().Single(module => module.Name == name);
 
+    /// <summary>
+    /// The <c>TlcShard*</c> routing categories of a case. The per-module
+    /// <c>TlcModule_*</c> family is deliberately left out: it routes nothing, so
+    /// every shard guard must ignore it.
+    /// </summary>
     private static IEnumerable<string> Categories(TestCaseData data) =>
+        AllCategories(data).Where(category => category.StartsWith("TlcShard", StringComparison.Ordinal));
+
+    private static IEnumerable<string> ModuleCategories(TestCaseData data) =>
+        AllCategories(data).Where(category => category.StartsWith(TlcCiShard.ModuleCategoryPrefix, StringComparison.Ordinal));
+
+    private static IEnumerable<string> AllCategories(TestCaseData data) =>
         data.Properties.ContainsKey(PropertyNames.Category)
             ? data.Properties[PropertyNames.Category].Cast<string>()
             : [];
