@@ -126,6 +126,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "asserts no raw ProcessorCount pool sizing across packages, not instrument declarations",
             ["RawAsyncEnumerableAdoptionGuardTests"] =
                 "asserts every raw IAsyncEnumerable enumeration in src is wrapped or justified, not instrument declarations",
+            ["RefinementSurfaceCensusTests"] =
+                "asserts every grain class in src is named by a TLA+ refinement note or listed in spec/UNMODELLED.md (issue #5157), not instrument declarations",
             ["RegistryAcquisitionSeamGuardTests"] =
                 "asserts every ILatticeRegistry acquisition in src goes through the timing seam, not instrument declarations",
             ["RoutingForceRefreshGuardTests"] =
