@@ -195,6 +195,8 @@ public sealed class TlcInputClassificationTests
     [TestCase(".github/workflows/ci.yml")]
     [TestCase(".github/workflows/publish.yml")]
     [TestCase(".github/workflows/ci-serial-old.yml")]
+    [TestCase(".github/workflows/coverage.yml")]
+    [TestCase(".github/workflows/plan-coverage-matrix.py")]
     public void A_routing_file_is_routing_and_not_a_verdict_input(string path)
     {
         var inputs = Load();
@@ -204,7 +206,7 @@ public sealed class TlcInputClassificationTests
     }
 
     [TestCase("test/lattice/Formal/RefinementDetectorResolverTests.cs")]
-    [TestCase(".github/workflows/coverage.yml")]
+    [TestCase(".github/workflows/coverage-catch-up.yml")]
     [TestCase("spec/shard-ownership/Refinement.md")]
     [TestCase("spec/atomic-commit/perturbations/Any.perturbation")]
     public void A_neutral_file_is_not_a_verdict_input(string path)
@@ -308,8 +310,8 @@ public sealed class TlcInputClassificationTests
         {
             Assert.That(ClassificationProblems(ScopedTrackedFiles(), Load().WithVerdictInputs(".github/workflows/ci.yml")),
                 Has.Some.Contains(".github/workflows/ci.yml is named both as a verdict input and as routing"));
-            Assert.That(ClassificationProblems(ScopedTrackedFiles(), Load().WithVerdictInputs(".github/workflows/coverage.yml")),
-                Has.Some.Contains(".github/workflows/coverage.yml is named both as a verdict input and as neutral"));
+            Assert.That(ClassificationProblems(ScopedTrackedFiles(), Load().WithVerdictInputs(".github/workflows/coverage-catch-up.yml")),
+                Has.Some.Contains(".github/workflows/coverage-catch-up.yml is named both as a verdict input and as neutral"));
         });
     }
 

@@ -81,6 +81,7 @@ public sealed partial class CiTlaToolchainProvisioningTests
     [
         "ci-serial-old.yml",
         "ci.yml",
+        "coverage.yml",
         "publish.yml",
     ];
 
