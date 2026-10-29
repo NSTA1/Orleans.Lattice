@@ -168,7 +168,8 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase("spec/atomic-commit/AtomicCommit.tla")]
     [TestCase("test/lattice/Formal/TlcModelCheckTests.cs")]
     [TestCase("test/shared/Orleans.Lattice.Testing/Hygiene/HygieneRepository.cs")]
-    [TestCase(".github/workflows/ci.yml")]
+    [TestCase(".github/actions/tla-toolchain/action.yml")]
+    [TestCase("tools/tlc/toolchain.json")]
     [TestCase("tools/tlc/build.py")]
     [TestCase("tools/tlc/patch.json")]
     [TestCase("tools/tlc/CheckpointOrderProbe.java")]
@@ -182,6 +183,7 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase("test/lattice/Formal/RefinementDetectorResolverTests.cs")]
     [TestCase(".github/workflows/coverage.yml;test/lattice/Hygiene/CiMemberPullRequestTieringTests.cs")]
     [TestCase(".github/workflows/test-shards.json;test/lattice/Formal/TlcCiShard.cs;.github/workflows/tier-scope.py")]
+    [TestCase(".github/workflows/ci.yml;.github/workflows/publish.yml;.github/workflows/ci-serial-old.yml")]
     public void A_main_pull_request_touching_only_routing_or_neutral_files_skips_exhaustive_TLC_and_keeps_the_smoke_shard(string changedList)
     {
         var decision = DecideTierScope("pull_request", "main", changedList.Split(';'));
@@ -208,9 +210,9 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase("test/lattice/Orleans.Lattice.Tests.csproj")]
     [TestCase("test/Directory.Build.props")]
     [TestCase("test/shared/Orleans.Lattice.Testing/Hygiene/HygieneRepository.cs")]
-    [TestCase(".github/workflows/ci.yml")]
-    [TestCase(".github/workflows/publish.yml")]
     [TestCase(".github/actions/tla-toolchain/action.yml")]
+    [TestCase("tools/tlc/toolchain.json")]
+    [TestCase("tools/tlc/toolchain.py")]
     [TestCase("Directory.Packages.props")]
     [TestCase("global.json")]
     [TestCase("tools/tlc/build.py")]

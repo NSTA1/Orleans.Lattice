@@ -2220,32 +2220,15 @@ jobs:
       # carry `lattice`. Legs are bin-packed dynamically, so which leg that is
       # changes from run to run and is not knowable here; gating on it would be
       # a guess that silently disarms the fixture when the packing shifts. The
-      # cost of being unconditional is a JDK already cached on the image plus a
-      # 2.3 MB download, against a fixture that fails closed under CI if the
-      # toolchain is absent.
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Fetch TLA+ tools
-        run: |
-          set -euo pipefail
-          mkdir -p tools
-          curl --fail --silent --show-error --location \
-            --retry 3 --retry-delay 5 --retry-all-errors \
-            --output tools/tla2tools.jar \
-            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
-          # Pinned by digest, not merely by tag. A release asset can be replaced
-          # in place, and an unverified jar on the classpath of a verification
-          # gate is the one dependency where a silent substitution would be
-          # least visible.
-          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tools/tla2tools.jar" \
-            | sha256sum --check --strict
-
-      - name: Build and regression-check TLC checkpoint overlay
-        run: python3 tools/tlc/build.py --java-home "$JAVA_HOME" --jar tools/tla2tools.jar --output tools/tlc/build
+      # cost of being unconditional is a JDK already cached on the image, a
+      # 2.3 MB download and, on a warm cache, an overlay restore, against a
+      # fixture that fails closed under CI if the toolchain is absent.
+      #
+      # Every pin lives in tools/tlc/toolchain.json and every lane provisions
+      # through the one composite action (#5151); `CiTlaToolchainProvisioningTests`
+      # fails if a workflow inlines a pin or provisions any other way.
+      - name: Provision TLA+ toolchain
+        uses: ./.github/actions/tla-toolchain
 
       - name: Run leg
         env:
@@ -2374,7 +2357,7 @@ jobs:
       # gate directories and silently fall outside the filter.
       #
       # `Tlc` is excluded deliberately: `TlcModelCheckTests` needs a JVM and
-      # `tla2tools.jar`, and it reads only `.tla` and `.cfg` files, which are
+      # the TLA+ tools jar, and it reads only `.tla` and `.cfg` files, which are
       # not markdown and therefore already reach the `test` matrix.
       #
       # `Orleans.Lattice.Explorer.UiTests` is excluded for the same reason its

@@ -1,0 +1,99 @@
+name: TLA+ toolchain
+description: >-
+  Provisions the TLA+ toolchain the Tlc test category needs: the pinned JDK, a
+  digest-verified tla2tools.jar at tools/tla2tools.jar, and the verified
+  checkpoint-order overlay at tools/tlc/build. Every pin is read from
+  tools/tlc/toolchain.json; this action carries none of its own.
+
+outputs:
+  overlay-cache-hit:
+    description: "'true' when the overlay was restored from the cache instead of being built."
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    # The single reader of toolchain.json. Its self-test runs first, so a
+    # broken validator cannot read a broken pin and report it as good.
+    - name: Read TLA+ toolchain pins
+      id: pins
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 tools/tlc/toolchain.py --self-test
+        python3 tools/tlc/toolchain.py pins >> "$GITHUB_OUTPUT"
+
+    - name: Setup Java
+      uses: actions/setup-java@v5
+      with:
+        distribution: ${{ steps.pins.outputs.java-distribution }}
+        java-version: ${{ steps.pins.outputs.java-version }}
+
+    # Pinned by digest, not merely by tag. A release asset can be replaced in
+    # place, and an unverified jar on the classpath of a verification gate is
+    # the one dependency where a silent substitution would be least visible.
+    - name: Fetch TLA+ tools
+      shell: bash
+      env:
+        JAR_URL: ${{ steps.pins.outputs.jar-url }}
+        JAR_SHA256: ${{ steps.pins.outputs.jar-sha256 }}
+      run: |
+        set -euo pipefail
+        mkdir -p tools
+        curl --fail --silent --show-error --location \
+          --retry 3 --retry-delay 5 --retry-all-errors \
+          --output tools/tla2tools.jar \
+          "$JAR_URL"
+        echo "$JAR_SHA256  tools/tla2tools.jar" | sha256sum --check --strict
+
+    # Keyed on every checked-in build input plus the resolved java/javac
+    # versions, so a pin change or a JDK patch release rebuilds and
+    # regression-checks the overlay rather than reusing one built by another
+    # compiler.
+    - name: Compute checkpoint overlay cache key
+      id: key
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 tools/tlc/toolchain.py cache-key --java-home "$JAVA_HOME" >> "$GITHUB_OUTPUT"
+
+    - name: Restore checkpoint overlay
+      id: restore
+      uses: actions/cache/restore@v5
+      with:
+        path: tools/tlc/build
+        key: ${{ steps.key.outputs.key }}
+
+    # Only on a miss. build.py fetches the upstream ModelChecker.java from
+    # raw.githubusercontent.com, so a warm leg makes no such request.
+    - name: Build and regression-check TLC checkpoint overlay
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: python3 tools/tlc/build.py --java-home "$JAVA_HOME" --jar tools/tla2tools.jar --output tools/tlc/build
+
+    # Unconditional: a restored overlay is held to exactly the same pins as a
+    # freshly built one, and any mismatch fails the leg here.
+    - name: Verify checkpoint overlay receipt
+      shell: bash
+      run: python3 tools/tlc/toolchain.py verify --jar tools/tla2tools.jar --build tools/tlc/build
+
+    # Saved only after the receipt verified, so the cache never holds an
+    # overlay that failed its checks.
+    - name: Save checkpoint overlay
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: tools/tlc/build
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Report checkpoint overlay provenance
+      shell: bash
+      env:
+        HIT: ${{ steps.restore.outputs.cache-hit }}
+        KEY: ${{ steps.key.outputs.key }}
+      run: |
+        if [ "$HIT" = "true" ]; then
+          echo "TLC checkpoint overlay restored from cache ($KEY) and verified; build.py did not run."
+        else
+          echo "TLC checkpoint overlay built, regression-checked and verified; saved as $KEY."
+        fi

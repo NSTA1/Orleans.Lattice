@@ -228,9 +228,8 @@ class TierScopeSelfTest(unittest.TestCase):
     def test_verdict_inputs_run_exhaustive_tlc(self):
         for path in (
             "test/shared/Orleans.Lattice.Testing/Hygiene/HygieneRepository.cs",
-            ".github/workflows/ci.yml",
-            ".github/workflows/publish.yml",
             ".github/actions/tla-toolchain/action.yml",
+            "tools/tlc/toolchain.json",
             "test/lattice/Formal/RefinementNote.cs",
             "test/lattice/Formal/RefinementPropertyCoverageTests.cs",
             "test/lattice/Formal/TlcModelCheckTests.cs",
@@ -253,6 +252,9 @@ class TierScopeSelfTest(unittest.TestCase):
             ".github/workflows/tlc-inputs.json",
             ".github/workflows/lightweight-change.py",
             ".github/workflows/select-test-packages.sh",
+            ".github/workflows/ci.yml",
+            ".github/workflows/publish.yml",
+            ".github/workflows/ci-serial-old.yml",
             "test/lattice/Formal/TlcCiShard.cs",
         ):
             for base in ("main", self.MEMBER):
