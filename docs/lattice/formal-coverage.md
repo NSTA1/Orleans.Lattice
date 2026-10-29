@@ -43,14 +43,17 @@ CI selects exhaustive TLC. The acceptance census (#4442) adds two more gates:
 
 ## Areas
 
-Figures are derived from module manifests and refinement notes. Each area's spec
-`README.md` holds the figures the build checks; the B+ tree topology row reflects
-its six checked modules.
+Figures are derived from module manifests and refinement notes, and the build checks
+every one of them: `FormalCoverageAreaCensusTests` re-derives each row from the
+modules it counts, and requires every module under `spec/` to be counted exactly
+once, either here or in the
+[focused materialised-view companions](#focused-materialised-view-companions).
 
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
+| Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
 | WAL durability lifecycle | 2 | 61 | 57 | 140 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
-| Shard ownership | 4 | 105 | 100 | 166 | [Verified Shard Ownership](verified-shard-ownership.md) |
+| Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 84 | 64 | 195 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
