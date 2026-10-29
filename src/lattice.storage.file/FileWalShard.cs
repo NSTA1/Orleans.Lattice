@@ -1171,7 +1171,7 @@ internal sealed class FileWalShard : IDisposable
             {
                 var payload = records[i].Payload.Span;
                 var payloadPosition = _writePosition + cursor
-                    + FileWalRecordFormat.FramingOverhead - 4 + FileWalRecordFormat.DataBodyPrefix;
+                    + FileWalRecordFormat.DataPayloadOffset;
                 cursor += FileWalRecordFormat.WriteDataRecord(
                     buffer.AsSpan(cursor), records[i].Offset, payload);
                 newEntries[i] = new IndexEntry(records[i].Offset, payloadPosition, payload.Length);
@@ -1340,7 +1340,7 @@ internal sealed class FileWalShard : IDisposable
 
                     var written = FileWalRecordFormat.WriteDataRecord(writeBuffer, _entries[i].Offset, payload);
                     var payloadPosition = position
-                        + FileWalRecordFormat.FramingOverhead - 4 + FileWalRecordFormat.DataBodyPrefix;
+                        + FileWalRecordFormat.DataPayloadOffset;
                     temp.Write(writeBuffer, 0, written);
                     newEntries[i] = new IndexEntry(_entries[i].Offset, payloadPosition, payload.Length);
                     position += written;
@@ -1531,12 +1531,12 @@ internal sealed class FileWalShard : IDisposable
         {
             record = default;
             // Need at least the type byte + body length prefix.
-            if (_position + 5 > _fileLength)
+            if (_position + FileWalRecordFormat.HeaderLength > _fileLength)
             {
                 return false;
             }
 
-            Span<byte> header = stackalloc byte[5];
+            Span<byte> header = stackalloc byte[FileWalRecordFormat.HeaderLength];
             _stream.Seek(_position, SeekOrigin.Begin);
             _stream.ReadExactly(header);
             var type = header[0];
@@ -1565,34 +1565,34 @@ internal sealed class FileWalShard : IDisposable
                 _stream.ReadExactly(rented, 0, recordLen);
 
                 var storedCrc = BinaryPrimitives.ReadUInt32LittleEndian(
-                    rented.AsSpan(5 + bodyLen, 4));
-                var actualCrc = Crc32.HashToUInt32(rented.AsSpan(0, 5 + bodyLen));
+                    rented.AsSpan(FileWalRecordFormat.HeaderLength + bodyLen, FileWalRecordFormat.ChecksumLength));
+                var actualCrc = Crc32.HashToUInt32(rented.AsSpan(0, FileWalRecordFormat.HeaderLength + bodyLen));
                 if (storedCrc != actualCrc)
                 {
                     return false;
                 }
 
-                var payloadPosition = _position + 5;
+                var bodyPosition = _position + FileWalRecordFormat.HeaderLength;
                 record = type switch
                 {
                     FileWalRecordFormat.RecordTypeData => new ScannedRecord
                     {
                         Type = type,
-                        Offset = BinaryPrimitives.ReadInt64LittleEndian(rented.AsSpan(5, 8)),
-                        PayloadPosition = payloadPosition + FileWalRecordFormat.DataBodyPrefix,
+                        Offset = BinaryPrimitives.ReadInt64LittleEndian(rented.AsSpan(FileWalRecordFormat.HeaderLength, sizeof(long))),
+                        PayloadPosition = bodyPosition + FileWalRecordFormat.DataBodyPrefix,
                         PayloadLength = bodyLen - FileWalRecordFormat.DataBodyPrefix,
                         EndPosition = _position + recordLen,
                     },
                     FileWalRecordFormat.RecordTypeCommit => new ScannedRecord
                     {
                         Type = type,
-                        CommitCount = BinaryPrimitives.ReadInt32LittleEndian(rented.AsSpan(5, 4)),
+                        CommitCount = BinaryPrimitives.ReadInt32LittleEndian(rented.AsSpan(FileWalRecordFormat.HeaderLength, sizeof(int))),
                         EndPosition = _position + recordLen,
                     },
                     FileWalRecordFormat.RecordTypeTrim => new ScannedRecord
                     {
                         Type = type,
-                        Offset = BinaryPrimitives.ReadInt64LittleEndian(rented.AsSpan(5, 8)),
+                        Offset = BinaryPrimitives.ReadInt64LittleEndian(rented.AsSpan(FileWalRecordFormat.HeaderLength, sizeof(long))),
                         EndPosition = _position + recordLen,
                     },
                     _ => new ScannedRecord { Type = type, EndPosition = _position + recordLen },
