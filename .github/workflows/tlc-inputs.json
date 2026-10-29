@@ -88,6 +88,7 @@
     ".github/workflows/coverage.yml",
     ".github/workflows/docs.yml",
     ".github/workflows/failed-tests-filter.py",
+    ".github/workflows/formal-impact.py",
     ".github/workflows/install-playwright-browsers.sh",
     ".github/workflows/package-reporting-selftest.py",
     ".github/workflows/plan-coverage-matrix.py",
