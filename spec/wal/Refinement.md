@@ -264,22 +264,30 @@ from this specification.**
   not states. Eventual successful admission and responsive storage are assumptions:
   the model proves neither a wall-clock bound nor progress under permanent refusal.
   Its one-entry slices abstract the production drive's bounded replay budget.
+  No production symbol: the gap states an environment premise of the model, not
+  a production mechanism.
 - **Values, keys, HLCs and CRDT merge.** A write is an offset and a projection is a
   set of offsets, so replay idempotence (applying an entry twice leaves the
   projection unchanged) is true by construction here and asserts nothing. It is the
   LWW and CRDT cores' property, not this model's; see the excluded candidate below.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **The checkpoint is NOT durably monotone.** The issue proposed
   `CheckpointMonotonicDurable`. It is false of production by design: rehydrating a
   snapshot older than the persisted checkpoint lowers the checkpoint to the
   snapshot's coverage (#2280, #2404), and the next persist writes the lower value.
   The durable quantities that ARE monotone are the pin store (by max merge) and
   snapshot coverage (`SnapshotCoverageMonotonic`); the model states those instead.
+  No production symbol: the gap records a candidate property that is false of
+  production by design, so it is not checked.
 - **Saga state.** Prepared buckets, deferred terminals, the unresolved-replay-work
   ledger and the prepare clamp on checkpoint advance (`BPlusLeafGrain.PendingTx`)
   are not modelled; the atomic-commit module covers the saga.
+  Production symbols: `BPlusLeafGrain.PendingTx`.
 - **Splits, merges and resharding.** Split handoff, checkpoint hints
   (`BPlusLeafGrain.ApplyCheckpointHintAsync`), moved-away slots and the warm-cache
   rescue are not modelled; the shard ownership module (#4434) owns them.
+  Production symbols: `BPlusLeafGrain.ApplyCheckpointHintAsync`.
 - **Replication, view maintainers, log subscribers and backup capture.** They are
   WAL consumers the offset floor does not speak for. They are absent here, which
   only over-approximates the trim, so nothing here speaks for them. Production
@@ -298,6 +306,8 @@ from this specification.**
   from leaf state the durable pins protect and is newer than the window it replaces
   (`IncrementalDeltaCollectorTests.A_trim_landing_after_the_tail_probe_makes_the_capture_fall_back_rather_than_skip_entries`).
   A configured retention TTL may trim past a reader; see "Retention TTL" below.
+  Production symbols: `IWalOffsetConsumerRegistryGrain`,
+  `WalGcTrimCore.ClassifyEntry`, `WalLogSubscriber`.
 - **HLC stamps, several partitions and the empty release: checked by a Coyote
   model.** Stamps and frontiers are abstracted away here and the instance has one
   partition, so the GC arms that admit by stamp (the cursor, the offset admission's
@@ -316,6 +326,8 @@ from this specification.**
   `LeafEmptyReleaseBeforeReplayTests`, `WalOverrideHoldTests`, and for the two
   arms `LeafDurablePinCoreTests.An_empty_partition_with_nothing_applied_releases_with_its_sentinel_checkpoint`
   and `LeafDurablePinCoreTests.Live_never_checkpointed_rows_over_a_proven_empty_wal_release_the_block_issue_3103`.
+  Production symbols: `LeafDurablePinCore.Resolve`,
+  `WalGcTrimCore.IsEntryEligible`.
 - **A purge is a contract, not a loss (issues #4654, #4700).** A purge reaches a
   leaf by first making a marker durable on the leaf's own row record; from then on
   the writes that leaf owned are deleted, and a leaf recovery re-creates empty is
@@ -331,11 +343,15 @@ from this specification.**
   environment faults and leaf (de)activation; once recovery has reset every marker
   the whole lifecycle resumes, which is what found that a re-created leaf must seed a
   fresh block pin (`RecoveryNeverFallsOffLogRecreateSeedsNoBlockPin`).
+  Production symbols: `LeafRowRecordState.PurgeCleared`.
 - **The row record.** `ILeafRowRecordGrain` is not modelled. It is defence in
   depth: a lost row with a surviving record already fails closed on the intent rule
   alone, and the model shows the intent rule closes the double loss of the row and
   its record without it.
+  Production symbols: `ILeafRowRecordGrain`.
 - **Shard moves.** Specified in `WalMove.tla`, not here.
+  No production symbol: the behaviour is `WalMove`'s, mapped in that module's
+  own refinement note.
 - **Atomicity of a grain turn: a modelling abstraction, covered at the
   implementation level.** Each action is one atomic step. Production interleaves
   grain turns at await points (`[AlwaysInterleave]` methods, timers, the background
@@ -354,12 +370,16 @@ from this specification.**
   (flush completions against reader polls) and
   `WalCommitLogWriterDrainCoyoteTests.Checking_the_token_before_parking_loses_a_wakeup`
   (the drain against parked callers).
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **The replay barrier and data operations: a modelling abstraction.** Readers of
   the projection are not modelled; `ReadPositionHonest` is stated over the
   projection a reader WOULD be served once the barrier releases, which is stricter
   than production's barrier needs while a replay is still running. That no data
   operation is served before the barrier releases is pinned by
   `BPlusLeafGrainTests.Every_data_entry_point_waits_for_the_replay_barrier`.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 
 ## Excluded candidates from the issue
 

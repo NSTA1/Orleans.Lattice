@@ -47,35 +47,46 @@ being propagated.
 | `RoutedKeysOwned` | In settled states, separator descent routes each acknowledged key to its unique owning leaf. | Yes: `BPlusInternalGrainTests.Route_with_multiple_separators_picks_correct_child` and `ConcurrentSplitLinkageIntegrationTests.Concurrent_SetAsync_leaves_no_orphaned_leaves_or_lost_keys`. |
 | `ReachMaxHeight` | Under the model's weak fairness assumptions, cascading right-edge splits can reach the six-level instance bound. | Yes: `ConcurrentSplitLinkageIntegrationTests.Sequential_splits_reach_at_least_six_tree_levels`. |
 
-## Bounds and abstraction gaps
+## Deliberate abstraction gaps
 
-The internal-node construction calls `InitializeForTreeAsync` (root promotion)
-and `InitializeWithChildrenForTreeAsync` (split siblings and bulk-load levels)
-only fuse dispatch. Each awaits the existing `SetTreeIdAsync` before the
-existing initialization method: the binding write, topology write, split gate,
-child-parent digest seeds and upward publication retain their order and failure
-semantics. The caller still persists split/promotion intent before construction
-and publishes the parent/root only after it succeeds. No modeled transition is
-removed or reordered; activation loss between the two writes still leaves a
-bound, uninitialized node that the same deterministic-id retry initializes.
-
-The checked configuration begins at height three with four leaves and fan-out
-three. It uses keys `1..184`, at most sixty-four leaves, 128 node identities,
-one activation loss, and `MaxHeight = 6`. TLC 1.7.4 exhaustively checks 1,271
-distinct states for this configuration. The level-indexed transitions are
-generic over the modeled levels, and an integration regression drives a real
-fan-out-three shard to at least six levels. Neither finite check is an
-unbounded-height proof or a production maximum-height guarantee.
-
-One structural split is pending at a time in this abstraction; ordered writes
-can interleave between its durable protocol phases, but two simultaneous
-cascades are not modeled here. `BPlusTopology` and the concurrent split
-integration tests cover their separate bounded interleavings. The cascade also
-abstracts values, deletions, arbitrary split pivots, non-rightmost splits, and
-the full leaf-transfer protocol.
-
-Internal-node redistribution/merge and root contraction are deliberate
-non-goals: production leaf reclaim removes an eligible child route but does not
-rebalance internal nodes or contract the root. The model also does not cover the
-orphan audit/repair algorithm. These are not implied behaviors; see the related
-production boundaries in the B+ tree module inventory.
+- **Fused internal-node initialisation.** The internal-node construction calls
+  `InitializeForTreeAsync` (root promotion) and
+  `InitializeWithChildrenForTreeAsync` (split siblings and bulk-load levels)
+  only fuse dispatch. Each awaits the existing `SetTreeIdAsync` before the
+  existing initialization method: the binding write, topology write, split gate,
+  child-parent digest seeds and upward publication retain their order and
+  failure semantics. The caller still persists split/promotion intent before
+  construction and publishes the parent/root only after it succeeds. No modeled
+  transition is removed or reordered; activation loss between the two writes
+  still leaves a bound, uninitialized node that the same deterministic-id retry
+  initializes.
+  Production symbols: `BPlusInternalGrain.InitializeForTreeAsync`,
+  `BPlusInternalGrain.InitializeWithChildrenForTreeAsync`,
+  `BPlusInternalGrain.SetTreeIdAsync`.
+- **The checked configuration is finite.** The checked configuration begins at
+  height three with four leaves and fan-out three. It uses keys `1..184`, at
+  most sixty-four leaves, 128 node identities, one activation loss, and
+  `MaxHeight = 6`. TLC 1.7.4 exhaustively checks 1,271 distinct states for this
+  configuration. The level-indexed transitions are generic over the modeled
+  levels, and an integration regression drives a real fan-out-three shard to at
+  least six levels. Neither finite check is an unbounded-height proof or a
+  production maximum-height guarantee.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
+- **One structural split at a time.** One structural split is pending at a time
+  in this abstraction; ordered writes can interleave between its durable
+  protocol phases, but two simultaneous cascades are not modeled here.
+  `BPlusTopology` and the concurrent split integration tests cover their
+  separate bounded interleavings. The cascade also abstracts values, deletions,
+  arbitrary split pivots, non-rightmost splits, and the full leaf-transfer
+  protocol.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
+- **No internal-node rebalancing or root contraction.** Internal-node
+  redistribution/merge and root contraction are deliberate non-goals: production
+  leaf reclaim removes an eligible child route but does not rebalance internal
+  nodes or contract the root. The model also does not cover the orphan
+  audit/repair algorithm. These are not implied behaviors; see the related
+  production boundaries in the B+ tree module inventory.
+  No production symbol: these are production non-goals, so there is no
+  implementation to name.

@@ -137,15 +137,20 @@ under-approximations are stated so that they are not mistaken for coverage:
   (a day by default) is a stranded saga, which `ShardOwnershipRetention`'s
   `NoStrandedBucket` rules out. `NoKeyLostCompactReapsYoungTombstone` shows the
   assumption is load-bearing.
+  Production symbols: `BPlusLeafGrain.CompactTombstonesAsync`.
 - **Compaction runs between migrations.** Reaping a tombstone that had aged out
   before a window opened is the same as reaping it just before; one that ages
   out inside a window needs a migration open for most of the grace period.
+  Production symbols: `TombstoneCompactionGrain`.
 - **A sealed survivor refuses a prepare in the window.** A saga's prepare of a
   folding slot, forwarded to a survivor that still holds the slot sealed, or
   replayed there by the sweep, is refused until the survivor reclaims the slot,
   and the saga or the sweep retries. That is a loss of availability, not of
   safety, and `MigrationCompletes` and `SagaCompletes` hold under it.
+  Production symbols: `ShardRootGrain.ThrowIfRejectedForKey`.
 - **Time.** No timers or deadlines beyond the compaction guards above.
+  No production symbol: the gap is the model's absence of time, not a production
+  mechanism.
 
 ## Territory owned by other open issues
 

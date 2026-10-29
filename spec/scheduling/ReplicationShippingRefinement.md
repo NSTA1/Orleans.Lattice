@@ -33,52 +33,65 @@ can clear the offered cap, but must not clear this pump's observed-feedback stop
 
 ## Deliberate abstraction gaps
 
-`EveryDeferralBounded` is conditional, retry-driven progress, not a wall-time
-deadline. This is the parent-autopilot scope decision, not a direct user selection, in
-[#4967 comment 6391108683](https://github.com/NSTA1/Orleans.Lattice/issues/4967#issuecomment-6391108683).
-For an eligible failed record, expiration is observed on a subsequent retry.
-Capacity for poison, quarantine and dead-letter storage is independent. Those
-three full states are checked fail-closed, not excluded. A decided prepare
-cannot safely be poisoned: it remains unacknowledged until application can
-succeed. `RepairDecided` explicitly represents that recovery, not a changed
-registry decision. A receiver restart loses volatile first-deferral history
-but preserves durable poison/quarantine and acknowledged delivery.
-
-The minimal real-code counterexample to the rejected unconditional contract is
-three retries with zero timeout against a Committed registry: every result is
-Deferred, with no poison or dead-letter entry. Poisoning that prepare could
-discard a key of a saga whose commit is already recorded. A full bounded queue
-likewise cannot acknowledge a record it did not retain. No overflow protocol,
-forced decision rewrite or durable timeout protocol is introduced.
-
-Capacity is an admission predicate, not an unbounded store. `FreeCapacity`
-abstracts sufficient stable admission for the remaining finite obligations;
-it does not prove progress against arbitrary competing traffic that refills
-a freed slot. Each initially full capacity is still checked fail-closed.
-
-Progress assumes finite transient transport faults, fair callback/retry and
-elapsed-time opportunities, eventual free capacity, completed reseeding and a
-stable receiver lifetime long enough to observe expiry. The finite restart
-budget represents a final stable lifetime, not an assertion that crashes stop
-in production. Safety checks include the restart before that lifetime. An
-unrepaired decided prepare may safely block indefinitely; `StreamProgresses`
-requires its application fault to have cleared. Jitter is not fairness.
-The no-reseed-cycle claim assumes its durable retired/quarantine marker is
-retained: the finite record universe cannot evict the production retired
-history's 4096-entry bound. Arbitrary histories that evict that marker are not
-certified as permanent no-reseed memory.
-
-The receiver failure submodel begins at the `MaxApplyRetries` threshold; earlier
-failed attempts rethrow without starting this clock. The real detectors use a
-one-attempt threshold and exercise actual decorator retries.
-
-`age = Timeout + 1` means no first deferral has been observed. `Defer` starts
-age at zero without counting retries as elapsed time. `Elapse` independently
-advances a coarse elapsed-time abstraction; retries alone do not expire it.
-The finite shared window and callback abstraction does not quantify over
-arbitrary classifier histories, unbounded restarts, wall-clock scheduling or
-changing source identities. Pause countdown is an environment opportunity
-after a window drains, not a measured latency bound.
+- **Bounded deferral is retry-driven, not a deadline.** `EveryDeferralBounded`
+  is conditional, retry-driven progress, not a wall-time deadline. This is the
+  parent-autopilot scope decision, not a direct user selection, in [#4967
+  comment
+  6391108683](https://github.com/NSTA1/Orleans.Lattice/issues/4967#issuecomment-6391108683).
+  For an eligible failed record, expiration is observed on a subsequent retry.
+  Capacity for poison, quarantine and dead-letter storage is independent. Those
+  three full states are checked fail-closed, not excluded. A decided prepare
+  cannot safely be poisoned: it remains unacknowledged until application can
+  succeed. `RepairDecided` explicitly represents that recovery, not a changed
+  registry decision. A receiver restart loses volatile first-deferral history
+  but preserves durable poison/quarantine and acknowledged delivery.
+  No production symbol: the gap states an environment premise of the model, not
+  a production mechanism.
+- **The rejected unconditional contract.** The minimal real-code counterexample
+  to the rejected unconditional contract is three retries with zero timeout
+  against a Committed registry: every result is Deferred, with no poison or
+  dead-letter entry. Poisoning that prepare could discard a key of a saga whose
+  commit is already recorded. A full bounded queue likewise cannot acknowledge a
+  record it did not retain. No overflow protocol, forced decision rewrite or
+  durable timeout protocol is introduced.
+  No production symbol: the gap records a contract that was rejected, so no
+  production symbol implements it.
+- **Capacity is an admission predicate.** Capacity is an admission predicate,
+  not an unbounded store. `FreeCapacity` abstracts sufficient stable admission
+  for the remaining finite obligations; it does not prove progress against
+  arbitrary competing traffic that refills a freed slot. Each initially full
+  capacity is still checked fail-closed.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **Progress premises.** Progress assumes finite transient transport faults,
+  fair callback/retry and elapsed-time opportunities, eventual free capacity,
+  completed reseeding and a stable receiver lifetime long enough to observe
+  expiry. The finite restart budget represents a final stable lifetime, not an
+  assertion that crashes stop in production. Safety checks include the restart
+  before that lifetime. An unrepaired decided prepare may safely block
+  indefinitely; `StreamProgresses` requires its application fault to have
+  cleared. Jitter is not fairness. The no-reseed-cycle claim assumes its durable
+  retired/quarantine marker is retained: the finite record universe cannot evict
+  the production retired history's 4096-entry bound. Arbitrary histories that
+  evict that marker are not certified as permanent no-reseed memory.
+  No production symbol: the gap states an environment premise of the model, not
+  a production mechanism.
+- **The receiver failure submodel starts at the retry threshold.** The receiver
+  failure submodel begins at the `MaxApplyRetries` threshold; earlier failed
+  attempts rethrow without starting this clock. The real detectors use a
+  one-attempt threshold and exercise actual decorator retries.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **Deferral age and elapsed time are coarse.** `age = Timeout + 1` means no
+  first deferral has been observed. `Defer` starts age at zero without counting
+  retries as elapsed time. `Elapse` independently advances a coarse elapsed-time
+  abstraction; retries alone do not expire it. The finite shared window and
+  callback abstraction does not quantify over arbitrary classifier histories,
+  unbounded restarts, wall-clock scheduling or changing source identities. Pause
+  countdown is an environment opportunity after a window drains, not a measured
+  latency bound.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 
 ## Variable mapping
 

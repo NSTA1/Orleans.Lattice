@@ -202,13 +202,16 @@ not a reason for an exclusive global slot or a larger local cohort.
 
 ## Deliberate abstraction gaps
 
-One reader with finite leaves, one reusable saga and fixed routing; no arbitrary
-reader queue, cross-tree authority RPC, host shutdown, process crash, permanent provider fault
-or caller cancellation. Local D0 ownership and all-registry coverage validation
-are supplied by the real fallback and independently tested fan-out. The model
-does not claim starvation-free admission among infinitely many competing
-readers; production bounds each caller's wait and reserves a writer-open window.
-It does not re-prove AtomicCommit safety, WAL storage capacity or classifier
-recovery. Composition is by these explicit interfaces, not a cross-product of
-the independent protocol state spaces. Finite-instance checking does not prove
-arbitrary N, ops/s, or wall-clock latency.
+- **One reader, finite leaves and fixed routing.** One reader with finite
+  leaves, one reusable saga and fixed routing; no arbitrary reader queue,
+  cross-tree authority RPC, host shutdown, process crash, permanent provider
+  fault or caller cancellation. Local D0 ownership and all-registry coverage
+  validation are supplied by the real fallback and independently tested fan-out.
+  The model does not claim starvation-free admission among infinitely many
+  competing readers; production bounds each caller's wait and reserves a
+  writer-open window. It does not re-prove AtomicCommit safety, WAL storage
+  capacity or classifier recovery. Composition is by these explicit interfaces,
+  not a cross-product of the independent protocol state spaces. Finite-instance
+  checking does not prove arbitrary N, ops/s, or wall-clock latency.
+  No production symbol: the gap states a bound or premise of the scheduling
+  model, not a production mechanism.

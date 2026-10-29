@@ -156,6 +156,8 @@ read as coverage of another (#2324):
   cross-cluster atomic visibility are epic #4430's cross-cluster module
   (#4436). The floor bypass and the causal-park bypass for prepared entries are
   not modelled.
+  No production symbol: the behaviour is the cross-cluster atomic-commit
+  module's, mapped in that module's own refinement note.
 - **Input-integrity faults in saga records (#4692).** A saga record whose
   apply fails for a cause a re-seed does not remove - a malformed terminal,
   a terminal contradicting the decision its re-seed recorded, or a
@@ -176,17 +178,21 @@ read as coverage of another (#2324):
   well-formed stream from a correctly configured peer produces, and it is a
   saga record's, which this module does not model (above); see
   [Dead-letter queue](../../docs/lattice.replication/dead-letter-queue.md).
+  Production symbols: `ILatticeReplicationDeadLetters.ReleaseQuarantinedSagaAsync`.
 - **Empty-origin records and the change feed.** Every write in the model
   carries an origin, which is what `WalCommitLogWriter` stamps on a replicated
   tree. Durability-only records with an empty origin, which the shipper drops
   and `ChangeFeed` deliberately keeps for a local bootstrap consumer (#2324),
   are not modelled, so the model says nothing about the change feed.
+  Production symbols: `WalCommitLogWriter`, `ChangeFeed`.
 - **Tombstone garbage collection.** No tombstone is reaped here, so a
   snapshot can carry every delete. A reaped delete behind the trim point, and
   a late write that outlives a reaped tombstone, are the re-bootstrap
   companion's
   ([`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md)),
   which found #4537, #4549 and #4615 there; #4647, #4675 and #4678 fixed them.
+  No production symbol: the behaviour is the re-bootstrap companion's, mapped in
+  that module's own refinement note.
 - **Causal order's low watermark.** `CausalOrder` is checked here with the
   identity half of production's dependency check. The other half - a
   dependency below the low watermark the origin ships, and not held back, is
@@ -196,11 +202,15 @@ read as coverage of another (#2324):
   which reproduced #4464's pin replacing the vector, was retired with the
   vector's part in the check: no property here reads the vector any more, so
   regressing it changes no outcome.
+  No production symbol: the behaviour is the low-watermark companion's, mapped
+  in that module's own refinement note.
 - **Range deletes, tombstone reaps, key filters, coalescing.** Point deletes
   are modelled, as tombstone writes by the bootstrap source to a key it holds;
   range deletes bypass the point-write dedup; tombstone reaps never ship; key
   filters and pre-ship coalescing reduce what ships without changing what
   converges. None is modelled. Content-hash elision is (`Elide`).
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Anti-entropy.** The digest probe, the Merkle walk, `LeafReReplayer` and
   `BootstrapFallbackPlanner`'s range-scoped re-ship are not modelled. Each
   only re-delivers writes a source holds, outside the shipper's cursor: a
@@ -211,6 +221,7 @@ read as coverage of another (#2324):
   `LeafReReplayer` selects only entries above the peer's per-origin high-water
   mark, the #1060 diagonal, so it cannot repair a hole below that mark; that
   bounds the repair's own reach, not convergence, which does not depend on it.
+  Production symbols: `LeafReReplayer`, `BootstrapFallbackPlanner`.
 - **Trims and encode dead letters on one edge.** `Trim` and `ShipDeadLetter`
   act only on the bootstrap edge (b to c), at most once and before the
   bootstrap, because the instance has one bootstrap; a skip on another edge
@@ -220,21 +231,31 @@ read as coverage of another (#2324):
   export opened before the second failure cannot clear it, and
   `ReplicationShipperGrainTests.A_second_encode_failure_raises_the_marker_so_an_export_opened_past_the_old_epoch_does_not_clear_it`
   pins it (proven red with the epoch kept on a second failure).
+  Production symbols: `ReplicationShipperGrain`.
 - **One WAL partition per cluster.** Production's key-hashed partitions have
   independent cursors. One partition already interleaves independent leaf
   clocks, and a single cursor never advances faster than per-partition ones
   would, so every entry production may still re-deliver, the model may too.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **The legacy-migration tick.** A state persisted before partition cursors
   existed drops entries at or below its scalar cursor once. The model starts
   from a fresh state, so that tick never runs.
+  No production symbol: the tick migrates state persisted before partition
+  cursors, which a fresh model state never holds.
 - **The apply window of the in-flight duplicate.** The model splits only the
   park window; the apply itself is atomic, so a duplicate arriving during an
   apply is not exhibited. Production defers it on both windows (#4477), and
   `ReplicationApplierTests.ApplyAsync_defers_a_duplicate_while_the_first_apply_is_in_flight_and_applies_it_after_an_abort`
   pins the apply window.
+  Production symbols: `ReplicationApplier`.
 - **Topology.** One instance: a and b ship to each other and to c, which only
   receives and is the only bootstrap target and fault site; a trim or an
   encode dead letter happens only on b's stream to c. Relays over longer
   chains, more than one fault and more than two writes are bounded out.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **Receive fence, enrolment and tenant gates, merge-mode mismatch.** These
   defer or refuse entries for reasons outside convergence and are not modelled.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.

@@ -134,11 +134,15 @@ under-approximations are stated so that they are not mistaken for coverage:
 ## Deliberate abstraction gaps
 
 - **The restore's own crash and retry, the reservation, and the alias and map
-  as two values** are `BackupCutover`'s. Its `RestoreReturns` and
+  as two values.** These are `BackupCutover`'s. Its `RestoreReturns` and
   `RevertReturns` are what make `Arm` and `RevertArm` fair here.
-- **A resize or split during the cutover** is `ShardOwnership`'s. The two never
+  No production symbol: the behaviour is `BackupCutover`'s, mapped in that
+  module's own refinement note.
+- **A resize or split during the cutover.** It is `ShardOwnership`'s. The two never
   hold a saga's binding at once: a split an alias move retargets is abandoned
   (`TreeShardSplitGrainTests.Swap_after_an_alias_cutover_does_not_apply_the_slot_diff_to_the_logical_map`).
+  No production symbol: the behaviour is `ShardOwnership`'s, mapped in that
+  module's own refinement note.
 - **Leaf reactivation.** The model's leaves never lose memory. In production a
   leaf that held one of the saga's buckets marks the discard durably
   (`LeafNodeState.DiscardedSagaPrepares`), so a replay after a reactivation
@@ -147,7 +151,10 @@ under-approximations are stated so that they are not mistaken for coverage:
   request once its response timeout has passed, so a straggler cannot outlive the
   call the saga gave up on. The mutation `AtomicAcrossCutoverDiscardForgetsTerminal`
   shows what a discard the leaf forgets costs.
+  Production symbols: `LeafNodeState.DiscardedSagaPrepares`.
 - **Time.** No retention windows, deadlines or timeouts.
+  No production symbol: the gap is the model's absence of time, not a production
+  mechanism.
 
 ## Territory owned by other open issues
 

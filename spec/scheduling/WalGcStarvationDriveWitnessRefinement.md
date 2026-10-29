@@ -114,15 +114,20 @@ parametric argument remain qualified below.
 
 ## Deliberate abstraction gaps
 
-TLC checks the refinement only at this module's small bound (`LeafCount = 1`,
-`Ceiling = 1`, `StallTicks = 1`). That run does not range over two-leaf rank,
-running or credit states, or over the core's `Ceiling = 4`, and is supporting
-evidence only. A larger refinement instance was measured outside CI and did
-not finish within the twenty-minute cap; it carries no claim.
-
-The refinement at any constants is argued, not checked: the parametric action,
-enabledness and fairness argument, including finite stall progress and the
-CallServe transfer, is in the core note's "Composition for any leaf count"
-section, together with a table of which claims are checked by TLC, by the
-composition test or by argument. The core's guarantees at its larger bounds
-transfer to this module, and so to the original model, through that argument.
+- **Checked only at a small bound.** TLC checks the refinement only at this
+  module's small bound (`LeafCount = 1`, `Ceiling = 1`, `StallTicks = 1`). That
+  run does not range over two-leaf rank, running or credit states, or over the
+  core's `Ceiling = 4`, and is supporting evidence only. A larger refinement
+  instance was measured outside CI and did not finish within the twenty-minute
+  cap; it carries no claim.
+  No production symbol: the gap describes how the instance is checked, not a
+  production mechanism.
+- **The refinement at any constants is argued.** The refinement at any constants
+  is argued, not checked: the parametric action, enabledness and fairness
+  argument, including finite stall progress and the CallServe transfer, is in
+  the core note's "Composition for any leaf count" section, together with a
+  table of which claims are checked by TLC, by the composition test or by
+  argument. The core's guarantees at its larger bounds transfer to this module,
+  and so to the original model, through that argument.
+  No production symbol: the gap is about a model-to-model refinement, not a
+  production mechanism.
