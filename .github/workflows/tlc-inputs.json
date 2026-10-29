@@ -66,6 +66,7 @@
     "tools/tlc/README.md",
     "test/lattice/Formal/RefinementDetectorResolverTests.cs",
     "test/lattice/Formal/RefinementIndex*",
+    "test/lattice/Formal/RefinementSurfaceCensus*",
     "test/lattice/Formal/SpecMutationBlockGrammarTests.cs",
     "test/lattice/Formal/TlcCheckpointToolchainTests.cs",
     "test/lattice/Formal/TlcCaseCensusTests.cs",
