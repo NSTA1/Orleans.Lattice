@@ -52,6 +52,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("BackupIncremental", TlcCiShard.Backup)]
     [TestCase("BackupProvenance", TlcCiShard.Backup)]
     [TestCase("BackupRestore", TlcCiShard.Backup)]
+    [TestCase("BPlusCascade", TlcCiShard.BPlusCascade)]
     [TestCase("ReplicationCausalDelivery", TlcCiShard.ReBootstrap)]
     [TestCase("ReplicationLowWatermark", TlcCiShard.ReBootstrap)]
     [TestCase("ReplicationReBootstrap", TlcCiShard.ReBootstrap)]
@@ -99,8 +100,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("ReplayPermits")]
     [TestCase("BackupCapture")]
     [TestCase("ShardOwnership")]
-    [TestCase("BPlusCascade")]
-    public void An_expensive_or_split_base_does_not_share_its_mutations_shard(string name)
+    public void An_expensive_base_does_not_share_its_mutations_shard(string name)
     {
         var module = Module(name);
 

@@ -140,14 +140,8 @@ internal static class TlcCiShard
     /// <summary>The full ReplicationShipping variant configurations, currently FourRecords.</summary>
     public const string SchedulingShippingVariants = "TlcShardSchedulingShippingVariants";
 
-    /// <summary>The BPlusCascade base-model TLC run.</summary>
-    public const string BPlusCascadeBase = "TlcShardBPlusCascadeBase";
-
-    /// <summary>The BPlusCascade mutants outside the parent-accounting, recovery, separator-range, and height groups.</summary>
-    public const string BPlusCascadeMutations1 = "TlcShardBPlusCascadeMutations1";
-
-    /// <summary>The BPlusCascade parent-accounting, recovery, separator-range, and height mutants.</summary>
-    public const string BPlusCascadeMutations2 = "TlcShardBPlusCascadeMutations2";
+    /// <summary>The BPlusCascade base model and every BPlusCascade mutant, co-located so the base serves their full-bound controls.</summary>
+    public const string BPlusCascade = "TlcShardBPlusCascade";
 
     /// <summary>
     /// The prefix of the per-module category every TLC base, variant and
@@ -163,7 +157,7 @@ internal static class TlcCiShard
     /// <summary>Every category <see cref="Of"/>, <see cref="OfModule"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
         [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup,
-         BPlusCascadeBase, BPlusCascadeMutations1, BPlusCascadeMutations2,
+         BPlusCascade,
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
@@ -235,9 +229,7 @@ internal static class TlcCiShard
 
         if (string.Equals(name, "BPlusCascade", StringComparison.Ordinal))
         {
-            return mutation.Target is "ParentChildAccounting" or "RecoverablePending" or "SeparatorRanges" or "ReachMaxHeight"
-                ? BPlusCascadeMutations2
-                : BPlusCascadeMutations1;
+            return BPlusCascade;
         }
 
         return name.StartsWith("AtomicCommit", StringComparison.Ordinal) ? Atomic : null;
@@ -247,9 +239,7 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return SchedulingCategory(module) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
-            ? BPlusCascadeBase
-            : null);
+        return SchedulingCategory(module) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
     }
 
     /// <summary>
@@ -280,14 +270,17 @@ internal static class TlcCiShard
     /// (249 s against 224 s) and ShardOwnership (265 s against 521 s), whose
     /// controls keep running. Replication's mutations are split: its base joins
     /// the replication-wal group, and its convergence mutations keep launching
-    /// their controls, as do the split BPlusCascade and AntiEntropy groups whose
-    /// bases stay where they are.
+    /// their controls, as do the split AntiEntropy groups whose base stays
+    /// where it is. BPlusCascade moved later (#5166): in CI run 40909619830 its
+    /// base took 10 s against 227 s for its thirteen mutations, then split over
+    /// two shards, so its base and mutations now share one shard.
     /// </para>
     /// </summary>
     private static string? CoLocatedBaseCategory(SpecModule module) => module.Name switch
     {
         "AtomicCommit" or "AtomicCommitCrossCluster" => Atomic,
         "BackupCutover" or "BackupIncremental" or "BackupProvenance" or "BackupRestore" => Backup,
+        "BPlusCascade" => BPlusCascade,
         "ReplicationCausalDelivery" or "ReplicationLowWatermark" or "ReplicationReBootstrap" => ReBootstrap,
         "ShardOwnershipCrdt" or "ShardOwnershipCutover" or "ShardOwnershipFold" or "ShardOwnershipRetention" => ShardOwnership,
         "Replication" or "WalDurability" or "WalMove" => ReplicationWal,

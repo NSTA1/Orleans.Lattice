@@ -120,28 +120,37 @@ public sealed partial class TlcCiShardTests
     }
 
     [Test]
-    public void Bplus_cascade_runs_are_partitioned_by_base_and_balanced_mutation_groups()
+    public void Bplus_cascade_base_and_mutations_share_one_shard()
     {
         var module = Module("BPlusCascade");
         var mutations = module.LoadMutations();
-        var loads = mutations
-            .GroupBy(mutation => TlcCiShard.Of(module, mutation)!, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
         Assert.Multiple(() =>
         {
-            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.BPlusCascadeBase));
-            Assert.That(loads.Keys, Is.EquivalentTo(new[]
-                { TlcCiShard.BPlusCascadeMutations1, TlcCiShard.BPlusCascadeMutations2 }));
-            Assert.That(
-                loads.Values.Max() - loads.Values.Min(),
-                Is.LessThanOrEqualTo(2),
-                "the BPlusCascade mutation cases must be spread across both TLC shards");
-            Assert.That(
-                mutations.Where(mutation => mutation.Target is "ParentChildAccounting" or "RecoverablePending" or "SeparatorRanges" or "ReachMaxHeight")
-                    .All(mutation => TlcCiShard.Of(module, mutation) == TlcCiShard.BPlusCascadeMutations2),
-                Is.True,
-                "the measured target-property groups must retain their shard assignment");
+            Assert.That(mutations, Is.Not.Empty);
+            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.BPlusCascade));
+            Assert.That(mutations.Select(mutation => TlcCiShard.Of(module, mutation)).Distinct(),
+                Is.EqualTo(new[] { TlcCiShard.BPlusCascade }));
+            Assert.That(mutations.All(mutation => TlcCiShard.SharesBaseShard(module, mutation)), Is.True,
+                "the base must run in the mutations' process to serve their full-bound controls");
+        });
+    }
+
+    [Test]
+    public void Every_category_routed_TLC_shard_runs_only_the_deterministic_tier()
+    {
+        var categoryShards = LatticeShards()
+            .Where(shard => shard.Categories.Any(category => category.StartsWith("TlcShard", StringComparison.Ordinal)))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(categoryShards, Has.Count.EqualTo(TlcCiShard.All.Count));
+            foreach (var shard in categoryShards)
+            {
+                Assert.That(shard.Tiers, Is.EqualTo(new[] { "deterministic" }),
+                    $"{shard.Name}: a TlcShard* category is carried only by TLC cases, which are never Chaos or Coyote, so any other tier is an empty dotnet test start");
+            }
         });
     }
 
