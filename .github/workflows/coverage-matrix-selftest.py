@@ -128,6 +128,116 @@ class CoverageMatrixTests(unittest.TestCase):
                 coverage.plan(Path(directory))
 
 
+def declared_tlc_shards() -> list[str]:
+    shards = json.loads((WORKFLOWS / "test-shards.json").read_text(encoding="utf-8"))
+    return [
+        shard["shard"] for shard in shards[coverage.TLC_PACKAGE]["shards"]
+        if shard.get("tlc") or shard.get("tlcSmoke")
+    ]
+
+
+class TlcMatrixTests(unittest.TestCase):
+    def test_every_tlc_and_smoke_shard_runs_once_uninstrumented(self):
+        legs = coverage.plan_tlc(ROOT)
+        items = [item for leg in legs for item in leg["items"]]
+        declared = declared_tlc_shards()
+        self.assertIn("formal-tlc-smoke", declared)
+        self.assertGreater(len(declared), 2)
+        self.assertEqual(sorted(declared), sorted(item["shard"] for item in items))
+        self.assertLessEqual(len(legs), coverage.TLC_MAX_LEGS)
+        project = coverage.discover_projects(ROOT)[coverage.TLC_PACKAGE]
+        for item in items:
+            self.assertEqual("deterministic", item["tier"])
+            self.assertEqual(project, item["project"])
+            self.assertTrue(item["filter"].endswith(f"&({coverage.TLC_FILTER})"), item["filter"])
+            self.assertNotRegex(item["filter"], r"TestCategory!=Tlc(?![A-Za-z0-9_])")
+            # run-test-leg.py drops the inactivity collector only for declared TLC items.
+            self.assertTrue(item["tlc"] or item["tlcSmoke"])
+            self.assertNotIn("skip", item)
+        for index, leg in enumerate(legs, start=1):
+            self.assertEqual(f"tlc-{index}", leg["id"])
+            self.assertEqual(coverage.tlc_timeout(leg["estimate"]), leg["timeout"])
+            self.assertGreaterEqual(leg["timeout"], leg["estimate"] + coverage.TLC_TIMEOUT_OVERHEAD)
+            self.assertLessEqual(leg["timeout"], coverage.TLC_TIMEOUT_CEILING)
+
+    def test_coverage_and_tlc_legs_never_share_an_artifact_or_a_shard(self):
+        coverage_ids = {leg["id"] for leg in coverage.plan(ROOT)}
+        tlc_ids = {leg["id"] for leg in coverage.plan_tlc(ROOT)}
+        self.assertFalse(coverage_ids & tlc_ids)
+        self.assertFalse(any(leg_id.startswith("leg-") for leg_id in tlc_ids))
+        coverage_shards = {item["shard"] for leg in coverage.plan(ROOT) for item in leg["items"]}
+        self.assertFalse(coverage_shards & set(declared_tlc_shards()))
+
+    def test_a_restricted_plan_runs_only_the_named_shards(self):
+        legs = coverage.plan_tlc(ROOT, only=["formal-tlc-smoke"])
+        self.assertEqual(1, len(legs))
+        self.assertEqual(["formal-tlc-smoke"], [item["shard"] for item in legs[0]["items"]])
+        self.assertIn("The_atomic_commit_base_specification_holds", legs[0]["items"][0]["filter"])
+        for name in ("formal-tlc-nope", "bplustree"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Not TLC shards"):
+                coverage.plan_tlc(ROOT, only=[name])
+
+    def test_a_leg_beyond_the_ceiling_is_refused_rather_than_cut_off(self):
+        self.assertEqual(31, coverage.tlc_timeout(0.24))
+        ceiling = (coverage.TLC_TIMEOUT_CEILING - coverage.TLC_TIMEOUT_OVERHEAD) / coverage.TLC_TIMEOUT_FACTOR
+        self.assertLessEqual(coverage.tlc_timeout(ceiling), coverage.TLC_TIMEOUT_CEILING)
+        with self.assertRaisesRegex(ValueError, "ceiling"):
+            coverage.tlc_timeout(ceiling + 1)
+
+    def test_cli_restriction_plans_no_coverage_and_needs_a_tlc_matrix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            planner = str(WORKFLOWS / "plan-coverage-matrix.py")
+            result = subprocess.run(
+                [sys.executable, planner, "--output-matrix", str(out / "c.json"),
+                 "--output-tlc-matrix", str(out / "t.json"), "--tlc-shards", " formal-tlc-smoke "],
+                text=True, capture_output=True, timeout=60,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual([], json.loads((out / "c.json").read_text()))
+            self.assertEqual(1, len(json.loads((out / "t.json").read_text())))
+            result = subprocess.run(
+                [sys.executable, planner, "--output-matrix", str(out / "c.json"),
+                 "--tlc-shards", "formal-tlc-smoke"],
+                text=True, capture_output=True, timeout=60,
+            )
+            self.assertNotEqual(0, result.returncode)
+
+    def test_case_durations_name_every_case_by_its_full_name(self):
+        trx = textwrap.dedent("""\
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <Results>
+                <UnitTestResult testId="a" testName="The_base_specification_holds(AtomicCommit)" outcome="Passed" duration="00:01:02.5000000"/>
+                <UnitTestResult testId="b" testName="A_mutant_fails(AtomicCommit, NoAbort)" outcome="Failed" duration="01:00:00"/>
+              </Results>
+              <TestDefinitions>
+                <UnitTest id="a"><TestMethod className="Orleans.Lattice.Tests.Formal.TlcModelCheckTests"/></UnitTest>
+                <UnitTest id="b"><TestMethod className="Orleans.Lattice.Tests.Formal.TlcModelCheckTests"/></UnitTest>
+              </TestDefinitions>
+            </TestRun>
+        """)
+        with tempfile.TemporaryDirectory() as directory:
+            leg = Path(directory) / "tlc-trx-1-tlc-1" / "test" / "TestResults"
+            leg.mkdir(parents=True)
+            (leg / "one.trx").write_text(trx, encoding="utf-8")
+            rows = coverage.tlc_case_durations(Path(directory))
+            self.assertEqual([
+                ("Orleans.Lattice.Tests.Formal.TlcModelCheckTests.A_mutant_fails(AtomicCommit, NoAbort)", "Failed", 3600.0),
+                ("Orleans.Lattice.Tests.Formal.TlcModelCheckTests.The_base_specification_holds(AtomicCommit)", "Passed", 62.5),
+            ], rows)
+            output = Path(directory) / "durations.tsv"
+            result = subprocess.run(
+                [sys.executable, str(WORKFLOWS / "plan-coverage-matrix.py"),
+                 "--tlc-case-durations", directory, "--output", str(output)],
+                text=True, capture_output=True, timeout=60,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            lines = output.read_text(encoding="utf-8").splitlines()
+            self.assertEqual("# case\toutcome\tseconds", lines[0])
+            self.assertTrue(lines[1].endswith("\tFailed\t3600.0"), lines[1])
+            self.assertEqual([], coverage.tlc_case_durations(Path(directory) / "missing"))
+
+
 class BrowserInstallTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -403,6 +513,135 @@ class CoverageShellTests(unittest.TestCase):
         self.env["LEGS"] = "[]"
         result = self.run_script("Verify all coverage legs are complete")
         self.assertNotEqual(0, result.returncode)
+
+
+def shell_root(test: unittest.TestCase) -> Path:
+    """A temporary cwd with a bin/ of tool wrappers, addressed relatively from bash."""
+    temporary = tempfile.TemporaryDirectory()
+    test.addCleanup(temporary.cleanup)
+    root = Path(temporary.name)
+    tools = root / "bin"
+    tools.mkdir()
+    python = Path(sys.executable).as_posix()
+    (tools / "python3").write_text(f'#!/bin/bash\nexec "{python}" "$@"\n', encoding="utf-8", newline="\n")
+    (tools / "python3").chmod(0o755)
+    if sys.platform == "win32":
+        jq = Path(shutil.which("jq")).as_posix()
+        (tools / "jq").write_text(f'#!/bin/bash\nexec "{jq}" --binary "$@"\n', encoding="utf-8", newline="\n")
+        (tools / "jq").chmod(0o755)
+    return root
+
+
+def run_step(root: Path, name: str, env: dict) -> subprocess.CompletedProcess:
+    (root / "step.sh").write_text('export PATH="$PWD/bin:$PATH"\n' + script(name), encoding="utf-8", newline="\n")
+    return subprocess.run([bash(), "step.sh"], cwd=root, env=env, text=True, capture_output=True, timeout=60)
+
+
+class PlanShellTests(unittest.TestCase):
+    def setUp(self):
+        self.root = shell_root(self)
+        workflows = self.root / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        for name in ("plan-coverage-matrix.py", "plan-test-matrix.py", "test-shards.json", "test-durations.tsv"):
+            shutil.copyfile(WORKFLOWS / name, workflows / name)
+        for package, project in (("lattice", "Orleans.Lattice.Tests"), ("other", "Other.Tests")):
+            path = self.root / "test" / package / f"{project}.csproj"
+            path.parent.mkdir(parents=True)
+            path.touch()
+        self.env = dict(os.environ, GITHUB_OUTPUT="output.txt", GITHUB_STEP_SUMMARY="summary.txt",
+                        DEFAULT_BRANCH="main", TLC_SHARDS="", TRACK_TLC_FAILURES="false")
+
+    def plan(self, ref: str, **inputs: str) -> dict:
+        self.env.update(GITHUB_REF=ref, TLC_SHARDS="", TRACK_TLC_FAILURES="false")
+        self.env.update(inputs)
+        result = run_step(self.root, "Plan coverage shards", self.env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        outputs = dict(
+            line.split("=", 1) for line in (self.root / "output.txt").read_text().splitlines()
+        )
+        (self.root / "output.txt").unlink()
+        outputs["stdout"] = result.stdout
+        return outputs
+
+    def test_a_full_run_on_main_plans_both_matrices_and_tracks(self):
+        outputs = self.plan("refs/heads/main")
+        self.assertEqual("true", outputs["coverage"])
+        self.assertEqual("true", outputs["track"])
+        self.assertGreater(len(json.loads(outputs["legs"])), 0)
+        shards = {item["shard"] for leg in json.loads(outputs["tlc_legs"]) for item in leg["items"]}
+        self.assertEqual(set(declared_tlc_shards()), shards)
+
+    def test_a_restricted_branch_run_skips_coverage_and_tracks_only_on_request(self):
+        outputs = self.plan("refs/heads/ci/probe", TLC_SHARDS="formal-tlc-smoke")
+        self.assertEqual("false", outputs["coverage"])
+        self.assertEqual("false", outputs["track"])
+        self.assertEqual([], json.loads(outputs["legs"]))
+        self.assertEqual(1, len(json.loads(outputs["tlc_legs"])))
+        self.assertEqual("true", self.plan("refs/heads/ci/probe", TLC_SHARDS="formal-tlc-smoke",
+                                           TRACK_TLC_FAILURES="true")["track"])
+        self.assertEqual("false", self.plan("refs/heads/ci/probe")["track"])
+
+    def test_main_ignores_a_restriction_so_a_partial_run_never_stands_in_for_a_night(self):
+        outputs = self.plan("refs/heads/main", TLC_SHARDS="formal-tlc-smoke")
+        self.assertIn("TLC restriction ignored", outputs["stdout"])
+        self.assertEqual("true", outputs["coverage"])
+        self.assertEqual(len(declared_tlc_shards()),
+                         sum(len(leg["items"]) for leg in json.loads(outputs["tlc_legs"])))
+
+    def test_an_unknown_shard_fails_the_plan(self):
+        self.env.update(GITHUB_REF="refs/heads/ci/probe", TLC_SHARDS="formal-tlc-nope")
+        result = run_step(self.root, "Plan coverage shards", self.env)
+        self.assertNotEqual(0, result.returncode)
+
+
+class TlcTrackingShellTests(unittest.TestCase):
+    TITLE = "Nightly exhaustive TLC failing on main"
+
+    def setUp(self):
+        self.root = shell_root(self)
+        (self.root / "bin" / "gh").write_text(textwrap.dedent("""\
+            #!/bin/bash
+            printf '%s\\n' "${*//$'\\n'/ }" >> calls
+            if [ "$1" = api ]; then printf '%s' "$OPEN_ISSUES"; fi
+        """), encoding="utf-8", newline="\n")
+        (self.root / "bin" / "gh").chmod(0o755)
+        self.env = dict(os.environ, GITHUB_SERVER_URL="https://github.com", GITHUB_REPOSITORY="o/r",
+                        GITHUB_RUN_ID="42", GITHUB_REF_NAME="main", GITHUB_SHA="abc", OPEN_ISSUES="")
+
+    def track(self, legs: str, report: str, open_issues: str = "") -> list[str]:
+        self.env.update(TLC_RESULT=legs, REPORT_RESULT=report, OPEN_ISSUES=open_issues)
+        (self.root / "calls").unlink(missing_ok=True)
+        result = run_step(self.root, "Open, update or close the nightly TLC tracking issue", self.env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        calls = self.root / "calls"
+        return calls.read_text().splitlines() if calls.exists() else []
+
+    def test_a_first_red_night_opens_the_issue_with_the_run_link(self):
+        calls = self.track("failure", "success")
+        self.assertEqual(2, len(calls))
+        self.assertTrue(calls[0].startswith("api --paginate -X GET repos/o/r/issues"), calls[0])
+        self.assertIn(f'.title == "{self.TITLE}"', calls[0])
+        self.assertIn("-f labels=ci", calls[0])
+        self.assertTrue(calls[1].startswith(f"issue create --repo o/r --title {self.TITLE} --label ci"), calls[1])
+        self.assertIn("https://github.com/o/r/actions/runs/42", calls[1])
+
+    def test_a_later_red_night_comments_on_the_oldest_open_issue(self):
+        calls = self.track("success", "failure", "17\n9\n")
+        self.assertEqual(2, len(calls))
+        self.assertTrue(calls[1].startswith("issue comment 9 --repo o/r --body"), calls[1])
+        self.assertIn("actions/runs/42", calls[1])
+
+    def test_the_first_green_night_closes_the_issue(self):
+        calls = self.track("success", "success", "9\n")
+        self.assertTrue(calls[1].startswith("issue close 9 --repo o/r --comment"), calls[1])
+
+    def test_a_green_night_with_no_issue_writes_nothing(self):
+        self.assertEqual(1, len(self.track("success", "success")))
+
+    def test_no_verdict_touches_nothing(self):
+        for legs, report in (("cancelled", "success"), ("skipped", "success"), ("success", "cancelled")):
+            with self.subTest(legs=legs, report=report):
+                self.assertEqual([], self.track(legs, report, "9\n"))
 
 
 if __name__ == "__main__":
