@@ -619,26 +619,11 @@ jobs:
       - name: Build the TLC test project
         run: dotnet build test/lattice/Orleans.Lattice.Tests.csproj --configuration Release
 
-      # Copied from ci.yml; the TLA+ toolchain action (#5151) replaces all three.
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Fetch TLA+ tools
-        run: |
-          set -euo pipefail
-          mkdir -p tools
-          curl --fail --silent --show-error --location \
-            --retry 3 --retry-delay 5 --retry-all-errors \
-            --output tools/tla2tools.jar \
-            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
-          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tools/tla2tools.jar" \
-            | sha256sum --check --strict
-
-      - name: Build and regression-check TLC checkpoint overlay
-        run: python3 tools/tlc/build.py --java-home "$JAVA_HOME" --jar tools/tla2tools.jar --output tools/tlc/build
+      # The one TLA+ toolchain action (#5151): pins from tools/tlc/toolchain.json,
+      # a digest-verified jar and the verified checkpoint overlay. Its overlay
+      # cache is keyed on the resolved JDK, so it is not a verdict receipt.
+      - name: Provision TLA+ toolchain
+        uses: ./.github/actions/tla-toolchain
 
       - name: Run TLC leg
         env:
