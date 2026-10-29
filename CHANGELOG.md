@@ -12,6 +12,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Terminal delivery.** Saga terminal broadcasts reuse stable leaf chains, combine fallback clock and sibling reads, and skip unused clocks without a WAL writer, while retaining routing invalidation and replay barriers. ([#5147](https://github.com/NSTA1/Orleans.Lattice/pull/5147)) (`Orleans.Lattice`)
+
 - **Performance - Coordinator probes.** Shadow cleanup and bootstrap registration each remove one normal-path registry read. View source-confirmation heads overlap in waves of up to 32, retaining provenance, alias-target checks and replay fences. ([#5143](https://github.com/NSTA1/Orleans.Lattice/pull/5143)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Replication`)
 
 - **Performance - Leaf binding calls.** Root leaf creation and single-key or batched CRDT self-heal each remove one grain call, retaining separate durable binding writes, birth protection and retry behavior. ([#5139](https://github.com/NSTA1/Orleans.Lattice/pull/5139)) (`Orleans.Lattice`)
