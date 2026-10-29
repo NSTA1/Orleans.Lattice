@@ -1,9 +1,8 @@
 # Refreshed measured rows from CI run 37589416238 (2026-10-07).
 # Passed, full-scope items >= 0.1 minutes replace their previous estimates;
-# other rows retain their earlier provenance below. No shard or tier is removed.
-# Eligible complete item TRX results from green member run 40648174016 refresh
-# unchanged formal items and lattice/rest. Current run 40658688360 supplies
-# scheduling and rebootstrap; subgroup estimates are explicitly reconstructed.
+# other rows retain their earlier provenance below. The formal-tlc*
+# deterministic rows were re-measured for #5166 from two receipt-free
+# exhaustive runs; see the lattice section below.
 
 # Per-work-item duration estimates, in minutes, used only to bin-pack the
 # matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
@@ -12,7 +11,7 @@
 # file can never make the plan wrong - only less well balanced.
 #
 # PROVENANCE. Every row in the original median refresh was MEASURED; later
-# refreshes and the scheduling reconstruction below have their own provenance.
+# refreshes below have their own provenance.
 # Each original figure is the MEDIAN wall-clock of that work item
 # across every successful pull-request run of ci.yml created between
 # 2026-09-24 and 2026-09-28: 85 successful runs, of which 67 still carried
@@ -82,66 +81,64 @@
 
 # -- lattice, sharded --------------------------------------------------------
 #
-# The formal-tlc* deterministic rows are not medians. Unchanged formal items
-# use complete passing item TRX from green run 40648174016 (head
-# c04710f914ed1628af05916aaf5f5272caa6d102); lattice/rest uses the same run.
-# Scheduling and rebootstrap use green run 40658688360 (head 92832b77).
-# Only complete passing item TRX with no policy-excluded tiers are eligible;
-# untouched rows retain their prior provenance. Elapsed TRX time excludes
-# some process overhead; prices round up once to hundredths of a minute.
-# Historical run 40576287689 (head 6a008512) had the atomic leg-4
+# The formal-tlc* deterministic rows are not medians. Each is the mean of
+# two measured item durations (leg-results `duration`, the time the item took
+# on its leg), rounded up to hundredths of a minute, re-measured for #5166
+# after controls became shared by content (#5152) and base-served (#5161):
+# - ci.yml bucket push run 40909619830 (head 9418a498d), receipt-free, so
+#   every TLC module ran exhaustively on the ten-leg plan;
+# - coverage.yml run 40923724192 (head 0e4aa6b2a), the nightly-equivalent
+#   dispatch whose eight exhaustive TLC legs run uninstrumented.
+# Both runs passed every TLC case. The two samples agree within about 5% on
+# most shards, but a single case can vary 1.5x between runs on identical
+# inputs: the dedicated TwoPartitions item took 35.22 and 52.78 minutes, and
+# scheduling-workload-b 12.11 and 20.64. The mean prices that noise, it does
+# not remove it. formal-tlc-bplus-cascade replaces three shards (#5166); its
+# row is the sum of their measured items, an upper bound once the base serves
+# the mutation controls. Estimates are planning inputs, not runtime
+# guarantees, and they decide only how work is distributed, never what runs.
+lattice	formal-tlc	deterministic	17.36
+lattice	formal-tlc-materialised-views	deterministic	4.01
+lattice	formal-tlc-view-fence	deterministic	0.20
+lattice	formal-tlc-view-horizon	deterministic	0.70
+lattice	formal-tlc-view-aggregation	deterministic	0.58
+lattice	formal-tlc-view-rebind	deterministic	0.51
+lattice	formal-tlc-view-ready-closure	deterministic	0.65
+lattice	formal-tlc-view-source-admission	deterministic	0.91
+lattice	formal-tlc-view-resolved-identity	deterministic	0.30
+lattice	formal-tlc-view-joint-repair	deterministic	0.63
+lattice	formal-tlc-tree-lifecycle	deterministic	0.65
+lattice	formal-tlc-anti-entropy	deterministic	3.56
+lattice	formal-tlc-anti-entropy-2	deterministic	5.10
+lattice	formal-tlc-anti-entropy-3	deterministic	2.66
+lattice	formal-tlc-aliasing	deterministic	0.45
+lattice	formal-tlc-split-gate	deterministic	1.46
+lattice	formal-tlc-bplus-cascade	deterministic	1.47
+lattice	formal-tlc-scheduling-replay-two-partitions	deterministic	44.00
+lattice	formal-tlc-scheduling	deterministic	31.05
+lattice	formal-tlc-scheduling-workload-b	deterministic	16.38
+lattice	formal-tlc-scheduling-shipping	deterministic	4.29
+lattice	formal-tlc-scheduling-shipping-variants	deterministic	19.76
+lattice	formal-tlc-shard-ownership	deterministic	5.40
+lattice	formal-tlc-convergence	deterministic	4.77
+lattice	formal-tlc-replication-wal	deterministic	13.98
+lattice	formal-tlc-rebootstrap	deterministic	15.68
+lattice	formal-tlc-atomic	deterministic	14.93
+lattice	formal-tlc-atomic-variants-1	deterministic	9.45
+lattice	formal-tlc-atomic-variants-2	deterministic	8.65
+lattice	formal-tlc-atomic-variants-3	deterministic	8.39
+lattice	formal-tlc-atomic-variants-4	deterministic	8.88
+lattice	formal-tlc-atomic-variants-5	deterministic	9.43
+lattice	formal-tlc-atomic-variants-6	deterministic	8.97
+lattice	formal-tlc-backup	deterministic	3.94
+lattice	formal-tlc-smoke	deterministic	0.27
+# lattice/rest (deterministic) uses complete passing item TRX from green run
+# 40648174016 (head c04710f914ed1628af05916aaf5f5272caa6d102); elapsed TRX
+# time excludes some process overhead, and the price rounds up once to
+# hundredths. Historical run 40576287689 (head 6a008512) had the atomic leg-4
 # orphan-slot flake (#5112); its lattice/rest item from that failed leg is
 # excluded. The earlier replacement came from green run 40588531777 (head
-# aa3fe4b6f24cf340c2a5cc5b6416e0c145c8b570), now superseded above.
-lattice	formal-tlc	deterministic	23.47
-lattice	formal-tlc-materialised-views	deterministic	3.74
-lattice	formal-tlc-view-fence	deterministic	0.27
-lattice	formal-tlc-view-horizon	deterministic	1.37
-lattice	formal-tlc-view-aggregation	deterministic	1.27
-lattice	formal-tlc-view-rebind	deterministic	0.97
-lattice	formal-tlc-view-ready-closure	deterministic	1.20
-lattice	formal-tlc-view-source-admission	deterministic	1.32
-lattice	formal-tlc-view-resolved-identity	deterministic	0.42
-lattice	formal-tlc-view-joint-repair	deterministic	1.17
-lattice	formal-tlc-tree-lifecycle	deterministic	0.87
-lattice	formal-tlc-anti-entropy	deterministic	3.83
-lattice	formal-tlc-anti-entropy-2	deterministic	6.41
-lattice	formal-tlc-anti-entropy-3	deterministic	7.21
-lattice	formal-tlc-aliasing	deterministic	0.67
-lattice	formal-tlc-split-gate	deterministic	5.32
-lattice	formal-tlc-bplus-cascade-base	deterministic	0.20
-lattice	formal-tlc-bplus-cascade-mutations-1	deterministic	0.59
-lattice	formal-tlc-bplus-cascade-mutations-2	deterministic	0.67
-# Scheduling: all 221 cases remain, partitioned 106/86/1/27/1. In run
-# 40658688360 head 92832b77, job 122717148586 passed the 192/192 general
-# item in 44.10233 TRX minutes. Prices 21.03/23.04 are
-# four-worker LPT reconstructions of case durations, not measured CI work-item times.
-# Four workers is a reconstruction assumption, not an attested runner trace.
-# Dedicated TwoPartitions: 41.14616 minutes, job 122717148551 (1/1).
-# Shipping: 6.16476 minutes, job 122717148735 (27/27). FourRecords:
-# 18.71505 minutes, job 122717148680 (1/1). Rebootstrap: 42.04940 minutes,
-# job 122717148595 (67/67). These are item TRX times, not compound job totals.
-# All source jobs passed. Historical run 40588708711 rebootstrap job
-# 122488444001 failed under #5116 and contributes no timing. Estimates are
-# planning inputs, not runtime guarantees.
-lattice	formal-tlc-scheduling-replay-two-partitions	deterministic	41.15
-lattice	formal-tlc-scheduling	deterministic	21.03
-lattice	formal-tlc-scheduling-workload-b	deterministic	23.04
-lattice	formal-tlc-scheduling-shipping	deterministic	6.17
-lattice	formal-tlc-scheduling-shipping-variants	deterministic	18.72
-lattice	formal-tlc-shard-ownership	deterministic	9.67
-lattice	formal-tlc-convergence	deterministic	10.84
-lattice	formal-tlc-replication-wal	deterministic	25.30
-lattice	formal-tlc-rebootstrap	deterministic	42.05
-lattice	formal-tlc-atomic	deterministic	26.89
-lattice	formal-tlc-atomic-variants-1	deterministic	9.25
-lattice	formal-tlc-atomic-variants-2	deterministic	6.70
-lattice	formal-tlc-atomic-variants-3	deterministic	7.93
-lattice	formal-tlc-atomic-variants-4	deterministic	5.41
-lattice	formal-tlc-atomic-variants-5	deterministic	5.76
-lattice	formal-tlc-atomic-variants-6	deterministic	6.33
-lattice	formal-tlc-backup	deterministic	7.32
-lattice	formal-tlc-smoke	deterministic	0.20
+# aa3fe4b6f24cf340c2a5cc5b6416e0c145c8b570), now superseded.
 lattice	bplustree	deterministic	7.9
 lattice	rest	deterministic	5.41
 lattice	bplustree	chaos	5.5
@@ -169,20 +166,11 @@ lattice	primitives	chaos	0.0
 lattice	primitives	coyote	0.0
 lattice	rest	chaos	0.1
 lattice	rest	coyote	0.0
-lattice	formal-tlc-convergence	chaos	0.0
-lattice	formal-tlc-convergence	coyote	0.0
-lattice	formal-tlc-replication-wal	chaos	0.0
-lattice	formal-tlc-replication-wal	coyote	0.0
-lattice	formal-tlc-shard-ownership	chaos	0.0
-lattice	formal-tlc-shard-ownership	coyote	0.0
+# Every category-routed formal-tlc-* shard runs only the deterministic tier
+# (TlcCiShardTests), so it has no chaos or coyote row. The formal-tlc
+# catch-all selects by name prefix and keeps every tier.
 lattice	formal-tlc	chaos	0.0
 lattice	formal-tlc	coyote	0.0
-lattice	formal-tlc-rebootstrap	chaos	0.0
-lattice	formal-tlc-rebootstrap	coyote	0.0
-lattice	formal-tlc-atomic	chaos	0.0
-lattice	formal-tlc-atomic	coyote	0.0
-lattice	formal-tlc-backup	chaos	0.0
-lattice	formal-tlc-backup	coyote	0.0
 
 # -- lattice.api.mcp.repocontext, sharded (untiered: see crossTiers) ----------
 lattice.api.mcp.repocontext	capture	all	3.3

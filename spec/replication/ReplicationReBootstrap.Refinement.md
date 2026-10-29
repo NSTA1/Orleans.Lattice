@@ -331,10 +331,12 @@ Porting #4549's drop floor into the module (the Floor variant), for the
 
 ## Deliberate abstraction gaps
 
-- Everything [`Replication.tla`](Replication.tla) covers - loss, duplication
+- **What the main module covers.** Everything [`Replication.tla`](Replication.tla) covers - loss, duplication
   and reordering, the cycle-break, the identity cache, the causal buffer,
   dead-lettering and restarts - is out of scope here; see
   [`Refinement.md`](Refinement.md#deliberate-abstraction-gaps).
+  No production symbol: the behaviour is the main replication module's, mapped
+  in that module's own refinement note.
 - **One key, two clusters; three in the Floor variant.** In the base the
   receiver's own write stands for every non-source origin. The Floor variant
   adds a third cluster q that only writes: its replica, the reap's hold for
@@ -342,31 +344,51 @@ Porting #4549's drop floor into the module (the Floor variant), for the
   re-seed of the receiver is a rewind of its edge. The variant bounds writes
   at two and detaches at one to fit the per-run budget; the one floor
   mutation that needs three writes runs with fewer HLCs instead.
-- **The floor's held-write exemption** is not exercised: the model's source
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
+- **The floor's held-write exemption.** It is not exercised: the model's source
   applies every write it receives, so it holds none back. The exemption is
   pinned by `ReplicationApplierTests.ApplyAsync_applies_a_held_write_and_a_write_at_or_above_the_floor`,
   and held writes themselves are the low-watermark companion's
   ([`ReplicationLowWatermark.Refinement.md`](ReplicationLowWatermark.Refinement.md)).
+  Production symbols: `ReplicationApplier`.
 - **The floor is read under the export's opening lineage only.** The model
   reads the watermark atomically with the export's open, so a frontier read
   under another lineage never arises; production refuses one
   (`BootstrapForeignDeleteReconcile.FrontierMatchesOpen`).
-- **The source's deliveries to the receiver are not split** into admission
-  and landing. A source write a shard root refuses as stale is re-shipped,
+  Production symbols: `BootstrapForeignDeleteReconcile.FrontierMatchesOpen`.
+- **Source deliveries are not split.** The source's deliveries to the
+  receiver are not split into admission and landing. A source write a shard root refuses as stale is re-shipped,
   which only delays it, and the source's origin is never floored.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **CRDT trees.** The reconcile is last-writer-wins only. The model has no
   CRDT delete, so it neither needs nor checks that gate.
-- **The reap guard's D and P** are stated over the model's single key and
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **The reap guard's D and P.** They are stated over the model's single key and
   its edges into the source; their production form is #4615's ceiling over every origin and peer.
-- **At most one disruption** of either tree per behaviour: a source restore,
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **At most one disruption.** At most one disruption of either tree per behaviour: a source restore,
   a reshard, a resize, a soft delete or a receiver restore. Each gate is
   checked against the disruption it exists for; combinations are bounded out.
-- **A read of a soft-deleted tree** fails in production. The model lets the
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
+- **A read of a soft-deleted tree.** It fails in production. The model lets the
   export carry nothing instead, the shape that would mislead the reconcile.
-- **A receiver restore** is taken only once the receiver's own writes have
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **A receiver restore.** It is taken only once the receiver's own writes have
   reached the source: one that destroys unshipped writes is a unilateral
   restore of their source, which the source-restore contract covers.
-- **The coordinated restore** is one atomic step; its saga's prepare, vote
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **The coordinated restore.** It is one atomic step; its saga's prepare, vote
   and commit are covered by the chaos suite, not this module.
-- **Receiver reaps** are not modelled, so a receiver tombstone is never
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **Receiver reaps.** They are not modelled, so a receiver tombstone is never
   garbage-collected.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.

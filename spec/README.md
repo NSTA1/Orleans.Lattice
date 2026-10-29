@@ -82,9 +82,11 @@ changing with it.
 
 The specifications are intentionally **outside** the compiled solution
 (`Orleans.Lattice.slnx`). They are not C#; they are checked by TLC, which needs
-a Java runtime and the TLA+ tools. TLC **is** run per PR, but through an NUnit
-fixture that shells out to it rather than by building anything here - see
-[CI decision](#ci-decision). This directory contains only `.tla`, `.cfg`,
+a Java runtime and the TLA+ tools. TLC **is** run in CI - a base-model smoke
+case on every pull request that selects `test/lattice`, and the exhaustive
+checks when a verdict input changes - but through an NUnit fixture that shells out to it
+rather than by building anything here - see [CI decision](#ci-decision) and the
+[Formal Verification Pipeline](../docs/lattice/formal-verification-pipeline.md). This directory contains only `.tla`, `.cfg`,
 `.mutation`, `.json` and `.md` files; nothing here is built by `dotnet`.
 
 ## Module layout
@@ -99,7 +101,8 @@ in kebab-case. A module directory holds:
 | `<Module>.<Variant>.cfg` | Optional: a variant configuration, the same specification checked under a different bound (see "Variant configurations" below). |
 | `<Module>.manifest.json` | The manifest (below). |
 | a mutation directory | One `.mutation` file per experiment, named by the manifest (conventionally `mutations/`). The file format is described in [`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md#file-format). |
-| a refinement note | The mapping from spec to code, named by the manifest (conventionally `Refinement.md`), with `## Variable mapping`, `## Action mapping` and `## Property mapping` tables and an optional `## Excluded properties` table. [`atomic-commit/Refinement.md`](atomic-commit/Refinement.md) is the worked example. |
+| a refinement note | The mapping from spec to code, named by the manifest (conventionally `Refinement.md`), with `## Variable mapping`, `## Action mapping` and `## Property mapping` tables and an optional `## Excluded properties` table. [`atomic-commit/Refinement.md`](atomic-commit/Refinement.md) is the worked example. An optional `## Deliberate abstraction gaps` section is a checked register of what the module does not model: after any introductory prose, one top-level bullet per gap, `- **<Gap title>.** <prose>`, one paragraph with unique titles, ending in a clause on a line of its own: either `Production symbols:` followed by backticked `Type` or `Type.Member` names separated by commas, or `No production symbol: <reason>.` Every listed symbol must resolve under `src/`, and every production symbol the prose names in backticks must be listed (`RefinementGapRegisterTests`). |
+| `perturbations/` | Optional: production-perturbation experiments for the area's refinement detectors (contract C7, #5158). Each `<Name>.perturbation` names `MODULE`, `ROW` (a behaviour row label of that module's note, without backticks), `FILE` (one repository-relative `.cs` file under `src/`), `DETECTORS` (comma-separated `Fixture.Method` names, each cited by that row) and `SUMMARY`, then `--- FIND` / `--- REPLACE` / `--- END` blocks in the mutation grammar, applied in order, each anchor matching exactly once. The directory's `README.md` lists, in a `## Unseeded rows` table with a reason per row, every behaviour row of a perturbed module that has no perturbation. `RefinementPerturbationTests` is the toolchain-free gate (anchors apply, rows and detectors resolve, every behaviour row is seeded or listed); `python3 tools/perturbations/run-perturbations.py --area <area> --output result.json` is the experiment, never run per pull request: it builds a scratch worktree, runs the named detectors on the unperturbed tree as a control that must pass, then on each perturbed tree (the edited file stamped with the residue marker of the testing instructions), where at least one must fail, and writes a schema-1 JSON result (exit 0 only when every perturbation was detected). The weekly lane `.github/workflows/formal-perturbations.yml` runs every perturbation on `main` (and on dispatch), writes per-perturbation verdicts and durations to its job summary, and keeps one `ci` tracking issue open while any perturbation is undetected or any control is red. [`atomic-commit/perturbations/README.md`](atomic-commit/perturbations/README.md) is the seed set. |
 | `README.md` | What the module models, and a `## Counts` table (below). |
 
 Discovery (`SpecModuleCatalogue`) fails, naming every problem at once, when a
@@ -234,8 +237,8 @@ discovered module, and each test case is named with the module
   cfg names its target once, every variant and every mutation `BOUNDS:` header
   assigns only names the specification has, and the full-bound generated cfg
   retains the base assignments while the mutant cfg adds the declared bounds.
-  The TLC pairing gate also uses that mutant cfg for its matching-bound
-  clean-source control.
+  The TLC pairing gate also checks that mutant cfg's model in its
+  matching-bound clean-source control.
 - `SpecActionMutationCoverageTests`: the note's action table matches `Next`, and
   every behavioural action is perturbed by a mutation that really edits it.
 - `RefinementNoteTests`, `RefinementPropertyCoverageTests`,
@@ -243,6 +246,28 @@ discovered module, and each test case is named with the module
   parses, covers every checked property, names only code that exists and
   detectors that resolve, and states no hand-maintained census count.
 - `SpecModuleDiscoveryTests`: the floor, the counts table and this index.
+- `RefinementDetectorRunnabilityTests`: every detector a note cites is a test
+  some CI lane executes - not `[Ignore]` or `[Explicit]`, and carrying
+  categories the planner's full plan selects.
+- `RefinementGapRegisterTests`: the `## Deliberate abstraction gaps` register
+  format, and every symbol it lists resolves under `src/`.
+- `RefinementPerturbationTests`: every perturbation's anchors apply, and its row
+  and detectors resolve (see the `perturbations/` row of the module layout).
+- `RefinementIndexTests`: the refinement index (rows, production symbols,
+  detectors and gaps) that the formal-impact report reads, written when
+  `LATTICE_REFINEMENT_INDEX` names a file.
+- `FormalCoverageAreaCensusTests` (in `test/lattice/Docs/`, not per module):
+  every figure in the areas table of
+  [Formal Coverage](../docs/lattice/formal-coverage.md#areas) is re-derived from
+  the manifests and notes, and every module is counted exactly once across that
+  table and the materialised-view companions table.
+- `RefinementSurfaceCensusTests` (not per module): every grain implementation
+  class under `src/` is named by some refinement note, by its class name or its
+  own contract interface, or is listed with a reason in
+  [`UNMODELLED.md`](UNMODELLED.md), the register of unmodelled grains; a row
+  for a grain that is gone, moved or now named fails it. The register is a
+  second top-level markdown file here, which discovery accepts because only the
+  directories under `spec/` are module directories.
 
 `SpecModuleDiscoveryControlTests` and
 `TlcModelCheckTests.A_synthetic_module_is_model_checked_by_every_TLC_gate` are
@@ -287,9 +312,12 @@ case, for example `--filter "FullyQualifiedName~TerminationNoFairness"`.
 pieces itself. It reads `tla2tools.jar` from the `TLA_TOOLS_JAR` environment
 variable (an absolute path), falling back to `tools/tla2tools.jar` at the
 repository root (a gitignored path), and it runs `java` from `JAVA_HOME/bin`,
-falling back to the first `java` on `PATH`. The CI workflows download the pinned
-tla2tools v1.7.4 release to `tools/tla2tools.jar` and verify its SHA-256 digest
-before the tests run. They then build and regression-check the overlay once per job.
+falling back to the first `java` on `PATH`. The CI workflows provision it through
+the `.github/actions/tla-toolchain` composite action, which reads every pin from
+`tools/tlc/toolchain.json`: it downloads the pinned release to
+`tools/tla2tools.jar` and verifies its SHA-256 digest before the tests run, then
+restores the overlay from the Actions cache, or builds and regression-checks it
+on a miss, and verifies its receipt either way.
 
 The fixture validates the pinned jar and all four overlay class hashes and puts
 `tools/tlc/build/compiled` before the jar on every TLC invocation. A missing
@@ -300,21 +328,66 @@ limits; none of those results constitutes a full GC model or recovery proof.
 
 ## CI decision
 
+This section records the decision and its rules. The
+[Formal Verification Pipeline](../docs/lattice/formal-verification-pipeline.md)
+page describes the whole process - every lane, the receipt trust model and the
+refinement gates - with diagrams.
+
 TLC runs through the ordinary NUnit fixture
 (`test/lattice/Formal/TlcModelCheckTests.cs`, `[Category("Tlc")]`). Routine CI
 pull requests keep a base-model smoke check: the `formal-tlc-smoke` shard runs
 one base specification in the deterministic tier. Exhaustive shards check every
 module, variant and mutation, but routine pull requests into `main` or an
-integration branch run them only when the diff touches a TLC input (`.tla`,
-`.cfg`, manifest or mutation files under `spec/`, the Formal harness, workflows,
-or build inputs). A missing or empty changed-file list fails toward running the
+integration branch run them only when the diff touches a TLC verdict input.
+`.github/workflows/tlc-inputs.json` sorts every file that can affect a TLC run into three classes: verdict inputs (`.tla`, `.cfg`, manifest and mutation files under `spec/`, the Formal harness that discovers modules, builds cases and cfgs, and launches and judges TLC, the TLA+ toolchain (`tools/tlc/`, whose `toolchain.json` holds every pin, and the `tla-toolchain` action), and build inputs); routing (which leg runs which existing case: `test-shards.json`, the planner, `tier-scope.py`, `TlcCiShard.cs`, and the workflows that provision the toolchain through that action and launch legs), where a routing-only change runs the smoke shard and a toolchain-free partition check proves every TLC case is still selected by exactly one TLC shard; and neutral (files no TLC run reads). A missing or empty changed-file list fails toward running the
 exhaustive checks. Release-line pull requests and pushes, integration-branch
-pushes, and nightly coverage run the exhaustive shards. `Publish` verifies that
+pushes, and nightly coverage run the exhaustive shards. The nightly TLC legs in
+`coverage.yml` run uninstrumented and ignore verdict receipts. An
+integration-branch push is never skipped by its own diff, because the previous
+push's run may have failed or been cancelled; it saves only through receipts.
+`Publish` verifies that
 the exact tag SHA has a successful release-line `build-and-test` run before it
 can publish, so its per-package test matrix can skip repeating TLC.
 
+When the exhaustive shards do run, per-module verdict receipts (#5164) decide
+which modules actually run. A receipt records that every census case of one
+module passed at one fingerprint, and the fingerprint
+(`.github/workflows/tlc-fingerprint.py`) covers the module's specification
+closure, cfgs, manifest and mutations, the TLC-affecting harness and the
+toolchain, so a module whose fingerprint has a trusted receipt cannot change its
+verdict. Receipts are GitHub Actions cache entries keyed
+`tlc-verdict-v1-<Module>-<fingerprint>`. The plan job looks them up, the matrix
+planner removes those modules' `TlcModule_<Module>` cases from the TLC shards
+(recording a shard left with no case as skipped, verified by receipt), and the
+aggregate job writes a receipt for each module whose every census case passed
+in the run. Its summary lists every module as ran, cached (naming the run that
+wrote the receipt), failed, or incomplete, and an incomplete module fails the
+check. Each leg also writes a partial receipt per module and finished item, so
+a cancelled run's completed modules are reused by the next run of the same
+scope once one run's partials cover the census.
+
+Receipts are read only from the run's own scope, its pull request's base branch
+and `main`, never from another pull request. That is the Actions cache's own
+scoping, and the lookup lists only those refs. A pull request writes only to its
+own scope, so it cannot plant a receipt that its base branch or `main` would
+read. Release-line pull requests and pushes ignore receipts, as does a manual
+`workflow_dispatch` run with `tlc_receipts: off`; both run every module.
+
+Because `ci.yml` does not run on pushes to `main`, two other lanes write receipts
+in `main`'s scope (#5165). `.github/workflows/formal-receipts.yml` runs on every
+push to `main`: it lists the receipts `main` already holds for the pushed
+fingerprints, stops before building anything when every module has one, and
+otherwise runs only the modules without one and saves their receipts. The
+nightly Coverage TLC legs never read a receipt, and its `tlc-receipts` job saves
+one for every module whose every census case passed that night.
+
 Only the dedicated `SpecModuleCases.TlcModules`, `TlcMutations` and
-`TlcVariants` sources attach TLC shard categories. The generic module sources
+`TlcVariants` sources attach TLC categories: a `TlcShard*` shard category and a
+per-module `TlcModule_<Module>` category, so
+`TestCategory=TlcModule_<Module>` selects exactly one module's base, variant and
+mutation cases. `TlcCaseCensusTests` writes the matching case census,
+`{ "<Module>": ["<FullyQualifiedName>", ...] }`, to the fully qualified path
+`LATTICE_TLC_CENSUS` names, without a JVM. The generic module sources
 remain untagged: structural discovery, mutation and refinement gates must run
 even when policy skips exhaustive JVM work. The regression for #4852 pins both
 the source boundary and equal case populations.
@@ -323,9 +396,8 @@ The materialised-view tail, anti-entropy, tree-lifecycle and alias bases,
 variants and mutants have dedicated deterministic-only shards rather than
 entering the TLC catch-all. Measured item durations feed the existing matrix
 bin-packer; adding a JVM shard must not add empty Coyote or Chaos work items.
-The control cache hashes the complete generated configuration, including its
-mutation-specific header, so distinct mutants currently run separate controls
-even when they target the same property.
+Controls are shared by content within a process, and served from the base run
+where it provably subsumes them; see [CI budget](#ci-budget).
 
 Every lane that runs .NET tests has to do the same, because the `Tlc` category
 is selected by any ordinary filter rather than opted into by name, and the
@@ -333,10 +405,12 @@ fixture fails closed when the toolchain is missing. That obligation was implicit
 once, and the coverage lane duly ran without the toolchain and failed the whole
 core suite at `OneTimeSetUp`. It is now explicit:
 `CiTlaToolchainProvisioningTests` (in `test/lattice/Hygiene/`) requires each
-workflow that runs tests either to provision the toolchain - pinned to the same
-release and digest as the others, and digest-verified - or to carry a
+workflow that runs tests either to provision the toolchain through the
+`.github/actions/tla-toolchain` action, which reads every pin from
+`tools/tlc/toolchain.json` and verifies the jar's digest, or to carry a
 `# tla-toolchain: not-required - <reason>` marker saying why it cannot select
-the category.
+the category. It refuses any workflow that inlines a pin or provisions the
+toolchain some other way.
 
 This reverses the earlier decision to keep exhaustive TLC out of routine per-PR
 CI, which is worth stating plainly rather than quietly overwriting. Routine PRs
@@ -387,23 +461,59 @@ dominate small models; a temporal check can require the complete state graph.
 `BOUNDS:` may reduce that cost, or enlarge an instance to reach the intended
 counterexample. The clean source must also hold at that matching bound.
 
-For one complete, successful base/variant/mutation selection with no reused
-controls, the launch count is `1 + V + 2*M + B + D`: one full base run, `V`
-variant runs, a full-bound clean control and targeted mutant for each of `M`
-mutations, `B` additional matching-bound clean controls whose generated cfg
-differs, and `D` deadlock-on mutant runs for `DEADLOCK: off`. A mutation with
-both headers therefore costs four launches. This is launch accounting, not
-elapsed-time pricing or a new measured census; early failure can prevent later
-arms from running, and separate smoke/discovery or harness controls cost extra.
+For one complete, successful base/variant/mutation selection, the launch count
+is `1 + V + C + M + D`: one full base run, `V` variant runs, `C` distinct clean
+controls the base run does not serve (see below), a targeted mutant for each of `M` mutations, and `D` deadlock-on
+mutant runs for `DEADLOCK: off`. `C` counts distinct control inputs, not
+mutations: one full-bound control per module, target and TLC options, plus one
+matching-bound control per module, target, options and bounds for the
+mutations whose `BOUNDS:` header makes the generated cfg differ. Without any
+sharing `C` would be `M + B` for `B` such mutations, so a mutation with both
+headers costs at most four launches. This is launch accounting, not
+elapsed-time pricing; early failure can prevent later arms from running, and
+separate smoke/discovery or harness controls cost extra.
 
-`ControlRuns` reuses only an identical complete input within the same test
-process: specification path, base source, full generated cfg text, TLC options
-and sorted sibling module names/text. Its key includes the generated mutation
-name comment, so distinct mutation names do not share controls merely because
-their target, bounds and options match. Repeated requests for the exact same
-key share one lazy result, including failure; there is no cross-process cache.
-Deduct launches only for such actual cache hits, not assumed cross-mutation
-reuse. Base, variant, targeted-mutant and deadlock-on runs bypass this cache.
+`ControlRuns` reuses an identical complete input within the same test process:
+specification path, base source, full generated cfg text, TLC options and
+sorted sibling module names/text (`TlcControlRunKey`). The generated control
+cfgs do not name the mutation - only the mutant cfg's header does - so
+mutations that agree on module, target, bounds and options share one control.
+Repeated requests for the same key share one lazy result, including failure,
+so a failing shared control fails every case that shares it. There is no
+cross-process cache: cases of one module that CI routes to different shard
+categories each pay for their own copy. Variant, targeted-mutant and
+deadlock-on runs bypass this cache.
+
+A full-bound control is not launched at all when the module's base run
+provably subsumes it (#5161, `TlcBaseRunSubsumption`): the control's carried
+configuration (everything but its `INVARIANT` and `PROPERTY` blocks) is
+identical to the base cfg's, every property it checks is checked by the base
+cfg in the same block, and its TLC options check nothing the base run does not
+(`-deadlock` only weakens a check). A clean base run then proves the control
+clean, so the case asserts the base run instead, through `BaseRuns`, one lazy
+result per process keyed like `ControlRuns`, which the base case shares. When
+the base run is not clean the control is launched and gives its own verdict.
+Matching-bound controls always run. Because sharing is process-local, a
+control is served only when the base case runs in the same shard
+(`TlcCiShard.SharesBaseShard`); otherwise serving would launch the base a
+second time. `TlcCiShard` co-locates a base with its mutations only where its
+measured case duration is at most half the mutation shard's, so expensive
+bases such as ReplayPermits stay where they are and their controls keep
+running.
+
+For the whole repository at the formal-pipeline integration base (1,060
+mutations, 120 of them with a differing `BOUNDS:` cfg), the 1,180 control
+requests are 597 distinct controls - 524 full-bound and 73 matching-bound. The
+base run serves 928 full-bound requests, leaving 131 control launches - 58
+full-bound and 73 matching-bound - or 132 with every TLC shard category in its
+own process (599 before #5161). A full run is then 1,359 TLC launches: 53 base,
+94 variant, 132 control, 1,060 targeted-mutant and 20 deadlock-on.
+`TlcControlRunSharingTests` recomputes these figures without a JVM, writes them
+to its test output, and fails if launches stop matching the distinct
+experiments the base run does not serve. Each TLC launch also writes a
+`TLC launch:` line (arm, module, exit code and seconds) to its case's test
+output, so a run's launches and their durations can be counted from its
+results.
 
 Measure each selected arm on the intended worker/heap settings rather than
 turning the formula into a runtime guarantee. The historical atomic-commit
@@ -427,11 +537,12 @@ runs sharing one directory corrupt each other's parse. On a four-core CI runner
 that is two processes of two workers each.
 
 The expectation as modules are added is therefore linear in the number of TLC
-runs: roughly `(1 + 2 x mutations)` runs per module, divided by the
-concurrency. Five more modules of the atomic-commit module's size would add
-about five times its cost - on the order of ten minutes of TLC on a four-core
-runner, which the `test/lattice` leg can absorb but a sixth or seventh area
-would make worth splitting into its own shard. The per-process five-minute
-timeout has been removed: a slow or large TLC run is allowed to finish rather
-than aborting the test job. The enclosing CI job timeout remains the outer bound
-for a process that never exits.
+launches the formula above counts, divided by the concurrency. CI spreads that
+cost over TLC shards rather than one leg: `TlcCiShard` gives grouped cases a
+`TlcShard*` category, `test-shards.json` partitions those categories into shards
+whose measured durations (`.github/workflows/test-durations.tsv`) feed the
+matrix planner, and every ungrouped case - a new module's, until it is routed -
+runs in the catch-all shard, which selects the rest of `TlcModelCheckTests` by
+name. The per-process five-minute timeout has been removed: a slow or large
+TLC run is allowed to finish rather than aborting the test job. The enclosing CI
+job timeout remains the outer bound for a process that never exits.

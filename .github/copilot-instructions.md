@@ -425,7 +425,9 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   prevent GitHub from manufacturing attribution trailers.
 
   PRs confined to `videos/**`, `.github/workflows/**`, and this instruction
-  file use lightweight CI: guard self-tests and video order run, but the
+  file use lightweight CI (except the TLC routing files that
+  `lightweight-change.py` lists in `TLC_ROUTING_FILES`,
+  which only the .NET suite validates): guard self-tests and video order run, but the
   .NET, formal, and content-fixture suites do not. The required
   `build-and-test` check still reports; any other changed path retains the
   normal selection, and integration-branch pushes remain fully gated.
@@ -499,13 +501,15 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     input-gated.** The `formal-tlc-smoke` shard checks one base specification in the
     deterministic tier on every routine CI pull request. A pull request into `main` or a
     `*/epic/**` integration branch skips exhaustive TLC only when its non-empty changed-file
-    list touches no TLC input: `.tla`, `.cfg`, manifest or mutation files under `spec/`, the
-    Formal harness, workflows, or build inputs. An absent or empty changed-file list fails
+    list touches no TLC verdict input. `.github/workflows/tlc-inputs.json` sorts every file that can affect a TLC run into three classes: verdict inputs (`.tla`, `.cfg`, manifest and mutation files under `spec/`, the Formal harness that discovers modules, builds cases and cfgs, and launches and judges TLC, the TLA+ toolchain (`tools/tlc/`, whose `toolchain.json` holds every pin, and the `tla-toolchain` action), and build inputs); routing (which leg runs which existing case: `test-shards.json`, the planner, `tier-scope.py`, `TlcCiShard.cs`, and the workflows that provision the toolchain through that action and launch legs), where a routing-only change runs the smoke shard and a toolchain-free partition check proves every TLC case is still selected by exactly one TLC shard; and neutral (files no TLC run reads). An absent or empty changed-file list fails
     toward running exhaustive TLC. A `main` pull request keeps all other tiers; a member pull
     request into an integration branch also skips Coyote and chaos and plans the deterministic
     tier onto at most six legs instead of ten, while retaining every guard step and
     `content-gates`. Release-line pull requests and pushes, integration-branch pushes, nightly
-    coverage, and any relevant or unknown diff run exhaustive TLC. `Publish` verifies successful
+    coverage, and any relevant or unknown diff run exhaustive TLC. Where
+    exhaustive TLC runs, a module with a trusted verdict receipt (#5164, `tlc-receipts.py`) is
+    not rerun, except on release lines and in the nightly run, which ignore receipts.
+    `docs/lattice/formal-verification-pipeline.md` describes every formal lane. `Publish` verifies successful
     release-line `build-and-test` for the exact tag SHA before publishing. The rule lives in
     `.github/workflows/tier-scope.py`; the skipped items are listed as NOT RUN, and
     `CiMemberPullRequestTieringTests` pins the policy. The cost is attribution: an exhaustive

@@ -1,7 +1,4 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Testing.Hygiene;
@@ -25,6 +22,8 @@ namespace Orleans.Lattice.Tests.Formal;
 /// <para>
 /// EACH TEST IS A CONTROLLED EXPERIMENT, NOT AN ASSERTION THAT SOMETHING FAILS.
 /// Every mutation runs a clean full-bound control and a targeted mutant.
+/// A full-bound control the module's clean base run provably subsumes is
+/// served by that run instead of launched (see <see cref="TlcBaseRunSubsumption"/>).
 /// When the mutant cfg differs, an additional clean-source control runs under
 /// that exact cfg, so both sides of the pair check the same instance.
 /// The controls must be clean; the mutant must report its target. Asserting only the second half
@@ -105,17 +104,27 @@ public sealed partial class TlcModelCheckTests
     /// <summary>
     /// Control-arm results, once per distinct input within this test process.
     /// Every mutation of a module that targets the same property with the same
-    /// TLC options builds a byte-identical control run - the unmutated base
-    /// under the same single-property cfg - so it is run once and shared. The
-    /// key is a hash of everything TLC reads (the module and its siblings, the
-    /// cfg and the options), so two inputs that differ in anything are two
-    /// runs. The <see cref="Lazy{T}"/> runs the first request and makes every
-    /// concurrent one wait for it, and a run that fails or throws - a timeout
-    /// included - is cached as such, so every case sharing that control fails
-    /// rather than only the first. Process-local by design: nothing is reused
-    /// across runs.
+    /// TLC options builds a byte-identical full-bound control run - the
+    /// unmutated base under the same single-property cfg, which does not name
+    /// the mutation - so it is run once and shared; a matching-bound control is
+    /// shared the same way when the bounds also match. The key
+    /// (<see cref="TlcControlRunKey"/>) is a hash of everything TLC reads (the
+    /// module and its siblings, the cfg and the options), so two inputs that
+    /// differ in anything are two runs. A run that fails or throws is cached as
+    /// such, so every case sharing that control fails rather than only the
+    /// first. Process-local by design: nothing is reused across runs.
     /// </summary>
-    private static readonly ConcurrentDictionary<string, Lazy<TlcResult>> ControlRuns = new(StringComparer.Ordinal);
+    private static readonly TlcControlRunCache<TlcResult> ControlRuns = new();
+
+    /// <summary>
+    /// Base-model results, once per distinct input within this test process,
+    /// keyed exactly as <see cref="ControlRuns"/> is (<see cref="TlcControlRunKey"/>
+    /// over the base cfg and <see cref="TlcBaseRunSubsumption.BaseRunOptions"/>).
+    /// The base case and every full-bound control the base run subsumes
+    /// (<see cref="TlcBaseRunSubsumption.ServesFullBoundControl"/>) share one
+    /// launch of it.
+    /// </summary>
+    private static readonly TlcControlRunCache<TlcResult> BaseRuns = new();
 
     /// <summary>TLC's switch that defers every liveness check to the end of the state search.</summary>
     private static readonly string[] LivenessAtEnd = ["-lncheck", "final"];
@@ -203,7 +212,7 @@ public sealed partial class TlcModelCheckTests
     {
         ArgumentNullException.ThrowIfNull(module);
 
-        var result = RunTlc(module, module.ReadSpecification(), module.ReadConfig(), module.Name, []);
+        var result = RunBase(module, module.ReadSpecification(), module.ReadConfig());
 
         Assert.That(
             result.Output,
@@ -246,7 +255,7 @@ public sealed partial class TlcModelCheckTests
         ArgumentException.ThrowIfNullOrEmpty(variant);
 
         var where = module.Describe(module.VariantConfigPath(variant));
-        var result = RunTlc(module, module.ReadSpecification(), module.ReadVariantConfig(variant), module.Name, []);
+        var result = RunTlc(module, module.ReadSpecification(), module.ReadVariantConfig(variant), module.Name, [], "variant");
 
         Assert.That(
             result.Output,
@@ -278,7 +287,9 @@ public sealed partial class TlcModelCheckTests
     /// <para>
     /// Arm 1 (control) runs the generated single-property cfg against the
     /// unmutated base and requires it to be clean. Mutations that build the
-    /// same control share one run of it (see <see cref="ControlRuns"/>). This is what stops the test
+    /// same control share one run of it (see <see cref="ControlRuns"/>), and
+    /// where the module's base run in the same process provably subsumes it,
+    /// a clean base run is its verdict (see <see cref="BaseRuns"/>). This is what stops the test
     /// passing for the wrong reason. Without it, a mutation that broke the
     /// module outright, or a property already violated on the base, would
     /// produce a red mutant and read as a successful pairing.
@@ -323,19 +334,25 @@ public sealed partial class TlcModelCheckTests
 
         // The control arm always runs at the module's own bounds. A mutation's
         // BOUNDS header cannot replace this full-model coverage. A different
-        // mutant cfg also needs its own clean-source control below.
-        var control = RunControl(module, baseSpec, config, mutation.TlcOptions);
-        AssertCleanControl(control, module, mutation, "FULL-BOUND");
+        // mutant cfg also needs its own clean-source control below. When the
+        // module's base run subsumes this control and is clean, that clean
+        // run is the control's verdict (#5161); otherwise it is launched.
+        var (control, arm) = RunFullBoundControl(module, mutation, baseSpec, baseConfig, config);
+        AssertCleanControl(control, module, mutation, arm);
 
+        // The matching-bound control checks the mutant cfg's model; its cfg
+        // differs from the mutant's only in not naming the mutation, so it is
+        // shared like the full-bound control.
         var mutantSpec = mutation.Apply(baseSpec, module.Name);
         var mutantConfig = mutation.BuildMutantConfig(baseConfig);
-        if (!string.Equals(config, mutantConfig, StringComparison.Ordinal))
+        var matchingConfig = mutation.BuildMatchingControlConfig(baseConfig);
+        if (!string.Equals(config, matchingConfig, StringComparison.Ordinal))
         {
-            var matchingControl = RunControl(module, baseSpec, mutantConfig, mutation.TlcOptions);
+            var matchingControl = RunControl(module, baseSpec, matchingConfig, mutation.TlcOptions);
             AssertCleanControl(matchingControl, module, mutation, "MATCHING-BOUND");
         }
 
-        var mutant = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, mutation.TlcOptions);
+        var mutant = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, mutation.TlcOptions, "mutant");
 
         Assert.That(
             mutant.ExitCode,
@@ -367,7 +384,7 @@ public sealed partial class TlcModelCheckTests
             // reachable. Left to TLC's default, a periodic mid-search liveness
             // check can report the target first on a slow machine, and the arm
             // would then fail for timing rather than for the declaration.
-            var withDeadlockCheck = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, LivenessAtEnd);
+            var withDeadlockCheck = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, LivenessAtEnd, "deadlock-on mutant");
             Assert.That(
                 withDeadlockCheck.Output,
                 Does.Contain(DeadlockBanner),
@@ -381,7 +398,7 @@ public sealed partial class TlcModelCheckTests
     /// <summary>
     /// The discovery control for the TLC gates: every TLC gate, found by
     /// signature rather than listed, is run over a module built in a temp
-    /// directory and must pass; then each broken copy - a silent mutation, a mutation whose BOUNDS shrink it below its violation, a wrong state count, a drifted variant count, a misspelt variant bound and an unresolved variant override - must fail the gate. A mutation whose BOUNDS also break the clean source must fail its matching-bound control
+    /// directory and must pass; then each broken copy - a silent mutation, a mutation whose BOUNDS shrink it below its violation, a wrong state count, a drifted variant count, a misspelt variant bound and an unresolved variant override - must fail the gate. A mutation whose BOUNDS also break the clean source must fail its matching-bound control, and a target the base cfg does not check must fail its full-bound control rather than be served by the clean base run
     /// that owns the fault. The toolchain-free gates have the same control in
     /// <see cref="SpecModuleDiscoveryControlTests"/>.
     /// </summary>
@@ -440,6 +457,8 @@ public sealed partial class TlcModelCheckTests
             // The full-bound control holds, but the clean source under Wrap
             // = 4 reaches 3, outside TypeOK. Its red mutant is not evidence
             // for the mutation unless this matching-bound control also holds.
+            // It is also the different-constants control for base-run serving
+            // (#5161): served by the clean base run, this control would pass.
             controlKeepsBase.Replace(
                 $"mutations/{SyntheticSpecModule.MutationName}.mutation",
                 "PERTURBS: Step\n",
@@ -450,6 +469,22 @@ public sealed partial class TlcModelCheckTests
                 Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
                 Does.Contain("MATCHING-BOUND CONTROL ARM FAILED"),
                 "a mutant passed even though its exact cfg also breaks the unmutated source.");
+        }
+
+        using (var baseLacksTarget = SyntheticSpecModule.Create())
+        {
+            // The base cfg checks only TypeOK, and the clean source violates
+            // Bounded (x reaches 2). The base run is clean, so serving the
+            // full-bound control from it (#5161) would pass the control and
+            // then the red mutant; only a launched control turns this red.
+            baseLacksTarget.Replace($"{SyntheticSpecModule.ModuleName}.tla", "Wrap == 3", "Wrap == 3\n\nBounded == x < 2");
+            baseLacksTarget.Replace($"mutations/{SyntheticSpecModule.MutationName}.mutation", "TARGET: TypeOK", "TARGET: Bounded");
+            var module = baseLacksTarget.Discover();
+            var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
+                Does.Contain("FULL-BOUND CONTROL ARM FAILED"),
+                "a control whose target the base cfg does not check was served by the clean base run.");
         }
 
         using (var matchingBounds = SyntheticSpecModule.Create())
@@ -580,43 +615,64 @@ public sealed partial class TlcModelCheckTests
     }
 
     /// <summary>
-    /// Writes a module and cfg into a scratch directory and runs TLC there.
-    /// TLC emits its state files beside the module it checks, so running in
-    /// <c>spec/</c> would leave build output in the repository. Every sibling
-    /// <c>.tla</c> of the module is copied in first, so a module that extends
-    /// or instantiates a sibling resolves it.
-    /// </summary>
-    /// <summary>
     /// Runs a mutation's control arm through <see cref="ControlRuns"/>: once
     /// per distinct input in this process, shared by every case that builds
     /// the same one.
     /// </summary>
-    private TlcResult RunControl(SpecModule module, string baseSpec, string config, IReadOnlyList<string> options)
+    private TlcResult RunControl(SpecModule module, string baseSpec, string config, IReadOnlyList<string> options) =>
+        ControlRuns.GetOrRun(
+            TlcControlRunKey.For(module, baseSpec, config, options),
+            () => RunTlc(module, baseSpec, config, module.Name, options, "control"));
+
+    /// <summary>
+    /// Runs the module's base model through <see cref="BaseRuns"/>: once per
+    /// distinct input in this process, shared by the base case and every
+    /// full-bound control it serves.
+    /// </summary>
+    private TlcResult RunBase(SpecModule module, string baseSpec, string baseConfig) =>
+        BaseRuns.GetOrRun(
+            TlcControlRunKey.For(module, baseSpec, baseConfig, TlcBaseRunSubsumption.BaseRunOptions),
+            () => RunTlc(module, baseSpec, baseConfig, module.Name, TlcBaseRunSubsumption.BaseRunOptions, "base"));
+
+    /// <summary>
+    /// The full-bound control's result and arm label. When the base run
+    /// subsumes the control (<see cref="TlcBaseRunSubsumption.ServesFullBoundControl"/>)
+    /// and is clean, that run is the verdict: a clean base run proves the
+    /// control clean. When the base run is not clean it proves nothing about
+    /// this one property, so the control is launched and gives its own verdict,
+    /// exactly as it would have without serving.
+    /// </summary>
+    private (TlcResult Result, string Arm) RunFullBoundControl(
+        SpecModule module, SpecMutation mutation, string baseSpec, string baseConfig, string config)
     {
-        var key = new StringBuilder()
-            .Append(module.SpecificationPath).Append('\0')
-            .Append(baseSpec).Append('\0')
-            .Append(config).Append('\0')
-            .AppendJoin(' ', options).Append('\0');
-        foreach (var (name, text) in module.ReadSiblingSpecifications().OrderBy(s => s.Key, StringComparer.Ordinal))
+        if (TlcBaseRunSubsumption.ServesFullBoundControl(module, mutation, baseConfig))
         {
-            key.Append(name).Append('\0').Append(text).Append('\0');
+            var baseRun = RunBase(module, baseSpec, baseConfig);
+            if (baseRun.ExitCode == 0 && baseRun.Output.Contains(CleanBanner, StringComparison.Ordinal))
+            {
+                return (baseRun, "FULL-BOUND (SERVED BY THE BASE RUN)");
+            }
         }
 
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key.ToString())));
-        return ControlRuns
-            .GetOrAdd(hash, _ => new Lazy<TlcResult>(
-                () => RunTlc(module, baseSpec, config, module.Name, options),
-                LazyThreadSafetyMode.ExecutionAndPublication))
-            .Value;
+        return (RunControl(module, baseSpec, config, mutation.TlcOptions), "FULL-BOUND");
     }
 
+    /// <summary>
+    /// Writes a module and cfg into a scratch directory and runs TLC there.
+    /// TLC emits its state files beside the module it checks, so running in
+    /// <c>spec/</c> would leave build output in the repository. Every sibling
+    /// <c>.tla</c> of the module is copied in first, so a module that extends
+    /// or instantiates a sibling resolves it. Each launch writes one
+    /// <c>TLC launch:</c> line to the test output, so a run's launches and
+    /// their durations can be counted from its results.
+    /// </summary>
     private TlcResult RunTlc(
         SpecModule module,
         string moduleText,
         string configText,
         string moduleName,
-        IReadOnlyList<string> options)
+        IReadOnlyList<string> options,
+        string arm)
     {
         var scratch = Path.Combine(Path.GetTempPath(), $"lattice-tlc-{Guid.NewGuid():N}");
         Directory.CreateDirectory(scratch);
@@ -654,6 +710,10 @@ public sealed partial class TlcModelCheckTests
 
             var stdoutText = stdout.GetAwaiter().GetResult();
             var stderrText = stderr.GetAwaiter().GetResult();
+            TestContext.Out.WriteLine(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"TLC launch: {arm} {moduleName} exit {process.ExitCode} in {watch.Elapsed.TotalSeconds:F1} s"));
             if (TlcEvidenceRetention.ConfiguredRoot is { } evidence)
             {
                 TlcEvidenceRetention.Retain(

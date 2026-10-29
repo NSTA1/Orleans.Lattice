@@ -1,0 +1,13 @@
+# The post-fan-out late-participant loop runs zero rounds, so a participant a
+# concurrent split registers after the initial fan-out is never told.
+MODULE: AtomicCommit
+ROW: Termination / EveryCommittedKeyReadable
+FILE: src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs
+DETECTORS: AtomicWriteGrainTests.BroadcastTerminals_late_arrival_fires_second_terminal
+SUMMARY: the broadcast never re-fetches participants, so a late participant receives no terminal
+
+--- FIND
+            const int MaxLateRefetchRounds = 5;
+--- REPLACE
+            const int MaxLateRefetchRounds = 0;
+--- END

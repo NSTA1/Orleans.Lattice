@@ -1,0 +1,13 @@
+# The saga records the opposite of the verdict it then broadcasts, so the
+# terminals no longer carry the single TxStatus the saga recorded.
+MODULE: AtomicCommit
+ROW: NoMixedTerminals
+FILE: src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs
+DETECTORS: AtomicWriteGrainTests.Committing_saga_broadcasts_its_single_recorded_commit_verdict_to_every_touched_shard
+SUMMARY: the recorded decision is the opposite of the verdict the terminals carry
+
+--- FIND
+        return TxRegistryWriteRetry.MarkDecisionAsync(registry, txid, committed);
+--- REPLACE
+        return TxRegistryWriteRetry.MarkDecisionAsync(registry, txid, !committed);
+--- END

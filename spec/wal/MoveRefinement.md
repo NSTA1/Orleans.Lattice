@@ -108,14 +108,22 @@ more than one consumer.
 - **Late-landing flushes.** Specified in `WalDurability.tla` (`Abandon`, `LateLand`,
   `SettleHole`; issue #4621), not here: a move's quiesce waits out every abandoned call
   (the `MoveCopy` row), so none lands under a copy.
+  No production symbol: the behaviour is `WalDurability`'s, mapped in that
+  module's own refinement note.
 - **Placement, catalogs and providers.** Which provider a partition lives on, the
   placement pin's other contents and its audit, and content verification are not
   modelled; the move is reduced to the stream's contents before and after the flip
   and the fence record it carries.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Re-drive.** A move whose coordinator is lost is abandoned here; its re-drive
   arithmetic is `WalMoveResumeCore`'s, checked by `WalMoveRedriveModel`, not by this
   module.
+  Production symbols: `WalMoveResumeCore`.
 - **Source reclamation.** Trimming the orphaned source after the flip
   (`LatticeAdminGrain.ReclaimMovedWalSourceAsync`) is not modelled.
+  Production symbols: `LatticeAdminGrain.ReclaimMovedWalSourceAsync`.
 - **Leaves.** The leaf lifecycle is `WalDurability.tla`'s; a move touches none of
   its state.
+  No production symbol: the behaviour is `WalDurability`'s, mapped in that
+  module's own refinement note.

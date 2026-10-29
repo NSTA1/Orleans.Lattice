@@ -63,12 +63,18 @@ fairness intact.
 
 ## Deliberate abstraction gaps
 
-- Everything the main module covers - the cycle-break, the identity cache,
+- **What the main module covers.** Everything the main module covers - the cycle-break, the identity cache,
   dead-lettering, restarts, bootstrap - is out of scope here; see
   [`Refinement.md`](Refinement.md#deliberate-abstraction-gaps).
-- One receiver, two writers, two writes each, HLCs up to 2, one-entry
+  No production symbol: the behaviour is the main replication module's, mapped
+  in that module's own refinement note.
+- **Instance bounds.** One receiver, two writers, two writes each, HLCs up to 2, one-entry
   batches. A batch large enough to carry an entry past a deferred one is
   bounded out, deliberately: it is a rescue that production's batch size does
   not guarantee.
-- The link between the two writers is a single learn step, not a modelled
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
+- **The writers' link.** The link between the two writers is a single learn step, not a modelled
   replication edge.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.

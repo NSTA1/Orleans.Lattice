@@ -14,9 +14,9 @@ GitHub revision; no upstream source tree or session binary is vendored.
 
 ## Build and use
 
-Use Python 3 and a **JDK 17** (including `javac`), not just a JRE. Download the
-v1.7.4 jar to `tools/tla2tools.jar`; its required SHA-256 is
-`936A262061C914694DFD669A543BE24573C45D5AA0FF20A8B96B23D01E050E88`.
+Use Python 3 and the JDK (including `javac`, not just a JRE) that
+`toolchain.json` pins. Download the jar `toolchain.json` names to
+`tools/tla2tools.jar` and check it against the SHA-256 recorded there.
 From the repository root on PowerShell:
 
 ```powershell
@@ -43,7 +43,16 @@ jar, missing/extra overlay files, or mismatched class hashes rather than silentl
 using the broken original. Missing Java/jar retains the existing local skip / CI
 failure policy; once those exist, an absent or invalid repair fails locally too.
 `TLA_TOOLS_JAR` can still select the original pinned jar at another absolute path.
-All provisioning workflows run this builder before their test runner.
+CI provisions all of this through one composite action,
+`.github/actions/tla-toolchain`. `toolchain.json` is the single source of the
+jar URL, its SHA-256, and the Java distribution and version; no workflow, and
+not the action itself, carries a copy. The action restores the overlay from the
+Actions cache, keyed on `toolchain.json`, `patch.json`, `build.py`, the
+regression fixtures and the resolved `java`/`javac` versions, and runs this
+builder only on a miss, so a warm leg makes no request for the upstream source.
+Either way it then runs `toolchain.py verify`, which holds the receipt, the
+jar and the exact overlay class set to the pins and fails the leg on any
+mismatch.
 
 For manual TLC invocations, use the same classpath order (semicolon on Windows,
 colon on Linux):

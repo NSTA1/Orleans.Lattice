@@ -12,6 +12,8 @@ name: Coverage
 # Why nightly rather than on every push. This lane builds the whole solution and
 # runs the non-chaos, non-Coyote, non-TLC suites under coverlet, including browsers.
 # Coverage uses CI's shard partitions and duration estimates on parallel runners.
+# Beside them, uninstrumented legs run every exhaustive TLC shard and the smoke
+# shard; see the `tlc` job below.
 # Before sharding this took over 150 minutes; the historic replay below explains
 # why it remains nightly even though parallelism reduces elapsed time.
 # Main took merges faster than the old serial run. Run on every push with
@@ -62,9 +64,22 @@ on:
         description: 'Stand in for a missed nightly run: skip if tonight is already covered. Set by coverage-catch-up.yml.'
         type: boolean
         default: false
+      # The cheap way to validate a change to the TLC legs or the tracking
+      # issue on a branch: one small TLC leg instead of the whole lane. Ignored
+      # on the default branch, where a partial run must never stand in for a
+      # night (the `measured` job counts any earlier run as covering it).
+      tlc_shards:
+        description: 'Branch validation only: comma-separated TLC shards (e.g. formal-tlc-smoke). Runs ONLY those, with no coverage legs and no Codecov upload. Ignored on the default branch.'
+        type: string
+        default: ''
+      track_tlc_failures:
+        description: 'Branch validation only: open, update or close the nightly TLC tracking issue from this run.'
+        type: boolean
+        default: false
 
 # Least-privilege: this workflow only reads source and uploads a coverage report.
-# The `measured` job additionally reads this workflow's own run history.
+# The `measured` job additionally reads this workflow's own run history, and the
+# `tlc-tracking` job alone may write issues, to maintain the TLC tracking issue.
 permissions:
   contents: read
 
@@ -153,24 +168,65 @@ jobs:
     timeout-minutes: 5
     outputs:
       legs: ${{ steps.matrix.outputs.legs }}
+      tlc_legs: ${{ steps.matrix.outputs.tlc_legs }}
+      coverage: ${{ steps.matrix.outputs.coverage }}
+      track: ${{ steps.matrix.outputs.track }}
     steps:
       - uses: actions/checkout@v5
       - name: Plan coverage shards
         id: matrix
+        env:
+          TLC_SHARDS: ${{ inputs.tlc_shards }}
+          TRACK_TLC_FAILURES: ${{ inputs.track_tlc_failures }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
         run: |
           set -euo pipefail
-          python3 .github/workflows/plan-coverage-matrix.py --output-matrix /tmp/coverage-matrix.json
-          echo "legs=$(cat /tmp/coverage-matrix.json)" >> "$GITHUB_OUTPUT"
+          shards="${TLC_SHARDS:-}"
+          on_default=false
+          if [ "$GITHUB_REF" = "refs/heads/${DEFAULT_BRANCH}" ]; then
+            on_default=true
+          fi
+          if [ -n "$shards" ] && [ "$on_default" = true ]; then
+            echo "::warning title=TLC restriction ignored::tlc_shards validates a branch. On ${DEFAULT_BRANCH} a partial run would stand in for a whole night, so this run measures everything."
+            shards=""
+          fi
+          python3 .github/workflows/plan-coverage-matrix.py \
+            --output-matrix /tmp/coverage-matrix.json \
+            --output-tlc-matrix /tmp/tlc-matrix.json \
+            --tlc-shards "$shards"
+          # The tracking issue follows the default branch's full runs: the
+          # schedule, its catch-up and a manual dispatch there. A branch run
+          # touches it only when asked to, to validate the tracking itself.
+          track=false
+          if [ "$on_default" = true ] || [ "${TRACK_TLC_FAILURES:-false}" = true ]; then
+            track=true
+          fi
+          coverage=true
+          if [ -n "$shards" ]; then
+            coverage=false
+          fi
+          {
+            echo "legs=$(cat /tmp/coverage-matrix.json)"
+            echo "tlc_legs=$(cat /tmp/tlc-matrix.json)"
+            echo "coverage=${coverage}"
+            echo "track=${track}"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "### Coverage plan"
             echo
-            echo "$(jq length /tmp/coverage-matrix.json) parallel legs using CI's shard partitions and duration estimates."
-            echo "Chaos, Coyote, exhaustive TLC and smoke TLC are NOT run."
+            if [ "$coverage" = true ]; then
+              echo "$(jq length /tmp/coverage-matrix.json) parallel coverage legs using CI's shard partitions and duration estimates."
+              echo "Chaos, Coyote and TLC are NOT run under coverlet."
+            else
+              echo "Coverage legs and the Codecov upload are NOT run: this branch run is restricted to TLC shards ${shards}."
+            fi
+            echo
+            echo "$(jq length /tmp/tlc-matrix.json) uninstrumented TLC legs ($(jq '[.[].items[]] | length' /tmp/tlc-matrix.json) shards), ignoring verdict receipts. Tracking issue maintained: ${track}."
           } >> "$GITHUB_STEP_SUMMARY"
 
   coverage:
     needs: [measured, plan]
-    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' && needs.plan.outputs.coverage == 'true' }}
     name: Coverage / ${{ matrix.leg.name }}
     runs-on: ubuntu-latest
     # Per-leg backstop; a hung leg cannot hold the nightly lane for six hours.
@@ -472,7 +528,7 @@ jobs:
 
   upload:
     needs: [measured, plan, coverage]
-    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' && needs.plan.outputs.coverage == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -519,3 +575,264 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: coverage
           fail_ci_if_error: false
+
+  # ---------------------------------------------------------------------------
+  # EXHAUSTIVE TLC, nightly. spec/README.md ("CI decision") and tier-scope.py
+  # say nightly coverage runs the exhaustive TLC shards; these legs make that
+  # true. Pull requests skip exhaustive TLC when no TLC input changed, and
+  # receipts (#5164) will let them skip unchanged modules, so this is the one
+  # lane that checks every module against a toolchain and runner image that can
+  # drift without any diff. Hence two rules:
+  #
+  # - Every "tlc" and "tlcSmoke" shard of test-shards.json runs, planned by
+  #   plan-coverage-matrix.py from CI's own partition and estimates. Nothing
+  #   here restores a TLC verdict receipt, and nothing ever may: a receipt
+  #   would turn the drift backstop into a check of nothing.
+  # - No coverlet. The legs run through run-test-leg.py exactly as ci.yml's
+  #   legs do, so a TLC-only item is bounded by this job's timeout rather than
+  #   VSTest's inactivity collector (#5012). The timeout is sized per leg from
+  #   its measured estimate by the planner, not fixed here.
+  #
+  # A quiet night skips with the coverage legs (see `measured`), so TLC reruns
+  # when main moves; a manual dispatch re-checks an unchanged commit.
+  # ---------------------------------------------------------------------------
+  tlc:
+    needs: [measured, plan]
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
+    name: Exhaustive TLC / ${{ matrix.leg.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.leg.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJson(needs.plan.outputs.tlc_legs) }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # Only the core test project: every TLC shard is in it.
+      - name: Build the TLC test project
+        run: dotnet build test/lattice/Orleans.Lattice.Tests.csproj --configuration Release
+
+      # The one TLA+ toolchain action (#5151): pins from tools/tlc/toolchain.json,
+      # a digest-verified jar and the verified checkpoint overlay. Its overlay
+      # cache is keyed on the resolved JDK, so it is not a verdict receipt.
+      - name: Provision TLA+ toolchain
+        uses: ./.github/actions/tla-toolchain
+
+      - name: Run TLC leg
+        env:
+          LEG: ${{ toJson(matrix.leg) }}
+          LEG_ID: ${{ matrix.leg.id }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$LEG" > /tmp/leg.json
+          python3 .github/workflows/run-test-leg.py \
+            --leg /tmp/leg.json \
+            --results-dir tlc-results \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload TLC leg results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tlc-results-${{ github.run_attempt }}-${{ matrix.leg.id }}
+          path: tlc-results/
+          retention-days: 7
+
+      - name: Upload TLC trx
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tlc-trx-${{ github.run_attempt }}-${{ matrix.leg.id }}
+          path: '**/TestResults/*.trx'
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Upload TLC diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tlc-diagnostics-${{ github.run_attempt }}-${{ matrix.leg.id }}
+          path: |
+            **/*.dmp
+            **/Sequence_*.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # One verdict over every TLC leg, so a leg that died before writing its
+  # result reads as a failure rather than as an absence, plus the measured
+  # durations TLC pricing is refreshed from: test-durations.tsv rows in the job
+  # summary, and one row per case in the tlc-case-durations artifact.
+  tlc-report:
+    needs: [measured, plan, tlc]
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # Every attempt: summarise-test-legs.py keeps the latest result per leg,
+      # so re-running one failed leg reports on the whole lane.
+      - name: Download TLC leg results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tlc-results-*
+          path: tlc-results
+          merge-multiple: false
+
+      - name: Download TLC trx
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tlc-trx-${{ github.run_attempt }}-*
+          path: tlc-trx
+          merge-multiple: false
+
+      - name: Write per-case TLC durations
+        run: |
+          set -euo pipefail
+          mkdir -p tlc-trx
+          python3 .github/workflows/plan-coverage-matrix.py \
+            --tlc-case-durations tlc-trx --output tlc-case-durations.tsv
+
+      - name: Upload per-case TLC durations
+        uses: actions/upload-artifact@v6
+        with:
+          name: tlc-case-durations-${{ github.run_attempt }}
+          path: tlc-case-durations.tsv
+          retention-days: 90
+
+      - name: Judge the TLC legs
+        if: ${{ !cancelled() }}
+        env:
+          TLC_LEGS: ${{ needs.plan.outputs.tlc_legs }}
+        run: |
+          set -euo pipefail
+          expect="$(jq length <<< "$TLC_LEGS")"
+          python3 .github/workflows/summarise-test-legs.py \
+            --results-dir tlc-results \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            --expect-legs "$expect"
+
+  # Receipts WRITTEN, never read (#5165). Every module whose every census case
+  # passed tonight gets a TLC verdict receipt (contract C5) in this run's cache
+  # scope, which on main is the scope every pull request reads, so a module the
+  # night verified is not rerun by the next pull request that touches a verdict
+  # input elsewhere. The legs above never restore one; see the `tlc` job. A
+  # separate job, so a receipt-writing fault never reads as a TLC failure in the
+  # tracking issue. Only this attempt's evidence counts: a receipt must come
+  # from one run.
+  tlc-receipts:
+    needs: [measured, plan, tlc]
+    if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build the TLC test project
+        run: dotnet build test/lattice/Orleans.Lattice.Tests.csproj --configuration Release
+
+      - name: Write the TLC case census
+        run: |
+          set -euo pipefail
+          LATTICE_TLC_CENSUS="$RUNNER_TEMP/tlc-census.json" \
+            dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --nologo \
+              --filter "FullyQualifiedName=Orleans.Lattice.Tests.Formal.TlcCaseCensusTests.The_census_is_written_to_the_file_LATTICE_TLC_CENSUS_names"
+          if [ ! -s "$RUNNER_TEMP/tlc-census.json" ]; then
+            echo "::error::Writing TLC receipts needs the census and it was not written."
+            exit 1
+          fi
+
+      - name: Fingerprint every TLC module
+        run: python3 .github/workflows/tlc-fingerprint.py --output "$RUNNER_TEMP/tlc-fingerprints.json"
+
+      - name: Download TLC leg results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tlc-results-${{ github.run_attempt }}-*
+          path: tlc-results
+          merge-multiple: false
+
+      # No receipt plan: the night ran every module, so every module whose
+      # census cases all passed earns a receipt.
+      - name: Write TLC verdict receipts
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/tlc-receipts.py assemble \
+            --fingerprints "$RUNNER_TEMP/tlc-fingerprints.json" \
+            --census "$RUNNER_TEMP/tlc-census.json" \
+            --evidence-dir tlc-results \
+            --receipts-dir "$RUNNER_TEMP/tlc-receipts" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # The action ci.yml saves receipts with; save only, never lookup.
+      - name: Save TLC verdict receipts
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/tlc-receipts
+        with:
+          operation: save
+          receipts-dir: ${{ runner.temp }}/tlc-receipts
+
+  # One open issue tracks a failing night: created on the first red night,
+  # commented with the run link on each later one, closed on the first green
+  # one. The only job in this workflow that may write issues.
+  tlc-tracking:
+    needs: [plan, tlc, tlc-report]
+    if: ${{ !cancelled() && needs.plan.outputs.track == 'true' && needs.tlc-report.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the nightly TLC tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TLC_RESULT: ${{ needs.tlc.result }}
+          REPORT_RESULT: ${{ needs.tlc-report.result }}
+        run: |
+          set -euo pipefail
+          title="Nightly exhaustive TLC failing on main"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$TLC_RESULT" = success ] && [ "$REPORT_RESULT" = success ]; then
+            verdict=green
+          elif [ "$TLC_RESULT" = failure ] || [ "$REPORT_RESULT" = failure ]; then
+            verdict=red
+          else
+            echo "::notice title=TLC tracking::No verdict (legs ${TLC_RESULT}, report ${REPORT_RESULT}); the tracking issue is left as it is."
+            exit 0
+          fi
+          # The REST listing rather than search: search is eventually
+          # consistent, so a run right after a red one could miss the issue it
+          # opened and open a second.
+          existing="$(gh api --paginate -X GET "repos/${GITHUB_REPOSITORY}/issues" \
+            -f state=open -f labels=ci -f per_page=100 \
+            --jq ".[] | select(.pull_request == null and .title == \"${title}\") | .number" \
+            | sort -n | head -n 1)"
+          if [ "$verdict" = red ]; then
+            note="Exhaustive TLC failed on \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}: ${run_url} (legs ${TLC_RESULT}, report ${REPORT_RESULT})."
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$note"
+              echo "::notice title=TLC tracking::Updated #${existing}."
+            else
+              body="$(printf '%s\n\n%s\n' "$note" "Maintained by the tlc-tracking job of .github/workflows/coverage.yml: each failing night adds its run here, and the first green night closes this issue.")"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label ci --body "$body"
+            fi
+          elif [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+              --comment "Exhaustive TLC passed on \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}: ${run_url}. Closing."
+            echo "::notice title=TLC tracking::Closed #${existing}."
+          else
+            echo "::notice title=TLC tracking::Green, and no open tracking issue to close."
+          fi

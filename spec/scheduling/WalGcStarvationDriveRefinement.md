@@ -194,32 +194,39 @@ its historical name; it skips the phase refresh and does not model randomness.
 
 ## Deliberate abstraction gaps
 
-Weak fairness is on delivered GcPass opportunities, including ordinary refusals,
-never on a selected successful grant. Refused touches without sibling
-completion drain to the later-pass boundary.
-
-ColdReturn is not fair. Hung ordinary owners can retain every physical permit.
-Liveness explicitly assumes their eventual return, a stable live tree, finite
-timer competition and finite WAL append. A budget opportunity includes the
-required runtime continuation; it is not wall time. The timely premise includes
-durable banking before the budget is exhausted.
-
-One in-pass retry witnesses the credit boundary; production
-ShareBoundedTouchRunner.MaxInPassRetries is three. The cross-pass finite attempt
-budget is two rather than the production budget. No exact cooldown, registry
-fault, unsized gate, cross-silo bound or arbitrary infinite competitor-arrival
-theorem is asserted.
-
-The stall clock is abstracted: TimerTick may fire whenever the WAL head is
-ahead of the pin, so the core admits every timer schedule the clocked witness
-does, and possibly more. A safety property of the core therefore also holds
-for the witness projection. The witness checks that projection only at its own
-small bound.
-
-A three-leaf instance of this core was measured outside CI. Its safety-only
-check passed in several minutes, and its full liveness check did not finish
-within the twenty-minute cap, so it is not enrolled and no three-leaf liveness
-claim is made.
+- **Fairness is on delivered GcPass opportunities.** Weak fairness is on
+  delivered GcPass opportunities, including ordinary refusals, never on a
+  selected successful grant. Refused touches without sibling completion drain to
+  the later-pass boundary.
+  No production symbol: the gap states an environment premise of the model, not
+  a production mechanism.
+- **Cold returns are not fair.** ColdReturn is not fair. Hung ordinary owners
+  can retain every physical permit. Liveness explicitly assumes their eventual
+  return, a stable live tree, finite timer competition and finite WAL append. A
+  budget opportunity includes the required runtime continuation; it is not wall
+  time. The timely premise includes durable banking before the budget is
+  exhausted.
+  No production symbol: the gap states an environment premise of the model, not
+  a production mechanism.
+- **Retry budgets are smaller than production's.** One in-pass retry witnesses
+  the credit boundary; production `ShareBoundedTouchRunner.MaxInPassRetries` is
+  three. The cross-pass finite attempt budget is two rather than the production
+  budget. No exact cooldown, registry fault, unsized gate, cross-silo bound or
+  arbitrary infinite competitor-arrival theorem is asserted.
+  Production symbols: `ShareBoundedTouchRunner.MaxInPassRetries`.
+- **The stall clock is abstracted.** The stall clock is abstracted: TimerTick
+  may fire whenever the WAL head is ahead of the pin, so the core admits every
+  timer schedule the clocked witness does, and possibly more. A safety property
+  of the core therefore also holds for the witness projection. The witness
+  checks that projection only at its own small bound.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **No three-leaf liveness claim.** A three-leaf instance of this core was
+  measured outside CI. Its safety-only check passed in several minutes, and its
+  full liveness check did not finish within the twenty-minute cap, so it is not
+  enrolled and no three-leaf liveness claim is made.
+  No production symbol: the gap describes how the instance is checked, not a
+  production mechanism.
 
 ## Disposition of the original model
 

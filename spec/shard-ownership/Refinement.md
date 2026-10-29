@@ -267,6 +267,8 @@ not read as coverage of another:
   and this module's stamp and import mutations still go red in it. That is the
   measured cost of composing the two modules and why it is not a CI gate (see
   the README's account of the seam).
+  No production symbol: the behaviour is the retention companion's, mapped in
+  that module's own refinement note.
 - **Alias cutovers other than a resize.** A shadow-cutover restore and its
   revert move the alias against a bound saga, and the companion module
   `ShardOwnershipCutover` checks them
@@ -278,28 +280,43 @@ not read as coverage of another:
   abandon an undo of a resize reaches is modelled (`SplitAbandon`, #4478), and
   for a cutover it is pinned by
   `TreeShardSplitGrainTests.Swap_after_an_alias_cutover_does_not_apply_the_slot_diff_to_the_logical_map`.
-- **A fold onto a survivor that already owns other slots.** `FoldBegin` moves
-  `k2`'s slot from `s1` onto `s2` exactly as the split does; the survivor's
-  rows for its own slots, and the donor's retirement as a routing tombstone
-  once the map no longer names it, are not distinguished here, because neither
-  changes who serves `k2`. A fold was outside this module altogether until
+  Production symbols: `ILatticeTreeAdmin.SetTreeAliasAsync`.
+- **A fold back onto a survivor, with stamps out of real-time order.**
+  `FoldBegin` moves `k2`'s slot from `s1` onto `s2` exactly as the split does;
+  the survivor's rows for its own slots, and the donor's retirement as a routing
+  tombstone once the map no longer names it, are not distinguished here, because
+  neither changes who serves `k2`. Both are modelled by the companion module
+  `ShardOwnershipFold` ([`RefinementFold.md`](RefinementFold.md)), which folds
+  the slot back onto the shard an earlier split took it from: the survivor's
+  sealed rows for the slot, their last-writer-wins import and reconciliation,
+  its reclaim, a cancel, and the donor's retirement. What neither module checks
+  is that fold back with a stamp that disagrees with real time: that module's
+  stamps follow real time, and this module's fold never meets a sealed survivor
+  row. A fold was outside this module altogether until
   #5125, on the ground that it shares the split's shadow-write window. That
   ground was wrong: the window is the shared primitive, but the retroactive
   sweep is a step of the split coordinator, and the fold did not take it. A
   shared primitive with several callers is covered only when the model
   includes every caller, or when the obligation lives in the primitive.
+  Production symbols: `TreeShardConsolidationGrain`,
+  `ShardRootGrain.ReclaimSlotsAsync`, `ShardRootGrain.RetireAsync`.
 - **The leaf-level moved-away handoff.** The seal a split leaves on the source
   leaves and its inheritance across a leaf split are modelled as one freeze
   step; the existing `SplitPivotAdmissionModel`, `SpanAdmissionMigrationModel`
   and `MovedAwaySealInheritanceModel` cover them at leaf granularity.
+  No production symbol: the leaf-granularity handoff is covered by the Coyote
+  models the gap names.
 - **Undo's failure paths.** A swap-back that fails after the arm is released
   by `TreeResizeGrain.ReleaseUndoRedirectUnlessSwappedAsync`; the model has no
   failing undo action.
+  Production symbols: `TreeResizeGrain.ReleaseUndoRedirectUnlessSwappedAsync`.
 - **Unmarked buckets.** A bucket forwarded by an older silo, or one whose P
   could not be read back, carries the destination's clock rather than P and
   keeps today's drain rule (#4522). It can lose a later write a split shadow-
   forward landed as a migrated row below its stamp. That is a named exception
   to `NoKeyLost` for a mixed-version cluster, recorded here and not modelled.
+  No production symbol: the gap is a named mixed-version exception, recorded
+  rather than mapped to code.
 - **A plain write before the prepare.** The base has no write before the
   saga's prepare. One acknowledged on T then, re-minted on R at a clock running
   ahead of P, would beat the saga's marked bucket there and tear the batch
@@ -307,17 +324,25 @@ not read as coverage of another:
   mirror forwards it at T's stamp, which is clean (123,933 states); the detector
   is `ResizeMirrorOriginalStampIntegrationTests.A_plain_write_is_mirrored_at_the_source_copys_own_stamp`,
   red with the mirror re-minting the write on R.
+  No production symbol: the case was checked once by extending the model, and
+  its detector pins production.
 - **Named exception to H.** An idempotent retry that reuses its issue stamp
   can be stamped below a prepare on the same leaf; `NoKeyLostLaterWriteBelowP`
   shows what that costs. A range delete no longer is one: it is stamped above
   the highest clock of every leaf it covers (#4530, fixed by #4568; detector
   `DeleteRangeAfterSagaDecisionIntegrationTests.Range_delete_acknowledged_after_the_decision_survives_the_terminal_drain`,
   red with the facade's wall-clock stamp restored).
+  No production symbol: the gap is a named exception to a property, pinned by
+  the detectors it cites.
 - **More than one of anything.** One split, one reshard, one resize, one saga
   writing two keys, one later write. A second saga contending for a key, a
   second split, and a split of the resized copy during the resize are bounded
   out.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **Time.** No timers, retention windows or deadlines.
+  No production symbol: the gap is the model's absence of time, not a production
+  mechanism.
 
 ## Territory owned by other open issues
 

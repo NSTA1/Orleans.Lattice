@@ -358,49 +358,59 @@ was relaxed, and no Replay model, bound, premise or launch policy changed.
 
 ## Deliberate abstraction gaps
 
-`ClassNonStarvation` covers both actual queued ambient classes. The external
-load eventually stops offering attempts or replacements; pressure is absent
-and the classifier remains `Draining` on the stable suffix. Existing holders
-complete. A workload with bounded holder completion satisfies this premise;
-`HoldersComplete` states eventual departure, not a wall-time upper bound.
-Its normalized `[]<>~held` form is exactly equivalent to `held ~> ~held` on
-all Boolean traces: when not held the eventual goal already holds now; when
-held both forms require a future non-held state. Infinite reacquisition remains
-allowed and an immortal holder still violates the premise. The arbitrary-holder
-trace control checks both implications without fairness and rejects the opposite
-recurrence, in periodic and final modes.
-The finite offered-attempt population means another class cannot manufacture
-an endless stream of overtaking acquisitions.
-
-The round-robin `BudgetOpportunity` counter abstracts continued execution of
-each existing owner's registered budget/cancellation continuation, not a
-production FIFO or class dispatcher. A drive's bound is counted in its budget
-visits; arbitrary interleavings or absent runtime opportunities have no claimed
-wall-time bound.
-
-`CapacityOpportunity` is an unconditionally enabled generic runtime callback:
-it toggles its epoch even without work. Weak fairness assumes callbacks keep
-running, not that any particular class is selected or that a desired service
-event occurs. Its implementation grants some eligible waiter when capacity
-exists. The starving-admission mutation preserves callbacks and these load and
-holder premises while withholding every grant. The real production negative
-control similarly parks queued acquisitions despite available capacity.
-Neither premise assumes FIFO, fair class admission or jitter-derived fairness.
-
-`NoSelfSustainingBacklog` is a transition property of replacement lineage:
-reactivating a client on a live owner must not change that owner, queue or held
-permit set. Queued actual-lifetime cancellation independently removes arrival
-accounting before a new attempt can replace it.
-
-`ReplayConverges` requires infinitely recurring non-hung focal ownership if it
-has not already completed, and strong fairness of each unfinished partition's
-storage-slice completion inside a live attempt. This storage-completion premise
-is explicit: completion only after every abandoned attempt is insufficient.
-Completed slices durably shorten a finite gap; interruption cannot erase them.
-No fairness of `Hang` or actual cold cancellation is assumed. A hung,
-uncancelled cold owner remains representable forever, as the approved guarantee
-requires. Banking and teardown persistence must finish for cancellation unwind;
-no state-mutating continuation is detached to manufacture this guarantee.
+- **Class non-starvation assumes finite load and departing holders.**
+  `ClassNonStarvation` covers both actual queued ambient classes. The external
+  load eventually stops offering attempts or replacements; pressure is absent
+  and the classifier remains `Draining` on the stable suffix. Existing holders
+  complete. A workload with bounded holder completion satisfies this premise;
+  `HoldersComplete` states eventual departure, not a wall-time upper bound. Its
+  normalized `[]<>~held` form is exactly equivalent to `held ~> ~held` on all
+  Boolean traces: when not held the eventual goal already holds now; when held
+  both forms require a future non-held state. Infinite reacquisition remains
+  allowed and an immortal holder still violates the premise. The
+  arbitrary-holder trace control checks both implications without fairness and
+  rejects the opposite recurrence, in periodic and final modes. The finite
+  offered-attempt population means another class cannot manufacture an endless
+  stream of overtaking acquisitions.
+  No production symbol: the gap states an environment premise of the model, not
+  a production mechanism.
+- **Budget opportunities are not a dispatcher.** The round-robin
+  `BudgetOpportunity` counter abstracts continued execution of each existing
+  owner's registered budget/cancellation continuation, not a production FIFO or
+  class dispatcher. A drive's bound is counted in its budget visits; arbitrary
+  interleavings or absent runtime opportunities have no claimed wall-time bound.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **Capacity callbacks are a runtime premise.** `CapacityOpportunity` is an
+  unconditionally enabled generic runtime callback: it toggles its epoch even
+  without work. Weak fairness assumes callbacks keep running, not that any
+  particular class is selected or that a desired service event occurs. Its
+  implementation grants some eligible waiter when capacity exists. The
+  starving-admission mutation preserves callbacks and these load and holder
+  premises while withholding every grant. The real production negative control
+  similarly parks queued acquisitions despite available capacity. Neither
+  premise assumes FIFO, fair class admission or jitter-derived fairness.
+  No production symbol: the gap states an environment premise of the model, not
+  a production mechanism.
+- **Replacement lineage is a transition property.** `NoSelfSustainingBacklog` is
+  a transition property of replacement lineage: reactivating a client on a live
+  owner must not change that owner, queue or held permit set. Queued
+  actual-lifetime cancellation independently removes arrival accounting before a
+  new attempt can replace it.
+  No production symbol: the gap states how a property of the model is phrased,
+  not a production mechanism.
+- **Replay convergence premises.** `ReplayConverges` requires infinitely
+  recurring non-hung focal ownership if it has not already completed, and strong
+  fairness of each unfinished partition's storage-slice completion inside a live
+  attempt. This storage-completion premise is explicit: completion only after
+  every abandoned attempt is insufficient. Completed slices durably shorten a
+  finite gap; interruption cannot erase them. No fairness of `Hang` or actual
+  cold cancellation is assumed. A hung, uncancelled cold owner remains
+  representable forever, as the approved guarantee requires. Banking and
+  teardown persistence must finish for cancellation unwind; no state-mutating
+  continuation is detached to manufacture this guarantee.
+  No production symbol: the gap states an environment premise of the model, not
+  a production mechanism.
 
 ## Harness and fixture corrections encountered here
 

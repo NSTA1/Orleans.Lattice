@@ -244,6 +244,7 @@ the reshard chaos suite cover them at the implementation level:
   This gap is about a TTL on the prepared **value**. It does **not** cover the
   retention window on the registry's **decision record**, which is a different
   clock and is declared separately below.
+  Production symbols: `AtomicVisibilityGate.ResolveKey`.
 - **No per-key value, stamp, or non-saga write.** A key is observed only as
   pre-saga, post-saga or hidden relative to one saga, so the model cannot say
   which of two writes to a key wins, and has no write outside a saga at all. The
@@ -254,6 +255,8 @@ the reshard chaos suite cover them at the implementation level:
   a re-drained orphan (issue #4522). That rule was checked in a separate
   last-writer-wins model while #4522 was designed; it is not a property of this
   module.
+  No production symbol: the last-writer-wins drain the gap leaves out was
+  checked by a separate model, not mapped here.
 - **The registry decision record's retention window.** Production reaches two
   states once `TxDecisionRetention` elapses on a tombstone, and the model now
   expresses one of them. While the row is still stored,
@@ -296,10 +299,15 @@ the reshard chaos suite cover them at the implementation level:
   mask, asking the registry for the recorded verdict behind an `Indeterminate`
   answer; neither can act once the row has been physically pruned, because the
   registry then has nothing left to report.
+  Production symbols: `TxRegistryGrain.GetStatusAsync`,
+  `TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync`,
+  `BPlusLeafGrain.SelfTerminaliseResolvedPreparesAsync`.
 - **Per-saga projection.** Each saga's visible value is modelled independently
   per key; inter-saga last-writer-wins ordering on a shared key (and the
   cross-migration LWW backstop) is orthogonal to all-or-nothing visibility and
   is left to the CRDT / LWW cores.
+  No production symbol: inter-saga ordering is left to the CRDT and
+  last-writer-wins cores, not to one production symbol.
 - **Cross-tree and cross-cluster delegation.** The `ExternalAuthorities` /
   `ReceiverDecisionAuthorities` delegation and the `Prepared` park-and-wait
   phase are not modelled; the spec covers the single-tree saga, whose
@@ -322,6 +330,9 @@ the reshard chaos suite cover them at the implementation level:
   origin. Every property row above is still a claim about one cluster, and none
   of them should be read as covering the replicated half (issue #2324); the
   cross-cluster module's properties are the claims about it.
+  Production symbols: `ITxRegistryGrain.RecordTerminalArrivalAsync`,
+  `IReplicationApplyGrain.ApplyTxTerminalAsync`,
+  `TxRegistryGrain.ResolveAllDelegatedAsync`.
 - **Crash / recovery.** Not modelled. `DecideTx` fires at most once per saga
   and `BroadcastStep` at most once per written key, because each leaves the
   phase or terminal its own guard requires, so the model has no re-entry at
@@ -329,3 +340,5 @@ the reshard chaos suite cover them at the implementation level:
   registry mark is classified idempotent while the decision is recorded, and a
   duplicate terminal is absorbed by the leaf's recently-terminal dedup - and
   the reminder-driven resume mechanics are code-level concerns.
+  No production symbol: the gap is the model's lack of re-entry; the idempotence
+  and resume it leaves out span the registry, the leaf and the saga grain.

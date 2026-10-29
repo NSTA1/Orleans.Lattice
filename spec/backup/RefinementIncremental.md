@@ -107,18 +107,25 @@ one step, and nothing in it waits on anything.
   nothing the properties see: `d0` is fixed for the drain, a saga committed in it
   had every prepare in the WAL before the gate, and a record the drain misses
   lies beyond the recorded frontier, so the next increment reads it.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **One saga, no ordinary writes.** Ordinary writes are emitted unchanged and
   restored last-writer-wins, as before the fix; the model keeps only the saga's
   records, whose resolution is what the fix changes.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **Retried prepares and duplicated terminals.** The core keys a prepare by its
   `LatticeMutation.AtomicBatchIndex`, so a retried prepare never completes a batch
   twice (`IncrementalSagaStagingTests.A_retried_prepare_replaces_its_index_rather_than_completing_the_batch`).
   A terminal redelivered after its saga settled reaches a later increment as a
   commit with no prepares and falls back to a full backup: safe, and outside the
   model.
+  Production symbols: `LatticeMutation.AtomicBatchIndex`.
 - **Gate lapse.** A lease that lapses during the drain makes the decision
   snapshot unreadable; the increment then falls back to a full backup.
   `BackupCapture` models the lease and its lapse.
+  No production symbol: the behaviour is `BackupCapture`'s, mapped in that
+  module's own refinement note.
 - **A base captured before the fix.** Its cut carries no undecided set
   (`BackupConsistencyCut.UndecidedSagaIds` is null), so an increment on it could
   not look those sagas up, and could restore a batch committed in its decision
@@ -127,3 +134,5 @@ one step, and nothing in it waits on anything.
   it and the capture falls back to a full backup, which starts a chain whose
   every link records the set. That is the `FullSnap` row's mapping; the model
   needs no action for it, because every base it builds took `FullSnap`.
+  Production symbols: `BackupConsistencyCut.UndecidedSagaIds`,
+  `LatticeBackupCaptureService.PredatesUndecidedSagaRecording`.

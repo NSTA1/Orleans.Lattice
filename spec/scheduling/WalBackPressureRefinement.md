@@ -256,17 +256,20 @@ it violates the acyclic relation directly.
 
 ## Deliberate abstraction gaps
 
-The finite pipeline represents callback opportunities, not a claimed CLR turn
-order among independent callers. Opportunity fairness is an environment
-callback/sampler opportunity premise; the gate and batching decisions inside
-it have no independent fairness assumptions. Relief completion order is
-enumerated, but provider-internal retries, storage service rates and the
-protocol safety of WAL/checkpoint/pin records remain in their owning models.
-The bounded classifier episodes use one shared sustained-window threshold
-and simultaneous onset for causes in an episode. This does not assert that
-production counters or their configurable windows share histories. Real
-sampler regressions cover cause priority and each production window; the
-larger two-cause variant is a bounded overlap check, not exhaustive coverage
-of arbitrary independent signal histories.
-ReceiverBatch, ViewBatch and Shed are the response operators for later
-composition; those independent scheduling modules are not implemented here.
+- **Callback opportunities, shared windows and later composition.** The finite
+  pipeline represents callback opportunities, not a claimed CLR turn order among
+  independent callers. Opportunity fairness is an environment callback/sampler
+  opportunity premise; the gate and batching decisions inside it have no
+  independent fairness assumptions. Relief completion order is enumerated, but
+  provider-internal retries, storage service rates and the protocol safety of
+  WAL/checkpoint/pin records remain in their owning models. The bounded
+  classifier episodes use one shared sustained-window threshold and simultaneous
+  onset for causes in an episode. This does not assert that production counters
+  or their configurable windows share histories. Real sampler regressions cover
+  cause priority and each production window; the larger two-cause variant is a
+  bounded overlap check, not exhaustive coverage of arbitrary independent signal
+  histories. ReceiverBatch, ViewBatch and Shed are the response operators for
+  later composition; those independent scheduling modules are not implemented
+  here.
+  No production symbol: the gap states a bound or premise of the scheduling
+  model, not a production mechanism.

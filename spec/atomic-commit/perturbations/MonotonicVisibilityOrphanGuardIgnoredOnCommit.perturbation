@@ -1,0 +1,18 @@
+# The orphan guard is skipped for a committed saga, so a late shadow-forward
+# bucket on a leaf that already applied the commit surfaces (or hides) the
+# key instead of deferring to the applied value.
+MODULE: AtomicCommit
+ROW: MonotonicVisibility
+FILE: src/lattice/BPlusTree/AtomicVisibilityGate.cs
+DETECTORS: AtomicVisibilityGateTests.Committed_but_already_terminal_orphan_falls_through
+SUMMARY: an already-terminal orphan bucket of a committed saga is no longer deferred to the projection
+
+--- FIND
+        if (alreadyTerminal)
+        {
+            // The orphan guard is tested first, ahead of every outcome arm,
+--- REPLACE
+        if (alreadyTerminal && status != TxStatus.Committed)
+        {
+            // The orphan guard is tested first, ahead of every outcome arm,
+--- END

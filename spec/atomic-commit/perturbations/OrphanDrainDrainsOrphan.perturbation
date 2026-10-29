@@ -1,0 +1,17 @@
+# The migration core forgets the orphan guard: a bucket whose saga already
+# terminalled here is drained (or discarded as an abort) by the delivered
+# verdict instead of being discarded as an orphan.
+MODULE: AtomicCommit
+ROW: OrphanDrain(t,k)
+FILE: src/lattice/BPlusTree/MigrationTerminalCore.cs
+DETECTORS: MigrationTerminalCoreTests.Pending_already_terminal_discards_orphan_regardless_of_verdict
+SUMMARY: a late orphan bucket is drained by the terminal's verdict instead of being discarded
+
+--- FIND
+        if (alreadyTerminal)
+        {
+            return MigrationTerminalBucketAction.DiscardOrphan;
+        }
+
+--- REPLACE
+--- END

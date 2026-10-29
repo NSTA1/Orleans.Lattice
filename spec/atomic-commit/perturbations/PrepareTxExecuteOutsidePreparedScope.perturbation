@@ -1,0 +1,18 @@
+# The execute phase dispatches the saga's batch without entering the prepared
+# scope, so its writes land in the visible projection instead of per-leaf
+# pending buckets. That is the hiding PrepareTx(t) abstracts.
+MODULE: AtomicCommit
+ROW: PrepareTx(t)
+FILE: src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs
+DETECTORS: AtomicWriteGrainTests.ExecuteAsync_routes_execute_phase_writes_through_the_prepared_path
+SUMMARY: the execute phase writes outside the prepared scope, so nothing is staged as a hidden pending bucket
+
+--- FIND
+        using (LatticePreparedContext.BeginScope())
+        {
+            var bindingMoves = 0;
+--- REPLACE
+        using ((IDisposable?)null)
+        {
+            var bindingMoves = 0;
+--- END

@@ -1,0 +1,14 @@
+# A commit mark against a live aborted decision is recorded instead of being
+# refused, flipping a terminal decision.
+MODULE: AtomicCommit
+ROW: DecisionDurability
+FILE: src/lattice/BPlusTree/Grains/TxRegistryGrain.cs
+DETECTORS: TxRegistryGrainTests.MarkCommittedAsync_throws_when_previously_aborted
+SUMMARY: a live aborted decision is overwritten by a later commit mark
+
+--- FIND
+                throw new InvalidOperationException(
+                    $"Cannot mark saga {txid:N} as committed: it was previously recorded as aborted.");
+--- REPLACE
+                break;
+--- END

@@ -168,13 +168,15 @@ fresh sweep, never a second concurrently running coordinator.
 
 ## Deliberate abstraction gaps
 
-Fixed covered-tree membership and fixed per-instance ProbeOnly/ChunkSize;
-no disabled schedule, cancellation, repeated process crashes, digest
-unavailability/collisions or unbounded changing subjects. An accepted call is
-not made durable before Orleans dispatches it: client retry is required if the
-activation dies. The model does not claim exactly-once RPC delivery. Tree repair
-is opaque, including flag convergence, mirror reconstruction, bounded read/write
-windows and re-verification races. Their real context regressions remain
-required independently; this model only treats complete successful return as
-repair completion. Environment fairness is conditional, never an uptime or
-timer-delivery guarantee.
+- **Fixed membership, opaque repair.** Fixed covered-tree membership and fixed
+  per-instance ProbeOnly/ChunkSize; no disabled schedule, cancellation, repeated
+  process crashes, digest unavailability/collisions or unbounded changing
+  subjects. An accepted call is not made durable before Orleans dispatches it:
+  client retry is required if the activation dies. The model does not claim
+  exactly-once RPC delivery. Tree repair is opaque, including flag convergence,
+  mirror reconstruction, bounded read/write windows and re-verification races.
+  Their real context regressions remain required independently; this model only
+  treats complete successful return as repair completion. Environment fairness
+  is conditional, never an uptime or timer-delivery guarantee.
+  No production symbol: the gap states a bound or premise of the scheduling
+  model, not a production mechanism.

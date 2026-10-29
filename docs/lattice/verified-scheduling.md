@@ -292,17 +292,16 @@ production/Coyote detector evidence. The revised complete harness passed both
 full configurations and all twenty-six pairs in 2745.4195361 monotonic seconds.
 Its accepted launcher-artifact completion is not a recovered CLI terminal event,
 loaded-DLL attestation or peak-RSS measurement. CI routing does not compose
-those certificates. The matrix prices the five scheduling items from passing TRX
-evidence in ci.yml run 40658688360 (head 92832b77): the dedicated TwoPartitions
-item is 41.15 minutes (job 122717148551), Shipping base/pairs are 6.17 (job
-122717148735), and FourRecords is 18.72 (job 122717148680). The passing 192/192
-general item (job 122717148586) is split into 106/86-case groups priced at
-21.03/23.04 minutes by four-worker LPT reconstruction of its case durations, not
-measured work-item times. Four workers is a reconstruction assumption, not an
-attested runner trace. The complete source run passed, including rebootstrap job
-122717148595. Historical run 40588708711's rebootstrap job 122488444001 failed
-under #5116; that failure remains recorded and contributes no timing. The
-estimates are planning inputs, not runtime guarantees.
+those certificates. The matrix prices the five scheduling items at the means of
+two measured work-item times, from the receipt-free bucket push ci.yml run
+40909619830 (head 9418a498d) and the nightly-equivalent coverage.yml run
+40923724192 (head 0e4aa6b2a), both of which passed every case: the dedicated
+TwoPartitions item took 35.22 and 52.78 minutes (jobs 123577568395 and
+123623834893), priced 44.00; the 106-case general group 31.71 and 30.38, priced
+31.05; the 86-case group 12.11 and 20.64, priced 16.38; Shipping base/pairs 4.37
+and 4.20, priced 4.29; and FourRecords 22.29 and 17.23, priced 19.76. A single
+case varies up to 1.5x between runs on identical inputs, so the estimates are
+planning inputs, not runtime guarantees.
 
 ## Defects found during the bucket
 

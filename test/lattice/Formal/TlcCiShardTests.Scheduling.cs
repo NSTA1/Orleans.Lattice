@@ -62,7 +62,7 @@ public sealed partial class TlcCiShardTests
             Assert.That(TlcCiShard.Of(future, mutation), Is.EqualTo(TlcCiShard.Scheduling));
             Assert.That(TlcCiShard.OfVariant(future, "FutureVariant"), Is.EqualTo(TlcCiShard.Scheduling));
             var ordinaryWal = Module("WalDurability");
-            Assert.That(TlcCiShard.OfModule(ordinaryWal), Is.Null);
+            Assert.That(TlcCiShard.OfModule(ordinaryWal), Is.EqualTo(TlcCiShard.ReplicationWal), "its base is co-located with its mutations (#5161)");
             Assert.That(TlcCiShard.Of(ordinaryWal, mutation), Is.EqualTo(TlcCiShard.ReplicationWal));
             Assert.That(TlcCiShard.OfVariant(ordinaryWal, "FutureVariant"), Is.Null);
             var outsideScheduling = module with { Directory = ordinaryWal.Directory };
@@ -137,7 +137,7 @@ public sealed partial class TlcCiShardTests
             Assert.That(structural, Is.Not.Empty);
             Assert.That(identities, Is.EquivalentTo(structural.Select(Identity)));
             Assert.That(identities, Is.Unique, "partitioning must not duplicate a native invocation");
-            Assert.That(structural.SelectMany(Categories), Is.Empty, "structural gates stay outside TLC shards");
+            Assert.That(structural.SelectMany(AllCategories), Is.Empty, "structural gates stay outside TLC shards and carry no module category");
             foreach (var data in ordinary)
             {
                 var expected = data.Arguments switch

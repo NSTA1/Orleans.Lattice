@@ -120,28 +120,37 @@ public sealed partial class TlcCiShardTests
     }
 
     [Test]
-    public void Bplus_cascade_runs_are_partitioned_by_base_and_balanced_mutation_groups()
+    public void Bplus_cascade_base_and_mutations_share_one_shard()
     {
         var module = Module("BPlusCascade");
         var mutations = module.LoadMutations();
-        var loads = mutations
-            .GroupBy(mutation => TlcCiShard.Of(module, mutation)!, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
         Assert.Multiple(() =>
         {
-            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.BPlusCascadeBase));
-            Assert.That(loads.Keys, Is.EquivalentTo(new[]
-                { TlcCiShard.BPlusCascadeMutations1, TlcCiShard.BPlusCascadeMutations2 }));
-            Assert.That(
-                loads.Values.Max() - loads.Values.Min(),
-                Is.LessThanOrEqualTo(2),
-                "the BPlusCascade mutation cases must be spread across both TLC shards");
-            Assert.That(
-                mutations.Where(mutation => mutation.Target is "ParentChildAccounting" or "RecoverablePending" or "SeparatorRanges" or "ReachMaxHeight")
-                    .All(mutation => TlcCiShard.Of(module, mutation) == TlcCiShard.BPlusCascadeMutations2),
-                Is.True,
-                "the measured target-property groups must retain their shard assignment");
+            Assert.That(mutations, Is.Not.Empty);
+            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.BPlusCascade));
+            Assert.That(mutations.Select(mutation => TlcCiShard.Of(module, mutation)).Distinct(),
+                Is.EqualTo(new[] { TlcCiShard.BPlusCascade }));
+            Assert.That(mutations.All(mutation => TlcCiShard.SharesBaseShard(module, mutation)), Is.True,
+                "the base must run in the mutations' process to serve their full-bound controls");
+        });
+    }
+
+    [Test]
+    public void Every_category_routed_TLC_shard_runs_only_the_deterministic_tier()
+    {
+        var categoryShards = LatticeShards()
+            .Where(shard => shard.Categories.Any(category => category.StartsWith("TlcShard", StringComparison.Ordinal)))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(categoryShards, Has.Count.EqualTo(TlcCiShard.All.Count));
+            foreach (var shard in categoryShards)
+            {
+                Assert.That(shard.Tiers, Is.EqualTo(new[] { "deterministic" }),
+                    $"{shard.Name}: a TlcShard* category is carried only by TLC cases, which are never Chaos or Coyote, so any other tier is an empty dotnet test start");
+            }
         });
     }
 
@@ -231,12 +240,17 @@ public sealed partial class TlcCiShardTests
         var mutation = TlcCiShard.Tag(new TestCaseData(rebootstrap, rebootstrap.LoadMutations()[0]));
         var variant = TlcCiShard.Tag(new TestCaseData(atomic, atomic.Manifest.Variants.Keys.First()));
         var baseCase = TlcCiShard.Tag(new TestCaseData(atomic));
+        var other = TlcCiShard.Tag(new TestCaseData("not a module"));
 
         Assert.Multiple(() =>
         {
             Assert.That(Categories(mutation), Is.EqualTo(new[] { TlcCiShard.ReBootstrap }));
             Assert.That(TlcCiShard.AtomicVariantShards.Contains(Categories(variant).Single()), Is.True);
-            Assert.That(Categories(baseCase), Is.Empty);
+            Assert.That(Categories(baseCase), Is.EqualTo(new[] { TlcCiShard.Atomic }), "its base is co-located with its mutations (#5161)");
+            Assert.That(ModuleCategories(mutation), Is.EqualTo(new[] { "TlcModule_ReplicationReBootstrap" }));
+            Assert.That(ModuleCategories(variant), Is.EqualTo(new[] { "TlcModule_AtomicCommitCrossCluster" }));
+            Assert.That(ModuleCategories(baseCase), Is.EqualTo(new[] { "TlcModule_AtomicCommitCrossCluster" }));
+            Assert.That(AllCategories(other), Is.Empty);
         });
     }
 
@@ -337,13 +351,25 @@ public sealed partial class TlcCiShardTests
             Assert.Throws<ArgumentNullException>(() => TlcCiShard.OfVariant(null!, "v"));
             Assert.Throws<ArgumentNullException>(() => TlcCiShard.OfVariant(module, null!));
             Assert.Throws<ArgumentNullException>(() => TlcCiShard.Tag(null!));
+            Assert.Throws<ArgumentNullException>(() => TlcCiShard.ModuleCategory(null!));
         });
     }
 
     private static SpecModule Module(string name) =>
         SpecModuleCatalogue.Repository().Single(module => module.Name == name);
 
+    /// <summary>
+    /// The <c>TlcShard*</c> routing categories of a case. The per-module
+    /// <c>TlcModule_*</c> family is deliberately left out: it routes nothing, so
+    /// every shard guard must ignore it.
+    /// </summary>
     private static IEnumerable<string> Categories(TestCaseData data) =>
+        AllCategories(data).Where(category => category.StartsWith("TlcShard", StringComparison.Ordinal));
+
+    private static IEnumerable<string> ModuleCategories(TestCaseData data) =>
+        AllCategories(data).Where(category => category.StartsWith(TlcCiShard.ModuleCategoryPrefix, StringComparison.Ordinal));
+
+    private static IEnumerable<string> AllCategories(TestCaseData data) =>
         data.Properties.ContainsKey(PropertyNames.Category)
             ? data.Properties[PropertyNames.Category].Cast<string>()
             : [];

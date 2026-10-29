@@ -35,13 +35,14 @@ Issue #2323 is the recommendation. This directory is it.
 
 A mutation retains a clean full-bound control and a targeted mutant.
 If its generated mutant cfg differs, the clean source also runs under that
-exact cfg. Every clean control uses the targeted mutant's TLC options and checks
+cfg's exact model (the control cfg omits only the mutant header's mutation
+name). Every clean control uses the targeted mutant's TLC options and checks
 `TypeOK` plus only its single target, not all the module's properties:
 
 | Arm | Module | Required outcome |
 | --- | --- | --- |
 | Full-bound control | the unmutated base with its original bounds | clean |
-| Matching-bound control, when the cfg differs | the unmutated base with the exact mutant cfg | clean |
+| Matching-bound control, when the cfg differs | the unmutated base with the mutant cfg's model | clean |
 | Treatment | the generated mutant with the mutant cfg | violates the named property |
 
 Asserting only the treatment outcome would repeat the mistake this directory exists to
@@ -148,8 +149,9 @@ the deadlock now comes first unless the check is off.
 specification declares or defines (`BOUNDS: MaxFaults = 0, MaxHlc = 1`).
 `BuildConfig` retains the module's original assignments for the full-bound
 clean control. `BuildMutantConfig` adds the header's assignments for the mutant.
-Whenever the generated cfg text differs, the harness additionally runs the
-unmutated source under that exact mutant cfg and the same TLC options before
+Whenever the generated cfg differs, the harness additionally runs the unmutated
+source under `BuildMatchingControlConfig` - the mutant cfg's model with a
+header that does not name the mutation - and the same TLC options before
 running the mutant. A nonempty header adds a cfg block, even if its values
 repeat the base assignments.
 
@@ -169,10 +171,11 @@ formula and exclusions are in [CI budget](../../README.md#ci-budget).
 
 Control reuse is process-local and requires the complete cache key to match:
 specification path, base source, generated cfg text, options and sorted sibling
-module names/text. The generated cfg includes its mutation-name comment, so
-different mutation names do not share a control just because their target and
-options match. Repeated identical requests share the same lazy result, including
-failure; this is not cross-process or cross-run reuse.
+module names/text. The generated control cfgs do not name the mutation, so
+mutations that agree on module, target, bounds and options share one control.
+Repeated identical requests share the same lazy result, including failure, so a
+failing shared control fails every case that shares it; this is not
+cross-process or cross-run reuse.
 
 ## `TypeOK` rides along in every cfg
 

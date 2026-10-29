@@ -92,16 +92,28 @@ over one lease.
   writer that crashes after committing, leave peers trusting the old snapshot until the
   background re-publish lands or membership declares the writer dead. Decisions already
   taken are never revoked.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Clock drift.** Time is abstract. The grain's lease table and the silo's lease clock
   are merged into one value per silo, so a silo whose clock runs fast and lapses early is
   not modelled (it only reduces authority). The guarantee assumes drift within the margin.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Serialised writes, one write.** The bounds are one write, two silos and, per variant
   configuration, one crash, one re-activation or one failed publication; all three
   interleave on one silo in `TenantIsolation.Faults.cfg`.
+  No production symbol: the gap bounds the checked instance; it is not a
+  production mechanism.
 - **Atomic steps.** Lease grant and application, the membership declaration and the
   rebuild's publish are single steps; a failing rebuild, silos not yet joined and the
   alias path are not modelled.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Boolean epoch knowledge.** Epochs only grow, so a silo's observation is modelled as
   whether it has seen the current epoch.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
 - **Crashed silo leases.** A crashed silo's captured lease is released at the crash; in
   production its recorded deadline passes later, which only lengthens the wait.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.

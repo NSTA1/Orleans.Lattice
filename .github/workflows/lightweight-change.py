@@ -7,11 +7,31 @@ import re
 import subprocess
 import unittest
 
+# Workflow files whose change is pinned by .NET tests (TlcCiShardTests,
+# CiMemberPullRequestTieringTests, TlcInputClassificationTests): they route TLC
+# cases or classify TLC verdict inputs, so the lightweight lane, which runs no
+# .NET test, cannot validate them (#5149). formal-receipts.yml decides which
+# modules TLC runs on main and is pinned by CiFormalReceiptsLaneTests (#5165).
+TLC_ROUTING_FILES = frozenset(
+    ".github/workflows/" + name
+    for name in (
+        "formal-receipts.yml",
+        "plan-test-matrix.py",
+        "run-test-leg.py",
+        "test-shards.json",
+        "tier-scope.py",
+        "tlc-inputs.json",
+        "tlc-fingerprint.py",
+        "tlc-receipts.py",
+    )
+)
+
 
 def is_lightweight(paths: list[str]) -> bool:
     return bool(paths) and all(
-        path.startswith(("videos/", ".github/workflows/"))
-        or path == ".github/copilot-instructions.md"
+        (path.startswith(("videos/", ".github/workflows/"))
+         or path == ".github/copilot-instructions.md")
+        and path not in TLC_ROUTING_FILES
         for path in paths
     )
 
@@ -24,6 +44,13 @@ class ClassificationTests(unittest.TestCase):
             ".github/copilot-instructions.md",
         ]))
 
+    def test_tlc_routing_files_require_full_ci(self):
+        for path in sorted(TLC_ROUTING_FILES):
+            with self.subTest(path=path):
+                self.assertTrue(Path(__file__).with_name(Path(path).name).is_file(), path)
+                self.assertFalse(is_lightweight([path]))
+                self.assertFalse(is_lightweight(["videos/package-lock.json", path]))
+
     def test_source_and_formal_changes_require_full_ci(self):
         for path in ("src/lattice/Tree.cs", "test/lattice/TreeTests.cs",
                      "spec/Atomic.tla", "docs/lattice/README.md",
@@ -33,6 +60,17 @@ class ClassificationTests(unittest.TestCase):
 
     def test_empty_diff_is_not_lightweight(self):
         self.assertFalse(is_lightweight([]))
+
+    def test_tla_toolchain_changes_require_full_ci(self):
+        # The toolchain's pins and its provisioning action live outside
+        # .github/workflows/ (#5151), so a toolchain change runs TLC.
+        root = Path(__file__).resolve().parents[2]
+        for path in (".github/actions/tla-toolchain/action.yml",
+                     "tools/tlc/toolchain.json", "tools/tlc/toolchain.py"):
+            with self.subTest(path=path):
+                self.assertTrue((root / path).is_file(), path)
+                self.assertFalse(is_lightweight([path]))
+                self.assertFalse(is_lightweight([".github/workflows/ci.yml", path]))
 
     def test_workflow_wires_both_classifiers_and_gates_expensive_steps(self):
         workflow = Path(__file__).with_name("ci.yml").read_text(encoding="utf-8")

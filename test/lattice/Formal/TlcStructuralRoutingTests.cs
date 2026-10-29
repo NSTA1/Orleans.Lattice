@@ -15,11 +15,12 @@ public sealed class TlcStructuralRoutingTests
         var incorrectlyTagged = structural.Where(data =>
             data.Properties.ContainsKey(PropertyNames.Category)
             && data.Properties[PropertyNames.Category].Cast<string>()
-                .Any(category => category.StartsWith("TlcShard", StringComparison.Ordinal)))
+                .Any(category => category.StartsWith("TlcShard", StringComparison.Ordinal)
+                    || category.StartsWith(TlcCiShard.ModuleCategoryPrefix, StringComparison.Ordinal)))
             .ToList();
 
         Assert.That(incorrectlyTagged, Is.Empty,
-            "generic structural cases must remain in the deterministic rest shard when exhaustive TLC is skipped");
+            "generic structural cases must remain in the deterministic rest shard when exhaustive TLC is skipped, and must not be selected by a per-module TLC filter");
     }
 
     [Test]

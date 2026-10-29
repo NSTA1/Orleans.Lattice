@@ -1,0 +1,17 @@
+# The gate surfaces the prepared value of a saga that is still in flight,
+# breaking the strict-isolation default.
+MODULE: AtomicCommit
+ROW: StrictIsolation
+FILE: src/lattice/BPlusTree/AtomicVisibilityGate.cs
+DETECTORS: AtomicVisibilityGateTests.InFlight_always_falls_through
+SUMMARY: an in-flight saga's prepared value is surfaced as though it had committed
+
+--- FIND
+        if (status == TxStatus.Committed)
+        {
+            return preparedHiddenByTombstoneOrExpiry
+--- REPLACE
+        if (status == TxStatus.Committed || status == TxStatus.InFlight)
+        {
+            return preparedHiddenByTombstoneOrExpiry
+--- END

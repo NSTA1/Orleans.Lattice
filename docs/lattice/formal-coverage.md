@@ -18,15 +18,24 @@ Each area follows the pattern the
 [atomic-commit specification](verified-atomic-commit.md) set:
 
 - **TLA+ modules checked by TLC in CI.** They live under
-  [`spec/`](../../spec/README.md), one directory per area. Routine pull requests
-  retain a base smoke check; exhaustive bases, variants and mutants run when the
-  diff touches a TLC input, and on integration/release pushes and nightly runs.
+  [`spec/`](../../spec/README.md), one directory per area. Every pull request
+  that runs the core `test/lattice` suite keeps a base-model smoke check. Exhaustive bases, variants and
+  mutants run when the diff touches a TLC verdict input, on every release-line
+  pull request, on integration-branch and release-line pushes, and nightly on
+  `main`; outside release lines, the nightly run and a dispatch with receipts
+  switched off, a module whose fingerprint already has a trusted verdict receipt
+  is not rerun. The [Formal Verification Pipeline](formal-verification-pipeline.md)
+  describes every lane.
 - **A mutation for every property and every action.** Each is a deliberate
   defect that must make TLC report a violation, so no property holds
   vacuously and no protocol step goes unchecked.
 - **A refinement note per module.** It maps every variable, action and property
-  to the production code that plays its role, and to detector tests that were
-  shown to go red when that code is perturbed.
+  to the production code that plays its role, and to the detector tests meant to
+  go red when that code deviates. Gates check that every named symbol exists and
+  every cited detector is a test CI runs. Whether a detector actually goes red is
+  re-checked mechanically only for rows that have a production perturbation,
+  which the [weekly perturbation lane](formal-verification-pipeline.md#weekly-production-perturbations)
+  applies.
 - **Production detectors, with pure-core and Coyote tiers where applicable.**
   The established concurrency cores also run under systematic Coyote
   interleaving with negative controls. The view, anti-entropy and lifecycle
@@ -43,14 +52,17 @@ CI selects exhaustive TLC. The acceptance census (#4442) adds two more gates:
 
 ## Areas
 
-Figures are derived from module manifests and refinement notes. Each area's spec
-`README.md` holds the figures the build checks; the B+ tree topology row reflects
-its six checked modules.
+Figures are derived from module manifests and refinement notes, and the build checks
+every one of them: `FormalCoverageAreaCensusTests` re-derives each row from the
+modules it counts, and requires every module under `spec/` to be counted exactly
+once, either here or in the
+[focused materialised-view companions](#focused-materialised-view-companions).
 
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
+| Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
 | WAL durability lifecycle | 2 | 61 | 57 | 140 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
-| Shard ownership | 4 | 105 | 100 | 166 | [Verified Shard Ownership](verified-shard-ownership.md) |
+| Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 84 | 64 | 195 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
@@ -383,13 +395,16 @@ gaps, states its full scope.
   - **Does not cover:** more than two partitions; splits, resharding and saga
     state; replication consumers, beyond their effect on the trim floor.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
-  - **Covers:** who serves a key across an adaptive split, an online reshard, an
-    online resize and its undo, with stale routers and an atomic write bound to
-    one physical copy; the transaction registry's retention, late forwarded
-    prepares and leaf reactivation; CRDT-mode keys across the same moves; and an
-    atomic write bound across a shadow-cutover restore.
-  - **Does not cover:** other alias moves, shard consolidation, and any
-    cross-cluster replication of ownership moves.
+  - **Covers:** who serves a key across an adaptive split, an online shard
+    fold, an online reshard, an online resize and its undo, with stale routers
+    and an atomic write bound to one physical copy; a fold back onto the shard a
+    split took the slot from, with the survivor's sealed rows, their
+    last-writer-wins import, reclaim, cancel and retirement; the transaction
+    registry's retention, late forwarded prepares and leaf reactivation;
+    CRDT-mode keys across the same moves; and an atomic write bound across a
+    shadow-cutover restore.
+  - **Does not cover:** other alias moves, a fold back whose stamps disagree
+    with real time, and any cross-cluster replication of ownership moves.
 - **B+ tree topology** ([`spec/bplustree/`](../../spec/bplustree/README.md)).
   - **Covers:** a donor-to-sibling split and parent-link crash window; right-edge
     parent splits from three to six levels in the checked instance; interleaved
@@ -499,10 +514,12 @@ of copies, shards, keys and faults exhaustively, and says which. A clean run is
 a statement about the design over that instance. The integration and
 [chaos tests](chaos-tests.md) remain the evidence for the deployed system.
 
-Three other verified pages predate this epic and are outside its census:
-[Verified Atomic-Commit](verified-atomic-commit.md) for the single-cluster
-protocol, [Verified Atomic Action](verified-atomic-action.md) and
-[Verified Distributed Lock](verified-lock.md).
+The single-cluster `AtomicCommit` module predates this epic; its row in the
+areas table counts it, and [Verified Atomic-Commit](verified-atomic-commit.md)
+describes it. Two other verified pages,
+[Verified Atomic Action](verified-atomic-action.md) and
+[Verified Distributed Lock](verified-lock.md), rest on verified cores and Coyote
+models rather than a TLA+ module, so they are outside this census.
 
 ## Defects the coverage found and fixed
 
@@ -531,38 +548,26 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 
 ## CI partition and non-vacuity
 
-The new view, anti-entropy and lifecycle JVM cases use dedicated
-deterministic-only TLC shards with measured durations in the matrix planner.
-Bases and variants leave the catch-all. Anti-entropy is split into three
-measured groups; its generated mutation-specific config headers prevent
-same-target controls from sharing the current byte-keyed cache. Structural
-discovery and refinement cases remain
-outside the TLC shards and run even when policy skips exhaustive model checking.
-The #4852 regression prevents a shard category from silently moving those
-structural checks into skipped work.
-
-Scheduling bases, variants and mutations route before the WAL-name fallback to
-five deterministic-only shards: 106 general cases (`formal-tlc-scheduling`), 86
-workload-B cases (`formal-tlc-scheduling-workload-b`), the dedicated
-ReplayPermits TwoPartitions case
-(`formal-tlc-scheduling-replay-two-partitions`), 27 Shipping base/pairs
-(`formal-tlc-scheduling-shipping`) and its FourRecords variant
-(`formal-tlc-scheduling-shipping-variants`), covering all 221 cases exactly
-once. Prices use passing TRX evidence from ci.yml run 40658688360 (head
-92832b77): the three measured item prices are 41.15 minutes (job 122717148551),
-6.17 (job 122717148735) and 18.72 (job 122717148680). The 192/192 general item
-passed in job 122717148586; its 106/86 subgroup prices of 21.03/23.04 minutes
-are four-worker LPT reconstructions from test-case durations, not measured
-work-item times. Four workers is a reconstruction assumption, not an attested
-runner trace. The complete source run passed, including rebootstrap job
-122717148595. Historical run 40588708711's rebootstrap job 122488444001 failed
-under #5116; that failure remains recorded and contributes no timing. Estimates
-are planning inputs, not runtime guarantees. Structural scheduling discovery and
-refinement checks remain outside those shards, so a skipped TLC run does not
-skip the acceptance census.
+Every TLC case carries a `TlcModule_<Module>` category, and `TlcCiShard` gives
+grouped cases a `TlcShard*` category; `test-shards.json` partitions those across
+deterministic TLC shards, plus a catch-all for every ungrouped case, and their
+measured costs feed the matrix planner. Structural discovery, mutation and refinement
+cases carry no TLC category, so they run in the content gates even when policy
+skips exhaustive model checking; the #4852 regression stops a shard category
+from moving them into skipped work, and a toolchain-free partition check proves
+every TLC case is selected by exactly one TLC shard. The
+[Formal Verification Pipeline](formal-verification-pipeline.md) explains the
+routing, the TLC input classes, verdict receipts and the nightly and weekly
+lanes. The scheduling shards' measured and reconstructed prices, with their run
+provenance, are recorded in the
+[scheduling area README](../../spec/scheduling/README.md) and
+[Verified Scheduling and Progress](verified-scheduling.md).
 
 ## Related
 
+- [Formal Verification Pipeline](formal-verification-pipeline.md) - which CI lane
+  runs which checks, TLC input classes, verdict receipts, and the refinement
+  gates, with diagrams.
 - [`spec/README.md`](../../spec/README.md) - the specification index, the module
   layout and the CI decision.
 - [Chaos Tests](chaos-tests.md) - the integration suite that drives a live

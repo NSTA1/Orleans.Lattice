@@ -42,7 +42,7 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class CiCoverageLaneScheduleTests
+public sealed partial class CiCoverageLaneScheduleTests
 {
     private const string CoverageWorkflow = ".github/workflows/coverage.yml";
 

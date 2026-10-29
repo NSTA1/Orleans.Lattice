@@ -1,0 +1,21 @@
+# The abort fan-out tells only the first touched shard, stranding the prepared
+# buckets of every other participant, as NoStrandedPrepareCompensationSkipsNacked
+# does in the model.
+MODULE: AtomicCommit
+ROW: NoStrandedPrepare
+FILE: src/lattice/BPlusTree/Grains/AtomicWriteGrain.cs
+DETECTORS: CompensationContinuousReaderTests.Compensation_broadcasts_TxAbort_to_every_touched_shard
+SUMMARY: the abort terminal reaches only the first touched shard, stranding the others' prepares
+
+--- FIND
+        foreach (var shardIndex in state.State.TouchedShards)
+        {
+            IReadOnlyDictionary<string, byte[]>? subset = null;
+            if (perShardCommitted is not null && perShardCommitted.TryGetValue(shardIndex, out var bucket))
+--- REPLACE
+        foreach (var shardIndex in state.State.TouchedShards)
+        {
+            if (!committed && shardIndex != state.State.TouchedShards[0]) continue;
+            IReadOnlyDictionary<string, byte[]>? subset = null;
+            if (perShardCommitted is not null && perShardCommitted.TryGetValue(shardIndex, out var bucket))
+--- END
