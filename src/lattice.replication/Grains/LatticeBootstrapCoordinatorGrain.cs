@@ -1477,7 +1477,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                var delta = await leaf.GetDeltaSinceAsync(everything).ConfigureAwait(true);
+                var (delta, liveEntries) = await leaf.GetBootstrapCaptureAsync(everything).ConfigureAwait(true);
                 foreach (var row in delta.Entries.Values)
                 {
                     if (string.Equals(row.OriginClusterId, sourceClusterId, StringComparison.Ordinal))
@@ -1486,7 +1486,6 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                     }
                 }
 
-                var liveEntries = await leaf.GetLiveRawEntriesAndNextSiblingAsync().ConfigureAwait(true);
                 foreach (var entry in liveEntries.Entries)
                 {
                     if (entry.ExpiresAtTicks != 0
@@ -1725,11 +1724,10 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                var liveEntriesTask = leaf.GetLiveRawEntriesAsync();
-                var pendingPageTask = leaf.GetPendingMutationsForSlotsAndNextSiblingAsync(allSlots, shardMap.VirtualShardCount);
-                await Task.WhenAll(liveEntriesTask, pendingPageTask).ConfigureAwait(true);
+                var (liveEntries, pendingPage) = await leaf.GetLiveRawEntriesAndPendingAsync(
+                    allSlots, shardMap.VirtualShardCount).ConfigureAwait(true);
 
-                foreach (var entry in await liveEntriesTask.ConfigureAwait(true))
+                foreach (var entry in liveEntries)
                 {
                     if (Doomed(entry.Key, entry.OriginClusterId, entry.Timestamp, entry.ExpiresAtTicks, entry.MergeMode ?? mergeMode))
                     {
@@ -1737,7 +1735,6 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                     }
                 }
 
-                var pendingPage = await pendingPageTask.ConfigureAwait(true);
                 foreach (var pending in pendingPage.Mutations)
                 {
                     if (pending.TransactionId != Guid.Empty
@@ -1783,11 +1780,11 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // prepare is superseded only by a row stamped strictly above it, so a
         // tombstone at its stamp would not hide it, and one above could beat a
         // legitimate later write.
-        foreach (var (leafId, transactionId) in staleSagas)
+        foreach (var leafSagas in staleSagas.GroupBy(saga => saga.Leaf))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await _grainFactory.GetGrain<IBPlusLeafGrain>(leafId)
-                .DiscardPendingTransactionAsync(transactionId)
+            await _grainFactory.GetGrain<IBPlusLeafGrain>(leafSagas.Key)
+                .DiscardPendingTransactionsAndGetNextSiblingAsync(leafSagas.Select(saga => saga.TransactionId).ToArray())
                 .ConfigureAwait(true);
         }
 

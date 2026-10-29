@@ -56,10 +56,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // on their local WAL too. Cross-cluster atomic visibility relies on
 // the terminal-HLC ordering invariant established below: the terminal
 // is stamped with an HLC strictly greater than every prepare's stamp
-// on this shard's chain (computed by fanning out GetClockAsync over
-// the affected-leaves subset and Tick-ing once over the max - for the
-// untouched leaves contribute no prepare for this saga, so their
-// clocks are irrelevant to the invariant). Consumers that merge WAL
+// on this shard's chain (Tick over the affected-leaf clock maximum,
+// sampled separately or during a stable fallback chain walk).
+// Untouched leaves contribute no prepare for this saga, so their
+// clocks are irrelevant to the invariant. Consumers that merge WAL
 // partitions by HLC rely on it to sort a terminal after the prepares it
 // resolves - without which a Zero-stamped terminal would always
 // sort ahead of non-Zero prepares and flush an empty pending bucket.
@@ -180,6 +180,13 @@ internal sealed partial class ShardRootGrain
         var stageTagShard = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex);
 
         var resolveStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        var writer = ResolveCommitLogWriter();
+        // Production dispatch brackets this terminal itself as one routing mutation.
+        var sampleChainClocks = writer is not null
+            && LatticeHlcOverrideContext.Current is null
+            && _routingMutationsInFlight <= 1;
+        HybridLogicalClock? chainMaxClock = null;
+        long? chainEpoch = null;
         HashSet<GrainId>? trackedAffected;
         IReadOnlyList<IBPlusLeafGrain> hlcLeaves;
         try
@@ -196,9 +203,18 @@ internal sealed partial class ShardRootGrain
             {
                 // Fallback path. The chain walk itself is sequential
                 // (each step needs the previous leaf's next-sibling
-                // pointer); the subsequent fan-outs (clock collection,
-                // terminal apply) parallelise across the collected list.
-                hlcLeaves = await CollectChainLeavesAsync(cancellationToken);
+                // pointer). A stable walk also samples the clocks, removing
+                // the later per-leaf clock fan-out.
+                var epoch = _routingEpoch;
+                var chain = await CollectChainLeavesAsync(cancellationToken, sampleChainClocks);
+                hlcLeaves = chain.Leaves;
+                // Point writes wait out this serial turn, but batch writes can
+                // interleave. Only reuse observations from a stable routing epoch.
+                if (_routingEpoch == epoch && _routingMutationsInFlight <= 1)
+                {
+                    chainEpoch = epoch;
+                    if (sampleChainClocks) chainMaxClock = chain.MaxClock;
+                }
             }
         }
         finally
@@ -214,8 +230,8 @@ internal sealed partial class ShardRootGrain
                 });
         }
 
-        // Step 2 (terminal HLC) - fan out GetClockAsync across the
-        // target subset and Tick once over the max so the resulting
+        // Step 2 (terminal HLC) - reuse the stable walk's clocks, or fan out
+        // GetClockAsync across the target subset, and Tick over the max so the resulting
         // terminal HLC is strictly greater than every prepare's HLC
         // stamped on this shard during this saga. Querying only the
         // affected leaves is sufficient because untouched leaves do
@@ -228,12 +244,15 @@ internal sealed partial class ShardRootGrain
         // Honours LatticeHlcOverrideContext.Current - when set (e.g.
         // a receiver-side relay stamping a source-cluster terminal
         // verbatim) the override wins so the receiver's local record
-        // matches the authoring cluster's HLC bit-identically.
+        // matches the authoring cluster's HLC bit-identically. Without a WAL
+        // writer no terminal record consumes this stamp, so skip sampling.
         var hlcStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         HybridLogicalClock terminalHlc;
         try
         {
-            terminalHlc = await ComputeTerminalHlcAsync(hlcLeaves);
+            terminalHlc = writer is null
+                ? HybridLogicalClock.Zero
+                : await ComputeTerminalHlcAsync(hlcLeaves, chainMaxClock);
         }
         finally
         {
@@ -271,7 +290,6 @@ internal sealed partial class ShardRootGrain
         // direct callers (cross-cluster replay, shadow-forward,
         // retroactive sweep) - exactly the attribution surface
         // c2-xxii established.
-        var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
             // A terminal stamped from an override (a replicated relay, a
@@ -386,6 +404,7 @@ internal sealed partial class ShardRootGrain
         {
             var leafFanOut = BroadcastTerminalToLeavesAsync(
                 trackedAffected,
+                chainEpoch == _routingEpoch && _routingMutationsInFlight <= 1 ? hlcLeaves : null,
                 transactionId,
                 committed,
                 committedValues,
@@ -438,18 +457,21 @@ internal sealed partial class ShardRootGrain
     /// reference into a list. The chain walk itself is sequential
     /// (each step needs the previous leaf's next-sibling pointer), so
     /// the wall-clock cost is <c>chain-length x next-sibling RPC</c>.
-    /// Returns an empty list when the tree has no root or the
-    /// leftmost-leaf lookup returns null.
+    /// Optionally samples clocks through the existing combined clock/link
+    /// call. Returns an empty list and Zero clock when no root or leftmost
+    /// leaf exists.
     /// </summary>
-    private async Task<List<IBPlusLeafGrain>> CollectChainLeavesAsync(CancellationToken cancellationToken)
+    private async Task<(List<IBPlusLeafGrain> Leaves, HybridLogicalClock MaxClock)> CollectChainLeavesAsync(
+        CancellationToken cancellationToken, bool sampleClocks = false)
     {
         var leaves = new List<IBPlusLeafGrain>();
+        var maxClock = HybridLogicalClock.Zero;
         if (state.State.RootNodeId is null)
-            return leaves;
+            return (leaves, maxClock);
 
         var leftmostId = await GetLeftmostLeafIdAsync();
         if (leftmostId is null)
-            return leaves;
+            return (leaves, maxClock);
 
         // DELIBERATELY NOT WORK-BOUNDED (issues 1955, 1972). Do not apply
         // LeafWalkBudget here; the whole-chain result is load-bearing at both
@@ -470,9 +492,9 @@ internal sealed partial class ShardRootGrain
         //    observable, which is exactly the atomicity the terminal exists
         //    to deliver.
         //
-        // This is a fallback path (both callers reach it only when
-        // TryConsumeAffectedLeaves returns empty), so it is rare by
-        // construction. Bounded by observability instead.
+        // Terminal delivery uses this as a fallback when tracking is empty;
+        // original-prepare stamp queries also need the exhaustive chain.
+        // Bounded by observability instead.
         var walk = new AtomicLeafWalk(nameof(CollectChainLeavesAsync));
         var currentId = leftmostId.Value;
         while (true)
@@ -483,13 +505,25 @@ internal sealed partial class ShardRootGrain
             leaves.Add(leaf);
             walk.RecordLeafVisited();
 
-            var next = await leaf.GetNextSiblingAsync();
+            GrainId? next;
+            if (sampleClocks)
+            {
+                // The combined call retains GetClockAsync's replay barrier.
+                // Its caller discards the sample if a routing mutation overlaps.
+                var page = await leaf.GetClockAndNextSiblingAsync();
+                if (page.Clock > maxClock) maxClock = page.Clock;
+                next = page.NextSibling;
+            }
+            else
+            {
+                next = await leaf.GetNextSiblingAsync();
+            }
             if (next is null) break;
             currentId = next.Value;
         }
 
         walk.ReportIfSlow(logger, context.GrainId);
-        return leaves;
+        return (leaves, maxClock);
     }
 
     /// <summary>
@@ -546,7 +580,8 @@ internal sealed partial class ShardRootGrain
     /// <see cref="LatticeHlcOverrideContext.Current"/> is set (the
     /// receiver-side relay path), the override is returned verbatim so
     /// the receiver's local WAL record matches the authoring cluster's
-    /// HLC bit-identically. Otherwise fans out
+    /// HLC bit-identically. Otherwise ticks the supplied stable chain maximum,
+    /// or fans out
     /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetClockAsync"/> across the chain in
     /// parallel, takes the max, and ticks once - guaranteeing the
     /// returned HLC is strictly greater than every prepare's stamp on
@@ -555,11 +590,15 @@ internal sealed partial class ShardRootGrain
     /// when the saga touches no leaves on this shard (e.g. a degenerate
     /// abort path on an empty tree).
     /// </summary>
-    private static async Task<HybridLogicalClock> ComputeTerminalHlcAsync(IReadOnlyList<IBPlusLeafGrain> leaves)
+    private static async Task<HybridLogicalClock> ComputeTerminalHlcAsync(
+        IReadOnlyList<IBPlusLeafGrain> leaves, HybridLogicalClock? chainMaxClock = null)
     {
         var ovr = LatticeHlcOverrideContext.Current;
         if (ovr is { } sourceHlc)
             return sourceHlc;
+
+        if (chainMaxClock is { } sampled)
+            return HybridLogicalClock.Tick(sampled);
 
         if (leaves.Count == 0)
             return HybridLogicalClock.Tick(HybridLogicalClock.Zero);
@@ -602,6 +641,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task BroadcastTerminalToLeavesAsync(
         HashSet<GrainId>? trackedAffected,
+        IReadOnlyList<IBPlusLeafGrain>? fallbackChain,
         Guid transactionId,
         bool committed,
         IReadOnlyDictionary<string, byte[]>? committedValues,
@@ -674,7 +714,9 @@ internal sealed partial class ShardRootGrain
             // the routing layer (trackedAffected) nor a backstop
             // payload (committedValues) was supplied. Empty chains are
             // a no-op.
-            var chain = await CollectChainLeavesAsync(cancellationToken);
+            // Reuse only while routing stayed stable since the HLC/hold walk.
+            // An interleaved batch may split a leaf; that needs a fresh walk.
+            var chain = fallbackChain ?? (await CollectChainLeavesAsync(cancellationToken)).Leaves;
             if (chain.Count == 0) return;
             var chainTasks = new Task[chain.Count];
             for (var i = 0; i < chain.Count; i++)
