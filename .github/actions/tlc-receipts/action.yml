@@ -1,0 +1,175 @@
+name: TLC verdict receipts
+description: >-
+  Look up or save per-module TLC verdict receipts (contract C5 of #5148, issue
+  #5164) as GitHub Actions cache entries. `lookup` lists the receipts visible in
+  the trusted refs for each module's fingerprint, restores them, and writes the
+  plan directory plan-test-matrix.py consumes. `save` saves every receipt under
+  a receipts directory, skipping (never failing on) a key that already exists.
+  All decisions live in .github/workflows/tlc-receipts.py; this action moves
+  bytes, because the cache runtime token exists only inside an action step.
+  Requires the repository checked out at the workspace root and Python 3.
+
+inputs:
+  operation:
+    description: "'lookup' or 'save'."
+    required: true
+  receipts-dir:
+    description: "save: the directory of <Module>/receipt.json and <Module>/partial-*.json files to save."
+    required: false
+    default: ''
+  fingerprints:
+    description: "lookup: the C4 fingerprint document (tlc-fingerprint.py --output)."
+    required: false
+    default: ''
+  census:
+    description: "lookup: the C2 case census (LATTICE_TLC_CENSUS)."
+    required: false
+    default: ''
+  case-categories:
+    description: "lookup: each census case's categories (LATTICE_TLC_CASE_CATEGORIES)."
+    required: false
+    default: ''
+  refs:
+    description: >-
+      lookup: comma-separated refs whose cache entries are trusted - the run's
+      own ref, its pull request's base branch, and refs/heads/main. Never
+      another pull request's ref: a pull request can write any receipt into
+      its own scope.
+    required: false
+    default: ''
+  output-dir:
+    description: "lookup: where the plan directory is written."
+    required: false
+    default: ''
+  ignore-receipts:
+    description: "lookup: 'true' plans every module to run and reads no cache entry."
+    required: false
+    default: 'false'
+  summary:
+    description: "lookup: 'true' appends the per-module receipt table to the job summary."
+    required: false
+    default: 'true'
+  token:
+    description: "lookup: a token with actions: read, used to list cache entries."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  cached-count:
+    description: "lookup: how many modules a trusted receipt proves."
+    value: ${{ steps.plan.outputs.cached }}
+
+runs:
+  using: composite
+  # Every step states `always()` explicitly. Inside a composite action an `if`
+  # without a status function means `success()` of the JOB, so a save invoked
+  # with `if: always()` after a failed or cancelled test step would otherwise
+  # skip every inner step - and a cancelled run's completed work is exactly
+  # what partial receipts exist to keep. A failure inside is fail-safe: a
+  # missing restore manifest restores nothing (every module runs), and a
+  # missing save manifest saves nothing.
+  steps:
+    - name: Check the operation
+      if: always()
+      shell: bash
+      env:
+        OPERATION: ${{ inputs.operation }}
+      run: |
+        set -euo pipefail
+        case "$OPERATION" in
+          lookup|save) ;;
+          *) echo "::error::tlc-receipts: operation must be 'lookup' or 'save', not '${OPERATION}'."; exit 1 ;;
+        esac
+
+    - name: Stage receipts
+      id: stage
+      if: always() && inputs.operation == 'save'
+      shell: bash
+      env:
+        RECEIPTS_DIR: ${{ inputs.receipts-dir }}
+      run: |
+        set -euo pipefail
+        if [ -z "$RECEIPTS_DIR" ] || [ ! -d "$RECEIPTS_DIR" ]; then
+          echo "No receipts directory at '${RECEIPTS_DIR}'; nothing to save."
+          echo "count=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        python3 "$GITHUB_WORKSPACE/.github/workflows/tlc-receipts.py" stage \
+          --receipts-dir "$RECEIPTS_DIR" \
+          --output-manifest "$RUNNER_TEMP/tlc-save.json"
+        echo "count=$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$RUNNER_TEMP/tlc-save.json")" >> "$GITHUB_OUTPUT"
+
+    # The cache client, pinned. Installed outside the workspace so it never
+    # reaches a build or an artifact, and only when there is something to move.
+    - name: Install the cache client
+      if: >-
+        always()
+        && ((inputs.operation == 'save' && steps.stage.outputs.count != '0' && steps.stage.outputs.count != '')
+            || (inputs.operation == 'lookup' && inputs.ignore-receipts != 'true'))
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -f "$RUNNER_TEMP/tlc-cache/node_modules/@actions/cache/lib/cache.js" ]; then
+          npm install --no-save --no-audit --no-fund --silent --prefix "$RUNNER_TEMP/tlc-cache" @actions/cache@6.3.0
+        fi
+
+    - name: List trusted receipts
+      if: always() && inputs.operation == 'lookup' && inputs.ignore-receipts != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        FINGERPRINTS: ${{ inputs.fingerprints }}
+        REFS: ${{ inputs.refs }}
+      run: |
+        set -euo pipefail
+        python3 "$GITHUB_WORKSPACE/.github/workflows/tlc-receipts.py" candidates \
+          --fingerprints "$FINGERPRINTS" \
+          --refs "$REFS" \
+          --repo "$GITHUB_REPOSITORY" \
+          --output-manifest "$RUNNER_TEMP/tlc-restore.json"
+
+    - name: Restore trusted receipts
+      if: always() && inputs.operation == 'lookup' && inputs.ignore-receipts != 'true'
+      uses: actions/github-script@v9
+      env:
+        TLC_MANIFEST: ${{ runner.temp }}/tlc-restore.json
+        TLC_CACHE_MODULE: ${{ github.action_path }}/cache.mjs
+      with:
+        script: |
+          const { pathToFileURL } = require('node:url');
+          const cache = await import(pathToFileURL(`${process.env.RUNNER_TEMP}/tlc-cache/node_modules/@actions/cache/lib/cache.js`).href);
+          const receipts = await import(pathToFileURL(process.env.TLC_CACHE_MODULE).href);
+          await receipts.restore({ cache, core, manifest: process.env.TLC_MANIFEST });
+
+    - name: Plan from the receipts
+      id: plan
+      if: always() && inputs.operation == 'lookup'
+      shell: bash
+      env:
+        FINGERPRINTS: ${{ inputs.fingerprints }}
+        CENSUS: ${{ inputs.census }}
+        CATEGORIES: ${{ inputs.case-categories }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        IGNORE: ${{ inputs.ignore-receipts }}
+        SUMMARY: ${{ inputs.summary }}
+      run: |
+        set -euo pipefail
+        args=(--fingerprints "$FINGERPRINTS" --census "$CENSUS" --case-categories "$CATEGORIES"
+              --restored-dir "$GITHUB_WORKSPACE/.tlc-receipts" --output-dir "$OUTPUT_DIR")
+        if [ "$IGNORE" = "true" ]; then args+=(--ignore-receipts); fi
+        if [ "$SUMMARY" = "true" ]; then args+=(--summary-file "$GITHUB_STEP_SUMMARY"); fi
+        python3 "$GITHUB_WORKSPACE/.github/workflows/tlc-receipts.py" plan "${args[@]}"
+        echo "cached=$(grep -c . "$OUTPUT_DIR/cached-modules.txt" || true)" >> "$GITHUB_OUTPUT"
+
+    - name: Save receipts
+      if: always() && inputs.operation == 'save' && steps.stage.outputs.count != '0' && steps.stage.outputs.count != ''
+      uses: actions/github-script@v9
+      env:
+        TLC_MANIFEST: ${{ runner.temp }}/tlc-save.json
+        TLC_CACHE_MODULE: ${{ github.action_path }}/cache.mjs
+      with:
+        script: |
+          const { pathToFileURL } = require('node:url');
+          const cache = await import(pathToFileURL(`${process.env.RUNNER_TEMP}/tlc-cache/node_modules/@actions/cache/lib/cache.js`).href);
+          const receipts = await import(pathToFileURL(process.env.TLC_CACHE_MODULE).href);
+          await receipts.save({ cache, core, manifest: process.env.TLC_MANIFEST });

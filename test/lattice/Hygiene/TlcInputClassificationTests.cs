@@ -197,6 +197,10 @@ public sealed class TlcInputClassificationTests
     [TestCase(".github/workflows/ci-serial-old.yml")]
     [TestCase(".github/workflows/coverage.yml")]
     [TestCase(".github/workflows/plan-coverage-matrix.py")]
+    [TestCase(".github/workflows/tlc-fingerprint.py")]
+    [TestCase(".github/workflows/tlc-receipts.py")]
+    [TestCase(".github/actions/tlc-receipts/action.yml")]
+    [TestCase(".github/actions/tlc-receipts/cache.mjs")]
     public void A_routing_file_is_routing_and_not_a_verdict_input(string path)
     {
         var inputs = Load();

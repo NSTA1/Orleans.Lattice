@@ -18,6 +18,14 @@ public sealed class TlcCaseCensusTests
     {
         var expected = TlcCaseCensus.Build();
         var requested = TlcCaseCensus.ExportIfRequested();
+        var categoriesPath = TlcCaseCensus.ExportCategoriesIfRequested();
+        if (categoriesPath is not null)
+        {
+            Assert.That(TlcCaseCensus.Read(categoriesPath).Keys,
+                Is.EquivalentTo(expected.Values.SelectMany(names => names)),
+                "the category export covers exactly the census cases");
+        }
+
         var path = requested ?? Path.Combine(Path.GetTempPath(), $"tlc-census-{Guid.NewGuid():N}.json");
 
         try
@@ -42,6 +50,27 @@ public sealed class TlcCaseCensusTests
                 File.Delete(path);
             }
         }
+    }
+
+    [Test]
+    public void Each_census_case_reports_its_module_category_beside_its_fixture_category()
+    {
+        var census = TlcCaseCensus.Build();
+        var categories = TlcCaseCensus.BuildCategories();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(categories.Keys, Is.EquivalentTo(census.Values.SelectMany(names => names)));
+            foreach (var (module, names) in census)
+            {
+                foreach (var name in names)
+                {
+                    Assert.That(categories[name], Does.Contain(TlcCiShard.ModuleCategoryPrefix + module), name);
+                    Assert.That(categories[name], Does.Contain("Tlc"), name + " carries its fixture's category");
+                    Assert.That(categories[name], Is.Ordered.Using((IComparer<string>)StringComparer.Ordinal), name);
+                }
+            }
+        });
     }
 
     [Test]

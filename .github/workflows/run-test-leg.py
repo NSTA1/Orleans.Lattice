@@ -129,6 +129,44 @@ def parse_trx(path: str) -> tuple[int, list[str]]:
     return executed, failures
 
 
+def parse_trx_outcomes(path: str) -> tuple[list[str], list[str]]:
+    """(passed, failed) fully qualified names from a trx file, read by the same
+    parser tlc-receipts.py uses for a directory of trx files, so a leg's
+    evidence and a downloaded trx cannot be read differently."""
+    import importlib.util
+
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tlc-receipts.py")
+    spec = importlib.util.spec_from_file_location("tlc_receipts", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.trx_outcomes(path)
+
+
+def write_tlc_evidence(item: dict, trx_path: str | None, results_dir: str, returncode: int) -> None:
+    """The per-item TLC evidence tlc-receipts.py turns into verdict receipts
+    (#5164): which cases passed and failed, under which filter.
+
+    Written as soon as the item finishes, not at the end of the leg, so a run
+    cancelled part-way still keeps every completed item's evidence. The
+    `.jsonl` extension keeps it out of summarise-test-legs.py's `*.json` scan.
+    """
+    passed, failed = parse_trx_outcomes(trx_path) if trx_path else ([], [])
+    evidence = {
+        "label": item["label"],
+        "package": item["package"],
+        "shard": item["shard"],
+        "tier": item["tier"],
+        "filter": item["filter"],
+        "attempt": run_attempt(),
+        "returncode": returncode,
+        "passed": passed,
+        "failed": failed,
+    }
+    with open(os.path.join(results_dir, f"tlc-evidence-{slug(item['label'])}.jsonl"), "w",
+              encoding="utf-8") as handle:
+        handle.write(json.dumps(evidence) + "\n")
+
+
 def run_attempt() -> int:
     """The run attempt this leg executed under, recorded into its own result.
 
@@ -224,6 +262,9 @@ def run_item(item: dict, results_dir: str) -> dict:
 
     trx_candidates = sorted(glob.glob(os.path.join("**", "TestResults", trx_name), recursive=True))
     executed, failures = parse_trx(trx_candidates[0]) if trx_candidates else (0, [])
+    if item.get("tlc") is True:
+        write_tlc_evidence(item, trx_candidates[0] if trx_candidates else None, results_dir,
+                           completed.returncode)
 
     # `dotnet test` reports a non-zero exit for a genuine failure. A filter that
     # matches nothing is not an error - most packages have no Coyote models -

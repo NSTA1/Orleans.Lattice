@@ -19,6 +19,8 @@ TLC_ROUTING_FILES = frozenset(
         "test-shards.json",
         "tier-scope.py",
         "tlc-inputs.json",
+        "tlc-fingerprint.py",
+        "tlc-receipts.py",
     )
 )
 
