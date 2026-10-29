@@ -21,11 +21,13 @@ namespace Orleans.Lattice.Tests.Formal;
 /// declared variant is routed automatically and the work remains balanced.
 /// </para>
 /// <para>
-/// CONTROL COST. <see cref="TlcModelCheckTests"/> caches byte-identical
-/// control inputs per process. Generated configurations include the mutation
-/// name, so distinct mutants currently run separate controls even when their
-/// module, target property and options match. Grouping by module or target
-/// does not eliminate that cost; measured item durations include it.
+/// CONTROL COST. <see cref="TlcModelCheckTests"/> shares controls per process:
+/// one full-bound control per module, target and options, and none at all when
+/// the module's base run subsumes it and the base case runs in the same shard
+/// (<see cref="SharesBaseShard"/>, <see cref="TlcBaseRunSubsumption"/>). So a
+/// base case is co-located with its mutations where that is cheaper than the
+/// full-bound controls it replaces (<see cref="CoLocatedBaseCategory"/>), and
+/// left where it is where it is not.
 /// </para>
 /// </summary>
 internal static class TlcCiShard
@@ -33,21 +35,21 @@ internal static class TlcCiShard
     /// <summary>The Replication EventualConvergence* temporal mutants.</summary>
     public const string Convergence = "TlcShardConvergence";
 
-    /// <summary>The other Replication mutants, plus the mutants of every Wal* module.</summary>
+    /// <summary>The other Replication mutants, plus the mutants of every Wal* module, and the Replication, WalDurability and WalMove bases.</summary>
     public const string ReplicationWal = "TlcShardReplicationWal";
 
-    /// <summary>The mutants of every ShardOwnership* module.</summary>
+    /// <summary>The mutants of every ShardOwnership* module, and the bases of all but ShardOwnership itself.</summary>
     public const string ShardOwnership = "TlcShardShardOwnership";
 
     /// <summary>
     /// The mutants of the replication companion modules (every Replication*
     /// module but the main one: ReplicationReBootstrap, ReplicationLowWatermark,
-    /// ReplicationCausalDelivery), and their variant configurations.
+    /// ReplicationCausalDelivery), their bases and their variant configurations.
     /// </summary>
     public const string ReBootstrap = "TlcShardReBootstrap";
 
     /// <summary>
-    /// The mutants of every AtomicCommit* module. Its variant configurations
+    /// The mutants of every AtomicCommit* module, and the AtomicCommit and AtomicCommitCrossCluster bases. Its variant configurations
     /// are split into <see cref="AtomicVariantShards"/>: a variant has no control arm, so
     /// splitting them off separates their measured JVM work from mutation controls.
     /// </summary>
@@ -75,7 +77,7 @@ internal static class TlcCiShard
     public static IReadOnlyList<string> AtomicVariantShards { get; } =
         [AtomicVariants1, AtomicVariants2, AtomicVariants3, AtomicVariants4, AtomicVariants5, AtomicVariants6];
 
-    /// <summary>The mutants of every Backup* module.</summary>
+    /// <summary>The mutants of every Backup* module, and the bases of all but BackupCapture.</summary>
     public const string Backup = "TlcShardBackup";
 
     /// <summary>The measured materialised-view tail base, variant and mutation runs.</summary>
@@ -245,10 +247,52 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return SchedulingCategory(module) ?? LifecycleCategory(module.Name) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
+        return SchedulingCategory(module) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module) ?? (string.Equals(module.Name, "BPlusCascade", StringComparison.Ordinal)
             ? BPlusCascadeBase
             : null);
     }
+
+    /// <summary>
+    /// Whether the base case of <paramref name="module"/> runs in the same CI
+    /// shard, and so the same test process, as <paramref name="mutation"/>:
+    /// the condition under which <see cref="TlcModelCheckTests"/> may serve the
+    /// mutation's full-bound control from the base run without launching the
+    /// base a second time. Two cases left in the catch-all share it.
+    /// </summary>
+    public static bool SharesBaseShard(SpecModule module, SpecMutation mutation) =>
+        string.Equals(OfModule(module), Of(module, mutation), StringComparison.Ordinal);
+
+    /// <summary>
+    /// The mutation shard a base case is moved into so that its subsumed
+    /// full-bound controls are served by it (#5161), or <see langword="null"/>
+    /// to leave it where it was. Listed by name, never by prefix, because each
+    /// move is a measured decision: a new module's base stays put until its
+    /// cost is known.
+    /// <para>
+    /// A base explores the same state space as each full-bound control it
+    /// replaces and checks their properties together, so moving it replaces
+    /// several launches with one. The risk is the shard's critical path: one
+    /// long base case cannot be parallelised the way several controls can. So a
+    /// base moves into the shard holding its module's mutations only when its
+    /// measured case duration in CI run 40860831824 (an upper bound, since it
+    /// includes waiting for a TLC slot) is at most half that shard's measured
+    /// duration. That excludes ReplayPermits (605 s against 684 s), BackupCapture
+    /// (249 s against 224 s) and ShardOwnership (265 s against 521 s), whose
+    /// controls keep running. Replication's mutations are split: its base joins
+    /// the replication-wal group, and its convergence mutations keep launching
+    /// their controls, as do the split BPlusCascade and AntiEntropy groups whose
+    /// bases stay where they are.
+    /// </para>
+    /// </summary>
+    private static string? CoLocatedBaseCategory(SpecModule module) => module.Name switch
+    {
+        "AtomicCommit" or "AtomicCommitCrossCluster" => Atomic,
+        "BackupCutover" or "BackupIncremental" or "BackupProvenance" or "BackupRestore" => Backup,
+        "ReplicationCausalDelivery" or "ReplicationLowWatermark" or "ReplicationReBootstrap" => ReBootstrap,
+        "ShardOwnershipCrdt" or "ShardOwnershipCutover" or "ShardOwnershipFold" or "ShardOwnershipRetention" => ShardOwnership,
+        "Replication" or "WalDurability" or "WalMove" => ReplicationWal,
+        _ => null,
+    };
 
     /// <summary>
     /// The shard category of variant configuration <paramref name="variant"/>

@@ -258,27 +258,38 @@ public sealed class TlcControlRunSharingTests
 
     /// <summary>
     /// Over the repository's real catalogue, the control launches are exactly
-    /// the distinct experiments: full-bound controls are one per module,
-    /// target and options, and matching-bound controls one per module, target,
-    /// options and bounds. A cfg or key that reintroduced a per-mutation input
-    /// (the mutation-name header #5152 removed) would break the equality and
-    /// is caught here without a JVM. The counts, and the launches when every
-    /// TLC shard category runs in its own process (sharing is process-local),
-    /// are written to the test output for the CI budget in <c>spec/README.md</c>.
+    /// the distinct experiments the base run does not serve: full-bound
+    /// controls are one per module, target and options unless
+    /// <see cref="TlcBaseRunSubsumption.ServesFullBoundControl"/> serves them
+    /// from the base run (#5161), and matching-bound controls one per module,
+    /// target, options and bounds. A cfg or key that reintroduced a
+    /// per-mutation input (the mutation-name header #5152 removed) would break
+    /// the equality and is caught here without a JVM. The counts, and the
+    /// launches when every TLC shard category runs in its own process (sharing
+    /// is process-local), are written to the test output for the CI budget in
+    /// <c>spec/README.md</c>.
     /// </summary>
     [Test]
     public void Repository_control_launches_equal_the_distinct_control_experiments()
     {
+        var moduleCount = 0;
+        var variantCount = 0;
         var mutationCount = 0;
+        var deadlockOnCount = 0;
         var matchingRequests = 0;
+        var servedRequests = 0;
         var fullBoundKeys = new HashSet<string>(StringComparer.Ordinal);
+        var launchedFullBoundKeys = new HashSet<string>(StringComparer.Ordinal);
         var matchingKeys = new HashSet<string>(StringComparer.Ordinal);
         var fullBoundExperiments = new HashSet<string>(StringComparer.Ordinal);
+        var launchedFullBoundExperiments = new HashSet<string>(StringComparer.Ordinal);
         var matchingExperiments = new HashSet<string>(StringComparer.Ordinal);
         var perShardKeys = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var module in SpecModuleCatalogue.Repository())
         {
+            moduleCount++;
+            variantCount += module.Manifest.Variants.Count;
             var baseSpecification = module.ReadSpecification();
             var baseConfig = module.ReadConfig();
             var siblings = module.ReadSiblingSpecifications();
@@ -286,6 +297,7 @@ public sealed class TlcControlRunSharingTests
             foreach (var mutation in module.LoadMutations())
             {
                 mutationCount++;
+                deadlockOnCount += mutation.DeadlockCheckDisabled ? 1 : 0;
                 var options = string.Join(' ', mutation.TlcOptions);
                 var experiment = $"{module.Name}\0{mutation.Target}\0{options}";
 
@@ -293,8 +305,17 @@ public sealed class TlcControlRunSharingTests
                 var config = mutation.BuildConfig(baseConfig);
                 var fullBoundKey = TlcControlRunKey.Compute(module.SpecificationPath, baseSpecification, config, mutation.TlcOptions, siblings);
                 fullBoundKeys.Add(fullBoundKey);
-                perShardKeys.Add(shard + "\0" + fullBoundKey);
                 fullBoundExperiments.Add(experiment);
+                if (TlcBaseRunSubsumption.ServesFullBoundControl(module, mutation, baseConfig))
+                {
+                    servedRequests++;
+                }
+                else
+                {
+                    launchedFullBoundKeys.Add(fullBoundKey);
+                    launchedFullBoundExperiments.Add(experiment);
+                    perShardKeys.Add(shard + "\0" + fullBoundKey);
+                }
 
                 var matching = mutation.BuildMatchingControlConfig(baseConfig);
                 if (!string.Equals(config, matching, StringComparison.Ordinal))
@@ -309,22 +330,37 @@ public sealed class TlcControlRunSharingTests
             }
         }
 
+        var launches = launchedFullBoundKeys.Count + matchingKeys.Count;
         TestContext.Out.WriteLine(
             $"Control requests: {mutationCount} full-bound + {matchingRequests} matching-bound = {mutationCount + matchingRequests}.");
         TestContext.Out.WriteLine(
-            $"Control launches: {fullBoundKeys.Count} full-bound + {matchingKeys.Count} matching-bound = {fullBoundKeys.Count + matchingKeys.Count}.");
+            $"Distinct controls: {fullBoundKeys.Count} full-bound + {matchingKeys.Count} matching-bound = {fullBoundKeys.Count + matchingKeys.Count}.");
+        TestContext.Out.WriteLine(
+            $"Full-bound requests served by the base run: {servedRequests}; full-bound controls still launched: {launchedFullBoundKeys.Count}.");
+        TestContext.Out.WriteLine(
+            $"Control launches: {launchedFullBoundKeys.Count} full-bound + {matchingKeys.Count} matching-bound = {launches}.");
         TestContext.Out.WriteLine(
             $"Control launches with each TLC shard category in its own process: {perShardKeys.Count}.");
+        TestContext.Out.WriteLine(
+            $"TLC launches per full run with each shard in its own process: {moduleCount} base + {variantCount} variant + "
+            + $"{perShardKeys.Count} control + {mutationCount} mutant + {deadlockOnCount} deadlock-on = "
+            + $"{moduleCount + variantCount + perShardKeys.Count + mutationCount + deadlockOnCount}.");
 
         Assert.Multiple(() =>
         {
             Assert.That(mutationCount, Is.GreaterThan(0), "the catalogue is empty, so this check would be vacuous");
             Assert.That(fullBoundKeys, Has.Count.EqualTo(fullBoundExperiments.Count));
+            Assert.That(launchedFullBoundKeys, Has.Count.EqualTo(launchedFullBoundExperiments.Count));
             Assert.That(matchingKeys, Has.Count.EqualTo(matchingExperiments.Count));
             Assert.That(
                 fullBoundKeys.Count,
                 Is.LessThan(mutationCount),
                 "no two mutations share a full-bound control, so sharing is not happening at all");
+            Assert.That(servedRequests, Is.GreaterThan(0), "no full-bound control is served by its base run, so #5161 serves nothing");
+            Assert.That(
+                launchedFullBoundKeys.Count,
+                Is.GreaterThan(0),
+                "every full-bound control is served, so the placement rule that keeps an expensive base from running twice is not acting");
         });
     }
 

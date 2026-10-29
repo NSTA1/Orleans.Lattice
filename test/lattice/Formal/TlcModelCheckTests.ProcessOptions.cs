@@ -46,10 +46,10 @@ public sealed partial class TlcModelCheckTests
             StringComparison.Ordinal);
         var config = module.ReadConfig() + "\nPROPERTY Progress\n";
         string[] options = atEnd ? LivenessAtEnd : [];
-        var control = RunTlc(module, source, config, module.Name, options);
+        var control = RunTlc(module, source, config, module.Name, options, "process-options control");
         var mutant = source.Replace(
             @"/\ x' = (x + 1) % Wrap", @"/\ x' = x", StringComparison.Ordinal);
-        var violation = RunTlc(module, mutant, config, module.Name, options);
+        var violation = RunTlc(module, mutant, config, module.Name, options, "process-options violation");
         var target = new SpecMutation
         {
             Name = "ProgressNeverAdvances",
@@ -93,12 +93,12 @@ public sealed partial class TlcModelCheckTests
             """;
         const string config = "SPECIFICATION Spec\nINVARIANT TypeOK\nPROPERTY Equivalent\n";
         string[] options = atEnd ? LivenessAtEnd : [];
-        var control = RunTlc(module, source, config, module.Name, options);
+        var control = RunTlc(module, source, config, module.Name, options, "process-options control");
         var mutant = source.Replace(
             @"Normalized == \A r \in {1, 2} : []<>(r \notin holders)",
             @"Normalized == \A r \in {1, 2} : []<>(r \in holders)",
             StringComparison.Ordinal);
-        var violation = RunTlc(module, mutant, config, module.Name, options);
+        var violation = RunTlc(module, mutant, config, module.Name, options, "process-options violation");
         var target = new SpecMutation
         {
             Name = "HolderDepartureOppositeRecurrence",
@@ -144,12 +144,12 @@ public sealed partial class TlcModelCheckTests
             """;
         const string config = "SPECIFICATION Spec\nINVARIANT TypeOK\nPROPERTY Equivalent\n";
         string[] options = atEnd ? LivenessAtEnd : [];
-        var control = RunTlc(module, source, config, module.Name, options);
+        var control = RunTlc(module, source, config, module.Name, options, "process-options control");
         var mutant = source.Replace(
             @"Folded == []((a /\ b) \/ stuttering)",
             @"Folded == [](a \/ stuttering)",
             StringComparison.Ordinal);
-        var violation = RunTlc(module, mutant, config, module.Name, options);
+        var violation = RunTlc(module, mutant, config, module.Name, options, "process-options violation");
         var target = new SpecMutation
         {
             Name = "ActionConjunctionDropsSecondClause",

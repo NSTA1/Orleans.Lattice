@@ -400,7 +400,7 @@ counterexample. The clean source must also hold at that matching bound.
 
 For one complete, successful base/variant/mutation selection, the launch count
 is `1 + V + C + M + D`: one full base run, `V` variant runs, `C` distinct clean
-controls, a targeted mutant for each of `M` mutations, and `D` deadlock-on
+controls the base run does not serve (see below), a targeted mutant for each of `M` mutations, and `D` deadlock-on
 mutant runs for `DEADLOCK: off`. `C` counts distinct control inputs, not
 mutations: one full-bound control per module, target and TLC options, plus one
 matching-bound control per module, target, options and bounds for the
@@ -418,16 +418,39 @@ mutations that agree on module, target, bounds and options share one control.
 Repeated requests for the same key share one lazy result, including failure,
 so a failing shared control fails every case that shares it. There is no
 cross-process cache: cases of one module that CI routes to different shard
-categories each pay for their own copy. Base, variant, targeted-mutant and
+categories each pay for their own copy. Variant, targeted-mutant and
 deadlock-on runs bypass this cache.
 
+A full-bound control is not launched at all when the module's base run
+provably subsumes it (#5161, `TlcBaseRunSubsumption`): the control's carried
+configuration (everything but its `INVARIANT` and `PROPERTY` blocks) is
+identical to the base cfg's, every property it checks is checked by the base
+cfg in the same block, and its TLC options check nothing the base run does not
+(`-deadlock` only weakens a check). A clean base run then proves the control
+clean, so the case asserts the base run instead, through `BaseRuns`, one lazy
+result per process keyed like `ControlRuns`, which the base case shares. When
+the base run is not clean the control is launched and gives its own verdict.
+Matching-bound controls always run. Because sharing is process-local, a
+control is served only when the base case runs in the same shard
+(`TlcCiShard.SharesBaseShard`); otherwise serving would launch the base a
+second time. `TlcCiShard` co-locates a base with its mutations only where its
+measured case duration is at most half the mutation shard's, so expensive
+bases such as ReplayPermits stay where they are and their controls keep
+running.
+
 For the whole repository at the formal-pipeline integration base (1,060
-mutations, 120 of them with a differing `BOUNDS:` cfg), that is 597 control
-launches - 524 full-bound and 73 matching-bound - for 1,180 control requests,
-or 599 with every TLC shard category in its own process.
+mutations, 120 of them with a differing `BOUNDS:` cfg), the 1,180 control
+requests are 597 distinct controls - 524 full-bound and 73 matching-bound. The
+base run serves 928 full-bound requests, leaving 131 control launches - 58
+full-bound and 73 matching-bound - or 132 with every TLC shard category in its
+own process (599 before #5161). A full run is then 1,359 TLC launches: 53 base,
+94 variant, 132 control, 1,060 targeted-mutant and 20 deadlock-on.
 `TlcControlRunSharingTests` recomputes these figures without a JVM, writes them
 to its test output, and fails if launches stop matching the distinct
-experiments.
+experiments the base run does not serve. Each TLC launch also writes a
+`TLC launch:` line (arm, module, exit code and seconds) to its case's test
+output, so a run's launches and their durations can be counted from its
+results.
 
 Measure each selected arm on the intended worker/heap settings rather than
 turning the formula into a runtime guarantee. The historical atomic-commit
