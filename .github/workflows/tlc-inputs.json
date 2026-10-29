@@ -96,6 +96,7 @@
     ".github/workflows/summarise-test-legs-selftest.py",
     ".github/workflows/summarise-test-legs.py",
     ".github/workflows/test-durations.tsv",
+    ".github/workflows/tlc-fingerprint.py",
     ".github/workflows/tlc-watchdog-selftest.py",
     ".github/workflows/trailer-guard-selftest.py",
     ".github/workflows/ui-test-shards.json",
