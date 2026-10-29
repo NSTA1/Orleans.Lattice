@@ -1,0 +1,253 @@
+name: Formal perturbations
+
+# The weekly production-perturbation lane (#5163, epic #5148).
+#
+# A production perturbation (spec/<area>/perturbations/<Name>.perturbation,
+# contract C7) is an anchored edit to one file under src/ that breaks the
+# behaviour a refinement-note row describes, plus the detector tests that row
+# cites. tools/perturbations/run-perturbations.py runs the detectors on the
+# unperturbed tree (the control, which must be green), then applies each
+# perturbation, rebuilds and runs its detectors, at least one of which must go
+# red. That is the evidence that "this detector catches this row" is true.
+#
+# Why weekly and not per pull request. Every perturbation rebuilds a test
+# project, so the experiment costs minutes per perturbation; the toolchain-free
+# RefinementPerturbationTests gate already checks every perturbation's anchor,
+# row and detectors on every pull request. What only this lane can catch is
+# drift in the claim itself: a detector that stopped catching its row as the
+# code moved. A week bounds that drift at a small fraction of per-PR cost.
+#
+# A failing run opens or updates one tracking issue (label `ci`) listing every
+# perturbation that was not detected and every control that went red; the first
+# green run closes it. Only the `tracking` job may write issues.
+#
+# Branch validation: dispatch on a branch with `track_failures: true` to prove
+# the tracking path, and `selection` to run part of the seed set. A partial
+# dispatch on the default branch never maintains the tracking issue, because
+# only a full run can say the lane is green.
+#
+# tla-toolchain: not-required - the runner filters by FullyQualifiedName to the
+# named detector methods only, so no run of this lane can select the Tlc
+# category, and it never launches TLC.
+#
+# Classified `neutral` in tlc-inputs.json. CiPerturbationLaneTests holds the
+# triggers, permissions and concurrency group in place.
+on:
+  schedule:
+    # Sundays 04:41 UTC: off the top of the hour, when GitHub delays and drops
+    # scheduled runs, and clear of the nightly coverage slot.
+    - cron: '41 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      selection:
+        description: 'Areas (spec/<area>) or repository-relative .perturbation files, separated by spaces or commas. Empty runs every perturbation.'
+        type: string
+        default: ''
+      shards:
+        description: 'Parallel shards, 1-8. Empty uses the lane default. Each shard builds once and runs its own control.'
+        type: string
+        default: ''
+      track_failures:
+        description: 'Open, update or close the tracking issue from this run (branch validation). A full run on the default branch always does.'
+        type: boolean
+        default: false
+
+# Least privilege: the lane reads source. The `tracking` job alone writes issues.
+permissions:
+  contents: read
+
+# One run per ref at a time, and nothing cancels a run: a cancelled check run
+# rolls up as a failure on its commit, and a half-run lane says nothing.
+concurrency:
+  group: formal-perturbations-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      shards: ${{ steps.plan.outputs.shards }}
+      track: ${{ steps.plan.outputs.track }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Plan shards
+        id: plan
+        env:
+          SELECTION: ${{ inputs.selection }}
+          SHARDS: ${{ inputs.shards }}
+          TRACK: ${{ inputs.track_failures }}
+          EVENT: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/perturbation-lane.py --self-test
+          python3 .github/workflows/perturbation-lane.py plan \
+            --selection "$SELECTION" --shards "$SHARDS" --event "$EVENT" \
+            --ref-name "$GITHUB_REF_NAME" --default-branch "$DEFAULT_BRANCH" \
+            --track "${TRACK:-false}" --github-output "$GITHUB_OUTPUT"
+
+  perturb:
+    name: perturb (shard ${{ matrix.shard }})
+    needs: plan
+    runs-on: ubuntu-latest
+    # About 2.5 minutes per perturbation after a first build, measured on a
+    # developer host (#5158); the shard count is the lever if this binds.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # The runner exits 0 when every perturbation was detected, 1 when one was
+      # not, and 2 on a usage or environment error. The record below accounts
+      # for the shard even when the runner wrote no result.
+      - name: Run perturbations
+        env:
+          SHARD: ${{ matrix.shard }}
+          FILES: ${{ matrix.files }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/perturbation-shard"
+          mkdir -p "$out"
+          read -r -a files <<< "$FILES"
+          code=0
+          python3 tools/perturbations/run-perturbations.py "${files[@]}" \
+            --scratch "$RUNNER_TEMP/scratch" --output "$out/result.json" || code=$?
+          python3 .github/workflows/perturbation-lane.py record \
+            --shard "$SHARD" --files "$FILES" --exit-code "$code" --output "$out/shard.json"
+          if [ -d "$RUNNER_TEMP/scratch-logs" ]; then
+            cp -R "$RUNNER_TEMP/scratch-logs" "$out/logs"
+          fi
+          echo "run-perturbations exited $code"
+          exit "$code"
+
+      - name: Upload shard result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: perturbation-shard-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/perturbation-shard
+          if-no-files-found: warn
+          retention-days: 30
+
+  report:
+    needs: [plan, perturb]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      verdict: ${{ steps.summarise.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download shard results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: perturbation-shard-${{ github.run_attempt }}-*
+          path: shards
+
+      - name: Summarise
+        id: summarise
+        env:
+          EXPECT: ${{ needs.plan.outputs.shards }}
+        run: |
+          set -euo pipefail
+          mkdir -p shards report
+          python3 .github/workflows/perturbation-lane.py summarise \
+            --shards-dir shards --expect "$EXPECT" \
+            --ref-name "$GITHUB_REF_NAME" --sha "$GITHUB_SHA" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --summary "$GITHUB_STEP_SUMMARY" --report report/report.json --findings report/findings.md \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: perturbation-report-${{ github.run_attempt }}
+          path: report
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Fail on a red verdict
+        if: ${{ steps.summarise.outputs.verdict != 'green' }}
+        run: |
+          echo "::error title=Production perturbations::verdict '${{ steps.summarise.outputs.verdict }}'; see the job summary."
+          exit 1
+
+  tracking:
+    needs: [plan, report]
+    if: ${{ !cancelled() && needs.plan.outputs.track == 'true' && needs.report.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Download report
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: perturbation-report-${{ github.run_attempt }}
+          path: report
+
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERDICT: ${{ needs.report.outputs.verdict }}
+          REPORT_RESULT: ${{ needs.report.result }}
+        run: |
+          set -euo pipefail
+          title="Weekly production-perturbation lane failing"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$VERDICT" = green ] && [ "$REPORT_RESULT" = success ]; then
+            verdict=green
+          elif [ "$VERDICT" = red ] || [ "$REPORT_RESULT" = failure ]; then
+            verdict=red
+          else
+            echo "::notice title=Perturbation tracking::No verdict (report ${REPORT_RESULT}); the tracking issue is left as it is."
+            exit 0
+          fi
+          # The REST listing rather than search: search is eventually
+          # consistent, so a run right after a red one could miss the issue it
+          # opened and open a second.
+          existing="$(gh api --paginate -X GET "repos/${GITHUB_REPOSITORY}/issues" \
+            -f state=open -f labels=ci -f per_page=100 \
+            --jq ".[] | select(.pull_request == null and .title == \"${title}\") | .number" \
+            | sort -n | head -n 1)"
+          if [ "$verdict" = red ]; then
+            if [ -s report/findings.md ]; then
+              findings="$(cat report/findings.md)"
+            else
+              findings="The weekly production-perturbation lane failed on \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}: ${run_url} (the report job ${REPORT_RESULT} before writing findings)."
+            fi
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$findings"
+              echo "::notice title=Perturbation tracking::Updated #${existing}."
+            else
+              footer="Opened by run ${run_url} on \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}. Maintained by the tracking job of .github/workflows/formal-perturbations.yml: each failing run adds its findings here, and the first green run closes this issue."
+              body="$(printf '%s\n\n%s\n' "$findings" "$footer")"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label ci --body "$body"
+            fi
+          elif [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
+              --comment "Every production perturbation was detected on \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}, with green controls: ${run_url}. Closing."
+            echo "::notice title=Perturbation tracking::Closed #${existing}."
+          else
+            echo "::notice title=Perturbation tracking::Green, and no open tracking issue to close."
+          fi
