@@ -1,0 +1,19 @@
+# Pairs with MigrationCompletes. The freeze is only taken for a split, so a
+# fold waits in its window forever. The mutant deadlocks once the saga is
+# done, which is the stall itself, so the deadlock check is off.
+MODULE: MigrationCompletesFoldNeverFreezes
+TARGET: MigrationCompletes
+CLASS: Temporal
+SUMMARY: a fold never freezes its donor, so it never completes
+PERTURBS: MigFreeze
+DEADLOCK: off
+
+--- FIND
+    /\ mp = "swept"
+    /\ mp' = "frozen"
+--- REPLACE
+\* MUTATION: a fold is never frozen.
+    /\ mp = "swept"
+    /\ mk = "split"
+    /\ mp' = "frozen"
+--- END

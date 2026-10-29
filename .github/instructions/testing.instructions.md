@@ -1087,11 +1087,12 @@ reactivation, over a saga bound across a split and a resize). The seam between
 them is described in that directory's README: each module's CI gate covers
 only that module, and their composition (every action of both,
 `ShardOwnership`'s stamps and migrated rows, all their properties) is clean
-but too large to gate. Two
+but too large to gate. Three
 companion modules sit beside them: `ShardOwnershipCrdt`
-(CRDT-mode keys) and `ShardOwnershipCutover`, which checks a saga bound to the
+(CRDT-mode keys), `ShardOwnershipCutover`, which checks a saga bound to the
 previous copy across a shadow-cutover restore and its revert and found #4689
-(fixed). Three ownership
+(fixed), and `ShardOwnershipFold`, which checks a slot a shard fold returns to
+the shard a split took it from and found #5130 (fixed). Three ownership
 decisions are extracted into pure cores the grains call - `ResizeFence`,
 `SagaCopyBinding` and `RoutingPairPublishGate` - each with a Coyote model whose
 guard tests remove one rule and must find the violation. Every TLA+ property
@@ -1109,6 +1110,7 @@ encoding is listed where one exists.
 | `SplitCompletes`, `ReshardCompletes`, `ResizeCompletes`, `SagaCompletes`, `RoutingConverges` | `ShardOwnership` (the first, third and fourth in both) | Each started operation finishes; stale routing converges. | TLA+ only. | Mutations, e.g. `SagaCompletesPurgedCopyRefusesTerminal`. |
 | `NoStrandedBucket` | `ShardOwnershipRetention` | A decided saga's bucket on a live copy is eventually consumed. | TLA+ only. | `NoStrandedBucketTerminalNotMirrored`. |
 | `AtomicAcrossCutover`, `CommittedBatchOnBoundCopy`, `SagaSettles` | `ShardOwnershipCutover` | No reader is served a saga's batch torn across a shadow-cutover restore or its revert; once committed, the batch sits only on its bound copy; the saga settles. | TLA+ only. | Mutations, e.g. `AtomicAcrossCutoverDecideSkipsDiscard` (production before #4689's fix) and `SagaSettlesDiscardRouted`. |
+| `MigrationCompletes` | `ShardOwnershipFold` | A split or a shard fold that opened its window finishes; the module also checks `UniqueOwner`, `NoKeyLost`, `NoResurrection`, `AtomicOnOwner`, `OwnerMonotonic`, `SagaCompletes` and `RoutingConverges` across a fold back onto the split's source. | TLA+ only. | Mutations, e.g. `NoKeyLostFoldImportDroppedOverSealedRow` and `NoKeyLostFoldSkipsReapReconciliation` (production before #5130's fix) and `MigrationCompletesFoldNeverFreezes`. |
 | (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation; `LatticeGrainTests.GetRoutingAsync_does_not_publish_a_pair_read_before_an_invalidation` pins the grain's call site. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
 
 Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,

@@ -1,0 +1,16 @@
+# Pairs with NoKeyLost. The write gate does not refuse a sealed slot, so a
+# router still holding an old map writes k2 to a shard that no longer owns it
+# and the write is acknowledged without reaching the owner.
+MODULE: NoKeyLostFoldLaterWriteIgnoresSeal
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a write through a stale map lands on a shard whose seal should refuse it
+PERTURBS: LaterOp
+
+--- FIND
+       IN /\ ~Refused(s, k2)
+          /\ row' = [x \in Shards |-> [k \in Keys |->
+--- REPLACE
+\* MUTATION: the seal does not refuse the write.
+       IN /\ row' = [x \in Shards |-> [k \in Keys |->
+--- END

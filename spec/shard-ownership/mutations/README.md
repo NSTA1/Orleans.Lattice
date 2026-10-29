@@ -1,7 +1,8 @@
 # Shard-ownership mutations
 
 Each `.mutation` file here, and in [`../mutations-retention/`](../mutations-retention/),
-[`../mutations-crdt/`](../mutations-crdt/) and [`../mutations-cutover/`](../mutations-cutover/),
+[`../mutations-crdt/`](../mutations-crdt/), [`../mutations-cutover/`](../mutations-cutover/) and
+[`../mutations-fold/`](../mutations-fold/),
 is one controlled experiment: a deliberate defect in one module that must make
 one named property fire. The full-bound clean control holds and the mutant
 fails; a differing mutant cfg also requires an exact matching-bound clean
@@ -14,7 +15,8 @@ these catalogues use it unchanged, including `PERTURBS:`.
 This directory holds the `ShardOwnership` catalogue and
 `../mutations-retention/` the `ShardOwnershipRetention` one, and
 `../mutations-crdt/` the `ShardOwnershipCrdt` one, and `../mutations-cutover/`
-the `ShardOwnershipCutover` one. Mutation names are
+the `ShardOwnershipCutover` one, and `../mutations-fold/` the
+`ShardOwnershipFold` one. Mutation names are
 unique across every module, because they name test cases; where both modules
 pair an action with the same kind of defect, the retention module's file has its
 own name.
@@ -28,7 +30,7 @@ own name.
   lands, the mutation stays, as the regression check for the behaviour it
   replaced. The refinement notes list them against their issues.
 - **Regression checks for fixed defects.** The #4357, #4358, #4362 and #4369
-  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 and #5125, are reproduced as standing checks.
+  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689, #5125 and #5130, are reproduced as standing checks.
 - **Checks against a naive fix.** Where the obvious fix for an open defect
   would break a different property, a mutation stands against it:
   `AtomicOnOwnerDiscardedCopyTerminalRedirects` is #4474's broadcast following
@@ -193,3 +195,26 @@ generates exactly that cfg.
 | [`SagaSettlesRevertSwapLeavesAlias`](../mutations-cutover/SagaSettlesRevertSwapLeavesAlias.mutation) | `SagaSettles` | Temporal | `RevertSwap` | the revert's swap leaves the alias on the shadow, which its fix-up then arms |
 | [`SagaSettlesSwapLeavesAlias`](../mutations-cutover/SagaSettlesSwapLeavesAlias.mutation) | `SagaSettles` | Temporal | `Swap` | the cutover's swap leaves the alias on the previous copy, which the restore then arms |
 | [`TypeOkCutoverDiscardOutsideCopies`](../mutations-cutover/TypeOkCutoverDiscardOutsideCopies.mutation) | `TypeOK` | Invariant | none (edits `Discard`) | the discard bookkeeping records a value outside the copies |
+
+## Inventory: ShardOwnershipFold
+
+| Mutation | Target | Class | Perturbs | What it breaks |
+|----------|--------|-------|----------|----------------|
+| [`AtomicOnOwnerFoldBeginSkipsSweep`](../mutations-fold/AtomicOnOwnerFoldBeginSkipsSweep.mutation) | `AtomicOnOwner` | Invariant | `FoldBegin` | **reproduces production before #5125 was fixed**: the fold opens its window past the retroactive sweep, so the donor's bucket never reaches the survivor |
+| [`AtomicOnOwnerFoldDecideBeforeDispatch`](../mutations-fold/AtomicOnOwnerFoldDecideBeforeDispatch.mutation) | `AtomicOnOwner` | Invariant | `SagaDecide` | the saga records its commit before every entry is dispatched |
+| [`AtomicOnOwnerFoldPrepareIgnoresSeal`](../mutations-fold/AtomicOnOwnerFoldPrepareIgnoresSeal.mutation) | `AtomicOnOwner` | Invariant | `SagaPrepare` | a prepare through a stale map lands on a shard whose seal should refuse it |
+| [`AtomicOnOwnerFoldSagaStartSkipsEntry`](../mutations-fold/AtomicOnOwnerFoldSagaStartSkipsEntry.mutation) | `AtomicOnOwner` | Invariant | `SagaStart` | the saga records k2 as dispatched before dispatching it, so the batch commits torn |
+| [`AtomicOnOwnerSplitBeginSkipsSweep`](../mutations-fold/AtomicOnOwnerSplitBeginSkipsSweep.mutation) | `AtomicOnOwner` | Invariant | `SplitBegin` | the split opens its window past the retroactive sweep, so a bucket prepared before it never reaches the destination |
+| [`MigrationCompletesFoldNeverFreezes`](../mutations-fold/MigrationCompletesFoldNeverFreezes.mutation) | `MigrationCompletes` | Temporal | `MigFreeze` | a fold never freezes its donor, so it never completes (`DEADLOCK: off`) |
+| [`NoKeyLostCompactReapsYoungTombstone`](../mutations-fold/NoKeyLostCompactReapsYoungTombstone.mutation) | `NoKeyLost` | Invariant | `Compact` | compaction reaps a delete while the saga it raced is still broadcasting, so the terminal's backstop revives the key |
+| [`NoKeyLostFoldAbortAcknowledged`](../mutations-fold/NoKeyLostFoldAbortAcknowledged.mutation) | `NoKeyLost` | Invariant | `SagaComplete` | an aborted saga acknowledges its caller as if it had committed |
+| [`NoKeyLostFoldImportDroppedOverSealedRow`](../mutations-fold/NoKeyLostFoldImportDroppedOverSealedRow.mutation) | `NoKeyLost` | Invariant | `MigCommit` | **reproduces production before #5130 was fixed**: the fold's drain is dropped over the row the survivor kept behind its seal |
+| [`NoKeyLostFoldLaterWriteIgnoresSeal`](../mutations-fold/NoKeyLostFoldLaterWriteIgnoresSeal.mutation) | `NoKeyLost` | Invariant | `LaterOp` | a write through a stale map lands on a shard whose seal should refuse it |
+| [`NoKeyLostFoldSkipsReapReconciliation`](../mutations-fold/NoKeyLostFoldSkipsReapReconciliation.mutation) | `NoKeyLost` | Invariant | `MigCommit` | **reproduces production before #5130 was fixed**: a key the donor reaped comes back from the survivor's pre-split row |
+| [`NoKeyLostFoldSweepDrainsOnlyMovedKey`](../mutations-fold/NoKeyLostFoldSweepDrainsOnlyMovedKey.mutation) | `NoKeyLost` | Invariant | `MigSweep` | the decided sweep records the terminal as applied at the survivor but drains only the moved key's bucket |
+| [`NoResurrectionFoldRetireLeavesDonorServing`](../mutations-fold/NoResurrectionFoldRetireLeavesDonorServing.mutation) | `NoResurrection` | Invariant | `MigFinish` | a retired donor is not sealed, so a stale router reads its released storage |
+| [`OwnerMonotonicFoldAbortOverturnsCommit`](../mutations-fold/OwnerMonotonicFoldAbortOverturnsCommit.mutation) | `OwnerMonotonic` | Invariant | `SagaAbort` | an abort overturns a recorded commit, so a key a reader saw committed goes back |
+| [`RoutingConvergesFoldSkipsReclaim`](../mutations-fold/RoutingConvergesFoldSkipsReclaim.mutation) | `RoutingConverges` | Temporal | `MigCommit` | the fold moves the map back onto the survivor without reclaiming the slot from its seal |
+| [`SagaCompletesFoldTerminalNotRecorded`](../mutations-fold/SagaCompletesFoldTerminalNotRecorded.mutation) | `SagaCompletes` | Temporal | `SagaTerminal` | the broadcast does not record the shards it visited, so the saga never completes |
+| [`TypeOkFoldPhaseOutsideDomain`](../mutations-fold/TypeOkFoldPhaseOutsideDomain.mutation) | `TypeOK` | Invariant | `FoldBegin` | an opened fold records a migration phase outside its domain |
+| [`UniqueOwnerFoldCancelAfterCommit`](../mutations-fold/UniqueOwnerFoldCancelAfterCommit.mutation) | `UniqueOwner` | Invariant | `FoldCancel` | a fold is cancelled after its commit, leaving both shards serving the slot |

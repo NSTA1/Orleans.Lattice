@@ -1,0 +1,15 @@
+# Pairs with NoResurrection. The fold releases the donor's storage but does
+# not record the slot in its seal, so a router still holding the split's map
+# is served by the retired donor, which no longer holds the key.
+MODULE: NoResurrectionFoldRetireLeavesDonorServing
+TARGET: NoResurrection
+CLASS: Invariant
+SUMMARY: a retired donor is not sealed, so a stale router reads its released storage
+PERTURBS: MigFinish
+
+--- FIND
+    /\ sealed' = [sealed EXCEPT ![src] = TRUE]
+--- REPLACE
+\* MUTATION: a fold's donor is not sealed.
+    /\ sealed' = IF mk = "fold" THEN sealed ELSE [sealed EXCEPT ![src] = TRUE]
+--- END

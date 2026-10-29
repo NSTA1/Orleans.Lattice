@@ -1,0 +1,14 @@
+# Pairs with NoKeyLost. The saga acknowledges the batch whatever it decided,
+# so an aborted batch is acknowledged and no shard holds it.
+MODULE: NoKeyLostFoldAbortAcknowledged
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: an aborted saga acknowledges its caller as if it had committed
+PERTURBS: SagaComplete
+
+--- FIND
+    /\ ackOn' = IF dec = "committed" THEN [k \in Keys |-> Max(ackOn[k], Rank(SagaV))] ELSE ackOn
+--- REPLACE
+\* MUTATION: acknowledged whatever the decision.
+    /\ ackOn' = [k \in Keys |-> Max(ackOn[k], Rank(SagaV))]
+--- END
