@@ -46,15 +46,23 @@ public sealed class TenancyCallerMemoTests : TenancyTestContext
     public async Task The_last_standing_is_not_the_next_callers()
     {
         UseTenancyAs(isOperator: true);
+        Switcher!.IsOperatorAsync(Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<bool>(true), new ValueTask<bool>(false));
         var catalog = Catalog;
 
         var proven = await catalog.GetStandingAsync(CancellationToken.None);
         Auth.SignIn("bob@example.com");
+        var bobBeforeReading = catalog.LastStanding;
+        var bob = await catalog.GetStandingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
             Assert.That(proven.IsOperator, Is.True);
-            Assert.That(catalog.LastStanding, Is.Null, "the operator's standing is not bob's");
+            Assert.That(bobBeforeReading, Is.Null, "the operator's standing is not bob's");
+            Assert.That(bob.IsOperator, Is.False, "bob's standing is proven independently");
+            Assert.That(catalog.LastStanding, Is.EqualTo(bob));
+            Assert.That(Cluster.Calls.Count(call => call == nameof(FakeTenancyCluster.GetCurrentTenantAsync)), Is.EqualTo(2),
+                "the next caller must trigger a new standing read");
         });
     }
 
