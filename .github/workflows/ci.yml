@@ -2408,6 +2408,12 @@ jobs:
           only="$(python3 .github/workflows/lightweight-change.py --base "$BASE_SHA" --head "$HEAD_SHA")"
           echo "only=$only" >> "$GITHUB_OUTPUT"
 
+      # The formal-impact report's self-test runs on every pull request,
+      # including a lightweight one: a pull request that changes only the
+      # script is lightweight, and its report step below then never runs.
+      - name: Formal impact self-test
+        run: python3 .github/workflows/formal-impact.py --self-test
+
       - name: Report lightweight content checks
         if: steps.lightweight.outputs.only == 'true'
         run: |
@@ -2439,13 +2445,50 @@ jobs:
         if: steps.lightweight.outputs.only != 'true'
         run: dotnet build --no-restore --configuration Release
 
+      # The refinement index (contract C6, #5148): `Formal.RefinementIndexTests`,
+      # which CONTENT_GATE_FILTER selects, writes every refinement row's
+      # production symbols and detectors, and every deliberate abstraction
+      # gap's symbols, to the file this variable names. The path is absolute
+      # because the test host's working directory is not the repository root.
+      - name: Locate the refinement index
+        if: steps.lightweight.outputs.only != 'true'
+        run: echo "LATTICE_REFINEMENT_INDEX=${RUNNER_TEMP}/refinement-index/refinement-index.json" >> "$GITHUB_ENV"
+
       - name: Run content gates
         if: steps.lightweight.outputs.only != 'true'
+        id: gates
         run: |
           set -euo pipefail
           python3 .github/workflows/run-text-gates.py \
             --solution Orleans.Lattice.slnx \
             --filter "$CONTENT_GATE_FILTER" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload refinement index
+        if: ${{ !cancelled() && steps.gates.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: refinement-index
+          path: ${{ env.LATTICE_REFINEMENT_INDEX }}
+          retention-days: 7
+          if-no-files-found: warn
+
+      # Formal impact (#5162): maps the pull request's changed src/**/*.cs
+      # types and members to the refinement rows and abstraction gaps that name
+      # them, and writes the result to the job summary. Advisory: see the
+      # GATING note in formal-impact.py for the replay and the decision. It
+      # fails only when the index is missing or malformed, or git fails.
+      - name: Formal impact report
+        if: ${{ !cancelled() && steps.gates.outcome != 'skipped' && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/formal-impact.py \
+            --index "$LATTICE_REFINEMENT_INDEX" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
             --summary-file "$GITHUB_STEP_SUMMARY"
 
       - name: Upload content gate results
