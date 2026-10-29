@@ -228,23 +228,49 @@ public sealed record SpecMutation
     /// uses to bound it. Only the checked-property blocks are replaced.
     /// </para>
     /// </summary>
-    public string BuildConfig(string baseConfig) => BuildConfig(baseConfig, []);
+    /// <para>
+    /// This is the full-bound control arm's cfg, and it deliberately does not
+    /// name the mutation. A control checks the unmutated base, so its input is
+    /// fully decided by the module, the target, the base cfg and the TLC
+    /// options; two mutations that agree on those build byte-identical control
+    /// cfgs and share one control run (see <see cref="TlcControlRunKey"/>).
+    /// The mutant arm's cfg keeps the mutation name in its header for
+    /// diagnostics (see <see cref="BuildMutantConfig"/>).
+    /// </para>
+    /// </summary>
+    public string BuildConfig(string baseConfig) => BuildConfig(baseConfig, [], mutationName: null);
 
     /// <summary>
-    /// Builds the cfg for the mutant arm: <see cref="Orleans.Lattice.Tests.Formal.SpecMutation.BuildConfig(string)"/> plus a
-    /// <c>CONSTANTS</c> block holding <see cref="Bounds"/>, so the mutant runs
-    /// on the smaller instance its header declares while the control arm keeps
-    /// the module's own bounds. Identical to <see cref="Orleans.Lattice.Tests.Formal.SpecMutation.BuildConfig(string)"/> for a
-    /// mutation that declares no bounds.
+    /// Builds the cfg for the matching-bound control arm:
+    /// <see cref="Orleans.Lattice.Tests.Formal.SpecMutation.BuildConfig(string)"/> plus a <c>CONSTANTS</c> block holding
+    /// <see cref="Bounds"/>. It checks the same model as
+    /// <see cref="BuildMutantConfig"/> - the same carried directives, bounds
+    /// and checked properties - and differs from it only in the generated
+    /// comment header, which names the mutation on the mutant arm and does not
+    /// here, so mutations that agree on module, target, bounds and options
+    /// share one matching-bound control run. Identical to
+    /// <see cref="Orleans.Lattice.Tests.Formal.SpecMutation.BuildConfig(string)"/> for a mutation that declares no bounds,
+    /// which is how the pairing gate knows no matching-bound control is needed.
     /// </summary>
-    public string BuildMutantConfig(string baseConfig) => BuildConfig(baseConfig, Bounds);
+    public string BuildMatchingControlConfig(string baseConfig) => BuildConfig(baseConfig, Bounds, mutationName: null);
 
-    private string BuildConfig(string baseConfig, IReadOnlyList<CfgAssignment> bounds)
+    /// <summary>
+    /// Builds the cfg for the mutant arm: the model of
+    /// <see cref="BuildMatchingControlConfig"/>, so the mutant runs on the
+    /// smaller instance its <c>BOUNDS:</c> header declares while the full-bound
+    /// control keeps the module's own bounds, under a header that names this
+    /// mutation so a retained cfg identifies the experiment it belongs to.
+    /// </summary>
+    public string BuildMutantConfig(string baseConfig) => BuildConfig(baseConfig, Bounds, Name);
+
+    private string BuildConfig(string baseConfig, IReadOnlyList<CfgAssignment> bounds, string? mutationName)
     {
         ArgumentNullException.ThrowIfNull(baseConfig);
 
         var builder = new StringBuilder();
-        builder.AppendLine($"\\* Generated for mutation {Name}. Do not check this file in.");
+        builder.AppendLine(mutationName is null
+            ? "\\* Generated clean-source control, shared by every mutation with this input. Do not check this file in."
+            : $"\\* Generated for mutation {mutationName}. Do not check this file in.");
         builder.AppendLine($"\\* Target: {Target} ({PropertyClass}).");
         builder.AppendLine();
         builder.AppendLine(SpecMutationCatalogue.CarriedConfiguration(baseConfig));

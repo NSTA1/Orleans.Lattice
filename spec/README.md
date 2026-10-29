@@ -234,8 +234,8 @@ discovered module, and each test case is named with the module
   cfg names its target once, every variant and every mutation `BOUNDS:` header
   assigns only names the specification has, and the full-bound generated cfg
   retains the base assignments while the mutant cfg adds the declared bounds.
-  The TLC pairing gate also uses that mutant cfg for its matching-bound
-  clean-source control.
+  The TLC pairing gate also checks that mutant cfg's model in its
+  matching-bound clean-source control.
 - `SpecActionMutationCoverageTests`: the note's action table matches `Next`, and
   every behavioural action is perturbed by a mutation that really edits it.
 - `RefinementNoteTests`, `RefinementPropertyCoverageTests`,
@@ -387,23 +387,36 @@ dominate small models; a temporal check can require the complete state graph.
 `BOUNDS:` may reduce that cost, or enlarge an instance to reach the intended
 counterexample. The clean source must also hold at that matching bound.
 
-For one complete, successful base/variant/mutation selection with no reused
-controls, the launch count is `1 + V + 2*M + B + D`: one full base run, `V`
-variant runs, a full-bound clean control and targeted mutant for each of `M`
-mutations, `B` additional matching-bound clean controls whose generated cfg
-differs, and `D` deadlock-on mutant runs for `DEADLOCK: off`. A mutation with
-both headers therefore costs four launches. This is launch accounting, not
-elapsed-time pricing or a new measured census; early failure can prevent later
-arms from running, and separate smoke/discovery or harness controls cost extra.
+For one complete, successful base/variant/mutation selection, the launch count
+is `1 + V + C + M + D`: one full base run, `V` variant runs, `C` distinct clean
+controls, a targeted mutant for each of `M` mutations, and `D` deadlock-on
+mutant runs for `DEADLOCK: off`. `C` counts distinct control inputs, not
+mutations: one full-bound control per module, target and TLC options, plus one
+matching-bound control per module, target, options and bounds for the
+mutations whose `BOUNDS:` header makes the generated cfg differ. Without any
+sharing `C` would be `M + B` for `B` such mutations, so a mutation with both
+headers costs at most four launches. This is launch accounting, not
+elapsed-time pricing; early failure can prevent later arms from running, and
+separate smoke/discovery or harness controls cost extra.
 
-`ControlRuns` reuses only an identical complete input within the same test
-process: specification path, base source, full generated cfg text, TLC options
-and sorted sibling module names/text. Its key includes the generated mutation
-name comment, so distinct mutation names do not share controls merely because
-their target, bounds and options match. Repeated requests for the exact same
-key share one lazy result, including failure; there is no cross-process cache.
-Deduct launches only for such actual cache hits, not assumed cross-mutation
-reuse. Base, variant, targeted-mutant and deadlock-on runs bypass this cache.
+`ControlRuns` reuses an identical complete input within the same test process:
+specification path, base source, full generated cfg text, TLC options and
+sorted sibling module names/text (`TlcControlRunKey`). The generated control
+cfgs do not name the mutation - only the mutant cfg's header does - so
+mutations that agree on module, target, bounds and options share one control.
+Repeated requests for the same key share one lazy result, including failure,
+so a failing shared control fails every case that shares it. There is no
+cross-process cache: cases of one module that CI routes to different shard
+categories each pay for their own copy. Base, variant, targeted-mutant and
+deadlock-on runs bypass this cache.
+
+For the whole repository at the formal-pipeline integration base (1,060
+mutations, 120 of them with a differing `BOUNDS:` cfg), that is 597 control
+launches - 524 full-bound and 73 matching-bound - for 1,180 control requests,
+or 599 with every TLC shard category in its own process.
+`TlcControlRunSharingTests` recomputes these figures without a JVM, writes them
+to its test output, and fails if launches stop matching the distinct
+experiments.
 
 Measure each selected arm on the intended worker/heap settings rather than
 turning the formula into a runtime guarantee. The historical atomic-commit
@@ -427,8 +440,8 @@ runs sharing one directory corrupt each other's parse. On a four-core CI runner
 that is two processes of two workers each.
 
 The expectation as modules are added is therefore linear in the number of TLC
-runs: roughly `(1 + 2 x mutations)` runs per module, divided by the
-concurrency. Five more modules of the atomic-commit module's size would add
+runs: at most `(1 + 2 x mutations)` runs per module before control sharing,
+divided by the concurrency. Five more modules of the atomic-commit module's size would add
 about five times its cost - on the order of ten minutes of TLC on a four-core
 runner, which the `test/lattice` leg can absorb but a sixth or seventh area
 would make worth splitting into its own shard. The per-process five-minute
