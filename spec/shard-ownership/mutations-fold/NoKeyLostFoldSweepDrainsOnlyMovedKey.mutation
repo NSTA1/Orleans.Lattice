@@ -1,0 +1,16 @@
+# Pairs with NoKeyLost. A fold's survivor can hold the saga's other buckets;
+# applying the terminal there must drain them all. Here the sweep backstops k2
+# only, yet records the terminal as applied, so the survivor's k1 bucket is
+# discarded when the broadcast arrives and k1 loses the committed batch.
+MODULE: NoKeyLostFoldSweepDrainsOnlyMovedKey
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the decided sweep marks the survivor's activation as having applied the terminal but drains only the moved key's bucket
+PERTURBS: MigSweep
+
+--- FIND
+                                       IF k = k2 \/ (pend[dst][k] # "none" /\ ~term[dst])
+--- REPLACE
+\* MUTATION: only the moved key is drained.
+                                       IF k = k2
+--- END

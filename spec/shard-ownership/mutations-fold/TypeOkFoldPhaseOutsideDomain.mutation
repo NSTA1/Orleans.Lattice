@@ -1,0 +1,15 @@
+# Pairs with TypeOK. The fold's window records a phase TypeOK does not allow.
+MODULE: TypeOkFoldPhaseOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an opened fold records a migration phase outside its domain
+PERTURBS: FoldBegin
+
+--- FIND
+    /\ mp' = "shadow"
+    /\ mk' = "fold"
+--- REPLACE
+\* MUTATION: a phase outside the domain.
+    /\ mp' = "folding"
+    /\ mk' = "fold"
+--- END

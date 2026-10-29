@@ -1,0 +1,18 @@
+# Pairs with AtomicOnOwner. The saga starts with k2 already counted as
+# prepared, so it decides with only k1's bucket in place and k1 surfaces the
+# batch before the terminal backstops k2.
+MODULE: AtomicOnOwnerFoldSagaStartSkipsEntry
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: the saga records k2 as dispatched before dispatching it, so the batch commits torn
+PERTURBS: SagaStart
+
+--- FIND
+    /\ sg' = "exec"
+    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, dec, opDone, young, ackOn>>
+--- REPLACE
+    /\ sg' = "exec"
+\* MUTATION: k2 counted as dispatched.
+    /\ prepped' = {k2}
+    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, told, dec, opDone, young, ackOn>>
+--- END
