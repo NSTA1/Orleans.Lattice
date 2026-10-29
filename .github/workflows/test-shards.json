@@ -89,8 +89,9 @@
       {
         "shard": "formal-tlc-convergence",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardConvergence"],
-        "note": "The TLC mutation gates are CPU-bound JVM runs, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). Sizes are test-minutes summed over the cases of CI run 37322771720, which the harness runs about four at a time, so wall-clock is about a quarter. This shard holds every Replication EventualConvergence (temporal) mutant, about 54 test-minutes (15 minutes wall-clock in that run). Mutants sharing a target property and options share one cached control (#5152); the Replication base runs in formal-tlc-replication-wal, so these mutants still launch that control here."
+        "note": "The TLC mutation gates are CPU-bound JVM runs, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). Each shard runs several cases at a time, so its item time is a fraction of its summed case time. This shard holds every Replication EventualConvergence (temporal) mutant: 9 cases, 13.6 case-minutes in a 4.05-minute item in the receipt-free bucket push run 40909619830 (#5166). Mutants sharing a target property and options share one cached control (#5152); the Replication base runs in formal-tlc-replication-wal, so these mutants still launch that control here."
       },
       {
         "shard": "formal-tlc-materialised-views",
@@ -200,121 +201,121 @@
       {
         "shard": "formal-tlc-rebootstrap",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardReBootstrap"],
-        "note": "The bases and mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations, about 66 test-minutes, 60 of them ReplicationReBootstrap's. Companion modules stay whole in this measured group; their bases run here so each serves its mutants' full-bound controls (#5161). The test-minute figure was measured before that move."
+        "note": "The bases and mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations. Companion modules stay whole in this measured group; their bases run here so each serves its mutants' full-bound controls (#5161). 70 cases, 53.7 case-minutes in a 13.90-minute item in the receipt-free bucket push run 40909619830 (#5166)."
       },
       {
         "shard": "formal-tlc-replication-wal",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardReplicationWal"],
-        "note": "The other Replication mutants plus the mutants of every Wal* module, with the Replication, WalDurability and WalMove bases co-located so they serve the full-bound controls (#5161); measured before that move at about 55 test-minutes (14 minutes wall-clock in that run)."
+        "note": "The other Replication mutants plus the mutants of every Wal* module, with the Replication, WalDurability and WalMove bases co-located so they serve the full-bound controls (#5161). 77 cases, 56.1 case-minutes in a 14.12-minute item in the receipt-free bucket push run 40909619830 (#5166)."
       },
       {
         "shard": "formal-tlc-shard-ownership",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardShardOwnership"],
-        "note": "The mutants of every ShardOwnership* module, with the ShardOwnershipCrdt, ShardOwnershipCutover, ShardOwnershipFold and ShardOwnershipRetention bases co-located (#5161; the ShardOwnership base stays in the catch-all because it is too long for this shard's critical path); measured before that move at about 62 test-minutes (16 minutes wall-clock in that run)."
+        "note": "The mutants of every ShardOwnership* module, with the ShardOwnershipCrdt, ShardOwnershipCutover, ShardOwnershipFold and ShardOwnershipRetention bases co-located (#5161; the ShardOwnership base stays in the catch-all because it is too long for this shard's critical path). 128 cases, 16.3 case-minutes in a 4.16-minute item in the receipt-free bucket push run 40909619830 (#5166)."
       },
       {
         "shard": "formal-tlc-atomic",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardAtomic"],
-        "note": "The mutants of every AtomicCommit* module and the AtomicCommit and AtomicCommitCrossCluster bases, which serve the mutants' full-bound controls (#5161). Variant configurations are balanced across six formal-tlc-atomic-variants-* shards; mutation controls are shared by content (#5152)."
+        "note": "The mutants of every AtomicCommit* module and the AtomicCommit and AtomicCommitCrossCluster bases, which serve the mutants' full-bound controls (#5161). 89 cases, 59.6 case-minutes in a 15.16-minute item in the receipt-free bucket push run 40909619830 (#5166). Variant configurations are balanced across six formal-tlc-atomic-variants-* shards; mutation controls are shared by content (#5152)."
       },
       {
         "shard": "formal-tlc-atomic-variants-1",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardAtomicVariants1"],
         "note": "State-weighted AtomicCommit* variant group 1 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
       },
       {
         "shard": "formal-tlc-atomic-variants-2",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardAtomicVariants2"],
         "note": "State-weighted AtomicCommit* variant group 2 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
       },
       {
         "shard": "formal-tlc-atomic-variants-3",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardAtomicVariants3"],
         "note": "State-weighted AtomicCommit* variant group 3 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
       },
       {
         "shard": "formal-tlc-atomic-variants-4",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardAtomicVariants4"],
         "note": "State-weighted AtomicCommit* variant group 4 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
       },
       {
         "shard": "formal-tlc-atomic-variants-5",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardAtomicVariants5"],
         "note": "State-weighted AtomicCommit* variant group 5 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
       },
       {
         "shard": "formal-tlc-atomic-variants-6",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardAtomicVariants6"],
         "note": "State-weighted AtomicCommit* variant group 6 of 6. Variants are assigned by deterministic longest-processing-time balancing over manifest distinctStates."
       },
       {
         "shard": "formal-tlc-backup",
         "tlc": true,
+        "tiers": ["deterministic"],
         "includeCategories": ["TlcShardBackup"],
-        "note": "The mutants of every Backup* module, with every Backup* base but BackupCapture co-located (#5161); measured before that move at about 30 test-minutes."
+        "note": "The mutants of every Backup* module, with every Backup* base but BackupCapture co-located (#5161). 75 cases, 16.5 case-minutes in a 4.19-minute item in the receipt-free bucket push run 40909619830 (#5166)."
       },
       {
-        "shard": "formal-tlc-bplus-cascade-base",
+        "shard": "formal-tlc-bplus-cascade",
         "tlc": true,
-        "includeCategories": ["TlcShardBPlusCascadeBase"],
-        "note": "The BPlusCascade base model, isolated from the catch-all so its exhaustive state search has a measured per-job budget."
-      },
-      {
-        "shard": "formal-tlc-bplus-cascade-mutations-1",
-        "tlc": true,
-        "includeCategories": ["TlcShardBPlusCascadeMutations1"],
-        "note": "Seven BPlusCascade mutations. The remaining six are grouped by target property in the companion shard. Mutations sharing a target property share one cached control (#5152); the base runs in its own shard, so the controls are launched here."
-      },
-      {
-        "shard": "formal-tlc-bplus-cascade-mutations-2",
-        "tlc": true,
-        "includeCategories": ["TlcShardBPlusCascadeMutations2"],
-        "note": "Six BPlusCascade parent-accounting, recovery, separator-range, and maximum-height mutations in the companion target-property group; measured costs include each mutation control."
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardBPlusCascade"],
+        "note": "The BPlusCascade base and its thirteen mutants, co-located so the base serves the mutants' full-bound controls (#5161). In the receipt-free bucket push run 40909619830 (#5166) the base case took 10 s against 227 s of mutation cases, and the three shards this one replaces (base, and two mutation groups) took 0.23, 0.69 and 0.58 item-minutes."
       },
       {
         "shard": "formal-tlc-scheduling-replay-two-partitions",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingReplayTwoPartitions"],
-        "note": "The ReplayPermits TwoPartitions variant remains in a dedicated one-case shard. Its passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148551) measured 41.14616 minutes; 41.15 is the measured item price, not a future runtime guarantee. It remains separate from the reconstructed scheduling groups."
+        "note": "The ReplayPermits TwoPartitions variant remains in a dedicated one-case shard: it is the longest indivisible TLC case and so sets the cold critical path. Its measured item took 35.22 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568395) and 52.78 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834893); 44.00 is their mean, a planning input, not a future runtime guarantee. It remains separate from the other scheduling groups."
       },
       {
         "shard": "formal-tlc-scheduling",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardScheduling"],
-        "note": "The 106-case group contains ReplayPermits base/PartialPrefix and the WalBackPressure, MaterialiserDrain, WalAdmission, WalGcStarvationDriveWitness and TurnOccupancy cases; future scheduling modules also fall back here. Its 21.03-minute price is reconstructed with four-worker LPT from the passing 192/192 case TRX in ci.yml run 40658688360 (head 92832b77, job 122717148586), not a measured CI work-item time. The source run passed including rebootstrap job 122717148595. Historical run 40588708711 rebootstrap job 122488444001 failed under #5116 and contributes no timing. Estimates are planning inputs, not runtime guarantees."
+        "note": "The 106-case group contains ReplayPermits base/PartialPrefix and the WalBackPressure, MaterialiserDrain, WalAdmission, WalGcStarvationDriveWitness and TurnOccupancy cases; future scheduling modules also fall back here. Its measured item took 31.71 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568364) and 30.38 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834850), led by the PartialPrefix variant (27.06 minutes) and the ReplayPermits base (23.38); 31.05 is their mean. Estimates are planning inputs, not runtime guarantees."
       },
       {
         "shard": "formal-tlc-scheduling-workload-b",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingWorkloadB"],
-        "note": "The 86-case group contains ReplayPermits mutations and the WalGcStarvationDrive, SagaReadProgress and TagIndexReconcile cases. Its 23.04-minute price is reconstructed with four-worker LPT from the passing 192/192 case TRX in ci.yml run 40658688360 (head 92832b77, job 122717148586), not a measured CI work-item time. Estimates are planning inputs, not runtime guarantees."
+        "note": "The 86-case group contains ReplayPermits mutations and the WalGcStarvationDrive, SagaReadProgress and TagIndexReconcile cases. Its measured item took 12.11 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568215) and 20.64 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834772); 16.38 is their mean. Estimates are planning inputs, not runtime guarantees."
       },
       {
         "shard": "formal-tlc-scheduling-shipping",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingShipping"],
-        "note": "ReplicationShipping base and all 26 paired mutations remain together (27 TLC cases), preserving process-local control behavior. The passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148735) measured 6.16476 minutes; 6.17 is the measured item price, not a future runtime guarantee."
+        "note": "ReplicationShipping base and all 26 paired mutations remain together (27 TLC cases), preserving process-local control behavior. Its measured item took 4.37 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568186) and 4.20 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834772); 4.29 is their mean, a planning input, not a future runtime guarantee."
       },
       {
         "shard": "formal-tlc-scheduling-shipping-variants",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingShippingVariants"],
-        "note": "Every full ReplicationShipping variant, currently the one FourRecords case. Its passing item TRX in ci.yml run 40658688360 (head 92832b77, job 122717148680) measured 18.71505 minutes; 18.72 is the measured item price, not a future runtime guarantee."
+        "note": "Every full ReplicationShipping variant, currently the one FourRecords case. Its measured item took 22.29 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568186) and 17.23 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834836); 19.76 is their mean, a planning input, not a future runtime guarantee."
       },
       {
         "shard": "formal-tlc-smoke",
@@ -327,7 +328,7 @@
         "shard": "formal-tlc",
         "tlc": true,
         "include": ["Formal.TlcModelCheckTests"],
-        "note": "Every TLC case not already claimed: bases not co-located with their mutations (TlcCiShard.CoLocatedBaseCategory lists the moved ones; ShardOwnership and BackupCapture stay here), ungrouped variants, mutations of ungrouped modules (including BPlusTopology), and synthetic-module gates. The lifecycle, materialised-view and anti-entropy areas route their bases, variants and mutants together above this catch-all. BPlusTopology's 15 base/mutation cases took 13s locally, too small to justify a dedicated runner; the catch-all historically measured about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
+        "note": "Every TLC case not already claimed: bases not co-located with their mutations (TlcCiShard.CoLocatedBaseCategory lists the moved ones; ShardOwnership and BackupCapture stay here), ungrouped variants, mutations of ungrouped modules (including BPlusTopology), and synthetic-module gates. The lifecycle, materialised-view and anti-entropy areas route their bases, variants and mutants together above this catch-all. 159 cases, 61.0 case-minutes in a 17.34-minute item in the receipt-free bucket push run 40909619830 (#5166), led by the WalDurability SnapshotLoss variant (9.6 minutes). It selects by name prefix rather than by category, so it keeps every tier: a non-TLC fixture under that prefix must not lose its Chaos or Coyote tier."
       },
       {
         "shard": "rest",

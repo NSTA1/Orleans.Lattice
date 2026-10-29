@@ -17,17 +17,17 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase(MemberSkippedTiers)]
     public void Scheduling_shards_price_all_certified_modules_in_full_and_member_plans(string? skippedTiers)
     {
-        // Item TRX evidence is from ci.yml run 40658688360 (head 92832b77).
-        // The general subgroups are four-worker LPT reconstructions from the
-        // passing 192/192 case TRX, not measured CI work-item times.
+        // Each price is the mean of two measured item durations (#5166): the
+        // receipt-free bucket push ci.yml run 40909619830 (head 9418a498d) and
+        // the nightly-equivalent coverage.yml run 40923724192 (head 0e4aa6b2a).
         const double itemOverheadMinutes = 0.04;
         var evidenceMinutes = new Dictionary<string, double>(StringComparer.Ordinal)
         {
-            ["formal-tlc-scheduling-replay-two-partitions"] = 41.14616,
-            ["formal-tlc-scheduling"] = 21.02106,
-            ["formal-tlc-scheduling-workload-b"] = 23.03827,
-            ["formal-tlc-scheduling-shipping"] = 6.16476,
-            ["formal-tlc-scheduling-shipping-variants"] = 18.71505,
+            ["formal-tlc-scheduling-replay-two-partitions"] = (35.22 + 52.78) / 2,
+            ["formal-tlc-scheduling"] = (31.71 + 30.38) / 2,
+            ["formal-tlc-scheduling-workload-b"] = (12.11 + 20.64) / 2,
+            ["formal-tlc-scheduling-shipping"] = (4.37 + 4.20) / 2,
+            ["formal-tlc-scheduling-shipping-variants"] = (22.29 + 17.23) / 2,
         };
         var scheduling = Plan(["lattice"], skippedTiers)
             .Where(item => item.Shard.StartsWith("formal-tlc-scheduling", StringComparison.Ordinal)).ToArray();
@@ -41,7 +41,7 @@ public sealed partial class CiMemberPullRequestTieringTests
                 Assert.That(item.Tier, Is.EqualTo("deterministic"), item.Shard);
                 var price = item.EstimateMinutes - itemOverheadMinutes;
                 Assert.That(price, Is.GreaterThanOrEqualTo(evidenceMinutes[item.Shard] - 0.000001),
-                    item.Shard + " must not be priced below its measured or reconstructed evidence");
+                    item.Shard + " must not be priced below its measured evidence");
                 Assert.That(price, Is.LessThan(evidenceMinutes[item.Shard] + 0.1),
                     item.Shard + " rounds its evidence-based allocation up once, to at most a tenth of a minute");
             }

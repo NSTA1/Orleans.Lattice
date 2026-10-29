@@ -327,17 +327,16 @@ The complete revised harness subsequently passed 28/28 cases: both full
 configurations and all twenty-six paired mutations, with fresh process-local
 controls. Its launcher-artifact receipt records 2745.4195361 monotonic seconds
 under the same configured resource policy. CI does not compose these
-certificates. Its scheduling prices use passing TRX evidence in ci.yml run
-40658688360 (head 92832b77): the dedicated TwoPartitions item is 41.15 minutes
-(job 122717148551), Shipping base/pairs are 6.17 (job 122717148735), and
-FourRecords is 18.72 (job 122717148680). The passing 192/192 general item (job
-122717148586) is split into 106/86-case groups priced at 21.03/23.04 minutes by
-four-worker LPT reconstruction of its case durations, not measured work-item
-times. Four workers is a reconstruction assumption, not an attested runner
-trace. The complete source run passed, including rebootstrap job 122717148595.
-Historical run 40588708711's rebootstrap job 122488444001 failed under #5116;
-that failure remains recorded and contributes no timing. These estimates are
-planning inputs, not runtime guarantees. The earlier standalone fulls remain
+certificates. Its scheduling prices are the means of two measured work-item
+times, from the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d)
+and the nightly-equivalent coverage.yml run 40923724192 (head 0e4aa6b2a), both
+of which passed every case: the dedicated TwoPartitions item took 35.22 and
+52.78 minutes (jobs 123577568395 and 123623834893), priced 44.00; the 106-case
+general group 31.71 and 30.38, priced 31.05; the 86-case group 12.11 and 20.64,
+priced 16.38; Shipping base/pairs 4.37 and 4.20, priced 4.29; and FourRecords
+22.29 and 17.23, priced 19.76. A single case varies up to 1.5x between runs on
+identical inputs, so these estimates are planning inputs, not runtime
+guarantees. The earlier standalone fulls remain
 diagnostics. Accepted completion binds the fresh TRX, redirected native output
 and immediate exit-code/Stopwatch receipt; it is not a recovered CLI terminal
 event, at-launch loaded-binary attestation or peak-RSS measurement.
@@ -418,16 +417,11 @@ ReplayPermits mutations plus WalGcStarvationDrive, SagaReadProgress and
 TagIndexReconcile; TlcShardSchedulingReplayTwoPartitions holds the single
 TwoPartitions case; TlcShardSchedulingShipping holds the ReplicationShipping
 base and pairs; and TlcShardSchedulingShippingVariants holds FourRecords.
-Passing item TRX results are from ci.yml run 40658688360 (head 92832b77):
-TwoPartitions 41.15 minutes (job 122717148551), Shipping 6.17 (job
-122717148735), and FourRecords 18.72 (job 122717148680). The passing 192/192
-general item in job 122717148586 is priced as 21.03/23.04-minute groups using
-four-worker LPT reconstruction of its case durations, not measured work-item
-times. Four workers is a reconstruction assumption, not an attested runner
-trace. The complete source run passed, including rebootstrap job 122717148595.
-Historical run 40588708711's rebootstrap job 122488444001 failed under #5116;
-that failure remains recorded and contributes no timing. Estimates are planning
-inputs, not runtime guarantees. Structural gates remain untagged. The checked-in
+Each item is priced at the mean of its measured work-item times in ci.yml run
+40909619830 (head 9418a498d) and coverage.yml run 40923724192 (head 0e4aa6b2a):
+TwoPartitions 44.00 minutes, the 106/86-case groups 31.05/16.38, Shipping 4.29
+and FourRecords 19.76. Estimates are planning inputs, not runtime guarantees.
+Structural gates remain untagged. The checked-in
 mutation files derive each mutant from the live module using exact anchors; the
 harness runs a clean control and one configured target per mutant.
 
