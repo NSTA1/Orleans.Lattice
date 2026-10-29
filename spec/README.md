@@ -320,9 +320,36 @@ integration branch run them only when the diff touches a TLC verdict input.
 `.github/workflows/tlc-inputs.json` sorts every file that can affect a TLC run into three classes: verdict inputs (`.tla`, `.cfg`, manifest and mutation files under `spec/`, the Formal harness that discovers modules, builds cases and cfgs, and launches and judges TLC, the TLA+ toolchain (`tools/tlc/`, whose `toolchain.json` holds every pin, and the `tla-toolchain` action), and build inputs); routing (which leg runs which existing case: `test-shards.json`, the planner, `tier-scope.py`, `TlcCiShard.cs`, and the workflows that provision the toolchain through that action and launch legs), where a routing-only change runs the smoke shard and a toolchain-free partition check proves every TLC case is still selected by exactly one TLC shard; and neutral (files no TLC run reads). A missing or empty changed-file list fails toward running the
 exhaustive checks. Release-line pull requests and pushes, integration-branch
 pushes, and nightly coverage run the exhaustive shards. The nightly TLC legs in
-`coverage.yml` run uninstrumented and ignore verdict receipts. `Publish` verifies that
+`coverage.yml` run uninstrumented and ignore verdict receipts. An
+integration-branch push is never skipped by its own diff, because the previous
+push's run may have failed or been cancelled; it saves only through receipts.
+`Publish` verifies that
 the exact tag SHA has a successful release-line `build-and-test` run before it
 can publish, so its per-package test matrix can skip repeating TLC.
+
+When the exhaustive shards do run, per-module verdict receipts (#5164) decide
+which modules actually run. A receipt records that every census case of one
+module passed at one fingerprint, and the fingerprint
+(`.github/workflows/tlc-fingerprint.py`) covers the module's specification
+closure, cfgs, manifest and mutations, the TLC-affecting harness and the
+toolchain, so a module whose fingerprint has a trusted receipt cannot change its
+verdict. Receipts are GitHub Actions cache entries keyed
+`tlc-verdict-v1-<Module>-<fingerprint>`. The plan job looks them up, the matrix
+planner removes those modules' `TlcModule_<Module>` cases from the TLC shards
+(recording a shard left with no case as skipped, verified by receipt), and the
+aggregate job writes a receipt for each module whose every census case passed
+in the run. Its summary lists every module as ran, cached (naming the run that
+wrote the receipt), failed, or incomplete, and an incomplete module fails the
+check. Each leg also writes a partial receipt per module and finished item, so
+a cancelled run's completed modules are reused by the next run of the same
+scope once one run's partials cover the census.
+
+Receipts are read only from the run's own scope, its pull request's base branch
+and `main`, never from another pull request. That is the Actions cache's own
+scoping, and the lookup lists only those refs. A pull request writes only to its
+own scope, so it cannot plant a receipt that its base branch or `main` would
+read. Release-line pull requests and pushes ignore receipts, as does a manual
+`workflow_dispatch` run with `tlc_receipts: off`; both run every module.
 
 Only the dedicated `SpecModuleCases.TlcModules`, `TlcMutations` and
 `TlcVariants` sources attach TLC categories: a `TlcShard*` shard category and a

@@ -64,6 +64,11 @@ drop anything silently, and that is the whole design:
   `"tlcSmoke": true` is the retained base-model smoke check. Each has its own
   skip reason so routine PRs can skip exhaustive TLC without losing smoke
   coverage, while Publish can skip both after exact-SHA CI verification.
+- `--tlc-cached-modules` (with `--tlc-census` and `--tlc-case-categories`)
+  removes the modules a trusted TLC verdict receipt proves (tlc-receipts.py,
+  #5164) from the exhaustive TLC shards: a category-only shard left with no
+  uncached case is recorded as skipped, "verified by receipt", and any other
+  shard runs with the cached modules' `TlcModule_` categories excluded.
 
 The deterministic tier cannot be skipped: a run with nothing left to execute is
 a green that verified nothing.
@@ -72,6 +77,8 @@ Usage:
   plan-test-matrix.py --packages FILE --shards FILE --durations FILE
                       [--seeded FILE] [--max-legs N]
                       [--skip-tiers TIER[,TIER]] [--skip-reason TEXT]
+                      [--tlc-cached-modules FILE --tlc-census FILE
+                       --tlc-case-categories FILE]
                       --output-matrix FILE [--report-file FILE]
   plan-test-matrix.py --shards FILE --emit-shard-filters PACKAGE
 
@@ -207,6 +214,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-matrix")
     parser.add_argument("--report-file")
     parser.add_argument(
+        "--tlc-cached-modules",
+        help="File naming, one per line, the specification modules whose TLC verdict is "
+             "proven by a trusted receipt (tlc-receipts.py plan). Their TlcModule_ "
+             "categories are excluded from the exhaustive TLC shards, and a category-only "
+             "TLC shard whose census cases are all cached is recorded as skipped, verified "
+             "by receipt. Requires --tlc-census and --tlc-case-categories.",
+    )
+    parser.add_argument("--tlc-census", help="The TLC case census (contract C2).")
+    parser.add_argument("--tlc-case-categories", help="Each census case's test categories.")
+    parser.add_argument(
         "--emit-shard-filters",
         metavar="PACKAGE",
         help="Print PACKAGE's shard partition as JSON ([{shard, filter}], or [] when "
@@ -225,6 +242,8 @@ def parse_args() -> argparse.Namespace:
         ]
         if missing:
             parser.error("the following arguments are required to plan a matrix: " + ", ".join(missing))
+        if args.tlc_cached_modules and not (args.tlc_census and args.tlc_case_categories):
+            parser.error("--tlc-cached-modules needs --tlc-census and --tlc-case-categories")
     args.skip_tiers = parse_skip_tiers(parser, args.skip_tiers)
     return args
 
@@ -470,6 +489,83 @@ def make_items(
     return items, skipped
 
 
+def load_receipt_tools():
+    """tlc-receipts.py, which owns the filter evaluator the legs also use, so
+    the planner and the legs cannot disagree on which cases an item selects."""
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tlc-receipts.py")
+    spec = importlib.util.spec_from_file_location("tlc_receipts", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+VERIFIED_BY_RECEIPT = "verified by receipt"
+
+
+def apply_tlc_receipts(
+    items: list[dict],
+    skipped: list[dict],
+    shard_config: dict,
+    cached: set[str],
+    census: dict[str, list[str]],
+    categories: dict[str, list[str]],
+) -> tuple[list[dict], list[dict]]:
+    """Remove receipt-proven modules from the exhaustive TLC shards.
+
+    For each exhaustive TLC item, the census cases its filter selects are
+    split into cached and uncached modules (the same evaluator the legs use):
+
+    - no cached module: unchanged;
+    - a category-only shard whose selected cases are ALL cached: recorded as
+      skipped, "verified by receipt", naming the modules - never dropped;
+    - otherwise the item runs with `TestCategory!=TlcModule_<M>` for each
+      cached module it selects, priced by its uncached share of cases. A shard
+      that selects by name prefix (the formal-tlc catch-all) is only ever
+      narrowed: it also holds TLC tests outside the census, which no receipt
+      covers.
+    """
+    if not cached:
+        return items, skipped
+    tools = load_receipt_tools()
+    prefix_shards = {
+        entry["shard"]
+        for config in shard_config.values()
+        for entry in config.get("shards", [])
+        if entry.get("include") or entry.get("complement")
+    }
+
+    kept: list[dict] = []
+    for item in items:
+        if not item.get("tlc") or not item.get("filter"):
+            kept.append(item)
+            continue
+        selected = tools.selected_cases(item["filter"], census, categories)
+        here = sorted(module for module in selected if module in cached)
+        total = sum(len(names) for names in selected.values())
+        uncached = sum(len(names) for module, names in selected.items() if module not in cached)
+        if not here:
+            kept.append(item)
+            continue
+        item["tlc_cached_modules"] = here
+        if uncached == 0 and item["shard"] not in prefix_shards:
+            named = ", ".join(here[:8]) + (f" and {len(here) - 8} more" if len(here) > 8 else "")
+            item["estimate"] = 0.0
+            item["skip"] = (
+                f"{VERIFIED_BY_RECEIPT}: every TLC case this shard selects belongs to a module "
+                f"whose verdict a trusted receipt proves ({named})"
+            )
+            skipped.append(item)
+            continue
+        exclusions = "&".join(f"TestCategory!=TlcModule_{module}" for module in here)
+        item["filter"] = f"({item['filter']})&({exclusions})"
+        share = uncached / total if total else 1.0
+        item["estimate"] = round(PER_ITEM_OVERHEAD + (item["estimate"] - PER_ITEM_OVERHEAD) * share, 3)
+        kept.append(item)
+    return kept, skipped
+
+
 def attach_skipped(legs: list[dict], skipped: list[dict]) -> None:
     """Record each policy-skipped item on a leg, after packing.
 
@@ -575,6 +671,20 @@ def write_report(
         if skipped:
             handle.write("\n")
 
+    by_receipt = [item for item in skipped or [] if str(item.get("skip", "")).startswith(VERIFIED_BY_RECEIPT)]
+    narrowed_by_receipt = [item for item in items if item.get("tlc_cached_modules")]
+    if by_receipt or narrowed_by_receipt:
+        handle.write(f"### TLC shards verified by receipt: {len(by_receipt)} skipped, "
+                     f"{len(narrowed_by_receipt)} narrowed\n\n")
+        handle.write("A skipped shard selects only cases of modules a trusted TLC receipt proves at "
+                     "their current fingerprint; a narrowed shard runs with those modules' "
+                     "`TlcModule_` categories excluded. The receipt table names each receipt's run.\n\n")
+        for item in sorted(by_receipt, key=lambda entry: entry["label"]):
+            handle.write(f"- `{item['label']}`: skipped\n")
+        for item in sorted(narrowed_by_receipt, key=lambda entry: entry["label"]):
+            handle.write(f"- `{item['label']}`: narrowed, {len(item['tlc_cached_modules'])} cached module(s) excluded\n")
+        handle.write("\n")
+
 
 def main() -> int:
     args = parse_args()
@@ -605,6 +715,12 @@ def main() -> int:
         packages, shard_config, durations, seeded, args.skip_tiers, args.skip_reason,
         args.skip_tlc_reason.strip(), args.skip_tlc_smoke_reason.strip(),
     )
+    if args.tlc_cached_modules:
+        tools = load_receipt_tools()
+        items, skipped = apply_tlc_receipts(
+            items, skipped, shard_config, set(read_lines(args.tlc_cached_modules)),
+            tools.load_census(args.tlc_census), tools.load_categories(args.tlc_case_categories),
+        )
     legs = pack(items, args.max_legs)
 
     if not legs:

@@ -270,9 +270,21 @@ public sealed partial class CiMemberPullRequestTieringTests
     private static Dictionary<string, string> DecideTierScope(
         string eventName,
         string baseRef,
-        string[]? changedFiles = null)
+        string[]? changedFiles = null,
+        string? refName = null,
+        string? tlcReceipts = null)
     {
         List<string> arguments = [Path.Combine(RepoRoot, TierScopeScript), "--event", eventName, "--base-ref", baseRef];
+        if (refName is not null)
+        {
+            arguments.AddRange(["--ref", refName]);
+        }
+
+        if (tlcReceipts is not null)
+        {
+            arguments.AddRange(["--tlc-receipts", tlcReceipts]);
+        }
+
         var work = changedFiles is null ? null : Directory.CreateTempSubdirectory("tierscope-");
         if (work is not null)
         {
@@ -323,9 +335,10 @@ public sealed partial class CiMemberPullRequestTieringTests
         string[] packages,
         string? skipTiers,
         string? skipTlcReason = null,
-        string? skipTlcSmokeReason = null)
+        string? skipTlcSmokeReason = null,
+        IEnumerable<string>? extraArguments = null)
     {
-        var (exitCode, _, stderr) = RunPlanner(packages, skipTiers, out var matrix, skipTlcReason, skipTlcSmokeReason);
+        var (exitCode, _, stderr) = RunPlanner(packages, skipTiers, out var matrix, skipTlcReason, skipTlcSmokeReason, extraArguments);
 
         Assert.That(exitCode, Is.Zero, "plan-test-matrix.py failed: " + stderr);
 
@@ -361,7 +374,8 @@ public sealed partial class CiMemberPullRequestTieringTests
         string? skipTiers,
         out string matrix,
         string? skipTlcReason = null,
-        string? skipTlcSmokeReason = null)
+        string? skipTlcSmokeReason = null,
+        IEnumerable<string>? extraArguments = null)
     {
         var work = Directory.CreateTempSubdirectory("tiering-");
 
@@ -394,6 +408,11 @@ public sealed partial class CiMemberPullRequestTieringTests
             if (skipTlcSmokeReason is not null)
             {
                 arguments.AddRange(["--skip-tlc-smoke-reason", skipTlcSmokeReason]);
+            }
+
+            if (extraArguments is not null)
+            {
+                arguments.AddRange(extraArguments);
             }
 
             var result = RunPython(arguments);

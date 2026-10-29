@@ -82,6 +82,19 @@ on:
     # exact tag commit.
     branches: ['*/epic/**', 'release/**']
 
+  # A manual run of the full suite on any branch, evaluated like a push: every
+  # package, every tier, exhaustive TLC. Its one input is the TLC verdict
+  # receipt switch (#5164): `off` makes every specification module run even
+  # when a trusted receipt proves it, which is the dry run of a release line,
+  # where receipts are never used.
+  workflow_dispatch:
+    inputs:
+      tlc_receipts:
+        description: "TLC verdict receipts: 'on' skips modules a trusted receipt proves; 'off' runs every module."
+        type: choice
+        options: ['on', 'off']
+        default: 'on'
+
 # Least-privilege: this workflow only reads source code.
 permissions:
   contents: read
@@ -223,6 +236,9 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+      # Lists the TLC verdict receipt cache entries in the trusted refs
+      # (tlc-receipts.py candidates, through .github/actions/tlc-receipts).
+      actions: read
 
     outputs:
       # Consumed by `extras` and by the `build-and-test` gate. A job cannot read
@@ -254,6 +270,11 @@ jobs:
       skipped_tiers: ${{ steps.tierscope.outputs.skipped_tiers }}
       tier_reason: ${{ steps.tierscope.outputs.reason }}
       skip_tlc_reason: ${{ steps.tierscope.outputs.skip_tlc_reason }}
+      # Whether this run's exhaustive TLC uses per-module verdict receipts
+      # (#5164), and the artifact carrying the receipt plan the legs and the
+      # aggregate read. `on` only when exhaustive TLC runs on `lattice`.
+      tlc_receipts: ${{ steps.receipts.outputs.on == 'true' && 'on' || 'off' }}
+      tlc_plan_artifact: tlc-receipt-plan-${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@v5
@@ -1289,9 +1310,9 @@ jobs:
           #
           # A push reaching this job is never a member push: the `classify`
           # job's flag keeps this whole job off a member branch.
-          if [ "$EVENT" = "push" ]; then
+          if [ "$EVENT" = "push" ] || [ "$EVENT" = "workflow_dispatch" ]; then
             run_tests=true
-            reason="integration branch push (#2972): the bucket's combined state is evaluated in full, via an empty changed-path list and the selector's no-match fallback"
+            reason="integration branch push (#2972) or manual dispatch: the branch's combined state is evaluated in full, via an empty changed-path list and the selector's no-match fallback"
           elif [ "$LIGHTWEIGHT" = "true" ]; then
             run_tests=false
             reason="videos/workflows/instructions-only PR: lightweight guards run; .NET and formal suites do not"
@@ -1394,7 +1415,7 @@ jobs:
           git diff --name-only "$BASE_SHA...$HEAD_SHA" > /tmp/changed-files.txt
 
       - name: Collect the changed paths (integration branch)
-        if: steps.gate.outputs.run_tests == 'true' && github.event_name == 'push'
+        if: steps.gate.outputs.run_tests == 'true' && github.event_name != 'pull_request'
         run: |
           set -euo pipefail
 
@@ -1534,14 +1555,111 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
+          TLC_RECEIPTS_INPUT: ${{ inputs.tlc_receipts || 'on' }}
         run: |
           set -euo pipefail
           python3 .github/workflows/tier-scope.py \
             --event "$EVENT" \
             --base-ref "$BASE_REF" \
+            --ref "$REF_NAME" \
             --changed-files /tmp/changed-files.txt \
+            --tlc-receipts "$TLC_RECEIPTS_INPUT" \
             --github-output "$GITHUB_OUTPUT" \
             --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # PER-MODULE TLC VERDICT RECEIPTS (#5164, contract C5). Only when
+      # exhaustive TLC runs on `lattice` and the run may use receipts
+      # (tier-scope.py: never on a release line or a dispatch with
+      # tlc_receipts=off). A module whose fingerprint (tlc-fingerprint.py, C4)
+      # has a trusted receipt - from this run's own ref, its pull request's base
+      # branch, or main, never another pull request's ref - is verified by that
+      # receipt and its cases are removed from the TLC shards. Every other
+      # module runs in full, and the aggregate writes its receipt only when
+      # every census case passed.
+      #
+      # The planner needs each census case's categories to know which shard
+      # selects it, and only the built test project can enumerate them, so this
+      # builds test/lattice and takes the census (toolchain-free, no JVM). That
+      # costs a few minutes of plan time, paid only on runs that would
+      # otherwise launch the exhaustive TLC shards.
+      - name: Decide whether TLC verdict receipts apply
+        id: receipts
+        if: steps.gate.outputs.run_tests == 'true' && steps.tierscope.outputs.tlc_receipts == 'on'
+        run: |
+          set -euo pipefail
+          if grep -qx lattice /tmp/selected-packages.txt; then
+            echo "on=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on=false" >> "$GITHUB_OUTPUT"
+            echo "lattice is not selected, so no TLC shard runs and there are no receipts to consult."
+          fi
+
+      - name: Setup .NET (TLC census)
+        if: steps.receipts.outputs.on == 'true'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages (TLC census)
+        if: steps.receipts.outputs.on == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Packages.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Take the TLC case census and fingerprints
+        if: steps.receipts.outputs.on == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tlc"
+          python3 .github/workflows/tlc-fingerprint.py --output "$RUNNER_TEMP/tlc/fingerprints.json"
+          dotnet build test/lattice/Orleans.Lattice.Tests.csproj --configuration Release --nologo
+          LATTICE_TLC_CENSUS="$RUNNER_TEMP/tlc/census.json" \
+          LATTICE_TLC_CASE_CATEGORIES="$RUNNER_TEMP/tlc/categories.json" \
+            dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --nologo \
+              --filter "FullyQualifiedName=Orleans.Lattice.Tests.Formal.TlcCaseCensusTests.The_census_is_written_to_the_file_LATTICE_TLC_CENSUS_names"
+          for file in census.json categories.json fingerprints.json; do
+            if [ ! -s "$RUNNER_TEMP/tlc/$file" ]; then
+              echo "::error::The TLC receipt plan needs $file and it was not written."
+              exit 1
+            fi
+          done
+
+      - name: Trusted TLC receipt refs
+        id: trustedrefs
+        if: steps.receipts.outputs.on == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          OWN_REF: ${{ github.ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          refs="$OWN_REF,refs/heads/main"
+          if [ "$EVENT" = "pull_request" ] && [ -n "$BASE_REF" ]; then
+            refs="$OWN_REF,refs/heads/$BASE_REF,refs/heads/main"
+          fi
+          echo "refs=$refs" >> "$GITHUB_OUTPUT"
+
+      - name: Look up TLC verdict receipts
+        if: steps.receipts.outputs.on == 'true'
+        uses: ./.github/actions/tlc-receipts
+        with:
+          operation: lookup
+          fingerprints: ${{ runner.temp }}/tlc/fingerprints.json
+          census: ${{ runner.temp }}/tlc/census.json
+          case-categories: ${{ runner.temp }}/tlc/categories.json
+          refs: ${{ steps.trustedrefs.outputs.refs }}
+          output-dir: ${{ runner.temp }}/tlc-plan
+
+      - name: Upload the TLC receipt plan
+        if: steps.receipts.outputs.on == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tlc-receipt-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tlc-plan/
+          retention-days: 7
 
       - name: Plan the test matrix
         id: matrix
@@ -1551,6 +1669,7 @@ jobs:
           TIER_REASON: ${{ steps.tierscope.outputs.reason }}
           SKIP_TLC_REASON: ${{ steps.tierscope.outputs.skip_tlc_reason }}
           MAX_LEGS: ${{ steps.tierscope.outputs.max_legs }}
+          TLC_RECEIPTS: ${{ steps.receipts.outputs.on }}
         run: |
           set -euo pipefail
 
@@ -1562,6 +1681,16 @@ jobs:
           sed -n 's/^Seeded by changed paths:.*(`\([^`]*\)`).*/\1/p' /tmp/selection.md \
             | tr ' ' '\n' | sed '/^$/d' > /tmp/seeded-packages.txt || true
 
+          # Modules a trusted TLC receipt proves leave the TLC shards (#5164).
+          receipts=()
+          if [ "$TLC_RECEIPTS" = "true" ]; then
+            receipts=(
+              --tlc-cached-modules "$RUNNER_TEMP/tlc-plan/cached-modules.txt"
+              --tlc-census "$RUNNER_TEMP/tlc-plan/census.json"
+              --tlc-case-categories "$RUNNER_TEMP/tlc-plan/categories.json"
+            )
+          fi
+
           python3 .github/workflows/plan-test-matrix.py \
             --packages /tmp/selected-packages.txt \
             --seeded /tmp/seeded-packages.txt \
@@ -1571,6 +1700,7 @@ jobs:
             --skip-tiers "$SKIPPED_TIERS" \
             --skip-reason "$TIER_REASON" \
             --skip-tlc-reason "$SKIP_TLC_REASON" \
+            "${receipts[@]}" \
             --output-matrix /tmp/matrix.json \
             --report-file "$GITHUB_STEP_SUMMARY"
 
@@ -2230,6 +2360,15 @@ jobs:
       - name: Provision TLA+ toolchain
         uses: ./.github/actions/tla-toolchain
 
+      # The receipt plan (#5164): which modules this run verifies and at which
+      # fingerprint, so the leg can write partial receipts as items finish.
+      - name: Download the TLC receipt plan
+        if: needs.plan.outputs.tlc_receipts == 'on'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.plan.outputs.tlc_plan_artifact }}
+          path: ${{ runner.temp }}/tlc-plan
+
       - name: Run leg
         env:
           LEG: ${{ toJson(matrix.leg) }}
@@ -2249,6 +2388,28 @@ jobs:
             --leg /tmp/leg.json \
             --results-dir leg-results \
             --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # PARTIAL TLC RECEIPTS (#5164). `always()` so a leg that failed, or a run
+      # that was cancelled part-way, still keeps every TLC item that finished:
+      # run-test-leg.py writes each item's evidence the moment it completes, and
+      # a partial receipt is written only for a module all of whose cases in
+      # that item passed. The next run of the same scope assembles a module's
+      # receipt from one run's partials when they cover its whole census.
+      - name: Write partial TLC receipts
+        if: always() && needs.plan.outputs.tlc_receipts == 'on'
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/tlc-receipts.py partials \
+            --evidence-dir leg-results \
+            --plan-dir "$RUNNER_TEMP/tlc-plan" \
+            --receipts-dir "$RUNNER_TEMP/tlc-partials"
+
+      - name: Save partial TLC receipts
+        if: always() && needs.plan.outputs.tlc_receipts == 'on'
+        uses: ./.github/actions/tlc-receipts
+        with:
+          operation: save
+          receipts-dir: ${{ runner.temp }}/tlc-partials
 
       - name: Upload leg results
         if: always()
@@ -2575,6 +2736,39 @@ jobs:
             --expect-legs "${{ needs.plan.outputs.leg_count }}" \
             --summary-file "$GITHUB_STEP_SUMMARY"
 
+      # TLC VERDICT RECEIPTS (#5164). Every module is reported as ran, cached
+      # (naming the receipt's run), failed, or incomplete, and a receipt is
+      # written for exactly the modules whose every census case passed in this
+      # run. INCOMPLETE fails the check: a module that neither had a trusted
+      # receipt nor reported every case has an unknown verdict, which is what a
+      # receipt or routing defect would look like, so it must not read as green.
+      - name: Download the TLC receipt plan
+        if: ${{ !cancelled() && needs.plan.outputs.tlc_receipts == 'on' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.plan.outputs.tlc_plan_artifact }}
+          path: ${{ runner.temp }}/tlc-plan
+
+      - name: Assemble TLC verdict receipts
+        if: ${{ !cancelled() && needs.plan.outputs.tlc_receipts == 'on' }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/tlc-receipts.py assemble \
+            --fingerprints "$RUNNER_TEMP/tlc-plan/fingerprints.json" \
+            --census "$RUNNER_TEMP/tlc-plan/census.json" \
+            --receipt-plan "$RUNNER_TEMP/tlc-plan/receipt-plan.json" \
+            --evidence-dir leg-results \
+            --receipts-dir "$RUNNER_TEMP/tlc-receipts" \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            --require-complete
+
+      - name: Save TLC verdict receipts
+        if: always() && needs.plan.outputs.tlc_receipts == 'on'
+        uses: ./.github/actions/tlc-receipts
+        with:
+          operation: save
+          receipts-dir: ${{ runner.temp }}/tlc-receipts
+
       # The verdict. Every upstream job must have either succeeded or been
       # deliberately skipped; anything else fails the required check.
       #
@@ -2635,7 +2829,9 @@ jobs:
           # Tiered gating (tier-scope.py) may skip Coyote/chaos only on a member
           # pull request. Exhaustive TLC may be skipped on a member or `main`
           # pull request only when no TLC input changed; the base-model smoke
-          # shard is never skipped. Release lines and pushes remain exhaustive.
+          # shard is never skipped. Release lines and pushes remain exhaustive
+          # (an integration-branch push saves only through verdict receipts,
+          # which exist only for fingerprints that actually passed).
           case "$EVENT:$BASE_REF" in
             pull_request:main|pull_request:release/*) tiers_may_skip=false; tlc_may_skip=true ;;
             pull_request:*/epic/*) tiers_may_skip=true; tlc_may_skip=true ;;

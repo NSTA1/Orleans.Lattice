@@ -17,12 +17,24 @@ behaviour under test:
 
 Every other run keeps all test tiers. Exhaustive TLC is separately scoped:
 
-- a pull request into `main` skips exhaustive TLC only when its diff contains
-  no TLC input; its base-model smoke shard still runs;
-- a pull request into a `release/**` line, the integration-branch push lane,
-  and nightly coverage keep exhaustive TLC;
+- a pull request into `main` or an integration branch skips exhaustive TLC only
+  when its diff contains no TLC verdict input; its base-model smoke shard still
+  runs;
+- an integration-branch push always plans exhaustive TLC, with receipts on. It
+  never skips by its own diff: that would assume the previous push's run passed
+  exhaustive TLC, which nothing checks (it may have failed, or been cancelled by
+  this push's concurrency group). Receipts give the saving safely instead,
+  because only a fingerprint that actually passed has one;
+- a pull request into a `release/**` line, a release-line push and nightly
+  coverage keep exhaustive TLC;
 - any event or base this script does not recognise. The failure direction is
   deliberately "run more", never "run less".
+
+When exhaustive TLC does run, per-module verdict receipts (tlc-receipts.py,
+contract C5, #5164) decide which modules actually run: a module whose
+fingerprint has a trusted receipt is verified by that receipt instead. Release
+lines never use receipts (`tlc_receipts=off`), and neither does a
+`workflow_dispatch` run whose `tlc_receipts` input is `off`.
 
 WHY THE SKIPPED TIERS STILL RUN SOMEWHERE
 -----------------------------------------
@@ -37,10 +49,11 @@ member's changes beside it. That is the accepted cost of this rule.
 EXHAUSTIVE TLC RUNS WHEN ITS INPUTS CHANGE
 -------------------------------
 The `Tlc` category is also exploration-dominated - TLC model-checks every
-specification module and a mutant of each definition, about 40 runner-minutes
-per run - and it is deterministic: the same specification, harness and toolchain
-yield the same verdict every run. A pull request into `main` or an integration
-branch runs the exhaustive TLC shards (test-shards.json `"tlc": true`) exactly
+specification module and a mutant of each definition, and a full exhaustive run
+costs about 460-550 runner-minutes - and it is deterministic: the same
+specification, harness and toolchain yield the same verdict every run. A pull
+request into `main` or an integration branch runs the exhaustive TLC shards
+(test-shards.json `"tlc": true`) exactly
 when its diff touches a TLC verdict input, and skips them otherwise. Every file
 that can affect a TLC run is classified in one file, `tlc-inputs.json` beside
 this script, into three classes (`TlcInputClassificationTests` pins it):
@@ -62,9 +75,10 @@ A change that touches no verdict input cannot alter any TLC verdict, so the
 skip loses nothing - not even attribution, because a specification change is
 precisely a TLC input and still runs TLC on the pull request that wrote it. The
 separate `"tlcSmoke": true` base-model shard still runs on every routine CI pull
-request. Release-line pull requests, pushes, nightly coverage, and any unknown
-event keep the exhaustive shards. A missing or empty changed-file list runs TLC
-(fail towards "run more").
+request. Release-line pull requests and pushes, nightly coverage, and any
+unknown event keep the exhaustive shards, and so does every integration-branch
+push (with receipts). A missing or
+empty changed-file list runs TLC (fail towards "run more").
 
 LEG CAP
 -------
@@ -77,12 +91,13 @@ minutes of one member's makespan for runner slots the other members are
 waiting on.
 
 Usage:
-  tier-scope.py --event EVENT [--base-ref REF] [--changed-files FILE]
+  tier-scope.py --event EVENT [--base-ref REF] [--ref REF] [--changed-files FILE]
+                [--tlc-receipts on|off]
                 [--github-output FILE] [--summary-file FILE]
   tier-scope.py --self-test
 
 Prints `key=value` lines (scope, skipped_tiers, max_legs, reason,
-skip_tlc_reason) to stdout,
+skip_tlc_reason, tlc_receipts, tlc_receipts_reason) to stdout,
 and appends them to --github-output when given.
 """
 
@@ -152,7 +167,34 @@ def touches_tlc_input(changed: list[str] | None) -> bool:
     return any(is_tlc_input(path) for path in changed)
 
 
-def decide(event: str, base_ref: str, changed: list[str] | None = None) -> dict[str, str]:
+def decide(
+    event: str,
+    base_ref: str,
+    changed: list[str] | None = None,
+    ref: str = "",
+    receipts_input: str = "on",
+) -> dict[str, str]:
+    """The tier scope for one run, plus whether it reads TLC verdict receipts."""
+    decision = decide_tiers(event, base_ref, changed)
+
+    if decision["skip_tlc_reason"]:
+        receipts, why = "off", "exhaustive TLC does not run, so there is nothing to look up"
+    elif (event == "pull_request" and fnmatch.fnmatchcase(base_ref, "release/*")) or (
+            event == "push" and fnmatch.fnmatchcase(ref, "release/*")):
+        receipts, why = "off", "release lines never use receipts: every module runs"
+    elif receipts_input.strip().lower() == "off":
+        receipts, why = "off", "the run was dispatched with tlc_receipts=off: every module runs"
+    else:
+        receipts, why = "on", (
+            "a module whose fingerprint has a trusted receipt (own scope, base branch or main) "
+            "is verified by it and does not run"
+        )
+    decision["tlc_receipts"] = receipts
+    decision["tlc_receipts_reason"] = why
+    return decision
+
+
+def decide_tiers(event: str, base_ref: str, changed: list[str] | None = None) -> dict[str, str]:
     """The tier scope for one run. Anything unrecognised is fully gated."""
     full = {"scope": "full", "skipped_tiers": "", "max_legs": str(FULL_MAX_LEGS), "skip_tlc_reason": ""}
 
@@ -278,6 +320,31 @@ class TierScopeSelfTest(unittest.TestCase):
         self.assertFalse(self.skips("main", []))
         self.assertFalse(bool(decide("pull_request", "main", None)["skip_tlc_reason"]))
 
+    def test_an_integration_push_always_plans_exhaustive_tlc_with_receipts_on(self):
+        # Never skipped by the push's own diff: the previous push's run may have
+        # failed or been cancelled, so its verdict cannot be assumed (#5187 review).
+        decision = decide("push", "", [], self.MEMBER)
+        self.assertEqual(decision["skip_tlc_reason"], "")
+        self.assertEqual(decision["skipped_tiers"], "", "a push lane skips no test tier")
+        self.assertEqual(decision["tlc_receipts"], "on")
+
+    def test_a_release_line_push_never_skips_and_never_uses_receipts(self):
+        decision = decide("push", "", [], "release/1.4")
+        self.assertEqual(decision["skip_tlc_reason"], "")
+        self.assertEqual(decision["tlc_receipts"], "off")
+        self.assertEqual(decide("pull_request", "release/1.4", ["spec/a.tla"])["tlc_receipts"], "off")
+
+    def test_receipts_are_on_wherever_exhaustive_tlc_runs_unless_switched_off(self):
+        self.assertEqual(decide("pull_request", "main", ["spec/a.tla"])["tlc_receipts"], "on")
+        self.assertEqual(decide("pull_request", self.MEMBER, ["spec/a.tla"])["tlc_receipts"], "on")
+        self.assertEqual(decide("workflow_dispatch", "", None, "feat/x")["tlc_receipts"], "on")
+        self.assertEqual(decide("workflow_dispatch", "", None, "feat/x", "off")["tlc_receipts"], "off")
+        self.assertEqual(decide("pull_request", "main", ["src/a.cs"])["tlc_receipts"], "off")
+
+    def test_the_docstring_states_the_current_full_run_cost(self):
+        self.assertNotIn("40 runner-minutes", __doc__)
+        self.assertIn("460-550 runner-minutes", " ".join(__doc__.split()))
+
     def test_a_classification_that_cannot_be_read_fails_rather_than_skips(self):
         for body in ("{", '{"schema": 2, "verdictInputs": ["spec/**"], "routing": [], "neutral": []}',
                      '{"schema": 1, "verdictInputs": [], "routing": [], "neutral": []}',
@@ -300,6 +367,9 @@ def main() -> int:
         help="File listing the diff's changed paths, one per line. Absent, unreadable "
              "or empty means TLC is not skipped.",
     )
+    parser.add_argument("--ref", default="", help="The pushed ref name (github.ref_name).")
+    parser.add_argument("--tlc-receipts", default="on",
+                        help="'off' makes the run ignore TLC verdict receipts (workflow_dispatch input).")
     parser.add_argument("--github-output")
     parser.add_argument("--summary-file")
     args = parser.parse_args()
@@ -310,18 +380,21 @@ def main() -> int:
     if args.event is None:
         parser.error("--event is required")
 
-    changed: list[str] | None = None
-    if args.changed_files:
+    def read_list(path: str | None) -> list[str] | None:
+        if not path:
+            return None
         try:
-            with open(args.changed_files, encoding="utf-8") as handle:
-                changed = [line.strip() for line in handle if line.strip()]
+            with open(path, encoding="utf-8") as handle:
+                return [line.strip() for line in handle if line.strip()]
         except OSError:
-            changed = None
+            return None
 
-    decision = decide(args.event.strip(), args.base_ref.strip(), changed)
+    decision = decide(args.event.strip(), args.base_ref.strip(), read_list(args.changed_files),
+                      args.ref.strip(), args.tlc_receipts)
     lines = [
         f"{key}={decision[key]}"
-        for key in ("scope", "skipped_tiers", "max_legs", "reason", "skip_tlc_reason")
+        for key in ("scope", "skipped_tiers", "max_legs", "reason", "skip_tlc_reason",
+                    "tlc_receipts", "tlc_receipts_reason")
     ]
 
     for line in lines:
@@ -348,6 +421,9 @@ def main() -> int:
                 handle.write("### Exhaustive TLC shards skipped\n\n")
                 handle.write(f"Reason: {decision['skip_tlc_reason']}.\n\n")
                 handle.write("The base-model smoke shard still runs.\n\n")
+            else:
+                handle.write(f"### TLC verdict receipts: {decision['tlc_receipts']}\n\n")
+                handle.write(f"Reason: {decision['tlc_receipts_reason']}.\n\n")
 
     return 0
 

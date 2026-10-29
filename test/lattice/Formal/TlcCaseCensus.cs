@@ -31,6 +31,15 @@ internal static class TlcCaseCensus
     public const string EnvironmentVariable = "LATTICE_TLC_CENSUS";
 
     /// <summary>
+    /// The environment variable naming the file each census case's test
+    /// categories are written to, as
+    /// <c>{ "&lt;FullyQualifiedName&gt;": ["&lt;Category&gt;", ...] }</c>. The CI
+    /// matrix planner evaluates each TLC shard's filter over these to learn
+    /// which shards a module's cases fall in (TLC verdict receipts, #5164).
+    /// </summary>
+    public const string CategoriesEnvironmentVariable = "LATTICE_TLC_CASE_CATEGORIES";
+
+    /// <summary>
     /// Every TLC case, built by NUnit from the <c>[TestCaseSource]</c> of each
     /// gate that runs TLC, exactly as the test adapter discovers it.
     /// </summary>
@@ -126,6 +135,62 @@ internal static class TlcCaseCensus
             census.ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal),
             StringComparer.Ordinal);
         return JsonSerializer.Serialize(ordered, new JsonSerializerOptions { WriteIndented = true }) + "\n";
+    }
+
+    /// <summary>
+    /// Every census case's test categories, as the test adapter reports them:
+    /// the case's own categories plus those its fixture declares, ordinal-sorted
+    /// and distinct, keyed by fully qualified name in ordinal order.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> BuildCategories()
+    {
+        var categories = new SortedDictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        foreach (var test in Cases())
+        {
+            var fixture = test.TypeInfo?.Type;
+            var inherited = fixture is null
+                ? []
+                : fixture.GetCustomAttributes(typeof(CategoryAttribute), inherit: true)
+                    .Cast<CategoryAttribute>().Select(attribute => attribute.Name);
+            categories[test.FullName] = test.Properties[PropertyNames.Category].Cast<string>()
+                .Concat(inherited)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        return categories;
+    }
+
+    /// <summary>
+    /// Writes <see cref="BuildCategories"/> to the file
+    /// <see cref="CategoriesEnvironmentVariable"/> names, and returns that path;
+    /// returns <see langword="null"/> and writes nothing when the variable is
+    /// unset or blank.
+    /// </summary>
+    /// <exception cref="ArgumentException">The named path is not fully qualified.</exception>
+    public static string? ExportCategoriesIfRequested()
+    {
+        var path = Environment.GetEnvironmentVariable(CategoriesEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        if (!Path.IsPathFullyQualified(path))
+        {
+            throw new ArgumentException(
+                $"{CategoriesEnvironmentVariable} must name a fully qualified path; '{path}' is relative.", nameof(path));
+        }
+
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(path, Serialize(BuildCategories()));
+        return path;
     }
 
     /// <summary>Reads a census written by <see cref="Export"/>.</summary>
