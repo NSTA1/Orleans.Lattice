@@ -17,18 +17,8 @@ internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider
     private readonly ConcurrentDictionary<string, CompiledSchemaPolicy?> _cache = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The maximum number of per-tree entries retained. The cache key is a tree id
-    /// a caller supplies freely, and a tree with no policy still caches a null
-    /// sentinel, so an unbounded map let any caller able to name trees grow silo
-    /// memory without limit by writing to an unlimited stream of distinct tree ids
-    /// (CWE-770). The bound is safe because a miss simply reloads from the store,
-    /// so refusing an insert costs a round-trip and never changes the answer.
-    /// </summary>
-    internal const int MaxCachedTrees = 4096;
-
-    /// <summary>
     /// The number of per-tree entries currently cached. Exposed for unit testing
-    /// that the cache honours <see cref="MaxCachedTrees"/>.
+    /// that the cache honours <see cref="SchemaTreeCacheExtensions.MaxCachedTrees"/>.
     /// </summary>
     internal int CachedTreeCount => _cache.Count;
 
@@ -67,21 +57,15 @@ internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider
             return new ValueTask<CompiledSchemaPolicy?>(cached);
         }
 
-        return new ValueTask<CompiledSchemaPolicy?>(LoadAsync(treeId, cancellationToken));
+        return new ValueTask<CompiledSchemaPolicy?>(LoadAndCacheAsync(treeId, cancellationToken));
     }
 
-    private async Task<CompiledSchemaPolicy?> LoadAsync(string treeId, CancellationToken cancellationToken)
+    private async Task<CompiledSchemaPolicy?> LoadAndCacheAsync(string treeId, CancellationToken cancellationToken)
     {
         var policy = await _store.GetPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
         var compiled = policy is null ? null : CompiledSchemaPolicy.Compile(policy);
 
-        // Last write wins on a concurrent miss; compiling twice is harmless.
-        // Refreshing a key already present never grows the map, so it stays
-        // allowed at the cap; only a brand-new key is refused there.
-        if (_cache.Count < MaxCachedTrees || _cache.ContainsKey(treeId))
-        {
-            _cache[treeId] = compiled;
-        }
+        _cache.CacheIfSpaceAvailable(treeId, compiled);
 
         return compiled;
     }
@@ -96,15 +80,7 @@ internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider
     /// <inheritdoc />
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
-        // Only policy-tree writes are relevant; every other tree fast-paths out so
-        // the observer stays cheap on the general write path. The policy is keyed
-        // by governed tree id, so the mutation key is the tree to evict.
-        if (string.Equals(mutation.TreeId, SchemaConstants.PolicyTree, StringComparison.Ordinal)
-            && !string.IsNullOrEmpty(mutation.Key))
-        {
-            _cache.TryRemove(mutation.Key, out _);
-        }
-
+        _cache.InvalidateForMutation(mutation, SchemaConstants.PolicyTree);
         return Task.CompletedTask;
     }
 }
