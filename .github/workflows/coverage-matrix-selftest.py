@@ -238,6 +238,84 @@ class TlcMatrixTests(unittest.TestCase):
             self.assertEqual([], coverage.tlc_case_durations(Path(directory) / "missing"))
 
 
+# A synthetic census in the shape TlcCaseCensus and tlc-receipts.py write: two
+# modules whose cases carry the TlcShard* category of a real category-only TLC
+# shard, plus a module no TLC shard can select because its case is not a Tlc case.
+FORMAL = "Orleans.Lattice.Tests.Formal.TlcModelCheckTests"
+WARMER_CENSUS = {
+    "Convergence": [f"{FORMAL}.The_base_specification_holds(Convergence)"],
+    "Views": [f"{FORMAL}.The_base_specification_holds(Views)",
+              f"{FORMAL}.A_mutation_is_caught(Views, Drop)"],
+    "Stray": ["Elsewhere.Fixture.Case(Stray)"],
+}
+WARMER_CATEGORIES = {
+    f"{FORMAL}.The_base_specification_holds(Convergence)":
+        ["Tlc", "TlcShardConvergence", "TlcModule_Convergence"],
+    f"{FORMAL}.The_base_specification_holds(Views)":
+        ["Tlc", "TlcShardMaterialisedViews", "TlcModule_Views"],
+    f"{FORMAL}.A_mutation_is_caught(Views, Drop)":
+        ["Tlc", "TlcShardMaterialisedViews", "TlcModule_Views"],
+    "Elsewhere.Fixture.Case(Stray)": ["Other"],
+}
+
+
+class TlcReceiptWarmerPlanTests(unittest.TestCase):
+    """--tlc-modules: the receipt warmer's TLC legs (#5165)."""
+
+    def plan(self, modules: set[str]) -> list[dict]:
+        return coverage.plan_tlc(ROOT, modules=modules, census=WARMER_CENSUS, categories=WARMER_CATEGORIES)
+
+    def test_only_the_shards_selecting_the_named_modules_run_narrowed_to_them(self):
+        legs = self.plan({"Convergence"})
+        items = [item for leg in legs for item in leg["items"]]
+        self.assertEqual(["formal-tlc-convergence"], [item["shard"] for item in items])
+        self.assertEqual(["Convergence"], items[0]["tlc_modules"])
+        self.assertTrue(items[0]["filter"].endswith("&(TestCategory=TlcModule_Convergence)"), items[0]["filter"])
+        self.assertTrue(items[0]["tlc"])
+        self.assertEqual("tlc-1", legs[0]["id"])
+        self.assertEqual(coverage.tlc_timeout(legs[0]["estimate"]), legs[0]["timeout"])
+
+    def test_every_named_module_is_planned_and_the_smoke_case_is_not(self):
+        items = [item for leg in self.plan({"Convergence", "Views"}) for item in leg["items"]]
+        self.assertEqual(["formal-tlc-convergence", "formal-tlc-materialised-views"],
+                         sorted(item["shard"] for item in items))
+        self.assertNotIn("formal-tlc-smoke", [item["shard"] for item in items])
+
+    def test_no_module_without_a_receipt_plans_no_leg(self):
+        self.assertEqual([], self.plan(set()))
+
+    def test_a_module_no_shard_selects_or_the_census_lacks_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "No TLC shard selects a census case of: Stray"):
+            self.plan({"Stray"})
+        with self.assertRaisesRegex(ValueError, "Not census modules: Nope"):
+            self.plan({"Nope"})
+
+    def test_cli_plans_tlc_legs_only_and_refuses_a_coverage_matrix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            (out / "census.json").write_text(json.dumps(WARMER_CENSUS), encoding="utf-8")
+            (out / "categories.json").write_text(json.dumps(WARMER_CATEGORIES), encoding="utf-8")
+            planner = str(WORKFLOWS / "plan-coverage-matrix.py")
+            common = ["--tlc-census", str(out / "census.json"),
+                      "--tlc-case-categories", str(out / "categories.json")]
+            for modules, expected in (("Views\n", 1), ("", 0)):
+                with self.subTest(modules=modules):
+                    (out / "modules.txt").write_text(modules, encoding="utf-8")
+                    result = subprocess.run(
+                        [sys.executable, planner, "--tlc-modules", str(out / "modules.txt"),
+                         "--output-tlc-matrix", str(out / "t.json"), *common],
+                        text=True, capture_output=True, timeout=60,
+                    )
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertEqual(expected, len(json.loads((out / "t.json").read_text())))
+            result = subprocess.run(
+                [sys.executable, planner, "--tlc-modules", str(out / "modules.txt"),
+                 "--output-tlc-matrix", str(out / "t.json"), "--output-matrix", str(out / "c.json"), *common],
+                text=True, capture_output=True, timeout=60,
+            )
+            self.assertNotEqual(0, result.returncode)
+
+
 class BrowserInstallTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

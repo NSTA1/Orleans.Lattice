@@ -1,0 +1,287 @@
+name: Formal receipts
+
+# Keeps main's TLC verdict receipts warm (#5165, epic #5148).
+#
+# A receipt (contract C5) records that every census case of one spec module
+# passed against one fingerprint (contract C4). A pull request reruns only the
+# modules it has no trusted receipt for. An Actions cache written by a pull
+# request is visible only to that pull request, and ci.yml does not run on
+# pushes to main, so without a writer in main's scope every pull request opened
+# after a spec merge would rerun the merged module until something on main
+# saved its receipt. This workflow is that writer:
+#
+# - It fingerprints every module at the pushed commit and lists the receipts
+#   main's scope already holds. When every module has one - every push that
+#   touched no verdict input - it stops there, before building anything.
+# - Otherwise it restores and validates them (tlc-receipts.py plan), and runs
+#   TLC for the modules without one, fanned out over the TLC shards and narrowed
+#   to those modules (plan-coverage-matrix.py --tlc-modules). Normally that is
+#   the module that just merged; after a harness or toolchain change it is every
+#   module.
+# - It writes and saves a receipt for every module whose every census case
+#   passed in this run (tlc-receipts.py assemble). A module with a failed or
+#   missing case gets none.
+#
+# It gates nothing. A red run here is a spec that fails on main, which the
+# nightly Coverage TLC legs, the other main-scope writer, also report through
+# their tracking issue. Those legs save a receipt for every module they verify
+# and never read one; this lane reads only main's own receipts.
+#
+# Concurrency: queue, never cancel. Cancelling a run part way loses the
+# receipts it was about to save, and a cancelled run rolls up as a red cross on
+# its main commit. `queue: max` keeps every pending run in FIFO order instead of
+# letting a newer push replace, and so cancel, the one pending before it.
+# Queued runs are cheap: a run behind one that verified the same modules finds
+# their receipts and builds nothing.
+#
+# Trust: only workflows running on main write main-scope caches, and the
+# listing reads main's scope alone (plus the dispatched ref, for a branch
+# validation run), so a pull request can never plant a receipt this lane
+# believes. CiFormalReceiptsLaneTests holds this shape in place.
+on:
+  push:
+    branches: [main]
+  # Re-warms main after cache eviction, or validates a change to this lane.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # tlc-receipts.py candidates lists the receipt cache entries.
+  actions: read
+
+concurrency:
+  group: formal-receipts-${{ github.ref }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Which modules lack a receipt, and the TLC legs that cover exactly those.
+  # ---------------------------------------------------------------------------
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      legs: ${{ steps.matrix.outputs.legs }}
+      leg_count: ${{ steps.matrix.outputs.leg_count || '0' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fingerprint every TLC module
+        run: python3 .github/workflows/tlc-fingerprint.py --output "$RUNNER_TEMP/tlc-fingerprints.json"
+
+      - name: List main's TLC verdict receipts
+        id: listing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          refs="refs/heads/${DEFAULT_BRANCH}"
+          if [ "$GITHUB_REF" != "$refs" ]; then
+            refs="${refs},${GITHUB_REF}"
+          fi
+          echo "refs=${refs}" >> "$GITHUB_OUTPUT"
+          python3 .github/workflows/tlc-receipts.py candidates \
+            --fingerprints "$RUNNER_TEMP/tlc-fingerprints.json" \
+            --refs "$refs" \
+            --repo "$GITHUB_REPOSITORY" \
+            --output-manifest "$RUNNER_TEMP/tlc-restore.json"
+          # Every module already holds a full receipt at its current
+          # fingerprint: nothing to verify, so nothing is built.
+          missing="$(python3 - "$RUNNER_TEMP/tlc-fingerprints.json" "$RUNNER_TEMP/tlc-restore.json" <<'PY'
+          import importlib.util, json, sys
+          spec = importlib.util.spec_from_file_location("tlc_receipts", ".github/workflows/tlc-receipts.py")
+          receipts = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(receipts)
+          fingerprints = receipts.load_fingerprints(sys.argv[1])
+          listed = {entry["key"] for entry in json.load(open(sys.argv[2], encoding="utf-8"))}
+          print(sum(receipts.receipt_key(module, fingerprint) not in listed
+                    for module, fingerprint in fingerprints.items()))
+          PY
+          )"
+          echo "missing=${missing}" >> "$GITHUB_OUTPUT"
+          if [ "$missing" = 0 ]; then
+            echo "### TLC verdict receipts: every module holds a receipt on main; no TLC runs" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Setup .NET
+        if: steps.listing.outputs.missing != '0'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      # The census (contract C2) and each case's categories, which say which
+      # TLC shard selects which module's cases. Toolchain-free; the same
+      # command ci.yml's plan job runs.
+      - name: Take the TLC case census
+        if: steps.listing.outputs.missing != '0'
+        run: |
+          set -euo pipefail
+          dotnet build test/lattice/Orleans.Lattice.Tests.csproj --configuration Release --nologo
+          LATTICE_TLC_CENSUS="$RUNNER_TEMP/tlc-census.json" \
+          LATTICE_TLC_CASE_CATEGORIES="$RUNNER_TEMP/tlc-case-categories.json" \
+            dotnet test test/lattice/Orleans.Lattice.Tests.csproj --no-build --configuration Release --nologo \
+              --filter "FullyQualifiedName=Orleans.Lattice.Tests.Formal.TlcCaseCensusTests.The_census_is_written_to_the_file_LATTICE_TLC_CENSUS_names"
+          for file in tlc-census.json tlc-case-categories.json; do
+            if [ ! -s "$RUNNER_TEMP/$file" ]; then
+              echo "::error::The TLC receipt plan needs $file and it was not written."
+              exit 1
+            fi
+          done
+
+      # Restores main's receipts and validates each against the census
+      # (tlc-receipts.py plan), through the action ci.yml uses.
+      - name: Look up main's TLC verdict receipts
+        if: steps.listing.outputs.missing != '0'
+        uses: ./.github/actions/tlc-receipts
+        with:
+          operation: lookup
+          fingerprints: ${{ runner.temp }}/tlc-fingerprints.json
+          census: ${{ runner.temp }}/tlc-census.json
+          case-categories: ${{ runner.temp }}/tlc-case-categories.json
+          refs: ${{ steps.listing.outputs.refs }}
+          output-dir: tlc-plan
+
+      - name: Plan TLC for the modules without a receipt
+        id: matrix
+        if: steps.listing.outputs.missing != '0'
+        run: |
+          set -euo pipefail
+          jq -r '.modules | to_entries[] | select(.value.status == "run") | .key' \
+            tlc-plan/receipt-plan.json > tlc-plan/run-modules.txt
+          python3 .github/workflows/plan-coverage-matrix.py \
+            --tlc-modules tlc-plan/run-modules.txt \
+            --tlc-census tlc-plan/census.json \
+            --tlc-case-categories tlc-plan/categories.json \
+            --output-tlc-matrix "$RUNNER_TEMP/tlc-matrix.json"
+          {
+            echo "legs<<MATRIX_EOF"
+            cat "$RUNNER_TEMP/tlc-matrix.json"
+            echo ""
+            echo "MATRIX_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "leg_count=$(jq length "$RUNNER_TEMP/tlc-matrix.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the receipt plan
+        if: steps.matrix.outputs.leg_count != '' && steps.matrix.outputs.leg_count != '0'
+        uses: actions/upload-artifact@v6
+        with:
+          name: tlc-plan-${{ github.run_attempt }}
+          path: tlc-plan/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # TLC for the modules without a receipt. Uninstrumented, bounded by the
+  # planner's per-leg timeout, and never reading a receipt itself.
+  # ---------------------------------------------------------------------------
+  tlc:
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.leg_count != '0' }}
+    name: TLC / ${{ matrix.leg.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.leg.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJson(needs.plan.outputs.legs) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build the TLC test project
+        run: dotnet build test/lattice/Orleans.Lattice.Tests.csproj --configuration Release
+
+      - name: Provision TLA+ toolchain
+        uses: ./.github/actions/tla-toolchain
+
+      - name: Run TLC leg
+        env:
+          LEG: ${{ toJson(matrix.leg) }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$LEG" > /tmp/leg.json
+          python3 .github/workflows/run-test-leg.py \
+            --leg /tmp/leg.json \
+            --results-dir tlc-results \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      # Leg results carry the per-item TLC evidence the receipts are written from.
+      - name: Upload TLC leg results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tlc-results-${{ github.run_attempt }}-${{ matrix.leg.id }}
+          path: tlc-results/
+          retention-days: 7
+
+      - name: Upload TLC trx
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: tlc-trx-${{ github.run_attempt }}-${{ matrix.leg.id }}
+          path: '**/TestResults/*.trx'
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Write and save a receipt for every module whose every census case passed in
+  # this run, then judge the legs. Runs after a partly red run too: the modules
+  # that passed keep their receipts.
+  # ---------------------------------------------------------------------------
+  receipts:
+    needs: [plan, tlc]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.leg_count != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download the receipt plan
+        uses: actions/download-artifact@v8
+        with:
+          name: tlc-plan-${{ github.run_attempt }}
+          path: tlc-plan
+
+      # This attempt only: a receipt must come from one run's evidence.
+      - name: Download TLC leg results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tlc-results-${{ github.run_attempt }}-*
+          path: tlc-results
+          merge-multiple: false
+
+      - name: Write TLC verdict receipts
+        id: assemble
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/tlc-receipts.py assemble \
+            --fingerprints tlc-plan/fingerprints.json \
+            --census tlc-plan/census.json \
+            --evidence-dir tlc-results \
+            --receipt-plan tlc-plan/receipt-plan.json \
+            --receipts-dir "$RUNNER_TEMP/tlc-receipts" \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            --require-complete
+
+      - name: Save TLC verdict receipts in main's scope
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/tlc-receipts
+        with:
+          operation: save
+          receipts-dir: ${{ runner.temp }}/tlc-receipts
+
+      - name: Judge the TLC legs
+        if: ${{ !cancelled() }}
+        env:
+          TLC_LEGS: ${{ needs.plan.outputs.legs }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/summarise-test-legs.py \
+            --results-dir tlc-results \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
+            --expect-legs "$(jq length <<< "$TLC_LEGS")"

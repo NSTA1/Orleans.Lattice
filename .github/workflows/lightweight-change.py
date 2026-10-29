@@ -10,10 +10,12 @@ import unittest
 # Workflow files whose change is pinned by .NET tests (TlcCiShardTests,
 # CiMemberPullRequestTieringTests, TlcInputClassificationTests): they route TLC
 # cases or classify TLC verdict inputs, so the lightweight lane, which runs no
-# .NET test, cannot validate them (#5149).
+# .NET test, cannot validate them (#5149). formal-receipts.yml decides which
+# modules TLC runs on main and is pinned by CiFormalReceiptsLaneTests (#5165).
 TLC_ROUTING_FILES = frozenset(
     ".github/workflows/" + name
     for name in (
+        "formal-receipts.yml",
         "plan-test-matrix.py",
         "run-test-leg.py",
         "test-shards.json",

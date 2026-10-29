@@ -13,7 +13,13 @@ run-test-leg.py, which bounds a declared TLC-only item by the enclosing job's
 timeout rather than VSTest's inactivity collector (#5012), so each TLC leg
 carries a timeout sized from its measured estimate. They never read a TLC
 verdict receipt: the nightly run is the backstop for drift no fingerprint can
-see (JDK patch level, runner image), so every case runs every night.
+see (JDK patch level, runner image), so every case runs every night. They do
+WRITE receipts (coverage.yml's tlc-report job, through tlc-receipts.py), so
+every module the night verifies on main is skipped by later pull requests.
+
+`--tlc-modules FILE` plans TLC legs for only the named census modules, for the
+receipt warmer (formal-receipts.yml, #5165), which runs on main only the
+modules without a receipt. It is never used by the nightly lane.
 
 `--tlc-case-durations DIR` is the lane's second helper: it reads the TLC legs'
 trx files and writes one row per case with its outcome and duration, so TLC
@@ -118,8 +124,60 @@ def tlc_timeout(estimate: float) -> int:
     return minutes
 
 
-def plan_tlc(root: Path, max_legs: int = TLC_MAX_LEGS, only: list[str] | None = None) -> list[dict]:
-    """Plan the exhaustive TLC legs: every "tlc" and "tlcSmoke" shard, or only the named ones."""
+def narrow_tlc_to_modules(
+    items: list[dict],
+    modules: set[str],
+    census: dict[str, list[str]],
+    categories: dict[str, list[str]],
+) -> list[dict]:
+    """Keep the TLC items that select a census case of one of `modules`, each
+    narrowed to those modules' `TlcModule_` categories (#5165).
+
+    Which census cases an item selects is decided by tlc-receipts.py's filter
+    evaluator, the one ci.yml's planner and the receipt writer also use (#5164),
+    so the three cannot disagree. An item that selects no such case is dropped
+    rather than run empty: the receipt warmer verifies modules, and a TLC test
+    outside the census (the smoke case, the synthetic module) earns no receipt.
+    Every module must be selected by some item, or the plan would claim to
+    verify a module that no leg runs.
+    """
+    tools = ci.load_receipt_tools()
+    kept = []
+    covered: set[str] = set()
+    for item in items:
+        selected = tools.selected_cases(item["filter"], census, categories)
+        here = sorted(module for module in selected if module in modules)
+        if not here:
+            continue
+        total = sum(len(names) for names in selected.values())
+        share = sum(len(selected[module]) for module in here) / total
+        clause = "|".join(f"TestCategory=TlcModule_{module}" for module in here)
+        item["filter"] = f"({item['filter']})&({clause})"
+        item["estimate"] = round(
+            ci.PER_ITEM_OVERHEAD + max(item["estimate"] - ci.PER_ITEM_OVERHEAD, 0.0) * share, 3)
+        item["tlc_modules"] = here
+        covered.update(here)
+        kept.append(item)
+    unplanned = sorted(modules - covered)
+    if unplanned:
+        raise ValueError("No TLC shard selects a census case of: " + ", ".join(unplanned))
+    return kept
+
+
+def plan_tlc(
+    root: Path,
+    max_legs: int = TLC_MAX_LEGS,
+    only: list[str] | None = None,
+    modules: set[str] | None = None,
+    census: dict[str, list[str]] | None = None,
+    categories: dict[str, list[str]] | None = None,
+) -> list[dict]:
+    """Plan the exhaustive TLC legs: every "tlc" and "tlcSmoke" shard, or only the named ones.
+
+    With `modules` (and the census and case categories that say which cases
+    each shard selects), only those modules' cases run; an empty set plans no
+    leg at all. The nightly lane never passes it: it runs every case.
+    """
     projects = discover_projects(root)
     if TLC_PACKAGE not in projects:
         raise ValueError(f"No test project for {TLC_PACKAGE}, which owns the TLC shards")
@@ -157,6 +215,15 @@ def plan_tlc(root: Path, max_legs: int = TLC_MAX_LEGS, only: list[str] | None = 
     planned = {item["shard"] for item in items}
     if planned != selected:
         raise ValueError("TLC shards with no runnable item: " + ", ".join(sorted(selected - planned)))
+    if modules is not None:
+        if census is None or categories is None:
+            raise ValueError("Restricting TLC to modules needs the census and the case categories")
+        unknown = sorted(modules - set(census))
+        if unknown:
+            raise ValueError("Not census modules: " + ", ".join(unknown))
+        items = narrow_tlc_to_modules(items, modules, census, categories)
+        if not items:
+            return []
     legs = ci.pack(items, max_legs)
     for index, leg in enumerate(legs, start=1):
         leg["id"] = f"tlc-{index}"
@@ -202,6 +269,16 @@ def main() -> None:
     parser.add_argument("--tlc-case-durations", type=Path, metavar="DIR",
                         help="Read trx files under DIR and write per-case TLC durations.")
     parser.add_argument("--output", type=Path, help="Output file for --tlc-case-durations.")
+    parser.add_argument(
+        "--tlc-modules", type=Path, metavar="FILE",
+        help="Plan ONLY the TLC legs that run these census modules (one per line; an empty "
+             "file plans no leg), and no coverage matrix. The receipt warmer (#5165) uses it; "
+             "the nightly lane never does. Requires --output-tlc-matrix, --tlc-census and "
+             "--tlc-case-categories.",
+    )
+    parser.add_argument("--tlc-census", type=Path, help="The TLC case census (contract C2).")
+    parser.add_argument("--tlc-case-categories", type=Path,
+                        help="Each census case's test categories (tlc-receipts.py, #5164).")
     args = parser.parse_args()
 
     if args.tlc_case_durations is not None:
@@ -215,10 +292,29 @@ def main() -> None:
         print(f"Wrote {len(rows)} TLC case duration(s) to {args.output}.")
         return
 
-    if args.output_matrix is None:
-        parser.error("--output-matrix is required to plan")
     if args.max_legs < 1 or args.max_tlc_legs < 1:
         parser.error("--max-legs and --max-tlc-legs must be positive")
+
+    if args.tlc_modules is not None:
+        if args.output_tlc_matrix is None or args.tlc_census is None or args.tlc_case_categories is None:
+            parser.error("--tlc-modules requires --output-tlc-matrix, --tlc-census and --tlc-case-categories")
+        if args.output_matrix is not None or args.tlc_shards:
+            parser.error("--tlc-modules plans TLC legs only; drop --output-matrix and --tlc-shards")
+        tools = ci.load_receipt_tools()
+        modules = {
+            line.strip() for line in args.tlc_modules.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        tlc_legs = plan_tlc(
+            args.root, args.max_tlc_legs, None, modules,
+            tools.load_census(args.tlc_census), tools.load_categories(args.tlc_case_categories),
+        )
+        args.output_tlc_matrix.write_text(json.dumps(tlc_legs, separators=(",", ":")), encoding="utf-8")
+        print(f"Planned {len(tlc_legs)} TLC legs for {len(modules)} module(s) without a receipt.")
+        return
+
+    if args.output_matrix is None:
+        parser.error("--output-matrix is required to plan")
     only = [name.strip() for name in args.tlc_shards.split(",") if name.strip()]
     if only and args.output_tlc_matrix is None:
         parser.error("--tlc-shards requires --output-tlc-matrix")
