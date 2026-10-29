@@ -783,3 +783,4 @@ SagaCompletes == sg \in {"exec", "decided"} ~> sg = "done"
 RoutingConverges == <>[](\A k \in Keys : Serves(CurrentPair, k))
 
 =============================================================================
+\* Probe for #5166 acceptance criteria 2 and 5 (draft PR, never merged).
