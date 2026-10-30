@@ -18,6 +18,9 @@ public sealed class RepoTreeWalkerPruningTests
 
     private string _root = null!;
 
+    /// <summary>The <see cref="RepoWalkPruning.WalkStartTicks"/> of the last <see cref="Prime"/> walk.</summary>
+    private long _primedWalkStart;
+
     [SetUp]
     public void SetUp()
     {
@@ -72,6 +75,7 @@ public sealed class RepoTreeWalkerPruningTests
         PinDirectoryMtimes(_root);
         var priming = new RepoWalkPruning { ForceFull = true };
         var cold = RepoTreeWalker.Walk(_root, null, null, pruning: priming);
+        _primedWalkStart = priming.WalkStartTicks;
         var anchorTicks = (anchor ?? DateTime.UtcNow.AddYears(1)).Ticks;
         var known = cold.ToDictionary(
             e => e.RelativePath,
@@ -88,7 +92,7 @@ public sealed class RepoTreeWalkerPruningTests
         Write("a/b/y.cs", "y");
         var (previous, known) = Prime();
 
-        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        var pruning = new RepoWalkPruning { PreviousWalkStartTicks = _primedWalkStart, PreviousDirectoryMtimes = previous };
         var entries = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning)
             .ToDictionary(e => e.RelativePath, e => e.Digest, StringComparer.Ordinal);
 
@@ -118,7 +122,7 @@ public sealed class RepoTreeWalkerPruningTests
         // Now the rules exclude it. src/app is unchanged, so the walk prunes it and
         // re-derives its subdirectories from the snapshot - which still names bin.
         Write(".gitignore", "bin/\n");
-        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        var pruning = new RepoWalkPruning { PreviousWalkStartTicks = _primedWalkStart, PreviousDirectoryMtimes = previous };
         var entries = RepoTreeWalker.Walk(
                 _root, null, null, respectGitignore: true, knownFiles: known, pruning: pruning)
             .Select(e => e.RelativePath)
@@ -145,7 +149,7 @@ public sealed class RepoTreeWalkerPruningTests
         // and read the file rather than pruning it.
         var (previous, known) = Prime(anchor: DateTime.UtcNow.AddYears(-1));
 
-        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous, ForceFull = true };
+        var pruning = new RepoWalkPruning { PreviousWalkStartTicks = _primedWalkStart, PreviousDirectoryMtimes = previous, ForceFull = true };
         var entry = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning)
             .Single();
 
@@ -198,7 +202,7 @@ public sealed class RepoTreeWalkerPruningTests
         // deterministic regardless of the test filesystem's timestamp resolution.
         Directory.SetLastWriteTimeUtc(Path.Combine(_root, "c"), DateTime.UtcNow.AddMinutes(1));
 
-        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        var pruning = new RepoWalkPruning { PreviousWalkStartTicks = _primedWalkStart, PreviousDirectoryMtimes = previous };
         var entries = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning)
             .ToDictionary(e => e.RelativePath, e => e.Digest, StringComparer.Ordinal);
 
@@ -226,7 +230,7 @@ public sealed class RepoTreeWalkerPruningTests
         // deterministic regardless of the test filesystem's timestamp resolution.
         Directory.SetLastWriteTimeUtc(Path.Combine(_root, "a", "b"), DateTime.UtcNow.AddMinutes(1));
 
-        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        var pruning = new RepoWalkPruning { PreviousWalkStartTicks = _primedWalkStart, PreviousDirectoryMtimes = previous };
         var entries = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning)
             .ToDictionary(e => e.RelativePath, e => e.Digest, StringComparer.Ordinal);
 
@@ -241,13 +245,81 @@ public sealed class RepoTreeWalkerPruningTests
     }
 
     [Test]
+    public void Walk_re_walks_a_directory_modified_in_the_tick_the_previous_walk_read_it()
+    {
+        // Issue #5268. A directory whose timestamp lands in the same tick in which the
+        // previous walk read it is racily clean: an entry added afterwards, inside that
+        // tick, leaves its modification time unchanged. Simulated deterministically by
+        // stamping the directories "now", priming, adding a file, and restoring the
+        // stamp - exactly what a coarse filesystem clock does on its own.
+        Write("a/x.cs", "x");
+        var racyStamp = DateTime.UtcNow;
+        Directory.SetLastWriteTimeUtc(_root, racyStamp);
+        Directory.SetLastWriteTimeUtc(Path.Combine(_root, "a"), racyStamp);
+        var priming = new RepoWalkPruning { ForceFull = true };
+        var cold = RepoTreeWalker.Walk(_root, null, null, pruning: priming);
+        var known = cold.ToDictionary(
+            e => e.RelativePath,
+            e => new StoredFileMeta(Sentinel, e.Language, e.SizeBytes, DateTime.UtcNow.AddYears(1).Ticks, []),
+            StringComparer.Ordinal);
+
+        Write("a/new.cs", "new");
+        Directory.SetLastWriteTimeUtc(Path.Combine(_root, "a"), racyStamp);
+
+        var pruning = new RepoWalkPruning
+        {
+            PreviousWalkStartTicks = priming.WalkStartTicks,
+            PreviousDirectoryMtimes = priming.CurrentDirectoryMtimes,
+        };
+        var entries = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning)
+            .Select(e => e.RelativePath)
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                priming.CurrentDirectoryMtimes["a"],
+                Is.EqualTo(pruning.CurrentDirectoryMtimes["a"]),
+                "precondition: the directory's modification time is unchanged between the walks");
+            Assert.That(entries, Does.Contain("a/new.cs"),
+                "a directory stamped inside the previous walk's racy window must be walked, not pruned");
+            Assert.That(pruning.PrunedDirectoryCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void Walk_prunes_nothing_when_the_previous_walk_start_is_unknown()
+    {
+        Write("a/x.cs", "x");
+        var (previous, known) = Prime();
+
+        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning);
+
+        Assert.That(pruning.PrunedDirectoryCount, Is.Zero,
+            "without the previous walk's start no unchanged time can be shown safe to trust");
+    }
+
+    [Test]
+    public void Walk_records_the_time_it_started()
+    {
+        Write("a/x.cs", "x");
+        var before = DateTime.UtcNow.Ticks;
+        var pruning = new RepoWalkPruning { ForceFull = true };
+
+        RepoTreeWalker.Walk(_root, null, null, pruning: pruning);
+
+        Assert.That(pruning.WalkStartTicks, Is.InRange(before, DateTime.UtcNow.Ticks));
+    }
+
+    [Test]
     public void Walk_records_a_modification_time_for_every_directory_it_visits()
     {
         Write("a/x.cs", "x");
         Write("a/b/y.cs", "y");
         var (previous, known) = Prime();
 
-        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        var pruning = new RepoWalkPruning { PreviousWalkStartTicks = _primedWalkStart, PreviousDirectoryMtimes = previous };
         RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning);
 
         // Every directory - root, a, a/b - is recorded whether pruned or walked, so the
@@ -271,7 +343,7 @@ public sealed class RepoTreeWalkerPruningTests
         {
             ["a/x.cs"] = new StoredFileMeta(Sentinel, "csharp", 1, 0, []),
         };
-        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = priming.CurrentDirectoryMtimes };
+        var pruning = new RepoWalkPruning { PreviousWalkStartTicks = priming.WalkStartTicks, PreviousDirectoryMtimes = priming.CurrentDirectoryMtimes };
         var entry = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning)
             .Single();
 
@@ -301,7 +373,7 @@ public sealed class RepoTreeWalkerPruningTests
 
         var (previous, known) = Prime();
 
-        var pruning = new RepoWalkPruning { PreviousDirectoryMtimes = previous };
+        var pruning = new RepoWalkPruning { PreviousWalkStartTicks = _primedWalkStart, PreviousDirectoryMtimes = previous };
         var entries = RepoTreeWalker.Walk(_root, null, null, knownFiles: known, pruning: pruning);
 
         Assert.Multiple(() =>
