@@ -1023,7 +1023,7 @@ internal sealed class FileWalShard : IDisposable
         if (fileLength > 0)
         {
             stream.Seek(0, SeekOrigin.Begin);
-            using var reader = new BinaryReaderState(stream, fileLength);
+            var reader = new RecoveryRecordScanner(stream, fileLength);
             while (reader.TryReadRecord(out var record))
             {
                 switch (record.Type)
@@ -1155,7 +1155,6 @@ internal sealed class FileWalShard : IDisposable
 
     private void WriteBatch(IReadOnlyList<PreparedWalRecord> records)
     {
-        var stream = _stream!;
         var total = FileWalRecordFormat.CommitRecordLength;
         for (var i = 0; i < records.Count; i++)
         {
@@ -1179,19 +1178,7 @@ internal sealed class FileWalShard : IDisposable
 
             cursor += FileWalRecordFormat.WriteCommitRecord(buffer.AsSpan(cursor), records.Count);
 
-            stream.Seek(_writePosition, SeekOrigin.Begin);
-            try
-            {
-                stream.Write(buffer, 0, cursor);
-                stream.Flush(_options.FlushToDisk);
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            {
-                RollBackUnacknowledgedTail(failure);
-                throw;
-            }
-
-            _writePosition += cursor;
+            AppendAndFlushLog(buffer.AsSpan(0, cursor));
         }
         finally
         {
@@ -1208,13 +1195,20 @@ internal sealed class FileWalShard : IDisposable
 
     private void AppendTrimMarker(long throughOffsetInclusive)
     {
-        var stream = _stream!;
         Span<byte> buffer = stackalloc byte[FileWalRecordFormat.TrimRecordLength];
         var written = FileWalRecordFormat.WriteTrimRecord(buffer, throughOffsetInclusive);
+        AppendAndFlushLog(buffer[..written]);
+    }
+
+    // Called with the shard gate held. Publish the new durable boundary only
+    // after flushing; a failed write or flush rolls back to the old boundary.
+    private void AppendAndFlushLog(ReadOnlySpan<byte> buffer)
+    {
+        var stream = _stream!;
         stream.Seek(_writePosition, SeekOrigin.Begin);
         try
         {
-            stream.Write(buffer[..written]);
+            stream.Write(buffer);
             stream.Flush(_options.FlushToDisk);
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
@@ -1223,7 +1217,7 @@ internal sealed class FileWalShard : IDisposable
             throw;
         }
 
-        _writePosition += written;
+        _writePosition += buffer.Length;
     }
 
     /// <summary>
@@ -1514,13 +1508,13 @@ internal sealed class FileWalShard : IDisposable
     /// file length, and stops at the first torn or corrupt record so the
     /// caller can treat everything beyond as a crash tail.
     /// </summary>
-    private sealed class BinaryReaderState : IDisposable
+    private sealed class RecoveryRecordScanner
     {
         private readonly FileStream _stream;
         private readonly long _fileLength;
         private long _position;
 
-        internal BinaryReaderState(FileStream stream, long fileLength)
+        internal RecoveryRecordScanner(FileStream stream, long fileLength)
         {
             _stream = stream;
             _fileLength = fileLength;
@@ -1611,10 +1605,6 @@ internal sealed class FileWalShard : IDisposable
             {
                 ArrayPool<byte>.Shared.Return(rented);
             }
-        }
-
-        public void Dispose()
-        {
         }
     }
 
