@@ -214,6 +214,15 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     Task SetParentAsync(GrainId? parentId);
 
     /// <summary>
+    /// Persists the parent binding, drains deferred child publications on gate
+    /// release, then reads the subtree digest in one dispatch. Does not publish
+    /// back into the parent awaiting the seed.
+    /// </summary>
+    /// <remarks>Must interleave for the same split-link cycle as <see cref="SetParentAsync"/>.</remarks>
+    [AlwaysInterleave]
+    Task<ChildDigestSnapshot> SetParentAndGetChildDigestSnapshotAsync(GrainId? parentId);
+
+    /// <summary>
     /// Hook invoked by a child grain (leaf or internal) when its
     /// published <see cref="ChildDigestSnapshot"/> changes. This node
     /// XOR-folds the delta between its persisted prior snapshot for
@@ -287,4 +296,11 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     /// visited, never by leaf count.
     /// </summary>
     Task<ShardTopologyNode> GetTopologyAsync(int depthLimit);
+
+    /// <summary>
+    /// Checks the node's bound physical tree before reading its topology in one
+    /// dispatch. Returns <see langword="null"/> for a foreign or unbound node,
+    /// without traversing any children. Uses ordinal tree identity comparison.
+    /// </summary>
+    Task<ShardTopologyNode?> GetTopologyForTreeAsync(string expectedTreeId, int depthLimit);
 }

@@ -552,6 +552,13 @@ internal sealed partial class BPlusInternalGrain
     }
 
     /// <inheritdoc />
+    public async Task<ChildDigestSnapshot> SetParentAndGetChildDigestSnapshotAsync(GrainId? parentId)
+    {
+        await SetParentAsync(parentId);
+        return await GetChildDigestSnapshotAsync();
+    }
+
+    /// <inheritdoc />
     public Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync()
     {
         EnsureSubtreeHashInitialized();
@@ -621,6 +628,15 @@ internal sealed partial class BPlusInternalGrain
         }
         if (highUnbounded) high = null;
         return (maxChildDepth + 1, live, tombstones, low, high);
+    }
+
+    /// <inheritdoc />
+    public async Task<ShardTopologyNode?> GetTopologyForTreeAsync(string expectedTreeId, int depthLimit)
+    {
+        ArgumentNullException.ThrowIfNull(expectedTreeId);
+        return string.Equals(state.State.TreeId, expectedTreeId, StringComparison.Ordinal)
+            ? await GetTopologyAsync(depthLimit)
+            : null;
     }
 
     /// <inheritdoc />

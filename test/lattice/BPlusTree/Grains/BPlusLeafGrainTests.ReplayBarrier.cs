@@ -149,7 +149,7 @@ public partial class BPlusLeafGrainTests
         "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
         // Digests and topology views computed FROM the projection.
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",
-        "GetChildDigestSnapshotAsync", "GetTopologyNodeAsync",
+        "GetChildDigestSnapshotAsync", "SetParentAndGetChildDigestSnapshotAsync", "GetTopologyNodeAsync",
         // Saga and transaction terminals.
         "ApplyTxTerminalAsync", "ApplyPreparedReplayCommitAsync", "MarkSagaShadowAsync",
         // Drops replayed pending buckets and records the discard marker that

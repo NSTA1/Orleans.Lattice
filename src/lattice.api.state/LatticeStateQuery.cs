@@ -1416,13 +1416,12 @@ internal sealed class LatticeStateQuery(
             // binds it to a tree. Verify the bound node actually belongs to the
             // requested tree before returning its subtree, so a structure query
             // labelled with one tree id cannot be steered at another tree's node.
-            var nodeTreeId = await node.GetTreeIdAsync().ConfigureAwait(false);
-            if (!string.Equals(nodeTreeId, physicalTreeId, StringComparison.Ordinal))
+            var subtree = await node.GetTopologyForTreeAsync(physicalTreeId, depthLimit).ConfigureAwait(false);
+            if (subtree is null)
             {
                 return TreeStructureResult.NotFound(request.TreeId);
             }
 
-            var subtree = await node.GetTopologyAsync(depthLimit).ConfigureAwait(false);
             var shardIndex = request.ShardIndex ?? subtree.ShardIndex ?? 0;
 
             var roots = new List<NodeStateSummary>(1);

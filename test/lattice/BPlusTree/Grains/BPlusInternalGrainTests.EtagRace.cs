@@ -42,8 +42,9 @@ public partial class BPlusInternalGrainTests
             "Per-activation _splitGate must serialise OnChildDigestPublishedAsync against AcceptSplitAsync's interleaved WriteStateAsync window.");
     }
 
-    [Test]
-    public async Task SetParentAsync_does_not_race_etag_when_concurrent_with_AcceptSplitAsync()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SetParentAsync_does_not_race_etag_when_concurrent_with_AcceptSplitAsync(bool combined)
     {
         var state = new FakePersistentState<InternalNodeState>
         {
@@ -53,7 +54,9 @@ public partial class BPlusInternalGrainTests
         var grain = CreateGrain(state);
         await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
-        var parentTask = Task.Run(() => grain.SetParentAsync(Child3));
+        var parentTask = Task.Run(() => combined
+            ? grain.SetParentAndGetChildDigestSnapshotAsync(Child3)
+            : grain.SetParentAsync(Child3));
         var splitTask = Task.Run(() => grain.AcceptSplitAsync("monkey", Child2));
 
         await Task.WhenAll(parentTask, splitTask);
