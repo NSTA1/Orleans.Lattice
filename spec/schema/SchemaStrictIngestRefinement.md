@@ -39,7 +39,7 @@ durable.
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `Deliver(e)` | A replicated entry reaches the choke point as a system-origin point write that the strict composition intercepts. | `ReplicationApplier.ApplyAsync`, `LatticeGrain.ApplyPreparedSetAsync`, `LatticeWriteInterceptorEnforcement.InterceptPointAsync`. | Yes: `LatticeWriteInterceptorEnforcementTests.Skips_is_false_on_a_system_origin_turn_for_an_opting_interceptor`, `SchemaWriteStageRegistrationTests.Composed_registration_opts_into_system_origin_when_either_stage_is_globally_strict`, `SchemaStrictIngestDeadLetterTests.Refused_entry_is_diverted_only_after_its_record_is_durable`. |
+| `Deliver(e)` | A replicated entry reaches the choke point as a system-origin point write that the strict composition intercepts. | `ReplicationApplier.ApplyAsync`, `LatticeGrain.ApplyPreparedSetAsync`, `LatticeWriteInterceptorEnforcement.InterceptPointAsync`. | Yes: `LatticeWriteInterceptorEnforcementTests.Skips_is_false_on_a_system_origin_turn_for_an_opting_interceptor`, `SchemaWriteStageRegistrationTests.Composed_registration_opts_into_system_origin_when_either_stage_is_globally_strict`, `SchemaStrictIngestDeadLetterTests.Refused_entry_is_diverted_only_after_its_record_is_durable`, `StrictIngestLatePrepareIntegrationTests.Refused_lww_atomic_entry_whose_prepare_precedes_the_commit_decision_is_diverted_not_applied`, `StrictIngestLatePrepareIntegrationTests.Refused_lww_atomic_entry_whose_prepare_follows_the_commit_decision_is_diverted_not_applied`. |
 | `Judge(r)` | Look up the policy the silo holds and judge the served body; a lookup that throws or is cancelled fails the write. | `LatticeSchemaWriteInterceptor.OnWriteAsync`, `ILatticeSchemaPolicyProvider.GetCompiledPolicyAsync`. | Yes: `SchemaStrictIngestDeadLetterTests.Failed_policy_lookup_fails_the_write_instead_of_admitting_it`, `SchemaStrictIngestDeadLetterTests.Each_delivery_is_judged_by_the_policy_the_silo_holds_at_that_delivery`, `SchemaEnforcementEnvelopedBodyTests.Strict_ingest_of_enveloped_value_with_noncompliant_body_is_dead_lettered`. |
 | `DeadLetter(r)` | Append the dead-letter record, then report the diversion; an append that fails, is cancelled or loses its response fails the write. | `LatticeSchemaDeadLetterStore.AppendAsync`, `LatticeSchemaWriteInterceptor.OnWriteAsync`, `LatticeSchemaVersionWriteInterceptor.OnWriteAsync`. | Yes: `SchemaStrictIngestDeadLetterTests.Refused_entry_is_diverted_only_after_its_record_is_durable`, `SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it`, `SchemaStrictIngestDeadLetterTests.Cancelled_dead_letter_append_fails_the_write_instead_of_diverting_it`, `SchemaStrictIngestDeadLetterTests.Dead_letter_append_whose_response_is_lost_fails_the_write_and_redelivery_records_it_again`. |
 | `Commit(r)` | The choke point proceeds with the admitted bytes; a failed WAL append fails the write. | `LatticeWriteInterceptorEnforcement.InterceptPointAsync`, `LatticeGrain.SetAsync`. | Yes: `LatticeWriteInterceptorEnforcementTests.InterceptPoint_accept_proceeds_with_the_original_value`, `SchemaStrictIngestDeadLetterTests.Valid_enveloped_entry_is_admitted_verbatim_with_no_record`. |
@@ -53,7 +53,7 @@ durable.
 
 | Spec property | Production property | Detector |
 |---------------|--------------------|----------|
-| `StoredValidWhenJudged` | Strict ingest commits no entry the policy its silo held refuses, no undecodable envelope and nothing it never judged, whatever the order in which the entry and its batch's decision arrived. | Yes: `SchemaStrictIngestDeadLetterTests.Undecodable_enveloped_entry_is_diverted_never_admitted`, `SchemaStrictIngestDeadLetterTests.Failed_policy_lookup_fails_the_write_instead_of_admitting_it`, `SchemaEnforcementEnvelopedBodyTests.Strict_ingest_of_enveloped_value_with_noncompliant_body_is_dead_lettered`. |
+| `StoredValidWhenJudged` | Strict ingest commits no entry the policy its silo held refuses, no undecodable envelope and nothing it never judged, whatever the order in which the entry and its batch's decision arrived. | Yes: `SchemaStrictIngestDeadLetterTests.Undecodable_enveloped_entry_is_diverted_never_admitted`, `SchemaStrictIngestDeadLetterTests.Failed_policy_lookup_fails_the_write_instead_of_admitting_it`, `SchemaEnforcementEnvelopedBodyTests.Strict_ingest_of_enveloped_value_with_noncompliant_body_is_dead_lettered`, `StrictIngestLatePrepareIntegrationTests.Refused_lww_atomic_entry_whose_prepare_follows_the_commit_decision_is_diverted_not_applied`. |
 | `AckedResolved` | An ingested entry is acknowledged only once it is committed, diverted with a durable record, or parked; a failed or cancelled lookup, append or commit fails the write. | Yes: `SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it`, `SchemaStrictIngestDeadLetterTests.Cancelled_dead_letter_append_fails_the_write_instead_of_diverting_it`, `SchemaStrictIngestDeadLetterTests.Failed_policy_lookup_fails_the_write_instead_of_admitting_it`, `DeadLetterTrackingReplicationApplierTests.ApplyAsync_rethrows_failure_below_threshold`. |
 | `OneRecordPerDelivery` | A delivery appends at most one dead-letter record; duplicates come only from re-delivery. | Yes: `SchemaStrictIngestDeadLetterTests.Refused_entry_is_diverted_only_after_its_record_is_durable`, `SchemaStrictIngestDeadLetterTests.Dead_letter_append_whose_response_is_lost_fails_the_write_and_redelivery_records_it_again`, `StrictIngestFullStateDivertIntegrationTests.Refused_full_state_pn_counter_row_under_strict_ingest_is_diverted_once_and_the_apply_completes`, `StrictIngestFullStateDivertIntegrationTests.Refused_full_state_or_map_row_under_strict_ingest_is_diverted_once_and_the_apply_completes`. |
 | `DiversionAckedOnlyWhenRecorded` | A diversion is reported only after its own record is durable, and a record never replaces an earlier one for the same key and instant. | Yes: `SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it`, `SchemaStrictIngestDeadLetterTests.Repeated_diversions_of_one_key_at_one_instant_are_all_retained`. |
@@ -116,7 +116,9 @@ behaviour is pinned by `DeadLetterTrackingReplicationApplierTests`, and the
 policy change and eviction by the `SchemaPolicyConfig` detectors.
 `StrictIngestFullStateDivertIntegrationTests` drives a refused full-state CRDT
 row through a real replication receiver and checks it is diverted once and the
-apply completes.
+apply completes. `StrictIngestLatePrepareIntegrationTests` replicates a refused
+entry of an atomic batch whose prepare precedes, and one whose prepare follows,
+the batch's commit decision, and checks each is diverted and never applied.
 
 ## Defect mutations whose fixes have landed
 
@@ -128,9 +130,12 @@ envelope it cannot serve. DiversionSettlesReportedAsFailure and
 OneRecordPerDeliveryAppendRetried are #5265: the full-state CRDT row fold read
 a diverted conditional write as a version mismatch, so one delivery appended a
 record per retry of its fold and the apply was retried and finally parked
-instead of acknowledged; the fold now settles on a diversion. Both are fixed in
-the schema-assurance integration bucket; this is integration-branch evidence,
-not a claim the fixes are released.
+instead of acknowledged; the fold now settles on a diversion.
+StoredValidWhenJudgedLatePrepareUnjudged is #5266: an LWW prepare that arrived
+after the receiver recorded its batch's commit was applied below the choke
+point, so strict ingest never judged it; the settle now judges it first. All are
+fixed in the schema-assurance integration bucket; this is integration-branch
+evidence, not a claim the fixes are released.
 
 ## Deliberate abstraction gaps
 
