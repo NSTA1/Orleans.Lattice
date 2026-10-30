@@ -1,0 +1,12 @@
+# DiversionSettles: a reported diversion drops the write, never fails it.
+MODULE: SchemaStrictIngest
+ROW: DiversionSettles
+FILE: src/lattice/LatticeWriteInterceptorEnforcement.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Refused_entry_is_diverted_only_after_its_record_is_durable
+SUMMARY: a reported diversion is thrown back to the caller
+
+--- FIND
+            LatticeWriteDecisionKind.DeadLetter => LatticeWriteInterceptionOutcome.Drop(),
+--- REPLACE
+            LatticeWriteDecisionKind.DeadLetter => throw Rejected(treeId, operation, key, decision.Reason),
+--- END

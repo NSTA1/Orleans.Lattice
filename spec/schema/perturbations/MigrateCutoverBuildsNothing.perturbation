@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_restamp
 SUMMARY: the build never writes a migrated value, so the cutover publishes an empty tree
 
 --- FIND
-                await destination.SetAsync(entry.Key, rewritten);
+                await destination.SetAsync(entry.Key, input.Restamp(rewritten));
 --- REPLACE
                 await Task.CompletedTask;
 --- END

@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -17,7 +18,9 @@ namespace Orleans.Lattice.Schema;
 /// <item><description>builds a fresh destination physical tree by scanning source
 /// entries, transforming each value, revalidating it, and writing it into the
 /// destination - aborting and discarding the partial destination on the first
-/// offending value. The destination is registered with the source's routing map,
+/// offending value. On a versioning-enabled tree each written value is re-enveloped
+/// at the schema version the transform ran on (the tree's target version), so the
+/// remediated tree stays self-describing (issue #5243). The destination is registered with the source's routing map,
 /// split allocation mark, structural pins and runtime configuration overrides
 /// (<see cref="DerivedTreeEntries.InheritingAsync"/>), so it lays keys out exactly
 /// as the source does and only the values change;</description></item>
@@ -543,11 +546,12 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             foreach (var entry in slice.Entries)
             {
+                SchemaRestampInput input;
                 byte[] rewritten;
                 try
                 {
-                    var input = decode is null ? entry.Value : await decode(entry.Value);
-                    rewritten = rewrite(input);
+                    input = decode is null ? Undecoded(entry.Value) : await decode(entry.Value);
+                    rewritten = rewrite(input.Body);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
                 {
@@ -630,11 +634,12 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             foreach (var entry in slice.Entries)
             {
+                SchemaRestampInput input;
                 byte[] rewritten;
                 try
                 {
-                    var input = decode is null ? entry.Value : await decode(entry.Value);
-                    rewritten = rewrite(input);
+                    input = decode is null ? Undecoded(entry.Value) : await decode(entry.Value);
+                    rewritten = rewrite(input.Body);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
                 {
@@ -649,7 +654,11 @@ internal sealed class LatticeSchemaRemediationGrain(
                     break;
                 }
 
-                await destination.SetAsync(entry.Key, rewritten);
+                // On a versioned tree this is one header-prefixed array per value, the
+                // same intrinsic cost the version write interceptor charges every write
+                // to an opted-in tree; an at-target value's body was read as a view past
+                // its header, so its per-value array count is unchanged (#5243).
+                await destination.SetAsync(entry.Key, input.Restamp(rewritten));
                 done++;
                 lastKey = entry.Key;
             }
@@ -890,13 +899,15 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// it enumerates the source with <c>ConfigureAwait(false)</c>. The delegate closes
     /// over local snapshots and the thread-safe singleton registry only, never
     /// <c>state</c>, so it never touches activation services.
-    /// <see cref="SchemaRemediationMode.Transform"/> evaluates the static transform;
+    /// <see cref="SchemaRemediationMode.Transform"/> evaluates the static transform
+    /// over the decoded body (a view into the stored array past its envelope header
+    /// when one is present, so the body is never copied out);
     /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/> re-stamps the value to
     /// the target schema version through the registry. The delegate throws
     /// <see cref="InvalidOperationException"/> or <see cref="NotSupportedException"/> on
     /// a per-value failure, which the dry-run / build turns into an abort.
     /// </summary>
-    private async Task<Func<byte[], byte[]>> CreateRewriteAsync()
+    private async Task<Func<ReadOnlyMemory<byte>, byte[]>> CreateRewriteAsync()
     {
         if (state.State.Mode == SchemaRemediationMode.SchemaVersionMigration)
         {
@@ -905,12 +916,29 @@ internal sealed class LatticeSchemaRemediationGrain(
                     $"Schema versioning is not registered on this silo; cannot resume the version migration of tree '{TreeId}'.");
             var schemaId = state.State.MigrationSchemaId;
             var targetVersion = state.State.MigrationTargetVersion;
-            return value => LatticeSchemaVersionMigration.Migrate(value, schemaId, targetVersion, registry);
+            return value => LatticeSchemaVersionMigration.Migrate(WholeArray(value), schemaId, targetVersion, registry);
         }
 
         var transform = state.State.Transform;
-        return value => LatticeValueTransformEvaluation.Evaluate(value, in transform);
+        return value => LatticeValueTransformEvaluator.Evaluate(value, in transform);
     }
+
+    /// <summary>
+    /// The array behind <paramref name="value"/> when it spans a whole array - always
+    /// the case for a migration, which rewrites the stored value undecoded - otherwise
+    /// a copy.
+    /// </summary>
+    private static byte[] WholeArray(ReadOnlyMemory<byte> value) =>
+        MemoryMarshal.TryGetArray(value, out var segment) && segment.Offset == 0 && segment.Count == segment.Array!.Length
+            ? segment.Array
+            : value.ToArray();
+
+    /// <summary>
+    /// A stored value the slice does not decode (the decoder is inactive, or a
+    /// version migration, whose rewrite reads the stored form itself): its bytes are
+    /// the rewrite's input and the rewrite's output is written as-is.
+    /// </summary>
+    private static SchemaRestampInput Undecoded(byte[] value) => new(value, Stamped: false, 0, 0);
 
     /// <summary>
     /// <c>true</c> when this is a <see cref="SchemaRemediationMode.Transform"/>
@@ -927,25 +955,45 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// The per-value decode a transform remediation applies to each stored value
     /// before its transform: the same read-path <see cref="ILatticeValueDecoder"/> a
     /// client read runs (strip the schema-version envelope, upcast to the tree's
-    /// target), so the transform sees, and remediation writes, exactly what it did
-    /// when it read through the decoding client read. The decoder throws
-    /// <see cref="NotSupportedException"/> on a value it cannot upcast, which the
-    /// dry-run / build turns into an abort naming that value. Returns <c>null</c> when
-    /// the decoder is inactive (the stored form is then the decoded form) and in
-    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/>, whose rewrite
-    /// upcasts the stored form itself.
+    /// target), so the transform sees exactly the body a client read returns. The
+    /// decoder throws <see cref="NotSupportedException"/> on a value it cannot
+    /// upcast, which the dry-run / build turns into an abort naming that value.
+    /// <para>
+    /// With schema versioning registered the decode also reports the stamp the
+    /// decoded body is at - the tree's target for a value of the tree's schema family
+    /// (see <see cref="LatticeSchemaVersionDecoder.DecodeForRestampAsync"/>) - and
+    /// the build re-envelopes each rewritten value at that stamp, so a remediation of
+    /// a versioned tree never cuts over to un-enveloped values that a later target
+    /// advance would not upcast and an eager migration would stamp without upcasting
+    /// (issue #5243). An unversioned tree reports no stamp and is written plain.
+    /// </para>
+    /// Returns <c>null</c> when the decoder is inactive (the stored form is then the
+    /// decoded form) and in <see cref="SchemaRemediationMode.SchemaVersionMigration"/>,
+    /// whose rewrite upcasts and re-stamps the stored form itself.
     /// </summary>
-    private Func<byte[], ValueTask<byte[]>>? TransformInputDecoderOrNull()
+    private Func<byte[], ValueTask<SchemaRestampInput>>? TransformInputDecoderOrNull()
     {
         if (!TransformDecoderActive)
         {
             return null;
         }
 
-        var decoder = valueDecoder!;
         var treeId = TreeId;
-        return value => decoder.DecodeAsync(treeId, value, CancellationToken.None);
+        if (valueDecoder is LatticeSchemaVersionDecoder versionDecoder)
+        {
+            return value => versionDecoder.DecodeForRestampAsync(treeId, value, CancellationToken.None);
+        }
+
+        var decoder = valueDecoder!;
+        return value => DecodedPlainAsync(decoder.DecodeAsync(treeId, value, CancellationToken.None));
     }
+
+    /// <summary>
+    /// A body decoded by a decoder that reports no schema-version stamp; the
+    /// rewrite is written as-is.
+    /// </summary>
+    private static async ValueTask<SchemaRestampInput> DecodedPlainAsync(ValueTask<byte[]> decode) =>
+        new(await decode.ConfigureAwait(false), Stamped: false, 0, 0);
 
     /// <summary>
     /// Compiles the target policy for build-time revalidation, or returns <c>null</c>

@@ -89,7 +89,7 @@ internal static class FormalCoverageAreaCensus
                 "TurnOccupancy", "WalAdmission", "WalBackPressure", "WalGcStarvationDrive",
                 "WalGcStarvationDriveWitness",
             ],
-            ["Schema enforcement and versioning"] = ["SchemaPolicyConfig", "SchemaStageOrdering", "SchemaVersionFamily", "SchemaDurableOperation", "SchemaComplianceScan"],
+            ["Schema enforcement and versioning"] = ["SchemaPolicyConfig", "SchemaStageOrdering", "SchemaVersionFamily", "SchemaDurableOperation", "SchemaComplianceScan", "SchemaStrictIngest"],
         };
 
     /// <summary>

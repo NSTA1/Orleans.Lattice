@@ -1,0 +1,18 @@
+# JudgedByHeldPolicy: every delivery is judged afresh.
+MODULE: SchemaStrictIngest
+ROW: JudgedByHeldPolicy
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Each_delivery_is_judged_by_the_policy_the_silo_holds_at_that_delivery
+SUMMARY: the first policy looked up is reused for every later delivery
+
+--- FIND
+    private readonly ILatticeValueDecoder? _valueDecoder;
+--- REPLACE
+    private readonly ILatticeValueDecoder? _valueDecoder;
+    private CompiledSchemaPolicy? _firstPolicy;
+--- END
+--- FIND
+        var compiled = await _provider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+--- REPLACE
+        var compiled = _firstPolicy ??= await _provider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+--- END

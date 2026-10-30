@@ -1,0 +1,12 @@
+# A repeated diversion of the same key overwrites the earlier record.
+MODULE: DiversionAckedOnlyWhenRecordedOverwrites
+TARGET: DiversionAckedOnlyWhenRecorded
+CLASS: Action
+SUMMARY: a dead-letter record replaces the previous one for the key
+PERTURBS: DeadLetter
+
+--- FIND
+       ELSE /\ dlq' = [dlq EXCEPT ![cur] = @ + 1]
+--- REPLACE
+       ELSE /\ dlq' = [dlq EXCEPT ![cur] = 1]
+--- END

@@ -1,0 +1,18 @@
+# DeadLettersOnlyRefused: an envelope at the target is admitted.
+MODULE: SchemaStrictIngest
+ROW: DeadLettersOnlyRefused
+FILE: src/lattice.schema/LatticeSchemaVersionWriteInterceptor.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Valid_enveloped_entry_is_admitted_verbatim_with_no_record
+SUMMARY: strict ingest dead-letters an entry stamped at the target
+
+--- FIND
+            && storedVersion <= version.TargetVersion
+            && registry.CanUpcast(version.SchemaId, storedVersion, version.TargetVersion))
+        {
+            return LatticeWriteDecision.Accept();
+--- REPLACE
+            && storedVersion < version.TargetVersion
+            && registry.CanUpcast(version.SchemaId, storedVersion, version.TargetVersion))
+        {
+            return LatticeWriteDecision.Accept();
+--- END

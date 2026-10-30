@@ -42,3 +42,5 @@ listed below, never both.
 | SchemaComplianceScan | StableKeysCounted | Every edit that skips a stable key is the seeded `Step` or `CountsAddUp` perturbation over the same loop. |
 | SchemaComplianceScan | ReportOnlyWhenSucceeded | The report is the work's return value, recorded only on success by the shared runner; the runner's success path is the `Finish(o)` row of `SchemaDurableOperation`. |
 | SchemaComplianceScan | ScanTerminates | Liveness: every edit that stops a scan terminating is one of the seeded `Count` or `Step` perturbations, whose detectors this row cites. |
+| SchemaStrictIngest | ChangePolicy | The same production edit as `SchemaPolicyConfig`'s `Change(s,p)` row, which `ChangeNeverStored` seeds against the same detector; a second copy adds no evidence. |
+| SchemaStrictIngest | Propagate | The same production edit as `SchemaPolicyConfig`'s `Propagate(s)` row, which `PropagateIgnoresChangeFeed` seeds against the same detector; a second copy adds no evidence. |
