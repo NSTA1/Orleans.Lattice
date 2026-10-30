@@ -106,7 +106,7 @@ public class LeafReclaimSplitRaceIntegrationTests
     /// </summary>
     private async Task<int> CountRowsInAsync(ILattice router, GrainId leafId)
     {
-        var range = await Leaf(leafId).GetKeyRangeAsync();
+        var range = (await Leaf(leafId).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         return await router.CountAsync(range.LowKeyInclusive, range.HighKeyExclusive);
     }
 
@@ -120,7 +120,7 @@ public class LeafReclaimSplitRaceIntegrationTests
         Assert.That(await CountRowsInAsync(router, inserted), Is.GreaterThan(0),
             "precondition: the split moved live rows into the inserted leaf, which is what a blind unlink would lose");
 
-        var staleNextRange = await Leaf(staleNext).GetKeyRangeAsync();
+        var staleNextRange = (await Leaf(staleNext).GetKeyRangeAndNextSiblingAsync()).KeyRange;
 
         // The reclaim now tries to fold `staleNext` out using the plan it made
         // before the split landed. It must refuse.
@@ -149,8 +149,8 @@ public class LeafReclaimSplitRaceIntegrationTests
         var (router, shard) = await CreateSingleShardTreeAsync(treeName);
         var (head, staleNext, inserted, _) = await BuildSplitUnderneathAsync(router, shard);
 
-        var headRangeBefore = await Leaf(head).GetKeyRangeAsync();
-        var staleNextRange = await Leaf(staleNext).GetKeyRangeAsync();
+        var headRangeBefore = (await Leaf(head).GetKeyRangeAndNextSiblingAsync()).KeyRange;
+        var staleNextRange = (await Leaf(staleNext).GetKeyRangeAndNextSiblingAsync()).KeyRange;
 
         await Leaf(head).TryUnlinkSuccessorAsync(
             staleNext,
@@ -160,7 +160,7 @@ public class LeafReclaimSplitRaceIntegrationTests
         Assert.That(await Leaf(head).GetNextSiblingAsync(), Is.EqualTo(inserted),
             "the chain must still run through the leaf the split inserted");
 
-        var headRangeAfter = await Leaf(head).GetKeyRangeAsync();
+        var headRangeAfter = (await Leaf(head).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         Assert.That(headRangeAfter.HighKeyExclusive, Is.EqualTo(headRangeBefore.HighKeyExclusive),
             "the widen must not leak through a declined unlink: a predecessor claiming a range it does not route to loses every write into it on the next projection rebuild");
         Assert.That(headRangeAfter.LowKeyInclusive, Is.EqualTo(headRangeBefore.LowKeyInclusive));
@@ -179,7 +179,7 @@ public class LeafReclaimSplitRaceIntegrationTests
         var (router, shard) = await CreateSingleShardTreeAsync(treeName);
         var (head, staleNext, _, insertedKeys) = await BuildSplitUnderneathAsync(router, shard);
 
-        var staleNextRange = await Leaf(staleNext).GetKeyRangeAsync();
+        var staleNextRange = (await Leaf(staleNext).GetKeyRangeAndNextSiblingAsync()).KeyRange;
 
         await Leaf(head).TryUnlinkSuccessorAsync(
             staleNext,
@@ -215,7 +215,7 @@ public class LeafReclaimSplitRaceIntegrationTests
         var (router, shard) = await CreateSingleShardTreeAsync(treeName);
         var (head, staleNext, _, insertedKeys) = await BuildSplitUnderneathAsync(router, shard);
 
-        var staleNextRange = await Leaf(staleNext).GetKeyRangeAsync();
+        var staleNextRange = (await Leaf(staleNext).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         await Leaf(head).TryUnlinkSuccessorAsync(
             staleNext,
             await Leaf(staleNext).GetNextSiblingAsync(),
@@ -282,7 +282,7 @@ public class LeafReclaimSplitRaceIntegrationTests
             "precondition: the split must publish a boundary before the fold, or this test proves nothing");
 
         // Drive the interleaving, then let a settled pass fold for real.
-        var staleNextRange = await Leaf(staleNext).GetKeyRangeAsync();
+        var staleNextRange = (await Leaf(staleNext).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         await Leaf(head).TryUnlinkSuccessorAsync(
             staleNext,
             await Leaf(staleNext).GetNextSiblingAsync(),
@@ -294,7 +294,7 @@ public class LeafReclaimSplitRaceIntegrationTests
         foreach (var leafId in await WalkChainAsync(shard))
         {
             var leaf = Leaf(leafId);
-            var range = await leaf.GetKeyRangeAsync();
+            var range = (await leaf.GetKeyRangeAndNextSiblingAsync()).KeyRange;
             var delta = await leaf.GetDeltaSinceCursorAsync(default);
 
             if (delta.SplitKey is null) continue;

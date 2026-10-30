@@ -24,7 +24,7 @@ public partial class TxRegistryGrainTests
 
         Assert.That(await grain.IsPurgedAsync(txid), Is.EqualTo(purged));
         var batch = await grain.HasUndecidedParticipantsManyAsync([txid, txid, Guid.Empty]);
-        Assert.That(batch[txid], Is.EqualTo(await grain.HasUndecidedParticipantsAsync(txid)));
+        Assert.That(batch[txid], Is.EqualTo(participants && status is not (TxStatus.Committed or TxStatus.Aborted)));
         Assert.That(batch[Guid.Empty], Is.False);
         Assert.That(batch.Count, Is.EqualTo(2));
         Assert.That(state.WriteCount, Is.Zero);

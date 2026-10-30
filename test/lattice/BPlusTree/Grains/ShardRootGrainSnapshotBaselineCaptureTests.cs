@@ -173,9 +173,9 @@ public sealed class ShardRootGrainSnapshotBaselineCaptureTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
 
-            leaf.FreezeProjectionAsync(Arg.Any<CancellationToken>())
+            leaf.Separate().FreezeProjectionAsync(Arg.Any<CancellationToken>())
                 .Returns(_ => index == parkFreezeAtLeaf
                     ? neverCompletes.Task
                     : Task.FromResult(new LeafBaselineFreeze

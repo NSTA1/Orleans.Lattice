@@ -26,6 +26,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Internal - Orphaned grain methods removed.** Internal grain-interface methods that no production code has called since 10.2.0, left behind by the call elisions above and in 10.2.0, are deleted or reduced to internal cores of the combined calls that replaced them. A rolling upgrade from 10.2.0 is unaffected; one straight from an earlier release would fail calls to the removed methods, so upgrade through 10.2.0. ([#5217](https://github.com/NSTA1/Orleans.Lattice/pull/5217)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
 - **Performance - App ownership calls.** Fresh structural app tree claims replace three registry fact reads with one, retaining retry freshness and foreign-alias checks. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice.Apps`)
 
 - **Performance - Peer maintenance calls.** Re-add and barrier cleanup use fewer grain calls; decommission combines marker reads with durable writes and batches verdicts by encoded registry owner, retaining import fences, delegation and retention. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214), [#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)

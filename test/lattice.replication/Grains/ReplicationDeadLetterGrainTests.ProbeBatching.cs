@@ -15,8 +15,6 @@ public partial class ReplicationDeadLetterGrainTests
         Assert.That(await grain.IsHoldingManyAsync("other", requested, CancellationToken.None),
             Is.EqualTo(new[] { false, false, false }));
         Assert.That(await grain.IsHoldingManyAsync("site-b", [], CancellationToken.None), Is.Empty);
-        var single = await Task.WhenAll(requested.Select(t => grain.IsHoldingAsync("site-b", t, CancellationToken.None)));
-        Assert.That(await grain.IsHoldingManyAsync("site-b", requested, CancellationToken.None), Is.EqualTo(single));
 
         await grain.DiscardAsync(id, CancellationToken.None);
         Assert.That(await grain.IsHoldingManyAsync("site-b", requested, CancellationToken.None),

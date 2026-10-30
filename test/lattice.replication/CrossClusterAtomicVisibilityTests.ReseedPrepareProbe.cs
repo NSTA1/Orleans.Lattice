@@ -65,7 +65,6 @@ public partial class CrossClusterAtomicVisibilityTests
         Assert.That(windows.All(window => window.Select(TxRegistryRouting.ShardOf).Distinct().Count() == 1), Is.True);
         Assert.That(windows.All(window => window.Length <= 128), Is.True);
         Assert.That(windows.SelectMany(window => window), Is.EquivalentTo(tracked));
-        await registry.DidNotReceiveWithAnyArgs().HasUndecidedParticipantsAsync(default);
         await registry.DidNotReceiveWithAnyArgs().GetRecordedStatusAsync(default);
         await registry.DidNotReceiveWithAnyArgs().GetParticipantsAsync(default);
     }

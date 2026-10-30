@@ -188,9 +188,6 @@ public class ShipperPersistenceIntegrationTests
         public ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 
-        public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
-            Task.FromResult((long)Entries.Count);
-
         public Task<long> GetResumeFloorAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException("State-observer resume validation is not exercised by the shipper.");
 

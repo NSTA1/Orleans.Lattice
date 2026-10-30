@@ -95,13 +95,13 @@ public sealed class ShardRootGrainDeleteSplitLinkTests
 
     private static IBPlusLeafGrain CreateLeaf(string? lowInclusive, string? highExclusive, GrainId? next)
     {
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.DeleteTrackedAsync(Arg.Any<string>())
             .Returns(Task.FromResult(new LeafDeleteResult { Deleted = true }));
         leaf.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
         leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LatticePredicateNode?>())
             .Returns(Task.FromResult(new RangeDeleteResult { Deleted = 0, PastRange = next is null }));
-        leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = lowInclusive,
             HighKeyExclusive = highExclusive,

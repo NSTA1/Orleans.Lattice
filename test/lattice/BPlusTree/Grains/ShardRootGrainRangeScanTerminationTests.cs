@@ -58,7 +58,7 @@ public class ShardRootGrainRangeScanTerminationTests
         var leaves = new IBPlusLeafGrain[n];
         for (var i = 0; i < n; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var entries = i == 0 ? entries0.ToList() : new List<KeyValuePair<string, byte[]>>();
             var keys = i == 0 ? keys0.ToList() : new List<string>();
 
@@ -68,7 +68,7 @@ public class ShardRootGrainRangeScanTerminationTests
             leaf.GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(_ => Task.FromResult(keys.ToList()));
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = lowBounds?[i],
                 HighKeyExclusive = highBounds[i],
@@ -118,7 +118,7 @@ public class ShardRootGrainRangeScanTerminationTests
         var leaves = new IBPlusLeafGrain[n];
         for (var i = 0; i < n; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var entries = i == n - 1
                 ? new List<KeyValuePair<string, byte[]>> { new("z1", new byte[] { 1 }) }
                 : new List<KeyValuePair<string, byte[]>>();
@@ -126,7 +126,7 @@ public class ShardRootGrainRangeScanTerminationTests
             leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(_ => Task.FromResult(entries.ToList()));
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = lowBounds[i],
                 HighKeyExclusive = null,

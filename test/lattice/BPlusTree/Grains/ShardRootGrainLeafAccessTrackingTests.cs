@@ -39,7 +39,7 @@ public class ShardRootGrainLeafAccessTrackingTests
         state.State.RootIsLeaf = true;
 
         var factory = Substitute.For<IGrainFactory>();
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.CountAsync().Returns(Task.FromResult(0));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);

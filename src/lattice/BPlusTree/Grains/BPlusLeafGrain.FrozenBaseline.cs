@@ -41,7 +41,12 @@ internal sealed partial class BPlusLeafGrain
         return new LeafBaselineFreezePage { Freeze = freeze, NextSibling = state.State.NextSibling };
     }
 
-    public async Task<LeafBaselineFreeze> FreezeProjectionAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// The read-only freeze <see cref="FreezeProjectionAndNextSiblingAsync"/>
+    /// returns: this leaf's committed projection cache, per-partition projection
+    /// frontier and in-flight prepared sagas. Not a grain call.
+    /// </summary>
+    internal async Task<LeafBaselineFreeze> FreezeProjectionAsync(CancellationToken cancellationToken)
     {
         await AwaitReplayBarrierAsync();
 

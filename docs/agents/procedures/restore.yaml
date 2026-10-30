@@ -64,7 +64,7 @@ postconditions:
   - check: "Backup-facade InPlace mode repairs missing or stale entries but does not overwrite newer live data."
     source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
   - check: "ShadowCutover restore carries the shadow tree's shard map onto the logical tree in the same registry write as the alias swap and records the replaced map on the shadow so revert can carry it back."
-    source: "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.PrepareCutoverAsync"
+    source: "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.PrepareCutoverResolvingAsync"
 failure_modes:
   - id: inplace-not-rollback
     signal: "InPlace restore is chosen for a rollback objective."

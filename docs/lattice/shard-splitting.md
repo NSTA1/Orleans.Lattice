@@ -339,7 +339,7 @@ that is still initialising cannot leave it claiming to run with nothing
 sampling; a keepalive registration deferred that way is retried after each
 sampling pass until it succeeds. On each tick (default every 30 s) it:
 
-1. Polls every physical shard's `GetHotnessAsync()` in parallel.
+1. Polls every physical shard's `GetSamplingStatusAsync()` (hotness, split and pending-bulk status) in parallel.
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
 3. Counts the shard migrations in flight **for this tree** by asking every
    physical shard whether it is splitting - the source of an adaptive split

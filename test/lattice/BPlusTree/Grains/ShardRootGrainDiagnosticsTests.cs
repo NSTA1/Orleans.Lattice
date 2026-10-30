@@ -61,7 +61,7 @@ public sealed class ShardRootGrainDiagnosticsTests
             int tombstones = 0)
         {
             var key = Guid.NewGuid();
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             leaf.GetStatsAsync().Returns(Task.FromResult(new LeafStats
             {
                 LiveKeys = liveKeys,

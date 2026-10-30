@@ -110,7 +110,7 @@ public partial class TreeMergeGrainTests
 
         for (int i = 0; i < leafIds.Length; i++)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leafMock = LeafSubstituteCombinedCalls.CreateComposed();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
 
             // TreeMergeGrain uses GetDeltaSinceAsync with an empty VersionVector
@@ -122,7 +122,7 @@ public partial class TreeMergeGrainTests
             };
             leafMock.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(delta));
 
-            leafMock.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leafMock.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = SourceLeafResumeKey(i),
                 HighKeyExclusive = i + 1 < leafIds.Length ? SourceLeafResumeKey(i + 1) : null,

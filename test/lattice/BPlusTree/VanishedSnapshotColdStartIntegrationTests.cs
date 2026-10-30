@@ -105,7 +105,7 @@ public sealed class VanishedSnapshotColdStartIntegrationTests
         await leaf.SetCheckpointOffsetHintsAsync([head - 1]);
         await leaf.CaptureSnapshotAsync();
         await tree.SetAsync("k-after-capture", Bytes("x"));
-        TestContext.Out.WriteLine($"head={head} checkpoint={await leaf.GetProjectionCheckpointOffsetAsync()}");
+        TestContext.Out.WriteLine($"head={head} checkpoint={(await leaf.GetProjectionCheckpointAndNextSiblingAsync()).CheckpointOffset}");
     }
     [Test]
     public async Task A_cold_start_over_a_vanished_snapshot_does_not_silently_lose_the_prefix_it_covered()

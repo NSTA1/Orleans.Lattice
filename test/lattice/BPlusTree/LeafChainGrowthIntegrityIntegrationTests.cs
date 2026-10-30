@@ -146,8 +146,8 @@ public class LeafChainGrowthIntegrityIntegrationTests
 
         // (2) The chain's outer bounds are open on both sides, so no key can
         // fall outside the tree.
-        var first = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[0]).GetKeyRangeAsync();
-        var last = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[^1]).GetKeyRangeAsync();
+        var first = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[0]).GetKeyRangeAndNextSiblingAsync()).KeyRange;
+        var last = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[^1]).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         Assert.That(first.LowKeyInclusive, Is.Null, "the leftmost leaf must be unbounded below");
         Assert.That(last.HighKeyExclusive, Is.Null, "the rightmost leaf must be unbounded above");
 
@@ -165,7 +165,7 @@ public class LeafChainGrowthIntegrityIntegrationTests
             var leafId = await shard.GetLeafIdForKeyAsync(key);
             Assert.That(leafId, Is.Not.Null, $"descent for '{key}' resolved to no leaf");
 
-            var range = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value).GetKeyRangeAsync();
+            var range = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value).GetKeyRangeAndNextSiblingAsync()).KeyRange;
             Assert.That(range.LowKeyInclusive is null || string.CompareOrdinal(key, range.LowKeyInclusive) >= 0,
                 Is.True, $"descent routed '{key}' to a leaf whose range starts at '{range.LowKeyInclusive}'");
             Assert.That(range.HighKeyExclusive is null || string.CompareOrdinal(key, range.HighKeyExclusive) < 0,

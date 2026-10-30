@@ -60,10 +60,6 @@ public class CausalFrontierProbeBenchmarks
         factory.GetGrain<ICausalApplyBufferGrain>(Tree, Arg.Any<string?>()).Returns(_buffer);
         factory.GetGrain<IReplicationDeadLetterGrain>(Tree, Arg.Any<string?>()).Returns(_deadLetters);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree, Arg.Any<string?>()).Returns(_hwm);
-        _buffer.IsHoldingAsync(Origin, Arg.Any<HybridLogicalClock>()).Returns(_ => SingleAsync(true));
-        _deadLetters.IsHoldingAsync(Origin, Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(_ => SingleAsync(true));
-        _hwm.HasAppliedAsync(Origin, Arg.Any<HybridLogicalClock>()).Returns(_ => SingleAsync(false));
         _buffer.IsHoldingManyAsync(Origin, Arg.Any<IReadOnlyList<HybridLogicalClock>>())
             .Returns(call => ManyAsync(((IReadOnlyList<HybridLogicalClock>)call[1]).Count, true));
         _deadLetters.IsHoldingManyAsync(Origin, Arg.Any<IReadOnlyList<HybridLogicalClock>>(), Arg.Any<CancellationToken>())
@@ -93,7 +89,11 @@ public class CausalFrontierProbeBenchmarks
         }
     }
 
-    /// <summary>The former per-identity authoritative confirmation.</summary>
+    /// <summary>
+    /// The former per-identity authoritative confirmation: one source call per
+    /// identity. The single-identity probe methods were removed once production
+    /// stopped calling them, so each call is a batch of one.
+    /// </summary>
     [Benchmark(Baseline = true)]
     public async Task<int> BeforeAsync()
     {
@@ -103,9 +103,9 @@ public class CausalFrontierProbeBenchmarks
         {
             var held = Path switch
             {
-                Site.CausalBuffer => await _buffer.IsHoldingAsync(Origin, timestamp),
-                Site.DeadLetters => await _deadLetters.IsHoldingAsync(Origin, timestamp, CancellationToken.None),
-                Site.ExportApplied => !await _hwm.HasAppliedAsync(Origin, timestamp),
+                Site.CausalBuffer => (await _buffer.IsHoldingManyAsync(Origin, [timestamp]))[0],
+                Site.DeadLetters => (await _deadLetters.IsHoldingManyAsync(Origin, [timestamp], CancellationToken.None))[0],
+                Site.ExportApplied => !(await _hwm.HasAppliedManyAsync(Origin, [timestamp]))[0],
                 _ => throw new InvalidOperationException("Unknown source."),
             };
             if (held) heldCount++;
@@ -121,12 +121,6 @@ public class CausalFrontierProbeBenchmarks
         _calls = 0;
         var verdicts = await _frontier.CheckAsync(_required, CancellationToken.None);
         return verdicts.Count(verdict => verdict == CausalDependencyVerdict.Unmet);
-    }
-
-    private async Task<bool> SingleAsync(bool result)
-    {
-        await DispatchAsync();
-        return result;
     }
 
     private async Task<bool[]> ManyAsync(int count, bool held)

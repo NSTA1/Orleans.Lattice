@@ -76,18 +76,12 @@ internal interface ICausalApplyBufferGrain : IGrainWithStringKey
 
     /// <summary>
     /// Whether the durable buffer holds a parked write of
-    /// <paramref name="originClusterId"/> at <paramref name="timestamp"/> (issue
-    /// #4586). Answered from the persisted entries, which a drain removes only
-    /// after the entry was applied or dead-lettered, so it never reports a held
-    /// write released early. Interleaves, so the origin frontier grain can ask
-    /// while this grain waits on it.
-    /// </summary>
-    [AlwaysInterleave]
-    Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp);
-
-    /// <summary>
-    /// Batch form of <see cref="IsHoldingAsync"/>, with one result per timestamp
-    /// in request order. Uses the same persisted entries and interleaving contract.
+    /// <paramref name="originClusterId"/> at each of <paramref name="timestamps"/>
+    /// (issue #4586), with one result per timestamp in request order. Answered
+    /// from the persisted entries, which a drain removes only after the entry was
+    /// applied or dead-lettered, so it never reports a held write released early.
+    /// Interleaves, so the origin frontier grain can ask while this grain waits
+    /// on it.
     /// </summary>
     [AlwaysInterleave]
     Task<bool[]> IsHoldingManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps);

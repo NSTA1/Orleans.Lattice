@@ -191,7 +191,7 @@ public class ShardRootGrainScanPagePartialBankingTests
                     $"k{((index * rowsPerLeaf) + r):D4}", [(byte)index]));
             }
 
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
 
             leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
@@ -204,7 +204,7 @@ public class ShardRootGrainScanPagePartialBankingTests
                     Visible(rows, call.ArgAt<string?>(0), call.ArgAt<string?>(2))
                         .Select(e => e.Key).ToList()));
 
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = rows[0].Key,
                 HighKeyExclusive = null,

@@ -94,7 +94,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(link.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(link.KeyRange, Is.EqualTo((await grain.GetKeyRangeAndNextSiblingAsync()).KeyRange));
             Assert.That(link.NextSibling, Is.EqualTo(await grain.GetNextSiblingAsync()));
             Assert.That(link.NextSibling, Is.EqualTo(CombinedPageSibling));
         });
@@ -159,7 +159,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(link.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(link.KeyRange, Is.EqualTo((await grain.GetKeyRangeAndNextSiblingAsync()).KeyRange));
             Assert.That(link.KeyRange.LowKeyInclusive, Is.EqualTo("f"));
             Assert.That(link.KeyRange.HighKeyExclusive, Is.EqualTo("m"));
             Assert.That(link.PrevSibling, Is.EqualTo(await grain.GetPrevSiblingAsync()));

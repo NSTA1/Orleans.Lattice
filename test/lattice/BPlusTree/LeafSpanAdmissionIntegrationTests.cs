@@ -109,7 +109,7 @@ public class LeafSpanAdmissionIntegrationTests
             await router.SetAsync($"k{i:D3}", Encoding.UTF8.GetBytes($"v{i}"));
 
         var donor = (await shard.GetLeftmostLeafIdAsync())!.Value;
-        var donorRange = await Leaf(donor).GetKeyRangeAsync();
+        var donorRange = (await Leaf(donor).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         Assert.That(donorRange.HighKeyExclusive, Is.Not.Null,
             "precondition: the leftmost leaf must have split, so it declares a bounded high key and "
             + "sits permanently at SplitState.SplitComplete - the state in which the old "
@@ -138,7 +138,7 @@ public class LeafSpanAdmissionIntegrationTests
         var current = from;
         for (var hop = 0; hop < 64; hop++)
         {
-            var range = await Leaf(current).GetKeyRangeAsync();
+            var range = (await Leaf(current).GetKeyRangeAndNextSiblingAsync()).KeyRange;
             if (SplitBoundary.Owns(key, range.LowKeyInclusive, range.HighKeyExclusive))
                 return current;
 

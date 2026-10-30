@@ -170,7 +170,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
         // The source leaf stays a stub: this fixture is about what reaches the
         // destination, and a prepared write leaves the source's visible
         // Entries untouched by construction.
-        var sourceLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var sourceLeaf = LeafSubstituteCombinedCalls.CreateComposed();
         sourceLeaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         sourceLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         StubLocalPrepareLookup(sourceLeaf);

@@ -67,14 +67,6 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     [AlwaysInterleave]
     Task<GrainId> GetLeftmostChildAsync();
 
-    /// <summary>Returns the grain identity of the rightmost child.</summary>
-    /// <remarks>
-    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> per U9p step
-    /// 8c-c-iv-c2-vi. Single-line synchronous read.
-    /// </remarks>
-    [AlwaysInterleave]
-    Task<GrainId> GetRightmostChildAsync();
-
     /// <summary>
     /// Returns the leftmost child and whether this node's children are leaves, in a single call.
     /// </summary>

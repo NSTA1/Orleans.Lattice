@@ -37,7 +37,7 @@ public sealed class PreparedBucketSweepMarkerStampTests
         var leafId = GrainId.Create("leaf", "sweep-source");
         var factory = Substitute.For<IGrainFactory>();
 
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>()).Returns(new List<PendingMutationSnapshot>
         {
             new()

@@ -347,9 +347,6 @@ internal sealed partial class BPlusInternalGrain(
     public Task<GrainId> GetLeftmostChildAsync() =>
         Task.FromResult(state.State.Children[0].ChildId);
 
-    public Task<GrainId> GetRightmostChildAsync() =>
-        Task.FromResult(state.State.Children[^1].ChildId);
-
     public Task<(GrainId ChildId, bool ChildrenAreLeaves)> GetLeftmostChildWithMetadataAsync() =>
         Task.FromResult((state.State.Children[0].ChildId, state.State.ChildrenAreLeaves));
 

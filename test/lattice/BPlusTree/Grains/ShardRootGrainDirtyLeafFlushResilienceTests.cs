@@ -60,7 +60,7 @@ public class ShardRootGrainDirtyLeafFlushResilienceTests
         state.State.RootIsLeaf = true;
 
         var factory = Substitute.For<IGrainFactory>();
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.DeleteAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
         leaf.DeleteTrackedAsync(Arg.Any<string>()).Returns(Task.FromResult(new LeafDeleteResult { Deleted = true }));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));

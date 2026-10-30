@@ -86,7 +86,7 @@ public partial class TreeSnapshotGrainTests
         state.State.LogicalTreeId = PreparedLogicalTreeId;
 
         var leafId = GrainId.Create("leaf", "prepared-source-leaf");
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>()).Returns(ci =>
         {
             order.Add("sweep");

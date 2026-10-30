@@ -88,7 +88,6 @@ public sealed partial class LatticeStateApiEdgeCaseTests
                 {
                     await wal.Received(1).GetResumeFloorAsync(Arg.Any<CancellationToken>());
                     _ = wal.DidNotReceive().GetNextSequenceAsync(Arg.Any<CancellationToken>());
-                    await wal.DidNotReceive().GetLiveEntryCountAsync(Arg.Any<CancellationToken>());
                 }
                 else
                 {
@@ -129,8 +128,6 @@ public sealed partial class LatticeStateApiEdgeCaseTests
                 Interlocked.Increment(ref tails[0]);
                 return new ValueTask<long>(gate.Task);
             });
-            wal.GetLiveEntryCountAsync(Arg.Any<CancellationToken>())
-                .Returns(Task.FromResult(p == trimmedPartition ? 1L : liveCount));
             var retained = p == trimmedPartition ? 1L : liveCount;
             wal.GetResumeFloorAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
             {

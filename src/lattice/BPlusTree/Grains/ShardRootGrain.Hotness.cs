@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// publishes a data point to the corresponding
 /// <see cref="LatticeMetrics"/> instrument so an OpenTelemetry pipeline
 /// can observe per-shard throughput without polling
-/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetHotnessAsync"/>.
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetSamplingStatusAsync"/>.
 /// </summary>
 internal sealed partial class ShardRootGrain
 {
@@ -87,30 +87,27 @@ internal sealed partial class ShardRootGrain
         LatticeMetrics.ShardRecordsWritten.Add(records, GetMetricTags());
     }
 
-    /// <inheritdoc />
-    public Task<ShardHotness> GetHotnessAsync()
-    {
-        return Task.FromResult(new ShardHotness
-        {
-            Reads = _readOps,
-            Writes = _writeOps,
-            Window = DateTime.UtcNow - _countersSince,
-        });
-    }
+    /// <summary>
+    /// This activation's volatile hotness counters, as
+    /// <see cref="GetSamplingStatusAsync"/> reports them. Not a grain call.
+    /// </summary>
+    internal Task<ShardHotness> GetHotnessAsync() => Task.FromResult(CurrentHotness());
 
     /// <inheritdoc />
     public Task<ShardSamplingStatus> GetSamplingStatusAsync()
     {
         return Task.FromResult(new ShardSamplingStatus
         {
-            Hotness = new ShardHotness
-            {
-                Reads = _readOps,
-                Writes = _writeOps,
-                Window = DateTime.UtcNow - _countersSince,
-            },
+            Hotness = CurrentHotness(),
             IsSplitting = state.State.SplitInProgress is not null,
             HasPendingBulkOperation = state.State.PendingBulkGraft is not null,
         });
     }
+
+    private ShardHotness CurrentHotness() => new()
+    {
+        Reads = _readOps,
+        Writes = _writeOps,
+        Window = DateTime.UtcNow - _countersSince,
+    };
 }
