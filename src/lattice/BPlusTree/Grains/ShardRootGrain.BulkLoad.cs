@@ -447,8 +447,8 @@ internal sealed partial class ShardRootGrain
             : await TraverseToRightmostLeafAsync();
 
         var rightmostLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(rightmostLeafId);
-        var existingKeys = await rightmostLeaf.GetKeysAsync();
-        int space = maxLeafKeys - existingKeys.Count;
+        var existingCount = await rightmostLeaf.CountAsync();
+        int space = maxLeafKeys - existingCount;
 
         int idx = 0;
         if (space > 0)
