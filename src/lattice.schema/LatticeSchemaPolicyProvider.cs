@@ -15,6 +15,7 @@ internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider
 {
     private readonly ILatticeSchemaPolicyStore _store;
     private readonly ConcurrentDictionary<string, CompiledSchemaPolicy?> _cache = new(StringComparer.Ordinal);
+    private readonly SchemaTreeCacheGenerations _generations = new();
 
     /// <summary>
     /// The number of per-tree entries currently cached. Exposed for unit testing
@@ -62,10 +63,13 @@ internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider
 
     private async Task<CompiledSchemaPolicy?> LoadAndCacheAsync(string treeId, CancellationToken cancellationToken)
     {
+        // Captured before the read: an invalidation after this point overtakes the
+        // load, which must then not install its possibly pre-change answer.
+        var generation = _generations.Capture(treeId);
         var policy = await _store.GetPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
         var compiled = policy is null ? null : CompiledSchemaPolicy.Compile(policy);
 
-        _cache.CacheIfSpaceAvailable(treeId, compiled);
+        _cache.CacheIfCurrent(_generations, treeId, generation, compiled);
 
         return compiled;
     }
@@ -74,13 +78,13 @@ internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider
     public void Invalidate(string treeId)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        _cache.TryRemove(treeId, out _);
+        _cache.Invalidate(_generations, treeId);
     }
 
     /// <inheritdoc />
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
-        _cache.InvalidateForMutation(mutation, SchemaConstants.PolicyTree);
+        _cache.InvalidateForMutation(_generations, mutation, SchemaConstants.PolicyTree);
         return Task.CompletedTask;
     }
 }

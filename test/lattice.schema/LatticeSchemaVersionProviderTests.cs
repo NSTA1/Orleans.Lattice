@@ -173,6 +173,67 @@ public sealed class LatticeSchemaVersionProviderTests
     }
 
     [Test]
+    public async Task GetConfigAsync_load_overtaken_by_invalidate_does_not_cache_stale_config()
+    {
+        // The store read blocks; a config change commits and invalidates while it
+        // is in flight; the read then returns the pre-change answer.
+        var blockedRead = new TaskCompletionSource<LatticeSchemaVersionConfig?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ILatticeSchemaVersionStore>();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(blockedRead.Task, Task.FromResult<LatticeSchemaVersionConfig?>(Config()));
+        var provider = CreateProvider(store);
+
+        var inFlight = provider.GetConfigAsync("orders").AsTask();
+        provider.Invalidate("orders");
+        blockedRead.SetResult(null);
+        Assert.That(await inFlight, Is.Null);
+
+        // The overtaken load must not install its pre-change answer: the next
+        // lookup re-reads the store and sees the new config.
+        var config = await provider.GetConfigAsync("orders");
+
+        Assert.That(config, Is.Not.Null);
+        await store.Received(2).GetConfigAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetConfigAsync_load_overtaken_by_version_mutation_does_not_cache_stale_config()
+    {
+        var blockedRead = new TaskCompletionSource<LatticeSchemaVersionConfig?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ILatticeSchemaVersionStore>();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(blockedRead.Task, Task.FromResult<LatticeSchemaVersionConfig?>(Config()));
+        var provider = CreateProvider(store);
+
+        var inFlight = provider.GetConfigAsync("orders").AsTask();
+        await provider.OnMutationAsync(
+            new LatticeMutation { TreeId = "sys-schema-version", Key = "orders" }, CancellationToken.None);
+        blockedRead.SetResult(null);
+        Assert.That(await inFlight, Is.Null);
+
+        var config = await provider.GetConfigAsync("orders");
+
+        Assert.That(config, Is.Not.Null);
+        await store.Received(2).GetConfigAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetConfigAsync_load_not_overtaken_is_cached()
+    {
+        var blockedRead = new TaskCompletionSource<LatticeSchemaVersionConfig?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ILatticeSchemaVersionStore>();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>()).Returns(blockedRead.Task);
+        var provider = CreateProvider(store);
+
+        var inFlight = provider.GetConfigAsync("orders").AsTask();
+        blockedRead.SetResult(Config());
+        _ = await inFlight;
+        _ = await provider.GetConfigAsync("orders");
+
+        await store.Received(1).GetConfigAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Invalidate_null_tree_throws()
     {
         var provider = CreateProvider(Substitute.For<ILatticeSchemaVersionStore>());

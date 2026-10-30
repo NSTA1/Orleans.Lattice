@@ -52,7 +52,8 @@ public sealed class AggregationLatticeViewProjection : ILatticeAggregationProjec
     /// reserved NUL (<c>\u0000</c>) prefix (which the maintainer reserves for its
     /// internal rows) is rejected: the contribution is dropped and counted via the
     /// <c>orleans.lattice.view.aggregation_rejected</c> metric rather than
-    /// materialised.
+    /// materialised, and the source key's prior membership is retracted as a
+    /// filter exit retracts it.
     /// </param>
     /// <param name="selectorVersion">
     /// Stable tag identifying the selectors' logic, folded into
@@ -123,7 +124,8 @@ public sealed class AggregationLatticeViewProjection : ILatticeAggregationProjec
     /// Maps a deserialized source value to the group key it belongs to. Must not
     /// be <see langword="null"/>. A group key that is empty or begins with the
     /// reserved NUL (<c>\u0000</c>) prefix is rejected (dropped and counted via the
-    /// <c>orleans.lattice.view.aggregation_rejected</c> metric).
+    /// <c>orleans.lattice.view.aggregation_rejected</c> metric, retracting the
+    /// source key's prior membership as a filter exit does).
     /// </param>
     /// <param name="selectorVersion">
     /// Stable tag identifying the selectors' logic, folded into

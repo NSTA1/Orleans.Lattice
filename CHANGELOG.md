@@ -30,7 +30,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **Explorer - Backup detail ownership.** Late detail reads no longer overwrite another backup; completed deletions cannot redirect its page, and old exports cannot disable new controls, clear a newer transfer or start a stale download. ([#5204](https://github.com/NSTA1/Orleans.Lattice/issues/5204)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Page and action ownership.** Backup reads, deletes and exports cannot affect a newer selection; configuration saves cannot overlap, late compaction replies stay silent, and orphan capability replies stop before resuming a disposed watch. ([#5204](https://github.com/NSTA1/Orleans.Lattice/issues/5204), [#5222](https://github.com/NSTA1/Orleans.Lattice/issues/5222)) (`Orleans.Lattice.Explorer.UI`)
 
 ## Released
 

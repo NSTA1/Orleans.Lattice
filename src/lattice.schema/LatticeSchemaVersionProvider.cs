@@ -16,6 +16,7 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
 {
     private readonly ILatticeSchemaVersionStore _store;
     private readonly ConcurrentDictionary<string, LatticeSchemaVersionConfig?> _cache = new(StringComparer.Ordinal);
+    private readonly SchemaTreeCacheGenerations _generations = new();
 
     /// <summary>
     /// The number of per-tree entries currently cached. Exposed for unit testing
@@ -63,9 +64,12 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
 
     private async Task<LatticeSchemaVersionConfig?> LoadAndCacheAsync(string treeId, CancellationToken cancellationToken)
     {
+        // Captured before the read: an invalidation after this point overtakes the
+        // load, which must then not install its possibly pre-change answer.
+        var generation = _generations.Capture(treeId);
         var config = await _store.GetConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
 
-        _cache.CacheIfSpaceAvailable(treeId, config);
+        _cache.CacheIfCurrent(_generations, treeId, generation, config);
 
         return config;
     }
@@ -74,13 +78,13 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
     public void Invalidate(string treeId)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        _cache.TryRemove(treeId, out _);
+        _cache.Invalidate(_generations, treeId);
     }
 
     /// <inheritdoc />
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
-        _cache.InvalidateForMutation(mutation, SchemaConstants.VersionConfigTree);
+        _cache.InvalidateForMutation(_generations, mutation, SchemaConstants.VersionConfigTree);
         return Task.CompletedTask;
     }
 }
