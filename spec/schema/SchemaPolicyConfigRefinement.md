@@ -23,7 +23,7 @@ overtook it.
 | `stored`, `rev` | The durable setting row and a ghost count of committed changes. | `LatticeSchemaPolicyStore.SetPolicyAsync`, `LatticeSchemaPolicyStore.ClearPolicyAsync`, `LatticeSchemaVersionStore.SetConfigAsync`. |
 | `admin`, `adminAt` | An admin call between its durable write and its return, and the silo serving it. | `LatticeSchemaAdmin.SetPolicyAsync`, `LatticeSchemaAdmin.ClearPolicyAsync`, `LatticeSchemaVersionAdmin.SetVersionConfigAsync`. |
 | `cache`, `cacheRev` | Each silo's cached setting or null sentinel, and the change it was read at. | `LatticeSchemaPolicyProvider.GetCompiledPolicyAsync`, `LatticeSchemaVersionProvider.GetConfigAsync`. |
-| `loading`, `loadVal`, `loadRev`, `overtaken` | A cache-miss read in flight, what it read, and whether an eviction overtook it. | `LatticeSchemaPolicyProvider.LoadAndCacheAsync`, `LatticeSchemaVersionProvider.LoadAndCacheAsync`, `SchemaTreeCacheExtensions.CacheIfSpaceAvailable`. |
+| `loading`, `loadVal`, `loadRev`, `overtaken` | A cache-miss read in flight, what it read, and whether an eviction overtook it. | `LatticeSchemaPolicyProvider.LoadAndCacheAsync`, `LatticeSchemaVersionProvider.LoadAndCacheAsync`, `SchemaTreeCacheExtensions.CacheIfCurrent`, `SchemaTreeCacheGenerations.Capture`. |
 | `pending` | A change not yet delivered to a silo's cache. | `LatticeSchemaPolicyProvider.OnMutationAsync`, `LatticeSchemaVersionProvider.OnMutationAsync`. |
 | `data`, `commits`, `writes`, `judge`, `outcome` | Local writes, the setting that judged each, and their verdict. | `LatticeSchemaWriteInterceptor.OnWriteAsync`, `LatticeWriteInterceptorEnforcement.InterceptPointAsync`. |
 
@@ -36,7 +36,7 @@ overtook it.
 | `Acknowledge` | The admin evicts its own silo's entry before it returns. | `LatticeSchemaAdmin.SetPolicyAsync`, `LatticeSchemaVersionAdmin.ClearVersionConfigAsync`. | Yes: `LatticeSchemaAdminTests.SetPolicyAsync_delegates_and_invalidates_cache`, `LatticeSchemaVersionAdminTests.ClearVersionConfigAsync_removes_and_invalidates`. |
 | `Propagate(s)` | The change reaches silo `s` and evicts its entry. | `LatticeSchemaPolicyProvider.OnMutationAsync`, `LatticeSchemaVersionProvider.OnMutationAsync`, `SchemaTreeCacheExtensions.InvalidateForMutation`. | Yes: `LatticeSchemaPolicyProviderTests.OnMutationAsync_policy_tree_write_evicts_affected_tree`, `LatticeSchemaVersionProviderTests.OnMutationAsync_version_tree_write_evicts_affected_tree`. |
 | `BeginLoad(s)` | A cache miss reads the durable row. | `LatticeSchemaPolicyProvider.GetCompiledPolicyAsync`, `LatticeSchemaVersionProvider.GetConfigAsync`. | Yes: `LatticeSchemaPolicyProviderTests.Invalidate_forces_reload_on_next_get`, `LatticeSchemaVersionProviderTests.Invalidate_forces_reload_on_next_get`. |
-| `InstallLoad(s)` | The read installs its result unless an eviction overtook it. | `LatticeSchemaPolicyProvider.LoadAndCacheAsync`, `LatticeSchemaVersionProvider.LoadAndCacheAsync`. | Yes: `LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_caches_after_first_load`, `LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_caches_null_sentinel_for_ungoverned_tree`, `LatticeSchemaVersionProviderTests.GetConfigAsync_caches_after_first_load`. |
+| `InstallLoad(s)` | The read installs its result unless an eviction overtook it. | `LatticeSchemaPolicyProvider.LoadAndCacheAsync`, `LatticeSchemaVersionProvider.LoadAndCacheAsync`. | Yes: `LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_caches_after_first_load`, `LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_caches_null_sentinel_for_ungoverned_tree`, `LatticeSchemaVersionProviderTests.GetConfigAsync_caches_after_first_load`, `LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_load_overtaken_by_invalidate_does_not_cache_stale_policy`. |
 | `Write(s,v)` | A local write is judged by the silo's cached setting before the WAL append. | `LatticeSchemaWriteInterceptor.OnWriteAsync`, `LatticeWriteInterceptorEnforcement.InterceptPointAsync`. | Yes: `LatticeSchemaWriteInterceptorTests.OnWriteAsync_valid_local_value_accepts`, `LatticeSchemaWriteInterceptorTests.OnWriteAsync_invalid_local_value_throws_violation`, `SchemaValidationDataApiTests.SetAsync_strict_json_rejection_preserves_typed_diagnostics_and_commits_nothing`. |
 | `Stutter` | No protocol step. | No production counterpart. | Not applicable. |
 
@@ -45,7 +45,7 @@ overtook it.
 | Spec property | Production property | Detector |
 |---------------|--------------------|----------|
 | `StoredPolicyCompiles` | A policy that does not compile is never written to the reserved tree. | Yes: `LatticeSchemaPolicyStoreTests.SetPolicyAsync_negative_max_byte_length_is_rejected_and_not_stored`. |
-| `CacheCurrentOrPending` | A silo's cached setting is current or an eviction for it is on its way; no overtaken load installs an older setting. | Yes: `LatticeSchemaPolicyProviderTests.OnMutationAsync_policy_tree_write_evicts_affected_tree`, `LatticeSchemaVersionProviderTests.OnMutationAsync_version_tree_write_evicts_affected_tree`, `LatticeSchemaPolicyProviderTests.Invalidate_forces_reload_on_next_get`. |
+| `CacheCurrentOrPending` | A silo's cached setting is current or an eviction for it is on its way; no overtaken load installs an older setting. | Yes: `LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_load_overtaken_by_invalidate_does_not_cache_stale_policy`, `LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_load_overtaken_by_policy_mutation_does_not_cache_stale_policy`, `LatticeSchemaVersionProviderTests.GetConfigAsync_load_overtaken_by_invalidate_does_not_cache_stale_config`, `LatticeSchemaVersionProviderTests.GetConfigAsync_load_overtaken_by_version_mutation_does_not_cache_stale_config`, `LatticeSchemaPolicyProviderTests.OnMutationAsync_policy_tree_write_evicts_affected_tree`, `LatticeSchemaVersionProviderTests.OnMutationAsync_version_tree_write_evicts_affected_tree`, `LatticeSchemaPolicyProviderTests.Invalidate_forces_reload_on_next_get`. |
 | `AdminSiloCurrentAtAck` | The admin's own silo has evicted its entry before the admin call returns. | Yes: `LatticeSchemaAdminTests.SetPolicyAsync_delegates_and_invalidates_cache`, `LatticeSchemaAdminTests.ClearPolicyAsync_delegates_and_invalidates_cache`, `LatticeSchemaVersionAdminTests.SetVersionConfigAsync_writes_store_and_invalidates_cache`. |
 | `AcceptedWriteValid` | A local write is committed only when the judging setting accepts it. | Yes: `LatticeSchemaWriteInterceptorTests.OnWriteAsync_invalid_local_value_throws_violation`, `SchemaValidationDataApiTests.SetAsync_strict_json_rejection_preserves_typed_diagnostics_and_commits_nothing`. |
 | `RejectLeavesNoMutation` | A rejected local write is thrown before the WAL append and changes no data. | Yes: `SchemaValidationDataApiTests.SetAsync_strict_json_rejection_preserves_typed_diagnostics_and_commits_nothing`, `LatticeSchemaWriteInterceptorTests.OnWriteAsync_invalid_local_value_persists_nothing_to_dlq`. |
@@ -107,9 +107,11 @@ claim the fixes are released.
 - **One governed tree, one setting kind.** The model tracks a single governed
   tree and one abstract setting that stands for either the enforcement policy
   or the version config, which share the cache admission and eviction rules.
-  Key isolation between governed trees, the reserved-tree short-circuit and the
-  bounded cache admission are checked by unit detectors, not modelled.
-  Production symbols: `SchemaTreeCacheExtensions.CacheIfSpaceAvailable`, `SchemaTreeCacheExtensions.InvalidateForMutation`.
+  Key isolation between governed trees, the reserved-tree short-circuit, the
+  bounded cache admission and the striped load generations (a stripe collision
+  only discards a still-current load) are checked by unit detectors, not
+  modelled.
+  Production symbols: `SchemaTreeCacheExtensions.CacheIfSpaceAvailable`, `SchemaTreeCacheExtensions.InvalidateForMutation`, `SchemaTreeCacheGenerations`.
 - **Propagation bound.** Delivery of a change to a silo other than the admin's
   is an environment step under weak fairness. The model checks eventual
   eviction, not the stated time bound within which delivery happens; that bound

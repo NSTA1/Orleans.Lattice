@@ -63,4 +63,4 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Tlc
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `SchemaPolicyConfig` | 3 | 4 | 8 | 8 | 13 | 106,331 |
-| `SchemaStageOrdering` | 2 | 11 | 7 | 17 | 17 | 40,523 |
+| `SchemaStageOrdering` | 2 | 11 | 7 | 18 | 17 | 40,192 |

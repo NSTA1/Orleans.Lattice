@@ -44,6 +44,15 @@ vars == <<config, phase, origin, atomic, req, ei, idx, val, kept, path, outcome,
 Intercepts(r) == (HasStage(r, "E") /\ gStrictE) \/ (HasStage(r, "V") /\ gStrictV)
 Skips(r, o) == r = "None" \/ (o = "System" /\ ~Intercepts(r))
 
+\* Enforcement judges the bytes a reader is served. Registering versioning
+\* installs the read decoder, which strips the envelope and upcasts the body;
+\* a value it cannot decode (newer than the target, or no upcast path) has no
+\* judgeable body. With no decoder the whole value, envelope included, is
+\* judged, and no body policy accepts the envelope header.
+DecoderInstalled(r) == r \in {"Versioning", "Composed", "Reversed"}
+Decodable(v) ==
+    v.form = "Raw" \/ (DecoderInstalled(reg) /\ ~(versionOn /\ v.tag = "Orphan"))
+
 TypeOK ==
     /\ reg \in Registrations
     /\ gStrictE \in BOOLEAN /\ gStrictV \in BOOLEAN
@@ -67,12 +76,15 @@ EnforcementSeesSubmittedValue ==
 
 CommitStep == phase = "Ready" /\ phase' = "Done"
 
-\* An intercepted local write is committed only when every entry's body
-\* satisfies the policy of a registration that includes enforcement.
+\* An intercepted local write is committed only when every entry is judgeable
+\* and its body satisfies the policy of a registration that includes
+\* enforcement.
 ValidationBeforeCommit ==
     [][(CommitStep /\ path = "Intercepted" /\ origin = "Local"
         /\ HasStage(reg, "E") /\ policyOn)
-       => \A e \in Range(stored') : e.body = "Good"]_vars
+       => \A e \in Range(stored') :
+            /\ e.body = "Good"
+            /\ (e.form = "Env" => (DecoderInstalled(reg) /\ ~(versionOn /\ e.tag = "Orphan")))]_vars
 
 \* A rejected or aborted write applies nothing.
 RefusalAppliesNothing ==
@@ -86,11 +98,13 @@ BatchAccounting ==
        => /\ Len(stored') + dropped = BatchSize
           /\ (atomic => dropped = 0)]_vars
 
-\* Enforcement refuses only an entry whose body breaks the policy, whether or
-\* not the entry arrived inside a version envelope.
+\* Enforcement refuses only an entry whose served body breaks the policy or
+\* cannot be decoded: an entry inside a version envelope that decodes to a
+\* valid body is never refused.
 ValidBodyNeverRefusedByEnforcement ==
     [][((dlq' # dlq \/ outcome' = "Rejected") /\ refusedBy' = "E")
-       => val.body = "Bad"]_vars
+       => \/ val.body = "Bad"
+          \/ (val.form = "Env" /\ ~(DecoderInstalled(reg) /\ ~(versionOn /\ val.tag = "Orphan")))]_vars
 
 \* Under a supported registration with versioning, every intercepted entry is
 \* stored self-describing.
@@ -127,7 +141,8 @@ StrictFlagsPerStage ==
 StrictIngestDiverts ==
     [][(CommitStep /\ path = "Intercepted" /\ origin = "System")
        => \A e \in Range(stored') :
-            /\ (HasStage(reg, "E") /\ policyOn /\ tStrictE => e.body = "Good")
+            /\ (HasStage(reg, "E") /\ policyOn /\ tStrictE =>
+                    e.body = "Good" /\ (e.form = "Env" => (DecoderInstalled(reg) /\ ~(versionOn /\ e.tag = "Orphan"))))
             /\ (HasStage(reg, "V") /\ versionOn /\ tStrictV => e.tag \in Upcastable)]_vars
 
 \* Only system-origin ingest is dead-lettered; a local refusal is a rejection.
@@ -177,10 +192,11 @@ Admit ==
             /\ UNCHANGED kept
     /\ UNCHANGED <<config, origin, atomic, req, ei, idx, val, outcome, refusedBy, dropped, dlq, stored>>
 
-\* The enforcement stage judges the entry's body.
+\* The enforcement stage judges the entry's served body, failing closed on an
+\* entry it cannot decode.
 RunEnforcement ==
     /\ phase = "Chain" /\ Chain(reg)[idx] = "E"
-    /\ IF ~policyOn \/ val.body = "Good"
+    /\ IF ~policyOn \/ (val.body = "Good" /\ Decodable(val))
        THEN /\ Advance(val)
             /\ UNCHANGED <<outcome, refusedBy, dropped, dlq>>
        ELSE IF origin = "Local"

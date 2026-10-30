@@ -1,0 +1,13 @@
+# The #5247 race: a completed load installs its result even when an eviction
+# overtook it, so the pre-change policy stays cached.
+MODULE: SchemaPolicyConfig
+ROW: CacheCurrentOrPending
+FILE: src/lattice.schema/LatticeSchemaPolicyProvider.cs
+DETECTORS: LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_load_overtaken_by_invalidate_does_not_cache_stale_policy, LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_load_overtaken_by_policy_mutation_does_not_cache_stale_policy
+SUMMARY: a load an eviction overtook still installs the pre-change policy
+
+--- FIND
+        _cache.CacheIfCurrent(_generations, treeId, generation, compiled);
+--- REPLACE
+        _cache.CacheIfSpaceAvailable(treeId, compiled);
+--- END

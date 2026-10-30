@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaVersionProviderTests.OnMutationAsync_version_tree_write_
 SUMMARY: the version provider never evicts a stale config
 
 --- FIND
-        _cache.InvalidateForMutation(mutation, SchemaConstants.VersionConfigTree);
+        _cache.InvalidateForMutation(_generations, mutation, SchemaConstants.VersionConfigTree);
 --- REPLACE
         _ = mutation;
 --- END

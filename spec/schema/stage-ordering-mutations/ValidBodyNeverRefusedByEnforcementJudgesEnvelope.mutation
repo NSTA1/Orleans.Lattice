@@ -7,7 +7,7 @@ SUMMARY: an enveloped entry with a valid body is refused by enforcement
 PERTURBS: RunEnforcement
 
 --- FIND
-    /\ IF ~policyOn \/ val.body = "Good"
+    /\ IF ~policyOn \/ (val.body = "Good" /\ Decodable(val))
 --- REPLACE
     /\ IF ~policyOn \/ (val.form = "Raw" /\ val.body = "Good")
 --- END

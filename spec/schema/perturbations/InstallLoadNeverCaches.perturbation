@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_caches_after_
 SUMMARY: a completed load is never installed
 
 --- FIND
-        _cache.CacheIfSpaceAvailable(treeId, compiled);
+        _cache.CacheIfCurrent(_generations, treeId, generation, compiled);
 --- REPLACE
-        _ = compiled;
+        _ = generation;
 --- END

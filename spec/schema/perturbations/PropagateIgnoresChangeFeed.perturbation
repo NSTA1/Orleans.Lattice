@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaPolicyProviderTests.OnMutationAsync_policy_tree_write_ev
 SUMMARY: the policy provider ignores a sys-schema-policy write
 
 --- FIND
-        _cache.InvalidateForMutation(mutation, SchemaConstants.PolicyTree);
+        _cache.InvalidateForMutation(_generations, mutation, SchemaConstants.PolicyTree);
 --- REPLACE
         _ = mutation;
 --- END
