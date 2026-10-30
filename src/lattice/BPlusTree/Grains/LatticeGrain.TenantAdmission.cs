@@ -199,10 +199,10 @@ internal sealed partial class LatticeGrain
     // returns an incomplete admission decision, which by construction is after
     // enforcement has already completed, so they must not re-enforce.
     private async Task SetAdmitThenWriteAsync(
-        ValueTask admit, string key, byte[] value, CancellationToken cancellationToken)
+        ValueTask admit, string key, byte[] value, WriteJudgement? judgement, CancellationToken cancellationToken)
     {
         await admit;
-        await SetGatedTailAsync(key, value, cancellationToken);
+        await SetGatedTailAsync(key, value, judgement, cancellationToken);
     }
 
     private async Task<bool> DeleteAdmitThenDeleteAsync(
