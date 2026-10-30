@@ -131,7 +131,8 @@ public partial class LatticeSchemaRemediationGrainTests
         SchemaRemediationState? seedState,
         ILatticeSchemaRegistry? schemaRegistry,
         LatticeSchemaPolicy? existingPolicy,
-        IServiceProvider? activationServices = null)
+        IServiceProvider? activationServices = null,
+        ILatticeValueDecoder? valueDecoder = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("remediation", TreeId));
@@ -199,7 +200,8 @@ public partial class LatticeSchemaRemediationGrainTests
             state,
             policyStore,
             policyProvider,
-            schemaRegistry);
+            schemaRegistry,
+            valueDecoder: valueDecoder);
 
         return new Harness
         {
@@ -345,6 +347,44 @@ public partial class LatticeSchemaRemediationGrainTests
         Assert.That(report.Succeeded, Is.False);
         Assert.That(report.OffendingKey, Is.EqualTo("k1"));
         await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
+    }
+
+    [Test]
+    public async Task StartAsync_with_an_active_decoder_reads_the_stored_form_and_aborts_on_an_undecodable_value()
+    {
+        // The client-facing entry scan and GetManyAsync run the read-path decoder,
+        // which throws on a value it cannot upcast before the per-value abort can run
+        // (#5252). A transform remediation over a tree the decoder is active for must
+        // read the stored form and decode each value itself.
+        var decoder = Substitute.For<ILatticeValueDecoder>();
+        decoder.IsActive(TreeId).Returns(true);
+        decoder.DecodeAsync(TreeId, Arg.Any<byte[]>(), Arg.Any<CancellationToken>()).Returns(ci =>
+        {
+            var value = ci.ArgAt<byte[]>(1);
+            return LatticeSchemaEnvelope.IsEnveloped(value)
+                ? throw new NotSupportedException("No upcaster registered.")
+                : new ValueTask<byte[]>(value);
+        });
+        var h = CreateGrainCore(
+            () => EntriesBytes(("k0", Utf8("{\"a\":0}")), ("k1", Env(1, "{\"a\":1}"))),
+            seedState: null,
+            schemaRegistry: null,
+            existingPolicy: null,
+            valueDecoder: decoder);
+
+        var report = await h.Grain.StartAsync(LatticeValueTransform.Passthrough(), JsonPolicy());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.DidAbort, Is.True);
+            Assert.That(report.OffendingKey, Is.EqualTo("k1"));
+            Assert.That(h.State.State.InProgress, Is.False);
+        });
+        await h.Source.DidNotReceive().GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>());
+        _ = h.Source.DidNotReceive().EntriesAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>());
+        await h.Registry.DidNotReceive().SwapAliasAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]

@@ -66,7 +66,8 @@ internal sealed class LatticeSchemaRemediationGrain(
     ILatticeSchemaPolicyStore? policyStore = null,
     ILatticeSchemaPolicyProvider? policyProvider = null,
     ILatticeSchemaRegistry? schemaRegistry = null,
-    SchemaRuntimeRegistry? runtimeRegistry = null)
+    SchemaRuntimeRegistry? runtimeRegistry = null,
+    ILatticeValueDecoder? valueDecoder = null)
     : IGrainBase, ILatticeSchemaRemediationGrain
 {
     private readonly int _previewMaxBytes = Math.Max(1, options.Value.DeadLetterPreviewMaxBytes);
@@ -513,6 +514,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     {
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var rewrite = await CreateRewriteAsync();
+        var decode = TransformInputDecoderOrNull();
         var policyView = PolicyViewOrNull();
         var compiled = CompiledPolicyOrNull();
         var sliceSize = Math.Max(1, SliceSize);
@@ -528,7 +530,8 @@ internal sealed class LatticeSchemaRemediationGrain(
                 byte[] rewritten;
                 try
                 {
-                    rewritten = rewrite(entry.Value);
+                    var input = decode is null ? entry.Value : await decode(entry.Value);
+                    rewritten = rewrite(input);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
                 {
@@ -600,6 +603,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var compiled = CompiledPolicyOrNull();
         var policyView = PolicyViewOrNull();
         var rewrite = await CreateRewriteAsync();
+        var decode = TransformInputDecoderOrNull();
         var sliceSize = Math.Max(1, SliceSize);
         var done = 0;
         string? lastKey = null;
@@ -613,7 +617,8 @@ internal sealed class LatticeSchemaRemediationGrain(
                 byte[] rewritten;
                 try
                 {
-                    rewritten = rewrite(entry.Value);
+                    var input = decode is null ? entry.Value : await decode(entry.Value);
+                    rewritten = rewrite(input);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
                 {
@@ -687,11 +692,22 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// own stamped version to the migration's target and whose failure the slice
     /// turns into an abort.
     /// </para>
+    /// <para>
+    /// A transform remediation over a tree the read-path
+    /// <see cref="ILatticeValueDecoder"/> is active for (a versioning-enabled silo)
+    /// also reads the stored form, then decodes each value itself, per value, through
+    /// that same decoder (<see cref="TransformInputDecoderOrNull"/>): the transform
+    /// sees exactly the body a client read returns, but a value the decoder cannot
+    /// upcast to the tree's target fails on its own key and becomes the abort, rather
+    /// than throwing the whole slice out of the decoding scan or multi-get and
+    /// leaving the remediation in flight holding the alias reservation (issue #5252).
+    /// </para>
     /// </summary>
     private async Task<SourceSlice> ReadSliceAsync(ILattice source, int sliceSize)
     {
         var keys = new List<string>(Math.Min(sliceSize, 1024));
-        var storedForm = state.State.Mode == SchemaRemediationMode.SchemaVersionMigration;
+        var storedForm = state.State.Mode == SchemaRemediationMode.SchemaVersionMigration
+            || TransformDecoderActive;
         ExceptionDispatchInfo? fault = null;
         try
         {
@@ -733,10 +749,11 @@ internal sealed class LatticeSchemaRemediationGrain(
     }
 
     /// <summary>
-    /// The source's keys after the durable cursor, in key order. A schema-version
-    /// migration (<paramref name="keysOnly"/>) scans keys only: the entry scan runs
-    /// the client-facing decoding read on each value, which throws on a value it
-    /// cannot upcast (issue #5208), and the slice never uses the scanned values.
+    /// The source's keys after the durable cursor, in key order. A slice that reads
+    /// the stored form (<paramref name="keysOnly"/>) scans keys only: the entry scan
+    /// runs the client-facing decoding read on each value, which throws on a value it
+    /// cannot upcast (issues #5208 and #5252), and the slice never uses the scanned
+    /// values.
     /// </summary>
     private async IAsyncEnumerable<string> ScanKeysAfterCursorAsync(ILattice source, bool keysOnly)
     {
@@ -877,6 +894,41 @@ internal sealed class LatticeSchemaRemediationGrain(
 
         var transform = state.State.Transform;
         return value => LatticeValueTransformEvaluation.Evaluate(value, in transform);
+    }
+
+    /// <summary>
+    /// <c>true</c> when this is a <see cref="SchemaRemediationMode.Transform"/>
+    /// remediation and the registered read-path <see cref="ILatticeValueDecoder"/> is
+    /// active for the tree, so the slice reads the stored form and decodes each value
+    /// itself (issue #5252).
+    /// </summary>
+    private bool TransformDecoderActive =>
+        state.State.Mode == SchemaRemediationMode.Transform
+        && valueDecoder is { } decoder
+        && decoder.IsActive(TreeId);
+
+    /// <summary>
+    /// The per-value decode a transform remediation applies to each stored value
+    /// before its transform: the same read-path <see cref="ILatticeValueDecoder"/> a
+    /// client read runs (strip the schema-version envelope, upcast to the tree's
+    /// target), so the transform sees, and remediation writes, exactly what it did
+    /// when it read through the decoding client read. The decoder throws
+    /// <see cref="NotSupportedException"/> on a value it cannot upcast, which the
+    /// dry-run / build turns into an abort naming that value. Returns <c>null</c> when
+    /// the decoder is inactive (the stored form is then the decoded form) and in
+    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/>, whose rewrite
+    /// upcasts the stored form itself.
+    /// </summary>
+    private Func<byte[], ValueTask<byte[]>>? TransformInputDecoderOrNull()
+    {
+        if (!TransformDecoderActive)
+        {
+            return null;
+        }
+
+        var decoder = valueDecoder!;
+        var treeId = TreeId;
+        return value => decoder.DecodeAsync(treeId, value, CancellationToken.None);
     }
 
     /// <summary>
