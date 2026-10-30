@@ -2533,8 +2533,45 @@ jobs:
   # `CiContentGateWiringTests` guards the wiring and the filter's coverage of
   # every declared gate fixture.
   # ---------------------------------------------------------------------------
+  # Where Content gates runs. It is one job, not a planned matrix, and it does
+  # not wait for `plan` (that would add the plan's minutes to its own path), so
+  # this small job runs the same router (runner-overflow.py) over a single-leg
+  # matrix. It carries Content gates' own condition, so it is skipped exactly
+  # where Content gates is. If it fails, Content gates still runs - its `if:`
+  # starts with `!cancelled()` - and falls back to a hosted runner.
+  route-content-gates:
+    name: Route content gates
+    needs: classify
+    if: ${{ !cancelled() && needs.classify.outputs.push_is_member != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      runs_on: ${{ steps.route.outputs.runs_on }}
+      pool: ${{ steps.route.outputs.pool }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/workflows/runner-overflow.py
+          sparse-checkout-cone-mode: false
+
+      - name: Route
+        id: route
+        env:
+          RUNNER_POOL: ${{ vars.RUNNER_POOL }}
+          HOSTED_RUNNER_BUDGET: ${{ vars.HOSTED_RUNNER_BUDGET }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          leg="$RUNNER_TEMP/content-gates-leg.json"
+          echo '[{"name": "Content gates"}]' > "$leg"
+          python3 .github/workflows/runner-overflow.py --matrix "$leg"
+          jq -r '.[0] | "runs_on=\(.runsOn)", "pool=\(.pool)"' "$leg" >> "$GITHUB_OUTPUT"
+
   content-gates:
-    name: Content gates (formal, hygiene, docs)
+    name: ${{ needs.route-content-gates.outputs.pool == 'true' && '[pool] ' || '' }}Content gates (formal, hygiene, docs)
     # The ONE condition this job may carry, and it cannot skip it on a pull
     # request. `classify` is push-only, so on every pull request it is skipped
     # and its flag is empty; `!cancelled()` stops that skip propagating, and
@@ -2545,9 +2582,12 @@ jobs:
     # exact condition, the single dependency, and the classifier's push-only
     # guard. Lightweight PRs run video order here but skip the .NET fixtures
     # at step level; the job must still succeed for the required verdict.
-    needs: classify
+    # `route-content-gates` only chooses the runner: because the condition
+    # starts with `!cancelled()`, its failure or skip cannot skip this job, and
+    # `runs-on` then falls back to a hosted runner.
+    needs: [classify, route-content-gates]
     if: ${{ !cancelled() && needs.classify.outputs.push_is_member != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.route-content-gates.outputs.runs_on || '"ubuntu-latest"') }}
 
     env:
       # Single source of truth for what this gate selects, read back by
@@ -2624,8 +2664,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Not on the pool: its image carries a NuGet snapshot (tools/ci-runners),
+      # and the ~800 MB cache per pool job exceeds the Actions cache egress limit.
       - name: Cache NuGet packages
-        if: steps.lightweight.outputs.only != 'true'
+        if: steps.lightweight.outputs.only != 'true' && needs.route-content-gates.outputs.pool != 'true'
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages

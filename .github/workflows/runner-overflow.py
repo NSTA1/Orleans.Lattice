@@ -3,11 +3,13 @@
 The repository's hosted runners share one account-wide concurrency cap (20 jobs
 on the Free plan). Every matrix lane (ci.yml legs, the nightly Coverage legs
 and TLC legs, formal-receipts.yml TLC legs) plans its legs, then calls this
-script before publishing them. It counts the hosted jobs already running or
+script before publishing them; ci.yml's Content gates job is routed as a
+single-leg matrix by its own small job. It counts the hosted jobs already running or
 queued in this repository - queued counts, because a queued hosted job is one
 waiting behind the cap, and a new hosted leg would wait behind it - and keeps
-legs on `ubuntu-latest` while that count stays under the budget (HOSTED_RUNNER_BUDGET, default 18 - two short of the
-cap, so concurrent planners overlapping by a little do not tip a lane into a
+legs on `ubuntu-latest` while that count stays under the budget (HOSTED_RUNNER_BUDGET, default 15 - five short of the
+cap, so concurrent planners overlapping by a little, and the jobs that always
+run hosted - the planners and routers themselves - do not tip a lane into a
 queue). The legs beyond the budget go to the elastic self-hosted pool in
 tools/ci-runners, longest first, because a long leg holds a hosted slot longest.
 
@@ -42,7 +44,7 @@ import urllib.error
 import urllib.request
 
 HOSTED = "ubuntu-latest"
-DEFAULT_BUDGET = 18
+DEFAULT_BUDGET = 15
 ACTIVE = ("queued", "in_progress")
 
 

@@ -74,10 +74,11 @@ public sealed class CiSelfHostedRunnerScopeTests
         var starts = JobHeader.Matches(jobs).Select(m => m.Index).Append(jobs.Length).ToList();
         var routed = Enumerable.Range(0, starts.Count - 1)
             .Select(i => jobs[starts[i]..starts[i + 1]])
-            .Where(job => job.Contains("matrix.leg.runsOn", StringComparison.Ordinal))
+            .Where(job => job.Contains("matrix.leg.runsOn", StringComparison.Ordinal)
+                || job.Contains(".outputs.runs_on", StringComparison.Ordinal))
             .ToList();
 
-        Assert.That(routed, Is.Not.Empty, $"{workflow}: expected at least one job routed by matrix.leg.runsOn");
+        Assert.That(routed, Is.Not.Empty, $"{workflow}: expected at least one job routed by runner-overflow.py");
         Assert.Multiple(() =>
         {
             foreach (var job in routed)
