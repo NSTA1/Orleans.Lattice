@@ -1425,6 +1425,13 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task EnterRejectPhaseAsync();
 
     /// <summary>
+    /// Seals every moved-slot leaf, then persists Reject in the same shard turn.
+    /// A failed seal leaves Reject unapplied; retries retain both operations'
+    /// idempotence. The coordinator must still drain before publishing its map.
+    /// </summary>
+    Task SealMovedSlotsAndEnterRejectAsync(int[] sortedMovedSlots, int virtualShardCount);
+
+    /// <summary>
     /// Clears the in-progress split state on this shard. Called by the split
     /// coordinator after the post-swap cleanup phase has finished tombstoning
     /// the moved entries. Idempotent.

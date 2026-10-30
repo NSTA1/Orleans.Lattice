@@ -262,6 +262,12 @@ if (string.Equals(suite, "reportrouting", StringComparison.OrdinalIgnoreCase))
     return reportSummary.HasCriticalValidationErrors || reportSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "migrationcontrol", StringComparison.OrdinalIgnoreCase))
+{
+    var calls = BenchmarkRunner.Run<ShardControlCallBenchmarks>(config);
+    return calls.HasCriticalValidationErrors || calls.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "shardcontrol", StringComparison.OrdinalIgnoreCase))
 {
     var calls = BenchmarkRunner.Run<ShardControlCallBenchmarks>(config);

@@ -267,6 +267,15 @@ public sealed partial class InternalOriginGuardIntegrationTests
     }
 
     [Test]
+    public void Leaf_GetCacheRefreshAsync_direct_external_call_without_internal_origin_is_refused()
+    {
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await leaf.GetCacheRefreshAsync(LeafDeliveryCursor.Empty));
+    }
+
+    [Test]
     public void Leaf_GetPendingKeysAsync_direct_external_call_without_internal_origin_is_refused()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());

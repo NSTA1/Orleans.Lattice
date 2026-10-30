@@ -12,6 +12,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Cache and migration calls.** Cache refresh, split freeze and consolidation freeze each replace two grain calls with one, preserving pending-before-delta reads, durable leaf seals, Reject and final-drain ordering. (`Orleans.Lattice`)
+
 - **Performance - Bootstrap leaf calls.** Receiver capture and foreign-row scans each use one leaf call instead of two. Stale foreign saga discards batch once per leaf, retaining visibility, replay barriers and bootstrap floor ordering. ([#5174](https://github.com/NSTA1/Orleans.Lattice/pull/5174)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
 - **Performance - Terminal delivery.** Saga terminal broadcasts reuse stable leaf chains, combine fallback clock and sibling reads, and skip unused clocks without a WAL writer, while retaining routing invalidation and replay barriers. ([#5147](https://github.com/NSTA1/Orleans.Lattice/pull/5147)) (`Orleans.Lattice`)

@@ -130,6 +130,7 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
         nameof(IShardRootGrain.ReleaseRetainedRedirectAsync),
         nameof(IShardRootGrain.RepairOrphanedLeavesAsync),
         nameof(IShardRootGrain.ReseedNodeBindingsAsync),
+        nameof(IShardRootGrain.SealMovedSlotsAndEnterRejectAsync),
         nameof(IShardRootGrain.RetainDirtyLeafAsync),
         nameof(IShardRootGrain.RetireAsync),
         nameof(IShardRootGrain.ReviveAsync),

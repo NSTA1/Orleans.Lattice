@@ -44,7 +44,7 @@ public partial class LeafCacheGrainTests
         var leafId = GrainId.Create("leaf", unique);
         var cookieSource = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(replicaId: unique);
 
-        var primary = Substitute.For<IBPlusLeafGrain>();
+        var primary = Substitute.For<IBPlusLeafGrain>().ComposeCacheRefresh();
         primary.GetTreeIdAsync().Returns("test-tree");
         primary.GetPendingKeysAsync().Returns(new List<string>());
 

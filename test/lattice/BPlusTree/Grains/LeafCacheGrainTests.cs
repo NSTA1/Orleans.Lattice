@@ -20,7 +20,7 @@ public partial class LeafCacheGrainTests
         LatticeOptions? options,
         long? registryOverrideMaxCacheValueBytes)
     {
-        var leafMock = Substitute.For<IBPlusLeafGrain>();
+        var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeCacheRefresh();
         leafMock.GetTreeIdAsync().Returns("test-tree");
         // Default the saga pending-key probe to "no pending keys" so cache
         // tests that don't explicitly exercise saga isolation aren't

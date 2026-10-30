@@ -146,7 +146,7 @@ public partial class TreeShardConsolidationGrainTests
             return persistedMap;
         }
 
-        var donor = Substitute.For<IShardRootGrain>();
+        var donor = Substitute.For<IShardRootGrain>().ComposeMigrationFreeze();
         var survivor = Substitute.For<IShardRootGrain>();
 
         donor.IsSplittingAsync().Returns(Task.FromResult(false));

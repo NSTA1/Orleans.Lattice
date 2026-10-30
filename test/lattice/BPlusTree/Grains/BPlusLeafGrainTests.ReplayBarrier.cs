@@ -143,7 +143,7 @@ public partial class BPlusLeafGrainTests
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         "GetBootstrapCaptureAsync", "GetLiveRawEntriesAndPendingAsync",
         // Replication and delta seams.
-        "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
+        "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetCacheRefreshAsync", "GetDeltaSinceForSlotsAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
         "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
         "GetOriginalPrepareStampsAsync",
         "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
