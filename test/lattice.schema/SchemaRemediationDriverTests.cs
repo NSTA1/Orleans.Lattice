@@ -45,7 +45,7 @@ public sealed class SchemaRemediationDriverTests
     public async Task DriveAsync_reports_each_slice_phase_values_and_total_until_terminal()
     {
         var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
-        grain.RunSliceAsync().Returns(
+        grain.RunSliceAsync(OperationId).Returns(
             Slice(LatticeSchemaRemediationPhase.DryRun, 2, null),
             Slice(LatticeSchemaRemediationPhase.Build, 0, 5),
             Slice(LatticeSchemaRemediationPhase.Build, 4, 5),
@@ -83,7 +83,7 @@ public sealed class SchemaRemediationDriverTests
             Assert.That(report, Is.EqualTo(Done));
             Assert.That(progress.Reports, Is.Empty);
         });
-        await grain.DidNotReceive().RunSliceAsync();
+        await grain.DidNotReceive().RunSliceAsync(OperationId);
     }
 
     [Test]
@@ -100,7 +100,7 @@ public sealed class SchemaRemediationDriverTests
 
         Assert.That(report, Is.EqualTo(cancelled));
         await grain.Received(1).CancelAsync(OperationId);
-        await grain.DidNotReceive().RunSliceAsync();
+        await grain.DidNotReceive().RunSliceAsync(OperationId);
     }
 
     [Test]
@@ -108,7 +108,7 @@ public sealed class SchemaRemediationDriverTests
     {
         var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
         grain.CancelAsync(OperationId).Returns(InFlight(LatticeSchemaRemediationPhase.Cutover, 5));
-        grain.RunSliceAsync().Returns(new SchemaRemediationSlice(Done, null));
+        grain.RunSliceAsync(OperationId).Returns(new SchemaRemediationSlice(Done, null));
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -117,7 +117,7 @@ public sealed class SchemaRemediationDriverTests
 
         Assert.That(report.Succeeded, Is.True);
         await grain.Received(1).CancelAsync(OperationId);
-        await grain.Received(1).RunSliceAsync();
+        await grain.Received(1).RunSliceAsync(OperationId);
     }
 
     [Test]
@@ -126,7 +126,7 @@ public sealed class SchemaRemediationDriverTests
         var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
         using var cts = new CancellationTokenSource();
         var slices = 0;
-        grain.RunSliceAsync().Returns(_ =>
+        grain.RunSliceAsync(OperationId).Returns(_ =>
         {
             // The first slice is where cancellation lands; any further slice ends
             // the run, so a driver that ignored the request fails on the report
@@ -142,7 +142,7 @@ public sealed class SchemaRemediationDriverTests
             grain, InFlight(LatticeSchemaRemediationPhase.Build, 0), progress, cts.Token);
 
         Assert.That(report, Is.EqualTo(cancelled), "the sink's refusal must not abandon the remediation mid-phase");
-        await grain.Received(1).RunSliceAsync();
+        await grain.Received(1).RunSliceAsync(OperationId);
         await grain.Received(1).CancelAsync(OperationId);
     }
 
@@ -151,6 +151,75 @@ public sealed class SchemaRemediationDriverTests
         Assert.That(
             async () => await SchemaRemediationDriver.DriveAsync(null!, Done, null, CancellationToken.None),
             Throws.ArgumentNullException);
+
+    [Test]
+    public async Task DriveAsync_stops_without_reporting_a_slice_of_another_operations_remediation()
+    {
+        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
+        var followed = InFlight(LatticeSchemaRemediationPhase.Build, 3);
+        grain.RunSliceAsync(OperationId).Returns(
+            Slice(LatticeSchemaRemediationPhase.Build, 3, 5),
+            new SchemaRemediationSlice(
+                LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.DryRun, 0, "t/remediated/y", "op-later"),
+                null));
+        var progress = new RecordingProgress();
+
+        var report = await SchemaRemediationDriver.DriveAsync(grain, followed, progress, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report, Is.EqualTo(InFlight(LatticeSchemaRemediationPhase.Build, 3)), "the last report of the followed remediation");
+            Assert.That(SchemaRemediationDriver.IsSuperseded(report), Is.True);
+            Assert.That(progress.Reports.Select(r => r.Phase), Has.None.EqualTo(SchemaOperationPhases.DryRun), "the later remediation's progress is never reported");
+        });
+        await grain.Received(2).RunSliceAsync(OperationId);
+        await grain.DidNotReceive().RunSliceAsync();
+    }
+
+    [Test]
+    public async Task DriveAsync_stops_when_a_cancel_finds_another_operations_remediation()
+    {
+        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
+        grain.CancelAsync(OperationId).Returns(
+            LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.Build, 1, "t/remediated/y", "op-later"));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var report = await SchemaRemediationDriver.DriveAsync(
+            grain, InFlight(LatticeSchemaRemediationPhase.Build, 2), progress: null, cts.Token);
+
+        Assert.That(report, Is.EqualTo(InFlight(LatticeSchemaRemediationPhase.Build, 2)));
+        await grain.DidNotReceive().RunSliceAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task DriveAsync_reports_the_followed_remediations_terminal_report_the_coordinator_still_holds()
+    {
+        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
+        var aborted = LatticeSchemaRemediationReport.Aborted(1, "k0", "bad", [], OperationId);
+        grain.RunSliceAsync(OperationId).Returns(new SchemaRemediationSlice(aborted, null));
+
+        var report = await SchemaRemediationDriver.DriveAsync(
+            grain, InFlight(LatticeSchemaRemediationPhase.DryRun, 0), progress: null, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report, Is.EqualTo(aborted));
+            Assert.That(SchemaRemediationDriver.IsSuperseded(report), Is.False);
+        });
+    }
+
+    [Test]
+    public void RequireTerminal_throws_for_a_superseded_report_and_returns_a_terminal_one()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaRemediationDriver.RequireTerminal(Done), Is.EqualTo(Done));
+            Assert.That(
+                () => SchemaRemediationDriver.RequireTerminal(InFlight(LatticeSchemaRemediationPhase.Build, 2)),
+                Throws.InvalidOperationException.With.Message.Contains($"'{OperationId}'"));
+        });
+    }
 
     [TestCase(LatticeSchemaRemediationPhase.DryRun, SchemaOperationPhases.DryRun)]
     [TestCase(LatticeSchemaRemediationPhase.Build, SchemaOperationPhases.Build)]

@@ -103,7 +103,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         catch { state.State.AliasReservationId = id; throw; }
     }
 
-    /// <summary>The number of values one <see cref="RunSliceAsync"/> processes before it persists its progress and returns.</summary>
+    /// <summary>The number of values one <see cref="RunSliceAsync(string)"/> processes before it persists its progress and returns.</summary>
     internal const int DefaultSliceSize = 512;
 
     /// <summary>
@@ -159,6 +159,22 @@ internal sealed class LatticeSchemaRemediationGrain(
     public async Task<SchemaRemediationSlice> RunSliceAsync()
     {
         EnsureControlPlaneOrigin();
+        await RunSliceCoreAsync();
+        return new SchemaRemediationSlice(GetStatus(), state.State.InProgress ? state.State.PhaseTotal : null);
+    }
+
+    /// <inheritdoc />
+    public async Task<SchemaRemediationSlice> RunSliceAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        EnsureControlPlaneOrigin();
+        if (state.State.InProgress
+            && !string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+        {
+            // Another operation's remediation: the caller does not follow it.
+            return new SchemaRemediationSlice(GetStatus(), null);
+        }
+
         await RunSliceCoreAsync();
         return new SchemaRemediationSlice(GetStatus(), state.State.InProgress ? state.State.PhaseTotal : null);
     }
@@ -277,7 +293,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// Runs slices until the remediation is terminal, all within the current turn.
     /// Serves the in-turn <see cref="StartAsync"/>, <see cref="StartVersionMigrationAsync"/>
     /// and <see cref="RunRemediationPassAsync"/> verbs; a caller that must not hold
-    /// one call open for the whole run drives <see cref="RunSliceAsync"/> instead.
+    /// one call open for the whole run drives <see cref="RunSliceAsync(string)"/> instead.
     /// </summary>
     private async Task DriveToTerminalAsync()
     {
