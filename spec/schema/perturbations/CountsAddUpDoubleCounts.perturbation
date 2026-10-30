@@ -6,7 +6,9 @@ DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_all_values_compliant
 SUMMARY: a compliant value is counted twice
 
 --- FIND
-                compliant++;
+                Compliant++;
+                return;
 --- REPLACE
-                compliant += 2;
+                Compliant += 2;
+                return;
 --- END

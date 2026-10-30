@@ -1,0 +1,18 @@
+# OutcomeOfFollowed: an operation never reports another remediation's outcome.
+MODULE: SchemaDurableOperation
+ROW: OutcomeOfFollowed
+FILE: src/lattice.schema/SchemaRemediationDriver.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.A_joined_driver_does_not_slice_or_report_a_later_remediation_after_the_followed_one_ended
+SUMMARY: a joined driver reports a later remediation's outcome (#5267)
+
+--- FIND
+            var slice = followed is null
+                ? await grain.RunSliceAsync().ConfigureAwait(false)
+                : await grain.RunSliceAsync(followed).ConfigureAwait(false);
+            if (followed is not null && !Follows(slice.Report, followed))
+            {
+                return report;
+            }
+--- REPLACE
+            var slice = await grain.RunSliceAsync().ConfigureAwait(false);
+--- END

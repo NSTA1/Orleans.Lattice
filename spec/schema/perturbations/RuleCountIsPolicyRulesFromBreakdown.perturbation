@@ -8,5 +8,5 @@ SUMMARY: the rule count is the number of failure reasons (#4966)
 --- FIND
             RuleCount = policy.RuleCount,
 --- REPLACE
-            RuleCount = breakdown?.Count ?? 0,
+            RuleCount = tally.Breakdown?.Count ?? 0,
 --- END

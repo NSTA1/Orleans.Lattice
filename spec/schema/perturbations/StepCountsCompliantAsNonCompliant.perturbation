@@ -6,7 +6,9 @@ DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_all_values_compliant
 SUMMARY: a compliant value is tallied as non-compliant
 
 --- FIND
-                compliant++;
+                Compliant++;
+                return;
 --- REPLACE
-                nonCompliant++;
+                NonCompliant++;
+                return;
 --- END

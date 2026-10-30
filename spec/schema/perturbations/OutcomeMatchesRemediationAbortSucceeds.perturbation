@@ -6,7 +6,13 @@ DETECTORS: SchemaOperationServiceTests.ToCompletion_records_an_aborted_remediati
 SUMMARY: an aborted remediation is recorded as succeeded
 
 --- FIND
+            AddRemediationId(result, report);
+            return new LatticeOperationCompletion
+            {
                 State = LatticeOperationState.Failed,
 --- REPLACE
+            AddRemediationId(result, report);
+            return new LatticeOperationCompletion
+            {
                 State = LatticeOperationState.Succeeded,
 --- END

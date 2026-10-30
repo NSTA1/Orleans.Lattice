@@ -31,15 +31,10 @@ listed below, never both.
 | Module | Row | Reason |
 |--------|-----|--------|
 | SchemaDurableOperation | Crash(s) | Silo death is an environment step with no production code path to edit; its detectors are the silo-loss chaos fixtures, which kill a real silo rather than run an edited one. |
-| SchemaDurableOperation | Observe(o) | Its detector is the #5267 regression test; the perturbation reverting that fix is seeded with it. |
 | SchemaDurableOperation | HandleHasRecord | A handle is built only from the record `BeginAsync` returns; no single-file edit makes a handle without a record that is not already the `StartRejected(o,s)` or `Begin(o,s,p)` perturbation. |
-| SchemaDurableOperation | OutcomeOfFollowed | Its detector is the #5267 regression test; the perturbation reverting that fix is seeded with it. |
-| SchemaDurableOperation | DrivenOnlyByFollowers | Its detector is the #5267 regression test; the perturbation reverting that fix is seeded with it. |
 | SchemaDurableOperation | OperationTerminates | Liveness: every edit that stops an operation terminating is one of the seeded `Finish(o)`, `DetectLoss(o)` or `LeaseExpire(o)` perturbations, whose detectors this row cites. |
 | SchemaComplianceScan | Cancel | Cancellation reaches the scan through the token the enumeration and the runner also observe, so removing the scan's own check is not observable by a deterministic detector. |
 | SchemaComplianceScan | Write(k,v) | An environment step: writes are ordinary data-plane writes with no scan code to edit. |
 | SchemaComplianceScan | StableKeysCounted | Every edit that skips a stable key is the seeded `Step` or `CountsAddUp` perturbation over the same loop. |
 | SchemaComplianceScan | ReportOnlyWhenSucceeded | The report is the work's return value, recorded only on success by the shared runner; the runner's success path is the `Finish(o)` row of `SchemaDurableOperation`. |
-| SchemaComplianceScan | FailsOnlyWhenLost | Its detector is the #5253 regression test; the perturbation reverting that fix is seeded with it. |
-| SchemaComplianceScan | UndecodableCountedNonCompliant | Its detector is the #5253 regression test; the perturbation reverting that fix is seeded with it. |
 | SchemaComplianceScan | ScanTerminates | Liveness: every edit that stops a scan terminating is one of the seeded `Count` or `Step` perturbations, whose detectors this row cites. |

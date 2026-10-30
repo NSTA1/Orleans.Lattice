@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_judges_every_value_w
 SUMMARY: the scan re-reads the policy for every value
 
 --- FIND
-            if (policy.Validate(entry.Value) is { } reason)
+                tally.Count(policy.Validate(entry.Value));
 --- REPLACE
-            if ((await _policyProvider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false) ?? policy).Validate(entry.Value) is { } reason)
+                tally.Count((await _policyProvider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false) ?? policy).Validate(entry.Value));
 --- END

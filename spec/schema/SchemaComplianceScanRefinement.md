@@ -37,7 +37,7 @@ report.
 |-------------|---------------|------------------|----------|
 | `Start` | The scan reads the cached policy once; an ungoverned tree succeeds at once with an ungoverned report. | `LatticeSchemaComplianceAdmin.ScanComplianceAsync`, `LatticeSchemaComplianceReport.Ungoverned`, `LatticeSchemaComplianceOperations.StartComplianceScanAsync`. | Yes: `LatticeSchemaComplianceAdminTests.ScanCompliance_ungoverned_tree_returns_an_ungoverned_report_without_scanning`, `LatticeSchemaComplianceAdminProgressTests.A_tracked_scan_of_an_ungoverned_tree_neither_counts_nor_scans`, `LatticeSchemaComplianceOperationsTests.A_started_scan_returns_a_handle_and_polls_to_the_report`. |
 | `Count` | The tracked scan counts the live entries before it scans. | `ILattice.CountAsync`, `LatticeSchemaComplianceAdmin.ScanComplianceAsync`. | Yes: `LatticeSchemaComplianceAdminProgressTests.A_tracked_scan_counts_first_then_reports_entries_scanned_against_the_count`. |
-| `Step` | The ordered scan judges the next live value by the start policy and tallies it, an undecodable value under enforcement's decode reason. | `LatticeSchemaComplianceAdmin.ScanComplianceAsync`, `CompiledSchemaPolicy.Validate`. | Yes: `LatticeSchemaComplianceAdminTests.ScanCompliance_mixed_values_group_non_compliant_by_failure_reason`, `LatticeSchemaComplianceAdminTests.ScanCompliance_all_values_compliant_reports_no_breakdown`, `PENDING_5253_DETECTOR`. |
+| `Step` | The ordered scan judges the next live value by the start policy and tallies it, an undecodable value under enforcement's decode reason. | `LatticeSchemaComplianceAdmin.ScanComplianceAsync`, `CompiledSchemaPolicy.Validate`, `SchemaUndecodableValue.Reason`. | Yes: `LatticeSchemaComplianceAdminTests.ScanCompliance_mixed_values_group_non_compliant_by_failure_reason`, `LatticeSchemaComplianceAdminTests.ScanCompliance_all_values_compliant_reports_no_breakdown`, `LatticeSchemaComplianceAdminUndecodableTests.ScanCompliance_after_a_decode_fault_judges_the_rest_from_the_stored_form`, `SchemaComplianceUndecodableValueIntegrationTests.ScanComplianceAsync_counts_undecodable_values_as_non_compliant_and_completes`. |
 | `Finish` | The pass ends and the report carries the start policy's rule count and the failure-reason count. | `LatticeSchemaComplianceAdmin.ScanComplianceAsync`, `SchemaComplianceScanResults.ToResultMap`. | Yes: `LatticeSchemaComplianceAdminTests.ScanCompliance_rule_count_matches_policy_not_failure_population`, `SchemaComplianceScanResultsTests.A_report_round_trips_through_the_result_map`. |
 | `Cancel` | A cancel request stops the running scan with no report. | `LatticeSchemaComplianceOperations.CancelOperationAsync`, `LatticeSchemaComplianceAdmin.ScanComplianceAsync`. | Yes: `LatticeSchemaComplianceAdminTests.ScanCompliance_cancelled_token_stops_the_scan`, `LatticeSchemaComplianceOperationsTests.Cancelling_a_running_scan_stops_it_and_reads_as_cancelled`. |
 | `Lose` | The runner's silo is lost; the record reads failed with no report. | `LatticeOperationGrain.GetAsync`, `ILatticeOperationSiloLiveness.IsDead`. | Yes: `LatticeOperationGrainTests.A_running_operation_whose_runner_silo_is_dead_reads_as_failed`, `LatticeSchemaComplianceOperationsTests.A_failed_scan_reads_as_failed_with_the_engine_reason`. |
@@ -57,10 +57,10 @@ report.
 | `StableKeysCounted` | A completed scan counted every key that was live and untouched for the whole scan. | Yes: `LatticeSchemaComplianceAdminTests.ScanCompliance_mixed_values_group_non_compliant_by_failure_reason`, `LatticeSchemaComplianceAdminProgressTests.An_untracked_scan_reports_nothing_and_does_not_count_the_tree`. |
 | `TotalNeverBelowScanned` | A known total never reads below the entries scanned; once passed it turns unknown. | Yes: `LatticeSchemaComplianceAdminProgressTests.A_count_that_falls_behind_the_scan_turns_the_total_unknown_rather_than_below_the_scanned_entries`. |
 | `ReportOnlyWhenSucceeded` | Only a completed scan publishes a report; a cancelled or failed one has none. | Yes: `LatticeSchemaComplianceOperationsTests.Cancelling_a_running_scan_stops_it_and_reads_as_cancelled`, `LatticeSchemaComplianceOperationsTests.A_failed_scan_reads_as_failed_with_the_engine_reason`. |
-| `FailsOnlyWhenLost` | No stored value faults the scan; it fails only when its runner is lost. | Yes: `PENDING_5253_DETECTOR`. |
+| `FailsOnlyWhenLost` | No stored value faults the scan; it fails only when its runner is lost. | Yes: `SchemaComplianceUndecodableValueIntegrationTests.Tracked_compliance_scan_over_undecodable_values_succeeds_and_records_them_as_non_compliant`, `LatticeSchemaComplianceAdminUndecodableTests.ScanCompliance_after_a_decode_fault_judges_the_rest_from_the_stored_form`. |
 | `PolicyFixedForScan` | A running scan keeps the policy it read at its start. | Yes: `LatticeSchemaComplianceAdminTests.ScanCompliance_judges_every_value_with_the_policy_read_at_start`. |
 | `JudgedByStartPolicy` | Every judged value is judged by the start policy. | Yes: `LatticeSchemaComplianceAdminTests.ScanCompliance_judges_every_value_with_the_policy_read_at_start`. |
-| `UndecodableCountedNonCompliant` | An undecodable stored value is counted non-compliant under enforcement's decode reason. | Yes: `PENDING_5253_DETECTOR`. |
+| `UndecodableCountedNonCompliant` | An undecodable stored value is counted non-compliant under enforcement's decode reason. | Yes: `LatticeSchemaComplianceAdminUndecodableTests.ScanCompliance_after_a_decode_fault_judges_the_rest_from_the_stored_form`, `SchemaComplianceUndecodableValueIntegrationTests.ScanComplianceAsync_counts_undecodable_values_as_non_compliant_and_completes`. |
 | `ScanTerminates` | A running scan reaches a terminal state. | Yes: `LatticeSchemaComplianceOperationsTests.A_started_scan_returns_a_handle_and_polls_to_the_report`, `LatticeSchemaComplianceAdminProgressTests.A_tracked_scan_counts_first_then_reports_entries_scanned_against_the_count`. |
 
 ## Excluded properties
@@ -150,6 +150,13 @@ evidence, not a claim the fix is released.
   values and the sink coalesces reports, so the total turns unknown at a report
   boundary rather than at the exact value that passes it.
   Production symbols: `LatticeOperationProgressSink`.
+- **The stored-form tail.** The scan streams decoded values and, at the first
+  value the read path cannot decode, judges the rest of the tree from the stored
+  form: keys from the access-gated key scan after the last key it judged, values
+  point-read with their envelopes and decoded one by one. The model's single
+  cursor stands for both reads; a key deleted after the key scan reached it is
+  skipped, which the model's deletes ahead of the cursor cover.
+  Production symbols: `ILatticeValueDecoder.DecodeAsync`, `IReplicationApplyGrain.ReadStoredWithVersionAsync`.
 - **The operation around the scan.** Admission, the record, idempotent starts,
   cancellation delivery and loss detection are the shared operation runner's,
   checked by the durable-operation model; here they are the start, cancel and

@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_mixed_values_group_n
 SUMMARY: a non-compliant value is never added to its reason row
 
 --- FIND
-                slot++;
+            slot++;
 --- REPLACE
-                _ = slot;
+            _ = slot;
 --- END

@@ -8,5 +8,5 @@ SUMMARY: the report's rule count is taken from the failure breakdown
 --- FIND
             RuleCount = policy.RuleCount,
 --- REPLACE
-            RuleCount = breakdown?.Count ?? 0,
+            RuleCount = tally.Breakdown?.Count ?? 0,
 --- END

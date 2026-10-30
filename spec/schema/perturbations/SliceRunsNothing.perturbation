@@ -6,11 +6,13 @@ DETECTORS: LatticeSchemaRemediationGrainTests.RunSliceAsync_processes_one_bounde
 SUMMARY: a slice call runs no slice
 
 --- FIND
+    public async Task<SchemaRemediationSlice> RunSliceAsync()
+    {
         EnsureControlPlaneOrigin();
         await RunSliceCoreAsync();
-        return new SchemaRemediationSlice
 --- REPLACE
+    public async Task<SchemaRemediationSlice> RunSliceAsync()
+    {
         EnsureControlPlaneOrigin();
         await Task.CompletedTask;
-        return new SchemaRemediationSlice
 --- END
