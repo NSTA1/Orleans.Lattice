@@ -172,6 +172,39 @@ public class ViewMaintainerSourceIdentityTests
     }
 
     [Test]
+    public async Task Notify_interleaved_into_a_resolve_survives_that_pass_and_forces_another_re_resolve()
+    {
+        // The push interleaves (#5279), so it can land while a pass is awaiting its
+        // resolve. That resolve may predate the change the push announces, so the
+        // pass converging must not consume the push.
+        var (grain, registry, _) = Create(TimeSpan.FromSeconds(30), Source, Source);
+        var reg = Reg();
+        var resolves = 0;
+        registry.GetEntryAsync(Source).Returns(call =>
+        {
+            if (Interlocked.Increment(ref resolves) == 1)
+            {
+                _ = grain.NotifySourceIdentityChangedAsync("orders-v2", CancellationToken.None);
+            }
+
+            return Task.FromResult<TreeRegistryEntry?>(new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = 1,
+                PhysicalTreeId = Source,
+            });
+        });
+
+        await grain.EnsureBoundForTestingAsync(reg);
+        await grain.EnsureBoundForTestingAsync(reg);
+        await grain.EnsureBoundForTestingAsync(reg);
+
+        Assert.That(resolves, Is.EqualTo(2),
+            "the pass the push interleaved into must leave it pending, and the next pass must consume it");
+    }
+
+    [Test]
     public async Task Failed_heal_does_not_suppress_the_retry_re_resolve_within_the_backstop()
     {
         // A swapped source whose heal throws (the source head probe faults) must NOT

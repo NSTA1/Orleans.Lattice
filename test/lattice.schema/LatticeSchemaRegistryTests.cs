@@ -111,6 +111,41 @@ public sealed class LatticeSchemaRegistryTests
         Assert.That(registry.CanUpcast(1, 1, 3), Is.False);
     }
 
+    /// <summary>
+    /// A hop past the target is not a route to it: the walk never follows a hop
+    /// whose destination overshoots the target, so a value at v1 with only a v1 to
+    /// v3 hop cannot be upcast to v2.
+    /// </summary>
+    [Test]
+    public void CanUpcast_hop_overshooting_the_target_is_false()
+    {
+        var registry = new LatticeSchemaRegistryBuilder()
+            .AddUpcaster(1, 1, 3, SetMember("c", 3))
+            .Build();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(registry.CanUpcast(1, 1, 2), Is.False);
+            Assert.That(registry.CanUpcast(1, 1, 3), Is.True);
+        });
+    }
+
+    /// <summary>
+    /// The upcast itself refuses an overshooting hop rather than returning a body
+    /// shaped for a version past the requested target.
+    /// </summary>
+    [Test]
+    public void Upcast_hop_overshooting_the_target_throws_not_supported()
+    {
+        var registry = new LatticeSchemaRegistryBuilder()
+            .AddUpcaster(1, 1, 3, SetMember("c", 3))
+            .Build();
+
+        Assert.That(
+            () => registry.Upcast(1, 1, 2, Utf8("{\"a\":1}")),
+            Throws.InstanceOf<NotSupportedException>());
+    }
+
     [Test]
     public void Upcast_identity_returns_same_reference()
     {

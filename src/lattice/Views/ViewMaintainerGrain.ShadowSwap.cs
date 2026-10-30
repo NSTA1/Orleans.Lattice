@@ -445,7 +445,7 @@ internal sealed partial class ViewMaintainerGrain
         var currentPhysical = await ResolveSourcePhysicalAsync(sourceTreeId);
         if (!string.Equals(currentPhysical, walTreeId, StringComparison.Ordinal))
         {
-            _sourceIdentityRebindRequested = true;
+            _sourceIdentityRebindRequests++;
             throw new StaleTreeRoutingException(sourceTreeId, walTreeId, currentPhysical);
         }
 
@@ -657,7 +657,7 @@ internal sealed partial class ViewMaintainerGrain
         var currentPhysical = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         if (!string.Equals(currentPhysical, built.WalTreeId, StringComparison.Ordinal))
         {
-            _sourceIdentityRebindRequested = true;
+            _sourceIdentityRebindRequests++;
             logger.LogWarning(
                 "View '{ViewName}' rejected a shadow scanned from '{CapturedPhysical}' after its source moved to '{CurrentPhysical}'.",
                 ViewName, built.WalTreeId, currentPhysical);

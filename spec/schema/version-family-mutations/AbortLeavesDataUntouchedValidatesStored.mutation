@@ -1,0 +1,13 @@
+# The policy judges the stored body before the upcast, so a migration aborts on
+# a value it could migrate and that the policy accepts once upcast.
+MODULE: AbortLeavesDataUntouchedValidatesStored
+TARGET: AbortLeavesDataUntouched
+CLASS: Action
+SUMMARY: validation runs before the upcast instead of after it
+PERTURBS: MigrateStep
+
+--- FIND
+       IF m = Stuck \/ Rejected(m, migT)
+--- REPLACE
+       IF m = Stuck \/ Rejected(data[k], migT)
+--- END

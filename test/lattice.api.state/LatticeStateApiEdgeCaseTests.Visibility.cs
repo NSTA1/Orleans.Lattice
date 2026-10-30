@@ -217,7 +217,8 @@ public sealed partial class LatticeStateApiEdgeCaseTests
     public async Task Entry_history_for_a_view_applies_the_source_key_filter()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IViewCatalog>(new FixedViewCatalog(Registration("orders", "orders-source")));
+        services.AddSingleton<IViewCatalog>(new FixedViewCatalog(
+            new ViewRegistration("orders", "orders-source", new PredicateLatticeViewProjection())));
         services.AddSingleton<IReadOnlyList<StartupViewRegistration>>(Array.Empty<StartupViewRegistration>());
         services.AddSingleton<ILatticeAccessGate>(new PrefixGate("allowed/"));
         services.AddSingleton<ILatticeMembershipContext>(new FixedMembership(NamedSubject));

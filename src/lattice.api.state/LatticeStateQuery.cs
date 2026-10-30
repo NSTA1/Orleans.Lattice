@@ -110,11 +110,9 @@ internal sealed class LatticeStateQuery(
         // read paths open a ViewReadContext scope that makes the access gate
         // bypass itself (LatticeAccessGateContext.IsGateBypassed), so the source
         // tree's read grant is the ONLY authorization boundary a view read has. An
-        // anonymous subject has no read grant on any source and is refused; a
-        // subject that can read the source sees the view; a prefix-granted subject
-        // still passes here and the gated data-plane surface prunes the individual
-        // keys it may not observe. Fail closed (hidden) when the source cannot be
-        // resolved.
+        // anonymous subject has no read grant on any source and is refused.
+        // Partial grants are safe only for known key-preserving projections:
+        // a projected key is otherwise not evidence of its source key.
         if (IsViewTree(treeId))
         {
             var sourceTreeId = await ResolveViewSourceTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
@@ -123,7 +121,10 @@ internal sealed class LatticeStateQuery(
                 return true;
             }
 
-            return !await _visibility.CanReadAnyKeyAsync(sourceTreeId, resolved, cancellationToken).ConfigureAwait(false);
+            var (allowed, _) = await LatticeStateViewSource.ResolveReadAccessAsync(
+                _services, _grainFactory, _visibility, treeId, resolved, cancellationToken).ConfigureAwait(false);
+            return !allowed
+                || !await _visibility.CanReadAnyKeyAsync(sourceTreeId, resolved, cancellationToken).ConfigureAwait(false);
         }
 
         // System trees are already hidden at each call site by the existence
@@ -181,13 +182,10 @@ internal sealed class LatticeStateQuery(
     /// access gate, so - unlike an ordinary tree, whose gated cursor / point read
     /// prunes unreadable keys automatically - the source tree's partial (prefix)
     /// grant is not otherwise enforced on the view rows. This resolves the source
-    /// tree's key filter so the read paths can prune the view to exactly the keys
-    /// the caller may read on the source. Returns <see langword="null"/> when no
-    /// per-key pruning is required: visibility disabled, an anonymous / unresolved
-    /// caller (the whole-view hidden check has already refused that read), the tree
-    /// is not a view, the source cannot be resolved, or the caller holds a
-    /// whole-tree read grant on the source (a <see langword="null"/> filter admits
-    /// every key). The predicate keeps a key when it returns <see langword="true"/>.
+    /// tree's key filter only for known key-preserving projections. Returns a
+    /// deny-all predicate when access cannot be established, and
+    /// <see langword="null"/> when visibility is disabled, this is not a view,
+    /// or the caller holds an unfiltered source grant.
     /// </summary>
     private async ValueTask<Func<string, bool>?> ResolveViewKeyFilterAsync(
         string treeId,
@@ -201,19 +199,12 @@ internal sealed class LatticeStateQuery(
         var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
         if (subject is not { } resolved)
         {
-            return null;
+            return static _ => false;
         }
 
-        var sourceTreeId = await ResolveViewSourceTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
-        if (sourceTreeId is null)
-        {
-            return null;
-        }
-
-        var (_, keyFilter) = await _visibility
-            .ResolveTreeReadAccessAsync(sourceTreeId, resolved, cancellationToken)
-            .ConfigureAwait(false);
-        return keyFilter;
+        var (allowed, keyFilter) = await LatticeStateViewSource.ResolveReadAccessAsync(
+            _services, _grainFactory, _visibility, treeId, resolved, cancellationToken).ConfigureAwait(false);
+        return allowed ? keyFilter : static _ => false;
     }
 
     public async Task<TreeSummaryResult> GetTreeSummaryAsync(
@@ -1364,14 +1355,22 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Auth-backed visibility: the structure of a tree the caller may not read
-        // is itself not disclosed (node shape leaks the existence of data). An
-        // unresolved/anonymous caller sees no structure.
+        // Topology contains real split keys outside a partial reader's scope.
+        // Require an unfiltered source grant before any shard or sub-path read.
         var effectiveTreeId = await EffectiveTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
 
-        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is { } resolved)
         {
-            return TreeStructureResult.NotFound(request.TreeId);
+            var (allowed, filter) = IsViewTree(effectiveTreeId)
+                ? await LatticeStateViewSource.ResolveReadAccessAsync(
+                    _services, _grainFactory, _visibility, effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false)
+                : await _visibility.ResolveTreeReadAccessAsync(
+                    effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false);
+            if (!allowed || filter is not null)
+            {
+                return TreeStructureResult.NotFound(request.TreeId);
+            }
         }
 
         // A materialised view is a read-only tree; permit it on the read path by

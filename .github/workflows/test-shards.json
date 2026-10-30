@@ -329,7 +329,8 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchema"],
-        "note": "Every SchemaPolicyConfig, SchemaStageOrdering, SchemaDurableOperation and SchemaComplianceScan base, variant and mutation (68 cases), bases co-located with their mutations so the base runs serve the full-bound controls. The #5226 modules' item took 2.34 minutes (dotnet test 2 m 17 s) in the member pull request ci.yml run 41065598921 (head 675f6363f, job 124100785054), where the SchemaPolicyConfig ThreeSilos variant dominates; the #5229 modules took 3.90 minutes locally (16-core Windows workstation), where the SchemaDurableOperation ThreeOps variant and the three-operation mutation controls dominate. Refresh from the #5229 member pull request run, and split the shard from measured timings as further Schema* modules join it."      },
+        "note": "Every SchemaPolicyConfig, SchemaStageOrdering, SchemaVersionFamily, SchemaDurableOperation and SchemaComplianceScan base, variant and mutation (86 cases), bases co-located with their mutations so the base runs serve the full-bound controls. The first two modules' 30 cases took 2.34 minutes (dotnet test 2 m 17 s) in the member pull request ci.yml run 41065598921 (head 675f6363f, job 124100785054) for #5226; with SchemaVersionFamily, 48 took 1 m 54 s of dotnet test in ci.yml run 41087582284 (head e15b3091e, job 124175924963) for #5227; with SchemaDurableOperation and SchemaComplianceScan instead, 68 took 6.64 minutes (dotnet test 6 m 34 s) in ci.yml run 41088681728 (head 4e5554713, job 124180139236) for #5229. The SchemaDurableOperation ThreeOps variant and its three-operation mutation controls dominate, then the SchemaPolicyConfig ThreeSilos variant. Split the shard from measured timings as further Schema* modules join it."
+      },
       {
         "shard": "formal-tlc-smoke",
         "tlcSmoke": true,

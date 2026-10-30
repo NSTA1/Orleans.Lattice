@@ -1,0 +1,12 @@
+# A migration starts without taking the alias reservation.
+MODULE: ReservationHeldWhileRunningBeginUnreserved
+TARGET: ReservationHeldWhileRunning
+CLASS: Invariant
+SUMMARY: the build runs with the tree's alias unreserved
+PERTURBS: MigrateBegin
+
+--- FIND
+    /\ mig' = "Running" /\ migT' = cfg /\ reserved' = TRUE
+--- REPLACE
+    /\ mig' = "Running" /\ migT' = cfg /\ reserved' = FALSE
+--- END

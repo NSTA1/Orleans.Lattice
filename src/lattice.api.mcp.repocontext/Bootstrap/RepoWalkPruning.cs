@@ -36,6 +36,43 @@ internal sealed class RepoWalkPruning
     public IReadOnlyDictionary<string, long>? PreviousDirectoryMtimes { get; init; }
 
     /// <summary>
+    /// The wall-clock UTC tick at which the previous walk began - the
+    /// <see cref="WalkStartTicks"/> it recorded, handed forward with
+    /// <see cref="PreviousDirectoryMtimes"/>. A directory is pruned only when its
+    /// modification time is unchanged <i>and</i> at least <see cref="RacyWindow"/> older
+    /// than this tick. <c>0</c> (unknown) prunes nothing.
+    /// <para>
+    /// <b>Why the second condition.</b> An unchanged modification time proves nothing
+    /// for a directory modified in the same timestamp tick in which the previous walk
+    /// read it: an entry added after that read leaves the time unchanged, because
+    /// filesystem timestamps are coarser than the walk (the Linux kernel stamps from a
+    /// coarse clock that lags real time by up to a scheduler tick; FAT and some
+    /// bind-mounted filesystems record whole seconds or worse). Such a directory is
+    /// "racily clean", the window git closes for its index the same way. Without this
+    /// condition the new entry stays invisible until the next forced full sweep -
+    /// issue #5268 - which the file-level fast path in <see cref="RepoTreeWalker"/>
+    /// already guards against with its strict comparison to the ingest anchor.
+    /// </para>
+    /// </summary>
+    public long PreviousWalkStartTicks { get; init; }
+
+    /// <summary>
+    /// The wall-clock UTC tick at which this walk began, read before any directory's
+    /// modification time, so it is never later than a time this walk recorded. Hand it to
+    /// the next walk as <see cref="PreviousWalkStartTicks"/>.
+    /// </summary>
+    public long WalkStartTicks { get; internal set; }
+
+    /// <summary>
+    /// How much older than <see cref="PreviousWalkStartTicks"/> a directory's modification
+    /// time must be before an unchanged time is trusted. Generous on purpose: it must
+    /// cover the coarsest timestamp resolution a walked filesystem uses plus any skew
+    /// between the clock that stamps a bind-mounted file and the walker's clock, and its
+    /// only cost is that a directory modified within it is walked in full once more.
+    /// </summary>
+    public static readonly TimeSpan RacyWindow = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// When <see langword="true"/>, the prior snapshot is ignored and every file is
     /// stat'd: the periodic full sweep whose whole purpose is to catch the in-place
     /// content edits pruning cannot see.

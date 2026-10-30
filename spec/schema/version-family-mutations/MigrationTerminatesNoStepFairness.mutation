@@ -1,0 +1,11 @@
+# Nothing obliges a running migration to process its next value.
+MODULE: MigrationTerminatesNoStepFairness
+TARGET: MigrationTerminates
+CLASS: Temporal
+SUMMARY: drops weak fairness on the per-value step
+
+--- FIND
+    /\ WF_vars(\E k \in Keys : MigrateStep(k))
+--- REPLACE
+    /\ TRUE
+--- END

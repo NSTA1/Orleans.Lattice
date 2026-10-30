@@ -75,6 +75,58 @@ internal sealed partial class LatticeGrain
             WriteInterceptor, TreeId, operation, key, value, ttl, cancellationToken);
 
     /// <summary>
+    /// <see cref="InterceptWriteAsync"/> for an apply that may run more than once
+    /// for one delivery. The first call consults the interceptor and records its
+    /// verdict in <paramref name="judgement"/>; a later call with the same record
+    /// reuses that verdict instead of judging (and dead-lettering) the value again
+    /// (issue #5285). With no record every call judges, as
+    /// <see cref="InterceptWriteAsync"/> does. A rejection throws and records
+    /// nothing, so it is never reused as a verdict.
+    /// </summary>
+    private async ValueTask<LatticeWriteInterceptionOutcome> InterceptWriteOnceAsync(
+        WriteJudgement? judgement, LatticeOperation operation, string key, byte[] value, TimeSpan? ttl, CancellationToken cancellationToken)
+    {
+        if (judgement is { Judged: true })
+        {
+            return judgement.Proceed
+                ? LatticeWriteInterceptionOutcome.Write(judgement.Value)
+                : LatticeWriteInterceptionOutcome.Drop();
+        }
+
+        var outcome = await InterceptWriteAsync(operation, key, value, ttl, cancellationToken);
+        judgement?.Record(outcome);
+        return outcome;
+    }
+
+    /// <summary>
+    /// The write interceptor's verdict on one delivered value, shared by the
+    /// passes that apply that same delivery: a replicated prepare staged (or
+    /// settled) on the held copy and mirrored onto the original tree during a
+    /// bootstrap hold (#4791). It is created by the apply that owns the delivery
+    /// and passed explicitly, never carried ambiently or across a grain call,
+    /// so it cannot exempt any other write from interception.
+    /// </summary>
+    private sealed class WriteJudgement
+    {
+        /// <summary>Whether the interceptor has judged the value.</summary>
+        public bool Judged { get; private set; }
+
+        /// <summary>Whether the value is to be written (not dead-lettered).</summary>
+        public bool Proceed { get; private set; }
+
+        /// <summary>The value to write when <see cref="Proceed"/> is <c>true</c>.</summary>
+        public byte[] Value { get; private set; } = [];
+
+        /// <summary>Records the interceptor's verdict.</summary>
+        public void Record(LatticeWriteInterceptionOutcome outcome)
+        {
+            Judged = true;
+            Proceed = outcome.Proceed;
+            Value = outcome.Value;
+        }
+    }
+
+    /// <summary>
     /// Consults the write interceptor for every entry of a batch, returning the
     /// effective entry list (the same reference when nothing changed). Throws on a
     /// rejected entry, and - when <paramref name="atomic"/> is <c>true</c> - on a

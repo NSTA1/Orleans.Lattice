@@ -122,6 +122,22 @@ if (string.Equals(suite, "ownershipbarriers", StringComparison.OrdinalIgnoreCase
     return ownershipSummary.HasCriticalValidationErrors || ownershipSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "decommissionmerkle", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is ReadFusionCallBenchmarks.Site.PeerDecommission
+            or ReadFusionCallBenchmarks.Site.MerkleNode
+            or ReadFusionCallBenchmarks.Site.DecommissionVerdicts));
+    if (!string.IsNullOrWhiteSpace(filterRaw))
+    {
+        config = config.AddFilter(new GlobFilter(filterRaw
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(name => $"*{name}*").ToArray()));
+    }
+    var decommissionSummary = BenchmarkRunner.Run<ReadFusionCallBenchmarks>(config);
+    return decommissionSummary.HasCriticalValidationErrors || decommissionSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "maintenancecalls", StringComparison.OrdinalIgnoreCase))
 {
     var maintenanceCalls = BenchmarkRunner.Run<MaintenanceCallReductionBenchmarks>(config);

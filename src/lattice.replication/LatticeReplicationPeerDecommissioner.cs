@@ -24,8 +24,7 @@ internal sealed class LatticeReplicationPeerDecommissioner(
         // registry on each phase tick, so from here on none of them lifts its
         // fence on the strength of the barriers abandoned below.
         var registry = grainFactory.GetGrain<IReplicationDecommissionedPeerRegistryGrain>(IReplicationDecommissionedPeerRegistryGrain.SingletonKey);
-        var alreadyDecommissioned = await registry.IsDecommissionedAsync(peerClusterId);
-        await registry.MarkDecommissionedAsync(peerClusterId, DateTimeOffset.UtcNow);
+        var alreadyDecommissioned = await registry.MarkDecommissionedAndGetPreviousAsync(peerClusterId, DateTimeOffset.UtcNow);
 
         // Enrolment outlives a tree's membership in the currently-replicated set
         // (#4684: attach adds, detach keeps, decommission removes), so every
@@ -99,12 +98,23 @@ internal sealed class LatticeReplicationPeerDecommissioner(
             cancellationToken.ThrowIfCancellationRequested();
             var pending = await StalePendingClearer.CapturePendingAsync(grainFactory, treeId, peerClusterId, cancellationToken);
             var verdicts = new Dictionary<Guid, bool>();
-            foreach (var txid in pending)
+            // Route by the shard stamped in each id, including the legacy
+            // registry. Bound payloads without changing delegated/retained reads.
+            foreach (var group in pending.GroupBy(TxRegistryRouting.ShardOf))
             {
-                var status = await TxRegistryRouting.GetRegistry(grainFactory, treeId, txid).GetStatusAsync(txid);
-                if (status is TxStatus.Committed or TxStatus.Aborted)
+                foreach (var window in group.Chunk(ITxRegistryGrain.MaxMaintenanceProbeBatchSize))
                 {
-                    verdicts[txid] = status == TxStatus.Committed;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var statuses = await TxRegistryRouting.GetRegistry(grainFactory, treeId, window[0]).GetStatusManyAsync(window);
+                    foreach (var txid in window)
+                    {
+                        if (!statuses.TryGetValue(txid, out var status))
+                            throw new InvalidOperationException($"Transaction registry omitted decommission verdict for '{txid}'.");
+                        if (status is TxStatus.Committed or TxStatus.Aborted)
+                        {
+                            verdicts[txid] = status == TxStatus.Committed;
+                        }
+                    }
                 }
             }
 

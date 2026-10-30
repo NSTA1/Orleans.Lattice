@@ -1,0 +1,12 @@
+# The admin accepts an advance to the current target.
+MODULE: AdvanceStrictEqualAccepted
+TARGET: AdvanceStrict
+CLASS: Action
+SUMMARY: the monotonic check admits an equal target
+PERTURBS: Advance
+
+--- FIND
+    /\ IF cfg # NoCfg /\ TargetValid(t) /\ t > cfg
+--- REPLACE
+    /\ IF cfg # NoCfg /\ TargetValid(t) /\ t >= cfg
+--- END

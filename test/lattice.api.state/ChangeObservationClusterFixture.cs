@@ -107,7 +107,7 @@ internal sealed class ChangeObservationClusterFixture
     /// <see cref="StateObserveTailCursor"/>.
     /// </summary>
     public Task<string> CaptureTailAsync(string treeId) =>
-        StateObserveTailCursor.CaptureAsync(Cluster.Client, SiloServices, treeId);
+        StateObserveTailCursor.CaptureAsync(SiloServices, treeId);
 
     /// <summary>
     /// Drains up to <paramref name="count"/> notifications from a live

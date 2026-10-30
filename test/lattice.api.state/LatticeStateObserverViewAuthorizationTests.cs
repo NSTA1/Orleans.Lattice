@@ -313,7 +313,8 @@ public sealed class LatticeStateObserverViewAuthorizationTests
         Assert.Multiple(() =>
         {
             Assert.That(admittedError, Is.Null);
-            Assert.That(admittedGate.AskedAbout, Is.EqualTo(new[] { SourceTree }));
+            Assert.That(admittedGate.AskedAbout, Is.Not.Empty);
+            Assert.That(admittedGate.AskedAbout, Has.All.EqualTo(SourceTree));
             Assert.That(refusedError, Is.TypeOf<KeyNotFoundException>());
         });
     }

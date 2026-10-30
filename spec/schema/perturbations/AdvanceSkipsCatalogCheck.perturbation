@@ -1,0 +1,12 @@
+# Advance(t) is validated against the catalog before the admin is reached.
+MODULE: SchemaVersionFamily
+ROW: Advance(t)
+FILE: src/lattice.api.schema/LatticeSchemaControl.cs
+DETECTORS: LatticeSchemaControlVersionTargetTests.AdvanceTargetVersion_refuses_a_target_with_no_registered_path
+SUMMARY: the facade advances the target without the catalog check
+
+--- FIND
+            await _runtimeRegistry.ValidateTargetAsync(treeId, current with { TargetVersion = newTargetVersion }, current).ConfigureAwait(false);
+--- REPLACE
+            _ = current;
+--- END

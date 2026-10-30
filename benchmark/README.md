@@ -582,6 +582,24 @@ savings describe the dispatch model, not production serialization. Set
 `BENCH_MICROBENCH_FIDELITY=quick-oop` and
 `BENCH_MICROBENCH_INVOCATIONS=128` for a short isolated run.
 
+The `--suite decommissionmerkle` subset uses the same hop models and settings
+for peer marker presence-plus-mark (2-to-1), internal-node Merkle digest-plus-
+routing (2-to-1), and 32 pending verdicts on one registry (32-to-1). Production
+verdict requests are bounded at 128 and routed by encoded owner, including the
+legacy registry. Setup asserts equivalent results and exact modeled call counts.
+Marker persistence, registry durability/delegation/retention, topology walks and
+serialization are deliberately excluded; these are dispatch-cost measurements,
+not end-to-end throughput claims. Run directly from the repository root:
+
+```powershell
+$env:BENCH_MICROBENCH_FIDELITY = 'quick-oop'
+$env:BENCH_MICROBENCH_INVOCATIONS = '128'
+dotnet run --project benchmark\host\Bench.Microbench -c Release -- --suite decommissionmerkle
+```
+
+For longer scheduler-only iterations, set `BENCH_MICROBENCH_INVOCATIONS=65536`
+and append `--filter Yield`; this subset honors the standard harness filter.
+
 `microbench` does not stand up the docker stack and does not boot an Orleans silo. It
 targets `ILattice` directly through a [BenchmarkDotNet](https://benchmarkdotnet.org/)
 harness that hand-instantiates the tree routing and leaf-storage path behind the
