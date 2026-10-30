@@ -520,6 +520,9 @@ internal sealed partial class ShardRootGrain
                 {
                     _leafRoutingStamps[leafId] = (proof.LeafRoutingEpoch, proof.LeafRoutingGeneration);
                     _unstampedLeafProbeRetryAfter.Remove(leafId);
+                    // A stamped observation already passed the leaf's ownership
+                    // and visibility gates. Do not fetch the same key via a cache.
+                    return proof.Value;
                 }
                 else
                 {
