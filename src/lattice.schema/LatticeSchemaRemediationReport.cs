@@ -28,12 +28,17 @@ public readonly record struct LatticeSchemaRemediationReport
     /// </summary>
     [Id(2)] public int ScannedCount { get; init; }
 
-    /// <summary>The first offending key on an abort, otherwise <c>null</c>.</summary>
+    /// <summary>
+    /// The first offending key on an abort, otherwise <c>null</c>. Also <c>null</c> on
+    /// an abort no value caused: a cutover refused because another alias change
+    /// superseded it, which <see cref="Reason"/> names.
+    /// </summary>
     [Id(3)] public string? OffendingKey { get; init; }
 
     /// <summary>
     /// The reason the offending value failed on an abort (a policy-violation reason
-    /// or a transform-failure message), otherwise <c>null</c>.
+    /// or a transform-failure message), or why a superseded cutover was refused,
+    /// otherwise <c>null</c>.
     /// </summary>
     [Id(4)] public string? Reason { get; init; }
 
@@ -55,7 +60,11 @@ public readonly record struct LatticeSchemaRemediationReport
     /// <summary>Whether the remediation completed successfully and cut the tree over.</summary>
     public bool Succeeded => Phase == LatticeSchemaRemediationPhase.Completed;
 
-    /// <summary>Whether the remediation aborted on an offending value with no cutover.</summary>
+    /// <summary>
+    /// Whether the remediation aborted with no cutover: on an offending value, or
+    /// because another alias change superseded its cutover (no
+    /// <see cref="OffendingKey"/>).
+    /// </summary>
     public bool DidAbort => Phase == LatticeSchemaRemediationPhase.Aborted;
 
     /// <summary>Whether the remediation was cancelled before cutover, with no cutover.</summary>
@@ -112,6 +121,26 @@ public readonly record struct LatticeSchemaRemediationReport
             OffendingKey = offendingKey,
             Reason = reason,
             OffendingValuePreview = offendingValuePreview,
+            OperationId = operationId,
+        };
+
+    /// <summary>
+    /// Creates the aborted terminal report of a cutover refused because another
+    /// alias change superseded it (issue #5289): the tree no longer resolved to the
+    /// physical tree the remediation captured. No value is at fault, so
+    /// <see cref="OffendingKey"/> and <see cref="OffendingValuePreview"/> are
+    /// <c>null</c>, and <see cref="Reason"/> names the supersession.
+    /// </summary>
+    /// <param name="scannedCount">The values the build had written to the discarded destination.</param>
+    /// <param name="reason">Why the cutover was refused, naming the superseding physical tree.</param>
+    /// <param name="operationId">The operation id.</param>
+    internal static LatticeSchemaRemediationReport Superseded(int scannedCount, string reason, string operationId) =>
+        new()
+        {
+            Phase = LatticeSchemaRemediationPhase.Aborted,
+            InProgress = false,
+            ScannedCount = scannedCount,
+            Reason = reason,
             OperationId = operationId,
         };
 

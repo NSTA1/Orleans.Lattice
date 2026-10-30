@@ -106,6 +106,26 @@ public sealed class LatticeTreeAdminGrpcServiceUnitTests
     }
 
     [Test]
+    public void SetTreeAlias_maps_a_held_alias_reservation_to_FailedPrecondition_naming_the_holder()
+    {
+        // Issue #5289: an explicit alias refused because a resize, restore, revert or
+        // schema remediation holds the tree's alias reservation reaches a gRPC caller
+        // as an actionable precondition failure, not an opaque Internal.
+        const string refusal = "Cannot set the alias of tree 'orders': alias operation 'remediation:abc' holds its alias reservation.";
+        var control = Substitute.For<ILatticeTreeAdmin>();
+        control.SetTreeAliasAsync("orders", "physical", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException(refusal));
+        var service = CreateService(control);
+
+        var error = Assert.ThrowsAsync<RpcException>(() => service.SetTreeAlias(
+            new TreeAdminSetAliasRequest { TreeId = "orders", PhysicalTreeId = "physical" },
+            Context("SetTreeAlias")));
+
+        Assert.That(error!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
+        Assert.That(error.Status.Detail, Is.EqualTo(refusal));
+    }
+
+    [Test]
     public void InvokeAsync_rethrows_an_RpcException_unchanged()
     {
         var original = new RpcException(new Status(StatusCode.ResourceExhausted, "quota"));
