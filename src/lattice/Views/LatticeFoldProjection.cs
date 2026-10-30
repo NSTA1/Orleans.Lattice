@@ -44,7 +44,8 @@ public sealed class LatticeFoldProjection : ILatticeFoldProjection
     /// reserved NUL (<c>\u0000</c>) prefix (which the maintainer reserves for its
     /// internal accumulator rows) is rejected: the contribution is dropped and
     /// counted via the <c>orleans.lattice.view.aggregation_rejected</c> metric
-    /// rather than materialised.
+    /// rather than materialised, and the source key's prior membership is
+    /// retracted as a filter exit retracts it.
     /// </param>
     /// <param name="initial">
     /// Produces the empty accumulator for a group. Must not be

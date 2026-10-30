@@ -27,6 +27,15 @@ namespace Orleans.Lattice.Schema;
 /// accepted here and any merge-result violation is left to
 /// <see cref="LatticeSchemaMergeObserver"/>, so convergence is never blocked.
 /// </para>
+/// <para>
+/// <b>Already-enveloped values.</b> A policy judges the body, never the
+/// schema-version envelope. A value that arrives already enveloped (a replicated
+/// entry or CRDT delta, or a re-write of stored bytes) is judged by what the
+/// registered <see cref="ILatticeValueDecoder"/> serves a reader: its body, upcast
+/// to the tree's target. One that cannot be decoded to the target shape is a
+/// violation. The value is admitted with its envelope unchanged. With no active
+/// decoder no read strips an envelope, so the whole value is judged.
+/// </para>
 /// </remarks>
 internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
 {
@@ -34,18 +43,28 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
     private readonly ILatticeSchemaDeadLetterStore _deadLetters;
     private readonly TimeProvider _timeProvider;
     private readonly int _previewMaxBytes;
+    private readonly ILatticeValueDecoder? _valueDecoder;
 
     /// <summary>Initializes a new <see cref="LatticeSchemaWriteInterceptor"/>.</summary>
     /// <param name="provider">Resolves the cached per-tree policy.</param>
     /// <param name="deadLetters">The dead-letter store strict-ingest diversions are appended to.</param>
     /// <param name="options">The enforcement options carrying the preview byte bound.</param>
     /// <param name="timeProvider">The clock used to stamp dead-letter entries.</param>
-    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    /// <param name="valueDecoder">
+    /// The silo's read-path value decoder, used to recover the reader-visible body of
+    /// an already-enveloped value, or <c>null</c> when none is registered (the value
+    /// is then judged whole).
+    /// </param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="provider"/>, <paramref name="deadLetters"/>, <paramref name="options"/>,
+    /// or <paramref name="timeProvider"/> is <c>null</c>.
+    /// </exception>
     public LatticeSchemaWriteInterceptor(
         ILatticeSchemaPolicyProvider provider,
         ILatticeSchemaDeadLetterStore deadLetters,
         IOptions<LatticeSchemaEnforcementOptions> options,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILatticeValueDecoder? valueDecoder = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(deadLetters);
@@ -55,6 +74,7 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
         _deadLetters = deadLetters;
         _timeProvider = timeProvider;
         _previewMaxBytes = Math.Max(1, options.Value.DeadLetterPreviewMaxBytes);
+        _valueDecoder = valueDecoder;
     }
 
     /// <inheritdoc />
@@ -80,20 +100,61 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
             return LatticeWriteDecision.Accept();
         }
 
+        string? reason;
+        var judged = value;
+
+        // An already-enveloped value (a replicated entry or delta, or a re-write of
+        // stored bytes) is judged by the bytes a reader is served: the body, upcast
+        // to the tree's target. Only the read decoder decides that, so with no active
+        // decoder (versioning not registered) nothing strips the header on read and
+        // the whole value is judged, which keeps an envelope-shaped prefix from
+        // bypassing the policy. A plain value is judged as-is with no extra work.
+        if (LatticeSchemaEnvelope.IsEnveloped(value)
+            && _valueDecoder is { } decoder
+            && decoder.IsActive(treeId))
+        {
+            try
+            {
+                judged = await decoder.DecodeAsync(treeId, value, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+            {
+                // No reader can be served this value at the target shape (stamped
+                // newer than the target, no upcast path, or an upcast that cannot run
+                // over the body), so its body cannot be judged: fail closed.
+                reason = $"The value's version envelope cannot be decoded to the tree's target shape. {ex.Message}";
+                return await ViolationAsync(compiled, treeId, key, value, operation, reason, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
         // A CRDT delta is only validated when it is shape-checkable (JSON). An
         // opaque delta is accepted here; a merge-result violation is surfaced by
         // the merge observer instead of blocking convergence.
-        if (operation == LatticeOperation.CrdtApply && !SchemaValueChecks.IsWellFormedJson(value))
+        if (operation == LatticeOperation.CrdtApply && !SchemaValueChecks.IsWellFormedJson(judged))
         {
             return LatticeWriteDecision.Accept();
         }
 
-        var reason = compiled.Validate(value);
+        reason = compiled.Validate(judged);
         if (reason is null)
         {
             return LatticeWriteDecision.Accept();
         }
 
+        return await ViolationAsync(compiled, treeId, key, value, operation, reason, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask<LatticeWriteDecision> ViolationAsync(
+        CompiledSchemaPolicy compiled,
+        string treeId,
+        string key,
+        byte[] value,
+        LatticeOperation operation,
+        string reason,
+        CancellationToken cancellationToken)
+    {
         if (!LatticeAccessGateContext.IsSystemOrigin)
         {
             // Local write: fail closed. Nothing is durable before this throw.
