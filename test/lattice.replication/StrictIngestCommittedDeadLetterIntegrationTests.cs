@@ -24,8 +24,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// Each case delivers one refused and one valid entry of the same batch - with
 /// the prepare before or after the decision, with or without a bootstrap hold
 /// (#4791) - and asserts one durable dead-letter record for the refused entry,
-/// which is never applied, none for the valid entry (which, in the LWW cases,
-/// commits), and that the
+/// which is never applied, none for the valid entry, which commits, and that the
 /// record's write-ahead-log entry carries nothing of the batch: it is not
 /// prepared, not under the batch's transaction id, not stamped with the batch's
 /// position, the source's origin or clock, or the entry's CRDT delta. The real
@@ -139,6 +138,7 @@ public sealed class StrictIngestCommittedDeadLetterIntegrationTests
         {
             TreeId = tree,
             Op = MutationKind.TxCommit,
+            Mode = ModeOf(tree),
             Key = shard.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Timestamp = Hlc(1_100 + i),
             OriginClusterId = Origin,
@@ -147,6 +147,11 @@ public sealed class StrictIngestCommittedDeadLetterIntegrationTests
             AtomicShardCount = shards.Length,
         }).ToArray();
     }
+
+    // A terminal carries its tree's merge mode: the applier's replication-mode gate
+    // rejects (and acknowledges) one whose mode differs from the tree's declared mode.
+    private static LatticeMergeMode ModeOf(string tree) =>
+        tree.StartsWith(CrdtTreePrefix, StringComparison.Ordinal) ? LatticeMergeMode.PnCounter : LatticeMergeMode.LwwRegister;
 
     private async Task DeliverAsync(WalRecord entry)
     {
@@ -342,10 +347,10 @@ public sealed class StrictIngestCommittedDeadLetterIntegrationTests
             decisionFirst: false);
 
         // A staged CRDT prepare is judged with the entry's delta ambient, so this
-        // case is the one that shows the record does not inherit the delta. The
-        // visibility of the committed CRDT sibling is not asserted here: it is a
-        // property of the CRDT terminal fold, not of the dead-letter append.
+        // case is the one that shows the record does not inherit the delta.
         Assert.That(await Lattice(tree).GetAsync(RefusedKey), Is.Null, "the refused entry is not applied");
+        Assert.That((await Lattice(tree).PnCounter(ValidKey).GetAsync()).Value, Is.EqualTo(3),
+            "the rest of the batch commits");
         await AssertOneOrdinaryCommittedDeadLetterAsync(tree, txid);
     }
 
