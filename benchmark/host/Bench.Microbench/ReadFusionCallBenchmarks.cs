@@ -1,4 +1,5 @@
 using BenchmarkDotNet.Attributes;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Benchmark.Microbench;
 
@@ -15,6 +16,8 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// The --suite decommissionmerkle subset measures peer marker and Merkle node
 /// 2-to-1 calls and one-owner pending verdict reads (32-to-1, below the 128 cap).
 /// It excludes unchanged marker persistence and registry retention/delegation work.
+/// The --suite pointtopology subset measures stamped point warmup (2-to-1) and
+/// bounded overlap of eight topology reads (8-to-8, not a call reduction).
 /// </summary>
 [MemoryDiagnoser]
 public class ReadFusionCallBenchmarks
@@ -40,6 +43,10 @@ public class ReadFusionCallBenchmarks
         MerkleNode,
         /// <summary>32 pending transactions on one registry share one status call.</summary>
         DecommissionVerdicts,
+        /// <summary>A stable stamped serial warmup omits the second cache call.</summary>
+        PointWarmup,
+        /// <summary>Eight read-only child calls overlap without reducing their count.</summary>
+        SubtreeFanOut,
     }
 
     /// <summary>The read path under measurement.</summary>
@@ -61,8 +68,10 @@ public class ReadFusionCallBenchmarks
         var beforeCalls = _calls;
         _calls = 0;
         var after = AfterAsync().GetAwaiter().GetResult();
-        var expectedCalls = Path == Site.DecommissionVerdicts ? 32 : Path == Site.AppOwnership ? 3 : 2;
-        if (before != after || beforeCalls != expectedCalls || _calls != 1)
+        var expectedCalls = Path == Site.DecommissionVerdicts ? 32
+            : Path == Site.SubtreeFanOut ? 8 : Path == Site.AppOwnership ? 3 : 2;
+        var expectedAfter = Path == Site.SubtreeFanOut ? 8 : 1;
+        if (before != after || beforeCalls != expectedCalls || _calls != expectedAfter)
             throw new InvalidOperationException("Read fusion changed the result or dispatch budget.");
     }
 
@@ -70,6 +79,12 @@ public class ReadFusionCallBenchmarks
     [Benchmark(Baseline = true)]
     public async Task<long> BeforeAsync()
     {
+        if (Path == Site.SubtreeFanOut)
+        {
+            long total = 0;
+            for (var i = 0; i < 8; i++) total += (await DispatchAsync()).Shards;
+            return total;
+        }
         if (Path == Site.DecommissionVerdicts)
         {
             long total = 0;
@@ -97,6 +112,14 @@ public class ReadFusionCallBenchmarks
     [Benchmark]
     public async Task<long> AfterAsync()
     {
+        if (Path == Site.SubtreeFanOut)
+        {
+            var children = await BoundedFanOut.RunAsync(8, BoundedFanOut.DefaultWidth,
+                async _ => (await DispatchAsync()).Shards);
+            long total = 0;
+            foreach (var child in children) total += child;
+            return total;
+        }
         var read = await DispatchAsync();
         return Path switch
         {

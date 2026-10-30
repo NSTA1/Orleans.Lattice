@@ -6,6 +6,26 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 public sealed partial class ShardRootGrainBulkLoadGraftTests
 {
+    [TestCase(0, 3)]
+    [TestCase(1, 2)]
+    [TestCase(2, 1)]
+    public async Task BulkAppend_reads_only_count_and_fills_remaining_capacity(int existingCount, int expectedTake)
+    {
+        var h = CreateHarness(maxLeafKeys: 3);
+        var existing = h.AddLeaf();
+        h.State.State.RootNodeId = existing;
+        h.State.State.RootIsLeaf = true;
+        var leaf = h.Leaf(existing);
+        leaf.CountAsync().Returns(existingCount);
+
+        await h.Grain.BulkAppendAsync("count-only", Pairs(3));
+
+        await leaf.Received(1).CountAsync();
+        await leaf.DidNotReceive().GetKeysAsync();
+        await leaf.Received(1).MergeEntriesAsync(
+            Arg.Is<Dictionary<string, LwwValue<byte[]>>>(rows => rows.Count == expectedTake));
+    }
+
     [Test]
     public async Task BulkAppend_batches_birth_metadata_and_preplans_the_unpublished_chain()
     {
@@ -13,7 +33,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var existing = h.AddLeaf();
         h.State.State.RootNodeId = existing;
         h.State.State.RootIsLeaf = true;
-        h.Leaf(existing).GetKeysAsync().Returns(Task.FromResult(new List<string> { "a", "b" }));
+        h.Leaf(existing).CountAsync().Returns(2);
 
         await h.Grain.BulkAppendAsync("append-batch", Pairs(5));
 
@@ -58,7 +78,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var leaf = h.Leaf(next);
         h.State.State.RootNodeId = existing;
         h.State.State.RootIsLeaf = true;
-        h.Leaf(existing).GetKeysAsync().Returns(Task.FromResult(new List<string> { "a", "b" }));
+        h.Leaf(existing).CountAsync().Returns(2);
         h.Factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(leaf);
         var pin = new TaskCompletionSource();
         leaf.InitializeSiblingAsync(Arg.Any<SiblingInitialization>()).Returns(pin.Task);
