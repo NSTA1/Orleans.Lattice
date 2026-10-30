@@ -190,10 +190,6 @@ internal sealed partial class ShardRootGrain
     public Task<int?> GetMigrationTargetShardIndexAsync()
         => Task.FromResult(state.State.SplitInProgress?.ShadowTargetShardIndex);
 
-    /// <inheritdoc />
-    public Task<bool> HasPendingBulkOperationAsync()
-        => Task.FromResult(state.State.PendingBulkGraft is not null);
-
     /// <summary>
     /// Hot-path write gate. Throws <see cref="StaleShardRoutingException"/>
     /// when (a) the shard is in <see cref="Orleans.Lattice.BPlusTree.State.ShardSplitPhase.Reject"/> and

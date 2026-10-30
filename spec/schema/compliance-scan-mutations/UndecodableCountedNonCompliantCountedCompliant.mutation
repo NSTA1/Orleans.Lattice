@@ -1,0 +1,12 @@
+# Fail open: a value no reader can be served at the target shape passes the audit.
+MODULE: UndecodableCountedNonCompliantCountedCompliant
+TARGET: UndecodableCountedNonCompliant
+CLASS: Action
+SUMMARY: an undecodable value is counted compliant
+PERTURBS: Step
+
+--- FIND
+           d == Verdict(scanPolicy, v)
+--- REPLACE
+           d == IF v = "Undec" THEN "Ok" ELSE Verdict(scanPolicy, v)
+--- END

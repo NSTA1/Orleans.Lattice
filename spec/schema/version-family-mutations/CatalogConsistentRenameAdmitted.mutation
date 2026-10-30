@@ -1,0 +1,12 @@
+# A registration may rename a version that is already registered, so the
+# effective catalog names one version twice.
+MODULE: CatalogConsistentRenameAdmitted
+TARGET: CatalogConsistent
+CLASS: Invariant
+SUMMARY: the merge stops refusing a descriptor whose name differs
+
+--- FIND
+    /\ \A x \in a.d, y \in D : x[1] = y[1] => x[2] = y[2]
+--- REPLACE
+    /\ TRUE
+--- END

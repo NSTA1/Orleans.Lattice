@@ -52,8 +52,8 @@ public partial class TreeMergeGrainTests
 
         var clock0 = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
         var clock1 = HybridLogicalClock.Tick(clock0);
-        var leaf0Mock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
-        var leaf1Mock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf0Mock = LeafSubstituteCombinedCalls.CreateComposed();
+        var leaf1Mock = LeafSubstituteCombinedCalls.CreateComposed();
         grainFactory.GetGrain<IBPlusLeafGrain>(leaf0).Returns(leaf0Mock);
         grainFactory.GetGrain<IBPlusLeafGrain>(leaf1).Returns(leaf1Mock);
         leaf0Mock.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(
@@ -124,7 +124,7 @@ public partial class TreeMergeGrainTests
         grainFactory.GetGrain<IShardRootGrain>($"{sourcePhysical}/1").Returns(srcShard1);
 
         var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leafMock = LeafSubstituteCombinedCalls.CreateComposed();
         grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);
         leafMock.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(
             new StateDelta

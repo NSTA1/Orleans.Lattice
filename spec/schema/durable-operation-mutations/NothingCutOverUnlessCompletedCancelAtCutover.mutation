@@ -1,0 +1,14 @@
+# Cutover is the point of no return; accepting a cancel there reports a cut-over tree as cancelled.
+MODULE: NothingCutOverUnlessCompletedCancelAtCutover
+TARGET: NothingCutOverUnlessCompleted
+CLASS: Invariant
+SUMMARY: a cancel is accepted after the cutover swap
+PERTURBS: DriveCancel
+
+--- FIND
+    /\ remInProgress /\ CancelAccepted(o)
+    /\ remInProgress' = FALSE
+--- REPLACE
+    /\ remInProgress /\ (CancelAccepted(o) \/ (remOwner = opFollows[o] /\ remPhase = "Cutover"))
+    /\ remInProgress' = FALSE
+--- END

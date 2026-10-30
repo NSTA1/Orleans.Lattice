@@ -59,6 +59,8 @@ public class LeafRangeReadBenchmarks
         var entries = GetEntriesAsync().GetAwaiter().GetResult();
         if (entries.Count != 16 || entries[0].Value[0] != (Pending ? 2 : 1))
             throw new InvalidOperationException("Leaf range-read benchmark did not exercise its configured visibility path.");
+        if (CountAsync().GetAwaiter().GetResult() != GetKeyCountAsync().GetAwaiter().GetResult())
+            throw new InvalidOperationException("Count-only capacity differs from the original key enumeration.");
     }
 
     /// <summary>Reads every key through the shipping leaf key range read.</summary>
@@ -67,6 +69,18 @@ public class LeafRangeReadBenchmarks
     {
         LatticeRegistrySnapshotContext.Current = _snapshot;
         return _leaf.GetKeysAsync();
+    }
+
+    /// <summary>The former bulk-append capacity read, including the discarded key list.</summary>
+    [Benchmark(Baseline = true)]
+    public async Task<int> GetKeyCountAsync() => (await GetKeysAsync()).Count;
+
+    /// <summary>The shipping count-only bulk-append capacity read.</summary>
+    [Benchmark]
+    public Task<int> CountAsync()
+    {
+        LatticeRegistrySnapshotContext.Current = _snapshot;
+        return _leaf.CountAsync();
     }
 
     /// <summary>Reads every entry through the shipping leaf entry range read.</summary>

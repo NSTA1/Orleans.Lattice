@@ -1,0 +1,12 @@
+# Begin(o,s,p): an admitted start records a queued operation.
+MODULE: SchemaDurableOperation
+ROW: Begin(o,s,p)
+FILE: src/lattice/Operations/LatticeOperationGrain.cs
+DETECTORS: LatticeOperationGrainTests.Begin_records_a_queued_operation_and_indexes_it
+SUMMARY: an admitted start records a running rather than a queued operation
+
+--- FIND
+            State = LatticeOperationState.Queued,
+--- REPLACE
+            State = LatticeOperationState.Running,
+--- END

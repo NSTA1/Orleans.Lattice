@@ -103,8 +103,8 @@ public partial class HotShardMonitorGrainTests
         {
             if (shardSubs.TryGetValue(i, out var s)) return s;
             var sub = Substitute.For<IShardRootGrain>();
-            sub.GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(30) });
-            sub.HasPendingBulkOperationAsync().Returns(false);
+            sub.StubHotness(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(30) });
+            sub.StubPendingBulkOperation(false);
             sub.IsSplittingAsync().Returns(false);
             sub.CountAsync().Returns(WellOccupiedShardEntryCount);
             ShardSamplingStatusStub.BridgeFromProbes(sub);
@@ -139,7 +139,7 @@ public partial class HotShardMonitorGrainTests
             .Count(c => c.GetMethodInfo().Name == nameof(ITimerRegistry.RegisterGrainTimer));
 
     private static void MakeHot(IShardRootGrain shard, int reads = 10_000) =>
-        shard.GetHotnessAsync().Returns(new ShardHotness
+        shard.StubHotness(new ShardHotness
         {
             Reads = reads,
             Writes = 0,

@@ -84,8 +84,9 @@ public partial class BPlusLeafGrainTests
     /// holds. The second persist is driven through the private seam directly
     /// because it stands for every ungated call site at once.
     /// </summary>
-    [Test]
-    public async Task Interleaved_SetParentAsync_persist_never_overlaps_an_ungated_persist()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Interleaved_SetParentAsync_persist_never_overlaps_an_ungated_persist(bool combined)
     {
         var state = new FakePersistentState<LeafNodeState> { SimulateEtagChecks = true };
         var grain = CreateGrain(state);
@@ -93,7 +94,9 @@ public partial class BPlusLeafGrainTests
 
         var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         state.BeforeWrite = () => hold.Task;
-        var parentTask = grain.SetParentAsync(ParentId);
+        Task parentTask = combined
+            ? grain.SetParentAndGetChildDigestSnapshotAsync(ParentId)
+            : grain.SetParentAsync(ParentId);
         Assert.That(parentTask.IsCompleted, Is.False, "the SetParentAsync write must be held open");
 
         var persist = typeof(BPlusLeafGrain).GetMethod(

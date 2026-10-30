@@ -1,0 +1,18 @@
+# Slice(o): each call runs one bounded, persisted slice.
+MODULE: SchemaDurableOperation
+ROW: Slice(o)
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.RunSliceAsync_processes_one_bounded_slice_at_a_time_through_every_phase
+SUMMARY: a slice call runs no slice
+
+--- FIND
+    public async Task<SchemaRemediationSlice> RunSliceAsync()
+    {
+        EnsureControlPlaneOrigin();
+        await RunSliceCoreAsync();
+--- REPLACE
+    public async Task<SchemaRemediationSlice> RunSliceAsync()
+    {
+        EnsureControlPlaneOrigin();
+        await Task.CompletedTask;
+--- END

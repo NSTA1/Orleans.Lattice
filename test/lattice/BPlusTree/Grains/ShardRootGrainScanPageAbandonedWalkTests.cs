@@ -86,7 +86,7 @@ public class ShardRootGrainScanPageAbandonedWalkTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var entries = new List<KeyValuePair<string, byte[]>>
             {
                 new($"k{index:D4}", [1]),
@@ -108,7 +108,7 @@ public class ShardRootGrainScanPageAbandonedWalkTests
                         ? harness.ParkedKeys.Task
                         : Task.FromResult(entries.Select(e => e.Key).ToList());
                 });
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = null,
                 HighKeyExclusive = null,

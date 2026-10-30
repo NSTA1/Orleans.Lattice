@@ -1,0 +1,12 @@
+# RequestCancel(o): the request is recorded durably.
+MODULE: SchemaDurableOperation
+ROW: RequestCancel(o)
+FILE: src/lattice/Operations/LatticeOperationGrain.cs
+DETECTORS: LatticeOperationGrainTests.Report_and_heartbeat_tell_the_runner_to_stop_once_cancellation_is_requested
+SUMMARY: a cancel request is written without the cancel flag
+
+--- FIND
+        record = record with { CancelRequested = true };
+--- REPLACE
+        record = record with { CancelRequested = false };
+--- END

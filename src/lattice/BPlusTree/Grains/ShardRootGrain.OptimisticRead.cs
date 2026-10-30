@@ -169,7 +169,7 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     /// <summary>
     /// The <see cref="IShardRootGrain"/> method names exempt from the
     /// routing-mutation bracket. Kept deliberately small: point reads, the batch read,
-    /// two activation-scoped diagnostics, and point Sets whose routing changes
+    /// an activation-scoped diagnostic, and point Sets whose routing changes
     /// are covered by the self-bracketing prepare, split-link and retry seams.
     /// </summary>
     internal static bool IsRoutingNeutralMethod(string? methodName) => methodName switch
@@ -179,7 +179,6 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
         nameof(IShardRootGrain.GetWithVersionAsync) => true,
         nameof(IShardRootGrain.ExistsAsync) => true,
         nameof(IShardRootGrain.GetManyAsync) => true,
-        nameof(IShardRootGrain.GetHotnessAsync) => true,
         nameof(IShardRootGrain.PublishLeafByteFootprintAsync) => true,
         // Both Set overloads change values, not ownership, unless they split.
         // LinkSplitAsync brackets every non-null split; leaf stamps cover the

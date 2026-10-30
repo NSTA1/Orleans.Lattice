@@ -1,0 +1,14 @@
+# Step: each value is tallied by its verdict.
+MODULE: SchemaComplianceScan
+ROW: Step
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_all_values_compliant_reports_no_breakdown
+SUMMARY: a compliant value is tallied as non-compliant
+
+--- FIND
+                Compliant++;
+                return;
+--- REPLACE
+                NonCompliant++;
+                return;
+--- END

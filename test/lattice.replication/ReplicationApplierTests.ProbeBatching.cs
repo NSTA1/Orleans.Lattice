@@ -15,8 +15,6 @@ public partial class ReplicationApplierTests
         Assert.That(await grain.IsHoldingManyAsync(RemoteCluster, requested), Is.EqualTo(new[] { true, false, true }));
         Assert.That(await grain.IsHoldingManyAsync("other", requested), Is.EqualTo(new[] { false, false, false }));
         Assert.That(await grain.IsHoldingManyAsync(RemoteCluster, []), Is.Empty);
-        var single = await Task.WhenAll(requested.Select(t => grain.IsHoldingAsync(RemoteCluster, t)));
-        Assert.That(await grain.IsHoldingManyAsync(RemoteCluster, requested), Is.EqualTo(single));
 
         h.Vc.Entries[OriginC] = Hlc(50);
         await grain.DrainAsync();

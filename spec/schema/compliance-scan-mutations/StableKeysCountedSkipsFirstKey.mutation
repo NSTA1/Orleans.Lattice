@@ -1,0 +1,14 @@
+# A scan that skips a live, untouched key under-reports the tree.
+MODULE: StableKeysCountedSkipsFirstKey
+TARGET: StableKeysCounted
+CLASS: Invariant
+SUMMARY: the scan treats the first key as absent
+PERTURBS: Step
+
+--- FIND
+          /\ IF v = "Absent"
+
+--- REPLACE
+          /\ IF v = "Absent" \/ k = 1
+
+--- END

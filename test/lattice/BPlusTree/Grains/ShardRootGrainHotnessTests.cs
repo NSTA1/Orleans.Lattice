@@ -27,7 +27,7 @@ public class ShardRootGrainHotnessTests
         var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: grainFactory);
 
         // Stub leaf grain for read/write paths.
-        var leafGrain = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leafGrain = LeafSubstituteCombinedCalls.CreateComposed();
         leafGrain.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
         leafGrain.ExistsAsync(Arg.Any<string>()).Returns(Task.FromResult(false));
         leafGrain.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
@@ -346,14 +346,12 @@ public class ShardRootGrainHotnessTests
 
         var status = await grain.GetSamplingStatusAsync();
         var isSplitting = await grain.IsSplittingAsync();
-        var hasPendingBulk = await grain.HasPendingBulkOperationAsync();
 
         Assert.Multiple(() =>
         {
             Assert.That(isSplitting, Is.True);
-            Assert.That(hasPendingBulk, Is.True);
             Assert.That(status.IsSplitting, Is.EqualTo(isSplitting));
-            Assert.That(status.HasPendingBulkOperation, Is.EqualTo(hasPendingBulk));
+            Assert.That(status.HasPendingBulkOperation, Is.True);
         });
     }
 

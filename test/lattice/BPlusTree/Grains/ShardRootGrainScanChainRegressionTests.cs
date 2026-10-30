@@ -77,7 +77,7 @@ public class ShardRootGrainScanChainRegressionTests
         for (var i = 0; i < n; i++)
         {
             var spec = specs[i];
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var keys = spec.Keys.ToList();
             var entries = spec.Keys
                 .Select(k => new KeyValuePair<string, byte[]>(k, ValueFor(k)))
@@ -89,7 +89,7 @@ public class ShardRootGrainScanChainRegressionTests
             leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(_ => Task.FromResult(entries.ToList()));
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = spec.Low,
                 HighKeyExclusive = spec.High,
@@ -317,7 +317,7 @@ public class ShardRootGrainScanChainRegressionTests
         // Non-vacuity: the row-less leaf really was read and walked past, and
         // its bounds really were consulted.
         await AssertKeyReadsAsync(h.Leaves[1], 1);
-        await h.Leaves[1].Received().GetKeyRangeAsync();
+        await h.Leaves[1].Received().Separate().GetKeyRangeAsync();
         await AssertKeyReadsAsync(h.Leaves[2], 1);
 
         Assert.That(page.Keys, Is.EqualTo(new[] { "a1", "b1" }));

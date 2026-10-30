@@ -83,8 +83,8 @@ public partial class HotShardMonitorGrainTests
         {
             if (shardSubs.TryGetValue(i, out var s)) return s;
             var sub = Substitute.For<IShardRootGrain>();
-            sub.GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(30) });
-            sub.HasPendingBulkOperationAsync().Returns(false);
+            sub.StubHotness(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(30) });
+            sub.StubPendingBulkOperation(false);
             sub.IsSplittingAsync().Returns(false);
             sub.CountAsync().Returns(WellOccupiedShardEntryCount);
             ShardSamplingStatusStub.BridgeFromProbes(sub);
@@ -129,7 +129,7 @@ public partial class HotShardMonitorGrainTests
     {
         var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain();
         // Shard 1 is hot.
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness
+        shardOf(1).StubHotness(new ShardHotness
         {
             Reads = 5_000, Writes = 5_000, Window = TimeSpan.FromSeconds(10),
         });
@@ -144,7 +144,7 @@ public partial class HotShardMonitorGrainTests
     {
         var (grain, _, lattice, splitGrain, _, shardOf, _) = CreateGrain();
         lattice.IsResizeCompleteAsync().Returns(false);
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 
@@ -155,8 +155,8 @@ public partial class HotShardMonitorGrainTests
     public async Task RunSamplingPass_suppressed_when_a_shard_has_pending_bulk_operation()
     {
         var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain();
-        shardOf(0).HasPendingBulkOperationAsync().Returns(true);
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(0).StubPendingBulkOperation(true);
+        shardOf(1).StubHotness(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 
@@ -167,8 +167,8 @@ public partial class HotShardMonitorGrainTests
     public async Task RunSamplingPass_picks_hottest_shard_when_multiple_exceed_threshold()
     {
         var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain();
-        shardOf(0).GetHotnessAsync().Returns(new ShardHotness { Reads = 1_500, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(0).StubHotness(new ShardHotness { Reads = 1_500, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 
@@ -202,12 +202,12 @@ public partial class HotShardMonitorGrainTests
         grainFactory.GetGrain<ITreeShardSplitGrain>(Arg.Any<string>()).Returns(splitGrain);
 
         var hotShard1 = Substitute.For<IShardRootGrain>();
-        hotShard1.GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        hotShard1.HasPendingBulkOperationAsync().Returns(false);
+        hotShard1.StubHotness(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        hotShard1.StubPendingBulkOperation(false);
         hotShard1.IsSplittingAsync().Returns(false);
         var coldShard0 = Substitute.For<IShardRootGrain>();
-        coldShard0.GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        coldShard0.HasPendingBulkOperationAsync().Returns(false);
+        coldShard0.StubHotness(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        coldShard0.StubPendingBulkOperation(false);
         coldShard0.IsSplittingAsync().Returns(false);
         ShardSamplingStatusStub.BridgeFromProbes(hotShard1);
         ShardSamplingStatusStub.BridgeFromProbes(coldShard0);
@@ -244,7 +244,7 @@ public partial class HotShardMonitorGrainTests
         // Shard 0 is already splitting (counts as 1 in-flight). Shard 1 is hot
         // but the cap is reached so no new split is triggered this tick.
         shardOf(0).IsSplittingAsync().Returns(true);
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 
@@ -261,10 +261,10 @@ public partial class HotShardMonitorGrainTests
         };
         var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain(physicalShardCount: 4, options: opts);
         // Two hot shards, two cold shards, no in-flight splits, cap = 2 → both hot ones split.
-        shardOf(0).GetHotnessAsync().Returns(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(2).GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(3).GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(0).StubHotness(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(2).StubHotness(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(3).StubHotness(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 
@@ -282,10 +282,10 @@ public partial class HotShardMonitorGrainTests
         };
         var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain(physicalShardCount: 4, options: opts);
         // Three hot shards but cap = 2 → only the two hottest split.
-        shardOf(0).GetHotnessAsync().Returns(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(2).GetHotnessAsync().Returns(new ShardHotness { Reads = 3_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(3).GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(0).StubHotness(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(2).StubHotness(new ShardHotness { Reads = 3_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(3).StubHotness(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 

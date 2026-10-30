@@ -10,6 +10,24 @@ chain. The model checks that those callbacks never queue behind that turn, that
 admitting them does not let two storage writes overlap on the leaf row, and
 that admitting them does not let a write land on a cleared leaf.
 
+## Combined parent/digest dispatch
+
+`SeedChildParentReadAsync` now calls the `[AlwaysInterleave]`
+`SetParentAndGetChildDigestSnapshotAsync` on either child kind. The wrapper
+awaits the existing `SetParentAsync` before `GetChildDigestSnapshotAsync`.
+The model's reparent admission, gate acquisition, durable write, gate release
+and digest service still occur in that order. Digest admission is a stuttering
+step inside the already admitted combined call, rather than a second queued
+message. The separate-call model therefore conservatively retains an extra
+admission boundary; neither a durable action nor a gate is elided.
+
+Leaf replay and persist-write barriers remain in the delegated methods. The
+internal-node release still drains deferred child publications before building
+the snapshot. Neither implementation publishes back to the parent awaiting its
+seed. A binding failure still prevents digest service and preserves retry
+semantics. Caller tests assert one combined dispatch per child; interleave,
+replay, persist-race, clear-row and deferred-fold tests guard the retained seams.
+
 ## Variable mapping
 
 | Spec variable | Protocol role | Code counterpart |

@@ -2893,13 +2893,6 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public Task<LeafKeyRange> GetKeyRangeAsync() =>
-        Task.FromResult(new LeafKeyRange
-        {
-            LowKeyInclusive = state.State.LowKeyInclusive,
-            HighKeyExclusive = state.State.HighKeyExclusive,
-        });
-
     /// <inheritdoc />
     public Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync() =>
         Task.FromResult(new LeafChainLink
@@ -3617,7 +3610,13 @@ internal sealed partial class BPlusLeafGrain(
         return new LeafDeltaPage { Delta = delta, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
     }
 
-    public async Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount)
+    /// <summary>
+    /// The moved-slot delta <see cref="GetDeltaSinceForSlotsAndNextSiblingAsync"/>
+    /// returns: only the entries whose virtual slot is in
+    /// <paramref name="sortedMovedSlots"/> (sorted ascending) and whose timestamp
+    /// is newer than what <paramref name="sinceVersion"/> has seen. Not a grain call.
+    /// </summary>
+    internal async Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount)
     {
         await AwaitReplayBarrierAsync();
 

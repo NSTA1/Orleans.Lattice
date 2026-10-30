@@ -1,0 +1,12 @@
+# JudgedByStartPolicy: every value is judged by the start policy.
+MODULE: SchemaComplianceScan
+ROW: JudgedByStartPolicy
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_judges_every_value_with_the_policy_read_at_start
+SUMMARY: values are judged by the policy current at each value
+
+--- FIND
+                tally.Count(policy.Validate(entry.Value));
+--- REPLACE
+                tally.Count((await _policyProvider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false) ?? policy).Validate(entry.Value));
+--- END

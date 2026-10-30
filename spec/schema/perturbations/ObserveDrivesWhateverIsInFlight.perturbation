@@ -1,0 +1,18 @@
+# Observe(o): a driver whose followed remediation ended stops with its report or as superseded.
+MODULE: SchemaDurableOperation
+ROW: Observe(o)
+FILE: src/lattice.schema/SchemaRemediationDriver.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.A_joined_driver_does_not_slice_or_report_a_later_remediation_after_the_followed_one_ended
+SUMMARY: the driver slices whatever remediation is in flight and never notices the followed one ended (#5267)
+
+--- FIND
+            var slice = followed is null
+                ? await grain.RunSliceAsync().ConfigureAwait(false)
+                : await grain.RunSliceAsync(followed).ConfigureAwait(false);
+            if (followed is not null && !Follows(slice.Report, followed))
+            {
+                return report;
+            }
+--- REPLACE
+            var slice = await grain.RunSliceAsync().ConfigureAwait(false);
+--- END

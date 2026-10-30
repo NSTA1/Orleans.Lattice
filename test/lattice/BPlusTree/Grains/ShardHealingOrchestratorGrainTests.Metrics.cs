@@ -197,7 +197,7 @@ public partial class ShardHealingOrchestratorGrainTests
             case "skewed_load":
                 h = CreateGrain(physicalShardCount: 8, baseShardCount: 2, options: options);
                 LoadUniformly(h, 8, opsPerShard: 10);
-                h.ShardOf(0).GetHotnessAsync().Returns(new ShardHotness
+                h.ShardOf(0).StubHotness(new ShardHotness
                 {
                     Reads = 400, Writes = 0, Window = TimeSpan.FromSeconds(1),
                 });

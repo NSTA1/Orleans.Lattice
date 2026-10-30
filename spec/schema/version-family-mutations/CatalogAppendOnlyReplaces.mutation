@@ -1,0 +1,12 @@
+# An accepted registration replaces the runtime descriptors instead of merging.
+MODULE: CatalogAppendOnlyReplaces
+TARGET: CatalogAppendOnly
+CLASS: Action
+SUMMARY: the registry persists only the latest registration's descriptors
+PERTURBS: Register
+
+--- FIND
+    /\ rtD' = IF ok THEN rtD \cup (a.d \ HostD) ELSE rtD
+--- REPLACE
+    /\ rtD' = IF ok THEN a.d \ HostD ELSE rtD
+--- END

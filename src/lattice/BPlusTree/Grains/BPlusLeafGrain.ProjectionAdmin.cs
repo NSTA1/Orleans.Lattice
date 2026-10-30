@@ -31,10 +31,6 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class BPlusLeafGrain
 {
     /// <inheritdoc />
-    public Task<long> GetProjectionCheckpointOffsetAsync() =>
-        Task.FromResult(state.State.ProjectionCheckpointOffset);
-
-    /// <inheritdoc />
     public Task<LeafCheckpointPage> GetProjectionCheckpointAndNextSiblingAsync() =>
         Task.FromResult(new LeafCheckpointPage
         {
@@ -50,8 +46,12 @@ internal sealed partial class BPlusLeafGrain
         return link;
     }
 
-    /// <inheritdoc />
-    public async Task RebuildProjectionFromWalAsync()
+    /// <summary>
+    /// The projection reset <see cref="RebuildProjectionAndNextSiblingAsync"/>
+    /// performs after capturing the chain link; see that member for the full
+    /// contract. Not a grain call.
+    /// </summary>
+    internal async Task RebuildProjectionFromWalAsync()
     {
         // Step 0 - an unreadable snapshot is discarded, accepting the loss
         // (issue #4450). Every activation fails its replay closed on a snapshot

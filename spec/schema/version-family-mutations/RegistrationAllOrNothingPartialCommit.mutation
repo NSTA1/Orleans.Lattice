@@ -1,0 +1,12 @@
+# A registration whose hop is refused still lands its descriptors.
+MODULE: RegistrationAllOrNothingPartialCommit
+TARGET: RegistrationAllOrNothing
+CLASS: Action
+SUMMARY: a refused registration commits the half that merged
+PERTURBS: Register
+
+--- FIND
+    /\ rtD' = IF ok THEN rtD \cup (a.d \ HostD) ELSE rtD
+--- REPLACE
+    /\ rtD' = IF ok \/ a.h # {} THEN rtD \cup (a.d \ HostD) ELSE rtD
+--- END

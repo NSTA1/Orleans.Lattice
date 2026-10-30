@@ -13,7 +13,7 @@ namespace Orleans.Lattice.BPlusTree;
 [Immutable]
 internal readonly record struct LeafPrevChainLink
 {
-    /// <summary>The leaf's bounds, as <see cref="IBPlusLeafGrain.GetKeyRangeAsync"/> returns them.</summary>
+    /// <summary>The leaf's persisted owned-key-range bounds.</summary>
     [Id(0)] public LeafKeyRange KeyRange { get; init; }
 
     /// <summary>The leaf's left sibling, as <see cref="IBPlusLeafGrain.GetPrevSiblingAsync"/> returns it.</summary>

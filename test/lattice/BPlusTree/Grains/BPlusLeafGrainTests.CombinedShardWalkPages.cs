@@ -34,7 +34,7 @@ public partial class BPlusLeafGrainTests
         {
             Assert.That(page.Keys, Is.EqualTo(new[] { "b" }));
             Assert.That(page.Keys, Is.EqualTo(await grain.GetKeysAsync("b", "d")));
-            Assert.That(page.Link.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(page.Link.KeyRange, Is.EqualTo((await grain.GetKeyRangeAndNextSiblingAsync()).KeyRange));
             Assert.That(page.Link.NextSibling, Is.EqualTo(await grain.GetNextSiblingAsync()));
         });
     }
@@ -49,7 +49,7 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(state);
         await grain.SetAsync("b", [1]);
         if (!tail) await grain.SetNextSiblingAsync(ShardWalkPageSibling);
-        var bounds = await grain.GetKeyRangeAsync();
+        var bounds = (await grain.GetKeyRangeAndNextSiblingAsync()).KeyRange;
         var next = await grain.GetNextSiblingAsync();
 
         var link = await grain.RebuildProjectionAndNextSiblingAsync();
@@ -101,8 +101,8 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(page.CheckpointOffset, Is.EqualTo(await grain.GetProjectionCheckpointOffsetAsync()));
-            Assert.That(page.Link.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(page.CheckpointOffset, Is.EqualTo(42L));
+            Assert.That(page.Link.KeyRange, Is.EqualTo((await grain.GetKeyRangeAndNextSiblingAsync()).KeyRange));
             Assert.That(page.Link.NextSibling, Is.EqualTo(await grain.GetNextSiblingAsync()));
         });
     }
@@ -129,7 +129,7 @@ public partial class BPlusLeafGrainTests
             Assert.That(await grain.GetAsync("e"), Is.Not.Null);
             Assert.That(page.NextSibling, Is.EqualTo(await grain.GetNextSiblingAsync()));
             Assert.That(page.NextSibling, Is.EqualTo(ShardWalkPageSibling));
-            Assert.That(page.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(page.KeyRange, Is.EqualTo((await grain.GetKeyRangeAndNextSiblingAsync()).KeyRange));
             Assert.That(page.KeyRange.HighKeyExclusive, Is.EqualTo("k"));
         });
     }
@@ -182,7 +182,7 @@ public partial class BPlusLeafGrainTests
             Assert.That(page.Clock, Is.Not.EqualTo(default(HybridLogicalClock)), "the write ticked the clock");
             Assert.That(page.NextSibling, Is.EqualTo(await grain.GetNextSiblingAsync()));
             Assert.That(page.NextSibling, Is.EqualTo(ShardWalkPageSibling));
-            Assert.That(page.KeyRange, Is.EqualTo(await grain.GetKeyRangeAsync()));
+            Assert.That(page.KeyRange, Is.EqualTo((await grain.GetKeyRangeAndNextSiblingAsync()).KeyRange));
             Assert.That(page.KeyRange.LowKeyInclusive, Is.EqualTo("f"));
         });
     }

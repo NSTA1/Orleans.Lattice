@@ -87,7 +87,7 @@ public partial class ShardRootGrainCountWorkBoundTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var keys = new List<string>();
             for (var j = 0; j < keysPerLeaf; j++)
                 keys.Add($"k{index:D3}-{j:D3}");
@@ -121,7 +121,7 @@ public partial class ShardRootGrainCountWorkBoundTests
                 });
 
             var high = index + 1 < leafCount ? $"k{index + 1:D3}-000" : null;
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = $"k{index:D3}-000",
                 HighKeyExclusive = high,

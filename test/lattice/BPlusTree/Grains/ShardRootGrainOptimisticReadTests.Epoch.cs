@@ -42,7 +42,6 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [TestCase(nameof(IShardRootGrain.GetWithVersionAsync))]
     [TestCase(nameof(IShardRootGrain.ExistsAsync))]
     [TestCase(nameof(IShardRootGrain.GetManyAsync))]
-    [TestCase(nameof(IShardRootGrain.GetHotnessAsync))]
     [TestCase(nameof(IShardRootGrain.PublishLeafByteFootprintAsync))]
     [TestCase(nameof(IShardRootGrain.SetAsync))]
     public void IsRoutingNeutralMethod_exempts_only_the_audited_calls(string methodName)
@@ -70,7 +69,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
             .Distinct()
             .ToArray();
 
-        Assert.That(exempt, Has.Length.EqualTo(8));
+        Assert.That(exempt, Has.Length.EqualTo(7));
     }
 
     [Test]
@@ -98,7 +97,6 @@ public sealed partial class ShardRootGrainOptimisticReadTests
         {
             nameof(IShardRootGrain.ExistsAsync),
             nameof(IShardRootGrain.GetAsync),
-            nameof(IShardRootGrain.GetHotnessAsync),
             nameof(IShardRootGrain.GetManyAsync),
             nameof(IShardRootGrain.GetWithVersionAsync),
             nameof(IShardRootGrain.PublishLeafByteFootprintAsync),

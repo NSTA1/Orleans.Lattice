@@ -1,0 +1,12 @@
+# A value stamped with another schema family is upcast through this family's
+# hops instead of being returned at its stored version.
+MODULE: UnversionedReadsStoredBodyForeignUpcast
+TARGET: UnversionedReadsStoredBody
+CLASS: Invariant
+SUMMARY: the decoder ignores the stamp's family
+
+--- FIND
+    ELSE IF v.tag = "Raw" \/ c = NoCfg \/ v.fam # Fam \/ v.ver = c
+--- REPLACE
+    ELSE IF v.tag = "Raw" \/ c = NoCfg \/ v.ver = c
+--- END

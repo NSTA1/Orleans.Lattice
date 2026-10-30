@@ -1,0 +1,12 @@
+# Accept(o): the in-flight remediation with the same parameters is followed.
+MODULE: SchemaDurableOperation
+ROW: Accept(o)
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.AcceptAsync_with_the_in_flight_parameters_returns_that_operation_and_accepts_nothing_new
+SUMMARY: an accept with the in-flight parameters is refused instead of following it
+
+--- FIND
+            if (IsSameParameters(transform, targetPolicy))
+--- REPLACE
+            if (IsSameParameters(transform, targetPolicy) && !IsSameParameters(transform, targetPolicy))
+--- END

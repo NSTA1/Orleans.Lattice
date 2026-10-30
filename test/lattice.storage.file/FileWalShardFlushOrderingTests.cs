@@ -444,18 +444,29 @@ public sealed class FileWalShardFlushOrderingTests
             "The trim whose fsync failed was reported as failed, so recovery must not apply its marker.");
     }
 
-    [Test]
-    public async Task A_failed_rollback_after_a_failed_fsync_fail_stops_the_shard()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_failed_rollback_after_a_failed_fsync_fail_stops_the_shard(bool trim)
     {
         var fileSystem = new RecordingFileWalFileSystem();
         using var provider = CreateProvider(fileSystem);
         await provider.AppendBatchAsync(TreeId, 0, Entries(0, 1), CancellationToken.None);
 
-        // The first fault is the batch's own fsync; the second is the fsync of
+        // The first fault is the operation's own fsync; the second is the fsync of
         // the truncation that rolls it back.
         fileSystem.ArmFault(count: 2);
         Assert.That(
-            async () => await provider.AppendBatchAsync(TreeId, 0, Entries(1, 2), CancellationToken.None),
+            async () =>
+            {
+                if (trim)
+                {
+                    await provider.TrimAsync(TreeId, 0, 0L, CancellationToken.None);
+                }
+                else
+                {
+                    await provider.AppendBatchAsync(TreeId, 0, Entries(1, 2), CancellationToken.None);
+                }
+            },
             Throws.InstanceOf<IOException>());
 
         var readFailure = Assert.ThrowsAsync<IOException>(

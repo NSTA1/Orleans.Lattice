@@ -1,0 +1,12 @@
+# AdvanceStrict: an advance must move the target strictly forward.
+MODULE: SchemaVersionFamily
+ROW: AdvanceStrict
+FILE: src/lattice.schema/LatticeSchemaVersionAdmin.cs
+DETECTORS: LatticeSchemaVersionAdminTests.AdvanceTargetVersionAsync_non_advancing_throws
+SUMMARY: the monotonic check admits the current target
+
+--- FIND
+        if (newTargetVersion <= config.TargetVersion)
+--- REPLACE
+        if (newTargetVersion < config.TargetVersion)
+--- END

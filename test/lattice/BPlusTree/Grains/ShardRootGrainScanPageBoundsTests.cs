@@ -74,7 +74,7 @@ public class ShardRootGrainScanPageBoundsTests
         var leafId = GrainId.Create(GrainType.Create("leaf"), GrainIdKeyExtensions.CreateGuidKey(Guid.NewGuid()));
         var leafGrainContext = Substitute.For<IGrainContext>();
         leafGrainContext.GrainId.Returns(leafId);
-        var leaf = Substitute.For<IBPlusLeafGrain, IGrainBase>();
+        var leaf = Substitute.For<IBPlusLeafGrain, IGrainBase, ILeafSeparateCalls>();
         ((IGrainBase)leaf).GrainContext.Returns(leafGrainContext);
         leaf.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
         leaf.SetShardIndexAsync(Arg.Any<int>()).Returns(Task.CompletedTask);
@@ -82,7 +82,7 @@ public class ShardRootGrainScanPageBoundsTests
             .Returns(Task.FromResult<SplitResult?>(null));
         leaf.GetNextSiblingAsync().Returns(_ =>
             leafWalkBehavior?.Invoke() ?? Task.FromResult<GrainId?>(null));
-        leaf.RebuildProjectionFromWalAsync().Returns(Task.CompletedTask);
+        leaf.Separate().RebuildProjectionFromWalAsync().Returns(Task.CompletedTask);
         leaf.ComposeChainLink();
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(leaf);

@@ -54,7 +54,7 @@ public sealed class WarmLeafCheckpointProgressIntegrationTests
                 ShardIndex = 0,
                 LowKeyInclusive = "a",
             });
-        Assert.That(await leaf.GetProjectionCheckpointOffsetAsync(), Is.Zero);
+        Assert.That((await leaf.GetProjectionCheckpointAndNextSiblingAsync()).CheckpointOffset, Is.Zero);
         await leaf.SetAsync("stable", [42]);
         var storage = _cluster.Client.GetGrain<ILeafSnapshotStorageGrain>(key);
         LeafSnapshotBlob? snapshot = null;
@@ -92,8 +92,8 @@ public sealed class WarmLeafCheckpointProgressIntegrationTests
         var (controlLeaf, controlSnapshot) = await ResolveLeafAsync(ControlTree);
         // The administration accessor exposes the legacy scalar's birth
         // default, not the presence-aware replay sentinel.
-        Assert.That(await subjectLeaf.GetProjectionCheckpointOffsetAsync(), Is.Zero);
-        Assert.That(await controlLeaf.GetProjectionCheckpointOffsetAsync(), Is.Zero);
+        Assert.That((await subjectLeaf.GetProjectionCheckpointAndNextSiblingAsync()).CheckpointOffset, Is.Zero);
+        Assert.That((await controlLeaf.GetProjectionCheckpointAndNextSiblingAsync()).CheckpointOffset, Is.Zero);
 
         await subject.SetAsync("stable", [42]);
         await control.SetAsync("stable", [42]);
@@ -125,8 +125,8 @@ public sealed class WarmLeafCheckpointProgressIntegrationTests
         Assert.That(snapshot!.SnapshotOffsetsByPartition![0], Is.GreaterThanOrEqualTo(head - 1));
         Assert.That(ContainsStableRow(snapshot), Is.True,
             "loadable coverage must include the acknowledged row, not merely a non-negative offset");
-        Assert.That(await subjectLeaf.GetProjectionCheckpointOffsetAsync(), Is.GreaterThanOrEqualTo(head - 1));
-        Assert.That(await controlLeaf.GetProjectionCheckpointOffsetAsync(), Is.Zero,
+        Assert.That((await subjectLeaf.GetProjectionCheckpointAndNextSiblingAsync()).CheckpointOffset, Is.GreaterThanOrEqualTo(head - 1));
+        Assert.That((await controlLeaf.GetProjectionCheckpointAndNextSiblingAsync()).CheckpointOffset, Is.Zero,
             "without the timer, foreground writes alone must not fabricate a processed shared-WAL prefix");
         Assert.That(await controlSnapshot.LoadAsync(CancellationToken.None), Is.Null);
 

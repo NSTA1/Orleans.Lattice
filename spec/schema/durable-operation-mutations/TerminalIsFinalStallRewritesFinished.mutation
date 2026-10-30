@@ -1,0 +1,12 @@
+# Loss detection must only fail a live record; applied to a finished one it rewrites the outcome.
+MODULE: TerminalIsFinalStallRewritesFinished
+TARGET: TerminalIsFinal
+CLASS: Action
+SUMMARY: a lapsed heartbeat lease is applied to a record already finished
+PERTURBS: LeaseExpire
+
+--- FIND
+    /\ Live(o) /\ alive[opRunner[o]] /\ stalls < MaxStalls
+--- REPLACE
+    /\ opState[o] # "Absent" /\ alive[opRunner[o]] /\ stalls < MaxStalls
+--- END

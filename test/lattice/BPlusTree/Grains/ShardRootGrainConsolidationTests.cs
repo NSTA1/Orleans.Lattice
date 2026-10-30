@@ -53,7 +53,7 @@ public partial class ShardRootGrainConsolidationTests
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: new LatticeOptions(), shardCount: 2, factory: factory);
 
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.UnmarkSlotsMovedAwayAsync(Arg.Any<int[]>(), Arg.Any<int>()).Returns(Task.CompletedTask);
 
         // A single-element chain by default; longer chains loop the same stub

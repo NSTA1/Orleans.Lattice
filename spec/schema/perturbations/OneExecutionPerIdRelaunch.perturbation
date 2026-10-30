@@ -1,0 +1,15 @@
+# OneExecutionPerId: one id runs its work at most once.
+MODULE: SchemaDurableOperation
+ROW: OneExecutionPerId
+FILE: src/lattice/Operations/LatticeOperationRunner.cs
+DETECTORS: LatticeOperationRunnerTests.Starting_an_existing_id_starts_nothing
+SUMMARY: an id's work is launched on every start that names it
+
+--- FIND
+        if (!begin.Created)
+        {
+            return new LatticeOperationLaunch<TResult>(begin.Record, null);
+        }
+--- REPLACE
+        _ = begin.Created;
+--- END

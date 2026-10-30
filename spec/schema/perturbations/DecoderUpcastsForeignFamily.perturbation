@@ -1,0 +1,12 @@
+# UnversionedReadsStoredBody: another family's stamp reads back as stored.
+MODULE: SchemaVersionFamily
+ROW: UnversionedReadsStoredBody
+FILE: src/lattice.schema/LatticeSchemaVersionDecoder.cs
+DETECTORS: LatticeSchemaVersionDecoderTests.DecodeAsync_enveloped_with_mismatched_schema_strips_stored_body
+SUMMARY: the decoder ignores the stamp's family
+
+--- FIND
+        if (config is not { } version || version.SchemaId != schemaId)
+--- REPLACE
+        if (config is not { } version)
+--- END

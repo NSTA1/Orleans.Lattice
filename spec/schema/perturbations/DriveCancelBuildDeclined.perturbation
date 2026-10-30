@@ -1,0 +1,12 @@
+# DriveCancel(o): a cancel is accepted in the dry run and the build.
+MODULE: SchemaDurableOperation
+ROW: DriveCancel(o)
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.CancelAsync_during_the_build_discards_the_destination_and_records_cancelled
+SUMMARY: the coordinator declines a cancel during the build
+
+--- FIND
+            || state.State.Phase is not (LatticeSchemaRemediationPhase.DryRun or LatticeSchemaRemediationPhase.Build))
+--- REPLACE
+            || state.State.Phase is not LatticeSchemaRemediationPhase.DryRun)
+--- END

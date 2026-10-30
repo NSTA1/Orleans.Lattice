@@ -552,6 +552,13 @@ internal sealed partial class BPlusInternalGrain
     }
 
     /// <inheritdoc />
+    public async Task<ChildDigestSnapshot> SetParentAndGetChildDigestSnapshotAsync(GrainId? parentId)
+    {
+        await SetParentAsync(parentId);
+        return await GetChildDigestSnapshotAsync();
+    }
+
+    /// <inheritdoc />
     public Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync()
     {
         EnsureSubtreeHashInitialized();
@@ -624,28 +631,43 @@ internal sealed partial class BPlusInternalGrain
     }
 
     /// <inheritdoc />
+    public async Task<ShardTopologyNode?> GetTopologyForTreeAsync(string expectedTreeId, int depthLimit)
+    {
+        ArgumentNullException.ThrowIfNull(expectedTreeId);
+        return string.Equals(state.State.TreeId, expectedTreeId, StringComparison.Ordinal)
+            ? await GetTopologyAsync(depthLimit)
+            : null;
+    }
+
+    /// <inheritdoc />
     public async Task<ShardTopologyNode> GetTopologyAsync(int depthLimit)
     {
         EnsureSubtreeHashInitialized();
         var (depth, live, tombstones, low, high) = ComputeStructuralAggregates();
 
-        var children = new List<ShardTopologyNode>(state.State.Children.Count);
-        foreach (var childEntry in state.State.Children)
+        var childEntries = state.State.Children;
+        var childFanout = childEntries.Count;
+        var entryCount = state.State.SubtreeEntryCount;
+        var children = new List<ShardTopologyNode>(childEntries.Count);
+        if (!state.State.ChildrenAreLeaves && depthLimit > 0)
         {
-            var childId = childEntry.ChildId;
-            state.State.ChildDigests.TryGetValue(childId, out var snap);
-            if (state.State.ChildrenAreLeaves)
+            var snapshot = childEntries.ToArray();
+            // Read-only subtrees are independent; retain ordinal child order
+            // and settle every launched read before propagating a failure.
+            children.AddRange(await BoundedFanOut.RunAsync(
+                snapshot.Length, BoundedFanOut.DefaultWidth,
+                async i => await grainFactory.GetGrain<IBPlusInternalGrain>(snapshot[i].ChildId)
+                    .GetTopologyAsync(depthLimit - 1)));
+        }
+        else
+        {
+            foreach (var childEntry in childEntries)
             {
-                children.Add(LeafSummaryNode(childId, snap));
-            }
-            else if (depthLimit > 0)
-            {
-                var childInternal = grainFactory.GetGrain<IBPlusInternalGrain>(childId);
-                children.Add(await childInternal.GetTopologyAsync(depthLimit - 1));
-            }
-            else
-            {
-                children.Add(InternalSummaryNode(childId, snap));
+                var childId = childEntry.ChildId;
+                state.State.ChildDigests.TryGetValue(childId, out var snap);
+                children.Add(state.State.ChildrenAreLeaves
+                    ? LeafSummaryNode(childId, snap)
+                    : InternalSummaryNode(childId, snap));
             }
         }
 
@@ -656,10 +678,10 @@ internal sealed partial class BPlusInternalGrain
             SubtreeDepth = depth,
             LowKeyInclusive = low,
             HighKeyExclusive = high,
-            EntryCount = state.State.SubtreeEntryCount,
+            EntryCount = entryCount,
             LiveCount = live,
             TombstoneCount = tombstones,
-            ChildFanout = state.State.Children.Count,
+            ChildFanout = childFanout,
             Children = children,
         };
     }

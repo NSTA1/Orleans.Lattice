@@ -1,0 +1,24 @@
+# TerminalIsFinal: the first terminal outcome wins.
+MODULE: SchemaDurableOperation
+ROW: TerminalIsFinal
+FILE: src/lattice/Operations/LatticeOperationGrain.cs
+DETECTORS: LatticeOperationGrainTests.Complete_records_the_outcome_once_and_marks_the_index
+SUMMARY: a completion rewrites a record that is already terminal
+
+--- FIND
+        var record = state.State.Record;
+        if (record is null || record.IsTerminal)
+        {
+            return record;
+        }
+
+        return await FinishAsync(record, completion, Clock.GetUtcNow());
+--- REPLACE
+        var record = state.State.Record;
+        if (record is null)
+        {
+            return record;
+        }
+
+        return await FinishAsync(record, completion, Clock.GetUtcNow());
+--- END

@@ -193,7 +193,7 @@ public class ShardRootGrainScanPageAggregateBankingTests
         {
             var index = i;
             var key = Key(index);
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
 
             // The leaf honours the walk's lower bound, so a resumed attempt
             // sees only new ground and a double count shows up as a total
@@ -209,7 +209,7 @@ public class ShardRootGrainScanPageAggregateBankingTests
             }));
             // Leaf 0 is the laggard, so the chain minimum is only correct if
             // the sweep actually reached it.
-            leaf.GetProjectionCheckpointOffsetAsync().Returns(_ => chain!.ReadCheckpoint(
+            leaf.Separate().GetProjectionCheckpointOffsetAsync().Returns(_ => chain!.ReadCheckpoint(
                 index == 0 ? LaggingCheckpointOffset : LaggingCheckpointOffset + 100));
             leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>())
                 .Returns(_ => chain!.ReadDelete(new RangeDeleteResult
@@ -217,7 +217,7 @@ public class ShardRootGrainScanPageAggregateBankingTests
                     Deleted = liveKeysPerLeaf,
                 }));
 
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = key,
                 HighKeyExclusive = boundedLeaves && index + 1 < leafCount

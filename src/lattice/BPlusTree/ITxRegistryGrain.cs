@@ -259,21 +259,15 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     [AlwaysInterleave]
     Task<TxStatus> GetRecordedStatusAsync(Guid txid);
 
-    /// <summary>
-    /// Returns whether <paramref name="txid"/> has participants but no physically
-    /// recorded commit or abort. Read-committed, like <see cref="GetRecordedStatusAsync"/>
-    /// and <see cref="GetParticipantsAsync"/>; does not resolve delegated decisions
-    /// or apply the retention mask. For maintenance clamps, not reader visibility.
-    /// </summary>
-    [AlwaysInterleave]
-    Task<bool> HasUndecidedParticipantsAsync(Guid txid);
-
     /// <summary>The maximum number of transactions in one maintenance probe.</summary>
     const int MaxMaintenanceProbeBatchSize = 128;
 
     /// <summary>
-    /// Read-committed maintenance predicates, one explicit result per requested
-    /// transaction. Does not resolve delegated decisions or apply retention masks.
+    /// Returns, for each requested transaction, whether it has participants but
+    /// no physically recorded commit or abort. Read-committed, like
+    /// <see cref="GetRecordedStatusAsync"/> and <see cref="GetParticipantsAsync"/>;
+    /// does not resolve delegated decisions or apply the retention mask. For
+    /// maintenance clamps, not reader visibility.
     /// </summary>
     [AlwaysInterleave]
     Task<Dictionary<Guid, bool>> HasUndecidedParticipantsManyAsync(IReadOnlyList<Guid> txids);

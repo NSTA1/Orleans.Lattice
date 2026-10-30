@@ -1,0 +1,16 @@
+# UpcastOrExplicitFailure: a hop past the target is not a route to it.
+MODULE: SchemaVersionFamily
+ROW: UpcastOrExplicitFailure
+FILE: src/lattice.schema/LatticeSchemaRegistry.cs
+DETECTORS: LatticeSchemaRegistryTests.Upcast_hop_overshooting_the_target_throws_not_supported
+SUMMARY: the upcast walk follows a hop that overshoots the target
+
+--- FIND
+            if (!_upcasters.TryGetValue((schemaId, current), out var hop) || hop.ToVersion > toVersion)
+            {
+                throw new NotSupportedException(
+--- REPLACE
+            if (!_upcasters.TryGetValue((schemaId, current), out var hop))
+            {
+                throw new NotSupportedException(
+--- END

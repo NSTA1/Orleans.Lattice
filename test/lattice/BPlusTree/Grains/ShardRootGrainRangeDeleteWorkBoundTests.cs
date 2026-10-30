@@ -64,7 +64,7 @@ public class ShardRootGrainRangeDeleteWorkBoundTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
 
             leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(call =>
@@ -90,7 +90,7 @@ public class ShardRootGrainRangeDeleteWorkBoundTests
             // High bound is the next leaf's first key, so a bounded batch can
             // hand back a real resume position.
             var high = index + 1 < leafCount ? $"k{index + 1:D3}-000" : null;
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = $"k{index:D3}-000",
                 HighKeyExclusive = high,

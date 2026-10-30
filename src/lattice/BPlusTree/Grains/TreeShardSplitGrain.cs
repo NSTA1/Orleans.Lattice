@@ -935,7 +935,7 @@ internal sealed class TreeShardSplitGrain(
     /// <see cref="LatticeOptions.SplitDrainBatchSize"/>: entries are flushed
     /// to the target whenever the in-flight batch reaches that size, and
     /// each leaf is asked only for moved-slot entries via
-    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceForSlotsAsync"/> so unrelated
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceForSlotsAndNextSiblingAsync"/> so unrelated
     /// data is never serialised on the wire.
     /// </para>
     /// <para>

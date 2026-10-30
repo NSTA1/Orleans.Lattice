@@ -1,0 +1,14 @@
+# A count that never completes leaves the tracked scan running forever.
+MODULE: ScanTerminatesCountNeverEnds
+TARGET: ScanTerminates
+CLASS: Temporal
+SUMMARY: the counting phase never hands over to the scan
+PERTURBS: Count
+
+--- FIND
+    /\ phase = "Counting"
+    /\ phase' = "Scanning"
+--- REPLACE
+    /\ phase = "Counting" /\ totalKnown
+    /\ phase' = "Scanning"
+--- END

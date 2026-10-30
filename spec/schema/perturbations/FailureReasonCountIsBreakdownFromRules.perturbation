@@ -1,0 +1,12 @@
+# FailureReasonCountIsBreakdown: the failure-reason count sizes the breakdown.
+MODULE: SchemaComplianceScan
+ROW: FailureReasonCountIsBreakdown
+FILE: src/lattice.schema/SchemaComplianceScanResults.cs
+DETECTORS: SchemaComplianceScanResultsTests.A_report_round_trips_through_the_result_map
+SUMMARY: the failure-reason count is written as the policy's rule count
+
+--- FIND
+            [FailureReasonCountKey] = breakdown.Count.ToString(CultureInfo.InvariantCulture),
+--- REPLACE
+            [FailureReasonCountKey] = report.RuleCount.ToString(CultureInfo.InvariantCulture),
+--- END

@@ -104,16 +104,10 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
 
     /// <summary>
     /// Whether the queue holds a parked write of <paramref name="originClusterId"/>
-    /// at <paramref name="timestamp"/> (issue #4586). An entry counts as held from
-    /// its durable enqueue until its durable removal. Interleaves, so the origin
-    /// frontier grain can ask while this grain waits on it.
-    /// </summary>
-    [AlwaysInterleave]
-    Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken);
-
-    /// <summary>
-    /// Batch form of <see cref="IsHoldingAsync"/>, with one result per timestamp
-    /// in request order. Uses the same parked identities and interleaving contract.
+    /// at each of <paramref name="timestamps"/> (issue #4586), with one result per
+    /// timestamp in request order. An entry counts as held from its durable
+    /// enqueue until its durable removal. Interleaves, so the origin frontier
+    /// grain can ask while this grain waits on it.
     /// </summary>
     [AlwaysInterleave]
     Task<bool[]> IsHoldingManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps, CancellationToken cancellationToken);

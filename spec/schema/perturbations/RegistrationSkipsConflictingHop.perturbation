@@ -1,0 +1,12 @@
+# RegistrationAllOrNothing: a registration with a conflicting hop lands nothing.
+MODULE: SchemaVersionFamily
+ROW: RegistrationAllOrNothing
+FILE: src/lattice.schema/SchemaRuntimeCatalog.cs
+DETECTORS: SchemaRuntimeRegistryTests.A_registration_with_any_conflicting_entry_persists_none_of_it
+SUMMARY: a conflicting hop is skipped and the rest of the registration lands
+
+--- FIND
+                throw new ArgumentException($"Schema {key.SchemaId} already has a different migration from v{key.FromVersion}.");
+--- REPLACE
+                continue;
+--- END

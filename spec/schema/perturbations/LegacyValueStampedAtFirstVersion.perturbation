@@ -1,0 +1,12 @@
+# MigrationReadEquivalent: a legacy value is stamped at the target, body untouched.
+MODULE: SchemaVersionFamily
+ROW: MigrationReadEquivalent
+FILE: src/lattice.schema/LatticeSchemaVersionMigration.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_legacy_unstamped_value_is_stamped_at_target
+SUMMARY: a legacy body is stamped at v1, so a read after cutover upcasts it
+
+--- FIND
+            return LatticeSchemaEnvelope.Encode(schemaId, targetVersion, value);
+--- REPLACE
+            return LatticeSchemaEnvelope.Encode(schemaId, 1, value);
+--- END

@@ -1,0 +1,13 @@
+# Each value is re-stamped at the tree's live target rather than the target the
+# migration started at, so a target advance mid-build splits the build.
+MODULE: ShadowAtOwnTargetLiveTarget
+TARGET: ShadowAtOwnTarget
+CLASS: Invariant
+SUMMARY: the per-value step reads the live config target
+PERTURBS: MigrateStep
+
+--- FIND
+    /\ LET m == MigrateValue(data[k], migT) IN
+--- REPLACE
+    /\ LET m == MigrateValue(data[k], IF cfg # NoCfg THEN cfg ELSE migT) IN
+--- END

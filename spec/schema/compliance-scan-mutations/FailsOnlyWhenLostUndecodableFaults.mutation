@@ -1,0 +1,27 @@
+# The behaviour #5253 replaces: the decoding read throws and the scan fails with no report.
+MODULE: FailsOnlyWhenLostUndecodableFaults
+TARGET: FailsOnlyWhenLost
+CLASS: Invariant
+SUMMARY: an undecodable stored value faults the whole scan (#5253)
+PERTURBS: Step
+
+--- FIND
+       IN /\ cursor' = k
+          /\ IF v = "Absent"
+
+--- REPLACE
+       IN /\ cursor' = k
+          /\ phase' = IF v = "Undec" THEN "Failed" ELSE phase
+          /\ IF v = "Absent" \/ v = "Undec"
+
+--- END
+
+--- FIND
+    /\ UNCHANGED <<phase, scanPolicy, lost>>
+
+\* The pass ends
+--- REPLACE
+    /\ UNCHANGED <<scanPolicy, lost>>
+
+\* The pass ends
+--- END

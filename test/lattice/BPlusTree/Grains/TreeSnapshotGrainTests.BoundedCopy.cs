@@ -187,14 +187,14 @@ public partial class TreeSnapshotGrainTests
         var leaf2 = (await h.SourceShard.GetLeafIdForKeyAsync(SnapshotLeafResumeKey(2)))!.Value;
 
         var rightHalf = GrainId.Create("leaf", "snap-src-leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var rightHalfLeaf = LeafSubstituteCombinedCalls.CreateComposed();
         h.Factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
         rightHalfLeaf.GetLiveRawEntriesAsync().Returns(Task.FromResult(new List<LwwEntry>
         {
             new("entry-01-right", LwwValue<byte[]>.Create([9], default)),
         }));
         rightHalfLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(leaf2));
-        rightHalfLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        rightHalfLeaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = "k0001m",
             HighKeyExclusive = SnapshotLeafResumeKey(2),
@@ -202,7 +202,7 @@ public partial class TreeSnapshotGrainTests
 
         var leftHalf = h.Factory.GetGrain<IBPlusLeafGrain>(leaf1);
         leftHalf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(rightHalf));
-        leftHalf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        leftHalf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = SnapshotLeafResumeKey(1),
             HighKeyExclusive = "k0001m",

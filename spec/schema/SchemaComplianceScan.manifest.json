@@ -1,0 +1,18 @@
+{
+  "mutations": "compliance-scan-mutations",
+  "refinement": "SchemaComplianceScanRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 10,
+    "properties": 4,
+    "actions": 9,
+    "mutations": 16,
+    "behaviourRows": 21,
+    "distinctStates": 23580
+  },
+  "variants": {
+    "TwoWrites": {
+      "distinctStates": 87970
+    }
+  }
+}

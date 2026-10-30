@@ -1,0 +1,12 @@
+# Count: the tracked scan counts the live entries first.
+MODULE: SchemaComplianceScan
+ROW: Count
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminProgressTests.A_tracked_scan_counts_first_then_reports_entries_scanned_against_the_count
+SUMMARY: the tracked scan never counts the tree
+
+--- FIND
+            total = await source.CountAsync(cancellationToken).ConfigureAwait(false);
+--- REPLACE
+            total = null;
+--- END

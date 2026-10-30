@@ -26,9 +26,17 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Internal - Orphaned grain methods removed.** Internal grain-interface methods that no production code has called since 10.2.0, left behind by the call elisions above and in 10.2.0, are deleted or reduced to internal cores of the combined calls that replaced them. A rolling upgrade from 10.2.0 is unaffected; one straight from an earlier release would fail calls to the removed methods, so upgrade through 10.2.0. ([#5217](https://github.com/NSTA1/Orleans.Lattice/pull/5217)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
+- **Performance - Point-read warmup.** Stable stamped ownership probes now return their value or absence directly, omitting a redundant cache grain call. Unstamped and routing-invalidated probes keep their existing fallback. ([#5288](https://github.com/NSTA1/Orleans.Lattice/pull/5288)) (`Orleans.Lattice`)
+
+- **Performance - Bulk-append capacity.** Appends read the rightmost leaf count instead of transferring its keys, avoiding a discarded key list while preserving transaction visibility and resumable graft ordering. ([#5288](https://github.com/NSTA1/Orleans.Lattice/pull/5288)) (`Orleans.Lattice`)
+
 - **Performance - App ownership calls.** Fresh structural app tree claims replace three registry fact reads with one, retaining retry freshness and foreign-alias checks. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice.Apps`)
 
 - **Performance - Peer maintenance calls.** Re-add and barrier cleanup use fewer grain calls; decommission combines marker reads with durable writes and batches verdicts by encoded registry owner, retaining import fences, delegation and retention. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214), [#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
+- **Performance - Subtree structure reads.** Targeted queries fuse ownership checks with topology retrieval and overlap independent child reads in bounded waves. Foreign or unbound nodes are rejected before traversal. ([#5260](https://github.com/NSTA1/Orleans.Lattice/pull/5260), [#5288](https://github.com/NSTA1/Orleans.Lattice/pull/5288)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
 
 - **Performance - Merkle node reads.** Anti-entropy reads each internal node's digest and routing table in one grain call instead of two, retaining the digest option gate and read-only topology traversal. ([#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
@@ -42,11 +50,11 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Leaf binding calls.** Root leaf creation and single-key or batched CRDT self-heal each remove one grain call, retaining separate durable binding writes, birth protection and retry behavior. ([#5139](https://github.com/NSTA1/Orleans.Lattice/pull/5139)) (`Orleans.Lattice`)
 
-- **Performance - Internal-node construction.** Root promotion, bulk-load internal levels and split-sibling recovery each combine tree binding and initialization into one grain call, preserving durability and recovery ordering. ([#5133](https://github.com/NSTA1/Orleans.Lattice/pull/5133)) (`Orleans.Lattice`)
+- **Performance - Structural seeding.** Internal construction combines tree binding and initialization; leaf and internal child adoption combine parent binding and digest reads. Durable writes, replay barriers, gate ordering and recovery behavior are unchanged. ([#5133](https://github.com/NSTA1/Orleans.Lattice/pull/5133), [#5260](https://github.com/NSTA1/Orleans.Lattice/pull/5260)) (`Orleans.Lattice`)
 
 ### Fixed
 
-- **Explorer - Page and action ownership.** Backup reads, deletes and exports cannot affect a newer selection; configuration saves cannot overlap, late compaction replies stay silent, and orphan capability replies stop before resuming a disposed watch. ([#5204](https://github.com/NSTA1/Orleans.Lattice/issues/5204), [#5222](https://github.com/NSTA1/Orleans.Lattice/issues/5222)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Page and action ownership.** Backup actions retain their selection; saves cannot overlap; late compaction and orphan replies stop after disposal. Telemetry replies respect current navigation and refreshes, and caller changes recheck operator controls. ([#5204](https://github.com/NSTA1/Orleans.Lattice/issues/5204), [#5222](https://github.com/NSTA1/Orleans.Lattice/issues/5222), [#5270](https://github.com/NSTA1/Orleans.Lattice/issues/5270)) (`Orleans.Lattice.Explorer.UI`)
 
 ## Released
 

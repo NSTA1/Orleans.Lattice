@@ -1,0 +1,12 @@
+# TypeOK pairing: a value lands that is not a stored value at all.
+MODULE: TypeOKPutUndeclaredValue
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a landing writes a torn value outside the value domain
+PERTURBS: Put
+
+--- FIND
+    /\ data' = [data EXCEPT ![k] = v]
+--- REPLACE
+    /\ data' = [data EXCEPT ![k] = Val("Torn", 0, 0, 0, TRUE)]
+--- END

@@ -1,0 +1,12 @@
+# The inverse confusion: the breakdown is sized by the policy rather than the failures.
+MODULE: FailureReasonCountIsBreakdownCountsRules
+TARGET: FailureReasonCountIsBreakdown
+CLASS: Invariant
+SUMMARY: the failure-reason count is the policy's rule count
+PERTURBS: Finish
+
+--- FIND
+    /\ repReasons' = FailureReasons
+--- REPLACE
+    /\ repReasons' = RuleCount(scanPolicy)
+--- END

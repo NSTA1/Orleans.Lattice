@@ -30,7 +30,7 @@ public partial class TombstoneCompactionGrainTests
         shardRoot.GetDirtyLeavesSinceLastCompactionAsync()
             .Returns(Task.FromResult(new DirtyLeavesSnapshot { DirtyLeaves = [], ObservedAdvance = default }));
         shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
-        var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leafMock = LeafSubstituteCombinedCalls.CreateComposed();
         grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);
         leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>())
             .Throws(new InvalidOperationException("leaf failed"));
@@ -92,7 +92,7 @@ public partial class TombstoneCompactionGrainTests
         shardRoot.GetDirtyLeavesSinceLastCompactionAsync()
             .Returns(Task.FromResult(new DirtyLeavesSnapshot { DirtyLeaves = [], ObservedAdvance = default }));
         shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
-        var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leafMock = LeafSubstituteCombinedCalls.CreateComposed();
         grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);
         leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>())
             .Throws(new InvalidOperationException("leaf failed"));

@@ -22,10 +22,11 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// <list type="bullet">
 /// <item><description>
-/// <c>HotShardMonitorGrain.RunSamplingPassAsync</c> fans out
+/// <c>HotShardMonitorGrain.RunSamplingPassAsync</c> fanned out
 /// <c>GetHotnessAsync</c>, <c>HasPendingBulkOperationAsync</c>, and
-/// <c>IsSplittingAsync</c> across every shard and awaits each set with a
-/// separate <c>Task.WhenAll</c>.
+/// <c>IsSplittingAsync</c> across every shard and awaited each set with a
+/// separate <c>Task.WhenAll</c> (all three are now read through
+/// <c>GetSamplingStatusAsync</c>).
 /// </description></item>
 /// <item><description>
 /// <c>ShardHealingOrchestratorGrain.ObserveLoadAsync</c> fans out the same
@@ -83,14 +84,13 @@ public sealed class ShardRootGrainIsSplittingInterleaveTests
     }
 
     /// <summary>
-    /// The three probes the coordinators fan out per shard must all be
-    /// interleaved. <c>IsSplittingAsync</c> is the member this fixture was
-    /// written for; the other two are included so that dropping the
-    /// attribute from any member of the awaited set fails here.
+    /// The probes the coordinators fan out per shard must all be interleaved.
+    /// <c>IsSplittingAsync</c> is the member this fixture was written for; the
+    /// combined sampling probe that replaced the other two is included so that
+    /// dropping the attribute from any member of the awaited set fails here.
     /// </summary>
     [TestCase(nameof(IShardRootGrain.IsSplittingAsync))]
-    [TestCase(nameof(IShardRootGrain.GetHotnessAsync))]
-    [TestCase(nameof(IShardRootGrain.HasPendingBulkOperationAsync))]
+    [TestCase(nameof(IShardRootGrain.GetSamplingStatusAsync))]
     public void Coordinator_fanout_probe_is_marked_AlwaysInterleave(string methodName)
     {
         var method = typeof(IShardRootGrain).GetMethod(methodName);
