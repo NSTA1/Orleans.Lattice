@@ -34,6 +34,28 @@ internal sealed partial class ViewMaintainerGrain
         return new RoutingInfo(physicalTreeId, map);
     }
 
+    /// <summary>
+    /// Reads one source row in its <b>stored</b> form (version envelope intact) for a
+    /// rebuild or reconcile, so the re-derivation hands
+    /// <see cref="ProjectionInput"/> exactly the bytes incremental apply read from the
+    /// WAL (#5240). An unaliased source reads through
+    /// <see cref="IReplicationApplyGrain.ReadStoredWithVersionAsync"/>, the
+    /// non-decoding counterpart of <see cref="ILattice.GetWithVersionAsync"/> - the
+    /// public read would strip and upcast to the target; an aliased source reads its
+    /// physical shards directly, which never decode.
+    /// </summary>
+    private Task<VersionedValue> ReadStoredSourceValueAsync(
+        string sourceTreeId, string physicalTreeId, string key, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(sourceTreeId, physicalTreeId, StringComparison.Ordinal))
+        {
+            return ReadPhysicalSourceValueAsync(sourceTreeId, physicalTreeId, key, cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return grainFactory.GetGrain<IReplicationApplyGrain>(physicalTreeId).ReadStoredWithVersionAsync(key);
+    }
+
     private async Task<VersionedValue> ReadPhysicalSourceValueAsync(
         string sourceTreeId, string physicalTreeId, string key, CancellationToken cancellationToken)
     {
