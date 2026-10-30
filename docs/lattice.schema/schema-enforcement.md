@@ -60,9 +60,18 @@ await admin.ClearPolicyAsync("orders", cancellationToken);
 
 Once a policy is installed, a local write of a non-compliant value throws a
 `LatticeSchemaViolationException` and is never persisted. A CRDT delta is checked
-at write time only when the delta itself parses as JSON; an opaque delta is
+at write time only when the delta's body parses as JSON (for a delta that carries
+a version envelope, the body it holds - see
+[composition with versioning](#composition-with-versioning)); an opaque delta is
 accepted, and only the opt-in merge-result observer (`ValidateCrdtMergeResults`)
 sees the merged value.
+
+A policy change takes effect on the silo that served the admin call as soon as
+`SetPolicyAsync` or `ClearPolicyAsync` returns, and on every other silo within
+`LatticeSchemaEnforcementOptions.PropagationInterval` (one second by default; see
+[configuration](configuration.md)). Propagation is eventual, not synchronous:
+during that window a write through another silo can still be judged against the
+previous policy.
 
 The check runs on the tree's value-carrying write operations: `SetAsync`,
 `SetIfVersionAsync`, `GetOrSetAsync`, `SetManyAsync`, `SetManyWherePredicateAsync`,
@@ -126,11 +135,14 @@ silently accepted nor allowed to stall the ingest stream.
 Strict mode only sees ingest that reaches the tree's write operations as a
 system-origin write, which in practice is two replication paths. One is the
 typed-CRDT path: a replicated CRDT delta (judged, like a local delta, only when
-it parses as JSON) or a full-state CRDT row during bootstrap. The other is the
+its body parses as JSON) or a full-state CRDT row during bootstrap. The other is the
 entries of a replicated atomic batch, which the receiver stages one at a time
 through the tree's write operations until the batch's commit arrives. A
 dead-lettered entry of such a batch is left out of what the receiver stages, and
-the receiver commits the batch's other entries when the commit arrives. A plain
+the receiver commits the batch's other entries when the commit arrives. An entry
+is judged at the same point whether its prepare arrives before or after the
+receiver holds the batch's commit decision, so both arrival orders reach the same
+verdict: a refused entry is diverted, not applied. A plain
 (non-atomic) last-writer-wins replication apply and a backup restore merge or
 bulk-load straight into the tree's shards, so even in strict mode their values
 are stored verbatim and never dead-lettered.
@@ -188,7 +200,9 @@ if (report.DidAbort)
 Remediation runs a read-only **dry-run gate** first: if any value cannot be
 rewritten to satisfy the target policy, the build aborts with the first offending
 key and reason, and the original tree is left completely untouched - no alias
-change, no policy change. The build then rewrites every value into a fresh
+change, no policy change. On a versioning-enabled tree that includes a stored
+value that cannot be upcast to the tree's target version (see
+[composition with versioning](#composition-with-versioning)). The build then rewrites every value into a fresh
 destination tree, re-validating each one; an offender found at that stage aborts
 the same way and the partial destination is discarded (soft-deleted). Only a fully
 successful build cuts the logical tree over to the remediated destination: it
@@ -198,7 +212,8 @@ no reader pairs the source with the destination's map or the reverse - then
 arms a retained redirect that steers already-materialised readers to the new data.
 A remediation holds the tree's alias reservation from the moment it starts until it
 completes or aborts - including while an interrupted one waits to be requested
-again - so a delete of the tree is refused for that whole time, and a remediation
+again - so a delete of the tree, and an explicit alias change through
+`ILatticeTreeAdmin.SetTreeAliasAsync`, are refused for that whole time, and a remediation
 is refused with `InvalidOperationException` while the tree is deleted, a delete is
 pending, or a resize or restore holds the reservation; see
 [Deleting an aliased tree](../lattice/tree-deletion.md#deleting-an-aliased-tree).
@@ -222,6 +237,16 @@ A refused swap throws `LatticeTreeOwnershipDeniedException` out of the cutover a
 leaves the remediation in flight at `Cutover`, with the target policy already
 installed on the tree.
 
+A remediation publishes only the copy of the tree it captured when it started. At
+cutover the tree must still resolve to that physical tree (or, when a cutover
+resumes after its swap, to the remediation's own destination). If another alias
+change has moved the tree, the cutover is refused: no policy the remediation
+installed is left in place, nothing is swapped, the remediated copy is discarded,
+and the alias reservation is released. The report ends `DidAbort` with no
+`OffendingKey` and a `Reason` naming the physical tree that superseded it; a
+tracked operation records `Failed` with `outcome` = `aborted` and that reason, and
+no `offendingKey`.
+
 The build copies at the logical level and does not shadow-forward writes that land
 on the source while it runs, so run a remediation while the tree is
 write-quiescent: a write accepted after the dry-run scan but before cutover is not
@@ -242,7 +267,11 @@ same transform and target policy) after a silo failover therefore resumes from t
 last recorded slice rather than from the start. Nothing resumes it on its own - an
 interrupted remediation stays in flight until it is requested again - and a call
 with different parameters while one is in flight throws
-`InvalidOperationException`.
+`InvalidOperationException`. A call that joins an in-flight remediation follows
+only that remediation; if it ends under the call that started it and a later
+remediation replaces its outcome before the joining call can read it, the joining
+call throws `InvalidOperationException` naming the followed remediation and applies
+nothing further.
 
 `RemediateAsync` drives the remediation to a terminal state before it returns its
 `LatticeSchemaRemediationReport`, one slice per call into the cluster, so no single
@@ -271,7 +300,13 @@ current compiled policy and returns a `LatticeSchemaComplianceReport` carrying
 the audited `TreeId`, `HasPolicy`, `RuleCount` (the number of rules in the policy
 scanned against), `CompliantCount`, `NonCompliantCount`, `ScannedCount`, and a
 `RuleBreakdown` of `LatticeSchemaComplianceRuleCount` (`Reason`, `Count`) rows,
-grouped by the reason of the first rule each non-compliant value failed. An
+grouped by the reason of the first rule each non-compliant value failed. Each
+value is judged as a client read serves it. On a versioning-enabled tree a stored
+value that cannot be decoded to the tree's target version (no registered upcast
+path, or stamped newer than the target) is counted as non-compliant, under the
+reason enforcement gives such a value (`The value's version envelope cannot be
+decoded to the tree's target shape.` followed by the decoder's message, so there
+is one breakdown row per distinct message); the scan still completes. An
 ungoverned tree returns an ungoverned report (`HasPolicy` is `false` and every
 count is zero). Remote callers should start the
 accept-then-poll compliance operation with
@@ -286,21 +321,41 @@ version after its 9.9.0 `LATTICE0002` deprecation.
 When a tree uses both enforcement and [versioning](schema-versioning.md), a value
 is validated against its **target (post-upcast) shape**, since that is the
 compliant form: on the write path the enforcement stage validates the plain value
-before the versioning stage wraps it in the envelope. Advancing the target version
-and re-stamping existing values (`AdvanceAndMigrateAsync`) is a single shadow
-build: upcast each value, validate it against the tree's **existing** policy, cut
-over, aborting on the first value that violates it (a value that cannot be upcast
-throws instead - see
+before the versioning stage wraps it in the envelope.
+
+A value that arrives already enveloped - a replicated atomic-batch entry or CRDT
+delta, or a re-write of stored bytes - is judged by the body a reader is served:
+its envelope stripped and the body upcast to the tree's target version. A value
+that cannot be decoded to the target (stamped newer than the target, or with no
+upcast path to it) is a violation, so a local write fails closed and a strict-mode
+ingested item is dead-lettered. An admitted value is stored with its envelope
+unchanged. On a silo that does not register versioning no read strips an
+envelope, so there the whole value is judged.
+
+Advancing the target version and re-stamping existing values
+(`AdvanceAndMigrateAsync`) is a single shadow build: upcast each value, validate it
+against the tree's **existing** policy, cut over, aborting on the first value that
+violates it or cannot be upcast (see
 [eager background migration](schema-versioning.md#eager-background-migration)).
 The migration leaves the policy unchanged, so tightening the policy is the
 separate remediation above.
 
-A remediation of a versioned tree reads each value through the read path, which
-strips its version envelope and upcasts it to the target, and writes the
-transformed value into the destination without an envelope. After cutover those
-values read back as unstamped (legacy) values: a read returns the transformed
-body, but a later target advance does not upcast it, and an eager version
-migration stamps it at its target without upcasting it.
+A remediation of a versioned tree reads each stored value and decodes it as the
+read path does - stripping its version envelope and upcasting it to the target -
+so the transform sees exactly what a client read returns, and the target policy
+validates the plain transformed body. Each remediated value is then written back
+enveloped at the version the transform ran on: the tree's target version (a
+legacy, unstamped value included), or, for a value of another schema family, its
+own stamp. After cutover the tree's values stay self-describing, so a later target
+advance upcasts them and an eager version migration upcasts them from that stamp.
+A remediation of an unversioned tree writes plain values.
+
+A stored value that cannot be upcast to the target (no registered upcaster hop, or
+stamped newer than the target) is an offending value like any other: the
+remediation returns the abort report rather than throwing, names that key, and
+releases its alias reservation, so the tree is never left in flight and nothing is
+cut over. Register the missing hop, or correct the target, then start the
+remediation again.
 
 ## See also
 

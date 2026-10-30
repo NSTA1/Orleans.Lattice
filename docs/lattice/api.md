@@ -2389,7 +2389,7 @@ overrides; every member takes a trailing `CancellationToken`.
 | `ILatticeEnvelopeCodec` | The merge-path complement: reports a stored value's schema-version tag (`ReadVersion`) and strips the version envelope from CRDT fold input (`StripForFold`) before it is deserialized, and never upcasts (`IsActive(treeId)`). The core default is inactive. |
 | `ILatticeMergeObserver` | Post-merge hook after a per-key CRDT or LWW merge completes (`OnMergedAsync(in LatticeMergeContext ctx, CancellationToken ct)`), returning a `LatticeMergeOutcome`. The core default always accepts. |
 | `LatticeMergeContext` | `Key`, `TreeId`, `Mode`, `LocalValue`, `IncomingValue`, `MergedValue`, `LocalVersion`, and `IncomingVersion`. |
-| `LatticeMergeOutcome` / `MergeOutcomeKind` | `Accept()`, `AcceptTransformed(mergedValue)` (LWW only), or `AcceptWithEvent(reason)`, read back through `Kind`, `TransformedValue`, and `EventReason`. There is deliberately no reject: the merge has already been applied. See [Schema](../lattice.schema/README.md). |
+| `LatticeMergeOutcome` / `MergeOutcomeKind` | `Accept()`, `AcceptTransformed(mergedValue)` (LWW only), or `AcceptWithEvent(reason)`, read back through `Kind`, `TransformedValue`, and `EventReason`. There is deliberately no reject: the merge has already been applied. An `AcceptWithEvent` outcome is counted on `orleans.lattice.leaf.merge_observer_events` and logged as a warning carrying its reason. See [Schema](../lattice.schema/README.md). |
 
 ### Tenancy seams
 

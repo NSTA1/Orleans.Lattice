@@ -76,12 +76,10 @@ siloBuilder.AddLatticeSchemaVersioning(registry =>
 });
 ```
 
-> When both features are used, call `AddLatticeSchemaEnforcement` **before**
-> `AddLatticeSchemaVersioning` so the enforcement validation stage is composed
-> ahead of the versioning envelope stage on the write path. The order is not
-> checked at registration: calling `AddLatticeSchemaEnforcement` second replaces
-> the composed write interceptor with the enforcement stage alone, so new writes
-> are no longer stamped with a version envelope.
+> When both features are used, they may be registered in either order: whichever
+> is registered second composes with the one already present, so the enforcement
+> validation stage always runs ahead of the versioning envelope stage on the
+> write path.
 
 To layer further option delegates after registration, use
 `ConfigureLatticeSchemaEnforcement(Action<LatticeSchemaEnforcementOptions>)` and
@@ -125,7 +123,8 @@ The validator judges the bytes it is given. For a tree that also uses schema
 versioning, strip the version envelope from a stored value that carries one first
 (`LatticeSchemaEnvelope.IsEnveloped`, then `LatticeSchemaEnvelope.StripToBody`,
 which removes the header length without checking for it), because a policy judges
-the body.
+the body. Cluster enforcement does this itself: it judges an already-enveloped
+value by the body a reader is served, upcast to the tree's target version.
 
 ## Documents
 

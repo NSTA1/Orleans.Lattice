@@ -279,7 +279,10 @@ atomically when it is complete. A `ShipView` view is the exception: to keep its
 replicated `view-{name}` tree id stable, the producer clears and re-derives that
 tree in place, so a reader on the producer can briefly observe a partially
 rebuilt view while consumers converge through replication anti-entropy.
-`ReconcileAsync` repairs a drifted `ShipView` view the same way.
+`ReconcileAsync` repairs a drifted `ShipView` view the same way. On a source tree
+with schema versioning, a rebuild projects exactly the input incremental
+maintenance did (see
+[Projection input on a versioned source](#projection-input-on-a-versioned-source)).
 
 ## Deleting a view
 
@@ -432,6 +435,20 @@ var projection = new PredicateLatticeViewProjection(
     keySelectorVersion: "adult-prefix-v1");
 ```
 
+## Projection input on a versioned source
+
+On a source tree with [schema versioning](../lattice.schema/schema-versioning.md),
+a projection receives each value's body with the version envelope stripped, at the
+version it was stamped with, never upcast to the tree's target. The input is
+identical on every derivation path - incremental apply, atomic publication, repair,
+rebuild and reconcile, whether or not the source is aliased - so a rebuild
+reproduces an incrementally maintained view and a reconcile reports no drift.
+
+Advancing the target version re-projects nothing. A projection must therefore
+handle every version its source can hold, or the tree must be eagerly
+[migrated](../lattice.schema/schema-versioning.md#eager-background-migration),
+which upcasts and re-stamps every stored value at the target; its cutover rebuilds the view from the migrated values (see [Source-identity rebind](#source-identity-rebind)).
+
 ## Re-keyed views and deletes
 
 The optional `keySelector` relocates the view key. It is a pure function of the
@@ -501,9 +518,13 @@ empty key or one beginning with `\u0000` therefore has its contribution
 **rejected** - dropped and counted on the
 `orleans.lattice.view.aggregation_rejected` metric - rather than materialised
 into the reserved region where it would be invisible to reads and could collide
-with an internal row. The rejection is deterministic on the key, so every cluster
-drops the same members and the view stays convergent; a non-zero counter means a
-selector is emitting reserved keys and should be corrected.
+with an internal row. A rejected contribution also retracts the source key's prior
+membership, exactly as a filter exit does, so a key that regroups from a valid
+group into a reserved one leaves its old group. The view stays a function of
+current source state, so incremental maintenance agrees with a rebuild. The
+rejection is deterministic on the key, so every cluster drops the same members and
+the view stays convergent; a non-zero counter means a selector is emitting reserved
+keys and should be corrected.
 
 Declare one with `AggregationLatticeViewProjection.Create<T>`: a group-key
 selector, a stable selector-version tag (the selectors are delegates and cannot
