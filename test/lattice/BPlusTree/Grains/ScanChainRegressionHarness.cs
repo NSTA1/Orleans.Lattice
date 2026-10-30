@@ -159,7 +159,7 @@ internal sealed class ScanChainRegressionHarness
         string lowKeyInclusive,
         GrainId? nextSibling)
     {
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
 
         // A fresh list per call: the scan path is entitled to own what a leaf
         // hands it, and sharing one instance across page fills would let an
@@ -170,7 +170,7 @@ internal sealed class ScanChainRegressionHarness
         leaf.GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                 Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
             .Returns(_ => Task.FromResult(rows.ConvertAll(r => r.Key)));
-        leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = lowKeyInclusive,
             HighKeyExclusive = null,

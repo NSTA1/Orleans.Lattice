@@ -42,7 +42,6 @@ public sealed class IBPlusInternalGrainInterleavedReadsTests
     [TestCase(nameof(IBPlusInternalGrain.RouteWithMetadataAsync))]
     [TestCase(nameof(IBPlusInternalGrain.GetRoutingTableAsync))]
     [TestCase(nameof(IBPlusInternalGrain.GetLeftmostChildAsync))]
-    [TestCase(nameof(IBPlusInternalGrain.GetRightmostChildAsync))]
     [TestCase(nameof(IBPlusInternalGrain.GetLeftmostChildWithMetadataAsync))]
     [TestCase(nameof(IBPlusInternalGrain.GetRightmostChildWithMetadataAsync))]
     [TestCase(nameof(IBPlusInternalGrain.AreChildrenLeavesAsync))]

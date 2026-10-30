@@ -321,24 +321,6 @@ internal sealed class ReplicationDeadLetterGrain(
     }
 
     /// <inheritdoc />
-    public Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
-        cancellationToken.ThrowIfCancellationRequested();
-        EnsureInitialized();
-        foreach (var identity in _parked.Keys)
-        {
-            if (identity.Timestamp == timestamp
-                && string.Equals(identity.OriginClusterId, originClusterId, StringComparison.Ordinal))
-            {
-                return Task.FromResult(true);
-            }
-        }
-
-        return Task.FromResult(false);
-    }
-
-    /// <inheritdoc />
     public Task<bool[]> IsHoldingManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);

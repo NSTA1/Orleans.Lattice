@@ -20,7 +20,7 @@ public partial class HotShardMonitorGrainTests
     {
         for (var i = 0; i < shardCount; i++)
         {
-            shardOf(i).GetHotnessAsync().Returns(new ShardHotness
+            shardOf(i).StubHotness(new ShardHotness
             {
                 Reads = 0,
                 Writes = opsPerWindow,
@@ -38,7 +38,7 @@ public partial class HotShardMonitorGrainTests
     {
         for (var i = 0; i < shardCount; i++)
         {
-            shardOf(i).GetHotnessAsync().Returns(new ShardHotness
+            shardOf(i).StubHotness(new ShardHotness
             {
                 Reads = i == hotShard ? hotOps : backgroundOps,
                 Writes = 0,
@@ -313,7 +313,7 @@ public partial class HotShardMonitorGrainTests
         var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain(physicalShardCount: Shards, options: opts);
         for (var i = 0; i < Shards; i++)
         {
-            shardOf(i).GetHotnessAsync().Returns(new ShardHotness
+            shardOf(i).StubHotness(new ShardHotness
             {
                 Reads = i < 2 ? 30_000 : 0,
                 Writes = 0,

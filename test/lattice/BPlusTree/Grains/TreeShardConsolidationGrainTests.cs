@@ -249,12 +249,12 @@ public partial class TreeShardConsolidationGrainTests
         for (var i = 0; i < leafEntries.Count; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             // The fold sweeps the donor's prepared buckets before draining
             // (issue #5125); by default the chain holds none.
             leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
                 .Returns(_ => Task.FromResult(new List<PendingMutationSnapshot>()));
-            leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+            leaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
                 .Returns(_ =>
                 {
                     log.Record($"leaf{index}.GetDelta");
@@ -266,7 +266,7 @@ public partial class TreeShardConsolidationGrainTests
                 });
             leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(
                 index + 1 < leafIds.Length ? leafIds[index + 1] : null));
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = DonorLeafResumeKey(index),
                 HighKeyExclusive = index + 1 < leafIds.Length ? DonorLeafResumeKey(index + 1) : null,
@@ -657,7 +657,7 @@ public partial class TreeShardConsolidationGrainTests
         var flakyLeafId = GrainId.Create("leaf", "donor-leaf-1");
         var flakyLeaf = h.Factory.GetGrain<IBPlusLeafGrain>(flakyLeafId);
         var attempts = 0;
-        flakyLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+        flakyLeaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(_ =>
             {
                 attempts++;

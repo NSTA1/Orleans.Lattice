@@ -265,7 +265,7 @@ public partial class ShardHealingOrchestratorGrainTests
             {
                 var reads = 900 + (round + i) % 7;
                 var writes = 400 + (round * 3 + i) % 5;
-                h.ShardOf(live[i]).GetHotnessAsync().Returns(new ShardHotness
+                h.ShardOf(live[i]).StubHotness(new ShardHotness
                 {
                     Reads = reads, Writes = writes, Window = TimeSpan.FromSeconds(1),
                 });

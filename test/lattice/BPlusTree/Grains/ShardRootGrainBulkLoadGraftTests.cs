@@ -408,7 +408,6 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         await h.Internal(root).Received().GetRightmostChildWithMetadataAsync();
         await h.Internal(root).DidNotReceive().AreChildrenLeavesAsync();
-        await h.Internal(root).DidNotReceive().GetRightmostChildAsync();
         await h.Internal(mid).Received().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
         await h.Internal(root).DidNotReceive().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
         Assert.That(existing, Is.Not.EqualTo(default(GrainId)));

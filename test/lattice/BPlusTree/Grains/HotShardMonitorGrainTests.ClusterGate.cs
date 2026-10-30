@@ -42,7 +42,7 @@ public partial class HotShardMonitorGrainTests
         };
         var (grain, grainFactory, _, splitGrain, _, shardOf, _) = CreateGrain(options: opts);
         var gate = SubstituteGate(grainFactory);
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 
@@ -67,7 +67,7 @@ public partial class HotShardMonitorGrainTests
         };
         var (grain, grainFactory, _, _, _, shardOf, _) = CreateGrain(options: opts);
         var gate = SubstituteGate(grainFactory);
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 
@@ -147,7 +147,7 @@ public partial class HotShardMonitorGrainTests
         };
         var (grain, grainFactory, _, _, _, shardOf, _) = CreateGrain(options: opts);
         var gate = SubstituteGate(grainFactory, grant: 1);
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         await grain.RunSamplingPassAsync();
 
@@ -176,7 +176,7 @@ public partial class HotShardMonitorGrainTests
         var gate = SubstituteGate(grainFactory);
         gate.ReportInFlightAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<TimeSpan>())
             .Returns(Task.FromException(new TimeoutException("gate unavailable")));
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 10_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         Assert.That(async () => await grain.RunSamplingPassAsync(), Throws.Nothing);
 
@@ -202,7 +202,7 @@ public partial class HotShardMonitorGrainTests
         // suppresses new splits but does not stop the one already running, so
         // the footprint must keep being published or the activity source would
         // report an idle cluster mid-split.
-        shardOf(1).HasPendingBulkOperationAsync().Returns(true);
+        shardOf(1).StubPendingBulkOperation(true);
         await grain.RunSamplingPassAsync();
 
         await gate.Received(1).ReportInFlightAsync(TreeId, 1, Arg.Any<TimeSpan>());
@@ -285,10 +285,10 @@ public partial class HotShardMonitorGrainTests
             MaxClusterConcurrentAutoSplits = 1,
         };
         var (grain, grainFactory, _, splitGrain, _, shardOf, _) = CreateGrain(physicalShardCount: 4, options: opts);
-        shardOf(0).GetHotnessAsync().Returns(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(2).GetHotnessAsync().Returns(new ShardHotness { Reads = 3_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(3).GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(0).StubHotness(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(2).StubHotness(new ShardHotness { Reads = 3_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(3).StubHotness(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         // The gate grants exactly one slot against the cluster ceiling.
         var gate = Substitute.For<IClusterSplitConcurrencyGrain>();
@@ -324,8 +324,8 @@ public partial class HotShardMonitorGrainTests
         };
         var (grain, grainFactory, _, _, _, shardOf, _) = CreateGrain(options: opts);
         var gate = SubstituteGate(grainFactory);
-        shardOf(0).GetHotnessAsync().Returns(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(0).StubHotness(new ShardHotness { Reads = 5_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
+        shardOf(1).StubHotness(new ShardHotness { Reads = 8_000, Writes = 0, Window = TimeSpan.FromSeconds(10) });
 
         using var recorder = new LongMetricRecorder();
         await grain.RunSamplingPassAsync();

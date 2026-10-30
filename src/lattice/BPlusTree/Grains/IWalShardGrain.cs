@@ -207,25 +207,18 @@ internal interface IWalShardGrain : IGrainWithStringKey
     ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Returns the number of <i>live</i> entries currently persisted in
-    /// this WAL shard - i.e. the count of entries between the lowest
-    /// still-stored offset and the highest assigned offset, inclusive.
-    /// For an untrimmed shard this equals the next sequence number
-    /// (the canonical "how many entries have I written" answer). After
-    /// <see cref="IWalStorageProvider.TrimAsync"/> removes a prefix
-    /// (driven by <see cref="ILatticeWalGc"/> once every consumer has
-    /// acked past that point) the live count drops by exactly the
-    /// trimmed prefix length, so state-observation cursors can detect when
-    /// a requested resume offset has fallen behind the retained prefix
-    /// rather than comparing against a monotonically-growing offset counter.
-    /// </summary>
-    Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken);
-
-    /// <summary>
     /// Returns the state observer's resume floor in one grain call: the next
-    /// assigned sequence sampled before the trim-aware live count is read.
-    /// Retains that read order and the live-count provider semantics; this is
-    /// not an atomic retention snapshot or a transaction-purge watermark.
+    /// assigned sequence, sampled first, minus the trim-aware <i>live</i> entry
+    /// count read after it. The live count is the number of entries between the
+    /// lowest still-stored offset and the highest assigned offset, inclusive, so
+    /// for an untrimmed shard the floor is zero. After
+    /// <see cref="IWalStorageProvider.TrimAsync"/> removes a prefix (driven by
+    /// <see cref="ILatticeWalGc"/> once every consumer has acked past that point)
+    /// the floor rises by exactly the trimmed prefix length, so state-observation
+    /// cursors can detect when a requested resume offset has fallen behind the
+    /// retained prefix rather than comparing against a monotonically-growing
+    /// offset counter. This is not an atomic retention snapshot or a
+    /// transaction-purge watermark.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<long> GetResumeFloorAsync(CancellationToken cancellationToken);
@@ -333,11 +326,11 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <see cref="IWalStorageProvider.TrimAsync"/> reduces the
     /// persisted footprint without updating this counter, so callers
     /// that need the trim-aware live footprint must use
-    /// <see cref="GetLiveEntryCountAsync"/> instead. Retained
+    /// <see cref="GetResumeFloorAsync"/> instead. Retained
     /// as an obsolete forwarder for one minor version so existing
     /// callers compile without immediate change.
     /// </summary>
-    [Obsolete("Use GetLiveEntryCountAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
+    [Obsolete("Use GetResumeFloorAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
     Task<long> GetEntryCountAsync(CancellationToken cancellationToken);
 
     /// <summary>

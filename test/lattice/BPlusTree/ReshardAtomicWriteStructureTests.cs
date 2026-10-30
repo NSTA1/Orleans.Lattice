@@ -106,7 +106,7 @@ public class ReshardAtomicWriteStructureTests
             while (leafId is { } id && hops++ < 64)
             {
                 var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(id);
-                var range = await leaf.GetKeyRangeAsync();
+                var range = (await leaf.GetKeyRangeAndNextSiblingAsync()).KeyRange;
                 var lk = await leaf.GetKeysAsync();
                 var pending = await leaf.GetPendingKeysAsync();
                 var owners = string.Join(",", lk.Select(k => $"{k}->{routing.Map.Resolve(k)}"));

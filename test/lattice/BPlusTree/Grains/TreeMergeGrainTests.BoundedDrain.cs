@@ -168,7 +168,7 @@ public partial class TreeMergeGrainTests
         // Leaf 1 splits; the right half is grafted in ahead of leaf 2 and holds
         // an entry no earlier pass could have seen.
         var rightHalf = GrainId.Create("leaf", "merge-src-leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var rightHalfLeaf = LeafSubstituteCombinedCalls.CreateComposed();
         factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
         rightHalfLeaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(new StateDelta
         {
@@ -176,7 +176,7 @@ public partial class TreeMergeGrainTests
             Version = new VersionVector(),
         }));
         rightHalfLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(leaf2));
-        rightHalfLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        rightHalfLeaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = "k0001m",
             HighKeyExclusive = SourceLeafResumeKey(2),
@@ -184,7 +184,7 @@ public partial class TreeMergeGrainTests
 
         var leftHalf = factory.GetGrain<IBPlusLeafGrain>(leaf1);
         leftHalf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(rightHalf));
-        leftHalf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        leftHalf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = SourceLeafResumeKey(1),
             HighKeyExclusive = "k0001m",

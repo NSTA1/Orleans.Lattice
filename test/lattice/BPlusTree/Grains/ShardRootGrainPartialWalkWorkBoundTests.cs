@@ -122,7 +122,7 @@ public class ShardRootGrainPartialWalkWorkBoundTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
 
             leaf.GetStatsAsync().Returns(_ =>
             {
@@ -144,14 +144,14 @@ public class ShardRootGrainPartialWalkWorkBoundTests
                 lock (callLog) callLog.Add($"count:{index}");
                 return Task.FromResult(KeysPerLeaf);
             });
-            leaf.GetProjectionCheckpointOffsetAsync().Returns(_ =>
+            leaf.Separate().GetProjectionCheckpointOffsetAsync().Returns(_ =>
             {
                 lock (callLog) callLog.Add($"checkpoint:{index}");
                 // Leaf 0 is the laggard, so the chain minimum is only correct
                 // if the walk actually reached it.
                 return Task.FromResult(index == 0 ? checkpointOffset : checkpointOffset + 100);
             });
-            leaf.RebuildProjectionFromWalAsync().Returns(_ =>
+            leaf.Separate().RebuildProjectionFromWalAsync().Returns(_ =>
             {
                 lock (callLog) callLog.Add($"rebuild:{index}");
                 Interlocked.Increment(ref rebuildCalls[index]);
@@ -159,7 +159,7 @@ public class ShardRootGrainPartialWalkWorkBoundTests
             });
 
             var high = index + 1 < leafCount ? $"k{index + 1:D3}-000" : null;
-            leaf.GetKeyRangeAsync().Returns(_ =>
+            leaf.Separate().GetKeyRangeAsync().Returns(_ =>
             {
                 lock (callLog) callLog.Add($"keyrange:{index}");
                 return Task.FromResult(new LeafKeyRange

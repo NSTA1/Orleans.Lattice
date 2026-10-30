@@ -13,8 +13,6 @@ public partial class ReplicationHighWaterMarkGrainTests
         Assert.That(await grain.HasAppliedManyAsync("origin", requested), Is.EqualTo(new[] { true, false, true }));
         Assert.That(await grain.HasAppliedManyAsync("other", requested), Is.EqualTo(new[] { false, false, false }));
         Assert.That(await grain.HasAppliedManyAsync("origin", []), Is.Empty);
-        var single = await Task.WhenAll(requested.Select(t => grain.HasAppliedAsync("origin", t)));
-        Assert.That(await grain.HasAppliedManyAsync("origin", requested), Is.EqualTo(single));
 
         await grain.ResetAppliedIdentitiesAsync(CancellationToken.None);
         Assert.That(await grain.HasAppliedManyAsync("origin", requested), Is.EqualTo(new[] { false, false, false }));

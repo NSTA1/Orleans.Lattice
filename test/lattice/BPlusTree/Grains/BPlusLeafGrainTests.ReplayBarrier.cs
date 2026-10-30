@@ -52,30 +52,24 @@ public partial class BPlusLeafGrainTests
                 "Acceptance criterion 2, and the load-bearing one. This is the probe the WAL GC "
                 + "blocked-leaf reactivation sweep calls, so it is precisely the call that must not "
                 + "queue behind the replay it exists to trigger. It ARMS the replay and returns.",
-            ["GetKeyRangeAsync"] =
-                "Topology, not projection. The key range lives in persisted grain state, which is "
-                + "loaded before activation and is not what the WAL replay rebuilds.",
             ["GetNextSiblingAsync"] = "Topology: persisted sibling pointer, untouched by replay.",
             ["GetKeyRangeAndNextSiblingAsync"] =
-                "Topology: persisted key range + sibling pointer, untouched by replay. The combined "
-                + "form of GetKeyRangeAsync and GetNextSiblingAsync, neither of which waits.",
+                "Topology, not projection. The key range and sibling pointer live in persisted grain "
+                + "state, which is loaded before activation and is not what the WAL replay rebuilds.",
             ["GetPrevSiblingAsync"] = "Topology: persisted sibling pointer, untouched by replay.",
             ["GetKeyRangeAndPrevSiblingAsync"] =
-                "Topology: persisted key range + sibling pointer, untouched by replay. The combined "
-                + "form of GetKeyRangeAsync and GetPrevSiblingAsync, neither of which waits.",
+                "Topology: persisted key range + sibling pointer, untouched by replay, like "
+                + "GetKeyRangeAndNextSiblingAsync.",
             ["SetNextSiblingAsync"] =
                 "Topology write. Gating it would put the chain-relink path behind a replay, which is "
                 + "how a split or merge would deadlock against the leaf it is relinking. Also "
                 + "[AlwaysInterleave] (issue #4919), so a split holding its gate is never queued "
                 + "behind the neighbour's turn.",
             ["SetPrevSiblingAsync"] = "Topology write; same reasoning as SetNextSiblingAsync, including [AlwaysInterleave].",
-            ["GetProjectionCheckpointOffsetAsync"] =
-                "Reports how far the replay HAS got. Waiting for the replay before answering would "
-                + "make the accessor unable to observe a replay in progress, which is the only state "
-                + "in which its answer is interesting.",
             ["GetProjectionCheckpointAndNextSiblingAsync"] =
-                "Combines the checkpoint progress probe with persisted topology; neither read "
-                + "waits for replay, so an in-flight replay remains observable.",
+                "Reports how far the replay HAS got, with persisted topology. Waiting for the replay "
+                + "before answering would make the accessor unable to observe a replay in progress, "
+                + "which is the only state in which its answer is interesting.",
             ["AbandonRetirementAsync"] =
                 "Releases a retirement reservation. It must stay callable on a leaf whose replay is "
                 + "failing, or a failed replay would strand the reservation permanently.",
@@ -92,13 +86,10 @@ public partial class BPlusLeafGrainTests
             ["ClearGrainStateAndGetNextSiblingAsync"] =
                 "Captures only routing metadata, then uses the same clear core, RETIRING the replay "
                 + "rather than waiting for the projection that is being discarded.",
-            ["RebuildProjectionFromWalAsync"] =
-                "Supersedes the replay outright and so RETIRES the barrier. It is the administrative "
-                + "remedy for a broken projection and must not require the broken replay to finish "
-                + "first.",
             ["RebuildProjectionAndNextSiblingAsync"] =
-                "Captures topology before the same administrative reset as RebuildProjectionFromWalAsync; "
-                + "must retire the broken replay rather than wait for it.",
+                "Captures topology, then supersedes the replay outright and so RETIRES the barrier. "
+                + "It is the administrative remedy for a broken projection and must not require the "
+                + "broken replay to finish first.",
             ["CaptureSnapshotAsync"] =
                 "A CORRECTION to the proposal in #2871, which classified every non-metadata entry "
                 + "point as one that must wait. This one must not, for two independent reasons. "
@@ -143,7 +134,7 @@ public partial class BPlusLeafGrainTests
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         "GetBootstrapCaptureAsync", "GetLiveRawEntriesAndPendingAsync",
         // Replication and delta seams.
-        "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetCacheRefreshAsync", "GetDeltaSinceForSlotsAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
+        "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetCacheRefreshAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
         "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
         "GetOriginalPrepareStampsAsync",
         "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
@@ -156,7 +147,7 @@ public partial class BPlusLeafGrainTests
         // replay consults, so it must run against the fully replayed buckets.
         "DiscardPendingTransactionAsync", "DiscardPendingTransactionsAndGetNextSiblingAsync",
         // Maintenance that reads the projection.
-        "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "CompactTombstonesAndNextSiblingAsync", "FreezeProjectionAsync", "FreezeProjectionAndNextSiblingAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
+        "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "CompactTombstonesAndNextSiblingAsync", "FreezeProjectionAndNextSiblingAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",
         "CompletePendingReclaimAsync",
         "TryBeginOrphanRetirementAsync",

@@ -7,15 +7,33 @@ namespace Orleans.Lattice.Tests.Fakes;
 /// <summary>
 /// Wires a substitute leaf's combined leaf-walk calls to answer from its
 /// separately stubbed calls, so a fixture that stubs
-/// <see cref="IBPlusLeafGrain.GetKeyRangeAsync"/> and
+/// <see cref="ILeafSeparateCalls.GetKeyRangeAsync"/> and
 /// <see cref="IBPlusLeafGrain.GetNextSiblingAsync"/> keeps describing the same
 /// chain when production reads both through
 /// <see cref="IBPlusLeafGrain.GetKeyRangeAndNextSiblingAsync"/>. The separate
 /// calls are still invoked, so <c>Received</c> counts and <c>When/Do</c> hooks
-/// on them keep firing once per leaf visit.
+/// on them keep firing once per leaf visit. Facets that are not grain calls
+/// live on <see cref="ILeafSeparateCalls"/>, which a substitute from
+/// <see cref="CreateComposed"/> also implements.
 /// </summary>
 internal static class LeafSubstituteCombinedCalls
 {
+    /// <summary>
+    /// Creates a leaf substitute that also implements <see cref="ILeafSeparateCalls"/>,
+    /// with its combined calls composed by <see cref="ComposeChainLink"/>.
+    /// </summary>
+    public static IBPlusLeafGrain CreateComposed() =>
+        Substitute.For<IBPlusLeafGrain, ILeafSeparateCalls>().ComposeChainLink();
+
+    /// <summary>
+    /// The separate, non-grain-call facets of a leaf substitute created by
+    /// <see cref="CreateComposed"/>, for stubbing and <c>Received</c> checks.
+    /// </summary>
+    public static ILeafSeparateCalls Separate(this IBPlusLeafGrain leaf) =>
+        leaf as ILeafSeparateCalls
+        ?? throw new InvalidOperationException(
+            "This leaf substitute has no separate facets; create it with LeafSubstituteCombinedCalls.CreateComposed().");
+
     /// <summary>Preserves existing cache arrangements; call-budget tests override this composition.</summary>
     internal static IBPlusLeafGrain ComposeCacheRefresh(this IBPlusLeafGrain leaf)
     {
@@ -62,7 +80,7 @@ internal static class LeafSubstituteCombinedCalls
             var next = await leaf.GetNextSiblingAsync();
             return new LeafChainLink
             {
-                KeyRange = next is null ? default : await leaf.GetKeyRangeAsync(),
+                KeyRange = next is null ? default : await leaf.Separate().GetKeyRangeAsync(),
                 NextSibling = next,
             };
         });
@@ -74,7 +92,7 @@ internal static class LeafSubstituteCombinedCalls
         });
         leaf.GetDeltaSinceForSlotsAndNextSiblingAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>()).Returns(async call =>
         {
-            var delta = await leaf.GetDeltaSinceForSlotsAsync(call.ArgAt<VersionVector>(0), call.ArgAt<int[]>(1), call.ArgAt<int>(2));
+            var delta = await leaf.Separate().GetDeltaSinceForSlotsAsync(call.ArgAt<VersionVector>(0), call.ArgAt<int[]>(1), call.ArgAt<int>(2));
             var link = await leaf.GetKeyRangeAndNextSiblingAsync();
             return new LeafDeltaPage { Delta = delta, NextSibling = link.NextSibling, KeyRange = link.KeyRange };
         });
@@ -95,7 +113,7 @@ internal static class LeafSubstituteCombinedCalls
         });
         leaf.GetKeyRangeAndPrevSiblingAsync().Returns(async _ => new LeafPrevChainLink
         {
-            KeyRange = await leaf.GetKeyRangeAsync(),
+            KeyRange = await leaf.Separate().GetKeyRangeAsync(),
             PrevSibling = await leaf.GetPrevSiblingAsync(),
         });
         leaf.DeleteRangeAndNextSiblingAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LatticePredicateNode?>()).Returns(async call =>
@@ -104,7 +122,7 @@ internal static class LeafSubstituteCombinedCalls
             return new LeafRangeDeletePage
             {
                 Result = result,
-                KeyRange = await leaf.GetKeyRangeAsync(),
+                KeyRange = await leaf.Separate().GetKeyRangeAsync(),
                 NextSibling = await leaf.GetNextSiblingAsync(),
             };
         });
@@ -114,13 +132,13 @@ internal static class LeafSubstituteCombinedCalls
             return new LeafClockPage
             {
                 Clock = clock,
-                KeyRange = await leaf.GetKeyRangeAsync(),
+                KeyRange = await leaf.Separate().GetKeyRangeAsync(),
                 NextSibling = await leaf.GetNextSiblingAsync(),
             };
         });
         leaf.GetProjectionCheckpointAndNextSiblingAsync().Returns(async _ =>
         {
-            var checkpoint = await leaf.GetProjectionCheckpointOffsetAsync();
+            var checkpoint = await leaf.Separate().GetProjectionCheckpointOffsetAsync();
             return new LeafCheckpointPage
             {
                 CheckpointOffset = checkpoint,
@@ -140,7 +158,7 @@ internal static class LeafSubstituteCombinedCalls
         leaf.RebuildProjectionAndNextSiblingAsync().Returns(async _ =>
         {
             var link = await leaf.GetKeyRangeAndNextSiblingAsync();
-            await leaf.RebuildProjectionFromWalAsync();
+            await leaf.Separate().RebuildProjectionFromWalAsync();
             return link;
         });
         leaf.GetStatsAndNextSiblingAsync().Returns(async _ =>
@@ -150,7 +168,7 @@ internal static class LeafSubstituteCombinedCalls
         });
         leaf.FreezeProjectionAndNextSiblingAsync(Arg.Any<CancellationToken>()).Returns(async call =>
         {
-            var freeze = await leaf.FreezeProjectionAsync(call.Arg<CancellationToken>());
+            var freeze = await leaf.Separate().FreezeProjectionAsync(call.Arg<CancellationToken>());
             return new LeafBaselineFreezePage { Freeze = freeze, NextSibling = await leaf.GetNextSiblingAsync() };
         });
         leaf.GetPendingMutationsForSlotsAndNextSiblingAsync(Arg.Any<int[]>(), Arg.Any<int>()).Returns(async call =>

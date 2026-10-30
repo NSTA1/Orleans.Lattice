@@ -79,9 +79,9 @@ public partial class TreeShardSplitGrainTests
         var leafId = GrainId.Create("bplusleaf", $"{TreeId}/0/leaf-0");
         source.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
 
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
-        leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+        leaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(Task.FromResult(new StateDelta
             {
                 Entries = new Dictionary<string, LwwValue<byte[]>>(),

@@ -96,7 +96,7 @@ public partial class TreeShardSplitGrainTests
         // Leaf stub returning the supplied pending-mutation snapshots
         // for any moved-slot query and null next-sibling so the sweep
         // walks exactly one leaf.
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(Task.FromResult(new List<PendingMutationSnapshot>(leafSnapshots)));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));

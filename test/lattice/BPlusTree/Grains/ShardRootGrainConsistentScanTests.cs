@@ -51,7 +51,7 @@ public class ShardRootGrainConsistentScanTests
         var keys = leafKeys ?? leafEntries?.Select(e => e.Key).ToList() ?? new List<string>();
         var entries = leafEntries ?? keys.Select(k => new KeyValuePair<string, byte[]>(k, [1])).ToList();
 
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>(),
                 Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(Task.FromResult(keys.ToList()));

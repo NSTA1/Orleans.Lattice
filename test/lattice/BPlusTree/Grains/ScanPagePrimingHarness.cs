@@ -77,13 +77,13 @@ internal sealed class ScanPagePrimingHarness
         state.State.RootIsLeaf = true;
 
         var factory = Substitute.For<IGrainFactory>();
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                 Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
             .Returns(_ => harness._park_enabled
                 ? harness._park.Task
                 : Task.FromResult(new List<KeyValuePair<string, byte[]>>(harness._rows)));
-        leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = harness._rows[0].Key,
             HighKeyExclusive = null,

@@ -106,7 +106,7 @@ internal static class LeafChainTiling
             }
 
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(id);
-            chain.Add((id, await leaf.GetKeyRangeAsync()));
+            chain.Add((id, (await leaf.GetKeyRangeAndNextSiblingAsync()).KeyRange));
             cursor = await leaf.GetNextSiblingAsync();
         }
 
@@ -142,7 +142,7 @@ internal static class LeafChainTiling
 
             var routedRange = routedId == chain[i].Id
                 ? chain[i].Range
-                : await grainFactory.GetGrain<IBPlusLeafGrain>(routedId).GetKeyRangeAsync();
+                : (await grainFactory.GetGrain<IBPlusLeafGrain>(routedId).GetKeyRangeAndNextSiblingAsync()).KeyRange;
             if (!SplitBoundary.Owns(low, routedRange.LowKeyInclusive, routedRange.HighKeyExclusive))
             {
                 breaks.Add(

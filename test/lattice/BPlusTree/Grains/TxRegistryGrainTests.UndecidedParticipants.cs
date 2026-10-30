@@ -22,7 +22,7 @@ public partial class TxRegistryGrainTests
         if (participants) state.State.Participants[txid] = [3, 1];
         var (grain, _) = CreateGrain(state);
 
-        Assert.That(await grain.HasUndecidedParticipantsAsync(txid), Is.EqualTo(expected));
+        Assert.That((await grain.HasUndecidedParticipantsManyAsync([txid]))[txid], Is.EqualTo(expected));
         Assert.That(state.WriteCount, Is.Zero, "The combined probe is observational.");
     }
 
@@ -33,7 +33,7 @@ public partial class TxRegistryGrainTests
         var (grain, state) = CreateGrain();
         state.State.Participants[txid] = [];
 
-        Assert.That(await grain.HasUndecidedParticipantsAsync(txid), Is.False);
+        Assert.That((await grain.HasUndecidedParticipantsManyAsync([txid]))[txid], Is.False);
         Assert.That(state.WriteCount, Is.Zero);
     }
 
@@ -48,7 +48,7 @@ public partial class TxRegistryGrainTests
         state.State.Participants[txid] = [1];
 
         Assert.That(await grain.GetStatusAsync(txid), Is.EqualTo(TxStatus.Indeterminate));
-        Assert.That(await grain.HasUndecidedParticipantsAsync(txid), Is.False);
+        Assert.That((await grain.HasUndecidedParticipantsManyAsync([txid]))[txid], Is.False);
         Assert.That(state.WriteCount, Is.Zero);
         Assert.That(state.State.ForgottenAt.ContainsKey(txid), Is.True);
     }
@@ -62,7 +62,7 @@ public partial class TxRegistryGrainTests
         await grain.RegisterExternalDecisionAuthorityAsync(txid, "reseed-probe");
         coordinator.ClearReceivedCalls();
 
-        Assert.That(await grain.HasUndecidedParticipantsAsync(txid), Is.True);
+        Assert.That((await grain.HasUndecidedParticipantsManyAsync([txid]))[txid], Is.True);
         await coordinator.DidNotReceive().GetDecisionAsync();
     }
 
@@ -79,12 +79,12 @@ public partial class TxRegistryGrainTests
         if (fail) state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
 
         var mark = OnTurnAsync(turn, () => grain.MarkCommittedAsync(txid));
-        var read = OnTurnAsync(turn, () => grain.HasUndecidedParticipantsAsync(txid));
+        var read = OnTurnAsync(turn, async () => (await grain.HasUndecidedParticipantsManyAsync([txid]))[txid]);
         await DrainAsync(turn);
         try
         {
             Assert.That(read.IsCompleted, Is.False, "An uncommitted verdict cannot release a clamp.");
-            Assert.That(await OnTurnAsync(turn, () => grain.HasUndecidedParticipantsAsync(Guid.NewGuid())), Is.False,
+            Assert.That(await OnTurnAsync(turn, async () => { var unrelated = Guid.NewGuid(); return (await grain.HasUndecidedParticipantsManyAsync([unrelated]))[unrelated]; }), Is.False,
                 "An unrelated read must not wait for this transaction's write.");
         }
         finally
@@ -107,7 +107,7 @@ public partial class TxRegistryGrainTests
         var (grain, _) = CreateGrain(state);
         var txid = Guid.NewGuid();
         var registration = OnTurnAsync(turn, () => grain.RegisterParticipantsAsync(txid, [1]));
-        var read = OnTurnAsync(turn, () => grain.HasUndecidedParticipantsAsync(txid));
+        var read = OnTurnAsync(turn, async () => (await grain.HasUndecidedParticipantsManyAsync([txid]))[txid]);
         await DrainAsync(turn);
         try
         {

@@ -74,7 +74,7 @@ public sealed class ShardRootGrainPurgeFanOutTests
 
         for (var i = 0; i < internalChildren; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var next = i + 1 < internalChildren ? (GrainId?)leafIds[i + 1] : null;
             leaf.GetNextSiblingAsync().Returns(Task.FromResult(next));
             leaf.ClearGrainStateAsync().Returns(Task.CompletedTask);

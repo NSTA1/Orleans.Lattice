@@ -301,7 +301,7 @@ public class LeafReclaimIntegrationTests
         Assert.That(chain, Is.Not.Empty, "a tree must always retain a leaf to route to");
         Assert.That(chain[0], Is.EqualTo(head), "the head leaf must be the survivor");
 
-        var range = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[0]).GetKeyRangeAsync();
+        var range = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[0]).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         Assert.That(range.LowKeyInclusive, Is.Null, "the surviving head must still be the catch-all for the range below the first separator");
     }
 

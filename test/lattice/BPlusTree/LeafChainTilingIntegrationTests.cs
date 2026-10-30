@@ -89,7 +89,7 @@ public sealed class LeafChainTilingIntegrationTests
         for (var cursor = await shard.GetLeftmostLeafIdAsync(); cursor is { } id;)
         {
             var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(id);
-            await leaf.RebuildProjectionFromWalAsync();
+            await leaf.RebuildProjectionAndNextSiblingAsync();
             cursor = await leaf.GetNextSiblingAsync();
         }
 

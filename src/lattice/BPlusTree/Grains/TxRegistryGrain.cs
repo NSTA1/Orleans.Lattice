@@ -1121,8 +1121,7 @@ internal sealed partial class TxRegistryGrain(
         }
     }
 
-    /// <inheritdoc />
-    public async Task<bool> HasUndecidedParticipantsAsync(Guid txid)
+    private async Task<bool> HasUndecidedParticipantsAsync(Guid txid)
     {
         while (true)
         {

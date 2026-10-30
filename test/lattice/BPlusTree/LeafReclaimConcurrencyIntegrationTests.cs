@@ -92,7 +92,7 @@ public class LeafReclaimConcurrencyIntegrationTests
     private async Task RebuildEveryProjectionAsync(IShardRootGrain shard)
     {
         foreach (var leafId in await WalkChainAsync(shard))
-            await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId).RebuildProjectionFromWalAsync();
+            await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId).RebuildProjectionAndNextSiblingAsync();
     }
 
     /// <summary>
@@ -139,7 +139,7 @@ public class LeafReclaimConcurrencyIntegrationTests
             var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(chain[i]);
             if (await leaf.CountAsync() != 0) continue;
 
-            var range = await leaf.GetKeyRangeAsync();
+            var range = (await leaf.GetKeyRangeAndNextSiblingAsync()).KeyRange;
             if (range.LowKeyInclusive is null) continue;
 
             return (chain[i], range);
@@ -213,7 +213,7 @@ public class LeafReclaimConcurrencyIntegrationTests
 
         foreach (var leafId in await WalkChainAsync(shard))
         {
-            var range = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetKeyRangeAsync();
+            var range = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetKeyRangeAndNextSiblingAsync()).KeyRange;
 
             // Descending on the leaf's own low bound is the question "does
             // routing still consider this leaf to own its own range?". The head
@@ -508,7 +508,7 @@ public class LeafReclaimConcurrencyIntegrationTests
         foreach (var leafId in await WalkChainAsync(shard))
         {
             var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var range = await leaf.GetKeyRangeAsync();
+            var range = (await leaf.GetKeyRangeAndNextSiblingAsync()).KeyRange;
             var delta = await leaf.GetDeltaSinceCursorAsync(default);
 
             if (delta.SplitKey is null) continue;
@@ -1185,7 +1185,7 @@ public class LeafReclaimConcurrencyIntegrationTests
                 if (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetAsync(key) is null)
                     continue;
 
-                var range = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetKeyRangeAsync();
+                var range = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetKeyRangeAndNextSiblingAsync()).KeyRange;
                 var span = $"[{range.LowKeyInclusive ?? "-inf"}, {range.HighKeyExclusive ?? "+inf"})";
                 var declares = SplitBoundary.Owns(key, range.LowKeyInclusive, range.HighKeyExclusive);
                 var probe = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetReclaimProbeAsync();
@@ -1204,7 +1204,7 @@ public class LeafReclaimConcurrencyIntegrationTests
             var routedNowDesc = "(no leaf)";
             if (routedNow is { } rn)
             {
-                var rnRange = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(rn).GetKeyRangeAsync();
+                var rnRange = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(rn).GetKeyRangeAndNextSiblingAsync()).KeyRange;
                 var rnProbe = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(rn).GetReclaimProbeAsync();
                 var rnDirect = await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(rn).GetAsync(key);
                 routedNowDesc =

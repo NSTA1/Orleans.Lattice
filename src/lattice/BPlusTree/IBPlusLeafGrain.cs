@@ -727,29 +727,22 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Returns this leaf's persisted owned-key-range bounds
     /// (<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.LowKeyInclusive"/> /
     /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.HighKeyExclusive"/>) as a
-    /// <see cref="LeafKeyRange"/>. The shard-root coordinator consults these
-    /// bounds to terminate a paged range-scan sibling walk as soon as it
+    /// <see cref="LeafKeyRange"/> together with what <see cref="GetNextSiblingAsync"/>
+    /// returns, read in one grain turn, so a bounded leaf-chain walk that needs
+    /// both to advance pays one call per leaf. The shard-root coordinator consults
+    /// the bounds to terminate a paged range-scan sibling walk as soon as it
     /// provably leaves the requested range, instead of reading every remaining
-    /// leaf to the end of the tree. A cheap in-memory read - it does not scan
-    /// the leaf's entries.
-    /// </summary>
-    Task<LeafKeyRange> GetKeyRangeAsync();
-
-    /// <summary>
-    /// Returns what <see cref="GetKeyRangeAsync"/> and
-    /// <see cref="GetNextSiblingAsync"/> return, read together in one grain turn,
-    /// so a bounded leaf-chain walk that needs both to advance pays one call per
-    /// leaf instead of two. Like both of those, it answers from persisted topology
-    /// state and does not wait for a WAL replay.
+    /// leaf to the end of the tree. A cheap in-memory read of persisted topology
+    /// state - it does not scan the leaf's entries or wait for a WAL replay.
     /// </summary>
     Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync();
 
     /// <summary>
-    /// Returns what <see cref="GetKeyRangeAsync"/> and
-    /// <see cref="GetPrevSiblingAsync"/> return, read together in one grain turn,
-    /// so a reverse leaf-chain walk that needs both to advance pays one call per
-    /// leaf instead of two. Like both of those, it answers from persisted topology
-    /// state and does not wait for a WAL replay.
+    /// Returns this leaf's persisted owned-key-range bounds together with what
+    /// <see cref="GetPrevSiblingAsync"/> returns, read in one grain turn, so a
+    /// reverse leaf-chain walk that needs both to advance pays one call per leaf.
+    /// Like <see cref="GetKeyRangeAndNextSiblingAsync"/>, it answers from
+    /// persisted topology state and does not wait for a WAL replay.
     /// </summary>
     Task<LeafPrevChainLink> GetKeyRangeAndPrevSiblingAsync();
 
@@ -1039,18 +1032,13 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <summary>
     /// Returns a <see cref="StateDelta"/> containing only the entries whose
     /// virtual slot is in <paramref name="sortedMovedSlots"/> and whose
-    /// timestamp is newer than what <paramref name="sinceVersion"/> has seen.
-    /// Used by the adaptive split coordinator to drain only moved-slot
-    /// data from each leaf, eliminating the cost of serialising entries the
-    /// coordinator would otherwise discard. The slot list must be sorted in
-    /// ascending order; lookup uses binary search.
-    /// </summary>
-    Task<StateDelta> GetDeltaSinceForSlotsAsync(VersionVector sinceVersion, int[] sortedMovedSlots, int virtualShardCount);
-
-    /// <summary>
-    /// <see cref="GetDeltaSinceForSlotsAsync"/> followed by the leaf's chain link
-    /// (<see cref="GetKeyRangeAndNextSiblingAsync"/>) in one grain turn, so the
-    /// split and consolidation slot drains pay one call per leaf instead of two.
+    /// timestamp is newer than what <paramref name="sinceVersion"/> has seen,
+    /// followed by the leaf's chain link (as
+    /// <see cref="GetKeyRangeAndNextSiblingAsync"/> returns it) in one grain turn.
+    /// Used by the adaptive split and online consolidation coordinators to drain
+    /// only moved-slot data from each leaf, eliminating the cost of serialising
+    /// entries the coordinator would otherwise discard, at one call per leaf. The
+    /// slot list must be sorted in ascending order; lookup uses binary search.
     /// The link is read after the replay barrier the delta awaits, so it is
     /// consistent with the delta it accompanies.
     /// </summary>
@@ -1314,10 +1302,11 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<ChildDigestSnapshot> GetProjectionDigestForRangeAsync(string? startInclusive, string? endExclusive);
 
     /// <summary>
-    /// Returns the persisted projection-checkpoint offset for this leaf -
-    /// the highest WAL offset this leaf's activation-time replay has
-    /// SCANNED, which includes entries it skipped as another leaf's work
-    /// rather than applied through
+    /// Returns the persisted projection-checkpoint offset for this leaf together
+    /// with its chain link (as <see cref="GetKeyRangeAndNextSiblingAsync"/>
+    /// returns it) in one metadata read. The checkpoint is the highest WAL offset
+    /// this leaf's activation-time replay has SCANNED, which includes entries it
+    /// skipped as another leaf's work rather than applied through
     /// <c>ILeafProjection.Apply</c> (issue #2270). See
     /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>.
     /// Read-only diagnostic accessor used by the operator-facing
@@ -1326,18 +1315,14 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// back-pressure metric without forcing a checkpoint flush. Read the
     /// resulting lag as "WAL this leaf has not yet read", not "work this
     /// leaf still owes": an idle leaf that owns none of the traffic keeps
-    /// pace with the head while applying nothing.
-    /// </summary>
-    Task<long> GetProjectionCheckpointOffsetAsync();
-
-    /// <summary>
-    /// Returns the current checkpoint together with the chain link in one
-    /// metadata read. Does not wait for replay, just like the separate reads.
+    /// pace with the head while applying nothing. Does not wait for replay.
     /// </summary>
     Task<LeafCheckpointPage> GetProjectionCheckpointAndNextSiblingAsync();
 
     /// <summary>
-    /// Operator-facing projection rebuild seam. Resets this leaf's
+    /// Operator-facing projection rebuild seam. Captures the leaf bounds and
+    /// successor (as <see cref="GetKeyRangeAndNextSiblingAsync"/> returns them),
+    /// then resets this leaf's
     /// materialised projection (<c>Entries</c>,
     /// the incremental <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionHash"/>,
     /// the persisted <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.ProjectionCheckpointOffset"/>,
@@ -1376,14 +1361,10 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// the call should be retried. A subsequent successful call completes
     /// the rebuild from a clean state.
     /// </para>
-    /// </summary>
-    Task RebuildProjectionFromWalAsync();
-
-    /// <summary>
-    /// Captures the leaf bounds and successor before rebuilding the projection,
-    /// returning them without reactivating the leaf the rebuild deactivates.
-    /// Like <see cref="RebuildProjectionFromWalAsync"/>, retires rather than
-    /// awaits the replay barrier.
+    /// <para>
+    /// The captured link is returned without reactivating the leaf the rebuild
+    /// deactivates. The rebuild retires rather than awaits the replay barrier.
+    /// </para>
     /// </summary>
     Task<LeafChainLink> RebuildProjectionAndNextSiblingAsync();
 
@@ -1547,21 +1528,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// First pass of the per-shard snapshot-baseline capture: freezes this
     /// leaf's committed projection cache, its per-partition projection frontier
     /// (the offsets the cache already reflects), and its in-flight prepared
-    /// sagas into a serializable <see cref="LeafBaselineFreeze"/>. Read-only -
-    /// no leaf state is mutated. The shard root captures every leaf's freeze,
-    /// then reads a uniform per-partition <c>capturedHead</c> <b>after</b> all
-    /// freezes have returned so that <c>frontier_p &lt;= capturedHead_p</c> for
-    /// every leaf and partition with no overshoot, and finally calls
-    /// <see cref="FoldTailOntoFrozenAsync"/> on each leaf with that head.
-    /// </summary>
-    /// <param name="cancellationToken">Cancellation token observed during the freeze.</param>
-    Task<LeafBaselineFreeze> FreezeProjectionAsync(CancellationToken cancellationToken);
-
-    /// <summary>
-    /// <see cref="FreezeProjectionAsync"/> followed by the leaf's right-sibling
-    /// pointer in one grain turn, so the snapshot-baseline freeze pass pays one
-    /// call per leaf instead of two. The freeze is read-only, so the pointer is
-    /// the one the separate call would have read.
+    /// sagas into a serializable <see cref="LeafBaselineFreeze"/>, and returns it
+    /// with the leaf's right-sibling pointer in one grain turn, so the freeze
+    /// pass pays one call per leaf. Read-only - no leaf state is mutated, so the
+    /// pointer is the one a separate read would have returned. The shard root
+    /// captures every leaf's freeze, then reads a uniform per-partition
+    /// <c>capturedHead</c> <b>after</b> all freezes have returned so that
+    /// <c>frontier_p &lt;= capturedHead_p</c> for every leaf and partition with
+    /// no overshoot, and finally calls <see cref="FoldTailOntoFrozenAsync"/> on
+    /// each leaf with that head.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token observed during the freeze.</param>
     Task<LeafBaselineFreezePage> FreezeProjectionAndNextSiblingAsync(CancellationToken cancellationToken);
@@ -1576,7 +1551,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// double-counted; leaves own disjoint key ranges, so no record is
     /// double-applied across the chain. Read-only - no leaf state is mutated.
     /// </summary>
-    /// <param name="freeze">This leaf's frozen projection from <see cref="FreezeProjectionAsync"/>.</param>
+    /// <param name="freeze">This leaf's frozen projection from <see cref="FreezeProjectionAndNextSiblingAsync"/>.</param>
     /// <param name="capturedHead">
     /// The uniform per-partition WAL head the shard captured after every leaf
     /// froze. Indexed by WAL partition number; the fold reads
@@ -1600,7 +1575,7 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// the capture. Throws <see cref="TxDecisionGateRefusedException"/> when the
     /// gate is no longer held.
     /// </summary>
-    /// <param name="freeze">This leaf's frozen projection from <see cref="FreezeProjectionAsync"/>.</param>
+    /// <param name="freeze">This leaf's frozen projection from <see cref="FreezeProjectionAndNextSiblingAsync"/>.</param>
     /// <param name="capturedHead">The uniform per-partition WAL head the shard captured.</param>
     /// <param name="decisionGate">The capture's decision gate.</param>
     /// <param name="cancellationToken">Cancellation token observed during the fold.</param>

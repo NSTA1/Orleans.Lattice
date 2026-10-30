@@ -383,15 +383,6 @@ public sealed partial class InternalOriginGuardIntegrationTests
     }
 
     [Test]
-    public void Wal_GetLiveEntryCountAsync_direct_external_call_without_internal_origin_is_refused()
-    {
-        var wal = _cluster.GrainFactory.GetGrain<IWalShardGrain>("origin-guard-wal-livecount/0");
-
-        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await wal.GetLiveEntryCountAsync(CancellationToken.None));
-    }
-
-    [Test]
     public void Wal_GetRetainedByteSizeAsync_direct_external_call_without_internal_origin_is_refused()
     {
         var wal = _cluster.GrainFactory.GetGrain<IWalShardGrain>("origin-guard-wal-bytes/0");

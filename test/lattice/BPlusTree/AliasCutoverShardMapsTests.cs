@@ -46,12 +46,12 @@ public sealed class AliasCutoverShardMapsTests
         ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, shards).Slots;
 
     [Test]
-    public async Task PrepareCutoverAsync_records_the_replaced_map_and_leaves_the_logical_entry_alone()
+    public async Task PrepareCutoverResolvingAsync_records_the_replaced_map_and_leaves_the_logical_entry_alone()
     {
         var (logical, destination) = await RegisterAsync();
         var before = (await Registry.GetEntryAsync(logical))!;
 
-        var replaced = await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        var (replaced, _) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
 
         var after = (await Registry.GetEntryAsync(logical))!;
         var recorded = await Registry.GetEntryAsync(destination);
@@ -68,13 +68,13 @@ public sealed class AliasCutoverShardMapsTests
     }
 
     [Test]
-    public async Task PrepareCutoverAsync_resumed_before_the_swap_keeps_the_recorded_map()
+    public async Task PrepareCutoverResolvingAsync_resumed_before_the_swap_keeps_the_recorded_map()
     {
         var (logical, destination) = await RegisterAsync();
         var before = (await Registry.GetShardMapAsync(logical))!;
-        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
 
-        var replaced = await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        var (replaced, _) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
 
         Assert.That(replaced!.Slots, Is.EqualTo(before.Slots));
     }
@@ -84,7 +84,7 @@ public sealed class AliasCutoverShardMapsTests
     {
         var (logical, destination) = await RegisterAsync();
         var before = (await Registry.GetShardMapAsync(logical))!;
-        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
 
         var replaced = await AliasCutoverShardMaps.SwapCutoverAsync(Grains, logical, destination);
 
@@ -104,11 +104,11 @@ public sealed class AliasCutoverShardMapsTests
     {
         var (logical, destination) = await RegisterAsync();
         var before = (await Registry.GetShardMapAsync(logical))!;
-        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
         await AliasCutoverShardMaps.SwapCutoverAsync(Grains, logical, destination);
         var carried = (await Registry.GetShardMapAsync(logical))!;
 
-        var replacedOnPrepare = await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        var (replacedOnPrepare, _) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
         var replacedOnSwap = await AliasCutoverShardMaps.SwapCutoverAsync(Grains, logical, destination);
 
         var after = (await Registry.GetShardMapAsync(logical))!;
@@ -144,12 +144,12 @@ public sealed class AliasCutoverShardMapsTests
             Assert.That(aliased, Is.EqualTo(aliasedResolve).And.EqualTo(physical));
             Assert.That(resumed, Is.EqualTo(resumedResolve).And.EqualTo(destination));
             Assert.That(resumedMap!.Slots, Is.EqualTo(unaliasedMap!.Slots),
-                "the map half is exactly what PrepareCutoverAsync returns");
+                "the map half matches the first prepare's recorded map");
         });
     }
 
     [Test]
-    public async Task PrepareCutoverAsync_of_an_aliased_tree_stamps_the_logical_map_onto_the_replaced_tree()
+    public async Task PrepareCutoverResolvingAsync_of_an_aliased_tree_stamps_the_logical_map_onto_the_replaced_tree()
     {
         var (logical, destination) = await RegisterAsync();
         var physical = $"{logical}-physical";
@@ -157,7 +157,7 @@ public sealed class AliasCutoverShardMapsTests
         await SetAliasAsync(logical, physical);
         var before = (await Registry.GetShardMapAsync(logical))!;
 
-        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
 
         Assert.That((await Registry.GetShardMapAsync(physical))!.Slots, Is.EqualTo(before.Slots),
             "the replaced tree was routed by the logical map, so that is what describes its shards");
@@ -168,7 +168,7 @@ public sealed class AliasCutoverShardMapsTests
     {
         var (logical, shadow) = await RegisterAsync();
         var before = (await Registry.GetShardMapAsync(logical))!;
-        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, shadow);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, shadow);
         await AliasCutoverShardMaps.SwapCutoverAsync(Grains, logical, shadow);
         var cutOver = (await Registry.GetShardMapAsync(logical))!;
 
@@ -192,7 +192,7 @@ public sealed class AliasCutoverShardMapsTests
     public async Task CompleteRevertAsync_clears_the_recorded_map()
     {
         var (logical, shadow) = await RegisterAsync();
-        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, shadow);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, shadow);
 
         await AliasCutoverShardMaps.CompleteRevertAsync(Grains, shadow);
 
@@ -217,7 +217,7 @@ public sealed class AliasCutoverShardMapsTests
         var split = Grains.GetGrain<ITreeShardSplitGrain>($"{logical}/0");
         await split.SplitAsync(sourceShardIndex: 0);
 
-        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
         await AliasCutoverShardMaps.SwapCutoverAsync(Grains, logical, destination);
         var carried = (await Registry.GetShardMapAsync(logical))!;
 
@@ -246,7 +246,7 @@ public sealed class AliasCutoverShardMapsTests
         var before = (await Registry.GetShardMapAsync(logical))!;
         var split = Grains.GetGrain<ITreeShardSplitGrain>($"{logical}/0");
         await split.SplitAsync(sourceShardIndex: 0);
-        await AliasCutoverShardMaps.PrepareCutoverAsync(Grains, logical, destination);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, logical, destination);
 
         await split.RunSplitPassAsync();
         var afterSplit = (await Registry.GetShardMapAsync(logical))!;
@@ -330,7 +330,7 @@ public sealed class AliasCutoverShardMapsTests
     {
         Assert.Multiple(() =>
         {
-            Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.PrepareCutoverAsync(Grains, null!, "d"));
+            Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.PrepareCutoverResolvingAsync(Grains, null!, "d"));
             Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.SwapCutoverAsync(Grains, "l", null!));
             Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.RevertAsync(Grains, "l", "s", null!));
             Assert.ThrowsAsync<ArgumentNullException>(() => AliasCutoverShardMaps.CompleteRevertAsync(null!, "s"));

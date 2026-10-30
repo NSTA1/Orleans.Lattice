@@ -62,7 +62,7 @@ public class ShardRootGrainAnyTests
             }
 
             var count = leafCounts[i];
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             leaf.CountAsync().Returns(Task.FromResult(count));
             leaf.CountAsync(Arg.Any<string?>(), Arg.Any<string?>()).Returns(Task.FromResult(count));
             factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);

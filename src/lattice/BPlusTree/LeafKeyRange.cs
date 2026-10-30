@@ -2,7 +2,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// The persisted owned-key-range bounds of a single B+ tree leaf, returned by
-/// <see cref="BPlusTree.IBPlusLeafGrain.GetKeyRangeAsync"/>.
+/// <see cref="BPlusTree.IBPlusLeafGrain.GetKeyRangeAndNextSiblingAsync"/> and the other leaf-walk pages.
 /// <para>
 /// A leaf owns exactly the half-open key span
 /// <c>[<see cref="LowKeyInclusive"/>, <see cref="HighKeyExclusive"/>)</c>; the
