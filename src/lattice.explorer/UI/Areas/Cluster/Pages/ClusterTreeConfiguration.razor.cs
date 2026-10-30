@@ -112,7 +112,7 @@ public partial class ClusterTreeConfiguration : IDisposable
 
     private async Task SaveConfigurationAsync()
     {
-        if (_config.Value is not { } current)
+        if (_saving || _lifetime.IsLeft || _config.Value is not { } current)
         {
             return;
         }
@@ -172,12 +172,17 @@ public partial class ClusterTreeConfiguration : IDisposable
 
     private async Task SaveRetentionAsync()
     {
+        if (_saving || _lifetime.IsLeft)
+        {
+            return;
+        }
+
         if (_windowField is not null && !await _windowField.ConfirmAsync())
         {
             return;
         }
 
-        if (_lifetime.IsLeft)
+        if (_saving || _lifetime.IsLeft)
         {
             return;
         }
