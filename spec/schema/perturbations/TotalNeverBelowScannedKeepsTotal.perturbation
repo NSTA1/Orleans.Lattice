@@ -1,0 +1,12 @@
+# TotalNeverBelowScanned: a passed total turns unknown.
+MODULE: SchemaComplianceScan
+ROW: TotalNeverBelowScanned
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminProgressTests.A_count_that_falls_behind_the_scan_turns_the_total_unknown_rather_than_below_the_scanned_entries
+SUMMARY: a total the scan has passed keeps reading as known
+
+--- FIND
+        if (total is { } known && scanned > known)
+--- REPLACE
+        if (total is { } known && scanned > known && known < 0)
+--- END

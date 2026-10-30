@@ -1,0 +1,13 @@
+# StartRejected(o,s): admission refuses before any record exists.
+MODULE: SchemaDurableOperation
+ROW: StartRejected(o,s)
+FILE: src/lattice.schema/SchemaOperationService.cs
+DETECTORS: SchemaOperationServiceTests.StartRemediationAsync_refuses_an_uncompilable_policy_before_accepting_anything
+SUMMARY: a remediation start no longer refuses an uncompilable policy before it is tracked
+
+--- FIND
+        _ = CompiledSchemaPolicy.Compile(targetPolicy);
+        var grain = Remediation(treeId);
+--- REPLACE
+        var grain = Remediation(treeId);
+--- END

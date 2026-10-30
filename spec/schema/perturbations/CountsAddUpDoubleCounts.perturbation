@@ -1,0 +1,12 @@
+# CountsAddUp: every judged value is counted once.
+MODULE: SchemaComplianceScan
+ROW: CountsAddUp
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_all_values_compliant_reports_no_breakdown
+SUMMARY: a compliant value is counted twice
+
+--- FIND
+                compliant++;
+--- REPLACE
+                compliant += 2;
+--- END

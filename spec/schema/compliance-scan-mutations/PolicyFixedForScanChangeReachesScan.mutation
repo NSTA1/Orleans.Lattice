@@ -1,0 +1,20 @@
+# A running scan must keep the policy it read at its start.
+MODULE: PolicyFixedForScanChangeReachesScan
+TARGET: PolicyFixedForScan
+CLASS: Action
+SUMMARY: a policy change reaches a scan already running
+PERTURBS: ChangePolicy
+
+--- FIND
+    /\ policy' = p
+    /\ policyChanges' = policyChanges + 1
+    /\ UNCHANGED <<value, writes, touched>>
+    /\ UNCHANGED scanVars
+--- REPLACE
+    /\ policy' = p
+    /\ policyChanges' = policyChanges + 1
+    /\ scanPolicy' = IF Running /\ p # "None" THEN p ELSE scanPolicy
+    /\ UNCHANGED <<value, writes, touched>>
+    /\ UNCHANGED <<phase, cursor, total, totalKnown, compliant, nonCompliant,
+                   reasonCount, seen, lastValue, lastVerdict, lost>>
+--- END

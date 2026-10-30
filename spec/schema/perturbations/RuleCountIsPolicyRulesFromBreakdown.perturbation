@@ -1,0 +1,12 @@
+# RuleCountIsPolicyRules: the rule count is the policy's.
+MODULE: SchemaComplianceScan
+ROW: RuleCountIsPolicyRules
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_rule_count_matches_policy_not_failure_population
+SUMMARY: the rule count is the number of failure reasons (#4966)
+
+--- FIND
+            RuleCount = policy.RuleCount,
+--- REPLACE
+            RuleCount = breakdown?.Count ?? 0,
+--- END

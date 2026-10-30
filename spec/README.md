@@ -75,6 +75,8 @@ be quiet about one.
 | [`view-resolved-identity/`](view-resolved-identity/README.md) | `MaterialisedViewResolvedIdentity` | Resolved transaction IDs and eviction-order ownership follow the actual physical WAL tail through reused IDs, same-log rebuilds and uncertain candidate publication. |
 | [`schema/`](schema/README.md) | `SchemaPolicyConfig` | Per-tree policy and version-config identity, set and clear, per-silo caching with eventual eviction on every silo, overtaken cache loads, refused uncompilable policies, and validation before the WAL append. |
 | [`schema/`](schema/README.md) | `SchemaStageOrdering` | Enforcement and versioning stage order for every registration combination, the system-origin opt-in, per-stage strict flags, envelope handling, batch refusal semantics and writes below the check. |
+| [`schema/`](schema/README.md) | `SchemaDurableOperation` | Tracked schema-operation admission before a handle, idempotent starts, the runner and the durable sliced remediation it follows, cancellation before cutover, terminal reporting, the superseded follower, and runner silo loss with a fresh start resuming the remediation. |
+| [`schema/`](schema/README.md) | `SchemaComplianceScan` | Compliance scans: policy read once at the start, the ungoverned report, count then ordered non-snapshot scan, per-reason tallies, undecodable values counted non-compliant, rule count versus failure-reason count, and cancellation or loss with no report. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

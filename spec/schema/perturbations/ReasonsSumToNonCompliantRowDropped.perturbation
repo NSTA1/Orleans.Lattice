@@ -1,0 +1,12 @@
+# ReasonsSumToNonCompliant: the breakdown accounts for every non-compliant value.
+MODULE: SchemaComplianceScan
+ROW: ReasonsSumToNonCompliant
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_mixed_values_group_non_compliant_by_failure_reason
+SUMMARY: a non-compliant value is never added to its reason row
+
+--- FIND
+                slot++;
+--- REPLACE
+                _ = slot;
+--- END

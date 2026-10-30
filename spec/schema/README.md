@@ -3,8 +3,9 @@
 The modules in this directory model the `Orleans.Lattice.Schema` add-ons: how a
 tree's schema setting is identified, changed and cached, and how the
 enforcement and versioning write stages compose at the `LatticeGrain` write
-choke point. Further schema modules (version family and runtime catalog, strict
-ingest and dead-letter, durable operations and compliance, remediation and
+choke point, and how tracked schema operations and compliance scans are
+admitted, driven, cancelled, lost and reported. Further schema modules (version
+family and runtime catalog, strict ingest and dead-letter, remediation and
 migration, and the atomic, replication and tenant interactions) are added here
 as they land, so every schema module shares one directory, one fingerprint
 group and the operators below.
@@ -15,6 +16,8 @@ group and the operators below.
 |--------|----------------|-----------------|
 | `SchemaPolicyConfig` | One governed tree's policy or version config: the durable reserved-tree row, set and clear, a per-silo cache with a null sentinel, eviction on change (the admin's own silo before it returns, every other silo eventually), a cache-miss load that an eviction can overtake, a refused uncompilable policy, and local writes judged by the cached setting before the WAL append. | [`SchemaPolicyConfigRefinement.md`](SchemaPolicyConfigRefinement.md) |
 | `SchemaStageOrdering` | The registered stage chain for each combination of the two add-ons, the reversed order included; the core's system-origin opt-in; per-stage per-tree strict flags; enforcement judging an entry's body; versioning stamping raw entries and checking enveloped ones on strict ingest; short-circuiting refusals; atomic and non-atomic batch semantics; and writes below the choke point as environment steps. | [`SchemaStageOrderingRefinement.md`](SchemaStageOrderingRefinement.md) |
+| `SchemaDurableOperation` | Tracked remediation, migration and advance-and-migrate operations over one tree: admission before a handle, idempotent starts, the in-process runner and the durable sliced remediation it follows, cooperative cancellation before cutover, terminal reporting (including the superseded follower of #5267), and a lost runner's silo with a fresh start resuming the remediation. | [`SchemaDurableOperationRefinement.md`](SchemaDurableOperationRefinement.md) |
+| `SchemaComplianceScan` | One tracked compliance scan: the policy read once at the start, the ungoverned short-circuit, the count before an ordered non-snapshot pass over a writable tree, per-reason tallies, undecodable values counted non-compliant (#5253), the rule count kept apart from the failure-reason count (#4966), and cancellation or a lost runner ending it with no report. | [`SchemaComplianceScanRefinement.md`](SchemaComplianceScanRefinement.md) |
 
 Shared vocabulary, for later modules here: a value is `Raw(body)` or
 `Env(body, tag)` with `body` in `{"Good", "Bad"}` and `tag` in
@@ -32,6 +35,15 @@ silo, and leaves the liveness property on the base for the TLC budget.
 `SchemaStageOrdering` checks a point write under every registration, origin,
 envelope form, tag and flag combination; its `Batch` variant re-checks every
 property over two-entry atomic and non-atomic batches.
+`SchemaDurableOperation` checks two operations, two silos (one of which can die),
+one lapsed lease and one refused start over a one-value remediation; its
+`ThreeOps` variant adds a third operation, the smallest bound where a followed
+remediation can be superseded, and its `TwoParams` variant a second parameter
+set, which reaches the in-band refusal of a different remediation. Both re-check
+every state and action property and leave the liveness properties on the base.
+`SchemaComplianceScan` checks two keys, one write and one policy change against
+a scan; its `TwoWrites` variant re-checks every state and action property with
+two writes racing the scan.
 
 ## What is not modelled
 
@@ -41,7 +53,9 @@ backup restore, tree merge) are never validated or stamped, so strict ingest is
 not a universal validation guarantee; the reversed registration order keeps
 enforcement but drops stamping and is not a supported configuration; rule
 semantics, CRDT deltas, the upcaster graph and dead-letter durability are left
-to the models that own them.
+to the models that own them. The operation models do not resume a lost
+remediation on their own, do not claim a compliance scan is a snapshot, and leave
+the cutover, reservation and migration specifics to the remediation model.
 
 ## How to run TLC
 
@@ -64,3 +78,5 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Tlc
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `SchemaPolicyConfig` | 3 | 4 | 8 | 8 | 13 | 106,331 |
 | `SchemaStageOrdering` | 2 | 11 | 7 | 18 | 17 | 40,192 |
+| `SchemaDurableOperation` | 8 | 6 | 13 | 17 | 25 | 72,732 |
+| `SchemaComplianceScan` | 10 | 4 | 9 | 16 | 21 | 23,580 |

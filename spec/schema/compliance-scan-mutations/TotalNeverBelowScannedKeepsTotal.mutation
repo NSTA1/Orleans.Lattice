@@ -1,0 +1,12 @@
+# The count taken before the scan reads below the entries already scanned.
+MODULE: TotalNeverBelowScannedKeepsTotal
+TARGET: TotalNeverBelowScanned
+CLASS: Invariant
+SUMMARY: a total the scan has passed keeps reading as known
+PERTURBS: Step
+
+--- FIND
+                  /\ IF totalKnown /\ n > total
+--- REPLACE
+                  /\ IF FALSE
+--- END

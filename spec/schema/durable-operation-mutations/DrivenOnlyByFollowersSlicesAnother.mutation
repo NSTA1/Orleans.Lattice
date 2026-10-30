@@ -1,0 +1,14 @@
+# Half of #5267: the slice call carries no remediation identity.
+MODULE: DrivenOnlyByFollowersSlicesAnother
+TARGET: DrivenOnlyByFollowers
+CLASS: Action
+SUMMARY: a driver slices a remediation it does not follow
+PERTURBS: Slice
+BOUNDS: OpCount = 3, MaxStalls = 0
+
+--- FIND
+    /\ remOwner = opFollows[o]
+    /\ (~Stop(o) \/ ~CancelAccepted(o))
+--- REPLACE
+    /\ (~Stop(o) \/ ~CancelAccepted(o))
+--- END

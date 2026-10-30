@@ -1,0 +1,22 @@
+# Treating a cancel request as completion: the record reads cancelled while the remediation runs on.
+MODULE: OutcomeMatchesRemediationCancelRecordsAtOnce
+TARGET: OutcomeMatchesRemediation
+CLASS: Invariant
+SUMMARY: a cancel request is recorded as the cancelled outcome before the remediation stops
+PERTURBS: RequestCancel
+
+--- FIND
+    /\ Live(o) /\ ~opCancel[o]
+    /\ opCancel' = [opCancel EXCEPT ![o] = TRUE]
+    /\ UNCHANGED <<alive, crashes, stalls, rejects, handles, launches,
+                   opState, opRunner, opParams, opWork, opFollows,
+                   opSeen, opOutcome, opResultRem>>
+--- REPLACE
+    /\ Live(o) /\ ~opCancel[o] /\ opFollows[o] # NoOp
+    /\ opCancel' = [opCancel EXCEPT ![o] = TRUE]
+    /\ opState' = [opState EXCEPT ![o] = "Cancelled"]
+    /\ opOutcome' = [opOutcome EXCEPT ![o] = "Cancelled"]
+    /\ opResultRem' = [opResultRem EXCEPT ![o] = opFollows[o]]
+    /\ UNCHANGED <<alive, crashes, stalls, rejects, handles, launches,
+                   opRunner, opParams, opWork, opFollows, opSeen>>
+--- END

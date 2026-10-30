@@ -1,0 +1,14 @@
+# The pre-#4123 shape: a lost runner's operation reads running forever.
+MODULE: LostRunnerReadsFailedNeverDetected
+TARGET: LostRunnerReadsFailed
+CLASS: Temporal
+SUMMARY: a read never notices that the runner's silo is dead
+PERTURBS: DetectLoss
+
+--- FIND
+    /\ Live(o) /\ ~alive[opRunner[o]]
+    /\ opState' = [opState EXCEPT ![o] = "Failed"]
+--- REPLACE
+    /\ Live(o) /\ ~alive[opRunner[o]] /\ alive[opRunner[o]]
+    /\ opState' = [opState EXCEPT ![o] = "Failed"]
+--- END

@@ -1,0 +1,15 @@
+# Start: an ungoverned tree succeeds at once with an ungoverned report.
+MODULE: SchemaComplianceScan
+ROW: Start
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_ungoverned_tree_returns_an_ungoverned_report_without_scanning
+SUMMARY: an ungoverned tree is not short-circuited
+
+--- FIND
+        if (policy is null)
+        {
+            return LatticeSchemaComplianceReport.Ungoverned(treeId);
+        }
+--- REPLACE
+        policy ??= CompiledSchemaPolicy.Compile(new LatticeSchemaPolicy(Array.Empty<LatticeSchemaRule>()));
+--- END

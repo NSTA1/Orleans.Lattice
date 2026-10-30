@@ -1,0 +1,14 @@
+# A continuation that does not move past a judged value counts it again.
+MODULE: CountsAddUpDoubleCounts
+TARGET: CountsAddUp
+CLASS: Invariant
+SUMMARY: the scan does not advance past a value it has counted
+PERTURBS: Step
+
+--- FIND
+       IN /\ cursor' = k
+
+--- REPLACE
+       IN /\ cursor' = IF v = "Absent" THEN k ELSE cursor
+
+--- END

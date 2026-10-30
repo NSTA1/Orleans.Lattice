@@ -1,0 +1,12 @@
+# ChangePolicy(p): a policy change does not reach a running scan.
+MODULE: SchemaComplianceScan
+ROW: ChangePolicy(p)
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_judges_every_value_with_the_policy_read_at_start
+SUMMARY: the scan re-reads the policy for every value
+
+--- FIND
+            if (policy.Validate(entry.Value) is { } reason)
+--- REPLACE
+            if ((await _policyProvider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false) ?? policy).Validate(entry.Value) is { } reason)
+--- END

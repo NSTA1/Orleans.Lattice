@@ -1,0 +1,12 @@
+# The breakdown loses a reason: its rows no longer account for every non-compliant value.
+MODULE: ReasonsSumToNonCompliantReasonDropped
+TARGET: ReasonsSumToNonCompliant
+CLASS: Invariant
+SUMMARY: a non-compliant value under one reason is counted without its breakdown row
+PERTURBS: Step
+
+--- FIND
+                          /\ reasonCount' = [reasonCount EXCEPT ![d] = @ + 1]
+--- REPLACE
+                          /\ reasonCount' = IF d = "RA" THEN reasonCount ELSE [reasonCount EXCEPT ![d] = @ + 1]
+--- END
