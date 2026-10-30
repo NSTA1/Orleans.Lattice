@@ -1,0 +1,21 @@
+# A changed projection definition adopted forward without a rebuild keeps the
+# contributions the old definition extracted.
+MODULE: IntendedContributionDefinitionAdoptedForward
+TARGET: IntendedContribution
+CLASS: Invariant
+SUMMARY: the view adopts the new definition without rebuilding
+PERTURBS: ChangeDefinition
+
+--- FIND
+    /\ defn = 1 /\ defn' = 2
+    /\ UNCHANGED <<appended, target, phys, stored, wal, intended, submitted,
+         mustRefuse, replicated, retried, rw, cap, promised>>
+    /\ UNCHANGED view
+--- REPLACE
+    /\ defn = 1 /\ defn' = 2
+    /\ UNCHANGED <<appended, target, phys, stored, wal, intended, submitted,
+         mustRefuse, replicated, retried, rw, cap, promised>>
+    /\ viewDefn' = 2
+    /\ UNCHANGED <<bound, genCopy, read, checkpoint, mem, slots, applied, faults,
+         reconciles, barrier>>
+--- END

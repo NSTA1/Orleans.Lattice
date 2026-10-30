@@ -1,0 +1,13 @@
+# The projection-input seam hands every derivation path the stored bytes with
+# the version envelope still on them.
+MODULE: SchemaViewComposition
+ROW: QuiescentAtStampedVersion
+FILE: src/lattice/Views/ViewMaintainerGrain.ProjectionInput.cs
+DETECTORS: ProjectionInputSeamCharacterizationTests.Incremental_maintenance_projects_the_stripped_body_at_its_stamped_version, ProjectionInputSeamCharacterizationTests.Rebuild_and_reconcile_rederive_exactly_the_incrementally_maintained_view
+SUMMARY: the seam no longer strips the version envelope
+
+--- FIND
+        var body = _projectionCodec!.StripForFold(value);
+--- REPLACE
+        var body = value;
+--- END

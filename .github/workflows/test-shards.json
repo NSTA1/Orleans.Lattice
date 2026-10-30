@@ -164,6 +164,13 @@
         "note": "Schema-independent numeric (Count/Sum) projection companion: MaterialisedViewNumeric base, Swap and TwoFaults variants and twenty paired mutations, 23 cases, measured at 1.43 minutes on its leg in receipt-free ci.yml run 41064780376 (head ff6cc0c64), where every TLC module ran exhaustively. Extraction and encoding, durable publication obligations, operation identity, filter-version and physical-copy rebind."
       },
       {
+        "shard": "formal-tlc-schema-view",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSchemaView"],
+        "note": "Schema/view composition (#5233): SchemaViewComposition base, Remediate and Strict variants and twenty-three paired mutations, 26 cases, kept in spec/schema-view/ and its own shard so it changes no schema or view fingerprint and does not lengthen formal-tlc-schema. Measured at 1.3 minutes locally at a TLC concurrency of two (estimate doubled in test-durations.tsv) until measured on its member pull request's CI leg."
+      },
+      {
         "shard": "formal-tlc-anti-entropy",
         "tlc": true,
         "tiers": ["deterministic"],

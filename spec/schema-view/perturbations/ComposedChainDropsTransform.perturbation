@@ -1,0 +1,13 @@
+# The composed write chain records that a stage transformed the value but
+# commits the value as submitted.
+MODULE: SchemaViewComposition
+ROW: Write
+FILE: src/lattice.schema/CompositeLatticeWriteInterceptor.cs
+DETECTORS: CompositeLatticeWriteInterceptorTests.OnWriteAsync_threads_transformed_value_into_next_stage
+SUMMARY: an accepting stage's transform is dropped
+
+--- FIND
+                    value = decision.TransformedValue!;
+--- REPLACE
+                    _ = decision.TransformedValue!;
+--- END

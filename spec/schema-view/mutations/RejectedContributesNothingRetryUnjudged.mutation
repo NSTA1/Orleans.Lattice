@@ -1,0 +1,21 @@
+# A retried write that skips the judgement its first submission received lands
+# even when the policy refuses it.
+MODULE: RejectedContributesNothingRetryUnjudged
+TARGET: RejectedContributesNothing
+CLASS: Invariant
+SUMMARY: a lost-response retry is appended without being judged
+PERTURBS: Retry
+BOUNDS: MaxRetries = 1
+
+--- FIND
+    /\ \E k \in Keys : submitted[k] # "none" /\ Submit(RetryUnit, k, submitted[k])
+--- REPLACE
+    /\ \E k \in Keys :
+         /\ submitted[k] # "none"
+         /\ mustRefuse' = IF Valid(submitted[k]) THEN mustRefuse ELSE mustRefuse \cup {RetryUnit}
+         /\ wal' = [wal EXCEPT ![phys] = Append(@,
+              Entry(RetryUnit, {k}, One(k, [ver |-> target, body |-> Fix(submitted[k])]), FALSE, TRUE))]
+         /\ stored' = [stored EXCEPT ![phys][k] = [ver |-> target, body |-> Fix(submitted[k])]]
+         /\ intended' = [intended EXCEPT ![k] = [ver |-> target, body |-> Fix(submitted[k])]]
+         /\ UNCHANGED submitted
+--- END

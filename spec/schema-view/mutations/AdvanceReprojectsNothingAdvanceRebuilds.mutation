@@ -1,0 +1,22 @@
+# A target advance that refreshes the view by re-projecting every stored value
+# upcast to the new target.
+MODULE: AdvanceReprojectsNothingAdvanceRebuilds
+TARGET: AdvanceReprojectsNothing
+CLASS: Action
+SUMMARY: advancing the target re-projects every member at the upcast body
+PERTURBS: Advance
+
+--- FIND
+    /\ UNCHANGED <<appended, defn, phys, stored, wal, intended, submitted,
+         mustRefuse, replicated, retried, rw, cap, promised>>
+    /\ UNCHANGED view
+--- REPLACE
+    /\ UNCHANGED <<appended, defn, phys, stored, wal, intended, submitted,
+         mustRefuse, replicated, retried, rw, cap, promised>>
+    /\ mem' = [k \in Keys |-> Proj(viewDefn,
+         IF stored[bound][k].ver = 0 THEN stored[bound][k]
+         ELSE [ver |-> 2, body |-> stored[bound][k].body])]
+    /\ slots' = Agg(mem')
+    /\ UNCHANGED <<bound, viewDefn, genCopy, read, checkpoint, applied, faults,
+         reconciles, barrier>>
+--- END

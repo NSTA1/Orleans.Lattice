@@ -199,6 +199,8 @@ public sealed partial class TlcCiShardTests
                             ? TlcCiShard.SchedulingWorkloadB : TlcCiShard.Scheduling
                         : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
+                        : module.Name == "SchemaViewComposition"
+                        ? TlcCiShard.SchemaView
                         : module.Name.StartsWith("Schema", StringComparison.Ordinal)
                         ? TlcCiShard.Schema
                         : module.Name == "MaterialisedViewFence"
@@ -263,6 +265,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
     [TestCase("aliasing", TlcCiShard.Aliasing)]
     [TestCase("schema", TlcCiShard.Schema)]
+    [TestCase("schema-view", TlcCiShard.SchemaView)]
     public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)
     {
         var modules = SpecModuleCatalogue.Repository().Where(module =>
@@ -351,7 +354,8 @@ public sealed partial class TlcCiShardTests
     public void Schema_modules_route_every_case_to_the_dedicated_schema_shard_with_their_base()
     {
         var modules = SpecModuleCatalogue.Repository()
-            .Where(module => module.Name.StartsWith("Schema", StringComparison.Ordinal))
+            .Where(module => module.Name.StartsWith("Schema", StringComparison.Ordinal)
+                && !string.Equals(module.Name, "SchemaViewComposition", StringComparison.Ordinal))
             .ToList();
 
         Assert.Multiple(() =>
@@ -374,6 +378,27 @@ public sealed partial class TlcCiShardTests
                         "the base must run in the mutations' process to serve their full-bound controls");
                 }
             }
+        });
+    }
+
+    [Test]
+    public void Schema_view_composition_routes_every_case_to_its_own_shard_with_its_base()
+    {
+        var module = Module("SchemaViewComposition");
+        var cases = new[] { TlcCiShard.OfModule(module) }
+            .Concat(module.Manifest.Variants.Keys.Select(variant => TlcCiShard.OfVariant(module, variant)))
+            .Concat(module.LoadMutations().Select(mutation => TlcCiShard.Of(module, mutation)))
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Path.GetFileName(module.Directory), Is.EqualTo("schema-view"),
+                "the composition model keeps its own directory, so no schema or view fingerprint changes with it");
+            Assert.That(cases, Has.Length.EqualTo(26));
+            Assert.That(cases, Is.All.EqualTo(TlcCiShard.SchemaView));
+            Assert.That(module.LoadMutations().All(mutation => TlcCiShard.SharesBaseShard(module, mutation)), Is.True,
+                "the base must run in the mutations' process to serve their full-bound controls");
+            Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(TlcCiShard.SchemaView)).Tiers,
+                Is.EqualTo(new[] { "deterministic" }));
         });
     }
 

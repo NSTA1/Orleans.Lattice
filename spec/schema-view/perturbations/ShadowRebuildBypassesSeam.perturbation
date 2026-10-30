@@ -1,0 +1,41 @@
+# The shadow rebuild a reconcile or rebuild runs projects the stored row with
+# its envelope instead of the seam's stripped input.
+MODULE: SchemaViewComposition
+ROW: Reconcile
+FILE: src/lattice/Views/ViewMaintainerGrain.ShadowSwap.cs
+DETECTORS: ProjectionInputSeamCharacterizationTests.Rebuild_and_reconcile_rederive_exactly_the_incrementally_maintained_view
+SUMMARY: the shadow build bypasses the projection-input seam
+
+--- FIND
+            // rebuilt entry expires in lockstep with its source (TTL preserved).
+            var synthetic = new LatticeMutation
+            {
+                TreeId = sourceTreeId,
+                Kind = MutationKind.Set,
+                Key = key,
+                Value = versioned.Value,
+                Timestamp = versioned.Version,
+                ExpiresAtTicks = versioned.ExpiresAtTicks,
+                Category = MutationCategory.User,
+            };
+
+            if (aggregationApplier is not null)
+            {
+                foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, synthetic)))
+--- REPLACE
+            // rebuilt entry expires in lockstep with its source (TTL preserved).
+            var synthetic = new LatticeMutation
+            {
+                TreeId = sourceTreeId,
+                Kind = MutationKind.Set,
+                Key = key,
+                Value = versioned.Value,
+                Timestamp = versioned.Version,
+                ExpiresAtTicks = versioned.ExpiresAtTicks,
+                Category = MutationCategory.User,
+            };
+
+            if (aggregationApplier is not null)
+            {
+                foreach (var contribution in registration.AggregationProjection!.Project(synthetic))
+--- END

@@ -1,0 +1,13 @@
+# The pre-#5308 head barrier: it waits only for the view to apply the copy it
+# is bound to, so after a cutover it returns before the rebind.
+MODULE: BarrierExactIgnoresSourceIdentity
+TARGET: BarrierExact
+CLASS: Invariant
+SUMMARY: the head barrier returns once the bound copy is applied, whatever copy the alias names
+PERTURBS: WaitHead
+
+--- FIND
+    /\ bound = phys /\ viewDefn = defn /\ read = Len(wal[phys])
+--- REPLACE
+    /\ read = Len(wal[bound])
+--- END

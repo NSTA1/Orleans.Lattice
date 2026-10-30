@@ -1,0 +1,13 @@
+# Incremental apply hands the projection the stored bytes with the envelope
+# still on them (the #5225 characterization of the seam before #5240).
+MODULE: QuiescentAtStampedVersionApplySeesEnvelope
+TARGET: QuiescentAtStampedVersion
+CLASS: Invariant
+SUMMARY: an ordinary apply projects the enveloped bytes instead of the stripped body
+PERTURBS: Apply
+
+--- FIND
+           new == Proj(viewDefn, Input(e.vals[k]))
+--- REPLACE
+           new == Proj(viewDefn, EnvelopeBytes(e.vals[k]))
+--- END

@@ -1,0 +1,18 @@
+# A rebind that rescans membership but keeps the old copy's accumulator slots
+# counts every key once from each copy after the cutover.
+MODULE: NoDuplicateContributionRebindKeepsSlots
+TARGET: NoDuplicateContribution
+CLASS: Invariant
+SUMMARY: the rebind rebuilds membership from the new copy but keeps the old slots
+PERTURBS: Rebind
+
+--- FIND
+    /\ ~Live
+    /\ Rebuild(Scan(phys))
+--- REPLACE
+    /\ ~Live
+    /\ mem' = Scan(phys)
+    /\ read' = Len(wal[phys]) /\ checkpoint' = Len(wal[phys])
+    /\ bound' = phys /\ viewDefn' = defn /\ genCopy' = phys
+    /\ UNCHANGED <<slots, applied, barrier>>
+--- END

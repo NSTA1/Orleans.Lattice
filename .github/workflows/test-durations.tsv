@@ -110,6 +110,9 @@ lattice	formal-tlc-view-joint-repair	deterministic	0.63
 # formal-tlc-view-numeric (#5232): one sample, its 23 cases on leg 6 of
 # receipt-free ci.yml run 41064780376 (head ff6cc0c64).
 lattice	formal-tlc-view-numeric	deterministic	1.43
+# formal-tlc-schema-view (#5233): its 26 cases took 1.3 minutes locally at
+# LATTICE_TLC_CONCURRENCY=2; doubled until measured on its member PR's CI leg.
+lattice	formal-tlc-schema-view	deterministic	2.60
 lattice	formal-tlc-tree-lifecycle	deterministic	0.65
 lattice	formal-tlc-anti-entropy	deterministic	3.56
 lattice	formal-tlc-anti-entropy-2	deterministic	5.10

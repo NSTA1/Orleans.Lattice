@@ -90,6 +90,7 @@ internal static class FormalCoverageAreaCensus
                 "WalGcStarvationDriveWitness",
             ],
             ["Schema enforcement and versioning"] = ["SchemaPolicyConfig", "SchemaStageOrdering", "SchemaVersionFamily", "SchemaDurableOperation", "SchemaComplianceScan", "SchemaStrictIngest"],
+        ["Schema and view composition"] = ["SchemaViewComposition"],
         };
 
     /// <summary>
