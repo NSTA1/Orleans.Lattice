@@ -100,7 +100,7 @@ A remediation or migration rewrites every value of a tree, so it can run for min
 | `GetOperationStatusAsync`, `ListOperationsAsync` | - | Scoped to the schema kinds, the caller's tenant and the trees the caller may read. An operation outside that scope is not found. |
 | `CancelOperationAsync` | - | Visible as above, and schema management over the tree. A caller who may read but not manage is refused. |
 
-Every start verb takes an optional `operationId`. A retried start with the same id returns the existing operation (`Created = false`) and starts nothing. A start that finds a remediation with the same parameters already in flight on the tree follows that remediation instead of starting another, and a start with different parameters fails in-band with the reason.
+Every start verb takes an optional `operationId`. A retried start with the same id returns the existing operation (`Created = false`) and starts nothing. A start that finds a remediation with the same parameters already in flight on the tree follows that remediation instead of starting another, and never drives, cancels or reports any other remediation. If the followed remediation ends under the operation that started it, the joining operation reports that remediation's outcome while the tree's coordinator still holds it. A start with different parameters fails in-band with the reason.
 
 The default facade registered by `AddLatticeSchemaApi` implements both `ILatticeSchemaControl` and `ILatticeSchemaOperations` on one singleton, so the start verbs and the direct-call verbs share one authorization path.
 
@@ -122,8 +122,12 @@ The tree's own remediation report (`ILatticeSchemaControl.GetRemediationStatusAs
 |---|---|---|
 | The tree was cut over. | `Succeeded` | `outcome` = `completed`, `valuesProcessed`, `remediationOperationId`. |
 | A value could not be remediated. Nothing was cut over. | `Failed`, with `FailureReason` naming the key and the reason. | `outcome` = `aborted`, `valuesProcessed`, `offendingKey`, `reason`, `remediationOperationId`. The tree's remediation report carries a bounded preview of the value. |
+| Another alias change moved the tree after the remediation captured it, so its cutover was refused. Nothing was cut over and the remediated copy was discarded. | `Failed`, with `FailureReason` naming the physical tree that superseded it. | `outcome` = `aborted`, `valuesProcessed`, `reason`, `remediationOperationId`; no `offendingKey`. |
 | Cancelled before cutover. Nothing was cut over. | `Cancelled` | `outcome` = `cancelled`, `valuesProcessed`, `remediationOperationId`. |
+| The joined remediation ended under the operation that started it and a later remediation replaced its outcome on the tree's coordinator; this operation applied nothing further. | `Failed`; `FailureReason` names the followed remediation and says its outcome is on that operation's record. | `outcome` = `superseded`, `remediationOperationId`. |
 | The work failed, for example a target version that does not advance. | `Failed`, with the exception type and message. | Empty. |
+
+The blocking `RemediateAsync`, `AdvanceAndMigrateAsync` and `MigrateToTargetVersionAsync` calls report the same superseded case by throwing `InvalidOperationException` with that reason.
 
 A remediation never runs as one long call. The tree's coordinator records the run when it is accepted, and the work then drives it one bounded slice of values at a time from a durable cursor. A cancel therefore takes effect between two slices. Cutover is the point of no return: a cancel that arrives during cutover is declined, and the run completes. If the silo running the work is lost, the operation reads as `Failed`, as for any operation. The remediation itself stays recorded in flight at its last slice, so starting the same remediation again resumes it from there.
 

@@ -1,0 +1,12 @@
+# DestinationStampedAtTarget: a migration re-stamps every value at the target.
+MODULE: SchemaRemediationCutover
+ROW: DestinationStampedAtTarget
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_restamps_mixed_versions_to_target_and_cuts_over, LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_legacy_unstamped_value_is_stamped_at_target
+SUMMARY: a migration copies each value without re-stamping it
+
+--- FIND
+            return value => LatticeSchemaVersionMigration.Migrate(WholeArray(value), schemaId, targetVersion, registry);
+--- REPLACE
+            return value => WholeArray(value);
+--- END

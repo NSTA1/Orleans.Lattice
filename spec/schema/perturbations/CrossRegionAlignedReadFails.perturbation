@@ -6,7 +6,7 @@ DETECTORS: SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_
 SUMMARY: an older value is refused instead of upcast along the receiver's hop
 
 --- FIND
-        return effectiveRegistry.Upcast(schemaId, storedVersion, version.TargetVersion, body);
+        return effectiveRegistry.Upcast(schemaId, storedVersion, targetVersion, body);
 --- REPLACE
         throw new NotSupportedException("perturbed: no upcast");
 --- END

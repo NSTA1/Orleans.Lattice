@@ -1,0 +1,12 @@
+# Intent records a build mode outside the two the coordinator implements.
+MODULE: TypeOKInitiateUndeclaredMode
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: intent persists a mode the coordinator does not have
+PERTURBS: Initiate
+
+--- FIND
+    /\ phase' = "DryRun" /\ mode' = m /\ cursor' = 0 /\ pend' = FALSE
+--- REPLACE
+    /\ phase' = "DryRun" /\ mode' = "Rebuild" /\ cursor' = 0 /\ pend' = FALSE
+--- END

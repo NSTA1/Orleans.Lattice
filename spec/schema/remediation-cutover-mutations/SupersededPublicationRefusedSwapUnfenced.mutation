@@ -1,0 +1,13 @@
+# The #5289 shape: the swap replaces whatever the alias resolves to, not the
+# captured source.
+MODULE: SupersededPublicationRefusedSwapUnfenced
+TARGET: SupersededPublicationRefused
+CLASS: Action
+SUMMARY: the swap is fenced only on the alias read just before it (#5289)
+PERTURBS: CutSwap
+
+--- FIND
+    /\ phase = "Cutover" /\ cstep = 1 /\ alias \in {srcPhys, dest}
+--- REPLACE
+    /\ phase = "Cutover" /\ cstep = 1
+--- END

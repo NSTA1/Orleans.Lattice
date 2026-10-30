@@ -1,0 +1,14 @@
+# AliasMapCoherent: the swap carries the destination's own map with the alias.
+MODULE: SchemaRemediationCutover
+ROW: AliasMapCoherent
+FILE: src/lattice/BPlusTree/AliasCutoverShardMaps.cs
+DETECTORS: SchemaRemediationCutoverShardMapIntegrationTests.Cutover_of_a_resharded_tree_keeps_every_value_readable, SchemaRemediationCutoverShardMapIntegrationTests.Cutover_of_a_resharded_aliased_tree_keeps_every_value_readable
+SUMMARY: the swap pairs the alias with a map that does not describe the destination
+
+--- FIND
+            destinationPhysicalTreeId,
+            destinationRouting.Map,
+--- REPLACE
+            destinationPhysicalTreeId,
+            ShardMap.CreateDefault(destinationRouting.Map.Slots.Length, 1),
+--- END

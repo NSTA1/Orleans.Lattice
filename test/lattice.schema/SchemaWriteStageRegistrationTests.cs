@@ -50,10 +50,46 @@ public sealed class SchemaWriteStageRegistrationTests
         Assert.That((schemaId, version), Is.EqualTo((Version.SchemaId, Version.TargetVersion)));
     }
 
-    [Test]
-    public async Task Composed_registration_validates_the_submitted_value_then_stamps_it()
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Either_registration_order_resolves_one_composed_interceptor(bool reversed)
     {
-        var (interceptor, _) = Resolve(enforcement: true, versioning: true, reversed: false);
+        // DI level (#5241): enforcement registered after versioning re-composes
+        // with the versioning stage instead of replacing it, so both orders leave
+        // exactly one interceptor descriptor and it resolves to the composite.
+        var builder = new FakeSiloBuilder().WithCoreLattice();
+        if (reversed)
+        {
+            builder.AddLatticeSchemaVersioning();
+            builder.AddLatticeSchemaEnforcement();
+        }
+        else
+        {
+            builder.AddLatticeSchemaEnforcement();
+            builder.AddLatticeSchemaVersioning();
+        }
+
+        using var services = builder.Services.BuildServiceProvider();
+
+        Assert.That(builder.Services.Count(d => d.ServiceType == typeof(ILatticeWriteInterceptor)), Is.EqualTo(1));
+        Assert.That(services.GetRequiredService<ILatticeWriteInterceptor>(), Is.TypeOf<CompositeLatticeWriteInterceptor>());
+    }
+
+    [Test]
+    public void Enforcement_only_registration_resolves_the_enforcement_interceptor()
+    {
+        var builder = new FakeSiloBuilder().WithCoreLattice();
+        builder.AddLatticeSchemaEnforcement();
+        using var services = builder.Services.BuildServiceProvider();
+
+        Assert.That(services.GetRequiredService<ILatticeWriteInterceptor>(), Is.TypeOf<LatticeSchemaWriteInterceptor>());
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Composed_registration_validates_the_submitted_value_then_stamps_it(bool reversed)
+    {
+        var (interceptor, _) = Resolve(enforcement: true, versioning: true, reversed: reversed);
 
         Assert.ThrowsAsync<LatticeSchemaViolationException>(
             async () => await interceptor.OnWriteAsync(Request(Utf8("not json"))));
@@ -64,13 +100,15 @@ public sealed class SchemaWriteStageRegistrationTests
         Assert.That(LatticeSchemaEnvelope.StripToBody(decision.TransformedValue!), Is.EqualTo(body));
     }
 
-    [Test]
-    public async Task Composed_registration_runs_enforcement_on_the_unstamped_value()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Composed_registration_runs_enforcement_on_the_unstamped_value(bool reversed)
     {
         // A strict system-origin diversion records a preview of the bytes the
-        // enforcement stage judged. Enforcement runs first, so the preview is the
-        // submitted value, never the version envelope the second stage would add.
-        var (interceptor, deadLetters) = Resolve(enforcement: true, versioning: true, reversed: false);
+        // enforcement stage judged. Enforcement runs first in either registration
+        // order, so the preview is the submitted value, never the version envelope
+        // the second stage would add.
+        var (interceptor, deadLetters) = Resolve(enforcement: true, versioning: true, reversed: reversed);
         var submitted = Utf8("not json");
 
         LatticeWriteDecision decision;
@@ -87,30 +125,46 @@ public sealed class SchemaWriteStageRegistrationTests
     }
 
     [Test]
-    public async Task Reversed_registration_keeps_enforcement_and_drops_stamping()
+    public async Task Reversed_registration_validates_then_stamps()
     {
-        // The documented non-guarantee (#5241): versioning registered before
-        // enforcement is accepted, and enforcement's replacement discards the
-        // composed interceptor. Validation still happens; stamping does not.
+        // #5241: versioning registered before enforcement used to resolve the
+        // enforcement stage alone, silently dropping stamping. Enforcement now
+        // re-composes with the versioning stage, so a valid write is stamped at
+        // the target and an invalid one is still rejected.
         var (interceptor, _) = Resolve(enforcement: true, versioning: true, reversed: true);
 
         Assert.ThrowsAsync<LatticeSchemaViolationException>(
             async () => await interceptor.OnWriteAsync(Request(Utf8("not json"))));
         var decision = await interceptor.OnWriteAsync(Request(Utf8("{\"a\":1}")));
 
-        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.Accept));
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.AcceptTransformed));
+        Assert.That(LatticeSchemaEnvelope.TryReadHeader(decision.TransformedValue!, out var schemaId, out var version), Is.True);
+        Assert.That((schemaId, version), Is.EqualTo((Version.SchemaId, Version.TargetVersion)));
     }
 
-    [TestCase(false, false, false)]
-    [TestCase(true, false, true)]
-    [TestCase(false, true, true)]
-    [TestCase(true, true, true)]
+    [TestCase(false, false, false, false)]
+    [TestCase(true, false, true, false)]
+    [TestCase(false, true, true, false)]
+    [TestCase(true, true, true, false)]
+    [TestCase(false, false, false, true)]
+    [TestCase(true, false, true, true)]
+    [TestCase(false, true, true, true)]
+    [TestCase(true, true, true, true)]
     public void Composed_registration_opts_into_system_origin_when_either_stage_is_globally_strict(
-        bool enforcementStrict, bool versioningStrict, bool expected)
+        bool enforcementStrict, bool versioningStrict, bool expected, bool reversed)
     {
         var builder = new FakeSiloBuilder().WithCoreLattice();
-        builder.AddLatticeSchemaEnforcement(options => options.StrictIngest = enforcementStrict);
-        builder.AddLatticeSchemaVersioning(configureOptions: options => options.StrictIngest = versioningStrict);
+        if (reversed)
+        {
+            builder.AddLatticeSchemaVersioning(configureOptions: options => options.StrictIngest = versioningStrict);
+            builder.AddLatticeSchemaEnforcement(options => options.StrictIngest = enforcementStrict);
+        }
+        else
+        {
+            builder.AddLatticeSchemaEnforcement(options => options.StrictIngest = enforcementStrict);
+            builder.AddLatticeSchemaVersioning(configureOptions: options => options.StrictIngest = versioningStrict);
+        }
+
         using var services = builder.Services.BuildServiceProvider();
 
         var interceptor = services.GetRequiredService<ILatticeWriteInterceptor>();

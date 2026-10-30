@@ -1,0 +1,12 @@
+# ExplicitAdmit: an explicit alias set is refused while a reservation is held.
+MODULE: SchemaRemediationCutover
+ROW: ExplicitAdmit
+FILE: src/lattice/BPlusTree/Grains/TreeDeletionGrain.Logical.cs
+DETECTORS: TreeDeletionGrainTests.Explicit_alias_is_refused_while_a_reservation_is_held_naming_the_holder
+SUMMARY: an explicit alias set ignores a held reservation (#5289)
+
+--- FIND
+        if (state.State.AliasOperationId is { } holder)
+--- REPLACE
+        if (state.State.AliasOperationId is { } holder && holder.Length < 0)
+--- END

@@ -1,0 +1,12 @@
+# RedirectsCoverSource: the cutover arms every shard of the source's live map.
+MODULE: SchemaRemediationCutover
+ROW: RedirectsCoverSource
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: SchemaRemediationCutoverAfterReshardIntegrationTests.Cutover_after_a_reshard_arms_every_source_shard, SchemaRemediationCutoverShardMapIntegrationTests.Cutover_of_a_resharded_aliased_tree_arms_every_source_shard
+SUMMARY: the cutover arms only the first source shard
+
+--- FIND
+            foreach (var shardIndex in retainedRouting.Map.GetPhysicalShardIndices())
+--- REPLACE
+            foreach (var shardIndex in retainedRouting.Map.GetPhysicalShardIndices().Take(1))
+--- END

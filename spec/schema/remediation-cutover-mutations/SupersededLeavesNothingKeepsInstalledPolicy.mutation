@@ -1,0 +1,13 @@
+# A refused cutover leaves the target policy its attempt installed before the
+# fenced swap was refused.
+MODULE: SupersededLeavesNothingKeepsInstalledPolicy
+TARGET: SupersededLeavesNothing
+CLASS: Action
+SUMMARY: a swap refused as superseded keeps the policy installed before it
+PERTURBS: Supersede
+
+--- FIND
+    /\ policy' = IF cstep = 1 THEN prevPol ELSE policy
+--- REPLACE
+    /\ policy' = policy
+--- END

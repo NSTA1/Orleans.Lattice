@@ -75,7 +75,9 @@ The workspace has five tabs.
 
 The Policy tab reads, sets, edits, and clears the tree's write-validation policy. A tree with no policy accepts every value. A value must satisfy every rule. Rules are written with the rule builder below.
 
-A policy needs at least one rule, so **Save policy** is disabled until there is a rule, or one being written, with a note saying so; to accept every value, clear the policy instead. Saving replaces the whole policy and affects new writes immediately. Existing stored values are not changed.
+A policy needs at least one rule, so **Save policy** is disabled until there is a rule, or one being written, with a note saying so; to accept every value, clear the policy instead. Saving replaces the whole policy and affects new writes at once on the silo that serves the change and on every other silo within the propagation interval (one second by default). Existing stored values are not changed.
+
+On a versioned tree the tab notes that this one policy covers values of every version - rules cannot be scoped to a version - and that values are checked as they are written, so advancing the target version re-checks nothing already stored; run a compliance scan to check stored values.
 
 #### Rule builder
 
@@ -136,6 +138,27 @@ Clearing a policy uses a destructive confirmation named **Clear this tree's poli
 
 The Versions tab manages the tree's envelope-version config. A version is a stamp, not a shape: new writes are stamped with the schema family and target version, and older values are upgraded when they are read or migrated. When runtime registration is installed, the tab lists named versions, migration hops and the host's supported transform ids. Descriptors name versions rather than validation shapes.
 
+A **How versioning works** note explains five separate operations:
+
+- **Stamping** - every new write is stamped with the tree's family and target version.
+- **Advancing the target** - changes the stamp on later writes only, and cannot be undone. Stored values are not rewritten, and materialised views over the tree are not refreshed: a view keeps seeing each value at the version it was stamped with.
+- **Upgrading on read** - a value stamped below the target is upgraded through the registered migration hops each time it is read. A value with no path to the target, or stamped above it, cannot be read.
+- **Migrating** - rewrites every stored value at the target once, in the background, so it no longer needs upgrading; views see the rewritten values.
+- **Enforcing** - the Policy tab's rules check values as they are written. One policy covers every version.
+
+The note also says that a change on this tab applies at once on the silo that serves it, and that the cluster's other silos pick it up shortly after (within the propagation interval, one second by default).
+
+Under **Versions and migration paths**, a version map lists each registered version of each family, with how a value stamped with it reads at the tree's current target:
+
+- **Reads as stored** - the version is the target.
+- **Upgraded as it is read** - a chain of registered hops leads to the target; the versions it passes through are listed.
+- **Cannot be read: no migration path leads to the target**.
+- **Cannot be read: it is newer than the target**.
+
+A version of a family the tree does not stamp reads **Not this tree's family**.
+
+Each hop is described in plain language from its declarative transform, for example **Renames qty to quantity.** A hop that runs a host transform names only its transform id, because the cluster does not describe what installed code changes; when the silo that answered does not install that transform, the tab says that a value needing the hop fails to read there. The catalog combines what the host provisions at startup with what is registered here, and the cluster does not say which is which. When the host defines its versions and migration paths in code without reporting them, the tab says so instead of listing them: a value stamped below the target then reads only when the host provides a path from its version to the target.
+
 When versioning is off, **Turn on versioning** asks for a schema family, a target version of 1 or more, and strict ingest. When versioning is on, the tab can:
 
 - **Advance target version...** after a confirmation named **Advance to version N**;
@@ -144,7 +167,9 @@ When versioning is off, **Turn on versioning** asks for a schema family, a targe
 - **Change config** by replacing the config as typed;
 - **Turn off versioning** after a destructive confirmation named **Turn off versioning**.
 
-Advancing can only move the target version up, so at the highest target version, 4,294,967,295, **Advance target version...** is turned off and the tab says no higher version exists. Migration and advance-and-migrate start cluster-tracked background operations. The tab links to the Remediation tab while one is running.
+Advancing can only move the target version up, so at the highest target version, 4,294,967,295, **Advance target version...** is turned off and the tab says no higher version exists. The advance and advance-and-migrate confirmations warn when the new version is not registered for the tree's family, and name every registered version that would have no migration path to the new target, because a value stamped with one of them could not be read once the target advances and a migration would stop at it. **Change config** notes that it replaces the config as typed without the advance check, and that values stamped with a previous family are then read as they were stored.
+
+Migration and advance-and-migrate start cluster-tracked background operations. Their confirmations state the abort contract: if a stored value cannot be upgraded to the target - no migration path leads there, or it is stamped above it - the migration stops at that value, names it and leaves every value as it was; register the missing path, then start it again. The tab links to the Remediation tab while one is running.
 
 If the cluster has not registered schema versioning, the tab says **Versioning is not available** instead of failing opaquely. A migration that is not ready is disabled with the server's explanation.
 

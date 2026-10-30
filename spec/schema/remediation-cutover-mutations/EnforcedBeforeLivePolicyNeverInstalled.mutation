@@ -1,0 +1,13 @@
+# The target policy is not installed before the swap, so the remediated tree
+# is live and unenforced.
+MODULE: EnforcedBeforeLivePolicyNeverInstalled
+TARGET: EnforcedBeforeLive
+CLASS: Invariant
+SUMMARY: the cutover swaps without installing the target policy
+PERTURBS: CutPolicy
+
+--- FIND
+    /\ policy' = IF mode = "Transform" THEN "New" ELSE policy
+--- REPLACE
+    /\ policy' = policy
+--- END

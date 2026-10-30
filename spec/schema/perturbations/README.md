@@ -24,6 +24,8 @@ have one perturbation for every behaviour row. `SchemaVersionFamily`
 ([`SchemaDurableOperationRefinement.md`](../SchemaDurableOperationRefinement.md))
 `SchemaComplianceScan`
 ([`SchemaComplianceScanRefinement.md`](../SchemaComplianceScanRefinement.md)),
+`SchemaRemediationCutover`
+([`SchemaRemediationCutoverRefinement.md`](../SchemaRemediationCutoverRefinement.md)),
 `SchemaCrossRegion` ([`SchemaCrossRegionRefinement.md`](../SchemaCrossRegionRefinement.md))
 and `SchemaTenantScope` ([`SchemaTenantScopeRefinement.md`](../SchemaTenantScopeRefinement.md))
 seed every behaviour row except those listed below. The gate requires every
@@ -46,6 +48,8 @@ listed below, never both.
 | SchemaComplianceScan | ScanTerminates | Liveness: every edit that stops a scan terminating is one of the seeded `Count` or `Step` perturbations, whose detectors this row cites. |
 | SchemaStrictIngest | ChangePolicy | The same production edit as `SchemaPolicyConfig`'s `Change(s,p)` row, which `ChangeNeverStored` seeds against the same detector; a second copy adds no evidence. |
 | SchemaStrictIngest | Propagate | The same production edit as `SchemaPolicyConfig`'s `Propagate(s)` row, which `PropagateIgnoresChangeFeed` seeds against the same detector; a second copy adds no evidence. |
+| SchemaRemediationCutover | Reshard | An environment step: the online reshard is the tree-lifecycle model's protocol, and an edit to it is a reshard defect, not a remediation one; the `RedirectsCoverSource` and `DestinationInheritsTopology` perturbations seed the remediation's response to a reshard. |
+| SchemaRemediationCutover | RemediationTerminates | Liveness: every edit that stops a remediation terminating is one of the seeded `Bank`, `CutArm`, `Complete` or `ProgressNeverRegresses` perturbations, whose detectors this row cites. |
 | SchemaCrossRegion | Deliver(e) | Every single-file edit to the receiver's ingest path is one of the seeded `StrictAdmitsOnlyServable`, `CrdtLiftedAtIngest`, `UncheckedStoredVerbatim` or `AtomicAllOrNothing` perturbations, whose detectors this row cites. |
 | SchemaCrossRegion | Decide | Applying a batch's terminal is the atomic-commit protocol's step, with no schema code on it; the schema-specific part, that a diverted entry leaves nothing staged, is the `AtomicAllOrNothing` perturbation's edit. |
 | SchemaCrossRegion | Read(e) | The same production edit as the `ReadsServeOrFail` perturbation, against the same detector; a second copy adds no evidence. |

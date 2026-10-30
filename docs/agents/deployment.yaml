@@ -2853,6 +2853,10 @@ configuration_schema:
         type: "int"
         default: "4096"
         source: "src/lattice.schema/LatticeSchemaEnforcementOptions.cs#LatticeSchemaEnforcementOptions.DeadLetterPreviewMaxBytes"
+      - name: "PropagationInterval"
+        type: "TimeSpan"
+        default: "TimeSpan.FromSeconds(1)"
+        source: "src/lattice.schema/LatticeSchemaEnforcementOptions.cs#LatticeSchemaEnforcementOptions.PropagationInterval"
   - type: "LatticeSchemaVersioningOptions"
     package: "Orleans.Lattice.Schema"
     registration:
@@ -2867,6 +2871,10 @@ configuration_schema:
         type: "int"
         default: "4096"
         source: "src/lattice.schema/LatticeSchemaVersioningOptions.cs#LatticeSchemaVersioningOptions.DeadLetterPreviewMaxBytes"
+      - name: "PropagationInterval"
+        type: "TimeSpan"
+        default: "TimeSpan.FromSeconds(1)"
+        source: "src/lattice.schema/LatticeSchemaVersioningOptions.cs#LatticeSchemaVersioningOptions.PropagationInterval"
   - type: "LatticeStateApiGrpcOptions"
     package: "Orleans.Lattice.Api.State.Grpc"
     registration:

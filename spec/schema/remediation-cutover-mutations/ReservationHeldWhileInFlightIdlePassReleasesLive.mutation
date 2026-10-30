@@ -1,0 +1,15 @@
+# The orphan-release pass does not check the remediation is idle, so it drops
+# the reservation a running remediation holds.
+MODULE: ReservationHeldWhileInFlightIdlePassReleasesLive
+TARGET: ReservationHeldWhileInFlight
+CLASS: Invariant
+SUMMARY: an idle pass releases the reservation of an in-flight remediation
+PERTURBS: IdlePass
+
+--- FIND
+IdlePass ==
+    /\ phase = "Idle" /\ reserved = "Rem" /\ ~begin
+--- REPLACE
+IdlePass ==
+    /\ reserved = "Rem" /\ ~begin
+--- END

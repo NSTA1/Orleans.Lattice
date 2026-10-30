@@ -575,6 +575,11 @@ internal sealed partial class LatticeRegistryGrain(
             throw new ArgumentException("Physical tree ID must differ from the logical tree ID.", nameof(physicalTreeId));
 
         await RecoverAliasMoveAsync(treeId);
+
+        // An explicit alias honours the reservation an in-flight resize, restore,
+        // revert or schema remediation holds (#5289), as delete does; those
+        // operations publish through SwapAliasAsync, never this verb.
+        await grainFactory.GetGrain<ITreeDeletionGrain>(treeId).EnsureAliasUnreservedAsync();
         await EnsureAliasTargetAdmissibleAsync(treeId, physicalTreeId);
 
         var existingRow = await GetEntryCoreAsync(treeId);

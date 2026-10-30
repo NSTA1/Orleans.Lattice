@@ -74,16 +74,71 @@ internal sealed class LatticeSchemaVersionDecoder(
             return body;
         }
 
-        if (storedVersion > version.TargetVersion)
+        // Stale value: upcast the body to the target before returning it.
+        return await UpcastToTargetAsync(treeId, schemaId, storedVersion, version.TargetVersion, body)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Decodes <paramref name="storedValue"/> exactly as <see cref="DecodeAsync"/>
+    /// does, and also reports the schema-version stamp the decoded body is at, so a
+    /// transform remediation can re-envelope its rewrite at that stamp instead of
+    /// writing it bare (issue #5243).
+    /// </summary>
+    /// <remarks>
+    /// The stamp is the version the transform runs on: the tree's target for a value
+    /// of the tree's schema family (a legacy un-stamped value included, which a read
+    /// returns verbatim and an eager migration stamps at the target unchanged); the
+    /// value's own stamp for a value of another family, which a read returns at its
+    /// stored version. An unversioned tree reports no stamp, so its remediation keeps
+    /// writing plain values. A value already at the target is returned as a view past
+    /// the envelope header with no copy.
+    /// </remarks>
+    /// <param name="treeId">The logical tree the value was read from.</param>
+    /// <param name="storedValue">The stored (possibly enveloped) value bytes.</param>
+    /// <param name="ct">Cancels the config lookup.</param>
+    /// <returns>The decoded body and its stamp.</returns>
+    /// <exception cref="NotSupportedException">The value is stamped newer than the tree's target, or cannot be upcast to it.</exception>
+    internal async ValueTask<SchemaRestampInput> DecodeForRestampAsync(
+        string treeId, byte[] storedValue, CancellationToken ct)
+    {
+        var config = await provider.GetConfigAsync(treeId, ct).ConfigureAwait(false);
+        if (!LatticeSchemaEnvelope.TryReadHeader(storedValue, out var schemaId, out var storedVersion))
+        {
+            return config is { } target
+                ? new SchemaRestampInput(storedValue, Stamped: true, target.SchemaId, target.TargetVersion)
+                : new SchemaRestampInput(storedValue, Stamped: false, 0, 0);
+        }
+
+        var body = storedValue.AsMemory(LatticeSchemaEnvelope.HeaderLength);
+        if (config is not { } version)
+        {
+            return new SchemaRestampInput(body, Stamped: false, 0, 0);
+        }
+
+        if (version.SchemaId != schemaId || storedVersion == version.TargetVersion)
+        {
+            return new SchemaRestampInput(body, Stamped: true, schemaId, storedVersion);
+        }
+
+        var upcast = await UpcastToTargetAsync(
+            treeId, schemaId, storedVersion, version.TargetVersion, LatticeSchemaEnvelope.StripToBody(storedValue))
+            .ConfigureAwait(false);
+        return new SchemaRestampInput(upcast, Stamped: true, schemaId, version.TargetVersion);
+    }
+
+    private async ValueTask<byte[]> UpcastToTargetAsync(
+        string treeId, uint schemaId, uint storedVersion, uint targetVersion, byte[] body)
+    {
+        if (storedVersion > targetVersion)
         {
             throw new NotSupportedException(
                 $"Value for tree '{treeId}' is stamped at schema {schemaId} v{storedVersion}, newer than the tree's " +
-                $"target v{version.TargetVersion}. Upgrade the reader's schema registry / target version to read it.");
+                $"target v{targetVersion}. Upgrade the reader's schema registry / target version to read it.");
         }
 
-        // Stale value: upcast the body to the target before returning it.
         var effectiveRegistry = runtimeRegistry is null ? registry
             : await runtimeRegistry.ResolveAsync(treeId).ConfigureAwait(false);
-        return effectiveRegistry.Upcast(schemaId, storedVersion, version.TargetVersion, body);
+        return effectiveRegistry.Upcast(schemaId, storedVersion, targetVersion, body);
     }
 }

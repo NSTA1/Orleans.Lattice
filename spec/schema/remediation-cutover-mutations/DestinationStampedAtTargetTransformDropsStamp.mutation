@@ -1,0 +1,16 @@
+# The #5243 shape: transform remediation of a versioned tree writes each
+# rewritten body without its version envelope.
+MODULE: DestinationStampedAtTargetTransformDropsStamp
+TARGET: DestinationStampedAtTarget
+CLASS: Invariant
+SUMMARY: a transform writes the decoded body with no envelope (#5243)
+PERTURBS: BuildStep
+
+--- FIND
+          ELSE /\ data' = [data EXCEPT ![dest][k] = Rewrite(data[alias][k], mode)]
+--- REPLACE
+          ELSE /\ data' = [data EXCEPT ![dest][k] =
+                    IF mode = "Transform"
+                    THEN [Rewrite(data[alias][k], mode) EXCEPT !.st = "None"]
+                    ELSE Rewrite(data[alias][k], mode)]
+--- END

@@ -1,0 +1,24 @@
+{
+  "mutations": "remediation-cutover-mutations",
+  "refinement": "SchemaRemediationCutoverRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter",
+    "Write"
+  ],
+  "counts": {
+    "invariants": 8,
+    "properties": 9,
+    "actions": 20,
+    "mutations": 25,
+    "behaviourRows": 34,
+    "distinctStates": 115966
+  },
+  "variants": {
+    "TwoRemediations": {
+      "distinctStates": 1596722
+    },
+    "TwoKeys": {
+      "distinctStates": 630272
+    }
+  }
+}

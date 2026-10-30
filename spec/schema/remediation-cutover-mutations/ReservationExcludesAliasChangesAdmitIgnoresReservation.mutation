@@ -1,0 +1,14 @@
+# The #5289 shape: an explicit alias set never consults the alias reservation.
+MODULE: ReservationExcludesAliasChangesAdmitIgnoresReservation
+TARGET: ReservationExcludesAliasChanges
+CLASS: Action
+SUMMARY: an explicit alias set ignores the reservation (#5289)
+PERTURBS: ExplicitAdmit
+
+--- FIND
+    /\ IF reserved = "None"
+       THEN explicit' = "Admitted"
+--- REPLACE
+    /\ IF TRUE
+       THEN explicit' = "Admitted"
+--- END

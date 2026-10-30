@@ -76,6 +76,38 @@ public partial class TreeResizeAliasLifecycleIntegrationTests
     }
 
     [Test]
+    public async Task Explicit_alias_while_an_alias_operation_holds_the_reservation_is_refused_naming_it()
+    {
+        // Issue #5289: an explicit alias change ignored the alias reservation a
+        // resize, restore, revert or schema remediation holds, which delete honours.
+        var name = $"alias-during-reservation-{Guid.NewGuid():N}";
+        var other = $"alias-during-reservation-target-{Guid.NewGuid():N}";
+        await _cluster.GrainFactory.GetGrain<ILattice>(name).SetAsync("key", [1]);
+        await _cluster.GrainFactory.GetGrain<ILattice>(other).SetAsync("key", [2]);
+        var registry = _cluster.GrainFactory.GetLatticeRegistry();
+        var lineage = (await registry.GetEntryAsync(name))?.Lineage;
+        var deletion = _cluster.GrainFactory.GetGrain<ITreeDeletionGrain>(name);
+        await deletion.BeginAliasChangeAsync("resize:held");
+
+        var carried = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(_cluster.GrainFactory, name, other));
+        var direct = Assert.ThrowsAsync<InvalidOperationException>(() => registry.SetAliasAsync(name, other));
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(carried!.Message, Does.Contain(name).And.Contain("resize:held"), carried.Message);
+            Assert.That(direct!.Message, Does.Contain(name).And.Contain("resize:held"), direct.Message);
+            Assert.That(await registry.ResolveAsync(name), Is.EqualTo(name), "a refused alias moves nothing");
+            Assert.That((await registry.GetEntryAsync(name))?.Lineage, Is.EqualTo(lineage),
+                "the refusal precedes the lineage re-stamp");
+        });
+
+        await deletion.EndAliasChangeAsync("resize:held");
+        await AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(_cluster.GrainFactory, name, other);
+        Assert.That(await registry.ResolveAsync(name), Is.EqualTo(other), "the alias is accepted once the reservation is released");
+    }
+
+    [Test]
     public async Task Delete_during_resize_refuses_and_undo_releases_the_reservation()
     {
         var name = $"delete-during-resize-{Guid.NewGuid():N}";

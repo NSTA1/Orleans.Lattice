@@ -1,0 +1,13 @@
+# A resize, restore or revert proceeds while the remediation holds the
+# reservation.
+MODULE: ReservationExcludesAliasChangesMoveDuringRemediation
+TARGET: ReservationExcludesAliasChanges
+CLASS: Action
+SUMMARY: a resize or restore moves the tree under a running remediation
+PERTURBS: Move
+
+--- FIND
+    /\ ~moved /\ reserved = "None" /\ nextId <= MaxCopy
+--- REPLACE
+    /\ ~moved /\ nextId <= MaxCopy
+--- END

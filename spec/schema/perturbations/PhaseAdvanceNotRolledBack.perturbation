@@ -1,0 +1,16 @@
+# Crash: a phase that failed to persist is rolled back, so a resume starts from durable state.
+MODULE: SchemaRemediationCutover
+ROW: Crash
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.AdvancePhase_write_failure_restores_the_phase_and_scanned_count
+SUMMARY: a failed phase write leaves the unpersisted phase in memory
+
+--- FIND
+            state.State.Phase = prevPhase;
+            state.State.ScannedCount = prevScannedCount;
+            state.State.ScanCursor = prevScanCursor;
+            state.State.PhaseTotal = prevPhaseTotal;
+            throw;
+--- REPLACE
+            throw;
+--- END
