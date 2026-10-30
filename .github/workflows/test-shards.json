@@ -161,7 +161,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardMaterialisedViewNumeric"],
-        "note": "Schema-independent numeric (Count/Sum) projection companion: MaterialisedViewNumeric base, Swap and TwoFaults variants and twenty paired mutations, 23 cases. PROVISIONAL local measurement pending the first CI run: whole-module NUnit selection on Java 17, four TLC workers. Extraction and encoding, durable publication obligations, operation identity, filter-version and physical-copy rebind."
+        "note": "Schema-independent numeric (Count/Sum) projection companion: MaterialisedViewNumeric base, Swap and TwoFaults variants and twenty paired mutations, 23 cases, measured at 1.43 minutes on its leg in receipt-free ci.yml run 41064780376 (head ff6cc0c64), where every TLC module ran exhaustively. Extraction and encoding, durable publication obligations, operation identity, filter-version and physical-copy rebind."
       },
       {
         "shard": "formal-tlc-anti-entropy",
