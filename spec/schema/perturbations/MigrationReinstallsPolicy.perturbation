@@ -8,9 +8,9 @@ SUMMARY: a migration reinstalls the policy it validated against
 --- FIND
         if (state.State.Mode == SchemaRemediationMode.Transform)
         {
-            await policyStore!.SetPolicyAsync
+            previousPolicy = await policyStore!.GetPolicyAsync(TreeId);
 --- REPLACE
         if (state.State.TargetPolicy is not null)
         {
-            await policyStore!.SetPolicyAsync
+            previousPolicy = await policyStore!.GetPolicyAsync(TreeId);
 --- END

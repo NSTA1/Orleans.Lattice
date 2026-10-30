@@ -6,7 +6,8 @@ DETECTORS: LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_resumes
 SUMMARY: the cutover arms and completes without swapping the alias
 
 --- FIND
-        var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(grainFactory, TreeId, destinationPhysical);
+            finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(
+                grainFactory, TreeId, destinationPhysical, expectedSourcePhysicalTreeId: sourcePhysical);
 --- REPLACE
-        var finalReplacedMap = replacedMap;
+            finalReplacedMap = await Task.FromResult(replacedMap);
 --- END

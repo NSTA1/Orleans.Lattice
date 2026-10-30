@@ -6,16 +6,18 @@ DETECTORS: LatticeSchemaRemediationGrainTests.Cutover_arms_the_target_policy_bef
 SUMMARY: the target policy is installed after the alias swap
 
 --- FIND
-            await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+            await policyStore.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
             policyProvider!.Invalidate(TreeId);
 --- REPLACE
             policyProvider!.Invalidate(TreeId);
 --- END
 
 --- FIND
-        var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(grainFactory, TreeId, destinationPhysical);
+                grainFactory, TreeId, destinationPhysical, expectedSourcePhysicalTreeId: sourcePhysical);
+        }
 --- REPLACE
-        var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(grainFactory, TreeId, destinationPhysical);
-        if (state.State.Mode == SchemaRemediationMode.Transform)
-            await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+                grainFactory, TreeId, destinationPhysical, expectedSourcePhysicalTreeId: sourcePhysical);
+            if (state.State.Mode == SchemaRemediationMode.Transform)
+                await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+        }
 --- END

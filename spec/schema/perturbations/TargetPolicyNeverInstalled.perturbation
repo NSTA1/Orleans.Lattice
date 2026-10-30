@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaRemediationGrainTests.Cutover_arms_the_target_policy_bef
 SUMMARY: the cutover never installs the target policy
 
 --- FIND
-            await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+            await policyStore.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
 --- REPLACE
             await Task.CompletedTask;
 --- END
