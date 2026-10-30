@@ -6,6 +6,14 @@ comparer, localiser, remediation guard, leaf re-replayer and bootstrap
 fallback planner, and the receiver applier and high-water-mark grain. The
 detector fixtures exercise those real components through their seams.
 
+Internal-node resolution reads the projection digest and then a defensive routing
+snapshot through one `GetSubtreeDigestAndRoutingAsync` call, instead of two
+external dispatches. The option gate, digest calculation, child order and live
+physical-tree resolution are unchanged; no topology mutation, child publication
+or repair step is elided. This is a read fusion, not a new persisted snapshot
+or a claim of cross-node atomicity. `BPlusInternalGrainTests` checks both returned
+projections and `GrainMerkleWalkLocalTreeTests` pins the one-call adapter budget.
+
 ## Variable mapping
 
 | Spec variable | Role | Code counterpart |

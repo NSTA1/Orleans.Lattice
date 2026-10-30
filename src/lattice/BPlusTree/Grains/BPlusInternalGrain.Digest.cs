@@ -545,6 +545,13 @@ internal sealed partial class BPlusInternalGrain
     }
 
     /// <inheritdoc />
+    public async Task<(LeafProjectionDigest Digest, RoutingTableSnapshot Routing)> GetSubtreeDigestAndRoutingAsync()
+    {
+        var digest = await GetSubtreeProjectionDigestAsync();
+        return (digest, await GetRoutingTableAsync());
+    }
+
+    /// <inheritdoc />
     public Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync()
     {
         EnsureSubtreeHashInitialized();
