@@ -44,8 +44,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed class SnapshotProjectionFolder(
     string treeId,
     CrdtShapeRegistry crdtShapes,
-    ILatticeEnvelopeCodec? envelopeCodec = null)
+    ILatticeEnvelopeCodec? envelopeCodec = null,
+    string? shapeTreeId = null)
 {
+    // Issue #5300: a derived physical copy (resize, restore, bootstrap hold or
+    // remediation destination) folds with the shape registered for the logical
+    // tree it backs, not under its own physical id.
+    private readonly string _shapeTreeId = string.IsNullOrEmpty(shapeTreeId) ? treeId : shapeTreeId;
     private readonly SortedDictionary<string, LwwValue<byte[]>> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>> _pendingTx = new();
     private readonly Dictionary<Guid, Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>> _pendingTxDeltas = new();
@@ -340,9 +345,9 @@ internal sealed class SnapshotProjectionFolder(
 
     private byte[] FoldPreparedCrdtDelta(string key, byte[] delta, LatticeMergeMode mode)
     {
-        var shape = crdtShapes.TryGet(treeId, mode)
+        var shape = crdtShapes.TryGet(_shapeTreeId, mode)
             ?? throw new InvalidOperationException(
-                $"No CrdtShape is registered for tree '{treeId}' at mode '{mode}'. "
+                $"No CrdtShape is registered for tree '{_shapeTreeId}' at mode '{mode}'. "
                 + "A prepared CRDT-mode entry cannot fold its typed delta on the snapshot "
                 + "leaf's terminal commit without a shape descriptor.");
 
