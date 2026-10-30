@@ -322,7 +322,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchema"],
-        "note": "Every SchemaPolicyConfig and SchemaStageOrdering base, variant and mutation (29 cases), bases co-located with their mutations so the base runs serve the full-bound controls. Measured locally at 1.97 minutes (16-core Windows workstation, default TLC concurrency) for #5226; the SchemaPolicyConfig ThreeSilos variant dominates at about one minute. Refresh from the first receipt-free schema-assurance bucket push, and split the shard from measured timings as further Schema* modules join it."
+        "note": "Every SchemaPolicyConfig, SchemaStageOrdering and SchemaStrictIngest base, variant and mutation (47 cases), bases co-located with their mutations so the base runs serve the full-bound controls. Measured locally at 1.97 minutes for the first 29 (#5226) and 0.78 minutes for the 18 SchemaStrictIngest cases (#5228) (16-core Windows workstation, default TLC concurrency); the SchemaPolicyConfig ThreeSilos variant dominates at about one minute. Refresh from the first receipt-free schema-assurance bucket push, and split the shard from measured timings as further Schema* modules join it."
       },
       {
         "shard": "formal-tlc-smoke",

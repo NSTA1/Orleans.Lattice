@@ -1,0 +1,12 @@
+# The #5266 mechanism: an entry whose batch decision arrived first is applied below the check.
+MODULE: StoredValidWhenJudgedLatePrepareUnjudged
+TARGET: StoredValidWhenJudged
+CLASS: Invariant
+SUMMARY: an entry settled against an earlier decision skips judgement
+PERTURBS: Deliver
+
+--- FIND
+    /\ cur' = e /\ rphase' = "Judging" /\ judged' = 0
+--- REPLACE
+    /\ cur' = e /\ rphase' = (IF late[e] THEN "Committing" ELSE "Judging") /\ judged' = 0
+--- END

@@ -1,0 +1,18 @@
+{
+  "mutations": "strict-ingest-mutations",
+  "refinement": "SchemaStrictIngestRefinement.md",
+  "nonBehaviouralActions": ["Stutter", "LoseAck"],
+  "counts": {
+    "invariants": 3,
+    "properties": 7,
+    "actions": 9,
+    "mutations": 16,
+    "behaviourRows": 16,
+    "distinctStates": 5326
+  },
+  "variants": {
+    "TwoEntries": {
+      "distinctStates": 1520648
+    }
+  }
+}

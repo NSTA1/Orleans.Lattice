@@ -1,0 +1,14 @@
+# The #5265 mechanism: the caller reads a reported diversion as a failure and retries.
+MODULE: DiversionSettlesReportedAsFailure
+TARGET: DiversionSettles
+CLASS: Action
+SUMMARY: a reported diversion is re-surfaced as a failure
+PERTURBS: DeadLetter
+
+--- FIND
+    /\ reported' = (r = "Ok")
+    /\ IF r = "Ok" THEN Acknowledge(cur) ELSE FailAttempt
+--- REPLACE
+    /\ reported' = (r = "Ok")
+    /\ FailAttempt
+--- END

@@ -353,7 +353,7 @@ public sealed partial class TlcCiShardTests
         Assert.Multiple(() =>
         {
             Assert.That(modules.Select(module => module.Name),
-                Is.SupersetOf(new[] { "SchemaPolicyConfig", "SchemaStageOrdering" }));
+                Is.SupersetOf(new[] { "SchemaPolicyConfig", "SchemaStageOrdering", "SchemaStrictIngest" }));
             Assert.That(modules.Select(module => Path.GetFileName(module.Directory)).Distinct(),
                 Is.EqualTo(new[] { "schema" }), "every Schema* module lives in spec/schema/");
             foreach (var module in modules)

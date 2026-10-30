@@ -1,0 +1,21 @@
+# DeadLetter: an append that fails is not a diversion.
+MODULE: SchemaStrictIngest
+ROW: DeadLetter(r)
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it, SchemaStrictIngestDeadLetterTests.Cancelled_dead_letter_append_fails_the_write_instead_of_diverting_it
+SUMMARY: a failed dead-letter append is reported as a diversion
+
+--- FIND
+        await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
+        return LatticeWriteDecision.DeadLetter(reason);
+--- REPLACE
+        try
+        {
+            await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+        }
+
+        return LatticeWriteDecision.DeadLetter(reason);
+--- END

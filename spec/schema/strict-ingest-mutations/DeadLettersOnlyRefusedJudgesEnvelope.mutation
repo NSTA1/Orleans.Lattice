@@ -1,0 +1,12 @@
+# The #5239 mechanism: enforcement judges the envelope, so a valid body is diverted.
+MODULE: DeadLettersOnlyRefusedJudgesEnvelope
+TARGET: DeadLettersOnlyRefused
+CLASS: Action
+SUMMARY: every enveloped entry is dead-lettered
+PERTURBS: Judge
+
+--- FIND
+            /\ rphase' = IF Refused(val[cur], seen) THEN "DeadLettering" ELSE "Committing"
+--- REPLACE
+            /\ rphase' = IF Refused(val[cur], seen) \/ val[cur].form = "Env" THEN "DeadLettering" ELSE "Committing"
+--- END
