@@ -410,8 +410,8 @@ public partial class ReplicationApplierTests
         // regression to that boundary faults rather than passing silently.
         apply.ReadStoredWithVersionAsync(Arg.Any<string>())
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
-        lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+        apply.ApplySetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ReplicationConditionalSetOutcome.Applied);
         return (
             new ReplicationApplier(
                 factory,
@@ -525,7 +525,7 @@ public partial class ReplicationApplierTests
         // origin) rather than a full-value Set; no read-merge-write fold.
         await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), 0L);
         await lattice.DidNotReceiveWithAnyArgs().GetWithVersionAsync(default!, default);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetIfVersionAsync(default!, default!, default);
     }
 
     [Test]
@@ -543,7 +543,7 @@ public partial class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.PnCounter, Arg.Any<byte[]>(), 0L);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetIfVersionAsync(default!, default!, default);
     }
 
     [Test]
@@ -561,7 +561,7 @@ public partial class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.GCounter, Arg.Any<byte[]>(), 0L);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetIfVersionAsync(default!, default!, default);
     }
 
     [Test]
@@ -580,7 +580,7 @@ public partial class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.VersionVector, Arg.Any<byte[]>(), 0L);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetIfVersionAsync(default!, default!, default);
     }
 
     [Test]
@@ -607,7 +607,7 @@ public partial class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.MvRegister, Arg.Any<byte[]>(), 0L);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetIfVersionAsync(default!, default!, default);
     }
 
     [Test]
@@ -696,7 +696,7 @@ public partial class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), 0L);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetIfVersionAsync(default!, default!, default);
     }
 
     [Test]
