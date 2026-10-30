@@ -112,6 +112,12 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// preserves it, and no fold-time upcast can occur - the determinism
     /// requirement documented on <see cref="ILatticeEnvelopeCodec"/>.
     /// </para>
+    /// <para>
+    /// A materialised-view rebuild or reconcile of an unaliased source reads
+    /// here too, for the same reason: it must re-project the stored form that
+    /// incremental apply read from the WAL, never the decoded and upcast body
+    /// (issue #5240).
+    /// </para>
     /// </remarks>
     /// <param name="key">The key to read.</param>
     /// <returns>

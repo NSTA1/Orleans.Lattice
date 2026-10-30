@@ -28,6 +28,14 @@ public interface ILatticeViewProjection
     /// Returns the view writes that <paramref name="mutation"/> produces, or an
     /// empty sequence when the mutation does not affect the view (filtered out).
     /// </summary>
+    /// <remarks>
+    /// When the source tree carries schema-version envelopes, the mutation's
+    /// <see cref="LatticeMutation.Value"/> is the value's body with the envelope
+    /// stripped, at the version it was stamped with and never upcast to the tree's
+    /// target. The input is identical on every derivation path (incremental apply,
+    /// atomic publication, repair, rebuild and reconcile), and advancing the target
+    /// version re-projects nothing.
+    /// </remarks>
     /// <param name="mutation">The committed source mutation to project.</param>
     IEnumerable<ViewWrite> Project(LatticeMutation mutation);
 }

@@ -47,7 +47,7 @@ internal sealed partial class ViewMaintainerGrain
         var writes = new List<ViewWrite>();
         foreach (var prepared in PublicationWinners(closure))
         {
-            writes.AddRange(registration.Projection!.Project(prepared));
+            writes.AddRange(registration.Projection!.Project(ProjectionInput(registration, prepared)));
         }
 
         var coalesced = ViewWriteCoalescer.Coalesce(writes);
@@ -78,7 +78,7 @@ internal sealed partial class ViewMaintainerGrain
         var contributions = new List<AggregationContribution>();
         foreach (var prepared in PublicationWinners(closure))
         {
-            contributions.AddRange(registration.AggregationProjection!.Project(prepared));
+            contributions.AddRange(registration.AggregationProjection!.Project(ProjectionInput(registration, prepared)));
         }
 
         contributions.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));

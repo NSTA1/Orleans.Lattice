@@ -1,31 +1,30 @@
 using System.Text;
 using System.Text.Json;
+using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Schema.Tests;
 
 /// <summary>
-/// Characterization of the projection input seam (#4908, #5225). It records, at the
-/// caller level over a real versioning-enabled tree and real aggregation and filter
-/// views, which bytes a projection's <c>Project(LatticeMutation)</c> receives today.
-/// It deliberately asserts current behaviour, not a decided contract: the contract
-/// is settled by design review, after which this fixture is promoted to the
-/// normative detector (changing an assertion here is a behaviour change, made in its
-/// own defect-fix pull request).
+/// The normative detector for the projection input contract on a versioning-enabled
+/// source (#4908 option B, #5240), exercised at the caller level over a real
+/// versioned tree with real aggregation and filter views. It began as the #5225
+/// characterization of the seam and was promoted when the contract was settled.
 /// <para>
-/// Recorded behaviour:
+/// The contract:
 /// </para>
 /// <list type="bullet">
-/// <item><description>Incremental maintenance projects the <b>stored</b> write-ahead
-/// log bytes: the 10-byte version envelope at the value's stamped version, with an
-/// un-upcast body. An envelope-unaware JSON projection therefore reads nothing usable
-/// (the sum stays zero and the filter keeps nothing), while a client read of the same
-/// keys returns the decoded body upcast to the target.</description></item>
-/// <item><description>Advancing the target version emits no source mutation, so it
-/// neither upcasts nor re-projects contributions already folded.</description></item>
-/// <item><description>A rebuild re-projects the <b>decoded</b> body, upcast to the
-/// target, with no envelope - so the same view holds different contents depending on
-/// whether it was maintained incrementally or rebuilt, and a reconcile of an
-/// incrementally maintained view reports drift.</description></item>
+/// <item><description><see cref="ILatticeViewProjection.Project"/> and
+/// <see cref="ILatticeAggregationProjection.Project"/> receive the
+/// <b>envelope-stripped body at its stamped version, never upcast</b> - so a value
+/// stamped at version 1 is projected with its version-1 shape even after the target
+/// advances, while a client read of the same key returns the body upcast to the
+/// target.</description></item>
+/// <item><description>The input is identical on <b>every derivation path</b>:
+/// incremental apply, atomic publication, rebuild and reconcile, over an aliased or
+/// an unaliased source. A rebuild therefore reproduces the incrementally maintained
+/// view exactly and a reconcile of it reports no drift.</description></item>
+/// <item><description>Advancing the target version emits no source mutation and
+/// reshapes no contribution already folded.</description></item>
 /// <item><description>On a tree that never opted in, a projection sees the plain
 /// bytes the caller wrote.</description></item>
 /// </list>
@@ -35,6 +34,12 @@ namespace Orleans.Lattice.Schema.Tests;
 public sealed class ProjectionInputSeamCharacterizationTests
 {
     private static readonly TimeSpan Barrier = TimeSpan.FromSeconds(30);
+
+    private static readonly string[] TagGroups =
+    [
+        "plain:Amount", "plain:Total", "plain:other",
+        "enveloped:v1:Amount", "enveloped:v1:Total", "enveloped:v2:Amount", "enveloped:v2:Total",
+    ];
 
     private ProjectionInputSeamClusterFixture _fixture = null!;
 
@@ -57,15 +62,14 @@ public sealed class ProjectionInputSeamCharacterizationTests
         return view!;
     }
 
-    private async Task<(ILatticeView Tags, ILatticeView Total, ILatticeView Filter)> ViewsAtHeadAsync(string source)
+    private async Task<SeamViews> ViewsAtHeadAsync(string source)
     {
-        var tags = await ViewAsync(ProjectionInputSeamClusterFixture.TagsView(source));
-        var total = await ViewAsync(ProjectionInputSeamClusterFixture.TotalView(source));
-        var filter = await ViewAsync(ProjectionInputSeamClusterFixture.FilterView(source));
-        await tags.WaitForSourceHeadAsync(Barrier);
-        await total.WaitForSourceHeadAsync(Barrier);
-        await filter.WaitForSourceHeadAsync(Barrier);
-        return (tags, total, filter);
+        var views = new SeamViews(
+            await ViewAsync(ProjectionInputSeamClusterFixture.TagsView(source)),
+            await ViewAsync(ProjectionInputSeamClusterFixture.TotalView(source)),
+            await ViewAsync(ProjectionInputSeamClusterFixture.FilterView(source)));
+        await views.WaitForSourceHeadAsync();
+        return views;
     }
 
     /// <summary>
@@ -90,67 +94,111 @@ public sealed class ProjectionInputSeamCharacterizationTests
         return document.RootElement.GetProperty("Total").GetDouble();
     }
 
+    /// <summary>
+    /// Asserts the option-B contract over the scenario written by
+    /// <see cref="WriteAcrossATargetAdvanceAsync"/>: the version-1 body projected
+    /// un-upcast, the version-2 body projected as written, no envelope anywhere.
+    /// </summary>
+    private static void AssertStrippedAtStampedVersion(SeamViewState state, long extraPlainTotal = 0, double extraSum = 0)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.Tags["plain:Amount"], Is.EqualTo(1L), "version-1 body, stripped and not upcast");
+            Assert.That(state.Tags["plain:Total"], Is.EqualTo(1L + extraPlainTotal), "version-2 body, stripped");
+            foreach (var enveloped in TagGroups.Where(static group => group.StartsWith("enveloped:", StringComparison.Ordinal)))
+            {
+                Assert.That(state.Tags[enveloped], Is.Null, $"no projection may observe an envelope ({enveloped})");
+            }
+
+            Assert.That(state.Sum, Is.EqualTo(7d + extraSum), "only the version-2 body carries Total");
+            Assert.That(state.FilterRows.Keys, Does.Contain("b"));
+            Assert.That(state.FilterRows["b"], Is.EqualTo("""{"Total":7}"""), "the filter view stores the stripped body");
+            Assert.That(state.FilterRows.Keys, Does.Not.Contain("a"), "the version-1 body has no Total member");
+        });
+    }
+
     [Test]
-    public async Task Incremental_maintenance_projects_the_stored_envelope_at_the_stamped_version()
+    public async Task Incremental_maintenance_projects_the_stripped_body_at_its_stamped_version()
     {
         const string source = ProjectionInputSeamClusterFixture.IncrementalSource;
         var tree = _fixture.Source(source);
         await _fixture.VersionAdmin.SetVersionConfigAsync(
             source, new LatticeSchemaVersionConfig(ProjectionInputSeamClusterFixture.SchemaId, 1));
         await tree.SetAsync("a", Json("""{"Amount":5}"""));
-        var (tags, total, filter) = await ViewsAtHeadAsync(source);
-        Assert.That(await tags.GetAggregateInt64Async("enveloped:v1:Amount"), Is.EqualTo(1L));
+        var views = await ViewsAtHeadAsync(source);
+        Assert.That(await views.Tags.GetAggregateInt64Async("plain:Amount"), Is.EqualTo(1L));
 
         // Advancing the target emits no source mutation, so the version-1
         // contribution already folded is neither upcast nor re-projected.
         await _fixture.VersionAdmin.AdvanceTargetVersionAsync(source, 2);
         await tree.SetAsync("b", Json("""{"Total":7}"""));
-        await tags.WaitForSourceHeadAsync(Barrier);
-        await total.WaitForSourceHeadAsync(Barrier);
-        await filter.WaitForSourceHeadAsync(Barrier);
+        await views.WaitForSourceHeadAsync();
 
         await Assert.MultipleAsync(async () =>
         {
             // A client read decodes and upcasts: both keys read at the target shape.
             Assert.That(TotalMember(await tree.GetAsync("a")), Is.EqualTo(5d));
             Assert.That(TotalMember(await tree.GetAsync("b")), Is.EqualTo(7d));
-
-            // The projection saw each value's stored envelope at the version it was
-            // stamped with, and the version-1 body was never upcast.
-            Assert.That(await tags.GetAggregateInt64Async("enveloped:v1:Amount"), Is.EqualTo(1L));
-            Assert.That(await tags.GetAggregateInt64Async("enveloped:v2:Total"), Is.EqualTo(1L));
-            Assert.That(await tags.GetAggregateInt64Async("plain:Total"), Is.Null);
-
-            // An envelope-unaware projection reads nothing usable from those bytes.
-            Assert.That(await total.GetAggregateDoubleAsync(ProjectionInputSeamClusterFixture.TotalGroup), Is.EqualTo(0d));
-            Assert.That(await filter.CountAsync(), Is.EqualTo(0));
         });
+        AssertStrippedAtStampedVersion(await views.ReadAsync());
     }
 
     [Test]
-    public async Task Rebuild_projects_the_decoded_body_upcast_to_the_target_and_reconcile_reports_drift()
+    public async Task Rebuild_and_reconcile_rederive_exactly_the_incrementally_maintained_view()
     {
         const string source = ProjectionInputSeamClusterFixture.RebuildSource;
         await WriteAcrossATargetAdvanceAsync(source);
-        var (tags, total, filter) = await ViewsAtHeadAsync(source);
-        Assert.That(await tags.GetAggregateInt64Async("enveloped:v1:Amount"), Is.EqualTo(1L), "precondition: incremental input");
+        var views = await ViewsAtHeadAsync(source);
+        var incremental = await views.ReadAsync();
+        AssertStrippedAtStampedVersion(incremental);
 
-        // A reconcile compares the live view with a fresh derivation and repairs it.
-        var drifted = await tags.ReconcileAsync();
-        await total.RebuildAsync();
-        await filter.RebuildAsync();
+        await AssertRederivationsMatchAsync(views, incremental);
 
-        await Assert.MultipleAsync(async () =>
-        {
-            Assert.That(drifted, Is.True);
+        // Incremental apply on top of the rebuilt view folds the same input shape.
+        await _fixture.Source(source).SetAsync("c", Json("""{"Total":1}"""));
+        await views.WaitForSourceHeadAsync();
+        var afterRebuild = await views.ReadAsync();
+        AssertStrippedAtStampedVersion(afterRebuild, extraPlainTotal: 1, extraSum: 1);
+        Assert.That(await views.ReconcileAllAsync(), Is.EqualTo(new[] { false, false, false }));
+    }
 
-            // Re-derived from the decoded, upcast body with no envelope.
-            Assert.That(await tags.GetAggregateInt64Async("plain:Total"), Is.EqualTo(2L));
-            Assert.That(await tags.GetAggregateInt64Async("enveloped:v1:Amount"), Is.Null);
-            Assert.That(await tags.GetAggregateInt64Async("enveloped:v2:Total"), Is.Null);
-            Assert.That(await total.GetAggregateDoubleAsync(ProjectionInputSeamClusterFixture.TotalGroup), Is.EqualTo(12d));
-            Assert.That(await filter.CountAsync(), Is.EqualTo(2));
-        });
+    [Test]
+    public async Task Atomic_publication_projects_the_same_input_and_reconciles_without_drift()
+    {
+        const string source = ProjectionInputSeamClusterFixture.AtomicSource;
+        var tree = _fixture.Source(source);
+        await _fixture.VersionAdmin.SetVersionConfigAsync(
+            source, new LatticeSchemaVersionConfig(ProjectionInputSeamClusterFixture.SchemaId, 1));
+        await tree.SetManyAtomicAsync([new("a", Json("""{"Amount":5}"""))]);
+        await _fixture.VersionAdmin.AdvanceTargetVersionAsync(source, 2);
+        await tree.SetManyAtomicAsync([new("b", Json("""{"Total":7}"""))]);
+        var views = await ViewsAtHeadAsync(source);
+        var incremental = await views.ReadAsync();
+        AssertStrippedAtStampedVersion(incremental);
+
+        await AssertRederivationsMatchAsync(views, incremental);
+    }
+
+    [Test]
+    public async Task Aliased_source_rebuild_and_reconcile_rederive_exactly_the_incrementally_maintained_view()
+    {
+        const string source = ProjectionInputSeamClusterFixture.AliasedSource;
+        var physical = $"{source}-physical";
+        var grains = _fixture.Cluster.GrainFactory;
+        await grains.GetGrain<ILattice>(physical).SetAsync("seed", Json("""{"Total":1}"""));
+        await grains.GetLatticeRegistry().SetAliasAsync(source, physical);
+
+        var sourceTree = grains.GetGrain<ILattice>(source);
+        Assert.That((await sourceTree.GetRoutingAsync(forceRefresh: true)).PhysicalTreeId, Is.EqualTo(physical),
+            "precondition: the source is aliased, so a rebuild reads its physical shards");
+        var views = await ViewsAtHeadAsync(source);
+        await WriteAcrossATargetAdvanceAsync(source);
+        await views.WaitForSourceHeadAsync();
+        Assert.That(TotalMember(await sourceTree.GetAsync("a")), Is.EqualTo(5d), "precondition: a is stamped at version 1");
+        var incremental = await views.ReadAsync();
+        AssertStrippedAtStampedVersion(incremental, extraPlainTotal: 1, extraSum: 1);
+
+        await AssertRederivationsMatchAsync(views, incremental);
     }
 
     [Test]
@@ -158,13 +206,84 @@ public sealed class ProjectionInputSeamCharacterizationTests
     {
         const string source = ProjectionInputSeamClusterFixture.PlainSource;
         await _fixture.Source(source).SetAsync("p", Json("""{"Total":3}"""));
-        var (tags, total, filter) = await ViewsAtHeadAsync(source);
+        var views = await ViewsAtHeadAsync(source);
 
         await Assert.MultipleAsync(async () =>
         {
-            Assert.That(await tags.GetAggregateInt64Async("plain:Total"), Is.EqualTo(1L));
-            Assert.That(await total.GetAggregateDoubleAsync(ProjectionInputSeamClusterFixture.TotalGroup), Is.EqualTo(3d));
-            Assert.That(await filter.CountAsync(), Is.EqualTo(1));
+            Assert.That(await views.Tags.GetAggregateInt64Async("plain:Total"), Is.EqualTo(1L));
+            Assert.That(await views.Total.GetAggregateDoubleAsync(ProjectionInputSeamClusterFixture.TotalGroup), Is.EqualTo(3d));
+            Assert.That(await views.Filter.CountAsync(), Is.EqualTo(1));
         });
+    }
+
+    /// <summary>
+    /// Reconciles then rebuilds every view and asserts each re-derivation reproduces
+    /// <paramref name="incremental"/> exactly, with no drift reported.
+    /// </summary>
+    private static async Task AssertRederivationsMatchAsync(SeamViews views, SeamViewState incremental)
+    {
+        Assert.That(await views.ReconcileAllAsync(), Is.EqualTo(new[] { false, false, false }),
+            "a reconcile of an incrementally maintained view must find no drift");
+        Assert.That(await views.ReadAsync(), Is.EqualTo(incremental).Using<SeamViewState>(SeamViewState.Equivalent),
+            "reconcile changed the view");
+
+        await views.RebuildAllAsync();
+        Assert.That(await views.ReadAsync(), Is.EqualTo(incremental).Using<SeamViewState>(SeamViewState.Equivalent),
+            "a rebuild must reproduce the incrementally maintained view");
+    }
+
+    private sealed record SeamViews(ILatticeView Tags, ILatticeView Total, ILatticeView Filter)
+    {
+        public async Task WaitForSourceHeadAsync()
+        {
+            await Tags.WaitForSourceHeadAsync(Barrier);
+            await Total.WaitForSourceHeadAsync(Barrier);
+            await Filter.WaitForSourceHeadAsync(Barrier);
+        }
+
+        public async Task<bool[]> ReconcileAllAsync() =>
+            [await Tags.ReconcileAsync(), await Total.ReconcileAsync(), await Filter.ReconcileAsync()];
+
+        public async Task RebuildAllAsync()
+        {
+            await Tags.RebuildAsync();
+            await Total.RebuildAsync();
+            await Filter.RebuildAsync();
+        }
+
+        public async Task<SeamViewState> ReadAsync()
+        {
+            var tags = new SortedDictionary<string, long?>(StringComparer.Ordinal);
+            foreach (var group in TagGroups)
+            {
+                tags[group] = await Tags.GetAggregateInt64Async(group);
+            }
+
+            var rows = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            await foreach (var entry in Filter.EntriesAsync())
+            {
+                rows[entry.Key] = Encoding.UTF8.GetString(entry.Value);
+            }
+
+            return new SeamViewState(
+                tags,
+                await Total.GetAggregateDoubleAsync(ProjectionInputSeamClusterFixture.TotalGroup) ?? 0d,
+                rows);
+        }
+    }
+
+    private sealed record SeamViewState(
+        SortedDictionary<string, long?> Tags,
+        double Sum,
+        SortedDictionary<string, string> FilterRows)
+    {
+        public static bool Equivalent(SeamViewState left, SeamViewState right) =>
+            left.Tags.SequenceEqual(right.Tags)
+            && left.Sum.Equals(right.Sum)
+            && left.FilterRows.SequenceEqual(right.FilterRows);
+
+        public override string ToString() =>
+            $"tags=[{string.Join(", ", Tags.Select(static t => $"{t.Key}={t.Value?.ToString() ?? "null"}"))}] "
+            + $"sum={Sum} filter=[{string.Join(", ", FilterRows.Select(static r => $"{r.Key}={r.Value}"))}]";
     }
 }
