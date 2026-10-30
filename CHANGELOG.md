@@ -24,6 +24,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Internal-node construction.** Root promotion, bulk-load internal levels and split-sibling recovery each combine tree binding and initialization into one grain call, preserving durability and recovery ordering. ([#5133](https://github.com/NSTA1/Orleans.Lattice/pull/5133)) (`Orleans.Lattice`)
 
+### Fixed
+
+- **Explorer - Backup detail ownership.** Late detail reads no longer overwrite another backup; completed deletions cannot redirect its page, and old exports cannot disable new controls, clear a newer transfer or start a stale download. ([#5204](https://github.com/NSTA1/Orleans.Lattice/issues/5204)) (`Orleans.Lattice.Explorer.UI`)
+
 ## Released
 
 ## [2026-10-28]

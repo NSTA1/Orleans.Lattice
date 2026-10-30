@@ -95,6 +95,9 @@ internal sealed partial class FakeBackupControl : ILatticeBackupControl
     /// <summary>A fault every artifact export throws when set.</summary>
     public Exception? ExportFault { get; set; }
 
+    /// <summary>A scripted wait before an artifact's first chunk.</summary>
+    public Func<string, string, Task> BeforeExport { get; set; } = (_, _) => Task.CompletedTask;
+
     /// <summary>A capability set allowing every operation over <paramref name="scope"/>.</summary>
     /// <param name="scope">The scope.</param>
     public static BackupScopeCapabilities AllowAll(BackupScopeSelector scope) => new()
@@ -247,6 +250,7 @@ internal sealed partial class FakeBackupControl : ILatticeBackupControl
     public async IAsyncEnumerable<ReadOnlyMemory<byte>> ExportArtifactAsync(string backupId, string artifactId, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         Calls.Add((nameof(ExportArtifactAsync), (backupId, artifactId)));
+        await BeforeExport(backupId, artifactId);
         await Task.Yield();
         if (ExportFault is { } fault)
         {

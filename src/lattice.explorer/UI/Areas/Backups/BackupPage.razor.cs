@@ -29,6 +29,7 @@ public partial class BackupPage : IDisposable
     ];
 
     private readonly ComponentLifetime _load = new();
+    private ExplorerAddress? _loadedFor;
     private string? _backupId;
     private BackupManifest? _manifest;
     private BackupTreeName? _tree;
@@ -121,13 +122,14 @@ public partial class BackupPage : IDisposable
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
-        var id = Address.Path.Count == 1 ? Address.Path[0] : null;
-        if (string.Equals(id, _backupId, StringComparison.Ordinal) && (_manifest is not null || _error is not null))
+        var address = Address;
+        if (address.Equals(_loadedFor))
         {
             return;
         }
 
-        _backupId = id;
+        _loadedFor = address;
+        _backupId = address.Path.Count == 1 ? address.Path[0] : null;
         await LoadAsync();
     }
 
@@ -145,6 +147,15 @@ public partial class BackupPage : IDisposable
         _capabilities = null;
         _app = null;
         _health = null;
+        _healthAvailable = false;
+        _healthPending = false;
+        _coldRestoreServed = false;
+        _confirmRestore = false;
+        _confirmDelete = false;
+        _targetError = null;
+        _deleteError = null;
+        _exporting = null;
+        _exportError = null;
 
         if (_backupId is not { Length: > 0 } backupId)
         {
@@ -157,7 +168,7 @@ public partial class BackupPage : IDisposable
         {
             description = await Control.DescribeBackupAsync(backupId, cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             return;
         }
@@ -195,17 +206,25 @@ public partial class BackupPage : IDisposable
             var health = Access.IsHealthMonitoringAvailableAsync(cancellationToken);
             var operations = AreOperationsServedAsync(cancellationToken);
 
-            _capabilities = await capabilities;
-            _app = await app;
-            _coldRestoreServed = await operations;
-            _healthAvailable = await health;
+            await Task.WhenAll(capabilities, app, health, operations);
+            cancellationToken.ThrowIfCancellationRequested();
+            _capabilities = capabilities.Result;
+            _app = app.Result;
+            _coldRestoreServed = operations.Result;
+            _healthAvailable = health.Result;
             if (_healthAvailable)
             {
                 _healthPending = true;
                 StateHasChanged();
                 try
                 {
-                    _health = await Control.GetBackupHealthAsync(backupId, cancellationToken);
+                    var report = await Control.GetBackupHealthAsync(backupId, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    _health = report;
+                }
+                catch (Exception) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
                 }
                 catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
                 {
@@ -213,13 +232,20 @@ public partial class BackupPage : IDisposable
                 }
                 finally
                 {
-                    _healthPending = false;
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        _healthPending = false;
+                    }
                 }
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             // A newer load replaced this one.
+        }
+        catch (Exception exception)
+        {
+            _error = BackupsFaults.Describe(exception);
         }
     }
 
@@ -284,18 +310,21 @@ public partial class BackupPage : IDisposable
         }
 
         _deleteError = null;
+        var cancellationToken = _load.Token;
         try
         {
-            var deleted = await Control.DeleteBackupAsync(manifest.Id, _load.Token);
+            var deleted = await Control.DeleteBackupAsync(manifest.Id, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             Toasts.Show(
                 deleted ? "Deleted backup " + BackupsFormat.Name(manifest) + "." : "Backup " + BackupsFormat.Name(manifest) + " was already gone.",
                 deleted ? LtToastTone.Success : LtToastTone.Warning);
-            if (!_load.IsLeft)
-            {
-                Navigator.NavigateTo(BackupsAddresses.Root);
-            }
+            Navigator.NavigateTo(BackupsAddresses.Root);
         }
-        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // The deletion may have completed, but its page is no longer current.
+        }
+        catch (Exception exception)
         {
             _deleteError = BackupsFaults.Describe(exception);
         }
@@ -310,18 +339,28 @@ public partial class BackupPage : IDisposable
 
         _exporting = artifactId;
         _exportError = null;
+        var cancellationToken = _load.Token;
         try
         {
-            var stream = await BackupArtifactStream.OpenAsync(Control.ExportArtifactAsync(manifest.Id, artifactId, _load.Token), _load.Token);
-            await Interop.SaveAsync(BackupsInterop.FileNameFor(manifest.Id, artifactId), stream, _load.Token);
+            await using var stream = await BackupArtifactStream.OpenAsync(
+                Control.ExportArtifactAsync(manifest.Id, artifactId, cancellationToken), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Interop.SaveAsync(BackupsInterop.FileNameFor(manifest.Id, artifactId), stream, cancellationToken);
         }
-        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, _load.Token))
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // A newer backup owns the page, including its export state.
+        }
+        catch (Exception exception)
         {
             _exportError = BackupsFaults.Describe(exception);
         }
         finally
         {
-            _exporting = null;
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _exporting = null;
+            }
         }
     }
 }
