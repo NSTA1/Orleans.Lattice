@@ -87,7 +87,7 @@
     "auth": {
       "interceptor": "LatticeReplicationGrpcAuthInterceptor and facade-specific LatticeReplicationApiGrpcAuthInterceptor",
       "authorizer": "IReplicationSecretProvider for peer transports; ILatticeReplicationApiAuthorizer for the facade and status facade; ISagaPeerAuthorizer for saga control after shared-secret auth.",
-      "decision": "Peer replication methods require the shared-secret header when RequireAuthentication is true; missing credentials are Unauthenticated and bad credentials are PermissionDenied. With BindCredentialToOriginCluster at its default true, an accepted credential must also match the outbound secret configured for the stamped origin or the call is PermissionDenied. The facade authorizer covers the control service and peer-status service, exempts only GetAuthScheme, and maps GetPeerStatus to LatticeReplicationApiOperation.GetPeerStatus. Saga control additionally denies origins outside the configured peer map before state mutation.",
+      "decision": "Peer replication methods require the shared-secret header when RequireAuthentication is true; missing credentials are Unauthenticated and bad credentials are PermissionDenied. With BindCredentialToOriginCluster at its default true, an accepted credential must also match the outbound secret configured for the stamped origin or the call is PermissionDenied. The facade authorizer covers the control service and peer-status service, exempts only GetAuthScheme, and maps GetPeerStatus to LatticeReplicationApiOperation.GetPeerStatus. Saga control additionally requires the interceptor's credential-to-origin binding, so it is refused when RequireAuthentication or BindCredentialToOriginCluster is false, denies origins outside the configured peer map before state mutation, and answers a GetDecision query only to a recorded participant of the saga.",
       "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor"
     }
   },
@@ -2374,7 +2374,7 @@
         },
         {
           "error_id": "permission-denied",
-          "condition": "The origin cluster is not an authorized replication peer."
+          "condition": "The call carries no origin cluster bound to its credential by the interceptor, the body declares a CoordinatorClusterId other than the stamped origin, or the origin cluster is not an authorized replication peer."
         },
         {
           "error_id": "internal",
@@ -2440,7 +2440,7 @@
         },
         {
           "error_id": "permission-denied",
-          "condition": "The origin cluster is not an authorized replication peer."
+          "condition": "The call carries no origin cluster bound to its credential by the interceptor, the body declares a CoordinatorClusterId other than the stamped origin, or the origin cluster is not an authorized replication peer."
         },
         {
           "error_id": "internal",
@@ -2481,6 +2481,77 @@
       ]
     },
     {
+      "id": "saga-get-decision",
+      "in_process": null,
+      "grpc_method": "/orleans.lattice.replication.LatticeSaga/GetDecision",
+      "transport_scope": "grpc_only",
+      "request": "SagaControlRequest",
+      "response": "SagaControlResponse",
+      "errors": [
+        {
+          "error_id": "unauthenticated",
+          "condition": "The shared-secret header is missing while peer authentication is required."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The shared secret is not accepted by the receiver."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "SagaId or TargetTree is empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The call carries no origin cluster bound to its credential by the interceptor, or the origin cluster is not an authorized replication peer."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The stamped origin cluster is not a recorded participant of the saga on this coordinator cluster."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Saga control 'GetDecision' failed, including on a host whose saga control handler hosts no saga coordinator; details are logged server-side."
+        },
+        {
+          "error_id": "invalid-operation",
+          "condition": "Client transport has no endpoint for the coordinator cluster or rejects a non-HTTPS endpoint without explicit plaintext opt-in."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The peer endpoint is temporarily unreachable."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only decision query; the coordinator only reads its recorded phase and never writes the decision on a query.",
+        "source": "src/lattice.replication/Grains/CrossClusterSagaCoordinatorGrain.cs#CrossClusterSagaCoordinatorGrain.ResolveDecisionForParticipantAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The operation is read-only: it answers Committed, Aborted, or Prepared while the decision is still pending, and Aborted for a saga the coordinator never started or has already cleared.",
+        "source": "src/lattice.replication/Grains/CrossClusterSagaCoordinatorGrain.cs#CrossClusterSagaCoordinatorGrain.ResolveDecisionForParticipantAsync"
+      },
+      "concurrency": {
+        "rule": "A participant asks the saga's coordinator cluster; the transport-stamped origin replaces any RequesterClusterId in the body, the coordinator-attribution check does not apply, and the coordinator answers only a requester recorded as one of the saga's participants.",
+        "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.HandleAsync"
+      },
+      "sources": [
+        "src/lattice.replication.grpc/LatticeSagaGrpcMethods.cs#LatticeSagaGrpcMethods.GetDecisionMethodName",
+        "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.GetDecision",
+        "src/lattice.replication.grpc/GrpcSagaControlChannel.cs#GrpcSagaControlChannel.GetDecisionAsync",
+        "src/lattice.replication/ISagaControlChannel.cs#ISagaControlChannel",
+        "src/lattice.replication/ILatticeSagaControlHandler.cs#ILatticeSagaControlHandler.GetDecisionAsync",
+        "src/lattice.replication/LatticeSagaControlHandler.cs#LatticeSagaControlHandler.GetDecisionAsync",
+        "src/lattice.replication/Grains/CrossClusterSagaCoordinatorGrain.cs#CrossClusterSagaCoordinatorGrain.ResolveDecisionForParticipantAsync",
+        "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs#PeerMapSagaPeerAuthorizer",
+        "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs#LatticeReplicationGrpcAuthInterceptor"
+      ]
+    },
+    {
       "id": "saga-get-status",
       "in_process": null,
       "grpc_method": "/orleans.lattice.replication.LatticeSaga/GetStatus",
@@ -2506,7 +2577,7 @@
         },
         {
           "error_id": "permission-denied",
-          "condition": "The origin cluster is not an authorized replication peer."
+          "condition": "The call carries no origin cluster bound to its credential by the interceptor, the body declares a CoordinatorClusterId other than the stamped origin, or the origin cluster is not an authorized replication peer."
         },
         {
           "error_id": "internal",
@@ -2572,7 +2643,7 @@
         },
         {
           "error_id": "permission-denied",
-          "condition": "The origin cluster is not an authorized replication peer."
+          "condition": "The call carries no origin cluster bound to its credential by the interceptor, the body declares a CoordinatorClusterId other than the stamped origin, or the origin cluster is not an authorized replication peer."
         },
         {
           "error_id": "internal",

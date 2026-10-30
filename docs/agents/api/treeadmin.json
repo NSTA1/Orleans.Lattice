@@ -53,7 +53,10 @@
         "registration": "AddLatticeTreeAdminApi",
         "package": "Orleans.Lattice.Api.TreeAdmin",
         "provides": [
-          "ILatticeTreeAdmin"
+          "ILatticeTreeAdmin",
+          "ILatticeTreeAdminOperations",
+          "ILatticeWalReclamation",
+          "ILatticeStorageUsageOperations"
         ],
         "source": "src/lattice.api.treeadmin/LatticeApiTreeAdminServiceCollectionExtensions.cs#LatticeApiTreeAdminServiceCollectionExtensions.AddLatticeTreeAdminApi"
       }
@@ -2354,22 +2357,24 @@
         }
       ],
       "retry": {
-        "safe": true,
-        "policy": "Retry only with the same idempotency key or matching in-flight target.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+        "safe": "conditional",
+        "policy": "Re-drive only the last un-acknowledged chunk under the same operationId and chunkIndex; never re-drive a chunk that a later chunk has already superseded on the same shard.",
+        "source": "docs/lattice.api.treeadmin/README.md"
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Same operationId and chunkIndex are idempotent.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+        "basis": "The facade keys each chunk as operationId/chunkIndex and a shard records only the most recent bulk chunk it completed, so re-driving that chunk is a no-op while re-driving an older chunk after a later one reached the same shard is not deduplicated.",
+        "source": "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs#ShardRootGrain.BulkAppendAsync"
       },
       "concurrency": {
-        "rule": "Entries must be strictly ascending by key and chunkIndex is monotonic.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+        "rule": "The facade rejects a chunk whose keys are not strictly ascending within the chunk and a negative chunkIndex; key order across chunks and a monotonic chunkIndex are caller obligations it does not check.",
+        "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.AppendBulkLoadAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#AppendBulkLoad"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#AppendBulkLoad",
+        "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs#ShardRootGrain.BulkAppendAsync",
+        "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.AppendBulkLoadAsync"
       ]
     },
     {
@@ -2383,6 +2388,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "Request validation failed."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "The tree id names a reserved system tree; the tree grain rejects it before any pass."
         },
         {
           "error_id": "permission-denied",
@@ -2413,7 +2422,8 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditOrphanedLeavesAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#AuditOrphanedLeaves"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#AuditOrphanedLeaves",
+        "src/lattice/BPlusTree/Grains/LatticeGrain.OrphanRepair.cs#LatticeGrain.DriveOrphanedLeafPassAsync"
       ]
     },
     {
@@ -2494,14 +2504,14 @@
         }
       ],
       "retry": {
-        "safe": true,
-        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "safe": "conditional",
+        "policy": "Retry begin only while no chunk has been appended; after the first acknowledged chunk, do not re-issue begin, resume by re-driving the last un-acknowledged chunk under the same operationId.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Same operationId opens or resumes the session.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
+        "basis": "The session holds no server-side state and begin re-runs the deep emptiness probe on every call, so a repeated begin succeeds only while the tree is still empty and throws TreeNotEmptyException once any chunk has landed.",
+        "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
       },
       "concurrency": {
         "rule": "The target tree must be empty, and the deep diagnostics probe must successfully sample every shard; any shard sample failure is refused fail-closed instead of being counted as empty.",
@@ -4214,8 +4224,12 @@
           "condition": "Request validation failed."
         },
         {
+          "error_id": "invalid-argument",
+          "condition": "The tree id names a reserved system tree; the tree grain rejects it before any pass."
+        },
+        {
           "error_id": "permission-denied",
-          "condition": "Authorization denied the caller."
+          "condition": "The caller lacks whole-tree TreeLifecycle authority at the facade, or whole-tree Admin authority, which the tree grain additionally enforces for a repair pass."
         },
         {
           "error_id": "cancelled",
@@ -4242,7 +4256,8 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RepairOrphanedLeaves"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RepairOrphanedLeaves",
+        "src/lattice/BPlusTree/Grains/LatticeGrain.OrphanRepair.cs#LatticeGrain.DriveOrphanedLeafPassAsync"
       ]
     },
     {
@@ -5290,12 +5305,12 @@
           "condition": "Request validation failed."
         },
         {
-          "error_id": "permission-denied",
-          "condition": "Authorization denied the caller."
+          "error_id": "invalid-argument",
+          "condition": "The tree id names a reserved system tree; the tree grain rejects it before any pass."
         },
         {
-          "error_id": "not-found",
-          "condition": "The named view or tag index does not exist."
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
         },
         {
           "error_id": "cancelled",
@@ -5327,7 +5342,8 @@
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartOrphanedLeavesAuditAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartOrphanedLeavesAudit",
-        "docs/lattice.api.treeadmin/operations.md"
+        "docs/lattice.api.treeadmin/operations.md",
+        "src/lattice/BPlusTree/Grains/LatticeGrain.OrphanRepair.cs#LatticeGrain.DriveOrphanedLeafPassAsync"
       ]
     },
     {
@@ -5344,12 +5360,12 @@
           "condition": "Request validation failed."
         },
         {
-          "error_id": "permission-denied",
-          "condition": "Authorization denied the caller."
+          "error_id": "invalid-argument",
+          "condition": "The tree id names a reserved system tree; the tree grain rejects it before any pass."
         },
         {
-          "error_id": "not-found",
-          "condition": "The named view or tag index does not exist."
+          "error_id": "permission-denied",
+          "condition": "The caller lacks whole-tree TreeLifecycle authority at the facade, or whole-tree Admin authority, which the tree grain additionally enforces for a repair pass."
         },
         {
           "error_id": "cancelled",
@@ -5381,7 +5397,8 @@
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartOrphanedLeavesRepairAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartOrphanedLeavesRepair",
-        "docs/lattice.api.treeadmin/operations.md"
+        "docs/lattice.api.treeadmin/operations.md",
+        "src/lattice/BPlusTree/Grains/LatticeGrain.OrphanRepair.cs#LatticeGrain.DriveOrphanedLeafPassAsync"
       ]
     },
     {
@@ -5663,6 +5680,10 @@
           "condition": "Request validation failed."
         },
         {
+          "error_id": "invalid-argument",
+          "condition": "The tree id names a reserved system tree; the tree grain rejects it before any pass."
+        },
+        {
           "error_id": "permission-denied",
           "condition": "The caller lacks whole-tree Read authority."
         },
@@ -5686,7 +5707,8 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
       },
       "sources": [
-        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync",
+        "src/lattice/BPlusTree/Grains/LatticeGrain.OrphanRepair.cs#LatticeGrain.DriveOrphanedLeafPassAsync"
       ]
     },
     {

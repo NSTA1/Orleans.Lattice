@@ -1,0 +1,165 @@
+schema: lattice.agents/procedure/v1
+id: tenant-lifecycle
+name: "Create, govern, suspend, resume, and delete a tenant"
+surfaces:
+  in_process:
+    api: "ILatticeTenantAdmin.CreateTenantAsync"
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#CreateTenantAsync"
+  grpc:
+    api: "/orleans.lattice.api.tenantadmin/CreateTenant"
+    source: "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs#CreateTenantMethodName"
+  mcp_tool:
+    api: "lattice_tenant_create"
+    source: "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/tenantadmin.json and, for each MCP tool used (lattice_tenant_create, lattice_tenant_set_quotas, lattice_tenant_get, lattice_tenant_suspend, lattice_tenant_resume, lattice_tenant_delete), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/tenantadmin.json"
+  - id: platform-operator
+    check: "The caller holds whole-scope LatticeOperation.Admin on the reserved auth policy tree (platform operator); a tenant-admin subject cannot create, suspend, resume, delete, or set quotas, and a narrowed Admin grant is refused."
+    source: "src/lattice.api.tenantadmin/TenantAdminAccessAuthorizer.cs#TenantAdminAccessAuthorizer.AuthorizeTenantAdminAsync"
+  - id: transport-opt-in
+    check: "Over gRPC the host registered an ILatticeTenantAdminApiAuthorizer other than the default DenyTenantAdminApiAuthorizer; over MCP the host set EnableTenantAdminControlTools and the caller's effective permissions grant Admin."
+    source: "src/lattice.api.tenantadmin.grpc/Security/ILatticeTenantAdminApiAuthorizer.cs#DenyTenantAdminApiAuthorizer"
+  - id: tenant-id-valid
+    check: "The tenant id matches ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ (1 to 63 characters) and, for create, does not begin with sys- or _lattice_."
+    source: "src/lattice.api.tenantadmin/LatticeTenantAdmin.cs#LatticeTenantAdmin.ThrowIfReservedTenantId"
+  - id: not-default-tenant
+    check: "The target of suspend, delete, or set-quotas is not the reserved default tenant; resume of default is an allowed no-op."
+    source: "docs/lattice.api.tenantadmin/README.md"
+  - id: admin-subjects-chosen
+    check: "The create's admin subjects are decided: omitted or empty seeds the calling subject; a non-empty set is used verbatim without the caller; entries must be non-blank and must not be a t/ tenant group; with ValidationRequired and a real identity directory every entry must resolve."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#CreateTenantAsync"
+  - id: delete-scope-accepted
+    check: "Deleting is intended to soft-delete every t/{tenantId}/* tree, purge the tenant's access data, and remove the grants other tenants issued to it; the source states no requirement to suspend, drain, or empty the tenant first."
+    source: "src/lattice.api.tenantadmin/LatticeTenantAdmin.cs#LatticeTenantAdmin.DeleteTenantAsync"
+steps:
+  - n: 1
+    action: "Create the tenant with its admin subjects."
+    api: "ILatticeTenantAdmin.CreateTenantAsync / CreateTenant / lattice_tenant_create"
+    expects: "TenantCreationResult with Status Active and the seeded AdminSubjects; the tenant starts unbounded on every resource quota with no residency configured."
+    source: "src/lattice.api.tenantadmin/LatticeTenantAdmin.cs#LatticeTenantAdmin.CreateTenantAsync"
+  - n: 2
+    action: "Author the tenant's quotas as one complete descriptor."
+    api: "ILatticeTenantAdmin.SetTenantQuotasAsync / SetTenantQuotas / lattice_tenant_set_quotas"
+    expects: "TenantQuotasUpdateResult.Quotas carries the quotas now in effect; the descriptor replaced the previous quotas rather than merging with them."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#SetTenantQuotasAsync"
+  - n: 3
+    action: "Read the tenant back as an operator through the quota-usage report, or as a seeded admin subject through the self-service read."
+    api: "ILatticeTenantQuotaUsage.GetQuotaUsageAsync / GetTenantQuotaUsage and ILatticeTenantSelfService.GetTenantAsync / GetTenant / lattice_tenant_get"
+    expects: "The quota-usage report returns ceilings, burst, and per-dimension usage (unmeasured while HasUsage is false); GetTenant returns Status, Regions, and Quotas for a caller in the tenant's admin subjects."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs#ILatticeTenantQuotaUsage.GetQuotaUsageAsync"
+  - n: 4
+    action: "Suspend the tenant to fence its traffic while keeping its definition."
+    api: "ILatticeTenantAdmin.SuspendTenantAsync / SuspendTenant / lattice_tenant_suspend"
+    expects: "TenantStatusChangeResult with NewStatus Suspended; Changed is false when the tenant was already suspended."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#SuspendTenantAsync"
+  - n: 5
+    action: "Resume the tenant."
+    api: "ILatticeTenantAdmin.ResumeTenantAsync / ResumeTenant / lattice_tenant_resume"
+    expects: "TenantStatusChangeResult with NewStatus Active; Changed is false when the tenant was already active."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#ResumeTenantAsync"
+  - n: 6
+    action: "Delete the tenant when it is to be retired."
+    api: "ILatticeTenantAdmin.DeleteTenantAsync / DeleteTenant / lattice_tenant_delete"
+    expects: "TenantDeletionResult.CascadedTreeCount reports how many of the tenant's trees were soft-deleted."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#DeleteTenantAsync"
+  - n: 7
+    action: "Confirm the registry record is gone by reading the tenant as an operator."
+    api: "ILatticeTenantQuotaUsage.GetQuotaUsageAsync / GetTenantQuotaUsage"
+    expects: "TenantNotFoundException, NotFound over gRPC."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs#ILatticeTenantQuotaUsage.GetQuotaUsageAsync"
+postconditions:
+  - check: "A created tenant is Active with Shared placement and unbounded resource quotas until quotas are authored."
+    source: "src/lattice.api.tenantadmin/LatticeTenantAdmin.cs#LatticeTenantAdmin.CreateTenantAsync"
+  - check: "A null resource ceiling is unbounded on that dimension; a null delegated access cap takes its default (500 groups, 10000 membership edges, 5000 member subjects, 1000 tenant rules) and is never unbounded."
+    source: "docs/lattice.api.tenantadmin/README.md"
+  - check: "Footprint ceilings bind against metered usage, so they arm only after the tenant's first usage sample lands (MeterInterval, default 30 seconds); admission is fail-open until then."
+    source: "docs/lattice.tenancy/README.md"
+  - check: "Usage above cap x (1 + BurstPercent/100) is refused with LatticeQuotaExceededException; usage between the cap and that bound is admitted and metered as overage; lowering a cap refuses new writes only and does not remove existing data."
+    source: "docs/lattice.tenancy/README.md"
+  - check: "MaxOpsPerSecond is a silo-local token budget charged on writes at admission and on reads after the access gate authorizes them; MaxTreeCount is charged at explicit tree creation through the tree-administration facade; footprint ceilings are never applied to reads."
+    source: "docs/lattice.tenancy/README.md"
+  - check: "While suspended, requests acting as the tenant are denied, its recorded cross-tenant grants admit nothing, and inbound replication writes for it are refused and dead-lettered."
+    source: "docs/lattice.tenancy/README.md"
+  - check: "Suspension is a status change that retains the tenant definition; it deletes no tree or record."
+    source: "src/lattice.tenancy/TenantStatus.cs#TenantStatus.Suspended"
+  - check: "A suspended tenant's own admin subjects hold no tenant-admin-tier authority until an operator resumes it; operator-tier lifecycle and quota calls are not status-gated."
+    source: "docs/lattice.api.tenantadmin/README.md"
+  - check: "After delete the tenant's trees are soft-deleted, its tenant-tier rules, tenant groups, and membership edges are purged, every grant other tenants issued to it is removed, and the registry record with its member set is removed, so a tenant later created under the same id inherits none of them."
+    source: "docs/lattice.tenancy/README.md"
+failure_modes:
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+  - id: authorization-denied
+    signal: "LatticeAuthorizationDeniedException, or PermissionDenied over gRPC including from the default-deny transport authorizer."
+    effect: "No lifecycle change is made, and the caller does not learn whether the tenant exists."
+    response: "Run as a platform operator and confirm the transport opt-in; do not retry unchanged."
+  - id: tenant-already-exists
+    signal: "TenantAlreadyExistsException, or AlreadyExists over gRPC, on create."
+    effect: "The existing tenant definition is left untouched."
+    response: "Read the existing tenant; after an ambiguous earlier create, treat this as that create having landed."
+  - id: invalid-argument
+    signal: "ArgumentException (including TenantAccessConfinementException and LatticeDirectoryValidationException), or InvalidArgument over gRPC."
+    effect: "Nothing is written."
+    response: "Fix the tenant id, the admin-subject list, or the negative quota value and resubmit."
+  - id: tenant-not-found
+    signal: "TenantNotFoundException, or NotFound over gRPC, on suspend, resume, delete, set-quotas, or a read."
+    effect: "No change is made."
+    response: "Verify the tenant id; after an ambiguous earlier delete, treat NotFound as that delete having completed."
+  - id: reserved-default-tenant
+    signal: "ReservedTenantOperationException, or FailedPrecondition over gRPC."
+    effect: "The default tenant is left unchanged."
+    response: "Do not target the default tenant with suspend, delete, or set-quotas."
+  - id: registry-write-contention
+    signal: "TenantRegistryConcurrencyException, or Internal over gRPC."
+    effect: "The write that exhausted its retries is not applied."
+    response: "Read the tenant back and retry the same call."
+  - id: delete-interrupted
+    signal: "Delete fails after it began, including InvalidOperationException (FailedPrecondition over gRPC) on a host whose membership directory or policy store was replaced and cannot be purged."
+    effect: "The tenant is left suspended with its registry record in place; trees already cascaded stay soft-deleted."
+    response: "Retry the delete, which completes the remaining cascade and purge; on a host that cannot be purged, stop and report."
+  - id: read-back-invisible
+    signal: "GetTenant returns TenantNotFoundException right after a successful create."
+    effect: "The tenant exists but the caller is not one of its admin subjects."
+    response: "Read through GetQuotaUsageAsync as an operator, or add the caller as an admin subject through tenant access administration."
+rollback:
+  supported: true
+  mechanism: "Suspend is reversed by resume and a quota change by re-applying the prior descriptor; create is reversed only by delete; delete has no inverse surface and removes the registry record, access data, and inbound grants."
+  steps:
+    - action: "Capture the current quotas before replacing them."
+      api: "ILatticeTenantQuotaUsage.GetQuotaUsageAsync / GetTenantQuotaUsage"
+      source: "src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaUsageReport.cs#TenantQuotaUsageReport.Quotas"
+    - action: "Re-apply the captured quota descriptor."
+      api: "ILatticeTenantAdmin.SetTenantQuotasAsync / SetTenantQuotas / lattice_tenant_set_quotas"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#SetTenantQuotasAsync"
+    - action: "Resume a tenant that was suspended in error."
+      api: "ILatticeTenantAdmin.ResumeTenantAsync / ResumeTenant / lattice_tenant_resume"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#ResumeTenantAsync"
+  source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs#ILatticeTenantAdmin"
+concurrency:
+  - rule: "Every mutating verb commits through the registry's optimistic read-merge-write and fails with TenantRegistryConcurrencyException only after a fixed number of lost races on the same tenant's record."
+    source: "docs/lattice.tenancy/README.md"
+  - rule: "A status change is stamped later than the status it replaces, and the result reports the merged status, so a racing write that wins makes Changed false or NewStatus differ from the request."
+    source: "src/lattice.api.tenantadmin/LatticeTenantAdmin.cs#LatticeTenantAdmin.TransitionAsync"
+  - rule: "Delete suspends the tenant before enumerating its trees, so no tenant-scoped admission can race the cascade, and removes the registry record last."
+    source: "src/lattice.api.tenantadmin/LatticeTenantAdmin.cs#LatticeTenantAdmin.DeleteTenantAsync"
+  - rule: "A registry write returns after every silo acknowledged the advanced tenant-policy epoch or its lease plus margin lapsed; until a silo's snapshot is current it confirms active-tenant requests against the registry or denies."
+    source: "docs/lattice.tenancy/README.md"
+  - rule: "Create is not an idempotent upsert; suspend, resume, and set-quotas with the same descriptor are idempotent; delete after success observes not-found."
+    source: "src/lattice.api.tenantadmin/LatticeTenantAdmin.cs#LatticeTenantAdmin"
+sources:
+  - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs"
+  - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs"
+  - "src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaUsageReport.cs"
+  - "src/lattice.api.tenantadmin/LatticeTenantAdmin.cs"
+  - "src/lattice.api.tenantadmin/TenantAdminAccessAuthorizer.cs"
+  - "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs"
+  - "src/lattice.api.tenantadmin.grpc/Security/ILatticeTenantAdminApiAuthorizer.cs"
+  - "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs"
+  - "src/lattice.tenancy/LatticeTenantPolicyEngine.cs"
+  - "src/lattice.tenancy/TenantStatus.cs"
+  - "docs/lattice.api.tenantadmin/README.md"
+  - "docs/lattice.tenancy/README.md"

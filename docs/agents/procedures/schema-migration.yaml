@@ -1,0 +1,180 @@
+schema: lattice.agents/procedure/v1
+id: schema-migration
+name: "Register a schema version, audit compliance, then advance and migrate a tree"
+surfaces:
+  in_process:
+    api: "ILatticeSchemaOperations.StartAdvanceAndMigrateAsync"
+    source: "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartAdvanceAndMigrateAsync"
+  grpc:
+    api: "/orleans.lattice.api.schema/StartAdvanceAndMigrate"
+    source: "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#StartAdvanceAndMigrateMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_schema_advance_and_migrate_start"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/schema.json and, for each MCP tool used (lattice_treeadmin_schema_probe_capabilities, lattice_treeadmin_schema_get_registry, lattice_treeadmin_schema_register, lattice_treeadmin_schema_get_version_config, lattice_treeadmin_schema_set_version_config, lattice_treeadmin_schema_clear_version_config, lattice_treeadmin_schema_get_policy, lattice_treeadmin_schema_set_policy, lattice_treeadmin_schema_compliance_scan_start, lattice_treeadmin_schema_compliance_scan_status, lattice_treeadmin_schema_compliance_scan_list, lattice_treeadmin_schema_remediation_start, lattice_treeadmin_schema_advance_and_migrate_start, lattice_treeadmin_schema_migration_start, lattice_treeadmin_schema_operation_status, lattice_treeadmin_schema_operation_list, lattice_treeadmin_schema_operation_cancel, lattice_treeadmin_schema_get_remediation_status, lattice_treeadmin_schema_count_dead_letters, lattice_treeadmin_schema_list_dead_letters), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/schema.json"
+  - id: mcp-schema-control-opt-in
+    check: "Over MCP, the register, set/clear, remediation, migration, advance-and-migrate and operation-cancel tools are contributed only when the host enabled schema control (AddTreeAdminTools enableSchemaControl or LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools)."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#AddTreeAdminTools"
+  - id: versioning-registered
+    check: "The silo registered AddLatticeSchemaVersioning; without it every version operation, including runtime registration and migration, throws InvalidOperationException at call time."
+    source: "docs/lattice.api.schema/architecture.md"
+  - id: schema-admin-authority
+    check: "Caller holds SchemaAdmin over the whole effective tree for register, set/clear policy, version-config changes, advance, migration, remediation and cancel; Read over the whole tree suffices for the registry, policy, version config, compliance scan, operation status, remediation status and dead letters. A partial or filtered allow is refused."
+    source: "src/lattice.schema/SchemaAccessAuthorizer.cs#AuthorizeManageAsync"
+  - id: tree-versioned
+    check: "The tree has a version config (GetVersionConfigAsync is not null) and the new target version is strictly greater than its current target."
+    source: "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceTargetVersionAsync"
+  - id: upcast-path-registered
+    check: "A descriptor for the new version and an upcaster hop chain from every stored version to it are registered in the runtime catalog or the startup registry; every transform id a hop references is installed identically on every serving silo."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - id: catalog-in-every-region
+    check: "For a replicated tree, the same definitions are registered in every serving region before the target is advanced; the catalog is per region and effective tenant tree and is not replicated."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - id: tree-write-quiescent
+    check: "The tree is write-quiescent and is not deleted or pending delete for the duration of the migration."
+    source: "docs/lattice.schema/schema-versioning.md"
+steps:
+  - n: 1
+    action: "Probe the caller's schema capabilities for the tree."
+    api: "ILatticeSchemaControl.ProbeCapabilitiesAsync / ProbeCapabilities / lattice_treeadmin_schema_probe_capabilities"
+    expects: "Returns advisory default-deny flags including CanManageVersion, CanStartMigration, CanStartRemediation, SupportsVersioning and SupportsRuntimeRegistration; each real call still authorizes."
+    source: "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#ProbeCapabilitiesAsync"
+  - n: 2
+    action: "Read the tree's runtime catalog and version config."
+    api: "ILatticeSchemaControl.GetRegistryAsync / GetRegistry / lattice_treeadmin_schema_get_registry and ILatticeSchemaControl.GetVersionConfigAsync / GetVersionConfig / lattice_treeadmin_schema_get_version_config"
+    expects: "Returns registered descriptors, upcaster hops and supported host transform ids, and the current schema id and target version, or null for an unversioned tree."
+    source: "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#GetRegistryAsync"
+  - n: 3
+    action: "Register the new version descriptor and the hop from the current target to it."
+    api: "ILatticeSchemaControl.RegisterSchemaAsync / RegisterSchema / lattice_treeadmin_schema_register"
+    expects: "Appends the definitions; an identical re-registration changes nothing; a changed descriptor or a different hop from an already-registered source is refused with ArgumentException and earlier registrations are kept."
+    source: "docs/lattice.api.schema/api.md"
+  - n: 4
+    action: "If the tree is unversioned, opt it in at its current version before advancing."
+    api: "ILatticeSchemaControl.SetVersionConfigAsync / SetVersionConfig / lattice_treeadmin_schema_set_version_config"
+    expects: "New writes are stamped at the configured target immediately; SetVersionConfigAsync replaces the whole config without the monotonic check."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - n: 5
+    action: "Read the enforcement policy the migration will validate against."
+    api: "ILatticeSchemaControl.GetPolicyAsync / GetPolicy / lattice_treeadmin_schema_get_policy"
+    expects: "Returns the policy, or null when the tree is ungoverned; the migration validates each re-stamped value against this policy and leaves it unchanged."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - n: 6
+    action: "Start a compliance scan and poll it to a terminal state; list scans to recover a lost handle."
+    api: "ILatticeSchemaComplianceOperations.StartComplianceScanAsync / StartComplianceScan / lattice_treeadmin_schema_compliance_scan_start, then GetOperationStatusAsync / GetComplianceScanStatus / lattice_treeadmin_schema_compliance_scan_status, and ListOperationsAsync / ListComplianceScans / lattice_treeadmin_schema_compliance_scan_list"
+    expects: "Phases Counting then Scanning with entries progress; a Succeeded result carries hasPolicy, compliantCount, nonCompliantCount, scannedCount and per-reason rule counts; an ungoverned tree succeeds at once with hasPolicy false."
+    source: "docs/lattice.api.schema/operations.md"
+  - n: 7
+    action: "When nonCompliantCount is above zero, start a remediation with a transform and target policy and poll it to a terminal state before migrating."
+    api: "ILatticeSchemaOperations.StartRemediationAsync / StartRemediation / lattice_treeadmin_schema_remediation_start"
+    expects: "Phases DryRun, Build, Cutover; Succeeded installs the target policy and cuts the tree over; a value that cannot be remediated fails the operation with outcome aborted and nothing cut over."
+    source: "docs/lattice.api.schema/operations.md"
+  - n: 8
+    action: "Start the advance-and-migrate with the new target version and a caller-chosen operationId; on a lost response re-issue it with the same operationId."
+    api: "ILatticeSchemaOperations.StartAdvanceAndMigrateAsync / StartAdvanceAndMigrate / lattice_treeadmin_schema_advance_and_migrate_start"
+    expects: "Returns a LatticeOperationHandle at once; a re-issue with the same id returns the existing operation with Created false and starts nothing."
+    source: "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs#StartAdvanceAndMigrateAsync"
+  - n: 9
+    action: "Poll the operation to a terminal state; to recover a lost handle read the tree's remediation status OperationId or list schema operations."
+    api: "ILatticeSchemaOperations.GetOperationStatusAsync / GetSchemaOperationStatus / lattice_treeadmin_schema_operation_status, ILatticeSchemaControl.GetRemediationStatusAsync / GetRemediationStatus / lattice_treeadmin_schema_get_remediation_status, and ListOperationsAsync / ListSchemaOperations / lattice_treeadmin_schema_operation_list"
+    expects: "Phases Advance, DryRun, Build, Cutover with values progress; Succeeded carries outcome completed, valuesProcessed and remediationOperationId."
+    source: "docs/lattice.api.schema/operations.md"
+  - n: 10
+    action: "Verify the new target and inspect any strict-ingest dead letters."
+    api: "ILatticeSchemaControl.GetVersionConfigAsync / GetVersionConfig / lattice_treeadmin_schema_get_version_config, ILatticeSchemaControl.CountDeadLettersAsync / CountDeadLetters / lattice_treeadmin_schema_count_dead_letters, and ILatticeSchemaControl.ListDeadLettersAsync / StreamDeadLetters / lattice_treeadmin_schema_list_dead_letters"
+    expects: "Version config reports the new target version; dead-letter entries carry key, bounded value preview, byte length, reason, source and UTC timestamp."
+    source: "docs/lattice.schema/dead-letter-queue.md"
+postconditions:
+  - check: "The target version is advanced and new writes are stamped at it; the advance is not rolled back if the migration later fails."
+    source: "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
+  - check: "On Succeeded every value is re-stamped from its own stored version to the target, and a legacy unenveloped value is stamped at the target with its body unchanged."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - check: "The migrated destination keeps the tree's shard map, virtual slot count, sizing and WAL-partition pins across cutover."
+    source: "docs/lattice.schema/schema-enforcement.md"
+  - check: "The migration leaves the enforcement policy unchanged; tightening the policy is a separate remediation."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - check: "Setting a policy does not rewrite stored values; only a remediation brings existing non-compliant values into compliance."
+    source: "docs/lattice.schema/schema-enforcement.md"
+  - check: "A local write that violates the policy is rejected with LatticeSchemaViolationException and is not dead-lettered; only strict-mode system-origin ingest produces dead-letter entries."
+    source: "docs/lattice.schema/dead-letter-queue.md"
+  - check: "The dead-letter queue is read-only through this surface: list and count, with no replay or requeue."
+    source: "docs/lattice.schema/dead-letter-queue.md"
+failure_modes:
+  - id: target-does-not-advance
+    signal: "The advance-and-migrate operation reads Failed in its Advance phase with the exception type and message; a direct AdvanceTargetVersionAsync throws InvalidOperationException (gRPC failed-precondition)."
+    effect: "No migration runs and the version config is unchanged."
+    response: "Read the version config and pick a strictly greater version, or use StartMigrationAsync to re-stamp to the current target."
+  - id: value-violates-policy
+    signal: "Operation Failed with outcome aborted, offendingKey and reason in the result map; the remediation status carries a bounded value preview."
+    effect: "Nothing is cut over and the tree's data is untouched; the advanced target stays in place and reads upcast lazily."
+    response: "Remediate the offending values against the policy, then start a migration to the current target."
+  - id: value-not-upcastable
+    signal: "The migration fails reading a value stamped at a version with no registered hop to the target or newer than the target (NotSupportedException)."
+    effect: "The migration stays in flight holding the tree's alias reservation, and every re-issue fails again until the registry can upcast the value."
+    response: "Register the missing descriptor and hop, then start a migration of the same tree again. The migration code comments instead describe an aborted report naming the value; the two sources disagree (#5208), so handle both outcomes."
+  - id: registration-conflict
+    signal: "RegisterSchemaAsync throws ArgumentException (gRPC invalid-argument) for a changed descriptor, a non-advancing or unregistered hop, an uninstalled transform id, or a catalog over 128 versions or hops."
+    effect: "Nothing is appended and earlier registrations are not replaced."
+    response: "Register the change under a new version number with a hop that advances between registered versions."
+  - id: versioning-not-registered
+    signal: "InvalidOperationException (gRPC failed-precondition) from a version, registration or migration call."
+    effect: "No version state changes."
+    response: "Report that the host must register AddLatticeSchemaVersioning; do not emulate it."
+  - id: authorization-denied
+    signal: "LatticeAuthorizationDeniedException (gRPC permission-denied)."
+    effect: "The call performs no work."
+    response: "Obtain SchemaAdmin, or Read for inspection verbs, over the whole effective tree."
+  - id: operation-id-kind-conflict
+    signal: "InvalidOperationException (gRPC failed-precondition) because the supplied operationId is in use by an operation of a different kind."
+    effect: "No operation is started."
+    response: "Use a fresh operationId."
+  - id: runner-silo-lost
+    signal: "Operation status reads Failed after the silo running it is lost or its lease lapses."
+    effect: "The migration stays recorded in flight at its last durable slice; the target advance already committed."
+    response: "Start a migration of the same tree (StartMigrationAsync), which resumes the in-flight migration from its last slice; do not re-issue advance-and-migrate with a new id because the target no longer advances."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: false
+  mechanism: "The target advance is monotonic and is not rolled back when the migration fails, and a cutover is not rolled back. Cancelling before cutover leaves the tree's data untouched. ClearVersionConfigAsync only stops stamping new writes and returns stamped values at their stored version, so it is not an undo."
+  steps:
+    - action: "Cancel the operation before cutover; a cancel during cutover is declined and the run completes."
+      api: "ILatticeSchemaOperations.CancelOperationAsync / CancelSchemaOperation / lattice_treeadmin_schema_operation_cancel"
+      source: "docs/lattice.api.schema/operations.md"
+  source: "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceAndMigrateAsync"
+concurrency:
+  - rule: "The migration copies at the logical level and does not shadow-forward concurrent writes; the lazy read path keeps concurrent readers correct until cutover."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - rule: "A write accepted after the dry-run scan and before cutover is not carried into the destination and is superseded by the alias swap."
+    source: "docs/lattice.schema/schema-enforcement.md"
+  - rule: "Advancing the target version only changes the config and is safe concurrently with live writes."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - rule: "An in-flight migration holds the tree's alias reservation, so a delete is refused and a migration of a deleted or delete-pending tree is refused."
+    source: "docs/lattice.schema/schema-versioning.md"
+  - rule: "Work runs in bounded slices from a durable cursor; a cancel takes effect between slices and is declined during cutover."
+    source: "docs/lattice.api.schema/operations.md"
+  - rule: "A compliance scan leaves the tree writable; when writes pass the counted total the total becomes null."
+    source: "docs/lattice.api.schema/operations.md"
+sources:
+  - "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs"
+  - "src/lattice.api.abstractions/Schema/ILatticeSchemaOperations.cs"
+  - "src/lattice.api.abstractions/Schema/ILatticeSchemaComplianceOperations.cs"
+  - "src/lattice.api.schema/LatticeSchemaControl.Operations.cs"
+  - "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs"
+  - "src/lattice.schema/ILatticeSchemaVersionAdmin.cs"
+  - "src/lattice.schema/SchemaAccessAuthorizer.cs"
+  - "docs/lattice.api.schema/api.md"
+  - "docs/lattice.api.schema/architecture.md"
+  - "docs/lattice.api.schema/operations.md"
+  - "docs/lattice.schema/schema-versioning.md"
+  - "docs/lattice.schema/schema-enforcement.md"
+  - "docs/lattice.schema/dead-letter-queue.md"

@@ -10213,18 +10213,18 @@
         }
       ],
       "retry": {
-        "safe": true,
-        "policy": "Retry only with the same idempotency key or matching in-flight target.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+        "safe": "conditional",
+        "policy": "Re-drive only the last un-acknowledged chunk under the same operationId and chunkIndex; never re-drive a chunk that a later chunk has already superseded on the same shard.",
+        "source": "docs/lattice.api.treeadmin/README.md"
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Same operationId and chunkIndex are idempotent.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+        "basis": "The facade keys each chunk as operationId/chunkIndex and a shard records only the most recent bulk chunk it completed, so re-driving that chunk is a no-op while re-driving an older chunk after a later one reached the same shard is not deduplicated.",
+        "source": "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs#ShardRootGrain.BulkAppendAsync"
       },
       "concurrency": {
-        "rule": "Entries must be strictly ascending by key and chunkIndex is monotonic.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AppendBulkLoadAsync"
+        "rule": "The facade rejects a chunk whose keys are not strictly ascending within the chunk and a negative chunkIndex; key order across chunks and a monotonic chunkIndex are caller obligations it does not check.",
+        "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.AppendBulkLoadAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs#TreeAdminLifecycleToolHandlers.AppendBulkLoadAsync",
@@ -10290,14 +10290,14 @@
         }
       ],
       "retry": {
-        "safe": true,
-        "policy": "Retry only with the same idempotency key or matching in-flight target.",
+        "safe": "conditional",
+        "policy": "Retry begin only while no chunk has been appended; after the first acknowledged chunk, do not re-issue begin, resume by re-driving the last un-acknowledged chunk under the same operationId.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Same operationId opens or resumes the session.",
-        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
+        "basis": "The session holds no server-side state and begin re-runs the deep emptiness probe on every call, so a repeated begin succeeds only while the tree is still empty and throws TreeNotEmptyException once any chunk has landed.",
+        "source": "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
       },
       "concurrency": {
         "rule": "The target tree must be empty, and the deep diagnostics probe must successfully sample every shard; any shard sample failure is refused fail-closed instead of being counted as empty.",
@@ -11687,7 +11687,7 @@
         "requires": [
           "AddLatticeSchemaApi"
         ],
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#and"
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
       },
       "request": [
         {
@@ -13329,7 +13329,7 @@
         "requires": [
           "AddLatticeTreeAdminApi"
         ],
-        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#and"
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
       },
       "request": [
         {

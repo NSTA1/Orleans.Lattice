@@ -1,0 +1,144 @@
+schema: lattice.agents/procedure/v1
+id: orphaned-leaves-repair
+name: "Audit and repair a tree's orphaned leaves"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdminOperations.StartOrphanedLeavesRepairAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartOrphanedLeavesRepairAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/StartOrphanedLeavesRepair"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartOrphanedLeavesRepairMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_orphaned_leaves_repair_start"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_orphaned_leaves_audit, lattice_treeadmin_orphaned_leaves_audit_start, lattice_treeadmin_orphaned_leaves_repair, lattice_treeadmin_orphaned_leaves_repair_start, lattice_treeadmin_operation_status, lattice_treeadmin_operation_list, lattice_treeadmin_operation_cancel), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
+  - id: orphan-definition
+    check: "The defect being addressed is an orphaned leaf: a leaf spliced into a shard's sibling chain but unreachable by descent from that shard's root, left by a split interrupted after linking the new sibling and before its parent learned of it."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditOrphanedLeavesAsync"
+  - id: audit-read-authority
+    check: "Caller holds whole-tree Read authority over the tree for the audit and the tracked audit start."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.Operations.cs#StartOrphanedLeafPassAsync"
+  - id: repair-lifecycle-authority
+    check: "Caller holds whole-tree TreeLifecycle authority over the tree for the repair and the tracked repair start; routine admin authority does not confer it."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync"
+  - id: core-admin-gate
+    check: "The core tree grain additionally enforces whole-tree Admin on the repair and whole-tree Read on the audit."
+    source: "src/lattice/BPlusTree/Grains/LatticeGrain.OrphanRepair.cs#LatticeGrain.DriveOrphanedLeafPassAsync"
+  - id: not-reserved-tree
+    check: "The tree id is not a reserved system tree id."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync"
+steps:
+  - n: 1
+    action: "Start a tracked whole-tree audit and poll its status until the state is terminal."
+    api: "ILatticeTreeAdminOperations.StartOrphanedLeavesAuditAsync / StartOrphanedLeavesAudit / lattice_treeadmin_orphaned_leaves_audit_start"
+    expects: "Returns an operation handle; on Succeeded the result map holds treeId, leavesWalked, orphanedLeaves, repairable, refused and gaps. It mutates nothing but the operation record."
+    source: "docs/lattice.api.treeadmin/operations.md"
+  - n: 2
+    action: "Page the blocking audit from a null resumeFrom, passing each report's ResumeFrom back unaltered, until IsComplete is true."
+    api: "ILatticeTreeAdmin.AuditOrphanedLeavesAsync / AuditOrphanedLeaves / lattice_treeadmin_orphaned_leaves_audit"
+    expects: "Each batch is a pure read with DryRun true, listing per-orphan shard, leaf id, key range, key count, disposition and first-failure key, plus Gaps for regions it could not judge."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#AuditOrphanedLeavesAsync"
+  - n: 3
+    action: "Read Gaps and IsComplete before Findings; treat an empty finding list as a clean tree only when IsComplete and VerdictComplete are both true, and stop there."
+    api: "ILatticeTreeAdmin.AuditOrphanedLeavesAsync / AuditOrphanedLeaves / lattice_treeadmin_orphaned_leaves_audit"
+    expects: "A finding marked Repairable is one the repair would unsplice; any other non-Repaired disposition is a refusal the repair would also make."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeOrphanedLeafReport.cs#TreeOrphanedLeafReport.VerdictComplete"
+  - n: 4
+    action: "Optionally page the read-only survey with the same verb and survey set on every batch for a full key census of each orphan."
+    api: "ILatticeTreeAdmin.SurveyOrphanedLeavesAsync / AuditOrphanedLeaves / lattice_treeadmin_orphaned_leaves_audit"
+    expects: "Adds nullable per-leaf survey counts; null means not surveyed, a missing key is not proof of data loss, and survey counts do not authorize repair."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SurveyOrphanedLeavesAsync"
+  - n: 5
+    action: "Start the tracked whole-tree repair with a caller-chosen operationId."
+    api: "ILatticeTreeAdminOperations.StartOrphanedLeavesRepairAsync / StartOrphanedLeavesRepair / lattice_treeadmin_orphaned_leaves_repair_start"
+    expects: "Returns an operation handle; the repair runs batch by batch to the end of the tree in the background and survives the caller disconnecting."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartOrphanedLeavesRepairAsync"
+  - n: 6
+    action: "Poll the repair's status until the state is terminal; list operations to recover a lost handle."
+    api: "ILatticeTreeAdminOperations.GetOperationStatusAsync / GetTreeAdminOperationStatus / lattice_treeadmin_operation_status and ILatticeTreeAdminOperations.ListOperationsAsync / ListTreeAdminOperations / lattice_treeadmin_operation_list"
+    expects: "Phase Walking with progress in physical shards; on Succeeded the result map holds treeId, leavesWalked, orphanedLeaves, repaired, refused and gaps."
+    source: "docs/lattice.api.treeadmin/operations.md"
+  - n: 7
+    action: "Re-audit the tree to completion as in steps 1 and 2; the re-audit is not optional."
+    api: "ILatticeTreeAdmin.AuditOrphanedLeavesAsync / AuditOrphanedLeaves / lattice_treeadmin_orphaned_leaves_audit"
+    expects: "A complete re-audit with no gaps reports zero Repairable findings."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync"
+postconditions:
+  - check: "A complete re-audit with IsComplete true and VerdictComplete true reports zero Repairable findings."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync"
+  - check: "Each repaired leaf is unspliced from its sibling chain and its state is cleared, releasing the WAL materialiser pin that held the trim floor down so the WAL can trim and compact again."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - check: "A leaf is unspliced only when every key it holds was verified readable by descent; a refused leaf is left exactly as it was found."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RepairOrphanedLeavesAsync"
+  - check: "The unsplice does not widen the predecessor onto the removed range and retires no routing entry."
+    source: "src/lattice/BPlusTree/Grains/ShardRootGrain.OrphanRepair.cs#ShardRootGrain"
+  - check: "A repairing pass also settles leaf state clears owed by earlier removals; an audit skips this and mutates nothing."
+    source: "src/lattice/BPlusTree/Grains/ShardRootGrain.OrphanRepair.cs#ShardRootGrain.RunOrphanedLeafPassAsync"
+  - check: "A leaf orphan repair took out of the tree but could not clear stays recorded on its shard root as owed a state clear, and a tree purge clears it."
+    source: "docs/lattice/tree-deletion.md"
+failure_modes:
+  - id: authorization-denied
+    signal: "LatticeAuthorizationDeniedException in-process, or permission-denied over gRPC or MCP."
+    effect: "No audit or repair is performed."
+    response: "Obtain whole-tree Read for the audit or whole-tree TreeLifecycle for the repair; do not retry unchanged."
+  - id: invalid-argument
+    signal: "ArgumentException for an empty or reserved system tree id, a resumeFrom token this surface did not produce, or a malformed operationId."
+    effect: "No batch runs."
+    response: "Correct the argument; pass ResumeFrom back unaltered or restart from null."
+  - id: verdict-gaps
+    signal: "The report carries Gaps, or the tracked result's gaps is non-zero; reasons include ShardSplitInProgress, ShardPassAlreadyRunning, ChainTruncated, ChainTruncatedUnrecoverable, WalkBudgetExhaustedWithoutResumePosition, LeafBoundsUndecidable and EntryLeafUnreachable."
+    effect: "The pass established no verdict over those regions, so zero findings there is not evidence of health."
+    response: "Re-run once a shard split settles or the other pass finishes; report the remaining gap reasons, shards and leaf ids to an operator."
+  - id: refused-leaves
+    signal: "Findings with disposition RefusedUnverifiedKeys, RefusedKeyCountExceeded, RefusedBlockingState, RefusedChainRace or RefusedRoutingContradiction."
+    effect: "Those leaves are left unchanged and keep holding the WAL trim floor."
+    response: "Re-run the audit and repair for RefusedChainRace or RefusedBlockingState; report the other refusals with their first-failure key and do not attempt to force removal."
+  - id: blocking-repair-timeout
+    signal: "A timeout or transport error from a blocking RepairOrphanedLeavesAsync / RepairOrphanedLeaves / lattice_treeadmin_orphaned_leaves_repair batch."
+    effect: "The return value is not authoritative; the batch may have repaired leaves before the reply was lost."
+    response: "Run the audit to learn the true state; re-running the repair is safe and cannot double-repair."
+  - id: operation-runner-lost
+    signal: "Tracked operation status reads Failed after the accepting silo is lost or the operation stops heartbeating past its lease."
+    effect: "The pass is not resumed; leaves already repaired stay repaired."
+    response: "Re-audit, then start a new tracked repair under a new operationId."
+  - id: operation-id-conflict
+    signal: "InvalidOperationException because the operationId is in use by an operation of a different kind."
+    effect: "No operation is started."
+    response: "Choose a different operationId."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: false
+  mechanism: "Repair is an irreversible structural change per repaired leaf and no inverse operation exists; cancelling a tracked repair stops it between batches and leaves already repaired stay repaired."
+  steps: []
+  source: "docs/lattice.api.treeadmin/operations.md"
+concurrency:
+  - rule: "A shard mid shard-level split declines the pass and is reported as a ShardSplitInProgress gap rather than judged."
+    source: "src/lattice/BPlusTree/Grains/ShardRootGrain.OrphanRepair.cs#ShardRootGrain.RunOrphanedLeafPassAsync"
+  - rule: "Only one orphaned-leaf pass runs per shard activation at a time; an overlapping pass on that shard is reported as a ShardPassAlreadyRunning gap."
+    source: "src/lattice/BPlusTree/Grains/ShardRootGrain.OrphanRepair.cs#ShardRootGrain.RunOrphanedLeafPassAsync"
+  - rule: "A leaf with split, seal or prepared-transaction state, or whose predecessor is mid-division into it, is refused as RefusedBlockingState."
+    source: "src/lattice/BPlusTree/Grains/ShardRootGrain.OrphanRepair.cs#ShardRootGrain.ExamineOrphanAsync"
+  - rule: "The unsplice is a compare-and-swap on the predecessor; a chain change under the walk refuses the leaf as RefusedChainRace."
+    source: "src/lattice/BPlusTree/Grains/ShardRootGrain.OrphanRepair.cs#ShardRootGrain.ExamineOrphanAsync"
+  - rule: "Each batch force-refreshes routing so a prior reshard or resize is seen; shards are walked sequentially, and a cursor naming a shard a reshard removed between batches ends the pass, so re-run from null."
+    source: "src/lattice/BPlusTree/Grains/LatticeGrain.OrphanRepair.cs#LatticeGrain.DriveOrphanedLeafPassAsync"
+  - rule: "Cancelling a tracked audit or repair requires the grant that starting it required."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#ILatticeTreeAdminOperations"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/TreeOrphanedLeafReport.cs"
+  - "src/lattice.api.treeadmin/LatticeTreeAdmin.Operations.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "src/lattice/BPlusTree/Grains/LatticeGrain.OrphanRepair.cs"
+  - "src/lattice/BPlusTree/Grains/ShardRootGrain.OrphanRepair.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice.api.treeadmin/operations.md"
+  - "docs/lattice/tree-deletion.md"

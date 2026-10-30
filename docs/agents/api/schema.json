@@ -69,7 +69,9 @@
         "registration": "AddLatticeSchemaApi",
         "package": "Orleans.Lattice.Api.Schema",
         "provides": [
-          "ILatticeSchemaControl"
+          "ILatticeSchemaControl",
+          "ILatticeSchemaOperations",
+          "ILatticeSchemaComplianceOperations"
         ],
         "source": "src/lattice.api.schema/LatticeApiSchemaServiceCollectionExtensions.cs#LatticeApiSchemaServiceCollectionExtensions.AddLatticeSchemaApi"
       }
