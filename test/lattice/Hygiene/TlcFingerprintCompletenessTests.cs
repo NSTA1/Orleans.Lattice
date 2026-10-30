@@ -35,7 +35,7 @@ public sealed class TlcFingerprintCompletenessTests
     /// The active lines of <c>.gitattributes</c> whose line-ending rules the
     /// script's normaliser mirrors.
     /// </summary>
-    private static readonly string[] MirroredGitAttributes = ["* text=auto", "tools/tlc/** text eol=lf"];
+    private static readonly string[] MirroredGitAttributes = ["* text=auto", "tools/tlc/** text eol=lf", "tools/ci-runners/** text eol=lf"];
 
     /// <summary>Bounds every child interpreter; tripping it means a hang.</summary>
     private static readonly TimeSpan ScriptTimeout = TimeSpan.FromMinutes(5);
