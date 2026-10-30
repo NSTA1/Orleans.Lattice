@@ -252,19 +252,29 @@ jobs:
     # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
     # AzureStorageEmulator-category integration tests drive via
     # `UseDevelopmentStorage=true`, so their code paths are counted in coverage
-    # rather than self-skipping. Mirrors the build-and-test job in ci.yml.
-    services:
-      azurite:
-        # Empty on a pool leg: Container Apps runs no Docker, so the service is
-        # skipped and the step below starts the Azurite baked into the pool image.
-        image: ${{ matrix.leg.pool && '' || 'mcr.microsoft.com/azure-storage/azurite:3.36.0' }}
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
-
+    # rather than self-skipping. Mirrors the build-and-test job in ci.yml,
+    # including starting it from a step rather than a `services:` container.
     steps:
       - uses: actions/checkout@v5
+
+      # Not a `services:` container: any services block - even one whose image
+      # evaluates empty - makes the runner probe the Docker daemon and create a
+      # job network, which fails on the self-hosted pool (no Docker daemon).
+      # Hosted legs run the pinned image; pool legs run the same version from
+      # npm, baked into the pool image.
+      - name: Start Azurite
+        env:
+          POOL: ${{ matrix.leg.pool }}
+        run: |
+          if [ "$POOL" = "true" ]; then
+            mkdir -p "$RUNNER_TEMP/azurite"
+            nohup azurite --silent --location "$RUNNER_TEMP/azurite" \
+              --blobHost 127.0.0.1 --queueHost 127.0.0.1 --tableHost 127.0.0.1 \
+              > "$RUNNER_TEMP/azurite.log" 2>&1 &
+          else
+            docker run -d --name azurite -p 10000:10000 -p 10001:10001 -p 10002:10002 \
+              mcr.microsoft.com/azure-storage/azurite:3.36.0
+          fi
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -300,14 +310,6 @@ jobs:
           CACHE_HIT: ${{ steps.pwcache.outputs.cache-hit }}
         run: |
           bash .github/workflows/install-playwright-browsers.sh "$CACHE_HIT" chromium firefox webkit
-
-      - name: Start Azurite on the self-hosted pool
-        if: ${{ matrix.leg.pool }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/azurite"
-          nohup azurite --silent --location "$RUNNER_TEMP/azurite" \
-            --blobHost 127.0.0.1 --queueHost 127.0.0.1 --tableHost 127.0.0.1 \
-            > "$RUNNER_TEMP/azurite.log" 2>&1 &
 
       - name: Wait for Azurite
         run: |

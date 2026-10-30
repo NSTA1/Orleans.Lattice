@@ -52,24 +52,66 @@ public sealed class CiSelfHostedRunnerScopeTests
         });
     }
 
+    private static readonly Regex JobHeader = new(@"^  [A-Za-z0-9_-]+:\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex ContainerKey = new(@"^    (services|container):", RegexOptions.Multiline | RegexOptions.Compiled);
+
     /// <summary>
-    /// Every leg job that routes through the plan must also skip the Azurite service on
-    /// the pool: Container Apps runs no Docker, so a service container would fail the job.
+    /// A job whose legs can be routed to the pool must declare neither <c>services:</c> nor
+    /// <c>container:</c>. Container Apps runs no Docker daemon, and the runner probes the
+    /// daemon and creates a job network in "Initialize containers" for ANY services block -
+    /// even one whose image evaluates to an empty string - so the leg fails before its
+    /// first step. Azurite is started from a step instead.
     /// </summary>
     [TestCase("ci.yml")]
     [TestCase("coverage.yml")]
-    public void A_routed_leg_with_an_Azurite_service_skips_it_on_the_pool(string workflow)
+    [TestCase("formal-receipts.yml")]
+    public void A_routed_leg_job_declares_no_service_or_job_container(string workflow)
+    {
+        var text = StripComments(File.ReadAllText(
+            Path.Combine(HygieneRepository.FindRepoRoot(), ".github", "workflows", workflow))).Replace("\r\n", "\n");
+        var jobs = text[text.IndexOf("\njobs:\n", StringComparison.Ordinal)..];
+        var starts = JobHeader.Matches(jobs).Select(m => m.Index).Append(jobs.Length).ToList();
+        var routed = Enumerable.Range(0, starts.Count - 1)
+            .Select(i => jobs[starts[i]..starts[i + 1]])
+            .Where(job => job.Contains("matrix.leg.runsOn", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.That(routed, Is.Not.Empty, $"{workflow}: expected at least one job routed by matrix.leg.runsOn");
+        Assert.Multiple(() =>
+        {
+            foreach (var job in routed)
+            {
+                Assert.That(ContainerKey.IsMatch(job), Is.False,
+                    $"{workflow}: routed job '{job.Split('\n')[0].Trim()}' declares services:/container:, "
+                    + "which fails on the self-hosted pool; start the dependency from a step");
+            }
+
+            Assert.That(text, Does.Not.Contain("vars.TLC_RUNNER"),
+                $"{workflow}: TLC_RUNNER was replaced by runner-overflow.py routing");
+        });
+    }
+
+    /// <summary>
+    /// The routed legs that run Azure-emulator tests start Azurite from a step that
+    /// handles both runner kinds: the pinned image on hosted runners, npm on the pool.
+    /// </summary>
+    [TestCase("ci.yml")]
+    [TestCase("coverage.yml")]
+    public void A_routed_leg_starts_Azurite_from_a_step_on_either_runner_kind(string workflow)
     {
         var text = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), ".github", "workflows", workflow));
 
         Assert.Multiple(() =>
         {
-            Assert.That(text, Does.Contain("image: ${{ matrix.leg.pool && '' || 'mcr.microsoft.com/azure-storage/azurite:"),
-                $"{workflow}: the Azurite service image must be empty on a pool leg");
-            Assert.That(text, Does.Contain("- name: Start Azurite on the self-hosted pool"),
-                $"{workflow}: a pool leg must start the Azurite baked into the pool image");
-            Assert.That(text, Does.Not.Contain("vars.TLC_RUNNER"),
-                $"{workflow}: TLC_RUNNER was replaced by runner-overflow.py routing");
+            Assert.That(text, Does.Contain("- name: Start Azurite\n").Or.Contain("- name: Start Azurite\r\n"),
+                $"{workflow}: the routed leg must start Azurite from a step");
+            Assert.That(text, Does.Contain("POOL: ${{ matrix.leg.pool }}"),
+                $"{workflow}: the step must branch on matrix.leg.pool");
+            Assert.That(text, Does.Contain("docker run -d --name azurite"),
+                $"{workflow}: hosted legs must run the pinned Azurite image");
+            Assert.That(text, Does.Contain("nohup azurite --silent"),
+                $"{workflow}: pool legs must run the Azurite baked into the pool image");
         });
     }
 

@@ -13,8 +13,8 @@ tools/ci-runners, longest first, because a long leg holds a hosted slot longest.
 
 Each leg gains three keys, read by the workflows:
   runsOn  a JSON runs-on value: "ubuntu-latest" or the pool's label array;
-  pool    true on a pool leg (the job prefixes its name with "[pool] ", skips
-          the Azurite service container and starts Azurite locally instead);
+  pool    true on a pool leg (the job prefixes its name with "[pool] " and
+          its Azurite step runs the npm build rather than the image);
   runner  "hosted" or "pool", for the summary.
 
 FAILS TOWARD HOSTED. Without RUNNER_POOL every leg stays hosted, so the pool is
