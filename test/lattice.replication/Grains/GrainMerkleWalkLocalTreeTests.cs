@@ -80,10 +80,31 @@ public sealed class GrainMerkleWalkLocalTreeTests
         Harness h, GrainId id, LeafProjectionDigest digest, RoutingTableSnapshot routing)
     {
         var node = Substitute.For<IBPlusInternalGrain>();
-        node.GetSubtreeProjectionDigestAsync().Returns(Task.FromResult(digest));
-        node.GetRoutingTableAsync().Returns(Task.FromResult(routing));
+        node.GetSubtreeDigestAndRoutingAsync().Returns(Task.FromResult((digest, routing)));
         h.Internals[id] = node;
         return node;
+    }
+
+    [Test]
+    public void ResolveAsync_propagates_a_fused_node_read_fault_without_a_second_probe()
+    {
+        var h = CreateHarness();
+        var id = InternalId("faulted");
+        var node = AddInternal(h, id, Digest(1, 0), new RoutingTableSnapshot
+        {
+            SeparatorKeys = [],
+            ChildIds = [],
+            ChildrenAreLeaves = true,
+        });
+        var failure = new IOException("node unavailable");
+        node.GetSubtreeDigestAndRoutingAsync().Returns(
+            Task.FromException<(LeafProjectionDigest, RoutingTableSnapshot)>(failure));
+
+        Assert.That(async () => await h.Tree.ResolveAsync(id, false, CancellationToken.None),
+            Throws.Exception.SameAs(failure));
+        node.Received(1).GetSubtreeDigestAndRoutingAsync();
+        node.DidNotReceive().GetSubtreeProjectionDigestAsync();
+        node.DidNotReceive().GetRoutingTableAsync();
     }
 
     [Test]
@@ -198,6 +219,9 @@ public sealed class GrainMerkleWalkLocalTreeTests
             Assert.That(node.Children.Select(x => x.SeparatorKey), Is.EqualTo(new string?[] { null, "m", "s" }));
             Assert.That(node.Children.Select(x => x.ChildIsLeaf), Is.All.True);
         });
+        await h.Internals[id].Received(1).GetSubtreeDigestAndRoutingAsync();
+        await h.Internals[id].DidNotReceive().GetSubtreeProjectionDigestAsync();
+        await h.Internals[id].DidNotReceive().GetRoutingTableAsync();
     }
 
     [Test]

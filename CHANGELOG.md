@@ -14,7 +14,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - App ownership calls.** Fresh structural app tree claims replace three registry fact reads with one, retaining retry freshness and foreign-alias checks. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice.Apps`)
 
-- **Performance - Peer barrier calls.** Peer re-add reads each live/tombstone index once, and eligible barrier cleanup validates origin and decision within the abandonment call, preserving whole-barrier cleanup and import fences. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+- **Performance - Peer maintenance calls.** Re-add and barrier cleanup use fewer grain calls; decommission combines marker reads with durable writes and batches verdicts by encoded registry owner, retaining import fences, delegation and retention. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214), [#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
+- **Performance - Merkle node reads.** Anti-entropy reads each internal node's digest and routing table in one grain call instead of two, retaining the digest option gate and read-only topology traversal. ([#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
 - **Performance - Cache and migration calls.** Cache refresh, split freeze and consolidation freeze each replace two grain calls with one, preserving pending-before-delta reads, durable leaf seals, Reject and final-drain ordering. ([#5202](https://github.com/NSTA1/Orleans.Lattice/pull/5202)) (`Orleans.Lattice`)
 
