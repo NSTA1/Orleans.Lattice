@@ -1,0 +1,12 @@
+# Enforcement registered after versioning replaces the composed interceptor
+# instead of re-composing with it, so the stamping stage is lost (#5241).
+MODULE: StampedWhenVersionedReversedReplaces
+TARGET: StampedWhenVersioned
+CLASS: Action
+SUMMARY: the reversed registration order resolves the enforcement stage alone
+
+--- FIND
+      [] r = "Reversed" -> <<"E", "V">>
+--- REPLACE
+      [] r = "Reversed" -> <<"E">>
+--- END
