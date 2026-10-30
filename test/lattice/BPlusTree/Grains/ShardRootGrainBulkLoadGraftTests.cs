@@ -90,10 +90,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         leafContext.GrainId.Returns(GrainId.Create("leaf", key.ToString("N")));
         ((IGrainBase)leaf).GrainContext.Returns(leafContext);
 
-        // The append path reads the rightmost leaf's key set to decide how much
-        // room is left in it. A substitute returns null for a List-typed result,
-        // so seed an empty leaf explicitly.
-        leaf.GetKeysAsync().ReturnsForAnyArgs(Task.FromResult(new List<string>()));
+        leaf.CountAsync().Returns(0);
         return leaf;
     }
 

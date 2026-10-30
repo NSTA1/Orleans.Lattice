@@ -112,6 +112,24 @@ if (string.Equals(suite, "readfusion", StringComparison.OrdinalIgnoreCase))
     return readSummary.HasCriticalValidationErrors || readSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "pointtopology", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is ReadFusionCallBenchmarks.Site.PointWarmup
+            or ReadFusionCallBenchmarks.Site.SubtreeFanOut));
+    var pointTopologySummary = BenchmarkRunner.Run<ReadFusionCallBenchmarks>(config);
+    return pointTopologySummary.HasCriticalValidationErrors || pointTopologySummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "leafcount", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Descriptor.WorkloadMethod.Name is nameof(LeafRangeReadBenchmarks.GetKeyCountAsync)
+            or nameof(LeafRangeReadBenchmarks.CountAsync)));
+    var leafCountSummary = BenchmarkRunner.Run<LeafRangeReadBenchmarks>(config);
+    return leafCountSummary.HasCriticalValidationErrors || leafCountSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "ownershipbarriers", StringComparison.OrdinalIgnoreCase))
 {
     config = config.AddFilter(new SimpleFilter(benchmark =>
