@@ -44,7 +44,8 @@ enforces, so this script and the C# guards read every glob identically.
 CONTENT, NEVER METADATA. Each entry is the repository-relative path and the
 SHA-256 of the file's content; entries are sorted by path. Text is normalised
 the way git normalises it under this repository's `.gitattributes`
-(`* text=auto`, `tools/tlc/** text eol=lf`): CRLF becomes LF unless git's
+(`* text=auto`, `tools/tlc/** text eol=lf`, `tools/ci-runners/** text eol=lf`):
+CRLF becomes LF unless git's
 auto-detection would treat the file as binary (a NUL byte or a lone CR), so a
 Windows checkout and a Linux checkout fingerprint identically. Timestamps,
 permissions and the order of discovery are never read.
@@ -82,7 +83,7 @@ MANIFEST_SUFFIX = ".manifest.json"
 
 # The repository's .gitattributes forces these paths to text (eol=lf), so they
 # are normalised even when auto-detection would call them binary.
-FORCED_TEXT = ("tools/tlc/*",)
+FORCED_TEXT = ("tools/tlc/*", "tools/ci-runners/*")
 
 GLOB_ALPHABET = re.compile(r"^[A-Za-z0-9_./*-]+$")
 
