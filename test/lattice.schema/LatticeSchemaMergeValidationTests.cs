@@ -59,6 +59,22 @@ public class LatticeSchemaMergeValidationTests
     }
 
     [Test]
+    public async Task Observer_system_tree_accepts_without_consulting_the_policy_provider()
+    {
+        // A merge on a core system tree (the tree registry's first write in a fresh
+        // cluster is one) must not reach the policy store: the store reads a schema
+        // tree whose own registration needs that registry write, so the lookup
+        // deadlocked the first tree access (#5242).
+        var provider = Substitute.For<ILatticeSchemaPolicyProvider>();
+        var observer = new LatticeSchemaMergeObserver(provider);
+
+        var outcome = await observer.OnMergedAsync(MergeWithTree("_lattice_trees", Utf8("not json")), CancellationToken.None);
+
+        Assert.That(outcome.Kind, Is.EqualTo(MergeOutcomeKind.Accept));
+        await provider.DidNotReceive().GetCompiledPolicyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task Observer_ungoverned_tree_accepts()
     {
         var provider = Substitute.For<ILatticeSchemaPolicyProvider>();
