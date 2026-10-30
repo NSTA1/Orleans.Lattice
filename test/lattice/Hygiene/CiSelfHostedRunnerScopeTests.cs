@@ -116,6 +116,23 @@ public sealed class CiSelfHostedRunnerScopeTests
     }
 
     /// <summary>
+    /// The routed ci.yml test legs skip the GitHub Actions NuGet cache on the pool: the
+    /// pool image carries a package snapshot, and an ~800 MB cache download per pool leg
+    /// pushes the repository over its cache egress limit, throttling every restore.
+    /// </summary>
+    [Test]
+    public void A_pool_leg_skips_the_Actions_NuGet_cache()
+    {
+        var text = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), ".github", "workflows", "ci.yml"))
+            .Replace("\r\n", "\n");
+        var test = text[text.IndexOf("\n  test:\n", StringComparison.Ordinal)..];
+        test = test[..test.IndexOf("\n  content-gates:\n", StringComparison.Ordinal)];
+
+        Assert.That(test, Does.Contain("- name: Cache NuGet packages\n        if: ${{ !matrix.leg.pool }}\n"),
+            "ci.yml test job: the NuGet cache step must be skipped on a pool leg");
+    }
+
+    /// <summary>
     /// The trigger regex must recognise every form a <c>pull_request_target</c> trigger can
     /// take, and must not match plain <c>pull_request</c>.
     /// </summary>

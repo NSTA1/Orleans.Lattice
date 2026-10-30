@@ -16,6 +16,17 @@
 # PowerShell (rig and tuning script tests), the Docker CLI with the compose v2
 # plugin (`docker compose config` needs no daemon), and Node with Azurite,
 # which a leg routed to the pool runs in place of the Azurite image.
+#
+# And a NuGet package snapshot in the runner's ~/.nuget/packages, restored from
+# every project in the solution (deploy.ps1 stages them under restore/). Pool
+# legs skip the GitHub Actions NuGet cache, so a burst of them neither waits on
+# nor adds to the repository's cache egress limit; restore fetches only what
+# changed since the image was built.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS nuget
+WORKDIR /src
+COPY restore/ ./
+RUN dotnet restore Orleans.Lattice.slnx --packages /nuget-snapshot
+
 FROM ghcr.io/actions/actions-runner:latest
 
 USER root
@@ -55,7 +66,9 @@ RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
  && chown -R runner:runner /usr/share/dotnet
 
 COPY tools/ci-runners/mint-jit.py tools/ci-runners/runner-entrypoint.sh /opt/ci-runner/
-RUN chmod 0755 /opt/ci-runner/runner-entrypoint.sh
+RUN chmod 0755 /opt/ci-runner/runner-entrypoint.sh \
+ && install -d -o runner -g runner /home/runner/.nuget
+COPY --from=nuget --chown=runner:runner /nuget-snapshot /home/runner/.nuget/packages
 
 USER runner
 WORKDIR /home/runner

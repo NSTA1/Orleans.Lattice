@@ -83,6 +83,14 @@ The image is the GitHub runner base plus what hosted runners provide and the tes
 use: the .NET 10 SDK, Python, jq, PowerShell, the Docker CLI with compose v2 (for
 `docker compose config`; no daemon), and Node with Azurite.
 
+It also carries a NuGet package snapshot in `~/.nuget/packages`, restored at build time
+from every project in the solution. Pool legs skip the GitHub Actions NuGet cache: it is
+about 800 MB per leg, and a burst of concurrent legs exceeds the repository's cache
+egress limit, which throttles every cache restore (TLC receipts included - a throttled
+receipt is treated as absent, so its spec reruns). `dotnet restore` on the pool fetches
+only packages added since the image was built, so redeploy after significant package
+changes to keep the snapshot current.
+
 The network shape follows `benchmark/azure-throughput`'s `-PrivateNetwork` option, for
 subscriptions whose policy blocks public IPs on workloads and requires identity-based
 registry pulls. Nothing listens; runners only make outbound calls.
@@ -125,8 +133,11 @@ spend pool compute up to the replica timeout; keep an Azure budget alert on the 
    ./tools/ci-runners/deploy.ps1 -NamePrefix latrun
    ```
 
-   The script is idempotent: rerun it to rebuild the image (tagged by the hash of its
-   inputs) and update the Job. `-SkipImageBuild` reuses the current image;
+   The script is idempotent: rerun it to rebuild the image and update the Job. The image
+   is built from a staged context (the runner files, plus every project, props, targets
+   and solution file under `restore/`, because the root `.dockerignore` excludes `test/`)
+   and tagged by the hash of that context, so package changes produce a new tag.
+   `-SkipImageBuild` reuses the current image;
    `-WorkloadProfileType`, `-MaxExecutions`, `-RunnerCpu`, `-RunnerMemory`, `-RunnerLabels`
    and `-ReplicaTimeoutSec` tune it.
 3. **Turn overflow on** by setting the repository variables:

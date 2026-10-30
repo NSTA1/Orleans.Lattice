@@ -123,13 +123,33 @@ $names = @{
 	Job       = "job-$NamePrefix"
 }
 
-# Tag the image by the hash of everything that goes into it, so a changed
-# script always reaches new executions (a reused :latest tag may be served
-# from a node's image cache).
-$imageInputs = 'Dockerfile', 'mint-jit.py', 'runner-entrypoint.sh' | ForEach-Object {
-	[System.IO.File]::ReadAllText((Join-Path $PSScriptRoot $_)).Replace("`r`n", "`n")
+# The image is built from a staged context, not the repository root: the root
+# .dockerignore (shaped for the benchmark images) excludes test/ and .github/,
+# and the image's NuGet snapshot stage restores every project in the solution.
+# The stage holds the runner's own files plus, under restore/, every tracked
+# project, props, targets, solution and NuGet config file - all `dotnet restore`
+# reads, and a small upload.
+#
+# The tag is the hash of everything staged, so a changed script or package set
+# always reaches new executions (a reused tag may be served from a node's image
+# cache). Redeploy after package changes to refresh the snapshot; until then a
+# pool leg's restore fetches only the difference from nuget.org.
+$restorePattern = '(?i)(\.(csproj|fsproj|proj|props|targets|slnx|sln)$|(^|/)nuget\.config$|(^|/)global\.json$|(^|/)packages\.lock\.json$)'
+[string[]] $restoreFiles = @(git -C $repoRoot ls-files) | Where-Object { $_ -match $restorePattern }
+if ($LASTEXITCODE -ne 0 -or $restoreFiles.Count -eq 0) { throw "git ls-files found no restore inputs under $repoRoot." }
+[Array]::Sort($restoreFiles, [StringComparer]::Ordinal)
+$staged = @('Dockerfile', 'mint-jit.py', 'runner-entrypoint.sh' | ForEach-Object { , @("tools/ci-runners/$_", "tools/ci-runners/$_") }) +
+	@($restoreFiles | ForEach-Object { , @($_, "restore/$_") })
+$contextDir = Join-Path ([System.IO.Path]::GetTempPath()) "lattice-ci-runner-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+$hashInput = [System.Text.StringBuilder]::new()
+foreach ($pair in $staged) {
+	$source = Join-Path $repoRoot $pair[0]
+	$target = Join-Path $contextDir $pair[1]
+	New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+	Copy-Item -LiteralPath $source -Destination $target
+	[void] $hashInput.Append($pair[1]).Append("`0").Append([System.IO.File]::ReadAllText($source).Replace("`r`n", "`n")).Append("`0")
 }
-$sha = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($imageInputs -join "`0"))
+$sha = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($hashInput.ToString()))
 $names.Image = "lattice-ci-runner:$([Convert]::ToHexString($sha).Substring(0, 12).ToLowerInvariant())"
 
 # ---------------------------------------------------------------------------
@@ -203,7 +223,7 @@ $image = "$($acr.loginServer)/$($names.Image)"
 
 if (-not $SkipImageBuild) {
 	Write-Host "[runners] building $image (remote)" -ForegroundColor Cyan
-	Push-Location $repoRoot
+	Push-Location $contextDir
 	try {
 		# --no-logs: streaming the build log through az on a Windows console crashes the
 		# CLI on the log's non-ASCII characters. Queue the build, then poll its status.
@@ -217,8 +237,9 @@ if (-not $SkipImageBuild) {
 		} while ($status -in 'Queued', 'Started', 'Running')
 		if ($status -ne 'Succeeded') { throw "az acr build run $runId ended '$status' (az acr task logs -r $($names.Acr) --run-id $runId)." }
 		Write-Host "[runners] image build $runId succeeded" -ForegroundColor Green
-	} finally { Pop-Location }
+	} finally { Pop-Location; Remove-Item -Recurse -Force -LiteralPath $contextDir -ErrorAction SilentlyContinue }
 }
+Remove-Item -Recurse -Force -LiteralPath $contextDir -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------------------
 # 3. Log Analytics and the internal-only workload-profiles environment.

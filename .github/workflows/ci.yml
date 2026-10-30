@@ -2323,7 +2323,14 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Not on a pool leg: the pool image carries a NuGet package snapshot in
+      # ~/.nuget/packages (tools/ci-runners/Dockerfile), so restore fetches only
+      # what changed since the image was built. Skipping the ~800 MB cache keeps
+      # pool legs off the repository's Actions cache egress limit, which a burst
+      # of concurrent legs otherwise exceeds (throttling every cache restore,
+      # TLC receipts included).
       - name: Cache NuGet packages
+        if: ${{ !matrix.leg.pool }}
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
