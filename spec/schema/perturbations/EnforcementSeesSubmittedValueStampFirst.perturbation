@@ -1,0 +1,12 @@
+# EnforcementSeesSubmittedValue: enforcement judges the value before it is stamped.
+MODULE: SchemaStageOrdering
+ROW: EnforcementSeesSubmittedValue
+FILE: src/lattice.schema/CompositeLatticeWriteInterceptor.cs
+DETECTORS: SchemaWriteStageRegistrationTests.Composed_registration_runs_enforcement_on_the_unstamped_value
+SUMMARY: the composite runs versioning before enforcement
+
+--- FIND
+            : new[] { enforcement, versioning };
+--- REPLACE
+            : new[] { versioning, enforcement };
+--- END

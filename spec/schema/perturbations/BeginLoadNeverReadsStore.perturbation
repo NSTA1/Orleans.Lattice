@@ -1,0 +1,12 @@
+# BeginLoad(s) reads the durable row on a miss.
+MODULE: SchemaPolicyConfig
+ROW: BeginLoad(s)
+FILE: src/lattice.schema/LatticeSchemaPolicyProvider.cs
+DETECTORS: LatticeSchemaPolicyProviderTests.Invalidate_forces_reload_on_next_get
+SUMMARY: a cache miss answers "no policy" without reading the store
+
+--- FIND
+        return new ValueTask<CompiledSchemaPolicy?>(LoadAndCacheAsync(treeId, cancellationToken));
+--- REPLACE
+        return new ValueTask<CompiledSchemaPolicy?>((CompiledSchemaPolicy?)null);
+--- END

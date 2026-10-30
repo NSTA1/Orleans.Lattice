@@ -1,0 +1,14 @@
+# An already-enveloped entry is re-stamped at the target, rewriting its tag.
+MODULE: EnvelopedValuesVerbatimRestamped
+TARGET: EnvelopedValuesVerbatim
+CLASS: Action
+SUMMARY: the versioning stage re-stamps an enveloped entry
+PERTURBS: RunVersioning
+
+--- FIND
+       ELSE IF origin = "Local" \/ ~tStrictV \/ val.tag \in Upcastable
+       THEN /\ Advance(val)
+--- REPLACE
+       ELSE IF origin = "Local" \/ ~tStrictV \/ val.tag \in Upcastable
+       THEN /\ Advance(Env(val.body, "Target"))
+--- END

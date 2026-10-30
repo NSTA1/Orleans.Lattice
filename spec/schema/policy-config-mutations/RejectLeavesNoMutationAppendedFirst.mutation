@@ -1,0 +1,14 @@
+# Validation after the WAL append: a rejected write has already changed data.
+MODULE: RejectLeavesNoMutationAppendedFirst
+TARGET: RejectLeavesNoMutation
+CLASS: Action
+SUMMARY: a rejected write is appended before the rejection is thrown
+PERTURBS: Write
+
+--- FIND
+       ELSE /\ outcome' = "Rejected"
+            /\ UNCHANGED <<data, commits>>
+--- REPLACE
+       ELSE /\ outcome' = "Rejected"
+            /\ data' = v /\ commits' = commits + 1
+--- END

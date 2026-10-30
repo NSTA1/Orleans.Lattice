@@ -1,0 +1,12 @@
+# TypeOK pairing: a write below the check records a path outside the model.
+MODULE: TypeOKBypassUndeclaredPath
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a below-check write records an undeclared path
+PERTURBS: Bypass
+
+--- FIND
+    /\ stored' = r /\ req' = r /\ path' = "Below" /\ origin' = "System"
+--- REPLACE
+    /\ stored' = r /\ req' = r /\ path' = "Unchecked" /\ origin' = "System"
+--- END

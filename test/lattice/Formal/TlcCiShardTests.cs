@@ -199,6 +199,8 @@ public sealed partial class TlcCiShardTests
                             ? TlcCiShard.SchedulingWorkloadB : TlcCiShard.Scheduling
                         : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
+                        : module.Name.StartsWith("Schema", StringComparison.Ordinal)
+                        ? TlcCiShard.Schema
                         : module.Name == "MaterialisedViewFence"
                         ? TlcCiShard.MaterialisedViewFence
                         : module.Name == "MaterialisedViewHorizon"
@@ -257,6 +259,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("view-joint-repair", TlcCiShard.MaterialisedViewJointRepair)]
     [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
     [TestCase("aliasing", TlcCiShard.Aliasing)]
+    [TestCase("schema", TlcCiShard.Schema)]
     public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)
     {
         var modules = SpecModuleCatalogue.Repository().Where(module =>
@@ -337,6 +340,32 @@ public sealed partial class TlcCiShardTests
             foreach (var category in cases.Keys)
                 Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(category)).Tiers,
                     Is.EqualTo(new[] { "deterministic" }));
+        });
+    }
+
+    [Test]
+    public void Schema_modules_route_every_case_to_the_dedicated_schema_shard_with_their_base()
+    {
+        var modules = SpecModuleCatalogue.Repository()
+            .Where(module => module.Name.StartsWith("Schema", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(modules.Select(module => module.Name),
+                Is.SupersetOf(new[] { "SchemaPolicyConfig", "SchemaStageOrdering" }));
+            Assert.That(modules.Select(module => Path.GetFileName(module.Directory)).Distinct(),
+                Is.EqualTo(new[] { "schema" }), "every Schema* module lives in spec/schema/");
+            foreach (var module in modules)
+            {
+                Assert.That(module.Manifest.Variants, Is.Not.Empty, $"{module.Name} needs a larger-bound variant");
+                foreach (var mutation in module.LoadMutations())
+                {
+                    Assert.That(TlcCiShard.Of(module, mutation), Is.EqualTo(TlcCiShard.Schema), $"{module.Name}/{mutation.Name}");
+                    Assert.That(TlcCiShard.SharesBaseShard(module, mutation), Is.True,
+                        "the base must run in the mutations' process to serve their full-bound controls");
+                }
+            }
         });
     }
 

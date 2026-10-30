@@ -1,0 +1,13 @@
+# #5239: enforcement judges an enveloped value's envelope bytes, which no
+# policy accepts, instead of its body.
+MODULE: ValidBodyNeverRefusedByEnforcementJudgesEnvelope
+TARGET: ValidBodyNeverRefusedByEnforcement
+CLASS: Action
+SUMMARY: an enveloped entry with a valid body is refused by enforcement
+PERTURBS: RunEnforcement
+
+--- FIND
+    /\ IF ~policyOn \/ val.body = "Good"
+--- REPLACE
+    /\ IF ~policyOn \/ (val.form = "Raw" /\ val.body = "Good")
+--- END

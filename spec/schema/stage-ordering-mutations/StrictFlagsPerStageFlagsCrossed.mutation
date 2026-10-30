@@ -1,0 +1,12 @@
+# Enforcement reads the versioning stage's per-tree strict flag.
+MODULE: StrictFlagsPerStageFlagsCrossed
+TARGET: StrictFlagsPerStage
+CLASS: Action
+SUMMARY: enforcement diverts under the other stage's strict flag
+PERTURBS: RunEnforcement
+
+--- FIND
+       ELSE IF ~tStrictE
+--- REPLACE
+       ELSE IF ~tStrictV
+--- END

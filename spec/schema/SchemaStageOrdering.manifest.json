@@ -1,0 +1,18 @@
+{
+  "mutations": "stage-ordering-mutations",
+  "refinement": "SchemaStageOrderingRefinement.md",
+  "nonBehaviouralActions": ["Stutter", "Bypass"],
+  "counts": {
+    "invariants": 2,
+    "properties": 11,
+    "actions": 7,
+    "mutations": 17,
+    "behaviourRows": 17,
+    "distinctStates": 40523
+  },
+  "variants": {
+    "Batch": {
+      "distinctStates": 372235
+    }
+  }
+}

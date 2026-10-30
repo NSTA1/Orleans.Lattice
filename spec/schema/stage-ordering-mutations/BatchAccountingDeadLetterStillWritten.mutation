@@ -1,0 +1,14 @@
+# A non-atomic batch dead-letters an entry and still writes it.
+MODULE: BatchAccountingDeadLetterStillWritten
+TARGET: BatchAccounting
+CLASS: Action
+SUMMARY: a versioning dead-letter keeps the diverted entry
+PERTURBS: RunVersioning
+
+--- FIND
+       ELSE /\ dlq' = dlq + 1 /\ dropped' = dropped + 1 /\ refusedBy' = "V"
+            /\ NextEntry(kept)
+--- REPLACE
+       ELSE /\ dlq' = dlq + 1 /\ dropped' = dropped + 1 /\ refusedBy' = "V"
+            /\ NextEntry(Append(kept, val))
+--- END

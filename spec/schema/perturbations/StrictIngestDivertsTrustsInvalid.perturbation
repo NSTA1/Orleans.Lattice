@@ -1,0 +1,12 @@
+# StrictIngestDiverts: strict ingest stores no violating entry.
+MODULE: SchemaStageOrdering
+ROW: StrictIngestDiverts
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: LatticeSchemaWriteInterceptorTests.OnWriteAsync_strict_ingest_invalid_item_dead_letters
+SUMMARY: strict ingest stores an invalid item
+
+--- FIND
+        if (!compiled.StrictIngest)
+--- REPLACE
+        if (true)
+--- END

@@ -73,6 +73,8 @@ be quiet about one.
 | [`view-staging/`](view-staging/README.md) | `MaterialisedViewReadyClosure` | Independent per-key clocks, transitive replacement closure outside the eligible flush set, per-consumer atomic snapshots, history and replay checkpoints. |
 | [`view-staging/`](view-staging/README.md) | `MaterialisedViewSourceAdmission` | Coherent row/version/kind identity, committed pending-row/decision overlays, source-apply lag, already-applied omission entitlement, history bypass and expected cross-tree participants. |
 | [`view-resolved-identity/`](view-resolved-identity/README.md) | `MaterialisedViewResolvedIdentity` | Resolved transaction IDs and eviction-order ownership follow the actual physical WAL tail through reused IDs, same-log rebuilds and uncertain candidate publication. |
+| [`schema/`](schema/README.md) | `SchemaPolicyConfig` | Per-tree policy and version-config identity, set and clear, per-silo caching with eventual eviction on every silo, overtaken cache loads, refused uncompilable policies, and validation before the WAL append. |
+| [`schema/`](schema/README.md) | `SchemaStageOrdering` | Enforcement and versioning stage order for every registration combination, the system-origin opt-in, per-stage strict flags, envelope handling, batch refusal semantics and writes below the check. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

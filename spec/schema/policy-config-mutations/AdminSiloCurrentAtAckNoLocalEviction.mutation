@@ -1,0 +1,19 @@
+# The admin returns before evicting its own silo's entry.
+MODULE: AdminSiloCurrentAtAckNoLocalEviction
+TARGET: AdminSiloCurrentAtAck
+CLASS: Action
+SUMMARY: the admin call returns without the local eviction
+PERTURBS: Acknowledge
+
+--- FIND
+    /\ admin' = "Idle"
+    /\ cache' = [cache EXCEPT ![adminAt] = "Miss"]
+    /\ pending' = [pending EXCEPT ![adminAt] = FALSE]
+    /\ overtaken' = [overtaken EXCEPT ![adminAt] = @ \/ loading[adminAt]]
+    /\ UNCHANGED <<stored, rev, adminAt, cacheRev, loading, loadVal, loadRev,
+                   data, commits, writes, judge, outcome>>
+--- REPLACE
+    /\ admin' = "Idle"
+    /\ UNCHANGED <<stored, rev, adminAt, cache, cacheRev, loading, loadVal, loadRev,
+                   overtaken, pending, data, commits, writes, judge, outcome>>
+--- END

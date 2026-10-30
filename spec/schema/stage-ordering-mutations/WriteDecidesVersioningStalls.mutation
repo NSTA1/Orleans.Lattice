@@ -1,0 +1,12 @@
+# The versioning stage never completes a local write, which then never decides.
+MODULE: WriteDecidesVersioningStalls
+TARGET: WriteDecides
+CLASS: Temporal
+SUMMARY: the versioning stage hangs on local writes
+PERTURBS: RunVersioning
+
+--- FIND
+    /\ phase = "Chain" /\ Chain(reg)[idx] = "V"
+--- REPLACE
+    /\ phase = "Chain" /\ Chain(reg)[idx] = "V" /\ origin = "System"
+--- END

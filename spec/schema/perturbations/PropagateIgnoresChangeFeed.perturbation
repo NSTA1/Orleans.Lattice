@@ -1,0 +1,12 @@
+# Propagate(s) evicts silo s when the change reaches it.
+MODULE: SchemaPolicyConfig
+ROW: Propagate(s)
+FILE: src/lattice.schema/LatticeSchemaPolicyProvider.cs
+DETECTORS: LatticeSchemaPolicyProviderTests.OnMutationAsync_policy_tree_write_evicts_affected_tree
+SUMMARY: the policy provider ignores a sys-schema-policy write
+
+--- FIND
+        _cache.InvalidateForMutation(mutation, SchemaConstants.PolicyTree);
+--- REPLACE
+        _ = mutation;
+--- END

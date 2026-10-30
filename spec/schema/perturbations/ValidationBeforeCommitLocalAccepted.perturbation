@@ -1,0 +1,12 @@
+# ValidationBeforeCommit: an invalid local write is rejected before the append.
+MODULE: SchemaStageOrdering
+ROW: ValidationBeforeCommit
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: SchemaWriteStageRegistrationTests.Enforcement_only_rejects_an_invalid_local_write_and_accepts_a_valid_one_unchanged, SchemaWriteStageRegistrationTests.Reversed_registration_keeps_enforcement_and_drops_stamping
+SUMMARY: an invalid local write is accepted under every registration with enforcement
+
+--- FIND
+            throw new LatticeSchemaViolationException(treeId, key, reason);
+--- REPLACE
+            return LatticeWriteDecision.Accept();
+--- END

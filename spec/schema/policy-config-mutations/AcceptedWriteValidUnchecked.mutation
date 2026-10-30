@@ -1,0 +1,12 @@
+# The write commits whatever the cached setting says about it.
+MODULE: AcceptedWriteValidUnchecked
+TARGET: AcceptedWriteValid
+CLASS: Action
+SUMMARY: a write is committed without being validated
+PERTURBS: Write
+
+--- FIND
+    /\ IF Valid(cache[s], v)
+--- REPLACE
+    /\ IF TRUE
+--- END

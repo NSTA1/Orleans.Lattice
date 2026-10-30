@@ -1,0 +1,12 @@
+# RunEnforcement dead-letters invalid strict ingest.
+MODULE: SchemaStageOrdering
+ROW: RunEnforcement
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: LatticeSchemaWriteInterceptorTests.OnWriteAsync_strict_ingest_invalid_item_dead_letters
+SUMMARY: strict ingest of an invalid item is trusted
+
+--- FIND
+        if (!compiled.StrictIngest)
+--- REPLACE
+        if (true)
+--- END

@@ -318,6 +318,13 @@
         "note": "Every full ReplicationShipping variant, currently the one FourRecords case. Its measured item took 22.29 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568186) and 17.23 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834836); 19.76 is their mean, a planning input, not a future runtime guarantee."
       },
       {
+        "shard": "formal-tlc-schema",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardSchema"],
+        "note": "Every SchemaPolicyConfig and SchemaStageOrdering base, variant and mutation (29 cases), bases co-located with their mutations so the base runs serve the full-bound controls. Measured locally at 1.97 minutes (16-core Windows workstation, default TLC concurrency) for #5226; the SchemaPolicyConfig ThreeSilos variant dominates at about one minute. Refresh from the first receipt-free schema-assurance bucket push, and split the shard from measured timings as further Schema* modules join it."
+      },
+      {
         "shard": "formal-tlc-smoke",
         "tlcSmoke": true,
         "tiers": ["deterministic"],
