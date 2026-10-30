@@ -61,6 +61,14 @@ public partial class LatticeSchemaRemediationGrainTests
         }
     }
 
+    internal static async IAsyncEnumerable<string> KeysOf(IAsyncEnumerable<KeyValuePair<string, byte[]>> entries)
+    {
+        await foreach (var entry in entries)
+        {
+            yield return entry.Key;
+        }
+    }
+
     private sealed class Harness
     {
         public required LatticeSchemaRemediationGrain Grain { get; init; }
@@ -101,6 +109,23 @@ public partial class LatticeSchemaRemediationGrainTests
 
         return values;
     }
+
+    /// <summary>
+    /// A stored-form reader serving each key's value from <paramref name="entriesFactory"/>
+    /// verbatim (envelope intact), as a schema-version migration point-reads it (#5208).
+    /// </summary>
+    internal static IReplicationApplyGrain StoredReader(Func<IAsyncEnumerable<KeyValuePair<string, byte[]>>> entriesFactory)
+    {
+        var reader = Substitute.For<IReplicationApplyGrain>();
+        reader.ReadStoredWithVersionAsync(Arg.Any<string>()).Returns(async ci =>
+        {
+            var key = ci.ArgAt<string>(0);
+            var values = await PointReadsAsync(entriesFactory(), [key]);
+            return new VersionedValue { Value = values.GetValueOrDefault(key) };
+        });
+        return reader;
+    }
+
     private static Harness CreateGrainCore(
         Func<IAsyncEnumerable<KeyValuePair<string, byte[]>>> entriesFactory,
         SchemaRemediationState? seedState,
@@ -118,6 +143,10 @@ public partial class LatticeSchemaRemediationGrainTests
         source.EntriesAsync(
                 Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
             .Returns(ci => Bounded(entriesFactory(), ci.ArgAt<string?>(0), ci.ArgAt<string?>(1)));
+        // A schema-version migration scans keys only (#5208), from the same entries.
+        source.KeysAsync(
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(ci => KeysOf(Bounded(entriesFactory(), ci.ArgAt<string?>(0), ci.ArgAt<string?>(1))));
         // A slice takes each scanned key's value from a point read (#4361), served
         // here from the same entries.
         source.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
@@ -147,6 +176,8 @@ public partial class LatticeSchemaRemediationGrainTests
             .Returns(destination);
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);
+        var storedReader = StoredReader(entriesFactory);
+        grainFactory.GetGrain<IReplicationApplyGrain>(TreeId).Returns(storedReader);
 
         var policyStore = Substitute.For<ILatticeSchemaPolicyStore>();
         policyStore.GetPolicyAsync(TreeId, Arg.Any<CancellationToken>()).Returns(existingPolicy);
@@ -314,6 +345,22 @@ public partial class LatticeSchemaRemediationGrainTests
         Assert.That(report.Succeeded, Is.False);
         Assert.That(report.OffendingKey, Is.EqualTo("k1"));
         await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
+    }
+
+    [Test]
+    public async Task StartVersionMigrationAsync_reads_the_stored_form_never_the_decoding_client_read()
+    {
+        // The client-facing entry scan and GetManyAsync strip the envelope and
+        // upcast to the tree's target, throwing on a value they cannot upcast before
+        // the per-value abort can run (#5208). A migration must read the stored form.
+        var h = CreateGrainBytes(new[] { ("k1", Env(1, "{\"a\":1}")) }, schemaRegistry: NoHopRegistry());
+
+        var report = await h.Grain.StartVersionMigrationAsync(MigSchemaId, 2);
+
+        Assert.That(report.DidAbort, Is.True);
+        await h.Source.DidNotReceive().GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>());
+        _ = h.Source.DidNotReceive().EntriesAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
