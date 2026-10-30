@@ -1,0 +1,12 @@
+# SetConfig(t) is validated against the catalog before the admin is reached.
+MODULE: SchemaVersionFamily
+ROW: SetConfig(t)
+FILE: src/lattice.api.schema/LatticeSchemaControl.cs
+DETECTORS: LatticeSchemaControlVersionTargetTests.SetVersionConfig_refuses_a_target_with_no_registered_descriptor, LatticeSchemaControlVersionTargetTests.SetVersionConfig_refuses_a_target_the_current_target_cannot_reach
+SUMMARY: the facade replaces the version config without the catalog check
+
+--- FIND
+            await _runtimeRegistry.ValidateTargetAsync(treeId, config, current).ConfigureAwait(false);
+--- REPLACE
+            _ = current;
+--- END

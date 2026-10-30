@@ -75,6 +75,7 @@ be quiet about one.
 | [`view-resolved-identity/`](view-resolved-identity/README.md) | `MaterialisedViewResolvedIdentity` | Resolved transaction IDs and eviction-order ownership follow the actual physical WAL tail through reused IDs, same-log rebuilds and uncertain candidate publication. |
 | [`schema/`](schema/README.md) | `SchemaPolicyConfig` | Per-tree policy and version-config identity, set and clear, per-silo caching with eventual eviction on every silo, overtaken cache loads, refused uncompilable policies, and validation before the WAL append. |
 | [`schema/`](schema/README.md) | `SchemaStageOrdering` | Enforcement and versioning stage order for every registration combination, the system-origin opt-in, per-stage strict flags, envelope handling, batch refusal semantics and writes below the check. |
+| [`schema/`](schema/README.md) | `SchemaVersionFamily` | The upcaster catalog from startup declarations and the append-only runtime registry, the facade's catalog-checked and monotonic target moves, read-time decode with explicit failures, and eager migration at its own target with its abort contract. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

@@ -1,0 +1,12 @@
+# The cutover publishes a build that has lost a key.
+MODULE: MigrationReadEquivalentCutoverDropsKey
+TARGET: MigrationReadEquivalent
+CLASS: Action
+SUMMARY: a completed migration deletes a value it was meant to re-stamp
+PERTURBS: MigrateCutover
+
+--- FIND
+    /\ data' = shadow /\ shadow' = Blank
+--- REPLACE
+    /\ data' = [shadow EXCEPT ![1] = Abs] /\ shadow' = Blank
+--- END

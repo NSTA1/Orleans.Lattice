@@ -1,0 +1,13 @@
+# ValidatedTarget: the current target must reach the new one.
+MODULE: SchemaVersionFamily
+ROW: ValidatedTarget
+FILE: src/lattice.schema/SchemaRuntimeRegistry.cs
+DETECTORS: LatticeSchemaControlVersionTargetTests.SetVersionConfig_refuses_a_target_the_current_target_cannot_reach, LatticeSchemaControlVersionTargetTests.AdvanceTargetVersion_refuses_a_target_with_no_registered_path
+SUMMARY: the target check accepts a registered target with no upcast path
+
+--- FIND
+            || target.TargetVersion < previous.TargetVersion
+            || !registry.CanUpcast(target.SchemaId, previous.TargetVersion, target.TargetVersion)))
+--- REPLACE
+            || target.TargetVersion < previous.TargetVersion))
+--- END

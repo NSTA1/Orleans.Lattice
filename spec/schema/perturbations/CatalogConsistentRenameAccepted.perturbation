@@ -1,0 +1,12 @@
+# CatalogConsistent: a version is never registered under a second name.
+MODULE: SchemaVersionFamily
+ROW: CatalogConsistent
+FILE: src/lattice.schema/SchemaRuntimeCatalog.cs
+DETECTORS: SchemaRuntimeRegistryTests.Identical_retry_is_idempotent_conflicts_leave_persisted_catalog_unchanged, SchemaRuntimeRegistryTests.A_registration_conflicting_with_a_host_declaration_is_refused_and_a_replay_of_one_persists_nothing
+SUMMARY: the merge overwrites a registered descriptor with a renamed one
+
+--- FIND
+            if (descriptors.TryGetValue(key, out var existing) && existing != descriptor)
+--- REPLACE
+            if (descriptors.TryGetValue(key, out var existing) && existing != descriptor && existing.Name is null)
+--- END

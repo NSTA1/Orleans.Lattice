@@ -105,6 +105,82 @@ public sealed class SchemaRuntimeRegistryTests
     }
 
     [Test]
+    public async Task A_later_registration_keeps_every_earlier_entry()
+    {
+        var state = new FakePersistentState<SchemaRuntimeRegistryState>();
+        var grain = Grain(state);
+        await grain.RegisterAsync(Registration());
+        await grain.RegisterAsync(new()
+        {
+            Descriptors = [new(42, 3, "orders-v3")],
+            Upcasters = [new() { SchemaId = 42, FromVersion = 2, ToVersion = 3, Transform = LatticeValueTransform.Passthrough() }],
+        });
+
+        var catalog = await grain.GetAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(catalog.Descriptors.Select(d => d.Version), Is.EqualTo(new uint[] { 1, 2, 3 }));
+            Assert.That(catalog.Upcasters.Select(h => h.FromVersion), Is.EqualTo(new uint[] { 1, 2 }));
+            Assert.That(SchemaRuntimeCatalog.Build(catalog, Transforms).CanUpcast(42, 1, 3), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task A_registration_with_any_conflicting_entry_persists_none_of_it()
+    {
+        var state = new FakePersistentState<SchemaRuntimeRegistryState>();
+        var grain = Grain(state);
+        await grain.RegisterAsync(Registration());
+
+        // The new descriptor is valid on its own; the hop collides with the
+        // registered v1 to v2 hop, so the whole registration is refused.
+        Assert.That(async () => await grain.RegisterAsync(new()
+        {
+            Descriptors = [new(42, 3, "orders-v3")],
+            Upcasters = [new() { SchemaId = 42, FromVersion = 1, ToVersion = 3, Transform = LatticeValueTransform.Passthrough() }],
+        }), Throws.ArgumentException);
+
+        var catalog = await grain.GetAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.WriteCount, Is.EqualTo(1), "the refused registration wrote nothing");
+            Assert.That(catalog.Descriptors.Select(d => d.Version), Is.EqualTo(new uint[] { 1, 2 }));
+            Assert.That(catalog.Upcasters.Select(h => h.ToVersion), Is.EqualTo(new uint[] { 2 }));
+        });
+    }
+
+    [Test]
+    public async Task A_registration_conflicting_with_a_host_declaration_is_refused_and_a_replay_of_one_persists_nothing()
+    {
+        var expected = Registration();
+        var host = new LatticeSchemaRegistryBuilder()
+            .AddSchema(42, 1, "orders-v1")
+            .AddSchema(42, 2, "orders-v2")
+            .AddUpcaster(42, 1, 2, expected.Upcasters[0].Transform!.Value)
+            .Build(Transforms);
+        var state = new FakePersistentState<SchemaRuntimeRegistryState>();
+        var grain = Grain(state, host);
+
+        Assert.That(async () => await grain.RegisterAsync(new() { Descriptors = [new(42, 1, "renamed")] }),
+            Throws.ArgumentException);
+        Assert.That(async () => await grain.RegisterAsync(new()
+        {
+            Descriptors = [new(42, 3, "orders-v3")],
+            Upcasters = [new() { SchemaId = 42, FromVersion = 1, ToVersion = 3, Transform = LatticeValueTransform.Passthrough() }],
+        }), Throws.ArgumentException);
+        Assert.That(state.WriteCount, Is.Zero, "a registration refused against the host declarations writes nothing");
+
+        await grain.RegisterAsync(Registration());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Registration.Descriptors, Is.Empty, "declared descriptors are never persisted");
+            Assert.That(state.State.Registration.Upcasters, Is.Empty, "declared hops are never persisted");
+        });
+    }
+
+    [Test]
     public async Task Callers_cannot_mutate_registered_catalog_arrays_or_nested_transform_nodes()
     {
         var grain = Grain(new());

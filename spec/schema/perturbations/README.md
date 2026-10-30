@@ -18,7 +18,9 @@ python3 tools/perturbations/run-perturbations.py --area schema --output result.j
 
 `SchemaPolicyConfig` ([`SchemaPolicyConfigRefinement.md`](../SchemaPolicyConfigRefinement.md))
 and `SchemaStageOrdering` ([`SchemaStageOrderingRefinement.md`](../SchemaStageOrderingRefinement.md))
-have one perturbation for every behaviour row. The gate requires every
+have one perturbation for every behaviour row. `SchemaVersionFamily`
+([`SchemaVersionFamilyRefinement.md`](../SchemaVersionFamilyRefinement.md)) has
+one for every behaviour row except the two below. The gate requires every
 behaviour row of a module that has any perturbation to be either seeded here or
 listed below, never both.
 
@@ -26,3 +28,5 @@ listed below, never both.
 
 | Module | Row | Reason |
 |--------|-----|--------|
+| SchemaVersionFamily | ConfigNeverRewritesData | The version admins and the runtime registry hold no path to a tree's stored values, so no edit to one production file makes a config change or a registration rewrite them; the detectors pin the contract end to end against any future such path. |
+| SchemaVersionFamily | MigrationTerminates | A migration that fails to terminate does so by faulting on a value it cannot migrate and staying in flight, which is exactly the edit the `AbortLeavesDataUntouched` perturbation seeds; a second copy of that edit would add no evidence. |
