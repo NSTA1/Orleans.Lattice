@@ -115,15 +115,16 @@ internal sealed class AggregationApplier(
         // reserved region (empty, or NUL-prefixed) would sort below every readable
         // key and could collide with an internal accumulator / inverse / membership
         // row. Rather than corrupt the view silently, drop the contribution and
-        // meter it: the rejection is deterministic on the key, so every cluster
-        // drops the same members and the view stays convergent. A regrouped source
-        // key whose new group is reserved simply keeps its prior (valid) group.
+        // meter it. The source key no longer belongs to any valid group, so its
+        // prior membership is retracted exactly as a filter exit retracts it
+        // (#5236): the view stays a function of current source state, so every
+        // cluster drops the same members and incremental maintenance agrees with a
+        // rebuild. A key with no prior membership retracts as a no-op (the numeric
+        // retract still completes any pending durable publication intent).
         if (IsReservedGroupKey(contribution.GroupKey))
         {
             Rejected.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagView, _viewName), _tenantTag);
-            return IsNumeric
-                ? CompletePendingNumericMaterialisationAsync(contribution.SourceKey, cancellationToken)
-                : Task.CompletedTask;
+            return RetractAsync(contribution, cancellationToken);
         }
 
         return IsNumeric

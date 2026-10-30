@@ -268,17 +268,20 @@ public class FoldAggregationApplierTests
     }
 
     [Test]
-    public async Task Fold_reserved_group_key_does_not_disturb_a_valid_group()
+    public async Task Fold_reserved_regroup_retracts_the_prior_valid_group_membership()
     {
-        // A rejected contribution must not perturb existing valid state: a source
-        // key that later regroups into a reserved key keeps its prior valid group.
+        // A rejected contribution still retracts the source key's prior
+        // membership, as a filter exit does (#5236): a key that regroups into a
+        // reserved key leaves its valid group, which is re-folded over the
+        // surviving members, so incremental maintenance agrees with a rebuild.
         var store = new InMemoryStore();
         var applier = Applier(store, new ConcatFold());
 
         await applier.ApplyAsync(Fold("g", "a", "A", Clock(1)));
-        await applier.ApplyAsync(Fold("\u0000bad", "a", "Z", Clock(2)));
+        await applier.ApplyAsync(Fold("g", "b", "B", Clock(2)));
+        await applier.ApplyAsync(Fold("\u0000bad", "a", "Z", Clock(3)));
 
-        Assert.That(Result(store, "g"), Is.EqualTo("A"),
-            "The valid group is unchanged when a later regroup targets a reserved key.");
+        Assert.That(Result(store, "g"), Is.EqualTo("B"),
+            "The regrouped key leaves its valid group when a later regroup targets a reserved key.");
     }
 }
