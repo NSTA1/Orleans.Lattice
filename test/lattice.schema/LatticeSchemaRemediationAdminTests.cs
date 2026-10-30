@@ -27,7 +27,7 @@ public class LatticeSchemaRemediationAdminTests
         var transform = LatticeValueTransform.Passthrough();
         grain.AcceptAsync(transform, policy, Arg.Any<string>())
             .Returns(LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.DryRun, 0, "orders/remediated/x", "op"));
-        grain.RunSliceAsync().Returns(
+        grain.RunSliceAsync("op").Returns(
             new SchemaRemediationSlice(
                 LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.Build, 0, "orders/remediated/x", "op"), 2),
             new SchemaRemediationSlice(LatticeSchemaRemediationReport.Completed(2, "orders/remediated/x", "op"), null));
@@ -36,7 +36,7 @@ public class LatticeSchemaRemediationAdminTests
 
         Assert.That(report.Succeeded, Is.True);
         await grain.Received(1).AcceptAsync(transform, policy, Arg.Any<string>());
-        await grain.Received(2).RunSliceAsync();
+        await grain.Received(2).RunSliceAsync("op");
         await grain.DidNotReceiveWithAnyArgs().StartAsync(default, default!, default);
     }
 
