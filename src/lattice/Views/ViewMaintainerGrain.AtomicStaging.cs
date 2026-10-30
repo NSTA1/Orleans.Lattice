@@ -1574,7 +1574,7 @@ internal sealed partial class ViewMaintainerGrain
                     continue;
                 }
 
-                foreach (var write in registration.Projection!.Project(prepared))
+                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, prepared)))
                 {
                     writes.Add(write);
                 }
@@ -1710,7 +1710,7 @@ internal sealed partial class ViewMaintainerGrain
                     continue;
                 }
 
-                foreach (var write in registration.Projection!.Project(prepared))
+                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, prepared)))
                 {
                     if (write.Kind is not (ViewWriteKind.Upsert or ViewWriteKind.Delete))
                     {

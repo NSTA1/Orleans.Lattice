@@ -8,10 +8,13 @@ namespace Orleans.Lattice.Schema;
 /// <see cref="CompiledSchemaPolicy"/> per governed tree (and a <c>null</c> sentinel
 /// for a tree known to have no policy) so per-write resolution is a dictionary
 /// lookup. Also an <see cref="IMutationObserver"/>: a write to the reserved
-/// <c>sys-schema-policy</c> tree evicts the affected tree's cache entry, so a
-/// policy change is picked up on the next write without a restart.
+/// <c>sys-schema-policy</c> tree evicts the affected tree's cache entry on the silo
+/// that committed it. Every other silo drops its cache within
+/// <see cref="LatticeSchemaEnforcementOptions.PropagationInterval"/> of the change,
+/// through <see cref="SchemaConfigEpochSynchronizer{TCache}"/>, so a policy change is
+/// picked up cluster-wide without a restart.
 /// </summary>
-internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider, IMutationObserver
+internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider, IMutationObserver, ISchemaConfigCache
 {
     private readonly ILatticeSchemaPolicyStore _store;
     private readonly ConcurrentDictionary<string, CompiledSchemaPolicy?> _cache = new(StringComparer.Ordinal);
@@ -80,6 +83,9 @@ internal sealed class LatticeSchemaPolicyProvider : ILatticeSchemaPolicyProvider
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         _cache.Invalidate(_generations, treeId);
     }
+
+    /// <inheritdoc />
+    public void InvalidateAll() => _cache.InvalidateAll(_generations);
 
     /// <inheritdoc />
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)

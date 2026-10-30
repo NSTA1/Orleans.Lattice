@@ -88,6 +88,13 @@ public static class LatticeSchemaVersioningServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<LatticeSchemaVersionProvider>());
 
+        // The observer above fires only on the silo that committed the config write,
+        // so every silo also follows the cluster-wide version-config epoch: a change
+        // reaches every silo's cache within PropagationInterval (#5238).
+        builder.Services.AddSchemaConfigEpochSynchronizer<LatticeSchemaVersionProvider>(
+            SchemaConstants.VersionConfigTree,
+            sp => sp.GetRequiredService<IOptions<LatticeSchemaVersioningOptions>>().Value.PropagationInterval);
+
         // Host-supplied schema registry (descriptors + upcasters), built once.
         builder.Services.AddSingleton<ILatticeSchemaRegistry>(sp =>
         {

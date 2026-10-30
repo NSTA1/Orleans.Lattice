@@ -15,6 +15,7 @@ public partial class SchemaVersionsPanel : IDisposable
 {
     private readonly ComponentLifetime _lifetime = new();
     private LatticeSchemaVersionConfig? _config;
+    private LatticeSchemaRuntimeRegistration? _catalog;
     private string? _loadedTree;
     private string? _error;
     private string? _formError;
@@ -98,6 +99,7 @@ public partial class SchemaVersionsPanel : IDisposable
         if (Workspace is { } workspace && !string.Equals(workspace.TreeId, _loadedTree, StringComparison.Ordinal))
         {
             _loadedTree = workspace.TreeId;
+            _catalog = null;
             _editor = Editor.None;
             _confirm = Confirm.None;
             await ReloadAsync();
@@ -110,6 +112,33 @@ public partial class SchemaVersionsPanel : IDisposable
     /// <returns><see langword="true"/> when it is a whole number that fits.</returns>
     internal static bool TryParseNumber(string text, out uint value) =>
         uint.TryParse(text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out value);
+
+    /// <summary>What a migration to <paramref name="target"/> does with a value it cannot upgrade.</summary>
+    /// <param name="target">The version the migration rewrites values at.</param>
+    /// <returns>A sentence.</returns>
+    internal static string MigrationStops(uint target) =>
+        $"If a stored value cannot be upgraded to version {target} - no migration path leads there, or it is stamped above it - "
+        + "the migration stops at that value, names it and leaves every value as it was. Register the missing path, then start it again.";
+
+    /// <summary>The warning for registered versions an advance would leave unreadable.</summary>
+    /// <param name="stranded">The versions with no path to <paramref name="target"/>, ascending.</param>
+    /// <param name="target">The target being considered.</param>
+    /// <returns>A sentence.</returns>
+    internal static string StrandedText(IReadOnlyList<uint> stranded, uint target)
+    {
+        var versions = stranded.Count == 1
+            ? $"Registered version {stranded[0]} has"
+            : $"Registered versions {string.Join(", ", stranded.Take(stranded.Count - 1))} and {stranded[^1]} have";
+        return $"{versions} no migration path to version {target}. A value stamped with "
+            + (stranded.Count == 1 ? "it" : "one of them")
+            + " could not be read once the target advances, and a migration would stop at it.";
+    }
+
+    private Task OnCatalogChanged(LatticeSchemaRuntimeRegistration? catalog)
+    {
+        _catalog = catalog;
+        return Task.CompletedTask;
+    }
 
     private async Task ReloadAsync()
     {

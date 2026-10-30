@@ -69,6 +69,14 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     /// </summary>
     public const string OrdersTree = "schema-orders";
 
+    /// <summary>
+    /// A tree of its own for the schema versioning journey (issue #5234), so turning
+    /// versioning on and registering versions never touches a tree another fixture reads.
+    /// Its version catalog is append-only, so the journey registers the same definitions
+    /// on every run.
+    /// </summary>
+    public const string VersionsTree = "schema-versions";
+
     private readonly GrpcChannel _adminChannel;
 
     private ExplorerWorld(ExplorerHead head, string grpcEndpoint)
@@ -346,6 +354,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             }
 
             silo.AddLatticeSchemaEnforcement();
+            silo.AddLatticeSchemaVersioning();
             silo.AddLatticeSchemaApi();
 
             silo.AddLatticeApps();
@@ -460,6 +469,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
 
             var membership = services.GetRequiredService<ILatticeMembershipDirectory>();
 
+            await grains.GetGrain<ILattice>(VersionsTree).SetAsync("order/0001", Encoding.UTF8.GetBytes("{\"qty\":2}"));
             // A membership edge alone makes no group: each seeded group gets its record,
             // so Access lists it and refuses its id as a new group's.
             await membership.UpsertGroupAsync(new MembershipGroup(WorldIdentities.OperatorsGroup, "Floor Operators"));
