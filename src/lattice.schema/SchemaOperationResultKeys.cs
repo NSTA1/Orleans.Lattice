@@ -14,10 +14,13 @@ public static class SchemaOperationResultKeys
     /// <summary>The values processed: the whole tree on completion, up to and including the offender on an abort.</summary>
     public const string ValuesProcessed = "valuesProcessed";
 
-    /// <summary>The first key whose value could not be remediated (aborted only).</summary>
+    /// <summary>
+    /// The first key whose value could not be remediated (aborted only; absent from an
+    /// abort no value caused, such as a cutover another alias change superseded).
+    /// </summary>
     public const string OffendingKey = "offendingKey";
 
-    /// <summary>Why the offending value failed (aborted only).</summary>
+    /// <summary>Why the offending value failed, or why a superseded cutover was refused (aborted only).</summary>
     public const string Reason = "reason";
 
     /// <summary>
@@ -30,7 +33,7 @@ public static class SchemaOperationResultKeys
     /// <summary>The <see cref="Outcome"/> of a remediation that cut the tree over.</summary>
     public const string Completed = "completed";
 
-    /// <summary>The <see cref="Outcome"/> of a remediation that stopped at an offending value with nothing cut over.</summary>
+    /// <summary>The <see cref="Outcome"/> of a remediation that stopped at an offending value, or whose cutover another alias change superseded, with nothing cut over.</summary>
     public const string Aborted = "aborted";
 
     /// <summary>The <see cref="Outcome"/> of a remediation cancelled before cutover, with nothing cut over.</summary>

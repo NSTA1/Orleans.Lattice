@@ -21,16 +21,15 @@ BoundedSeq(S) == UNION {[1..n -> S] : n \in 0..BatchSize}
 Range(s) == {s[i] : i \in DOMAIN s}
 
 \* The stage chain the DI wiring resolves. "Reversed" is versioning registered
-\* before enforcement: accepted, but enforcement's replacement discards the
-\* composed interceptor, so only the enforcement stage runs.
+\* before enforcement: enforcement re-composes with the registered versioning
+\* stage instead of replacing it (#5241), so it resolves the same chain.
 Chain(r) ==
     CASE r = "None" -> << >>
       [] r = "Enforcement" -> <<"E">>
       [] r = "Versioning" -> <<"V">>
       [] r = "Composed" -> <<"E", "V">>
-      [] r = "Reversed" -> <<"E">>
+      [] r = "Reversed" -> <<"E", "V">>
 HasStage(r, s) == \E i \in 1..Len(Chain(r)) : Chain(r)[i] = s
-Supported(r) == r # "Reversed"
 
 VARIABLES reg, gStrictE, gStrictV, policyOn, versionOn, tStrictE, tStrictV,
           phase, origin, atomic, req, ei, idx, val, kept, path, outcome,
@@ -106,11 +105,13 @@ ValidBodyNeverRefusedByEnforcement ==
        => \/ val.body = "Bad"
           \/ (val.form = "Env" /\ ~(DecoderInstalled(reg) /\ ~(versionOn /\ val.tag = "Orphan")))]_vars
 
-\* Under a supported registration with versioning, every intercepted entry is
-\* stored self-describing.
+\* Under every registration with versioning, in either order, every intercepted
+\* entry is stored self-describing. The guard is the registration (the decoder
+\* is installed exactly when versioning is), not the resolved chain, so a
+\* registration that silently loses the stamping stage violates it.
 StampedWhenVersioned ==
-    [][(CommitStep /\ path = "Intercepted" /\ Supported(reg)
-        /\ HasStage(reg, "V") /\ versionOn)
+    [][(CommitStep /\ path = "Intercepted"
+        /\ DecoderInstalled(reg) /\ versionOn)
        => \A e \in Range(stored') : e.form = "Env"]_vars
 
 \* An entry that arrived enveloped is stored with its own tag, never re-stamped.

@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaRemediationGrainTests.StartAsync_all_values_remediate_cu
 SUMMARY: the cutover phase completes without cutting the tree over
 
 --- FIND
-                        await CutoverAsync();
+                        if (await CutoverAsync())
 --- REPLACE
-                        await Task.CompletedTask;
+                        if (await Task.FromResult(true))
 --- END

@@ -83,7 +83,7 @@ public interface ILatticeSchemaVersionAdmin
     /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="newTargetVersion">The new target version. Must be greater than the current target.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
-    /// <returns>The terminal migration report: <see cref="LatticeSchemaRemediationReport.Succeeded"/> on cutover, or <see cref="LatticeSchemaRemediationReport.DidAbort"/> with the first offending entry.</returns>
+    /// <returns>The terminal migration report: <see cref="LatticeSchemaRemediationReport.Succeeded"/> on cutover, or <see cref="LatticeSchemaRemediationReport.DidAbort"/> with the first offending entry, or with no offending entry and a reason naming the supersession when another alias change superseded the cutover.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
     /// <exception cref="InvalidOperationException">The tree is unversioned, <paramref name="newTargetVersion"/> does not advance the current target, schema versioning is not registered, or the call joined a migration already in flight that then ended under another operation and was replaced by a later remediation before its outcome could be read.</exception>
     Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(

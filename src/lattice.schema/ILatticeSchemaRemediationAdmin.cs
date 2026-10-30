@@ -39,7 +39,7 @@ public interface ILatticeSchemaRemediationAdmin
     /// <param name="transform">The per-value remediation transform.</param>
     /// <param name="targetPolicy">The policy the transformed values must satisfy. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
-    /// <returns>The terminal report: <see cref="LatticeSchemaRemediationReport.Succeeded"/> on cutover, or <see cref="LatticeSchemaRemediationReport.DidAbort"/> with the first offending entry.</returns>
+    /// <returns>The terminal report: <see cref="LatticeSchemaRemediationReport.Succeeded"/> on cutover, or <see cref="LatticeSchemaRemediationReport.DidAbort"/> with the first offending entry, or with no offending entry and a reason naming the supersession when another alias change superseded the cutover.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="targetPolicy"/> carries an uncompilable regex rule.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="targetPolicy"/> is <c>null</c>.</exception>
     /// <exception cref="InvalidOperationException">A remediation with different parameters is already in flight for the tree, or the call joined a remediation already in flight that then ended under another operation and was replaced by a later remediation before its outcome could be read.</exception>

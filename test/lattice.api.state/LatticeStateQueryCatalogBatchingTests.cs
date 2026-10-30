@@ -80,6 +80,7 @@ public sealed class LatticeStateQueryCatalogBatchingTests
         public Task BeginAliasChangeAsync(string operationId) => throw new NotSupportedException();
         public Task EndAliasChangeAsync(string operationId) => throw new NotSupportedException();
         public Task EnsureAliasWritableAsync() => throw new NotSupportedException();
+        public Task EnsureAliasUnreservedAsync() => throw new NotSupportedException();
 
         public Task<TreeDeletionSnapshot> GetDeletionStatusAsync() => throw new NotSupportedException();
 
