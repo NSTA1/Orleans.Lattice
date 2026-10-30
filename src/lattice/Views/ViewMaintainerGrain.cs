@@ -97,7 +97,13 @@ internal sealed partial class ViewMaintainerGrain(
     // drain reads no registry. Mirrors the cross-cluster shipper's gated backstop.
     private bool _sourceIdentityResolved;
     private DateTime _lastSourceIdentityResolveUtc;
-    private bool _sourceIdentityRebindRequested;
+
+    // Alias-swap pushes received and the count a converged heal has accounted for.
+    // A sequence rather than a flag because the push interleaves (it must never
+    // wait behind a drain, #5279): one landing while a heal is already past its
+    // resolve has to survive that heal's convergence and force another re-resolve.
+    private long _sourceIdentityRebindRequests;
+    private long _sourceIdentityRebindsHandled;
 
     // Wall clock backing the source-identity backstop. Aliased to
     // TimeProvider.System in production; a test overrides it via
@@ -1259,7 +1265,9 @@ internal sealed partial class ViewMaintainerGrain(
         // already-armed drain timer (<= CoalesceWindow) picks this up promptly, so
         // the control-plane push does not run the heavy heal inline on the observer
         // fan-out. A lost push still heals via the coarse backstop re-resolve.
-        _sourceIdentityRebindRequested = true;
+        // Runs interleaved: the registry sends it from inside its alias turn, and a
+        // drain may be rebuilding against that registry right now (#5279).
+        _sourceIdentityRebindRequests++;
 
         if (logger.IsEnabled(LogLevel.Debug))
         {
@@ -1347,7 +1355,7 @@ internal sealed partial class ViewMaintainerGrain(
         // as a push (NotifySourceIdentityChangedAsync sets the rebind flag) or is
         // caught by the backstop re-resolve below.
         if (_sourceIdentityResolved
-            && !_sourceIdentityRebindRequested
+            && _sourceIdentityRebindsHandled == _sourceIdentityRebindRequests
             && !string.IsNullOrEmpty(state.State.BoundPhysicalTreeId)
             && _sourceIdentityClock.GetUtcNow().UtcDateTime - _lastSourceIdentityResolveUtc
                 < Options.SourceIdentityBackstopInterval)
@@ -1355,6 +1363,8 @@ internal sealed partial class ViewMaintainerGrain(
             return false;
         }
 
+        // A push that arrives after this point is not covered by the resolve below.
+        var rebindRequestsCovered = _sourceIdentityRebindRequests;
         var physical = await ResolveSourcePhysicalAsync(logical);
         var bound = state.State.BoundPhysicalTreeId;
 
@@ -1369,7 +1379,7 @@ internal sealed partial class ViewMaintainerGrain(
         {
             _lastSourceIdentityResolveUtc = _sourceIdentityClock.GetUtcNow().UtcDateTime;
             _sourceIdentityResolved = true;
-            _sourceIdentityRebindRequested = false;
+            _sourceIdentityRebindsHandled = rebindRequestsCovered;
         }
 
         if (string.IsNullOrEmpty(bound))

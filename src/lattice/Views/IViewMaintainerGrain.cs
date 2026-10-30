@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Views;
@@ -33,7 +34,16 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// call never needs to block on the rebuild itself. <paramref name="newPhysicalTreeId"/>
     /// is the registry's post-swap effective physical id, carried for diagnostics;
     /// the authoritative re-resolve happens on the next drain.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: the registry sends it from
+    /// inside its own non-reentrant alias turn, after committing the new row. A
+    /// drain that has already seen that row may be rebuilding into a fresh
+    /// generation tree whose registration queues behind the same turn, so a push
+    /// that waited for the drain would deadlock the registry (#5279). It only
+    /// records the request, so interleaving it into a drain is safe.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task NotifySourceIdentityChangedAsync(string newPhysicalTreeId, CancellationToken cancellationToken = default);
 
     /// <summary>
