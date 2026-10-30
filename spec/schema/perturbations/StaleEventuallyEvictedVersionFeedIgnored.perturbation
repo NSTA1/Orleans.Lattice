@@ -1,0 +1,12 @@
+# StaleEventuallyEvicted: a stale setting is eventually evicted.
+MODULE: SchemaPolicyConfig
+ROW: StaleEventuallyEvicted
+FILE: src/lattice.schema/LatticeSchemaVersionProvider.cs
+DETECTORS: LatticeSchemaVersionProviderTests.OnMutationAsync_version_tree_write_evicts_affected_tree
+SUMMARY: the version provider never evicts a stale config
+
+--- FIND
+        _cache.InvalidateForMutation(_generations, mutation, SchemaConstants.VersionConfigTree);
+--- REPLACE
+        _ = mutation;
+--- END

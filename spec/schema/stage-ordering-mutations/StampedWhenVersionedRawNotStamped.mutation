@@ -1,0 +1,12 @@
+# The versioning stage passes a raw value through unstamped.
+MODULE: StampedWhenVersionedRawNotStamped
+TARGET: StampedWhenVersioned
+CLASS: Action
+SUMMARY: a raw write to a versioned tree is stored without an envelope
+PERTURBS: RunVersioning
+
+--- FIND
+       THEN /\ Advance(Env(val.body, "Target"))
+--- REPLACE
+       THEN /\ Advance(val)
+--- END

@@ -1,0 +1,19 @@
+# A policy that does not compile is written to the reserved tree instead of
+# being refused at set time.
+MODULE: StoredPolicyCompilesUncompilableStored
+TARGET: StoredPolicyCompiles
+CLASS: Invariant
+SUMMARY: an uncompilable policy is made durable
+PERTURBS: ChangeRefused
+
+--- FIND
+ChangeRefused ==
+    /\ admin = "Idle"
+    /\ UNCHANGED vars
+--- REPLACE
+ChangeRefused ==
+    /\ admin = "Idle" /\ rev < MaxChanges
+    /\ stored' = "Bad" /\ rev' = rev + 1
+    /\ UNCHANGED <<admin, adminAt, cache, cacheRev, loading, loadVal, loadRev,
+                   overtaken, pending, data, commits, writes, judge, outcome>>
+--- END

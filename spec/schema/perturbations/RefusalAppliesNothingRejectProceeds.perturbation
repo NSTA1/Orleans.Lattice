@@ -1,0 +1,12 @@
+# RefusalAppliesNothing: a rejected write applies nothing.
+MODULE: SchemaStageOrdering
+ROW: RefusalAppliesNothing
+FILE: src/lattice/LatticeWriteInterceptorEnforcement.cs
+DETECTORS: LatticeWriteInterceptorEnforcementTests.InterceptPoint_reject_throws_with_context
+SUMMARY: a rejected point write proceeds to the append
+
+--- FIND
+            _ => throw Rejected(treeId, operation, key, decision.Reason),
+--- REPLACE
+            _ => LatticeWriteInterceptionOutcome.Write(value),
+--- END

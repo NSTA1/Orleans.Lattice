@@ -1,0 +1,12 @@
+# Strict ingest stores an enveloped entry that cannot be upcast to the target.
+MODULE: StrictIngestDivertsOrphanAccepted
+TARGET: StrictIngestDiverts
+CLASS: Action
+SUMMARY: versioning accepts a newer or unreachable version on strict ingest
+PERTURBS: RunVersioning
+
+--- FIND
+       ELSE IF origin = "Local" \/ ~tStrictV \/ val.tag \in Upcastable
+--- REPLACE
+       ELSE IF origin = "Local" \/ ~tStrictV \/ val.tag \in Tags
+--- END

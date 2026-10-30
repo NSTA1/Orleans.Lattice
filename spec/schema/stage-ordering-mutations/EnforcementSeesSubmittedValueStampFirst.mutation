@@ -1,0 +1,12 @@
+# The composed interceptor runs versioning before enforcement, so the
+# validator sees the stamped envelope rather than the submitted value.
+MODULE: EnforcementSeesSubmittedValueStampFirst
+TARGET: EnforcementSeesSubmittedValue
+CLASS: Invariant
+SUMMARY: the composition orders the stamping stage first
+
+--- FIND
+      [] r = "Composed" -> <<"E", "V">>
+--- REPLACE
+      [] r = "Composed" -> <<"V", "E">>
+--- END

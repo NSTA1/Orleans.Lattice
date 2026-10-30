@@ -1,0 +1,15 @@
+# The cache-load race: a load that read the store before a change installs its
+# result after the eviction ran, so the pre-change setting stays cached.
+MODULE: CacheCurrentOrPendingOvertakenLoadInstalls
+TARGET: CacheCurrentOrPending
+CLASS: Invariant
+SUMMARY: a load an eviction overtook still installs the pre-change setting
+PERTURBS: InstallLoad
+
+--- FIND
+    /\ cache' = IF overtaken[s] THEN cache ELSE [cache EXCEPT ![s] = loadVal[s]]
+    /\ cacheRev' = IF overtaken[s] THEN cacheRev ELSE [cacheRev EXCEPT ![s] = loadRev[s]]
+--- REPLACE
+    /\ cache' = [cache EXCEPT ![s] = loadVal[s]]
+    /\ cacheRev' = [cacheRev EXCEPT ![s] = loadRev[s]]
+--- END

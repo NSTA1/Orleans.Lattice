@@ -1,0 +1,12 @@
+# RunVersioning stamps a raw entry at the target.
+MODULE: SchemaStageOrdering
+ROW: RunVersioning
+FILE: src/lattice.schema/LatticeSchemaVersionWriteInterceptor.cs
+DETECTORS: LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_local_write_stamps_envelope_at_target
+SUMMARY: a raw local write to a versioned tree is not stamped
+
+--- FIND
+            LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, value));
+--- REPLACE
+            value);
+--- END

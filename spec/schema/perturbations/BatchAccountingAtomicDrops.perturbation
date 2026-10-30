@@ -1,0 +1,12 @@
+# BatchAccounting: an atomic batch never drops an entry.
+MODULE: SchemaStageOrdering
+ROW: BatchAccounting
+FILE: src/lattice/LatticeWriteInterceptorEnforcement.cs
+DETECTORS: LatticeWriteInterceptorEnforcementTests.InterceptEntries_atomic_dead_letter_aborts_the_batch
+SUMMARY: an atomic batch drops a dead-lettered entry instead of aborting
+
+--- FIND
+                    if (atomic)
+--- REPLACE
+                    if (false)
+--- END

@@ -1,0 +1,15 @@
+# The change is owed to every silo but never delivered to one that did not
+# serve the admin call, so its stale entry is never evicted.
+MODULE: StaleEventuallyEvictedNeverDelivered
+TARGET: StaleEventuallyEvicted
+CLASS: Temporal
+SUMMARY: propagation to a non-admin silo never happens
+PERTURBS: Propagate
+
+--- FIND
+Propagate(s) ==
+    /\ pending[s]
+--- REPLACE
+Propagate(s) ==
+    /\ pending[s] /\ s = adminAt
+--- END

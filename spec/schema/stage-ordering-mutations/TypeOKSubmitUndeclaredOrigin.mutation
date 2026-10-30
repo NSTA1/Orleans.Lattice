@@ -1,0 +1,12 @@
+# TypeOK pairing: a submitted write carries an origin outside the model.
+MODULE: TypeOKSubmitUndeclaredOrigin
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a write arrives with an undeclared origin
+PERTURBS: Submit
+
+--- FIND
+    /\ phase' = "Submitted" /\ origin' = o /\ atomic' = a /\ req' = r /\ val' = r[1]
+--- REPLACE
+    /\ phase' = "Submitted" /\ origin' = "Peer" /\ atomic' = a /\ req' = r /\ val' = r[1]
+--- END

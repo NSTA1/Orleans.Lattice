@@ -1,0 +1,12 @@
+# Commit appends the bytes the chain produced.
+MODULE: SchemaStageOrdering
+ROW: Commit
+FILE: src/lattice/LatticeWriteInterceptorEnforcement.cs
+DETECTORS: LatticeWriteInterceptorEnforcementTests.InterceptPoint_accept_transformed_proceeds_with_the_replacement_value
+SUMMARY: the choke point appends the submitted bytes instead of the transformed ones
+
+--- FIND
+                LatticeWriteInterceptionOutcome.Write(TransformedOrThrow(in decision, treeId, operation, key)),
+--- REPLACE
+                LatticeWriteInterceptionOutcome.Write(value),
+--- END

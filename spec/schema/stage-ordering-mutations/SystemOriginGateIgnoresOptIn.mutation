@@ -1,0 +1,12 @@
+# The core skips every system-origin write, even when a stage opted in.
+MODULE: SystemOriginGateIgnoresOptIn
+TARGET: SystemOriginGate
+CLASS: Action
+SUMMARY: system-origin ingest is never intercepted
+PERTURBS: Admit
+
+--- FIND
+    /\ IF Skips(reg, origin)
+--- REPLACE
+    /\ IF reg = "None" \/ origin = "System"
+--- END

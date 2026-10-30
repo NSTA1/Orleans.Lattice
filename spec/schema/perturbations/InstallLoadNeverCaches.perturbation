@@ -1,0 +1,12 @@
+# InstallLoad(s) installs the read result.
+MODULE: SchemaPolicyConfig
+ROW: InstallLoad(s)
+FILE: src/lattice.schema/LatticeSchemaPolicyProvider.cs
+DETECTORS: LatticeSchemaPolicyProviderTests.GetCompiledPolicyAsync_caches_after_first_load
+SUMMARY: a completed load is never installed
+
+--- FIND
+        _cache.CacheIfCurrent(_generations, treeId, generation, compiled);
+--- REPLACE
+        _ = generation;
+--- END

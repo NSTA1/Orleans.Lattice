@@ -1,0 +1,14 @@
+# Fail-open on an undecodable value: enforcement judges the stamped body of an
+# envelope no reader can be served (or, with no decoder, ignores the envelope
+# bytes) and admits it.
+MODULE: ValidationBeforeCommitUndecodableAdmitted
+TARGET: ValidationBeforeCommit
+CLASS: Action
+SUMMARY: enforcement admits a value whose envelope cannot be decoded
+PERTURBS: RunEnforcement
+
+--- FIND
+    /\ IF ~policyOn \/ (val.body = "Good" /\ Decodable(val))
+--- REPLACE
+    /\ IF ~policyOn \/ val.body = "Good"
+--- END

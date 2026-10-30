@@ -1,0 +1,12 @@
+# LocalRefusalRejects: a local violation is a rejection, never a diversion.
+MODULE: SchemaStageOrdering
+ROW: LocalRefusalRejects
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: LatticeSchemaWriteInterceptorTests.OnWriteAsync_invalid_local_value_throws_violation
+SUMMARY: a local violation is handled as ingest instead of thrown
+
+--- FIND
+        if (!LatticeAccessGateContext.IsSystemOrigin)
+--- REPLACE
+        if (false)
+--- END

@@ -1,0 +1,12 @@
+# AcceptedWriteValid: only a write the setting accepts is committed.
+MODULE: SchemaPolicyConfig
+ROW: AcceptedWriteValid
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: LatticeSchemaWriteInterceptorTests.OnWriteAsync_invalid_local_value_throws_violation
+SUMMARY: an invalid local write is committed
+
+--- FIND
+            throw new LatticeSchemaViolationException(treeId, key, reason);
+--- REPLACE
+            return LatticeWriteDecision.Accept();
+--- END
