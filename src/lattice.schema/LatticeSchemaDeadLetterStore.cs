@@ -8,7 +8,9 @@ namespace Orleans.Lattice.Schema;
 /// time-ordered composite key (<see cref="SchemaDeadLetterKey"/>) so a tree's
 /// entries are a single contiguous prefix scan. Writes run under
 /// <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> so the diversion is
-/// not itself re-validated or blocked by the access gate.
+/// not itself re-validated or blocked by the access gate, and under
+/// <see cref="LatticeCommittedWriteBoundary"/> so an append is always an ordinary
+/// committed write, never part of the diverted write's transaction.
 /// </summary>
 internal sealed class LatticeSchemaDeadLetterStore(IGrainFactory grainFactory) : ILatticeSchemaDeadLetterStore
 {
@@ -22,6 +24,14 @@ internal sealed class LatticeSchemaDeadLetterStore(IGrainFactory grainFactory) :
 
         var unique = Guid.NewGuid().ToString("N")[..8];
         var key = SchemaDeadLetterKey.Encode(treeId, entry.TimestampUtc, entry.Key, unique);
+
+        // A diversion is judged while the diverted write's own context is ambient:
+        // a replicated atomic-batch prepare carries its transaction id and prepare
+        // flag, and every replicated entry its origin, clock and delta. The record
+        // is an ordinary committed write of its own, so it is detached from all of
+        // them; inheriting a prepare would stage it in a pending bucket of this tree
+        // that no terminal ever commits (#5297).
+        using (LatticeCommittedWriteBoundary.Enter())
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             await Queue.SetAsync(key, entry, cancellationToken).ConfigureAwait(false);
