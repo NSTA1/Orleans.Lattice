@@ -1,0 +1,21 @@
+# The #4853 class: on a swap the view moves its binding to the new copy and
+# tails that log from the beginning, so writes still unread on the old copy's
+# log never reach it.
+MODULE: QuiescentExactSwapTailsNewLogOnly
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: the view follows a physical swap by tailing the new copy's log from its start without rescanning
+PERTURBS: Swap
+BOUNDS: Topology = 2
+
+--- FIND
+    /\ Topology = CopySwap /\ phys = 1 /\ phys' = 2
+    /\ UNCHANGED <<appended, logs, decision, src, defn, bound, viewDefn, epoch,
+         read, checkpoint, phase, mem, slots, pub, intent, registry, conflict,
+         faults, reconciles>>
+--- REPLACE
+    /\ Topology = CopySwap /\ phys = 1 /\ phys' = 2
+    /\ bound' = 2 /\ read' = 0 /\ checkpoint' = 0 /\ phase' = "idle"
+    /\ UNCHANGED <<appended, logs, decision, src, defn, viewDefn, epoch,
+         mem, slots, pub, intent, registry, conflict, faults, reconciles>>
+--- END

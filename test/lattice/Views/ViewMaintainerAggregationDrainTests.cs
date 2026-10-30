@@ -9,6 +9,7 @@ using Orleans.Lattice.Tests.Fakes;
 using Orleans.Lattice.Views;
 using Orleans.Lattice.Wal;
 using Orleans.Runtime;
+using Orleans.Timers;
 
 namespace Orleans.Lattice.Tests.Views;
 
@@ -37,7 +38,7 @@ namespace Orleans.Lattice.Tests.Views;
 /// </para>
 /// </summary>
 [TestFixture]
-public class ViewMaintainerAggregationDrainTests
+public partial class ViewMaintainerAggregationDrainTests
 {
     private const string ViewName = "orders-agg";
     private const string SourceTreeId = "orders";
@@ -157,7 +158,8 @@ public class ViewMaintainerAggregationDrainTests
     private static Harness Create(
         Func<LatticeMutation, IEnumerable<AggregationContribution>>? projector = null,
         LatticeViewOptions? options = null,
-        TimeSpan? sourceWalRetention = null)
+        TimeSpan? sourceWalRetention = null,
+        IReminderRegistry? reminderRegistry = null)
     {
         var catalog = new ArmableViewCatalog();
         catalog.Register(new ViewRegistration(
@@ -245,6 +247,7 @@ public class ViewMaintainerAggregationDrainTests
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("viewmaintainer", ViewName));
+        context.ActivationServices.GetService(typeof(ITimerRegistry)).Returns(Substitute.For<ITimerRegistry>());
 
         var viewOptions = Substitute.For<IOptionsMonitor<LatticeViewOptions>>();
         viewOptions.Get(Arg.Any<string>()).Returns(options ?? new LatticeViewOptions());
@@ -266,7 +269,7 @@ public class ViewMaintainerAggregationDrainTests
         var grain = new ViewMaintainerGrain(
             context,
             factory,
-            reminderRegistry: null!,
+            reminderRegistry: reminderRegistry!,
             NullLogger<ViewMaintainerGrain>.Instance,
             catalog,
             commitLogReader: Substitute.For<ICommitLogReader>(),

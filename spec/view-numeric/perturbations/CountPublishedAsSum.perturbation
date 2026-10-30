@@ -1,0 +1,15 @@
+# A Count group is published with the Sum encoding, so its public value is not
+# the count of its members.
+MODULE: MaterialisedViewNumeric
+ROW: Publish(k,g)
+FILE: src/lattice/Views/AggregationApplier.cs
+DETECTORS: MaterialisedViewNumericCompanionTests.Count_and_sum_follow_create_update_regroup_filter_exit_and_delete_exactly
+SUMMARY: every numeric group is materialised as a double sum
+
+--- FIND
+        var value = kind == AggregationKind.Count
+            ? LatticeAggregationValue.EncodeInt64(totalCount)
+            : LatticeAggregationValue.EncodeDouble(totalSum);
+--- REPLACE
+        var value = LatticeAggregationValue.EncodeDouble(totalSum);
+--- END

@@ -27,8 +27,9 @@ internal sealed class LatticeSchemaRemediationAdmin(IGrainFactory grainFactory) 
 
         var grain = grainFactory.GetGrain<ILatticeSchemaRemediationGrain>(treeId);
         var accepted = await grain.AcceptAsync(transform, targetPolicy, Guid.NewGuid().ToString("N")).ConfigureAwait(false);
-        return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress: null, CancellationToken.None)
+        var report = await SchemaRemediationDriver.DriveAsync(grain, accepted, progress: null, CancellationToken.None)
             .ConfigureAwait(false);
+        return SchemaRemediationDriver.RequireTerminal(report);
     }
 
     /// <inheritdoc />

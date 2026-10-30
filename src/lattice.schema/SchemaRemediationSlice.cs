@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.Schema;
 
 /// <summary>
-/// What one <see cref="ILatticeSchemaRemediationGrain.RunSliceAsync"/> call left
+/// What one <see cref="ILatticeSchemaRemediationGrain.RunSliceAsync(string)"/> call left
 /// behind: the remediation's status after the slice, and how many values the
 /// current phase will process in all, when that is known.
 /// </summary>

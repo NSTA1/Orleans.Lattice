@@ -1,0 +1,14 @@
+# Banking the pass before every affected group is republished.
+MODULE: CheckpointAfterPublicationEarly
+TARGET: CheckpointAfterPublication
+CLASS: Action
+SUMMARY: the checkpoint advances while an affected-group intent is still outstanding
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ Live /\ phase = "idle" /\ checkpoint # read /\ intent = NoIntent
+    /\ checkpoint' = read
+--- REPLACE
+    /\ Live /\ checkpoint # read
+    /\ checkpoint' = read
+--- END

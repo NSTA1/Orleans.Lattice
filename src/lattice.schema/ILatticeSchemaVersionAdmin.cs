@@ -85,7 +85,7 @@ public interface ILatticeSchemaVersionAdmin
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The terminal migration report: <see cref="LatticeSchemaRemediationReport.Succeeded"/> on cutover, or <see cref="LatticeSchemaRemediationReport.DidAbort"/> with the first offending entry.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="InvalidOperationException">The tree is unversioned, <paramref name="newTargetVersion"/> does not advance the current target, or schema versioning is not registered.</exception>
+    /// <exception cref="InvalidOperationException">The tree is unversioned, <paramref name="newTargetVersion"/> does not advance the current target, schema versioning is not registered, or the call joined a migration already in flight that then ended under another operation and was replaced by a later remediation before its outcome could be read.</exception>
     Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
         string treeId, uint newTargetVersion, CancellationToken cancellationToken = default);
 
@@ -104,7 +104,7 @@ public interface ILatticeSchemaVersionAdmin
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The terminal migration report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="InvalidOperationException">The tree is unversioned, or schema versioning is not registered.</exception>
+    /// <exception cref="InvalidOperationException">The tree is unversioned, schema versioning is not registered, or the call joined a migration already in flight that then ended under another operation and was replaced by a later remediation before its outcome could be read.</exception>
     Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(
         string treeId, CancellationToken cancellationToken = default);
 

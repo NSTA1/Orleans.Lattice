@@ -1,0 +1,14 @@
+# Without the exact-membership skip, a replay after a committed regroup
+# recomputes its key set from the already-flipped membership and resubmits it
+# under the original operation id.
+MODULE: MaterialisedViewNumeric
+ROW: NoIdentityConflict
+FILE: src/lattice/Views/AggregationApplier.cs
+DETECTORS: AggregationApplierNumericReplayTests.ApplyAsync_regrouped_ordinary_replay_completes_intent_without_changing_the_atomic_key_set
+SUMMARY: an exactly installed membership is flipped again under its original id
+
+--- FIND
+        if (priorBytes is not null && priorBytes.AsSpan().SequenceEqual(membership))
+--- REPLACE
+        if (priorBytes is not null && priorBytes.Length < 0)
+--- END
