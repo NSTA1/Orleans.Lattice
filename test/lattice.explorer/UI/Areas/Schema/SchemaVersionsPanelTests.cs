@@ -52,8 +52,8 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
             var terms = cut.FindAll("[role=tabpanel] dl.lt-dl dd").Select(value => value.TextContent.Trim()).ToArray();
             Assert.That(terms[..2], Is.EqualTo(new[] { "7", "3" }));
             Assert.That(terms[2], Does.StartWith("On: a replicated CRDT or atomic-batch entry"));
-            Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("Descriptors name versions"));
-            Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("Advancing the target cannot be undone"));
+            Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("A version is a stamp, not a shape"));
+            Assert.That(cut.Find(".lt-schema-note").TextContent, Does.Contain("Changes the stamp on later writes only, and cannot be undone"));
             Assert.That(cut.FindAll("[role=tabpanel] button").Select(button => button.TextContent.Trim()), Is.EqualTo(new[]
             {
                 "Advance target version...", "Migrate stored values...", "Change config", "Turn off versioning",
