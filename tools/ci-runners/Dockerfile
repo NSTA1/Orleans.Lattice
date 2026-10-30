@@ -10,12 +10,36 @@
 # the .NET 10 SDK (setup-dotnet finds it already installed), Python 3, jq and
 # git. Java is left to actions/setup-java, which pins the version through
 # tools/tlc/toolchain.json.
+#
+# Also what the test legs expect from a GitHub-hosted runner and cannot get
+# from a service container here (Container Apps runs no Docker daemon):
+# PowerShell (rig and tuning script tests), the Docker CLI with the compose v2
+# plugin (`docker compose config` needs no daemon), and Node with Azurite,
+# which a leg routed to the pool starts locally in place of the service.
 FROM ghcr.io/actions/actions-runner:latest
 
 USER root
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq unzip zip python3 python3-jwt python3-cryptography libicu-dev \
+      ca-certificates curl git jq procps unzip zip python3 python3-jwt python3-cryptography libicu-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# PowerShell (Microsoft's package feed) and the Docker CLI with compose v2.
+RUN . /etc/os-release \
+ && curl -fsSL "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb" -o /tmp/ms.deb \
+ && dpkg -i /tmp/ms.deb && rm /tmp/ms.deb \
+ && install -m 0755 -d /etc/apt/keyrings \
+ && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
+ && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list \
+ && apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends powershell docker-ce-cli docker-compose-plugin \
+ && rm -rf /var/lib/apt/lists/*
+
+# Node 22 and Azurite, pinned to the version the workflows' service uses.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs \
+ && npm install -g azurite@3.36.0 \
+ && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/*
 
 # .NET 10 SDK where actions/setup-dotnet looks, owned by the runner user so
