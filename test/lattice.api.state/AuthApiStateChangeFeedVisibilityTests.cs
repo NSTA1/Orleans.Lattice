@@ -149,15 +149,18 @@ public sealed class AuthApiStateChangeFeedVisibilityTests
     [Test]
     public async Task Observe_bootstrap_admin_sees_every_change()
     {
+        var treeId = $"{TreeB}-{Guid.NewGuid():N}";
+        var tree = await _fixture.RegisterTreeAsync(treeId);
+
         using (AuthApiStateClusterFixture.AsSubject(AuthApiStateClusterFixture.BootstrapAdmin))
         {
             var notifications = await _fixture.ObserveWhileAsync(
-                new StateObserveRequest { TreeId = TreeB },
+                new StateObserveRequest { TreeId = treeId },
                 expectedCount: 2,
                 () => WriteAsAdminAsync(async () =>
                 {
-                    await _treeB.SetAsync("b/1", V("v1"));
-                    await _treeB.SetAsync("b/2", V("v2"));
+                    await tree.SetAsync("b/1", V("v1"));
+                    await tree.SetAsync("b/2", V("v2"));
                 }));
 
             Assert.That(
