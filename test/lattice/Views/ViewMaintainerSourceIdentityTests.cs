@@ -180,7 +180,7 @@ public class ViewMaintainerSourceIdentityTests
         var (grain, registry, _) = Create(TimeSpan.FromSeconds(30), Source, Source);
         var reg = Reg();
         var resolves = 0;
-        registry.GetEntryAsync(Source).Returns(_ =>
+        registry.GetEntryAsync(Source).Returns(call =>
         {
             if (Interlocked.Increment(ref resolves) == 1)
             {
