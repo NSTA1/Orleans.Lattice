@@ -207,6 +207,28 @@ internal sealed class LatticeStateQuery(
         return allowed ? keyFilter : static _ => false;
     }
 
+    /// <summary>
+    /// Hides reads whose output cannot be pruned by source key. A filtered allow
+    /// is insufficient for raw topology, tag catalogs and dead-letter queues.
+    /// </summary>
+    private async ValueTask<bool> IsUnfilteredTreeReadHiddenAsync(
+        string treeId,
+        CancellationToken cancellationToken)
+    {
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is not { } resolved)
+        {
+            return false;
+        }
+
+        var (allowed, filter) = IsViewTree(treeId)
+            ? await LatticeStateViewSource.ResolveReadAccessAsync(
+                _services, _grainFactory, _visibility, treeId, resolved, cancellationToken).ConfigureAwait(false)
+            : await _visibility.ResolveTreeReadAccessAsync(
+                treeId, resolved, cancellationToken).ConfigureAwait(false);
+        return !allowed || filter is not null;
+    }
+
     public async Task<TreeSummaryResult> GetTreeSummaryAsync(
         string treeId,
         bool deep = true,
@@ -971,11 +993,10 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.IndexName);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Auth-backed visibility: tag values of a tree the caller may not read are
-        // not disclosed (they leak which values exist in unreadable data).
+        // A distinct tag has no source key to which a partial grant can be applied.
         var effectiveTreeId = await EffectiveTreeIdAsync(request.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
-        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
+        if (await IsUnfilteredTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return new TagValueCatalogPage();
         }
@@ -1151,11 +1172,13 @@ internal sealed class LatticeStateQuery(
         // every covered tree, so a single tag can reveal that a value exists in a
         // covered tree the subject cannot read. This surface cannot attribute a
         // tag to a specific tree, so it is conservatively all-or-nothing: the tag
-        // list is disclosed only when the subject can read every covered tree;
+        // list is disclosed only with unfiltered access to every covered tree;
         // otherwise it is empty. (Per-tree tag values remain available through
         // ListTagValuesAsync, which is scoped to a single readable source tree.)
         var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
-        if (subject is { } resolved)
+        if (subject is not null
+            || (_services.GetService<ITenantEnumerationFilter>() is { IsActive: true }
+                && LatticeActiveTenantContext.Current is not null))
         {
             IReadOnlyCollection<string> covered;
             using (LatticeAccessGateContext.EnterSystemOrigin())
@@ -1163,11 +1186,23 @@ internal sealed class LatticeStateQuery(
                 covered = await index.CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            foreach (var treeId in covered)
+            // The tag union cannot be pruned by source tree. Tenant isolation
+            // applies independently of auth-backed read visibility.
+            if (FilterTreeIdsByActiveTenant(covered).Count != covered.Count)
             {
-                if (!await _visibility.CanReadTreeAsync(treeId, resolved, cancellationToken).ConfigureAwait(false))
+                return new TagValueCatalogPage();
+            }
+
+            if (subject is { } resolved)
+            {
+                foreach (var treeId in covered)
                 {
-                    return new TagValueCatalogPage();
+                    var (allowed, filter) = await _visibility.ResolveTreeReadAccessAsync(
+                        treeId, resolved, cancellationToken).ConfigureAwait(false);
+                    if (!allowed || filter is not null)
+                    {
+                        return new TagValueCatalogPage();
+                    }
                 }
             }
         }
@@ -1227,6 +1262,17 @@ internal sealed class LatticeStateQuery(
         }
 
         var index = tagFactory.CreateMultiTree(request.IndexName);
+        HashSet<string>? tenantVisibleTrees = null;
+        if (_services.GetService<ITenantEnumerationFilter>() is { IsActive: true }
+            && LatticeActiveTenantContext.Current is not null)
+        {
+            IReadOnlyCollection<string> covered;
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                covered = await index.CoveredTreesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            tenantVisibleTrees = new HashSet<string>(FilterTreeIdsByActiveTenant(covered), StringComparer.Ordinal);
+        }
         var pageSize = request.EffectivePageSize;
         DecodeTagMemberToken(request.PageToken, out var afterTree, out var afterKey);
 
@@ -1239,16 +1285,15 @@ internal sealed class LatticeStateQuery(
         await foreach (var tagged in index.WithAllTags(request.Tag)
             .WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (afterTree is not null
-                && CompareTaggedKey(tagged.TreeId, tagged.Key, afterTree, afterKey) <= 0)
+            if (tenantVisibleTrees is not null && !tenantVisibleTrees.Contains(tagged.TreeId))
             {
                 continue;
             }
 
-            if (members.Count == pageSize)
+            if (afterTree is not null
+                && CompareTaggedKey(tagged.TreeId, tagged.Key, afterTree, afterKey) <= 0)
             {
-                nextToken = EncodeTagMemberToken(members[^1].TreeId, members[^1].Key);
-                break;
+                continue;
             }
 
             // Live-only: a membership row can outlive its primary key until the
@@ -1258,6 +1303,12 @@ internal sealed class LatticeStateQuery(
             if (!await tree.ExistsAsync(tagged.Key, cancellationToken).ConfigureAwait(false))
             {
                 continue;
+            }
+
+            if (members.Count == pageSize)
+            {
+                nextToken = EncodeTagMemberToken(members[^1].TreeId, members[^1].Key);
+                break;
             }
 
             members.Add(new TagMember { TreeId = tagged.TreeId, Key = tagged.Key });
@@ -1359,18 +1410,9 @@ internal sealed class LatticeStateQuery(
         // Require an unfiltered source grant before any shard or sub-path read.
         var effectiveTreeId = await EffectiveTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
 
-        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
-        if (subject is { } resolved)
+        if (await IsUnfilteredTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
-            var (allowed, filter) = IsViewTree(effectiveTreeId)
-                ? await LatticeStateViewSource.ResolveReadAccessAsync(
-                    _services, _grainFactory, _visibility, effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false)
-                : await _visibility.ResolveTreeReadAccessAsync(
-                    effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false);
-            if (!allowed || filter is not null)
-            {
-                return TreeStructureResult.NotFound(request.TreeId);
-            }
+            return TreeStructureResult.NotFound(request.TreeId);
         }
 
         // A materialised view is a read-only tree; permit it on the read path by
@@ -2155,11 +2197,10 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Auth-backed visibility: a tree the caller may not read discloses
-        // nothing, not even that it has a dead-letter queue.
+        // The store runs under system origin, so it cannot prune source keys.
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
 
-        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
+        if (await IsUnfilteredTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return 0;
         }
@@ -2189,7 +2230,7 @@ internal sealed class LatticeStateQuery(
 
         var effectiveTreeId = await EffectiveTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
 
-        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
+        if (await IsUnfilteredTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return new DeadLetterQueuePage();
         }
