@@ -652,11 +652,14 @@ internal sealed partial class LatticeGrain
         // visible projection.
         // A receiver whose registry already holds this saga's decision
         // settles the prepare against it instead of staging it (#4482).
+        var lwwJudged = false;
+        var lwwDiverted = false;
+        var lwwValue = value;
         if (await TrySettleReplicatedPrepareAsync(
                 transactionId,
                 () => mode != LatticeMergeMode.LwwRegister && delta is not null
                     ? ApplyCrdtDeltaPreparedCommittedAsync(key, mode, delta, expiresAtTicks, originClusterId)
-                    : ApplySetAsync(key, value, sourceHlc, originClusterId, sourceVectorClock, expiresAtTicks)))
+                    : ApplyLwwPreparedCommittedAsync()))
         {
             return;
         }
@@ -696,6 +699,39 @@ internal sealed partial class LatticeGrain
             {
                 await SetAsync(key, value);
             }
+        }
+
+        // A settled-committed LWW prepare is applied at its source clock through
+        // the LWW merge seam, below the write choke point, so it is judged here
+        // first, exactly as StageAsync's SetAsync judges a prepare that arrives
+        // before the decision (#5266): a dead-lettered value is diverted and not
+        // applied, a transformed value is applied transformed, and a rejection
+        // throws. The judgement is made once and reused when a bootstrap hold
+        // mirrors the apply, so one refused entry is dead-lettered once. An
+        // already-expired value is not judged, as StageAsync tombstones it
+        // without a judged write.
+        async Task ApplyLwwPreparedCommittedAsync()
+        {
+            if (!lwwJudged)
+            {
+                lwwJudged = true;
+                var ttl = expiresAtTicks > 0
+                    ? TimeSpan.FromTicks(expiresAtTicks - DateTimeOffset.UtcNow.UtcTicks)
+                    : (TimeSpan?)null;
+                if (WriteInterceptionActive && (ttl is null || ttl > TimeSpan.Zero))
+                {
+                    var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl, CancellationToken.None);
+                    lwwDiverted = !outcome.Proceed;
+                    lwwValue = outcome.Value;
+                }
+            }
+
+            if (lwwDiverted)
+            {
+                return;
+            }
+
+            await ApplySetAsync(key, lwwValue, sourceHlc, originClusterId, sourceVectorClock, expiresAtTicks);
         }
     }
 
@@ -799,7 +835,10 @@ internal sealed partial class LatticeGrain
     ///   applied as a committed write at its source clock. Last-writer-wins at
     ///   that clock keeps it below any newer write the key already holds, and
     ///   makes it a no-op over the snapshot row the bootstrap installed. It
-    ///   also heals a prepare that arrives after its saga's terminal.</description></item>
+    ///   also heals a prepare that arrives after its saga's terminal. The
+    ///   value is judged at the write choke point first, as a staged prepare
+    ///   is, so a dead-lettered value is diverted rather than applied
+    ///   (#5266).</description></item>
     ///   <item><description><see cref="TxStatus.Aborted"/>: the prepare is dropped.</description></item>
     ///   <item><description>Otherwise the prepare is staged as before.</description></item>
     /// </list>
