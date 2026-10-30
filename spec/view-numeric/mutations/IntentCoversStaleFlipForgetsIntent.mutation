@@ -1,0 +1,13 @@
+# The pre-#4890 shape: the flip commits membership and slots but records no
+# durable obligation to republish the groups it changed.
+MODULE: IntentCoversStaleFlipForgetsIntent
+TARGET: IntentCoversStale
+CLASS: Invariant
+SUMMARY: the atomic flip changes membership and slots without persisting the affected-group intent
+PERTURBS: Flip
+
+--- FIND
+                       /\ intent' = [intent EXCEPT ![k] = Touched(old, new)]
+--- REPLACE
+                       /\ intent' = intent
+--- END

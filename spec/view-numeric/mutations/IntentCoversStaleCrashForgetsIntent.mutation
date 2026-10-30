@@ -1,0 +1,17 @@
+# Treating the publication obligation as volatile: a failure forgets it.
+MODULE: IntentCoversStaleCrashForgetsIntent
+TARGET: IntentCoversStale
+CLASS: Invariant
+SUMMARY: a lost response or crash discards the durable affected-group intent
+PERTURBS: Fail
+
+--- FIND
+    /\ read' = checkpoint /\ phase' = "idle" /\ faults' = faults + 1
+    /\ UNCHANGED <<appended, logs, phys, decision, src, defn, bound, viewDefn,
+         epoch, checkpoint, mem, slots, pub, intent, registry, conflict, reconciles>>
+--- REPLACE
+    /\ read' = checkpoint /\ phase' = "idle" /\ faults' = faults + 1
+    /\ intent' = NoIntent
+    /\ UNCHANGED <<appended, logs, phys, decision, src, defn, bound, viewDefn,
+         epoch, checkpoint, mem, slots, pub, registry, conflict, reconciles>>
+--- END

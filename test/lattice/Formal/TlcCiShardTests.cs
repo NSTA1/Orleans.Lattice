@@ -215,6 +215,8 @@ public sealed partial class TlcCiShardTests
                         ? TlcCiShard.MaterialisedViewResolvedIdentity
                         : module.Name == "MaterialisedViewJointRepair"
                         ? TlcCiShard.MaterialisedViewJointRepair
+                        : module.Name == "MaterialisedViewNumeric"
+                        ? TlcCiShard.MaterialisedViewNumeric
                         : module.Name.StartsWith("MaterialisedView", StringComparison.Ordinal)
                         ? TlcCiShard.MaterialisedViews
                         : module.Name.StartsWith("AntiEntropy", StringComparison.Ordinal)
@@ -255,6 +257,7 @@ public sealed partial class TlcCiShardTests
     }
 
     [TestCase("view-joint-repair", TlcCiShard.MaterialisedViewJointRepair)]
+    [TestCase("view-numeric", TlcCiShard.MaterialisedViewNumeric)]
     [TestCase("tree-lifecycle", TlcCiShard.TreeLifecycle)]
     [TestCase("aliasing", TlcCiShard.Aliasing)]
     public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)
@@ -282,6 +285,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("MaterialisedViewReadyClosure", TlcCiShard.MaterialisedViewReadyClosure, 15)]
     [TestCase("MaterialisedViewSourceAdmission", TlcCiShard.MaterialisedViewSourceAdmission, 26)]
     [TestCase("MaterialisedViewResolvedIdentity", TlcCiShard.MaterialisedViewResolvedIdentity, 20)]
+    [TestCase("MaterialisedViewNumeric", TlcCiShard.MaterialisedViewNumeric, 23)]
     public void Measured_view_modules_route_every_case_to_a_nonempty_deterministic_shard(
         string name, string category, int expectedCases)
     {

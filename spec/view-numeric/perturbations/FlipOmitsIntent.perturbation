@@ -1,0 +1,15 @@
+# The atomic flip moves membership and slots without persisting the
+# affected-group intent, so nothing obliges the groups to be republished.
+MODULE: MaterialisedViewNumeric
+ROW: IntentCoversStale
+FILE: src/lattice/Views/AggregationApplier.cs
+DETECTORS: AggregationMembershipAtomicityTests.ApplyAsync_failed_group_write_or_intent_retirement_replays_before_the_next_contribution, AggregationMembershipAtomicityTests.ApplyAsync_absent_member_retry_completes_a_failed_retraction_materialisation
+SUMMARY: the contribution flip writes no durable rematerialisation intent
+
+--- FIND
+        entries.Add(new KeyValuePair<string, byte[]>(
+            NumericMaterialisationKey(sourceKey),
+            EncodeNumericMaterialisation(newGroup, oldGroup is not null && oldGroup != newGroup ? oldGroup : null)));
+--- REPLACE
+        _ = oldGroup;
+--- END
