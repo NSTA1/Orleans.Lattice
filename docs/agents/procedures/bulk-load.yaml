@@ -1,0 +1,147 @@
+schema: lattice.agents/procedure/v1
+id: bulk-load
+name: "Bulk-load an empty tree through the chunked session protocol"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.BeginBulkLoadAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/BeginBulkLoad"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#BeginBulkLoadMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_bulk_load_begin"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_bulk_load_begin, lattice_treeadmin_bulk_load_append, lattice_treeadmin_bulk_load_commit, lattice_treeadmin_shard_diagnostics), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
+  - id: bulk-load-authority
+    check: "Caller holds the distinct whole-tree BulkLoad capability; a per-key Write grant does not confer it and a partial or filtered allow is refused."
+    source: "src/lattice.api.treeadmin/TreeAdminAccessAuthorizer.cs#TreeAdminAccessAuthorizer.AuthorizeBulkLoadAsync"
+  - id: tree-empty
+    check: "Target tree holds no live keys and no tombstones, and every one of its shards can be sampled."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
+  - id: tree-id-writable
+    check: "Target tree id is not a reserved system tree id and not a materialised-view backing tree (a view- name)."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: not-typed-crdt-replicated
+    check: "Target tree is not declared for replication under a typed CRDT merge mode; bulk-loaded values are plain last-writer-wins writes."
+    source: "docs/lattice/external-store-migration.md"
+  - id: operation-id-stable
+    check: "Operation id is non-empty, contains no '/', and is kept stable across producer restarts for the whole session."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
+  - id: input-ordinal-ascending
+    check: "Source entries are de-duplicated and strictly ascending by ordinal key comparison across the whole stream, not only within each chunk."
+    source: "docs/lattice/external-store-migration.md"
+  - id: sizes-checked-by-producer
+    check: "Producer validates key length, value size, and live-key or byte caps itself; the bulk path enforces neither the write-size bounds nor the per-tree admission caps."
+    source: "docs/lattice/bulk-loading.md"
+steps:
+  - n: 1
+    action: "Probe the caller's tree-admin capabilities for the target tree."
+    api: "ILatticeTreeAdmin.ProbeCapabilitiesAsync / ProbeCapabilities"
+    expects: "CanBulkLoad is true; the flag is advisory and every real call is still authorized."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ProbeCapabilitiesAsync"
+  - n: 2
+    action: "Open the session with the target tree id and the stable operation id."
+    api: "ILatticeTreeAdmin.BeginBulkLoadAsync / BeginBulkLoad / lattice_treeadmin_bulk_load_begin"
+    expects: "Returns a session echoing the tree id and operation id after a fresh deep emptiness probe; no server-side session state is created."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
+  - n: 3
+    action: "Append chunks in order, starting at chunk index 0 and sending each next chunk at the returned next chunk index."
+    api: "ILatticeTreeAdmin.AppendBulkLoadAsync / AppendBulkLoad / lattice_treeadmin_bulk_load_append"
+    expects: "Each call returns an acknowledgement carrying the accepted-entry count and a next chunk index equal to the chunk index plus one."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeBulkLoadChunkAck.cs#TreeBulkLoadChunkAck.NextChunkIndex"
+  - n: 4
+    action: "Compare each acknowledgement's accepted-entry count with the number of entries sent in that chunk."
+    api: "ILatticeTreeAdmin.AppendBulkLoadAsync / AppendBulkLoad / lattice_treeadmin_bulk_load_append"
+    expects: "Counts match; a lower count means a write interceptor diverted entries to a dead-letter store instead of writing them."
+    source: "docs/lattice/external-store-migration.md"
+  - n: 5
+    action: "After a lost acknowledgement or failed append, re-send the same chunk index with the same entries under the same operation id; do not call begin again."
+    api: "ILatticeTreeAdmin.AppendBulkLoadAsync / AppendBulkLoad / lattice_treeadmin_bulk_load_append"
+    expects: "The re-driven chunk is absorbed without reapplying entries, and the stream continues from its next chunk index."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BeginBulkLoadAsync"
+  - n: 6
+    action: "Commit the session once the last chunk is acknowledged."
+    api: "ILatticeTreeAdmin.CommitBulkLoadAsync / CommitBulkLoad / lattice_treeadmin_bulk_load_commit"
+    expects: "Returns the tree's freshly counted live-key total; compare it with the source count recorded at the cut."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.CommitBulkLoadAsync"
+  - n: 7
+    action: "Read a deep diagnostic report of the target tree after the diagnostics cache window has passed."
+    api: "ILatticeTreeAdmin.GetDiagnosticsAsync / GetDiagnostics / lattice_treeadmin_shard_diagnostics"
+    expects: "No shard reports BulkOperationPending, and live-key and tombstone totals match the load; requires whole-tree Read authority."
+    source: "docs/lattice/external-store-migration.md"
+postconditions:
+  - check: "Every acknowledged chunk is durable before commit; commit persists no further data and is only the end-of-stream marker."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CommitBulkLoadAsync"
+  - check: "Commit reports a fresh live-key count, not a cached diagnostic report."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.CommitBulkLoadAsync"
+  - check: "A bulk append registers a target tree that had no registry row, so the tree need not be created first."
+    source: "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs#ShardRootGrain.BulkAppendAsync"
+  - check: "A shard that crashed mid-graft completes its recorded graft intent before serving its next operation."
+    source: "docs/lattice/external-store-migration.md"
+  - check: "Loaded entries carry no expiry, and the MergeMode and Raw fields of a chunk entry have no effect."
+    source: "docs/lattice/external-store-migration.md"
+  - check: "On a replicated tree the loaded entries are user mutations and ship to every replication peer."
+    source: "docs/lattice/external-store-migration.md"
+failure_modes:
+  - id: tree-not-empty
+    signal: "TreeNotEmptyException from begin."
+    effect: "No session is opened and nothing is written."
+    response: "Load into a fresh empty tree; when resuming a stream whose chunks already landed, skip begin and re-drive the last un-acknowledged chunk."
+  - id: shard-not-sampled
+    signal: "InvalidOperationException from begin naming a shard that could not be sampled."
+    effect: "No session is opened; emptiness was not verified."
+    response: "Retry begin once the shard is reachable."
+  - id: chunk-out-of-order
+    signal: "BulkLoadOrderException carrying TreeId, ChunkIndex, OffendingKey and PrecedingKey."
+    effect: "No entry of that chunk is applied."
+    response: "Sort the chunk ordinally, remove duplicate keys, and re-send it at the same chunk index."
+  - id: authorization-denied
+    signal: "LatticeAuthorizationDeniedException from begin, append or commit."
+    effect: "The call does no work."
+    response: "Obtain the whole-tree BulkLoad grant for the target tree."
+  - id: target-not-writable
+    signal: "InvalidOperationException for a materialised-view backing tree, or LatticeReplicationModeMismatchException for a tree replicated under a typed CRDT merge mode."
+    effect: "The chunk is refused."
+    response: "Choose a different target tree."
+  - id: schema-violation
+    signal: "LatticeSchemaViolationException from append."
+    effect: "The whole chunk fails before any of its entries is applied."
+    response: "Fix the offending values in the source and re-send the chunk at the same chunk index."
+  - id: partial-chunk-failure
+    signal: "Append fails or times out after some shards may have applied their slice."
+    effect: "The load is not atomic across shards; shards that committed keep their slice."
+    response: "Re-send the same chunk index under the same operation id; the load is resumed, not rolled back."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: false
+  mechanism: "No inverse operation exists: there is no bulk-load cancel or tracked operation, acknowledged chunks stay durable, and a failed load is resumed under the same operation id rather than rolled back."
+  steps: []
+  source: "docs/lattice/external-store-migration.md"
+concurrency:
+  - rule: "Begin keeps no session and re-probes emptiness on every call, so a begin after any chunk has landed is refused."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.BeginBulkLoadAsync"
+  - rule: "Each shard remembers only the most recent chunk it applied; resume from the last un-acknowledged chunk and never re-drive a chunk a later chunk has superseded."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - rule: "The facade checks key order only within a chunk and tracks no chunk index beyond rejecting a negative one; cross-chunk order is the caller's obligation."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.AppendBulkLoadAsync"
+  - rule: "Each append force-refreshes the tree's physical routing, so chunks follow a resize, reshard, restore or alias swap that completed before the call."
+    source: "docs/lattice/bulk-loading.md"
+  - rule: "An Online snapshot of the tree does not forward bulk appends to its destination."
+    source: "docs/lattice.api.treeadmin/README.md"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/TreeBulkLoadChunkAck.cs"
+  - "src/lattice.api.treeadmin/LatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin/TreeAdminAccessAuthorizer.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "src/lattice/BPlusTree/Grains/ShardRootGrain.BulkLoad.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/bulk-loading.md"
+  - "docs/lattice/external-store-migration.md"

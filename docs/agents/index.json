@@ -244,11 +244,25 @@
       "summary": "Capture a live tree snapshot or a durable catalogued backup (full, incremental or backup set) as a tracked operation, validate artifacts with a health check, and rebuild or scrub the backup catalog."
     },
     {
+      "path": "procedures/bulk-load.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Bulk-load an empty tree through the begin/append/commit chunk session, resume from the last un-acknowledged chunk without re-issuing begin, and confirm the committed live-key count."
+    },
+    {
       "path": "procedures/compaction.yaml",
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
       "summary": "Trigger an out-of-cycle tombstone compaction pass on one physical shard and read diagnostics when the pass is not accepted."
+    },
+    {
+      "path": "procedures/orphaned-leaves-repair.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Audit a tree for orphaned leaves to a complete verdict, run a tracked repair that unsplices verified-safe orphans, then re-audit to confirm zero repairable findings."
     },
     {
       "path": "procedures/region-backfill.yaml",
@@ -321,6 +335,13 @@
       "summary": "Read, set or clear a tree's durable-history retention mode and age window, and confirm the applied policy."
     },
     {
+      "path": "procedures/schema-migration.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Register a schema version, scan compliance, remediate if needed, then run a tracked advance-and-migrate and verify the target version and dead letters."
+    },
+    {
       "path": "procedures/tag-index-reconcile.yaml",
       "kind": "procedure",
       "format": "yaml",
@@ -333,6 +354,13 @@
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
       "summary": "Delegate access administration to a tenant: create a tenant group, add members, admit it to the tenant, grant it a tenant-tier rule, and confirm the resulting decision."
+    },
+    {
+      "path": "procedures/tenant-lifecycle.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Create a tenant, author its quotas, read it back, suspend and resume it, and delete it with its tree cascade and access-data purge."
     },
     {
       "path": "procedures/tenant-region-drain.yaml",

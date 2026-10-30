@@ -946,16 +946,51 @@
         {
           "id": "saga-origin-check",
           "check": "Call is a saga control RPC.",
-          "on_true": "origin-authorized",
+          "on_true": "saga-credential-bound",
           "on_false": "body-origin-check",
           "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs"
         },
         {
-          "id": "origin-authorized",
-          "check": "The x-lattice-replication-origin header is non-blank, agrees ordinally with a non-blank CoordinatorClusterId in the request body, and ISagaPeerAuthorizer.IsAuthorizedAsync accepts it (by default it accepts an origin that is a non-empty key in LatticeReplicationGrpcOptions.Peers).",
-          "on_true": "allow",
+          "id": "saga-credential-bound",
+          "check": "The x-lattice-replication-origin header is non-blank and ordinally equals the peer the interceptor recorded after a successful credential-to-origin binding; no peer is recorded when RequireAuthentication or BindCredentialToOriginCluster is false.",
+          "on_true": "saga-decision-query",
           "on_false": "deny-permission-denied",
           "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.HandleAsync"
+        },
+        {
+          "id": "saga-decision-query",
+          "check": "Call is GetDecision, a participant's query to the saga's coordinator cluster.",
+          "on_true": "origin-authorized",
+          "on_false": "saga-coordinator-attribution",
+          "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.HandleAsync"
+        },
+        {
+          "id": "saga-coordinator-attribution",
+          "check": "The request body's CoordinatorClusterId is blank or ordinally equals the stamped origin.",
+          "on_true": "origin-authorized",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.HandleAsync"
+        },
+        {
+          "id": "origin-authorized",
+          "check": "ISagaPeerAuthorizer.IsAuthorizedAsync accepts the stamped origin (by default it accepts an origin that is a non-empty key in LatticeReplicationGrpcOptions.Peers).",
+          "on_true": "saga-decision-requester",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.HandleAsync"
+        },
+        {
+          "id": "saga-decision-requester",
+          "check": "Call is GetDecision.",
+          "on_true": "decision-requester-participant",
+          "on_false": "allow",
+          "source": "src/lattice.replication.grpc/LatticeSagaGrpcService.cs#LatticeSagaGrpcService.HandleAsync"
+        },
+        {
+          "id": "decision-requester-participant",
+          "check": "The coordinator has not started the saga (it answers Aborted), or the stamped origin, which overwrites any body RequesterClusterId, is one of the saga's recorded participants.",
+          "on_true": "allow",
+          "on_false": "deny-permission-denied",
+          "source": "src/lattice.replication/Grains/CrossClusterSagaCoordinatorGrain.cs#CrossClusterSagaCoordinatorGrain.ResolveDecisionForParticipantAsync"
         },
         {
           "id": "body-origin-check",
@@ -990,14 +1025,15 @@
           "outcome": "The call fails with gRPC status Unauthenticated."
         }
       ],
-      "fail_closed": "Authentication is required by default; missing secrets are Unauthenticated, non-matching secrets are PermissionDenied, credential-to-origin binding is required by default, and saga control also requires an authorized peer origin; a peer may only advance or read the high-water mark of its own stamped origin.",
+      "fail_closed": "Authentication is required by default; missing secrets are Unauthenticated, non-matching secrets are PermissionDenied, credential-to-origin binding is required by default, and saga control requires that binding (it is refused when RequireAuthentication or BindCredentialToOriginCluster is off) and an authorized peer origin; a saga decision is answered only to a recorded participant; a peer may only advance or read the high-water mark of its own stamped origin.",
       "sources": [
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcAuthInterceptor.cs",
         "src/lattice.replication.grpc/Security/LatticeReplicationGrpcMetadataNames.cs",
         "src/lattice.replication.grpc/LatticeSagaGrpcService.cs",
         "src/lattice.replication.grpc/PeerMapSagaPeerAuthorizer.cs",
         "src/lattice.replication/Security/LatticeReplicationSecurityOptions.cs",
-        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs"
+        "src/lattice.replication.grpc/LatticeReplicationGrpcService.cs",
+        "src/lattice.replication/Grains/CrossClusterSagaCoordinatorGrain.cs"
       ]
     },
     {
