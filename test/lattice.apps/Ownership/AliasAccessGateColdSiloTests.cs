@@ -56,10 +56,14 @@ public sealed class AliasAccessGateColdSiloTests
     [Test]
     public void SetAlias_by_an_unauthorized_caller_on_a_cold_silo_is_denied_without_deadlocking()
     {
-        var registry = _cluster.Client.GetLatticeRegistry();
+        var registry = Silo.GetRequiredService<IGrainFactory>().GetLatticeRegistry();
+        var logicalTreeId = $"logical-{Guid.NewGuid():N}";
+        var physicalTreeId = $"physical-{Guid.NewGuid():N}";
 
-        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            () => registry.SetAliasAsync($"logical-{Guid.NewGuid():N}", $"physical-{Guid.NewGuid():N}").WaitAsync(Bound));
+        var denied = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            () => registry.SetAliasAsync(logicalTreeId, physicalTreeId).WaitAsync(Bound));
+        Assert.That(denied?.TreeId, Is.EqualTo(physicalTreeId),
+            "The cold policy gate must refuse the alias target, not the registry's internal-origin guard.");
     }
 
     [Test]
@@ -71,7 +75,7 @@ public sealed class AliasAccessGateColdSiloTests
         // behind some other timing that happens not to deadlock this test.
         const string EdgesTree = "sys-membership-edges";
         var directory = Silo.GetRequiredService<ILatticeMembershipDirectory>();
-        var registry = _cluster.Client.GetLatticeRegistry();
+        var registry = Silo.GetRequiredService<IGrainFactory>().GetLatticeRegistry();
 
         Assert.That(await directory.GroupsOfAsync("alice").WaitAsync(Bound), Is.Empty);
         Assert.That(await directory.ExpandGroupsAsync(["readers"]).WaitAsync(Bound), Is.EquivalentTo(new[] { "readers" }));
@@ -83,7 +87,7 @@ public sealed class AliasAccessGateColdSiloTests
     {
         const string PolicyTree = "sys-auth-policy";
         var store = Silo.GetRequiredService<ILatticeAuthorizationPolicyStore>();
-        var registry = _cluster.Client.GetLatticeRegistry();
+        var registry = Silo.GetRequiredService<IGrainFactory>().GetLatticeRegistry();
 
         var rules = new List<LatticeAuthorizationRule>();
         await foreach (var rule in store.ListRulesAsync())
@@ -110,7 +114,7 @@ public sealed class AliasAccessGateColdSiloTests
             await grains.GetGrain<ITreeResizeGrain>(treeId).ResizeAsync(64, 64);
         }
 
-        var registry = _cluster.Client.GetLatticeRegistry();
+        var registry = Silo.GetRequiredService<IGrainFactory>().GetLatticeRegistry();
         await TestPoll.UntilAsync(
             async () => (await registry.ResolveAsync(treeId)).StartsWith(treeId + "/resized/", StringComparison.Ordinal),
             "the timer-driven resize to swap its alias",
