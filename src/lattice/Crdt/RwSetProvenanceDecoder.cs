@@ -177,7 +177,7 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
                     }
                 }
 
-                CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CausalOrderComparer.Comparison);
+                CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CrdtMemberChangeOrdinalFirstComparer.Comparison);
             }
             return result;
         }
@@ -402,39 +402,6 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
                 Ordinal = dot.Counter,
                 WallClock = wallClock,
             });
-        }
-    }
-
-    /// <summary>
-    /// Orders two member-change events for the same element by causal ordinal,
-    /// then replica id, then kind (an add sorts before the remove that observed
-    /// its own dot). Cached as a single shared instance so the per-element sort
-    /// never allocates a comparison delegate.
-    /// <para>
-    /// Internal rather than private so the microbenchmark host's verbatim
-    /// pre-trim baseline sorts through the same cached comparison the shipped
-    /// body uses, leaving the key window as the pair's only difference.
-    /// </para>
-    /// </summary>
-    internal sealed class CausalOrderComparer : IComparer<CrdtMemberChange>
-    {
-        public static CausalOrderComparer Instance { get; } = new();
-
-        /// <summary>
-        /// <see cref="Instance"/>'s comparison, constructed once, so a sort
-        /// does not mint a fresh comparison delegate per call. Declared below
-        /// <see cref="Instance"/> because static initialisers run in
-        /// declaration order.
-        /// </summary>
-        public static readonly Comparison<CrdtMemberChange> Comparison = Instance.Compare;
-
-        public int Compare(CrdtMemberChange x, CrdtMemberChange y)
-        {
-            var byOrdinal = x.Ordinal.CompareTo(y.Ordinal);
-            if (byOrdinal != 0) return byOrdinal;
-            var byReplica = string.CompareOrdinal(x.ReplicaId, y.ReplicaId);
-            if (byReplica != 0) return byReplica;
-            return ((int)x.Kind).CompareTo((int)y.Kind);
         }
     }
 }
