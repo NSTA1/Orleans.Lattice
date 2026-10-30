@@ -1355,14 +1355,22 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Auth-backed visibility: the structure of a tree the caller may not read
-        // is itself not disclosed (node shape leaks the existence of data). An
-        // unresolved/anonymous caller sees no structure.
+        // Topology contains real split keys outside a partial reader's scope.
+        // Require an unfiltered source grant before any shard or sub-path read.
         var effectiveTreeId = await EffectiveTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
 
-        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is { } resolved)
         {
-            return TreeStructureResult.NotFound(request.TreeId);
+            var (allowed, filter) = IsViewTree(effectiveTreeId)
+                ? await LatticeStateViewSource.ResolveReadAccessAsync(
+                    _services, _grainFactory, _visibility, effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false)
+                : await _visibility.ResolveTreeReadAccessAsync(
+                    effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false);
+            if (!allowed || filter is not null)
+            {
+                return TreeStructureResult.NotFound(request.TreeId);
+            }
         }
 
         // A materialised view is a read-only tree; permit it on the read path by

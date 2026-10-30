@@ -42,7 +42,11 @@
       "interceptor": "LatticeStateApiGrpcAuthInterceptor",
       "authorizer": "ILatticeStateApiAuthorizer",
       "decision": "The interceptor matches the state service prefix, exempts GetAuthScheme, optionally bypasses enforcement when RequireAuthorization is false, describes operation and target tree, and rejects false authorizer decisions with PermissionDenied.",
-      "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
+      "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#EnforceAuthAsync",
+      "data_visibility": [
+        "With auth-backed visibility enabled, raw topology requires an unfiltered tree grant, or an unfiltered source grant for a view; partial grants return TreeNotFound with no roots.",
+        "Change feeds re-resolve subject and read access after every WAL page read and before subsequent buffered entries. Revocation ends the stream with NotFound; narrowing replaces the key filter, subject to membership and policy cache propagation."
+      ]
     }
   },
   "availability": {

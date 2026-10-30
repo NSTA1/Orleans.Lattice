@@ -55,6 +55,8 @@ The catalog, structure and summary reads do not flow through the gated `ILattice
 - With no real access gate registered, or with `Disabled`, no caller subject is resolved and no filtering happens.
 - With a real gate (`Auto` or `Enforced`), the caller's subject is resolved from the ambient credential and each tree is checked for read permission; an anonymous caller is denied every read, so catalogs are empty and tree-scoped reads report not found.
 
+Topology reads require an unfiltered tree (or view-source) grant because split keys cannot be safely pruned. Change feeds refresh their subject and grant after every WAL page read and before processing subsequent buffered entries, so a resumed consumer cannot retain an earlier authorization verdict.
+
 This filter runs after, and independently of, any transport-level authorizer: the transport gate decides whether a call may run at all, and this filter prunes what an admitted call can see. See [Security](security.md#visibility-boundaries).
 
 ## Source map

@@ -93,7 +93,7 @@ internal sealed class PolicyAccessGate(
         // namespace it is an ordinary Admin grant on the exact tenant-scope id
         // (authorable because the id is not sys-auth-*), so a delegated per-tenant admin
         // is honoured only for its own tenant and can never inherit Allow for another's;
-        // for the tenant, app, membership and schema backing stores it is an
+        // for the tenant, app, membership, schema and backup backing stores it is an
         // explicit rule an operator deliberately scoped at the tree; and for the sentinel it is the cluster-wide grant
         // LatticeScope.ClusterWide() authors, which lands in the "*" bucket and is
         // resolved against it directly. A cluster-wide all-trees (Tree:*) wildcard never
