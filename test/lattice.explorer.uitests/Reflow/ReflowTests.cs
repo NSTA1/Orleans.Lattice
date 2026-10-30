@@ -33,6 +33,14 @@ public sealed class ReflowTests : UiTestBase
         await Shell.AssertNoHorizontalPageScrollAsync(page, $"The {area.DisplayName} area at {width}px");
         await Shell.GotoAsync(page, world.Head, area.DeepPath);
         await Expect(Shell.Heading(page)).ToBeVisibleAsync();
+        if (area.ShownToAdmin)
+        {
+            await Expect(Shell.Heading(page)).Not.ToHaveTextAsync(ExplorerAreas.NotFoundHeading);
+        }
+        else
+        {
+            await Expect(Shell.Heading(page)).ToHaveTextAsync(ExplorerAreas.NotFoundHeading);
+        }
         await Shell.WaitForMotionToSettleAsync(page);
         await Shell.AssertNoHorizontalPageScrollAsync(page, $"{area.DeepPath} at {width}px");
     }
