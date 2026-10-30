@@ -2241,18 +2241,8 @@ jobs:
     # caching.azureblob, backup.azureblob, and lattice.integration) drive via
     # `UseDevelopmentStorage=true`.
     # Without it those tests self-skip (Assert.Inconclusive) and never validate their
-    # coverage in CI. The image's default command binds blob/queue/table on 0.0.0.0;
-    # publishing 10000-10002 to the runner host makes the SDK dev endpoints
-    # (127.0.0.1:10000-10002) resolve. Pinned to the version validated locally.
-    services:
-      azurite:
-        # Empty on a pool leg: Container Apps runs no Docker, so the service is
-        # skipped and the step below starts the Azurite baked into the pool image.
-        image: ${{ matrix.leg.pool && '' || 'mcr.microsoft.com/azure-storage/azurite:3.36.0' }}
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
+    # coverage in CI. It is started by the "Start Azurite" step rather than a
+    # `services:` container: see that step for why.
     # Carried over from the serial job, and load-bearing. Legs are bin-packed
     # dynamically, so any leg can contain storage.azuretable, caching.azureblob,
     # backup.azureblob, or lattice.integration. Without the service those
@@ -2307,6 +2297,27 @@ jobs:
           # offender is prose. Describe it in words instead, as here.
           fetch-depth: 0
 
+      # Azurite is started here, not as a `services:` container. Any services
+      # block - even one whose image evaluates empty - makes the runner probe the
+      # Docker daemon and create a job network in "Initialize containers", which
+      # fails on the self-hosted pool (Container Apps runs no Docker daemon).
+      # Hosted legs run the pinned image; pool legs run the same version from npm,
+      # baked into the pool image. Started first so it is warm by "Wait for
+      # Azurite". Both listen on 127.0.0.1:10000-10002, the SDK dev endpoints.
+      - name: Start Azurite
+        env:
+          POOL: ${{ matrix.leg.pool }}
+        run: |
+          if [ "$POOL" = "true" ]; then
+            mkdir -p "$RUNNER_TEMP/azurite"
+            nohup azurite --silent --location "$RUNNER_TEMP/azurite" \
+              --blobHost 127.0.0.1 --queueHost 127.0.0.1 --tableHost 127.0.0.1 \
+              > "$RUNNER_TEMP/azurite.log" 2>&1 &
+          else
+            docker run -d --name azurite -p 10000:10000 -p 10001:10001 -p 10002:10002 \
+              mcr.microsoft.com/azure-storage/azurite:3.36.0
+          fi
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -2344,17 +2355,9 @@ jobs:
       # `src/foo/` that has no `test/foo/`).
       # Ensure Azurite is accepting connections before the AzureStorageEmulator
       # tests run (they self-skip on a connection failure, so a not-yet-ready
-      # emulator would silently drop that coverage rather than fail). The service
-      # starts at job start and restore/build precede this, so it is normally
-      # already satisfied; this is a cheap guard against a cold-start race.
-      - name: Start Azurite on the self-hosted pool
-        if: ${{ matrix.leg.pool }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/azurite"
-          nohup azurite --silent --location "$RUNNER_TEMP/azurite" \
-            --blobHost 127.0.0.1 --queueHost 127.0.0.1 --tableHost 127.0.0.1 \
-            > "$RUNNER_TEMP/azurite.log" 2>&1 &
-
+      # emulator would silently drop that coverage rather than fail). It is
+      # started right after checkout and restore/build precede this, so it is
+      # normally already satisfied; this is a cheap guard against a cold-start race.
       - name: Wait for Azurite
         run: |
           for port in 10000 10001 10002; do

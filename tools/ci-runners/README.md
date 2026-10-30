@@ -20,8 +20,11 @@ and `formal-receipts.yml` (TLC legs).
 - Legs stay on `ubuntu-latest` while that count is under `HOSTED_RUNNER_BUDGET`
   (default 18, two short of the cap so lanes planning at the same moment do not tip into
   a queue). The rest go to the pool, longest first, since a long leg holds a slot longest.
-- A pool leg's check name starts with `[pool] `. It skips the Azurite service container
-  (Container Apps runs no Docker) and starts the Azurite baked into the image instead.
+- A pool leg's check name starts with `[pool] `. A routed job must declare no `services:`
+  or `container:`: the runner probes the Docker daemon for any services block, even one
+  whose image is empty, and Container Apps runs none. So the legs start Azurite from a
+  step - the pinned image on hosted runners, the npm build baked into the pool image.
+  `CiSelfHostedRunnerScopeTests` enforces this.
 - It fails toward hosted: with `RUNNER_POOL` unset, or if the API cannot be read, every
   leg stays hosted.
 

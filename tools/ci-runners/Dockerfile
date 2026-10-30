@@ -12,10 +12,10 @@
 # tools/tlc/toolchain.json.
 #
 # Also what the test legs expect from a GitHub-hosted runner and cannot get
-# from a service container here (Container Apps runs no Docker daemon):
+# from a container here (Container Apps runs no Docker daemon):
 # PowerShell (rig and tuning script tests), the Docker CLI with the compose v2
 # plugin (`docker compose config` needs no daemon), and Node with Azurite,
-# which a leg routed to the pool starts locally in place of the service.
+# which a leg routed to the pool runs in place of the Azurite image.
 FROM ghcr.io/actions/actions-runner:latest
 
 USER root
