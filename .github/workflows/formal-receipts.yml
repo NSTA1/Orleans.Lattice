@@ -179,7 +179,12 @@ jobs:
     needs: plan
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.leg_count != '0' }}
     name: TLC / ${{ matrix.leg.name }}
-    runs-on: ubuntu-latest
+    # TLC_RUNNER (a repository variable holding a JSON runs-on value, e.g.
+    # ["self-hosted","lattice-tlc"]) moves these legs onto the elastic
+    # self-hosted pool in tools/ci-runners, off the hosted runners PR CI uses.
+    # Unset, they run on ubuntu-latest. Only trusted workflows (push to main,
+    # schedule, owner dispatch) may opt in: never a pull_request workflow.
+    runs-on: ${{ fromJSON(vars.TLC_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: ${{ matrix.leg.timeout }}
     strategy:
       fail-fast: false
