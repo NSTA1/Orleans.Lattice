@@ -154,6 +154,41 @@ public sealed class CiCoverageUploadCompletenessTests
     }
 
     /// <summary>
+    /// The upload must send one merged report and nothing else (#5218). The raw legs were
+    /// 134 per-project Cobertura files, about 3 GB of XML, and Codecov failed to process
+    /// them within its time limit, so every upload from 2026-10-27 ended in 'error' with no
+    /// report. The merge must run only on a complete set of legs, and the upload only on
+    /// a successful merge, or a failed merge would upload nothing while looking like a
+    /// normal run.
+    /// </summary>
+    [Test]
+    public void The_upload_sends_only_the_merged_report_of_a_complete_set_of_legs()
+    {
+        var merge = Step("Merge coverage reports");
+        var upload = Step("Upload coverage to Codecov");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(merge, Does.Match(@"(?m)^\s+id:\s*merge\s*$"),
+                "the merge step must carry 'id: merge', or the upload cannot require its success");
+            Assert.That(merge, Does.Contain("steps.test.outputs.complete == 'true'"),
+                "the merge must run only on a complete set of legs");
+            Assert.That(merge, Does.Contain("dotnet-reportgenerator-globaltool --version"),
+                "the merge must use a pinned ReportGenerator");
+            Assert.That(merge, Does.Contain("-reporttypes:Cobertura").And.Contain("coverage-merged"),
+                "the merge must write one Cobertura report into coverage-merged");
+            Assert.That(upload, Does.Contain("steps.merge.outcome == 'success'"),
+                "the upload must require a successful merge");
+            Assert.That(upload, Does.Contain("files: coverage-merged/Cobertura.xml"),
+                "the upload must send the merged report");
+            Assert.That(upload, Does.Contain("disable_search: true"),
+                "the upload must not also search for and send the raw per-project reports");
+            Assert.That(upload, Does.Not.Match(@"(?m)^\s+directory:\s*coverage\s*$"),
+                "uploading the raw coverage directory brings back the report Codecov cannot process");
+        });
+    }
+
+    /// <summary>
     /// Reads one step's block by its name, up to the next step or the end of the file.
     /// Fails rather than returning an empty string, because every assertion above would
     /// pass or fail meaninglessly against one.

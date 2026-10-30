@@ -530,7 +530,9 @@ jobs:
     needs: [measured, plan, coverage]
     if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' && needs.plan.outputs.coverage == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Sized for the ReportGenerator merge below (about seven minutes for the
+    # 2026-10-30 legs) plus the download and the upload.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Download coverage legs
@@ -557,6 +559,32 @@ jobs:
           done < <(jq -r '.[].id' <<< "$LEGS")
           echo "complete=true" >> "$GITHUB_OUTPUT"
 
+      # Merge every leg's per-test-project Cobertura report into one before
+      # uploading (#5218). Each project's report repeats the classes of every
+      # assembly it loads, so the raw upload was 134 files and about 3 GB of
+      # XML. Codecov stopped processing that within its time limit (every upload
+      # from 2026-10-27 ended in 'error' after ~10 minutes, with no report).
+      # Merged, it is one report of about 35 MB. The merge runs only on a
+      # complete set of legs, like the upload.
+      - name: Setup .NET (coverage merge)
+        if: ${{ !cancelled() && steps.test.outputs.complete == 'true' }}
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Merge coverage reports
+        id: merge
+        if: ${{ !cancelled() && steps.test.outputs.complete == 'true' }}
+        run: |
+          set -euo pipefail
+          dotnet tool install dotnet-reportgenerator-globaltool --version 5.5.11 \
+            --tool-path "$RUNNER_TEMP/reportgenerator"
+          "$RUNNER_TEMP/reportgenerator/reportgenerator" \
+            "-reports:coverage/**/coverage.cobertura.xml" \
+            -targetdir:coverage-merged -reporttypes:Cobertura -verbosity:Warning
+          test -s coverage-merged/Cobertura.xml
+          echo "Merged $(find coverage -name coverage.cobertura.xml | wc -l) report(s) into $(du -h coverage-merged/Cobertura.xml | cut -f1)."
+
       - name: Upload coverage to Codecov
         # Upload even when a project failed above, provided every suite still
         # produced a complete report: a named test failure leaves the report
@@ -566,14 +594,17 @@ jobs:
         # upload by reporting `complete` as anything but 'true'. This final job
         # also requires every planned leg's attempt-scoped artifact and marker.
         # CiCoverageUploadCompletenessTests holds this in place.
-        if: ${{ !cancelled() && steps.test.outputs.complete == 'true' }}
+        if: ${{ !cancelled() && steps.test.outputs.complete == 'true' && steps.merge.outcome == 'success' }}
         uses: codecov/codecov-action@v7
         with:
           # Add a CODECOV_TOKEN repository secret (from the Codecov project
           # settings). fail_ci_if_error is left false so a transient upload
           # hiccup never fails the nightly run.
           token: ${{ secrets.CODECOV_TOKEN }}
-          directory: coverage
+          # Only the merged report: searching the raw legs would upload the
+          # 134 per-project files again.
+          files: coverage-merged/Cobertura.xml
+          disable_search: true
           fail_ci_if_error: false
 
   # ---------------------------------------------------------------------------
