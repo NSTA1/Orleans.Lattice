@@ -109,7 +109,7 @@ In the README, What it is and why it exists sets out the three positions, and A 
 <!-- The list is written from the series plan (videos/series.json) by `npm run companions` in videos/; edit the plan, not this block. -->
 <!-- where-next:begin -->
 
-- **Next on Evaluate:** The guarantees
+- **Next on Evaluate:** [The guarantees](guarantees.md)
 - **The pages it introduces:** [What it is and why it exists](../../README.md#what-is-it) and [A core plus seams](../../README.md#architecture-a-core-plus-seams)
 
 <!-- where-next:end -->
