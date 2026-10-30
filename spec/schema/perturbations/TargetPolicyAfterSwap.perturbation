@@ -1,0 +1,21 @@
+# EnforcedBeforeLive: the policy is installed before the destination goes live.
+MODULE: SchemaRemediationCutover
+ROW: EnforcedBeforeLive
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.Cutover_arms_the_target_policy_before_repointing_the_alias
+SUMMARY: the target policy is installed after the alias swap
+
+--- FIND
+            await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+            policyProvider!.Invalidate(TreeId);
+--- REPLACE
+            policyProvider!.Invalidate(TreeId);
+--- END
+
+--- FIND
+        var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(grainFactory, TreeId, destinationPhysical);
+--- REPLACE
+        var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(grainFactory, TreeId, destinationPhysical);
+        if (state.State.Mode == SchemaRemediationMode.Transform)
+            await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+--- END

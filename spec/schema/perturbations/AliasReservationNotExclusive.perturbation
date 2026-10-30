@@ -1,0 +1,12 @@
+# Move: a resize, restore or revert cannot take a reservation another operation holds.
+MODULE: SchemaRemediationCutover
+ROW: Move
+FILE: src/lattice/BPlusTree/Grains/TreeDeletionGrain.Logical.cs
+DETECTORS: TreeDeletionGrainTests.Alias_reservation_is_idempotent_exclusive_and_explicitly_abandonable
+SUMMARY: a second alias operation takes a held reservation
+
+--- FIND
+        if (state.State.AliasOperationId is { } active && active != operationId)
+--- REPLACE
+        if (state.State.AliasOperationId is { } active && active != operationId && active.Length < 0)
+--- END

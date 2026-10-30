@@ -1,0 +1,16 @@
+# MigrationKeepsPolicy: only a transform remediation installs a policy at cutover.
+MODULE: SchemaRemediationCutover
+ROW: MigrationKeepsPolicy
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_with_policy_validates_post_upcast_body_and_cuts_over
+SUMMARY: a migration reinstalls the policy it validated against
+
+--- FIND
+        if (state.State.Mode == SchemaRemediationMode.Transform)
+        {
+            await policyStore!.SetPolicyAsync
+--- REPLACE
+        if (state.State.TargetPolicy is not null)
+        {
+            await policyStore!.SetPolicyAsync
+--- END
