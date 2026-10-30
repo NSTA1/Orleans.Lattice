@@ -184,4 +184,130 @@ public sealed class ClusterOperationProgressTests
             Assert.That(legacy?.Maximum, Is.Null, "a purge recorded by an earlier build has no shard count");
         });
     }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Of_resize_with_a_nonpositive_total_is_indeterminate(int total)
+    {
+        var progress = ClusterOperationProgress.Of(new TreeResizeStatus
+        {
+            TreeId = Tree,
+            InProgress = true,
+            Phase = TreeResizePhase.Swap,
+            CompletedUnits = 7,
+            TotalUnits = total,
+        });
+
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress(
+            "Resize progress", "Pointing the tree's name at the copy", 0, null, null)));
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Of_snapshot_with_a_nonpositive_shard_count_is_indeterminate(int total)
+    {
+        var progress = ClusterOperationProgress.Of(new TreeSnapshotStatus
+        {
+            TreeId = Tree,
+            InProgress = true,
+            Phase = TreeSnapshotPhase.Copy,
+            CopiedShardCount = 7,
+            ShardCount = total,
+        });
+
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress(
+            "Snapshot progress", "Copying shards", 0, null, null)));
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Of_reshard_with_a_nonpositive_target_does_not_invent_a_percentage(int target)
+    {
+        var progress = ClusterOperationProgress.Of(new TreeReshardStatus
+        {
+            TreeId = Tree,
+            InProgress = true,
+            CurrentPhysicalShardCount = 5,
+            StartPhysicalShardCount = 2,
+            TargetShardCount = target,
+        });
+
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress(
+            "Reshard progress", "Resharding", 0, null, "5 physical shards so far.")));
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Of_completed_purge_without_a_positive_shard_count_is_whole(int total)
+    {
+        var progress = ClusterOperationProgress.Of(new TreeDeletionStatus
+        {
+            TreeId = Tree,
+            IsDeleted = true,
+            PurgeComplete = true,
+            PurgeShardCount = total,
+        });
+
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress("Purge progress", "Purged", 1, 1, null)));
+    }
+
+    [Test]
+    public void Of_requires_a_status_for_every_operation_kind()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => ClusterOperationProgress.Of((TreeResizeStatus)null!), Throws.ArgumentNullException);
+            Assert.That(() => ClusterOperationProgress.Of((TreeSnapshotStatus)null!), Throws.ArgumentNullException);
+            Assert.That(() => ClusterOperationProgress.Of((TreeReshardStatus)null!), Throws.ArgumentNullException);
+            Assert.That(() => ClusterOperationProgress.Of((TreeDeletionStatus)null!), Throws.ArgumentNullException);
+        });
+    }
+
+    [TestCase(0, "Copy complete. Step 1 of 3 to finish.")]
+    [TestCase(100, "Copy complete. Step 3 of 3 to finish.")]
+    public void Of_resize_clamps_the_finishing_step_to_the_declared_step_range(int completed, string detail)
+    {
+        var progress = ClusterOperationProgress.Of(new TreeResizeStatus
+        {
+            TreeId = Tree,
+            InProgress = true,
+            Phase = TreeResizePhase.Swap,
+            CompletedUnits = completed,
+            TotalUnits = 11,
+        });
+
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress(
+            "Resize progress", "Pointing the tree's name at the copy", completed, 11, detail)));
+    }
+
+    [Test]
+    public void Of_resize_without_a_phase_keeps_copy_progress_and_clamps_the_copied_shard_count()
+    {
+        var progress = ClusterOperationProgress.Of(new TreeResizeStatus
+        {
+            TreeId = Tree,
+            InProgress = true,
+            CompletedUnits = 10,
+            TotalUnits = 11,
+        });
+
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress(
+            "Resize progress", "Resizing", 10, 11, "8 of 8 shards copied, then 3 steps to finish.")));
+    }
+
+    [TestCase(6, "Folding shards together", "6 physical shards now, down to 4.")]
+    [TestCase(4, "Finishing", "4 of 4 physical shards. The reshard completes once its last step finishes.")]
+    public void Of_reshard_with_start_equal_to_target_treats_the_start_as_unknown(int current, string phase, string detail)
+    {
+        var progress = ClusterOperationProgress.Of(new TreeReshardStatus
+        {
+            TreeId = Tree,
+            InProgress = true,
+            CurrentPhysicalShardCount = current,
+            StartPhysicalShardCount = 4,
+            TargetShardCount = 4,
+        });
+
+        Assert.That(progress, Is.EqualTo(new ClusterOperationProgress("Reshard progress", phase, 0, null, detail)));
+    }
 }

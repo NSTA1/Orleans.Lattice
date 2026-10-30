@@ -83,6 +83,30 @@ public sealed class ClusterStatusPollerTests
         Assert.That(() => poller.Follow(null!), Throws.ArgumentNullException);
     }
 
+    [Test]
+    public void Follow_after_disposal_never_arms_a_timer_or_invokes_the_refresh()
+    {
+        var time = new Orleans.Lattice.Testing.ManualTimeProvider();
+        var poller = new ClusterStatusPoller(time);
+        var reads = 0;
+        poller.Dispose();
+
+        poller.Follow(_ =>
+        {
+            Interlocked.Increment(ref reads);
+            return Task.FromResult(ClusterPollOutcome.Running);
+        });
+        time.Advance(ClusterStatusPoller.MaximumInterval);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(poller.IsFollowing, Is.False);
+            Assert.That(time.PendingTimerCount, Is.Zero);
+            Assert.That(Volatile.Read(ref reads), Is.Zero);
+        });
+        poller.Dispose();
+    }
+
     private static void ReadsReach(Func<int> reads, int expected) =>
         FollowBarriers.ReadsReach(reads, expected, "the poller");
 
