@@ -2,8 +2,10 @@ namespace Orleans.Lattice.Schema;
 
 /// <summary>
 /// The schema-versioning control plane: opt a tree in to envelope versioning, read its current config,
-/// advance its monotonic target version, and opt it back out. Advancing the target
-/// takes effect immediately for new writes (they are stamped at the new version);
+/// advance its monotonic target version, and opt it back out. A change takes effect
+/// on the silo that serves the call as soon as it returns, and on every other silo
+/// within <see cref="LatticeSchemaVersioningOptions.PropagationInterval"/>; from
+/// then on new writes are stamped at the new target version, while
 /// existing values stamped at an older version are upcast lazily on read through
 /// the registered upcaster chain.
 /// </summary>
@@ -19,7 +21,9 @@ public interface ILatticeSchemaVersionAdmin
     /// <summary>
     /// Opts <paramref name="treeId"/> in to envelope versioning (or replaces its
     /// existing config) with <paramref name="config"/>. New writes are stamped at
-    /// <see cref="LatticeSchemaVersionConfig.TargetVersion"/> immediately.
+    /// <see cref="LatticeSchemaVersionConfig.TargetVersion"/> on the serving silo as
+    /// soon as the call returns, and on every other silo within
+    /// <see cref="LatticeSchemaVersioningOptions.PropagationInterval"/>.
     /// (<see cref="LatticeOperation.SchemaAdmin"/>.)
     /// </summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
@@ -43,8 +47,10 @@ public interface ILatticeSchemaVersionAdmin
     /// Advances <paramref name="treeId"/>'s target schema version to
     /// <paramref name="newTargetVersion"/>. The target is <b>monotonic</b>: the new
     /// version must be strictly greater than the current target. New writes are
-    /// stamped at the new version immediately; existing values are upcast lazily on
-    /// read. (<see cref="LatticeOperation.SchemaAdmin"/>.)
+    /// stamped at the new version on the serving silo as soon as the call returns,
+    /// and on every other silo within
+    /// <see cref="LatticeSchemaVersioningOptions.PropagationInterval"/>; existing
+    /// values are upcast lazily on read. (<see cref="LatticeOperation.SchemaAdmin"/>.)
     /// </summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="newTargetVersion">The new target version. Must be greater than the current target.</param>

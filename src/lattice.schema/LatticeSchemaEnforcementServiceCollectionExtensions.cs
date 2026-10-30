@@ -83,6 +83,13 @@ public static class LatticeSchemaEnforcementServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<LatticeSchemaPolicyProvider>());
 
+        // The observer above fires only on the silo that committed the policy write,
+        // so every silo also follows the cluster-wide policy epoch: a policy change
+        // reaches every silo's cache within PropagationInterval (#5238).
+        builder.Services.AddSchemaConfigEpochSynchronizer<LatticeSchemaPolicyProvider>(
+            SchemaConstants.PolicyTree,
+            sp => sp.GetRequiredService<IOptions<LatticeSchemaEnforcementOptions>>().Value.PropagationInterval);
+
         // Enforcement wiring: replace the core default NullLatticeWriteInterceptor
         // (registered by AddLattice via TryAddSingleton) with the schema
         // interceptor. Replace (not TryAdd) guarantees exactly one interceptor

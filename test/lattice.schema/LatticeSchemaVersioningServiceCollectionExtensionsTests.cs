@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using NSubstitute;
 using Orleans.Hosting;
 
 namespace Orleans.Lattice.Schema.Tests;
@@ -128,6 +130,26 @@ public sealed class LatticeSchemaVersioningServiceCollectionExtensionsTests
             .Value;
         Assert.That(options.DeadLetterPreviewMaxBytes, Is.EqualTo(11));
     }
+
+    [Test]
+    public void AddLatticeSchemaVersioning_registers_the_version_epoch_synchronizer_with_the_configured_interval()
+    {
+        var builder = new FakeSiloBuilder().WithCoreLattice();
+
+        builder.AddLatticeSchemaVersioning(configureOptions: o => o.PropagationInterval = TimeSpan.FromMilliseconds(250));
+        builder.Services.AddSingleton(Substitute.For<IGrainFactory>());
+        builder.Services.AddLogging();
+        var services = builder.Services.BuildServiceProvider();
+
+        var synchronizer = services.GetRequiredService<SchemaConfigEpochSynchronizer<LatticeSchemaVersionProvider>>();
+        Assert.That(synchronizer.PollInterval, Is.EqualTo(TimeSpan.FromMilliseconds(250)));
+        Assert.That(services.GetServices<IHostedService>(), Has.Some.SameAs(synchronizer));
+        Assert.That(services.GetServices<IMutationObserver>(), Has.Some.SameAs(synchronizer));
+    }
+
+    [Test]
+    public void LatticeSchemaVersioningOptions_PropagationInterval_defaults_to_one_second() =>
+        Assert.That(new LatticeSchemaVersioningOptions().PropagationInterval, Is.EqualTo(TimeSpan.FromSeconds(1)));
 
     private static bool Registered<TService>(ISiloBuilder builder) =>
         builder.Services.Any(d => d.ServiceType == typeof(TService));
