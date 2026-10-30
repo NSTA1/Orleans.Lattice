@@ -661,6 +661,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetParentAsync(GrainId? parentId);
 
     /// <summary>
+    /// Persists the parent binding, then reads the child's digest in one dispatch.
+    /// Retains the replay barrier and split/persist gates of <see cref="SetParentAsync"/>,
+    /// without publishing back into the parent that is awaiting this seed.
+    /// </summary>
+    /// <remarks>Must interleave for the same split-link cycle as <see cref="SetParentAsync"/>.</remarks>
+    [AlwaysInterleave]
+    Task<ChildDigestSnapshot> SetParentAndGetChildDigestSnapshotAsync(GrainId? parentId);
+
+    /// <summary>
     /// Returns this leaf's current contribution to its parent internal
     /// node's subtree fold: the raw 16-byte
     /// <c>ProjectionHash</c>, the total entry count (live plus

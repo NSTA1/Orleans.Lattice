@@ -184,6 +184,13 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
+    public async Task<ChildDigestSnapshot> SetParentAndGetChildDigestSnapshotAsync(GrainId? parentId)
+    {
+        await SetParentAsync(parentId);
+        return await GetChildDigestSnapshotAsync();
+    }
+
+    /// <inheritdoc />
     public async Task<ChildDigestSnapshot> GetChildDigestSnapshotAsync()
     {
         await AwaitReplayBarrierAsync();

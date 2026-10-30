@@ -27,6 +27,7 @@ public sealed class LatticeStateQueryStructureRoutingTests
         public required ILattice Lattice { get; init; }
         public required Dictionary<int, IShardRootGrain> Shards { get; init; }
         public required ILatticeRegistry Registry { get; init; }
+        public required IGrainFactory Factory { get; init; }
     }
 
     private static Harness CreateQuery(ShardMap map, int pinnedShardCount, params int[] shardsWithRoots)
@@ -77,7 +78,48 @@ public sealed class LatticeStateQueryStructureRoutingTests
             new ServiceCollection().BuildServiceProvider(),
             new NullTenantContextResolver());
 
-        return new Harness { Query = query, Lattice = lattice, Shards = shards, Registry = registry };
+        return new Harness { Query = query, Lattice = lattice, Shards = shards, Registry = registry, Factory = grainFactory };
+    }
+
+    [Test]
+    public async Task Subpath_structure_checks_physical_ownership_and_reads_topology_in_one_dispatch()
+    {
+        var h = CreateQuery(ShardMap.CreateDefault(8, 2), 2);
+        var id = GrainId.Create("internal", "subtree");
+        var node = Substitute.For<IBPlusInternalGrain>();
+        node.GetTopologyForTreeAsync(PhysicalTree, 2).Returns(new ShardTopologyNode
+        {
+            NodeId = id.ToString(), EntryCount = 42, LiveCount = 42, ChildFanout = 3,
+        });
+        h.Factory.GetGrain<IBPlusInternalGrain>(id).Returns(node);
+
+        var result = await h.Query.GetTreeStructureAsync(new StructureRequest
+        {
+            TreeId = Tree, SubPathNodeId = id.ToString(), DepthLimit = 2,
+        });
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found));
+        Assert.That(result.Roots.Single().SubtreeKeyCount, Is.EqualTo(42));
+        await node.Received(1).GetTopologyForTreeAsync(PhysicalTree, 2);
+        await node.DidNotReceive().GetTreeIdAsync();
+        await node.DidNotReceiveWithAnyArgs().GetTopologyAsync(default);
+    }
+
+    [Test]
+    public async Task Subpath_structure_denied_by_bound_node_returns_no_roots()
+    {
+        var h = CreateQuery(ShardMap.CreateDefault(8, 2), 2);
+        var id = GrainId.Create("internal", "foreign-subtree");
+        var node = Substitute.For<IBPlusInternalGrain>();
+        node.GetTopologyForTreeAsync(PhysicalTree, Arg.Any<int>()).Returns(Task.FromResult<ShardTopologyNode?>(null));
+        h.Factory.GetGrain<IBPlusInternalGrain>(id).Returns(node);
+
+        var result = await h.Query.GetTreeStructureAsync(new StructureRequest { TreeId = Tree, SubPathNodeId = id.ToString() });
+
+        Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+        Assert.That(result.Roots, Is.Empty);
+        await node.Received(1).GetTopologyForTreeAsync(PhysicalTree, Arg.Any<int>());
+        await node.DidNotReceiveWithAnyArgs().GetTopologyAsync(default);
     }
 
     [Test]
