@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Schema.Tests;
 
 /// <summary>
 /// A single-silo <see cref="TestCluster"/> with schema versioning and startup-declared
-/// materialised views, used to characterize the projection input seam (#4908, #5225):
+/// materialised views, used to pin the projection input contract (#4908, #5240):
 /// which bytes <see cref="ILatticeAggregationProjection.Project"/> and
 /// <see cref="ILatticeViewProjection.Project"/> receive when their source tree is
 /// versioning-enabled. Each scenario owns a source tree tailed by three views:
@@ -33,6 +33,15 @@ public sealed class ProjectionInputSeamClusterFixture
 
     /// <summary>A versioned source whose views are rebuilt and reconciled.</summary>
     public const string RebuildSource = "seam-rebuild";
+
+    /// <summary>A versioned source written through atomic batches (atomic publication).</summary>
+    public const string AtomicSource = "seam-atomic";
+
+    /// <summary>
+    /// A versioned logical source aliased to a physical tree before its first write,
+    /// so a rebuild reads the physical shards directly.
+    /// </summary>
+    public const string AliasedSource = "seam-aliased";
 
     /// <summary>A source with versioning registered but never opted in (the control).</summary>
     public const string PlainSource = "seam-plain";
@@ -111,6 +120,20 @@ public sealed class ProjectionInputSeamClusterFixture
             ? total.GetDouble()
             : 0d;
 
+    /// <summary>The count projection grouping each value by <see cref="Tag"/>.</summary>
+    internal static ILatticeAggregationProjection TagsProjection() =>
+        new AggregationLatticeViewProjection(AggregationKind.Count, Tag, "seam-tags-v1");
+
+    /// <summary>The sum projection over the target-shape <c>Total</c> member.</summary>
+    internal static ILatticeAggregationProjection TotalProjection() =>
+        new AggregationLatticeViewProjection(
+            AggregationKind.Sum, static _ => TotalGroup, "seam-total-v1", valueSelector: TotalOf);
+
+    /// <summary>The predicate filter projection keeping <c>Total &gt;= 0</c>.</summary>
+    internal static ILatticeViewProjection FilterProjection() =>
+        new PredicateLatticeViewProjection(
+            LatticePredicateTranslator.Translate<SeamDocument>(d => d.Total >= 0));
+
     private static string Shape(byte[] body)
     {
         if (!TryParseObject(body, out var root))
@@ -159,19 +182,11 @@ public sealed class ProjectionInputSeamClusterFixture
                     LatticeValueTransform.Passthrough(LatticeValueTransform.RenameMember("Amount", "Total"))));
             siloBuilder.AddLatticeViews(views =>
             {
-                foreach (var source in new[] { IncrementalSource, RebuildSource, PlainSource })
+                foreach (var source in new[] { IncrementalSource, RebuildSource, AtomicSource, AliasedSource, PlainSource })
                 {
-                    views.AddAggregationView(
-                        TagsView(source), source,
-                        new AggregationLatticeViewProjection(AggregationKind.Count, Tag, "seam-tags-v1"));
-                    views.AddAggregationView(
-                        TotalView(source), source,
-                        new AggregationLatticeViewProjection(
-                            AggregationKind.Sum, static _ => TotalGroup, "seam-total-v1", valueSelector: TotalOf));
-                    views.AddView(
-                        FilterView(source), source,
-                        new PredicateLatticeViewProjection(
-                            LatticePredicateTranslator.Translate<SeamDocument>(d => d.Total >= 0)));
+                    views.AddAggregationView(TagsView(source), source, TagsProjection());
+                    views.AddAggregationView(TotalView(source), source, TotalProjection());
+                    views.AddView(FilterView(source), source, FilterProjection());
                 }
             });
         }

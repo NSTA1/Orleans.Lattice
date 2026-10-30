@@ -2,11 +2,12 @@ namespace Orleans.Lattice.Schema;
 
 /// <summary>
 /// The default <see cref="ILatticeSchemaVersionAdmin"/>. It delegates config
-/// mutations to the durable <see cref="ILatticeSchemaVersionStore"/> and eagerly
-/// evicts the local <see cref="ILatticeSchemaVersionProvider"/> cache on a change,
-/// so the new config takes effect on this silo's next write / read without waiting
-/// for the mutation observer to propagate the eviction. Mirrors
-/// <c>LatticeSchemaAdmin</c>.
+/// mutations to the durable <see cref="ILatticeSchemaVersionStore"/> and evicts this
+/// silo's <see cref="ILatticeSchemaVersionProvider"/> cache before a change returns,
+/// so the new config takes effect on this silo's next write / read. Every other silo
+/// picks the change up within <see cref="LatticeSchemaVersioningOptions.PropagationInterval"/>
+/// through the cluster-wide version-config epoch; propagation is eventual, not
+/// synchronous. Mirrors <c>LatticeSchemaAdmin</c>.
 /// </summary>
 internal sealed class LatticeSchemaVersionAdmin(
     ILatticeSchemaVersionStore store,

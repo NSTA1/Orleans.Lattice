@@ -2,35 +2,77 @@
 @using System.Text.Json.Serialization
 @implements IDisposable
 
-@if (Workspace is { Grants.SupportsRuntimeRegistration: true, Grants.ViewVersion: true })
+@if (Workspace is { Grants.SupportsVersioning: true, Grants.ViewVersion: true, Grants.SupportsRuntimeRegistration: false })
 {
     <section class="lt-schema-editor" aria-labelledby="lt-schema-registry-title">
-        <h2 id="lt-schema-registry-title" class="lt-schema-section-title">Registered versions and migration paths</h2>
-        <p class="lt-schema-note">These definitions belong to this tree in the selected region. They survive silo restarts. Existing versions and migration hops are immutable; repeat the same registration safely, but use a new version for a changed definition.</p>
+        <h2 id="lt-schema-registry-title" class="lt-schema-section-title">Versions and migration paths</h2>
+        <p class="lt-schema-note">This host defines its versions and migration paths in code and does not report them, so they cannot be shown or registered here. A value stamped below the target reads only when the host provides a path from its version to the target.</p>
+    </section>
+}
+else if (Workspace is { Grants.SupportsRuntimeRegistration: true, Grants.ViewVersion: true })
+{
+    <section class="lt-schema-editor" aria-labelledby="lt-schema-registry-title">
+        <h2 id="lt-schema-registry-title" class="lt-schema-section-title">Versions and migration paths</h2>
+        <p class="lt-schema-note">These definitions belong to this tree in the selected region and survive silo restarts. They combine what the host provisions at startup with what is registered here; the cluster does not say which is which. A registered version or migration hop cannot be changed or removed.</p>
         @if (_catalog is { } catalog)
         {
-            <LtTable TItem="LatticeSchemaDescriptor" Items="@catalog.Descriptors" Caption="Registered schema versions">
-                <ChildContent>
-                    <LtColumn TItem="LatticeSchemaDescriptor" Title="Family" Value="@(row => row.SchemaId)" />
-                    <LtColumn TItem="LatticeSchemaDescriptor" Title="Version" Value="@(row => row.Version)" />
-                    <LtColumn TItem="LatticeSchemaDescriptor" Title="Name" Value="@(row => row.Name)" />
-                </ChildContent>
-            </LtTable>
-            <LtTable TItem="LatticeSchemaRuntimeUpcaster" Items="@catalog.Upcasters" Caption="Registered migration hops">
-                <ChildContent>
-                    <LtColumn TItem="LatticeSchemaRuntimeUpcaster" Title="Family" Value="@(row => row.SchemaId)" />
-                    <LtColumn TItem="LatticeSchemaRuntimeUpcaster" Title="From" Value="@(row => row.FromVersion)" />
-                    <LtColumn TItem="LatticeSchemaRuntimeUpcaster" Title="To" Value="@(row => row.ToVersion)" />
-                    <LtColumn TItem="LatticeSchemaRuntimeUpcaster" Title="Transform" Value="@(row => row.TransformId ?? "Declarative JSON transform")" />
-                </ChildContent>
-            </LtTable>
+            var map = Map(catalog);
+            @if (map.IsEmpty)
+            {
+                <p class="lt-schema-note">No versions or migration paths are registered.@(Config is { } config ? $" A value stamped below version {config.TargetVersion} cannot be read until a path from its version to the target is registered." : string.Empty)</p>
+            }
+            @foreach (var family in map.Families)
+            {
+                <h3 class="lt-schema-subtitle">@FamilyTitle(family)</h3>
+                <LtTable TItem="SchemaVersionRow" Items="@family.Versions" Caption="@($"Versions of family {family.SchemaId}")" CaptionHidden="true">
+                    <ChildContent>
+                        <LtColumn TItem="SchemaVersionRow" Title="Version" Value="@(row => row.Version)" />
+                        <LtColumn TItem="SchemaVersionRow" Title="Name" Value="@(row => row.Name ?? "Not registered")" />
+                        <LtColumn TItem="SchemaVersionRow" Title="A value stamped with it" Value="@(row => ReachText(row))" />
+                    </ChildContent>
+                    <CompactRow Context="row">
+                        <LtCompactRow>
+                            <Primary>Version @row.Version: @(row.Name ?? "Not registered")</Primary>
+                            <Secondary>@ReachText(row)</Secondary>
+                        </LtCompactRow>
+                    </CompactRow>
+                </LtTable>
+                @if (family.Hops.Count > 0)
+                {
+                    <ol class="lt-schema-hops" aria-label="@($"What changes between versions of family {family.SchemaId}")">
+                        @foreach (var hop in family.Hops)
+                        {
+                            <li class="lt-schema-hops__hop">
+                                <span class="lt-schema-hops__label">Version @hop.FromVersion to @hop.ToVersion</span>
+                                @if (hop.TransformId is { } transformId)
+                                {
+                                    <p class="lt-schema-hops__step">Runs the host transform <code class="lt-shell-mono">@transformId</code>, installed code whose changes the cluster does not describe.</p>
+                                    @if (!hop.Installed)
+                                    {
+                                        <p class="lt-schema-error">The silo that answered does not install this transform, so a value that needs this hop fails to read there.</p>
+                                    }
+                                }
+                                else
+                                {
+                                    <ul class="lt-schema-hops__steps">
+                                        @foreach (var step in hop.Steps)
+                                        {
+                                            <li class="lt-schema-hops__step">@step</li>
+                                        }
+                                    </ul>
+                                }
+                            </li>
+                        }
+                    </ol>
+                }
+            }
             <p class="lt-schema-note">Host-supported transform ids: @(catalog.SupportedTransformIds.Length == 0 ? "none; use a declarative transform" : string.Join(", ", catalog.SupportedTransformIds)). An id references installed code; registration never uploads code or assemblies.</p>
         }
         @if (Workspace.Grants.ManageVersion)
         {
             <details>
                 <summary>Register versions and migration paths</summary>
-                <p id="lt-schema-registry-hint" class="lt-schema-note">Append a JSON definition. Descriptors name versions, not JSON shapes; use the Policy tab for validation. A hop must specify either a declarative transform or one advertised transformId. Register prerequisites in every serving region before advancing a replicated tree.</p>
+                <p id="lt-schema-registry-hint" class="lt-schema-note">Append a JSON definition. A descriptor names a version; what differs between two versions is the transform of the hop between them, which is listed above once registered. A hop must specify either a declarative transform or one advertised transformId. Validation rules stay on the Policy tab and apply to every version alike. Register prerequisites in every serving region before advancing a replicated tree.</p>
                 <div class="lt-field">
                     <label class="lt-field__label" for="lt-schema-registry-json">Registration JSON</label>
                     <textarea id="lt-schema-registry-json" class="lt-input lt-shell-mono" rows="10" spellcheck="false"
@@ -71,6 +113,7 @@
 
     private readonly ComponentLifetime _lifetime = new();
     private LatticeSchemaRuntimeRegistration? _catalog;
+    private (LatticeSchemaRuntimeRegistration Catalog, LatticeSchemaVersionConfig? Config, SchemaVersionMap Map)? _map;
     private string? _loadedTree;
     private string _json = Example;
     private string? _error;
@@ -79,11 +122,50 @@
     [CascadingParameter]
     internal SchemaWorkspace? Workspace { get; set; }
 
+    /// <summary>The tree's version config, which the map reads the catalog against; <see langword="null"/> when unversioned.</summary>
+    [Parameter]
+    public LatticeSchemaVersionConfig? Config { get; set; }
+
+    /// <summary>Raised with the catalog each time it is read, and with <see langword="null"/> when it could not be.</summary>
+    [Parameter]
+    public EventCallback<LatticeSchemaRuntimeRegistration?> CatalogChanged { get; set; }
+
     [Inject]
     internal SchemaFacades Facades { get; set; } = default!;
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
+
+    /// <summary>The map of <paramref name="catalog"/> at the current config, rebuilt only when either changes.</summary>
+    private SchemaVersionMap Map(LatticeSchemaRuntimeRegistration catalog)
+    {
+        if (_map is not { } cached || !ReferenceEquals(cached.Catalog, catalog) || !Nullable.Equals(cached.Config, Config))
+        {
+            cached = (catalog, Config, SchemaVersionMap.Build(catalog, Config));
+            _map = cached;
+        }
+
+        return cached.Map;
+    }
+
+    /// <summary>The heading of one family's versions.</summary>
+    /// <param name="family">The family.</param>
+    /// <returns>The heading.</returns>
+    internal static string FamilyTitle(SchemaVersionFamily family) => family.IsConfigured
+        ? $"Family {family.SchemaId}, which this tree stamps"
+        : $"Family {family.SchemaId}";
+
+    /// <summary>How a value stamped with <paramref name="row"/>'s version reads at the target.</summary>
+    /// <param name="row">The version.</param>
+    /// <returns>A sentence.</returns>
+    internal static string ReachText(SchemaVersionRow row) => row.Reach switch
+    {
+        SchemaVersionReach.Target => "Reads as stored: this is the target version",
+        SchemaVersionReach.Upgraded => "Upgraded as it is read, through versions " + string.Join(", ", row.Route),
+        SchemaVersionReach.NoPath => "Cannot be read: no migration path leads to the target",
+        SchemaVersionReach.AboveTarget => "Cannot be read: it is newer than the target",
+        _ => "Not this tree's family",
+    };
 
     /// <inheritdoc />
     public void Dispose()
@@ -117,6 +199,7 @@
             if (!_lifetime.IsLeft)
             {
                 _catalog = catalog;
+                await CatalogChanged.InvokeAsync(catalog);
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsLeft)
@@ -124,7 +207,13 @@
         }
         catch (Exception exception)
         {
+            // A catalog that could not be re-read is no longer shown as current.
+            _catalog = null;
             _error = SchemaFailure.Describe(exception, "read the schema definitions");
+            if (!_lifetime.IsLeft)
+            {
+                await CatalogChanged.InvokeAsync(null);
+            }
         }
     }
 

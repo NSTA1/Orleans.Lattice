@@ -592,7 +592,7 @@ internal sealed partial class ViewMaintainerGrain(
             mutation =>
             {
                 var spanStart = collected.Count;
-                foreach (var write in registration.Projection!.Project(mutation))
+                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, mutation)))
                 {
                     collected.Add(write);
                     if (write.Kind == ViewWriteKind.RangeReconcile)

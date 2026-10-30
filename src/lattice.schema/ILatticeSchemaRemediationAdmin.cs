@@ -11,6 +11,14 @@ namespace Orleans.Lattice.Schema;
 /// alias change, no policy change). Only a fully successful build cuts the logical
 /// tree over to the remediated destination and installs the target policy.
 /// </para>
+/// <para>
+/// On a versioning-enabled tree the transform sees each value as a client read
+/// returns it (envelope stripped, upcast to the tree's target version). A stored
+/// value that cannot be upcast to the target - no registered upcaster hop, or a
+/// value stamped newer than the target - is an offending value like any other: the
+/// abort report is returned, not thrown, and the remediation releases its alias
+/// reservation, so the tree is not left in flight.
+/// </para>
 /// </summary>
 public interface ILatticeSchemaRemediationAdmin
 {

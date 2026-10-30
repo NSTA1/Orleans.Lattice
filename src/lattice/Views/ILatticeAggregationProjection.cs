@@ -38,6 +38,14 @@ public interface ILatticeAggregationProjection
     /// <see cref="AggregationContributionKind.Retract"/>; an unconstrained range
     /// delete yields a <see cref="AggregationContributionKind.RangeReconcile"/>.
     /// </summary>
+    /// <remarks>
+    /// When the source tree carries schema-version envelopes, the mutation's
+    /// <see cref="LatticeMutation.Value"/> is the value's body with the envelope
+    /// stripped, at the version it was stamped with and never upcast to the tree's
+    /// target. The input is identical on every derivation path (incremental apply,
+    /// atomic publication, repair, rebuild and reconcile), and advancing the target
+    /// version re-projects nothing.
+    /// </remarks>
     /// <param name="mutation">The committed source mutation to project.</param>
     IEnumerable<AggregationContribution> Project(LatticeMutation mutation);
 }

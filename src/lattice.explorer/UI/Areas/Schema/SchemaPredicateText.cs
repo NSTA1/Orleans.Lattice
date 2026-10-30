@@ -138,7 +138,10 @@ internal static class SchemaPredicateText
         _ => "?",
     };
 
-    private static string Constant(LatticeConstant constant) => constant.Kind switch
+    /// <summary>Writes a constant as the expression shows it: text quoted and escaped onto one line.</summary>
+    /// <param name="constant">The constant.</param>
+    /// <returns>The constant as text.</returns>
+    internal static string Constant(LatticeConstant constant) => constant.Kind switch
     {
         LatticeConstantKind.Null => "null",
         LatticeConstantKind.Boolean => constant.BooleanValue ? "true" : "false",

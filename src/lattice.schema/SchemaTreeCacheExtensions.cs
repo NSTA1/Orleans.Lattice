@@ -58,6 +58,17 @@ internal static class SchemaTreeCacheExtensions
         cache.TryRemove(treeId, out _);
     }
 
+    /// <summary>
+    /// Evicts every entry and overtakes every load still in flight, for a change the
+    /// silo learned of without knowing which tree it touched.
+    /// </summary>
+    internal static void InvalidateAll<T>(
+        this ConcurrentDictionary<string, T> cache, SchemaTreeCacheGenerations generations)
+    {
+        generations.AdvanceAll();
+        cache.Clear();
+    }
+
     internal static void InvalidateForMutation<T>(
         this ConcurrentDictionary<string, T> cache,
         SchemaTreeCacheGenerations generations,
