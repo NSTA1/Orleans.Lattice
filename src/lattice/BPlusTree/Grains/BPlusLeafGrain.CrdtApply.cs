@@ -81,6 +81,20 @@ internal sealed partial class BPlusLeafGrain
             ?? FallbackCrdtShapeRegistry;
 
     /// <summary>
+    /// The tree id this leaf resolves a <see cref="CrdtShape"/> under (issue
+    /// #5300): the logical tree a derived physical copy backs - a resize's copy, a
+    /// bootstrap hold's held copy, a shadow-cutover restore's copy or a schema
+    /// remediation's destination - read from the copy's registry entry
+    /// (<c>DerivedFrom</c>) when the leaf's tree id was bound, else the bound id
+    /// itself. A host registers an OR-Map shape under the logical tree name, so
+    /// resolving it under a copy's physical id found nothing and every CRDT fold
+    /// and join on the copy faulted.
+    /// </summary>
+    /// <param name="boundTreeId">The tree id the leaf is bound to.</param>
+    private string ShapeTreeId(string boundTreeId) =>
+        _metricTreeId is { Length: > 0 } logicalTreeId ? logicalTreeId : boundTreeId;
+
+    /// <summary>
     /// Joins a CRDT row a cross-shard migration imports into the row this leaf
     /// already holds for <paramref name="key"/> (issue #4613), or returns
     /// <see langword="false"/> when the key is not a live CRDT key on both sides,
@@ -259,7 +273,7 @@ internal sealed partial class BPlusLeafGrain
                 nameof(mode));
         }
 
-        var treeId = RequireBoundTreeId(key, mode, "the typed CRDT delta apply");
+        var treeId = ShapeTreeId(RequireBoundTreeId(key, mode, "the typed CRDT delta apply"));
         var registry = ResolveCrdtShapeRegistry();
         var shape = registry.TryGet(treeId, mode);
         if (shape is null)

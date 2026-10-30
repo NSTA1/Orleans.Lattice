@@ -213,7 +213,7 @@ internal sealed class SnapshotLeafGrain(
         _baselineToken = baselineToken;
         if (optionsResolver is not null)
             await optionsResolver.ResolveMetricTreeIdAsync(treeId);
-        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec());
+        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec(), MetricTreeId);
 
         if (baselineToken != Guid.Empty)
         {
@@ -287,7 +287,7 @@ internal sealed class SnapshotLeafGrain(
         _capturedOffsetsByPartition = capturedHead;
         _baselineToken = baselineToken;
         _seedBaseline = baseline;
-        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec());
+        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec(), MetricTreeId);
 
         // Seed the rows verbatim. Donor-orphan ownership filtering is applied by
         // the read path against the cursor-supplied owned-slot set (set on the
