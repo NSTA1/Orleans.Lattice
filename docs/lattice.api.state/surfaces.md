@@ -52,7 +52,7 @@ Each `TreeCatalogEntry` carries the tree id, its pinned shard count, its lifecyc
 
 `ListTagIndexesAsync` lists the tag-index membership trees as their own category; set `SourceTreeId` to restrict it to the indexes that cover one tree. `ListTagValuesAsync` then enumerates the distinct tag values carried by a single index over its subject tree, in ascending ordinal order - pass both `SourceTreeId` (the subject tree) and `IndexName` (the index). Both are paged like the other catalogs, so a client can populate a tag picker without scanning the index tree itself.
 
-Index-wide read methods browse a multi-tree tag index without decoding any internal membership-tree naming convention. Each is scoped to a single `IndexName` and spans every tree the index covers:
+With auth-backed visibility enabled, distinct tag catalogs require unfiltered source read access; an index-wide union requires this for every covered source. Tenant enumeration applies independently of auth visibility: unions containing a tenant-hidden source are empty, and member scans omit tenant-hidden rows before presence checks and pagination. Index-wide read methods browse a multi-tree tag index without decoding any internal membership-tree naming convention. Each is scoped to a single `IndexName` and spans every tree the index covers:
 
 - `ListCoveredTreesAsync(CatalogRequest { IndexName })` returns a `CoveredTreeCatalogPage` of the subject-tree ids the index covers, in ascending ordinal order.
 - `ListIndexTagsAsync(CatalogRequest { IndexName })` returns a `TagValueCatalogPage` of the distinct tag values across the whole index (the index-wide union of `ListTagValuesAsync` over every covered tree).
@@ -168,7 +168,7 @@ while (continuation is not null);
 
 ## Dead letters
 
-The state facade exposes read-only strict-mode schema-enforcement dead-letter operations:
+The state facade exposes read-only strict-mode schema-enforcement dead-letter operations. With auth-backed visibility enabled, both require unfiltered source-tree read access; partial readers receive zero or an empty page without reading the backing queue:
 
 - `Task<int> GetDeadLetterCountAsync(string treeId, CancellationToken cancellationToken = default)` counts retained dead-letter entries for a tree.
 - `Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)` lists the queue in append (time) order.
