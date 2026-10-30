@@ -139,11 +139,7 @@ internal sealed class LatticeReplicationPeerDecommissioner(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var index = grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(treeId);
-            keys.UnionWith(await index.GetAsync());
-            if (includeDecided)
-            {
-                keys.UnionWith(await index.GetTombstonesAsync());
-            }
+            keys.UnionWith(includeDecided ? await index.GetAllAsync() : await index.GetAsync());
         }
 
         var abandoned = 0;
@@ -151,14 +147,7 @@ internal sealed class LatticeReplicationPeerDecommissioner(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var receiver = grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key);
-            var status = await receiver.GetStatusAsync();
-            if (!string.Equals(status.OriginClusterId, originClusterId, StringComparison.Ordinal)
-                || (status.Decided && !includeDecided))
-            {
-                continue;
-            }
-
-            if (await receiver.AbandonAsync())
+            if (await receiver.AbandonForOriginAsync(originClusterId, includeDecided))
             {
                 abandoned++;
             }

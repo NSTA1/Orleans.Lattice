@@ -12,6 +12,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - App ownership calls.** Fresh structural app tree claims replace three registry fact reads with one, retaining retry freshness and foreign-alias checks. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice.Apps`)
+
+- **Performance - Peer barrier calls.** Peer re-add reads each live/tombstone index once, and eligible barrier cleanup validates origin and decision within the abandonment call, preserving whole-barrier cleanup and import fences. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
 - **Performance - Cache and migration calls.** Cache refresh, split freeze and consolidation freeze each replace two grain calls with one, preserving pending-before-delta reads, durable leaf seals, Reject and final-drain ordering. ([#5202](https://github.com/NSTA1/Orleans.Lattice/pull/5202)) (`Orleans.Lattice`)
 
 - **Performance - Bootstrap leaf calls.** Receiver capture and foreign-row scans each use one leaf call instead of two. Stale foreign saga discards batch once per leaf, retaining visibility, replay barriers and bootstrap floor ordering. ([#5174](https://github.com/NSTA1/Orleans.Lattice/pull/5174)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)

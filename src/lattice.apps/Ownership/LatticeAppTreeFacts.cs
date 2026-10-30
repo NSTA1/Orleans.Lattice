@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Apps;
 
@@ -25,6 +26,15 @@ internal sealed class LatticeAppTreeFacts : IAppTreeFacts
         using (LatticeSystemOrigin.Enter())
         {
             return await _grainFactory.GetLatticeRegistry().ExistsAsync(treeId).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeRegistryEntry?> GetEntryAsync(string treeId)
+    {
+        using (LatticeSystemOrigin.Enter())
+        {
+            return await _grainFactory.GetLatticeRegistry().GetEntryAsync(treeId).ConfigureAwait(false);
         }
     }
 

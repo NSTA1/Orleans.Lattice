@@ -8,6 +8,10 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// provider I/O and topology traversal are unchanged and excluded in both lanes.
 /// Delay1Ms ratios model serial hops; absolute times depend on OS timer resolution.
 /// Run with --suite readfusion.
+/// The --suite ownershipbarriers subset models fresh structural ownership checks,
+/// re-add index reads and matching-origin barrier abandonment. It excludes the
+/// unchanged alias survey, index withdrawals and persistence. Allocations are
+/// those of the dispatch model, not production row/status serialization.
 /// </summary>
 [MemoryDiagnoser]
 public class ReadFusionCallBenchmarks
@@ -21,6 +25,12 @@ public class ReadFusionCallBenchmarks
         ObserverResume,
         /// <summary>Forced routing supplies both physical identity and shard map.</summary>
         TreeStructure,
+        /// <summary>Missing structural tree: exists, derivation and resolution become one row read.</summary>
+        AppOwnership,
+        /// <summary>Re-add reads live and tombstoned keys in one index call.</summary>
+        BarrierIndex,
+        /// <summary>Matching-origin status and abandonment become one serialized call.</summary>
+        BarrierAbandon,
     }
 
     /// <summary>The read path under measurement.</summary>
@@ -42,20 +52,27 @@ public class ReadFusionCallBenchmarks
         var beforeCalls = _calls;
         _calls = 0;
         var after = AfterAsync().GetAwaiter().GetResult();
-        if (before != after || beforeCalls != 2 || _calls != 1)
+        if (before != after || beforeCalls != (Path == Site.AppOwnership ? 3 : 2) || _calls != 1)
             throw new InvalidOperationException("Read fusion changed the result or dispatch budget.");
     }
 
-    /// <summary>The two separate grain calls used before fusion.</summary>
+    /// <summary>The separate grain calls used before fusion.</summary>
     [Benchmark(Baseline = true)]
     public async Task<long> BeforeAsync()
     {
         var first = await DispatchAsync();
         var second = await DispatchAsync();
+        if (Path == Site.AppOwnership)
+        {
+            var third = await DispatchAsync();
+            return first.Identity.Length + second.Partitions + third.Shards;
+        }
         return Path switch
         {
             Site.WalActivation => first.Identity.Length + second.Partitions,
             Site.ObserverResume => first.Next - second.Live,
+            Site.BarrierIndex => first.Partitions + second.Shards,
+            Site.BarrierAbandon => first.Identity.Length + second.Live,
             _ => first.Identity.Length + second.Shards,
         };
     }
@@ -69,6 +86,9 @@ public class ReadFusionCallBenchmarks
         {
             Site.WalActivation => read.Identity.Length + read.Partitions,
             Site.ObserverResume => read.Next - read.Live,
+            Site.AppOwnership => read.Identity.Length + read.Partitions + read.Shards,
+            Site.BarrierIndex => read.Partitions + read.Shards,
+            Site.BarrierAbandon => read.Identity.Length + read.Live,
             _ => read.Identity.Length + read.Shards,
         };
     }

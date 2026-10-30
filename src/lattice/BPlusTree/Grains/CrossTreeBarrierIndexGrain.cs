@@ -104,6 +104,10 @@ internal sealed class CrossTreeBarrierIndexGrain(
     public Task<ImmutableArray<string>> GetTombstonesAsync() => Task.FromResult(state.State.Tombstones.ToImmutableArray());
 
     /// <inheritdoc />
+    public Task<ImmutableArray<string>> GetAllAsync() =>
+        Task.FromResult(state.State.Barriers.Union(state.State.Tombstones, StringComparer.Ordinal).ToImmutableArray());
+
+    /// <inheritdoc />
     public async Task RemoveAsync(string barrierKey)
     {
         ArgumentException.ThrowIfNullOrEmpty(barrierKey);

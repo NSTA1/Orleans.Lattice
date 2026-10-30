@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree.State;
+
 namespace Orleans.Lattice.Apps;
 
 /// <summary>
@@ -12,6 +14,9 @@ internal interface IAppTreeFacts
     /// <param name="treeId">The effective tree id.</param>
     /// <returns><c>true</c> when registered.</returns>
     Task<bool> ExistsAsync(string treeId);
+
+    /// <summary>A fresh registry row, or <c>null</c> when unregistered. Never cached across checks.</summary>
+    Task<TreeRegistryEntry?> GetEntryAsync(string treeId);
 
     /// <summary>The logical tree <paramref name="treeId"/> was derived from, or <c>null</c> for an independent tree.</summary>
     /// <param name="treeId">The effective tree id.</param>

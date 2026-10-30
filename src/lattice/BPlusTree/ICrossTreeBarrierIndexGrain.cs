@@ -50,4 +50,8 @@ internal interface ICrossTreeBarrierIndexGrain : IGrainWithStringKey
     /// <summary>Every listed tombstone.</summary>
     [AlwaysInterleave]
     Task<ImmutableArray<string>> GetTombstonesAsync();
+
+    /// <summary>Every live or tombstoned barrier key, deduplicated in one observation.</summary>
+    [AlwaysInterleave]
+    Task<ImmutableArray<string>> GetAllAsync();
 }

@@ -137,11 +137,71 @@ public sealed class LatticeAppTreeLedgerStoreTests
         _registry.GetAliasesTargetingAsync("p").Returns(_ => { origins.Add(LatticeSystemOrigin.IsActive); return Task.FromResult<IReadOnlyList<string>>(["t"]); });
 
         Assert.That(await facts.ExistsAsync("t"), Is.True);
+        Assert.That((await facts.GetEntryAsync("t"))?.DerivedFrom, Is.EqualTo("src"));
         Assert.That(await facts.GetDerivedFromAsync("t"), Is.EqualTo("src"));
         Assert.That(await facts.GetDerivedFromAsync("none"), Is.Null);
         Assert.That(await facts.ResolveAsync("t"), Is.EqualTo("p"));
         Assert.That(await facts.GetAliasesTargetingAsync("p"), Is.EqualTo(new[] { "t" }));
-        Assert.That(origins, Is.EqualTo(new[] { true, true, true, true }));
+        Assert.That(origins, Is.EqualTo(new[] { true, true, true, true, true }));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Fresh_claim_reads_one_registry_entry_without_existence_or_alias_resolution_calls(bool adopted)
+    {
+        var store = new InMemoryAppTreeLedgerStore();
+        var ledger = new AppTreeOwnershipLedger(store, new LatticeAppTreeFacts(_grainFactory),
+            new InMemoryAppRegistryStore(), new ManualTimeProvider(AppRegistryTestData.Start));
+        var owner = new AppTreeOwner(TenantId.Default, AppSlug.Parse("crm"), "first-party");
+        _registry.GetAliasesTargetingAsync("t").Returns(Task.FromResult<IReadOnlyList<string>>([]));
+
+        var kind = adopted ? AppTreeClaimKind.Adopted : AppTreeClaimKind.Structural;
+        var conflict = await ledger.ClaimAsync(owner, 1, [new("t", "t", kind)], null, CancellationToken.None);
+
+        Assert.That(conflict, Is.Null);
+        Assert.That(store.AppliedWrites, Is.EqualTo(1));
+        await _registry.Received(1).GetEntryAsync("t");
+        await _registry.Received(1).GetAliasesTargetingAsync("t");
+        await _registry.DidNotReceiveWithAnyArgs().ExistsAsync(default!);
+        await _registry.DidNotReceiveWithAnyArgs().ResolveAsync(default!);
+    }
+
+    [Test]
+    public async Task Fresh_claim_rereads_facts_after_a_lost_compare_and_set()
+    {
+        var store = new InMemoryAppTreeLedgerStore();
+        var ledger = new AppTreeOwnershipLedger(store, new LatticeAppTreeFacts(_grainFactory),
+            new InMemoryAppRegistryStore(), new ManualTimeProvider(AppRegistryTestData.Start));
+        var owner = new AppTreeOwner(TenantId.Default, AppSlug.Parse("crm"), "first-party");
+        _registry.GetAliasesTargetingAsync("t").Returns(Task.FromResult<IReadOnlyList<string>>([]));
+        store.BeforeSet = key =>
+        {
+            store.Seed(key, Claim() with { Released = true });
+            _registry.GetEntryAsync(key).Returns(Task.FromResult<TreeRegistryEntry?>(new TreeRegistryEntry()));
+            return Task.CompletedTask;
+        };
+
+        var conflict = await ledger.ClaimAsync(owner, 1,
+            [new("t", "t", AppTreeClaimKind.Structural)], null, CancellationToken.None);
+
+        Assert.That(conflict?.Reason, Is.EqualTo(AppTreeOwnershipConflictReason.PreExistingUnownedTree));
+        Assert.That(store.AppliedWrites, Is.Zero);
+        await _registry.Received(2).GetEntryAsync("t");
+    }
+
+    [Test]
+    public void Fresh_claim_propagates_registry_failure_without_writing_a_claim()
+    {
+        var store = new InMemoryAppTreeLedgerStore();
+        var ledger = new AppTreeOwnershipLedger(store, new LatticeAppTreeFacts(_grainFactory),
+            new InMemoryAppRegistryStore(), new ManualTimeProvider(AppRegistryTestData.Start));
+        var owner = new AppTreeOwner(TenantId.Default, AppSlug.Parse("crm"), "first-party");
+        _registry.GetEntryAsync("t").Returns(Task.FromException<TreeRegistryEntry?>(new InvalidOperationException("unavailable")));
+
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await ledger.ClaimAsync(owner, 1,
+            [new("t", "t", AppTreeClaimKind.Structural)], null, CancellationToken.None));
+        Assert.That(store.AppliedWrites, Is.Zero);
+        Assert.That(LatticeSystemOrigin.IsActive, Is.False);
     }
 
     [Test]

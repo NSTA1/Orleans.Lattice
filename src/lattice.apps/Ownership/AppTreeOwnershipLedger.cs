@@ -365,19 +365,20 @@ internal sealed class AppTreeOwnershipLedger
 
     private async Task<AppTreeOwnershipConflict?> CheckFreshAsync(AppTreeClaimPlan item)
     {
-        if (item.Kind == AppTreeClaimKind.Structural && await _facts.ExistsAsync(item.Key).ConfigureAwait(false))
+        var entry = await _facts.GetEntryAsync(item.Key).ConfigureAwait(false);
+        if (item.Kind == AppTreeClaimKind.Structural && entry is not null)
         {
             return new(item.TreeName, AppTreeOwnershipConflictReason.PreExistingUnownedTree, null,
                 $"Tree '{item.TreeName}' already exists and is not owned by any app install (a pre-existing unowned tree); it cannot be taken over.");
         }
 
-        if (await _facts.GetDerivedFromAsync(item.Key).ConfigureAwait(false) is not null)
+        if (entry?.DerivedFrom is not null)
         {
             return new(item.TreeName, AppTreeOwnershipConflictReason.DerivedTree, null,
                 $"Tree '{item.TreeName}' is a physical copy derived from another tree and cannot be owned.");
         }
 
-        var backing = await _facts.ResolveAsync(item.Key).ConfigureAwait(false);
+        var backing = entry?.PhysicalTreeId ?? item.Key;
         var foreignAlias = !string.Equals(backing, item.Key, StringComparison.Ordinal)
             && !string.Equals(await _facts.GetDerivedFromAsync(backing).ConfigureAwait(false), item.Key, StringComparison.Ordinal);
         if (!foreignAlias)
