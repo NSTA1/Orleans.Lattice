@@ -102,6 +102,31 @@ public sealed class SchemaOperationServiceTests
     }
 
     [Test]
+    public void ToCompletion_records_a_superseded_publication_as_an_abort_naming_the_supersession()
+    {
+        // Issue #5289: an abort no value caused - the cutover found the tree's alias
+        // moved by another alias change - carries no offending key.
+        var completion = SchemaOperationService.ToCompletion(new LatticeSchemaRemediationReport
+        {
+            Phase = LatticeSchemaRemediationPhase.Aborted,
+            ScannedCount = 600,
+            Reason = "Another alias change superseded the publication. Nothing was cut over.",
+            OperationId = "op-1",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(completion.State, Is.EqualTo(LatticeOperationState.Failed));
+            Assert.That(completion.FailureReason, Does.Contain("superseded").And.Not.Contain("Stopped at key"));
+            Assert.That(completion.Result[SchemaOperationResultKeys.Outcome], Is.EqualTo(SchemaOperationResultKeys.Aborted));
+            Assert.That(completion.Result[SchemaOperationResultKeys.Reason], Does.Contain("superseded"));
+            Assert.That(completion.Result.ContainsKey(SchemaOperationResultKeys.OffendingKey), Is.False,
+                "no value is at fault, so none is named");
+            Assert.That(completion.Result[SchemaOperationResultKeys.RemediationOperationId], Is.EqualTo("op-1"));
+        });
+    }
+
+    [Test]
     public void ToCompletion_records_a_cancelled_remediation_as_cancelled()
     {
         var completion = SchemaOperationService.ToCompletion(LatticeSchemaRemediationReport.Cancelled(2, "op-1"));

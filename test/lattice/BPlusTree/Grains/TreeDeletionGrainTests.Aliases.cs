@@ -173,6 +173,31 @@ public partial class TreeDeletionGrainTests
     }
 
     [Test]
+    public async Task Explicit_alias_is_refused_while_a_reservation_is_held_naming_the_holder()
+    {
+        // Issue #5289: an explicit alias honours the reservation, as delete does.
+        var (grain, _, _, _, _) = CreateGrain();
+        await grain.EnsureAliasUnreservedAsync();
+
+        await grain.BeginAliasChangeAsync("remediation:abc");
+        var refused = Assert.ThrowsAsync<InvalidOperationException>(() => grain.EnsureAliasUnreservedAsync());
+        Assert.That(refused!.Message,
+            Does.Contain(TreeId).And.Contain("'remediation:abc'").And.Contain("schema remediation or migration"));
+
+        await grain.EndAliasChangeAsync("remediation:abc");
+        await grain.EnsureAliasUnreservedAsync();
+
+        await grain.BeginAliasChangeAsync("resize:def");
+        Assert.That(() => grain.EnsureAliasUnreservedAsync(),
+            Throws.InvalidOperationException.With.Message.Contains("resize 'resize:def'"));
+        await grain.EndAliasChangeAsync("resize:def");
+
+        await grain.BeginAliasChangeAsync("orders/restore/1:revert");
+        Assert.That(() => grain.EnsureAliasUnreservedAsync(),
+            Throws.InvalidOperationException.With.Message.Contains("restore revert"));
+    }
+
+    [Test]
     public async Task Delete_pending_fences_alias_writes_during_controlled_registry_interleaving()
     {
         var (grain, _, _, factory, _) = CreateGrain();

@@ -332,8 +332,11 @@ internal sealed class LatticeSchemaRemediationGrain(
                         await RunBuildSliceAsync();
                         break;
                     case LatticeSchemaRemediationPhase.Cutover:
-                        await CutoverAsync();
-                        await CompleteAsync();
+                        if (await CutoverAsync())
+                        {
+                            await CompleteAsync();
+                        }
+
                         break;
                     default:
                         throw new InvalidOperationException(
@@ -1032,16 +1035,42 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// the alias swap, the remediation remains in Cutover with the target policy
     /// already installed and the alias reservation still held for retry or
     /// operator repair.
+    /// <para>
+    /// The cutover publishes only the copy of the tree it captured (issue #5289):
+    /// while the logical tree still resolves to the persisted
+    /// <see cref="SchemaRemediationState.SourcePhysicalTreeId"/>, or - on a resume
+    /// after the swap - to its own destination. Any other physical tree means an
+    /// alias change superseded the remediation, so it refuses: no policy is left
+    /// installed by it, nothing is swapped, the destination is discarded, and the
+    /// remediation ends aborted with no offending key and a reason naming the
+    /// supersession; the caller's finally releases the reservation. The check runs
+    /// before anything is written, and the swap is fenced on the same identity, so
+    /// a change landing between the two is refused at the registry and handled the
+    /// same way.
+    /// </para>
     /// </summary>
-    private async Task CutoverAsync()
+    /// <returns>
+    /// <see langword="true"/> when the destination is published;
+    /// <see langword="false"/> when the cutover was superseded and refused.
+    /// </returns>
+    private async Task<bool> CutoverAsync()
     {
         var destinationTreeId = state.State.DestinationTreeId!;
         var operationId = state.State.OperationId!;
-        var sourcePhysical = state.State.SourcePhysicalTreeId!;
+
+        // Null only on a remediation persisted before the source was captured, which
+        // has nothing to fence on and keeps the unfenced behaviour.
+        var sourcePhysical = state.State.SourcePhysicalTreeId;
 
         // The destination is a fresh, never-aliased tree, so its physical id equals
         // its logical id.
         var destinationPhysical = destinationTreeId;
+
+        if (await SupersedingCopyAsync(sourcePhysical, destinationPhysical) is { } supersededBeforeCutover)
+        {
+            await RefuseSupersededAsync(sourcePhysical!, supersededBeforeCutover);
+            return false;
+        }
 
         // Arm enforcement BEFORE the alias swap so there is no window in which the
         // remediated destination is live (logical-alias-routed) yet unenforced. The
@@ -1058,10 +1087,14 @@ internal sealed class LatticeSchemaRemediationGrain(
         // the build but does not change it: the policy is keyed by the logical tree
         // id, so the alias flip leaves it governing the re-stamped destination
         // unchanged. (Tightening a policy is the separate enforcement path.)
+        LatticeSchemaPolicy? previousPolicy = null;
+        var installedPolicy = false;
         if (state.State.Mode == SchemaRemediationMode.Transform)
         {
-            await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+            previousPolicy = await policyStore!.GetPolicyAsync(TreeId);
+            await policyStore.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
             policyProvider!.Invalidate(TreeId);
+            installedPolicy = true;
         }
 
         // Carry the destination's map onto the logical entry before the swap (#4250).
@@ -1083,16 +1116,39 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             // Forced (#4206), and pinned to the source so a resume does not follow
             // the installed alias to the destination.
-            var resolvedSource = await grainFactory.GetGrain<ILattice>(sourcePhysical).GetRoutingAsync(forceRefresh: true);
-            retainedRouting = resolvedSource with { PhysicalTreeId = sourcePhysical };
+            var resolvedSource = await grainFactory.GetGrain<ILattice>(sourcePhysical!).GetRoutingAsync(forceRefresh: true);
+            retainedRouting = resolvedSource with { PhysicalTreeId = sourcePhysical! };
         }
 
         // Repoint the logical tree to the remediated destination, moving the
         // destination's map onto the logical entry in the same registry write
         // (#4336), so no reader pairs one copy with the other's map. The map the
-        // swap replaced is the source's final layout.
-        var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(grainFactory, TreeId, destinationPhysical);
-        retainedRouting ??= new RoutingInfo(sourcePhysical, finalReplacedMap ?? replacedMap!);
+        // swap replaced is the source's final layout. Fenced on the captured source
+        // (#5289): a swap superseded since the check above is refused, and the
+        // remediation then backs out the policy it installed and refuses.
+        ShardMap? finalReplacedMap;
+        try
+        {
+            finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(
+                grainFactory, TreeId, destinationPhysical, expectedSourcePhysicalTreeId: sourcePhysical);
+        }
+        catch (InvalidOperationException)
+        {
+            if (await SupersedingCopyAsync(sourcePhysical, destinationPhysical) is not { } superseding)
+            {
+                throw;
+            }
+
+            if (installedPolicy)
+            {
+                await RestorePolicyAsync(previousPolicy);
+            }
+
+            await RefuseSupersededAsync(sourcePhysical!, superseding);
+            return false;
+        }
+
+        retainedRouting ??= new RoutingInfo(sourcePhysical!, finalReplacedMap ?? replacedMap!);
 
         // Arm every source shard to redirect logical-alias-routed traffic onto the
         // destination. Without this, a stale stateless-worker routing activation
@@ -1113,6 +1169,67 @@ internal sealed class LatticeSchemaRemediationGrain(
         // Proactively invalidate this activation's cached alias / routing so a
         // caller observes the cutover without waiting for a reactivation.
         await grainFactory.GetGrain<ILattice>(TreeId).GetRoutingAsync(forceRefresh: true);
+        return true;
+    }
+
+    /// <summary>
+    /// The physical tree the logical tree now resolves to when that is neither the
+    /// captured <paramref name="sourcePhysical"/> nor the
+    /// <paramref name="destinationPhysical"/> a resumed cutover already swapped to -
+    /// that is, when another alias change superseded this remediation - otherwise
+    /// <see langword="null"/>. Always <see langword="null"/> without a captured source.
+    /// </summary>
+    private async Task<string?> SupersedingCopyAsync(string? sourcePhysical, string destinationPhysical)
+    {
+        if (sourcePhysical is null)
+        {
+            return null;
+        }
+
+        var current = await grainFactory.GetLatticeRegistry().ResolveAsync(TreeId);
+        return string.Equals(current, sourcePhysical, StringComparison.Ordinal)
+            || string.Equals(current, destinationPhysical, StringComparison.Ordinal)
+                ? null
+                : current;
+    }
+
+    /// <summary>
+    /// Puts back the policy the tree had before this cutover installed its target
+    /// policy, when a swap the cutover was about to make turned out superseded.
+    /// </summary>
+    private async Task RestorePolicyAsync(LatticeSchemaPolicy? previousPolicy)
+    {
+        if (previousPolicy is null)
+        {
+            await policyStore!.ClearPolicyAsync(TreeId);
+        }
+        else
+        {
+            await policyStore!.SetPolicyAsync(TreeId, previousPolicy);
+        }
+
+        policyProvider!.Invalidate(TreeId);
+    }
+
+    /// <summary>
+    /// Refuses a superseded cutover: discards the unpublished destination and ends
+    /// the remediation aborted, with no offending key and a reason naming the
+    /// physical tree that superseded it. The caller releases the reservation once
+    /// the remediation is no longer in progress.
+    /// </summary>
+    private async Task RefuseSupersededAsync(string sourcePhysical, string superseding)
+    {
+        logger.LogWarning(
+            "Schema remediation {OperationId} of tree '{TreeId}' refused its cutover: the tree now resolves to "
+            + "'{Superseding}', not its captured source '{Source}'.",
+            state.State.OperationId, TreeId, superseding, sourcePhysical);
+        await DiscardDestinationAsync(grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!));
+        await FinishAbortedAsync(LatticeSchemaRemediationReport.Superseded(
+            state.State.ScannedCount,
+            $"Tree '{TreeId}' now resolves to '{superseding}', not the physical tree '{sourcePhysical}' this "
+            + "remediation captured: another alias change superseded its publication. Nothing was cut over, and "
+            + "the remediated copy was discarded.",
+            state.State.OperationId!));
     }
 
     private async Task DiscardDestinationAsync(ILattice destination)
@@ -1217,7 +1334,11 @@ internal sealed class LatticeSchemaRemediationGrain(
         }
     }
 
-    private async Task AbortAsync(int scannedCount, string offendingKey, string reason, byte[] offendingValuePreview)
+    private Task AbortAsync(int scannedCount, string offendingKey, string reason, byte[] offendingValuePreview) =>
+        FinishAbortedAsync(LatticeSchemaRemediationReport.Aborted(
+            scannedCount, offendingKey, reason, offendingValuePreview, state.State.OperationId!));
+
+    private async Task FinishAbortedAsync(LatticeSchemaRemediationReport report)
     {
         var prevInProgress = state.State.InProgress;
         var prevPhase = state.State.Phase;
@@ -1226,9 +1347,8 @@ internal sealed class LatticeSchemaRemediationGrain(
 
         state.State.InProgress = false;
         state.State.Phase = LatticeSchemaRemediationPhase.Aborted;
-        state.State.ScannedCount = scannedCount;
-        state.State.LastReport = LatticeSchemaRemediationReport.Aborted(
-            scannedCount, offendingKey, reason, offendingValuePreview, state.State.OperationId!);
+        state.State.ScannedCount = report.ScannedCount;
+        state.State.LastReport = report;
         try
         {
             await WriteAndPublishStateAsync();

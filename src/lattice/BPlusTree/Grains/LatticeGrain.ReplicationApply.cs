@@ -173,22 +173,39 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public Task<ReplicationConditionalSetOutcome> ApplySetIfVersionAsync(
+    public async Task<VersionedValue> ReadStoredForApplyAsync(string key)
+    {
+        EnsureInternalOrigin(LatticeOperation.Replication);
+        ThrowIfSystemTree();
+        ArgumentNullException.ThrowIfNull(key);
+
+        // Issue #5294: the read half of the full-state fold resolves routing as a
+        // replication apply, so it reaches a held bootstrap copy (#4791) and checks
+        // the copy receive fence (#4593) on every resolution, exactly as its write
+        // half, ApplySetIfVersionAsync, does. Both halves then resolve the same
+        // copy. Stored form, as ReadStoredWithVersionAsync (issue #2813).
+        ReplicationApplyScope.Enter();
+        return await GetWithVersionCoreAsync(key, decode: false, CancellationToken.None);
+    }
+
+    /// <inheritdoc />
+    public async Task<ReplicationConditionalSetOutcome> ApplySetIfVersionAsync(
         string key,
         byte[] value,
         HybridLogicalClock expectedVersion)
     {
         EnsureInternalOrigin(LatticeOperation.Replication);
 
-        // The same gated body, and the same routing, as the public
-        // SetIfVersionAsync this replaces in the applier's read-merge-write fold:
-        // the write interceptor judges the value exactly as it judges any write
-        // through the choke point. Only the result is richer, so the applier can
-        // tell a diverted value from a version miss (issue #5265). No
-        // ReplicationApplyScope is entered: the fold's read,
-        // ReadStoredWithVersionAsync, routes without one, and the write must
-        // resolve the same physical tree as the read or every attempt misses.
-        return SetIfVersionGatedAsync(key, value, expectedVersion, CancellationToken.None);
+        // The same gated body as the public SetIfVersionAsync: the write
+        // interceptor judges the value exactly as it judges any write through the
+        // choke point, and the richer result tells a diverted value from a version
+        // miss (issue #5265). Issue #5294: routed as a replication apply, so the
+        // copy receive fence and the bootstrap-hold routing apply to the fold's
+        // write as to every other replicated write. Its read half,
+        // ReadStoredForApplyAsync, routes under the same scope, so both resolve
+        // the same copy.
+        ReplicationApplyScope.Enter();
+        return await SetIfVersionGatedAsync(key, value, expectedVersion, CancellationToken.None);
     }
 
     /// <inheritdoc />
