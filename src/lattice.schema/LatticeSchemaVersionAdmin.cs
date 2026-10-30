@@ -106,8 +106,9 @@ internal sealed class LatticeSchemaVersionAdmin(
         var accepted = await grain
             .AcceptVersionMigrationAsync(schemaId, targetVersion, Guid.NewGuid().ToString("N"))
             .ConfigureAwait(false);
-        return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress: null, CancellationToken.None)
+        var report = await SchemaRemediationDriver.DriveAsync(grain, accepted, progress: null, CancellationToken.None)
             .ConfigureAwait(false);
+        return SchemaRemediationDriver.RequireTerminal(report);
     }
 
     /// <inheritdoc />

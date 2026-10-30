@@ -77,6 +77,7 @@ be quiet about one.
 | [`schema/`](schema/README.md) | `SchemaStageOrdering` | Enforcement and versioning stage order for every registration combination, the system-origin opt-in, per-stage strict flags, envelope handling, batch refusal semantics and writes below the check. |
 | [`schema/`](schema/README.md) | `SchemaDurableOperation` | Tracked schema-operation admission before a handle, idempotent starts, the runner and the durable sliced remediation it follows, cancellation before cutover, terminal reporting, the superseded follower, and runner silo loss with a fresh start resuming the remediation. |
 | [`schema/`](schema/README.md) | `SchemaComplianceScan` | Compliance scans: policy read once at the start, the ungoverned report, count then ordered non-snapshot scan, per-reason tallies, undecodable values counted non-compliant, rule count versus failure-reason count, and cancellation or loss with no report. |
+| [`view-numeric/`](view-numeric/README.md) | `MaterialisedViewNumeric` | Schema-independent Count/Sum extraction and encoding, retract/add membership across create, update, regroup, filter exit, reserved keys and delete, overlapping batches, durable publication obligations, operation identity, and filter-version and physical-copy rebind. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

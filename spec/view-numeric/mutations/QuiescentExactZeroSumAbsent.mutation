@@ -1,0 +1,14 @@
+# Encoding by total instead of membership: a group with a member whose numeric
+# is 0 is published as if it had no members.
+MODULE: QuiescentExactZeroSumAbsent
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: a batch publishes a live Sum group whose total is zero as absent
+PERTURBS: FlushBatch
+
+--- FIND
+               /\ pub' = [g \in Groups |-> IF g \in aff THEN Enc(s1[g]) ELSE pub[g]]
+--- REPLACE
+               /\ pub' = [g \in Groups |-> IF g \in aff
+                     THEN IF s1[g].sum = 0 THEN Absent ELSE Enc(s1[g]) ELSE pub[g]]
+--- END

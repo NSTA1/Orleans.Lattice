@@ -173,6 +173,25 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
+    public Task<ReplicationConditionalSetOutcome> ApplySetIfVersionAsync(
+        string key,
+        byte[] value,
+        HybridLogicalClock expectedVersion)
+    {
+        EnsureInternalOrigin(LatticeOperation.Replication);
+
+        // The same gated body, and the same routing, as the public
+        // SetIfVersionAsync this replaces in the applier's read-merge-write fold:
+        // the write interceptor judges the value exactly as it judges any write
+        // through the choke point. Only the result is richer, so the applier can
+        // tell a diverted value from a version miss (issue #5265). No
+        // ReplicationApplyScope is entered: the fold's read,
+        // ReadStoredWithVersionAsync, routes without one, and the write must
+        // resolve the same physical tree as the read or every attempt misses.
+        return SetIfVersionGatedAsync(key, value, expectedVersion, CancellationToken.None);
+    }
+
+    /// <inheritdoc />
     public async Task ApplyDeleteRangeAsync(
         string startInclusive,
         string endExclusive,

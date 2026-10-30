@@ -19,6 +19,14 @@ public interface ILatticeSchemaComplianceAdmin
     /// The scan is a pure read: it never mutates data. It is cancellable and reports
     /// best-effort progress via <see cref="LatticeSchemaComplianceReport.ScannedCount"/>.
     /// (Read authority.)
+    /// <para>
+    /// Each value is judged as a client read serves it. On a versioning-enabled tree a
+    /// stored value that cannot be decoded to the tree's target version (no registered
+    /// upcast path, or stamped newer than the target) is counted as non-compliant, under
+    /// the reason schema enforcement gives such a value ("The value's version envelope
+    /// cannot be decoded to the tree's target shape." followed by the decoder's
+    /// message), and the scan completes.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the scan.</param>

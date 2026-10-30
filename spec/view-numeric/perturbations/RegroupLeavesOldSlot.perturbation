@@ -1,0 +1,16 @@
+# A regroup adds the member to its new group's slot but never writes the
+# retracted old-group slot, so the old group keeps the member's contribution.
+MODULE: MaterialisedViewNumeric
+ROW: Flip
+FILE: src/lattice/Views/AggregationApplier.cs
+DETECTORS: AggregationMembershipAtomicityTests.ApplyAsync_regroup_retract_and_lost_response_keep_membership_atomic, MaterialisedViewNumericCompanionTests.Count_and_sum_follow_create_update_regroup_filter_exit_and_delete_exactly
+SUMMARY: the regroup flip omits the old group's decremented slot
+
+--- FIND
+        if (oldKey is not null && !sameSlot)
+        {
+            entries.Add(new KeyValuePair<string, byte[]>(oldKey, SlotValue(oldRow)));
+        }
+--- REPLACE
+        _ = oldRow;
+--- END

@@ -1,0 +1,13 @@
+# The captured batch slice installs both memberships but folds only the first
+# key's retract/add into the slots.
+MODULE: SlotsMatchMembershipBatchMissesKey
+TARGET: SlotsMatchMembership
+CLASS: Invariant
+SUMMARY: a batch flip folds only the first key's delta into the slots
+PERTURBS: FlushBatch
+
+--- FIND
+           s1 == Add(Retract(Add(Retract(slots, mem[1]), m1[1]), mem[2]), m1[2])
+--- REPLACE
+           s1 == Add(Retract(slots, mem[1]), m1[1])
+--- END

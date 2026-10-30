@@ -1,0 +1,13 @@
+# An operation id derived from the source key alone: the second ordinary write
+# to key 2 re-attaches to the first write's completed saga.
+MODULE: NoIdentityConflictDropsHlc
+TARGET: NoIdentityConflict
+CLASS: Invariant
+SUMMARY: the operation id omits the source HLC, so a later write to the key reuses an earlier write's id
+PERTURBS: Flip
+
+--- FIND
+           id == OrdinaryId(epoch, k, Hlc(e))
+--- REPLACE
+           id == OrdinaryId(epoch, k, 0)
+--- END
