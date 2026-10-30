@@ -10,9 +10,11 @@ namespace Orleans.Lattice.Schema;
 public interface ILatticeSchemaAdmin
 {
     /// <summary>
-    /// Sets or replaces the enforcement policy for <paramref name="treeId"/>,
-    /// enforced immediately on subsequent writes. Rejects an uncompilable regex at
-    /// this point. (<see cref="LatticeOperation.SchemaAdmin"/>.)
+    /// Sets or replaces the enforcement policy for <paramref name="treeId"/>. The
+    /// silo that serves the call enforces it on subsequent writes as soon as the
+    /// call returns; every other silo enforces it within
+    /// <see cref="LatticeSchemaEnforcementOptions.PropagationInterval"/>.
+    /// Rejects an uncompilable regex at this point. (<see cref="LatticeOperation.SchemaAdmin"/>.)
     /// </summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="policy">The policy to apply. Must not be <c>null</c>.</param>
@@ -23,7 +25,10 @@ public interface ILatticeSchemaAdmin
 
     /// <summary>
     /// Clears the enforcement policy for <paramref name="treeId"/>. Returns
-    /// <c>true</c> when a policy was removed. (<see cref="LatticeOperation.SchemaAdmin"/>.)
+    /// <c>true</c> when a policy was removed. Takes effect on the serving silo when
+    /// the call returns and on every other silo within
+    /// <see cref="LatticeSchemaEnforcementOptions.PropagationInterval"/>.
+    /// (<see cref="LatticeOperation.SchemaAdmin"/>.)
     /// </summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the write.</param>

@@ -867,7 +867,8 @@ internal sealed class LatticeSchemaRemediationGrain(
         // guards the source's logical id for the brief instant before the swap - it
         // can never reject an existing destination value. Evict the local policy
         // cache eagerly (as the admin does) so the coordinating silo enforces the new
-        // policy on its next write without waiting for the change feed to propagate.
+        // policy on its next write; every other silo follows the cluster-wide policy
+        // epoch within the propagation interval (#5238).
         //
         // Only the enforcement-transform mode installs a policy. A pure version
         // migration validates each value against the tree's EXISTING policy during

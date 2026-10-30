@@ -70,4 +70,10 @@ internal static class SchemaTypeAliases
 
     /// <summary>Alias for <see cref="LatticeSchemaComplianceRuleCount"/>.</summary>
     internal const string LatticeSchemaComplianceRuleCount = "ols.cc";
+
+    /// <summary>Alias for <see cref="SchemaConfigEpoch"/>.</summary>
+    internal const string SchemaConfigEpoch = "ols.ce";
+
+    /// <summary>Alias for <see cref="ISchemaConfigEpochGrain"/>.</summary>
+    internal const string ISchemaConfigEpochGrain = "ols.eg";
 }
