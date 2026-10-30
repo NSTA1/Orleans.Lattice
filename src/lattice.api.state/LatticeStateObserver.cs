@@ -111,7 +111,7 @@ internal sealed class LatticeStateObserver(
         // directly rather than flowing through the gated ILattice surface, so it
         // is the sole point that must honour the data-plane read policy for the
         // live stream. When a real access gate is registered (and the host did
-        // not opt out) resolve the caller subject once and decide tree access:
+        // not opt out) resolve the caller subject and decide current tree access:
         //   * an anonymous or unauthorized subject is denied outright and, like
         //     every other read surface, reported as not-found;
         //   * a whole-tree grant streams every change (null filter);
@@ -136,22 +136,7 @@ internal sealed class LatticeStateObserver(
         // source also yields the source's key filter. Partial grants require a
         // known key-preserving projection; filtering transformed output keys
         // would not protect their source keys. Unknown provenance fails closed.
-        Func<string, bool>? keyFilter = null;
-        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
-        if (subject is { } resolved)
-        {
-            var (allowed, filter) = LatticeViewTrees.IsViewTree(effectiveTreeId)
-                ? await LatticeStateViewSource.ResolveReadAccessAsync(
-                    services, _grainFactory, _visibility, effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false)
-                : await _visibility.ResolveTreeReadAccessAsync(
-                    effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false);
-            if (!allowed)
-            {
-                throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
-            }
-
-            keyFilter = filter;
-        }
+        await ResolveReadFilterAsync(effectiveTreeId, request.TreeId, cancellationToken).ConfigureAwait(false);
 
         var cursor = await SeedCursorAsync(physicalTreeId, partitions, request.ContinuationToken, cancellationToken)
             .ConfigureAwait(false);
@@ -173,6 +158,8 @@ internal sealed class LatticeStateObserver(
 
                 var grain = _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
                 var page = await grain.ReadAsync(cursor[partition], pageSize, cancellationToken).ConfigureAwait(false);
+                var keyFilter = await ResolveReadFilterAsync(
+                    effectiveTreeId, request.TreeId, cancellationToken).ConfigureAwait(false);
                 var pageEntries = page.Entries;
                 if (pageEntries.Count == 0)
                 {
@@ -181,6 +168,14 @@ internal sealed class LatticeStateObserver(
 
                 for (var i = 0; i < pageEntries.Count; i++)
                 {
+                    // A yield suspends even within a buffered page; never reuse
+                    // a verdict from before the consumer last resumed the feed.
+                    if (i > 0)
+                    {
+                        keyFilter = await ResolveReadFilterAsync(
+                            effectiveTreeId, request.TreeId, cancellationToken).ConfigureAwait(false);
+                    }
+
                     var sequenced = pageEntries[i];
                     // Advance the per-partition cursor past every entry read
                     // (emitted or filtered) so filtered entries are never
@@ -235,6 +230,30 @@ internal sealed class LatticeStateObserver(
     /// </summary>
     private static bool IsSystemTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal);
+
+    private async ValueTask<Func<string, bool>?> ResolveReadFilterAsync(
+        string effectiveTreeId,
+        string requestedTreeId,
+        CancellationToken cancellationToken)
+    {
+        var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (subject is not { } resolved)
+        {
+            return null;
+        }
+
+        var (allowed, filter) = LatticeViewTrees.IsViewTree(effectiveTreeId)
+            ? await LatticeStateViewSource.ResolveReadAccessAsync(
+                services, _grainFactory, _visibility, effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false)
+            : await _visibility.ResolveTreeReadAccessAsync(
+                effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false);
+        if (!allowed)
+        {
+            throw new KeyNotFoundException($"Tree '{requestedTreeId}' was not found.");
+        }
+
+        return filter;
+    }
 
     private async Task<long[]> SeedCursorAsync(
         string physicalTreeId,

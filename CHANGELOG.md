@@ -12,6 +12,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - Backup isolation.** Backup backing trees now require explicit grants or bootstrap administration. Default-allow and all-trees grants no longer expose captured bytes from denied source trees. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Auth`)
+
+- **Security - Topology boundaries.** Raw tree, shard and sub-path topology now requires unfiltered tree or view-source read access, preventing protected split keys from reaching prefix-only readers. Filtered entry scans remain available. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Api.State`)
+
+- **Security - Live-feed revocation.** Change feeds refresh caller read access across WAL pages and buffered consumer resumptions. Revoked grants end the stream; narrowed grants replace its key filter. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Api.State`)
+
 - **Security - View source provenance.** Partial source grants no longer expose re-keyed, history, aggregate or unknown view rows. Known key-preserving projections retain filtered access; whole-source grants are unchanged. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice.Api.State`)
 
 - **Security - Registry routing.** Authorization-enabled clusters refuse direct external calls to the internal tree registry, preventing forged physical routing entries from bypassing alias-target checks. Trusted infrastructure calls remain available. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice`)

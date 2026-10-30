@@ -1342,7 +1342,7 @@
         },
         {
           "id": "control-plane",
-          "check": "Tree is reserved auth, tenant-admin capability, tenant/app registry, membership/schema backing store, or * sentinel.",
+          "check": "Tree is reserved auth, tenant-admin capability, tenant/app registry, membership/schema/backup backing store, or * sentinel.",
           "on_true": "explicit-control-allow",
           "on_false": "strict-fence",
           "source": "src/lattice.auth/PolicyAccessGate.cs"
@@ -1409,7 +1409,7 @@
       "nodes": [
         {
           "id": "all-trees-deny",
-          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching deny.",
+          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, sys-backup-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching deny.",
           "on_true": "deny",
           "on_false": "collection-request",
           "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator"
@@ -1437,7 +1437,7 @@
         },
         {
           "id": "all-trees-allow",
-          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching allow.",
+          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, sys-backup-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching allow.",
           "on_true": "allow",
           "on_false": "tenant-layer-applies",
           "source": "src/lattice.auth/PolicyEvaluator.cs"

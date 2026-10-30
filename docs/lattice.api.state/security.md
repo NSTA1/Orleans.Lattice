@@ -40,6 +40,10 @@ Silo-internal **system trees** (the reserved `_lattice_*` prefix) are hidden fro
 
 With auth-backed visibility enabled, materialised-view reads and change subscriptions require source-tree read access. Partial source grants are supported only for locally known, key-preserving predicate projections. History, re-keyed, aggregate and unknown projections require an unfiltered source grant: their output keys cannot establish which source keys contributed the data. A refused read or subscription reports the view as not found.
 
+Raw topology (`GetTreeStructure`, including shard and sub-path requests) requires an unfiltered tree grant, or an unfiltered source grant for a view. Split boundaries can contain keys outside a partial reader's scope, so a prefix-only reader receives `TreeNotFound` with no roots; filtered entry scans remain available.
+
+Change subscriptions re-resolve the caller and read grant after each WAL page read and before continuing through buffered entries. Revocation ends the stream with not-found, including when a consumer resumes a partially consumed page; narrowing a grant replaces the key filter for subsequent notifications. These checks use the membership and policy services' current cached state and do not bypass their propagation delays.
+
 `CatalogRequest.IncludeSystemTrees` is an **operator-convenience filter, not a security boundary**: it only adds the trees a catalog hides by default to the listing for diagnostics (on `ListTrees` the internal `_lattice_` trees, the materialised-view backing trees and the `sys-` system data trees; on `ListViews` the `sys-` system views). It neither unlocks nor locks reading or observing their contents: the read and observation paths ignore the flag, rejecting the internal `_lattice_` trees outright while materialised-view and `sys-` system data trees stay readable and observable under the caller's ordinary per-tree read access, listed or not (a `sys-` name is refused outright under an asserted tenant). It must not be relied on to gate access.
 
 ## Default-deny posture

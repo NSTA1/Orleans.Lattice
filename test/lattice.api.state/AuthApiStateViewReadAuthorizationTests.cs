@@ -82,6 +82,24 @@ public sealed class AuthApiStateViewReadAuthorizationTests
         }
     }
 
+    [TestCase(PrefixReader, StateQueryStatus.TreeNotFound)]
+    [TestCase(Outsider, StateQueryStatus.TreeNotFound)]
+    [TestCase(SourceReader, StateQueryStatus.Found)]
+    public async Task GetTreeStructure_view_requires_an_unfiltered_source_grant(
+        string subject, StateQueryStatus expected)
+    {
+        using (AuthViewApiStateClusterFixture.AsSubject(subject))
+        {
+            var result = await _fixture.Query.GetTreeStructureAsync(
+                new StructureRequest { TreeId = _viewTreeId });
+
+            Assert.That(result.Status, Is.EqualTo(expected));
+            Assert.That(result.Roots.Count, expected == StateQueryStatus.Found
+                ? Is.GreaterThan(0)
+                : Is.Zero);
+        }
+    }
+
     [Test]
     public async Task ScanEntries_view_is_hidden_from_an_anonymous_caller()
     {
