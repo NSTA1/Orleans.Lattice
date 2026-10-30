@@ -1392,10 +1392,13 @@ internal sealed class WalCommitLogWriter(
         // Plain LWW Set/Delete records leave Mode at the enum default, so
         // for them we still consult the resolver - that is the seam a
         // replicated tree relies on to stamp its configured convergence
-        // mode onto every foreground write for cross-cluster typing.
+        // mode onto every foreground write for cross-cluster typing. It
+        // resolves under the logical tree (issue #5306): a derived physical
+        // copy's records carry the tree's declared mode, exactly as its leaf
+        // resolves it, so the copy's replay reconstructs the leaf's fold state.
         var resolvedMode = entry.Mode != LatticeMergeMode.LwwRegister
             ? entry.Mode
-            : modeResolver.Resolve(entry.TreeId) ?? LatticeMergeMode.LwwRegister;
+            : modeResolver.Resolve(optionsResolver.GetMetricTreeId(entry.TreeId)) ?? LatticeMergeMode.LwwRegister;
 
         var resolvedOrigin = string.IsNullOrEmpty(entry.OriginClusterId)
             ? clusterIdResolver.Resolve(entry.TreeId)

@@ -1120,7 +1120,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private byte[] FoldPreparedCrdtDelta(string key, byte[] delta, LatticeMergeMode mode)
     {
-        var treeId = ShapeTreeId(RequireBoundTreeId(key, mode, "the prepared CRDT-mode terminal-commit fold"));
+        var treeId = LogicalTreeId(RequireBoundTreeId(key, mode, "the prepared CRDT-mode terminal-commit fold"));
         var registry = ResolveCrdtShapeRegistry();
         var shape = registry.TryGet(treeId, mode)
             ?? throw new LatticeCrdtShapeNotRegisteredException(
@@ -1181,7 +1181,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private byte[] JoinCrdtStateIntoRow(string key, LatticeMergeMode mode, byte[] incomingState)
     {
-        var treeId = ShapeTreeId(RequireBoundTreeId(key, mode, "the CRDT state join"));
+        var treeId = LogicalTreeId(RequireBoundTreeId(key, mode, "the CRDT state join"));
         var shape = ResolveCrdtShapeRegistry().TryGet(treeId, mode)
             ?? throw new LatticeCrdtShapeNotRegisteredException(
                 "No CrdtShape is registered for tree '"
