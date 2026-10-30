@@ -158,19 +158,19 @@ source-superseded replay fixed for #4885.
   infinity poisons a Sum group: retracting it cannot restore a finite total.
   Non-integral doubles accumulate by retract/add, so an incrementally maintained
   Sum can differ from a rebuilt one by rounding. The model uses small integers
-  and defines no policy for either. Production symbols:
-  `AggregationApplier.ContributeNumericAsync`, `AggregationApplier.MaterialiseAccumulatorAsync`.
+  and defines no policy for either.
+  Production symbols: `AggregationApplier.ContributeNumericAsync`, `AggregationApplier.MaterialiseAccumulatorAsync`.
 - **A throwing selector stops the drain.** A group, value or filter selector
   that throws fails the pass before any publication and before the checkpoint
   advances, so the view stays at its last consistent state and retries the same
   entry; there is no dead-letter or skip policy for an unprojectable value, and
-  the model has no such event. Production symbols:
-  `AggregationLatticeViewProjection.Project`, `ViewMaintainerGrain.DrainAggregationAsync`.
+  the model has no such event.
+  Production symbols: `AggregationLatticeViewProjection.Project`, `ViewMaintainerGrain.DrainAggregationAsync`.
 - **Fixed script and shapes.** Two keys, two groups, one reserved group and one
   filter value are a fixed script, not every projection encoding, predicate or
   selector. Fanout greater than one, range deletes lowered to a rebuild,
-  min/max/set-union and custom folds are outside this module. Production symbols:
-  `AggregationLatticeViewProjection`, `LatticeFoldProjection`.
+  min/max/set-union and custom folds are outside this module.
+  Production symbols: `AggregationLatticeViewProjection`, `LatticeFoldProjection`.
 - **Staging, supersession closure and public snapshots are relied on.** Prepare
   staging before the decision, terminal horizons, the omitted-member replacement
   gate and the multi-group public snapshot of a batch are the obligations of
@@ -186,7 +186,8 @@ source-superseded replay fixed for #4885.
 - **Accumulative history is separate.** A revision-keyed history view keeps
   superseded revisions and adopts a changed version forward; that contract is
   checked by `MaterialisedViewAggregation`, not here, where a changed version
-  must rebuild. Production symbols: `HistoryLatticeViewProjection`.
+  must rebuild.
+  Production symbols: `HistoryLatticeViewProjection`.
 - **No schema component.** The extraction reads the stored value bytes directly;
   enforcement, version envelopes and upcasting are not installed in this model.
   No production symbol: the gap states the module's independence premise.
