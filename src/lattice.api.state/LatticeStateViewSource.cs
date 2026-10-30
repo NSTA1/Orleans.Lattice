@@ -30,6 +30,39 @@ namespace Orleans.Lattice.Api.State;
 internal static class LatticeStateViewSource
 {
     /// <summary>
+    /// Resolves view read access without treating a projected output key as source
+    /// provenance. Only a known key-preserving predicate projection can apply a
+    /// partial source grant; history, re-keyed, aggregate and unknown projections
+    /// require an unfiltered source grant.
+    /// </summary>
+    internal static async ValueTask<(bool Allowed, Func<string, bool>? KeyFilter)> ResolveReadAccessAsync(
+        IServiceProvider services,
+        IGrainFactory grainFactory,
+        LatticeStateVisibilityFilter visibility,
+        string treeId,
+        LatticeSubject subject,
+        CancellationToken cancellationToken)
+    {
+        var source = await ResolveAsync(services, grainFactory, treeId, cancellationToken).ConfigureAwait(false);
+        if (source is null)
+        {
+            return (false, null);
+        }
+
+        var access = await visibility.ResolveTreeReadAccessAsync(source, subject, cancellationToken).ConfigureAwait(false);
+        if (!access.Allowed || access.KeyFilter is null)
+        {
+            return access;
+        }
+
+        var registration = services.GetService<IViewCatalog>()?.TryGet(LatticeViewTrees.ViewNameFromTreeId(treeId));
+        return registration is { IsAggregation: false, Projection: PredicateLatticeViewProjection { HasKeySelector: false } }
+            && string.Equals(registration.SourceTreeId, source, StringComparison.Ordinal)
+                ? access
+                : (false, null);
+    }
+
+    /// <summary>
     /// Resolves the source tree id backing <paramref name="treeId"/>. Prefers the
     /// allocation-free local <see cref="IViewCatalog"/> (every startup-declared
     /// view and any runtime view rehydrated on this silo), then falls back to the

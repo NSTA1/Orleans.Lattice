@@ -10,6 +10,14 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
+### Security
+
+- **Security - View source provenance.** Partial source grants no longer expose re-keyed, history, aggregate or unknown view rows. Known key-preserving projections retain filtered access; whole-source grants are unchanged. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice.Api.State`)
+
+- **Security - Registry routing.** Authorization-enabled clusters refuse direct external calls to the internal tree registry, preventing forged physical routing entries from bypassing alias-target checks. Trusted infrastructure calls remain available. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice`)
+
+- **Security - Schema previews.** Schema backing trees now require explicit tree grants or bootstrap administration. Data-plane default-allow and all-trees grants no longer reveal dead-letter value previews from denied source trees. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice.Auth`)
+
 ### Changed
 
 - **Performance - App ownership calls.** Fresh structural app tree claims replace three registry fact reads with one, retaining retry freshness and foreign-alias checks. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice.Apps`)
