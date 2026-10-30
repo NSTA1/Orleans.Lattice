@@ -63,7 +63,7 @@ public partial class TreeShardSplitGrainTests
             .Returns(ci => Task.FromResult<ShardMap?>((ShardMap)ci[3]));
 
         // Stub source + target shards.
-        var sourceShard = Substitute.For<IShardRootGrain>();
+        var sourceShard = Substitute.For<IShardRootGrain>().ComposeMigrationFreeze();
         var targetShard = Substitute.For<IShardRootGrain>();
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(ci =>
         {

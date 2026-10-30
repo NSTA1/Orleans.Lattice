@@ -4,7 +4,7 @@ using Orleans.Lattice.BPlusTree;
 namespace Orleans.Lattice.Benchmark.Microbench;
 
 /// <summary>
-/// Warm-activation dispatch model for the two partition-head capture sites.
+/// Warm-activation dispatch model for partition heads, cache refresh and migration freeze.
 /// Yield and Delay1Ms model transport scheduling/latency, not Orleans throughput
 /// or product allocations. Cold activation still resolves options once.
 /// Run with --suite shardcontrol.
@@ -19,6 +19,12 @@ public class ShardControlCallBenchmarks
         SnapshotHead,
         /// <summary>Four head reads and one leaf page: six calls become five.</summary>
         MaterialiserLag,
+        /// <summary>Pending-key snapshot and cursor delta: two calls become one.</summary>
+        CacheRefresh,
+        /// <summary>Source leaf seal and Reject persistence: two calls become one.</summary>
+        SplitFreeze,
+        /// <summary>Donor leaf seal and Reject persistence: two calls become one.</summary>
+        ConsolidationFreeze,
     }
 
     /// <summary>The operation under measurement.</summary>
@@ -40,12 +46,17 @@ public class ShardControlCallBenchmarks
         var beforeCalls = _calls;
         _calls = 0;
         var after = AfterAsync().GetAwaiter().GetResult();
-        var expectedAfter = Path == Site.SnapshotHead ? 4 : 5;
+        var expectedAfter = Path switch
+        {
+            Site.SnapshotHead => 4,
+            Site.MaterialiserLag => 5,
+            _ => 1,
+        };
         if (before != after || beforeCalls != expectedAfter + 1 || _calls != expectedAfter)
             throw new InvalidOperationException("Shard control result or dispatch budget differs.");
     }
 
-    /// <summary>The previous per-request options registry read.</summary>
+    /// <summary>The previous separate registry/pending/seal dispatch followed by its remaining work.</summary>
     [Benchmark(Baseline = true)]
     public async Task<long> BeforeAsync()
     {
@@ -53,12 +64,17 @@ public class ShardControlCallBenchmarks
         return await CaptureAsync();
     }
 
-    /// <summary>The activation-cached options path; WAL heads are still fresh.</summary>
+    /// <summary>One fewer dispatch; the heads or constituent observations/writes remain ordered.</summary>
     [Benchmark]
     public Task<long> AfterAsync() => CaptureAsync();
 
     private async Task<long> CaptureAsync()
     {
+        if (Path is Site.CacheRefresh or Site.SplitFreeze or Site.ConsolidationFreeze)
+        {
+            await DispatchAsync();
+            return 42;
+        }
         var heads = await BoundedFanOut.RunAsync(4, BoundedFanOut.DefaultWidth, async partition =>
         {
             await DispatchAsync();

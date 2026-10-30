@@ -938,6 +938,12 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<StateDelta> GetDeltaSinceCursorAsync(LeafDeliveryCursor sinceCursor);
 
     /// <summary>
+    /// Captures pending keys before the cursor delta in one leaf turn, so a
+    /// cache refresh cannot pair a post-terminal pending set with pre-terminal rows.
+    /// </summary>
+    Task<(List<string> PendingKeys, StateDelta Delta)> GetCacheRefreshAsync(LeafDeliveryCursor sinceCursor);
+
+    /// <summary>
     /// Returns the set of keys that currently have a pending-tx mutation
     /// on this leaf (the saga has prepared a write but the registry has
     /// not yet recorded a terminal decision, OR the terminal has been

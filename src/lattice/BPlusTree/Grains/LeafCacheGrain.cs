@@ -614,9 +614,9 @@ internal sealed class LeafCacheGrain(
 
         var primaryLeaf = PrimaryLeaf;
 
-        // Refresh the pending-key set BEFORE fetching the delta. The
-        // ordering matters: a saga drain (TxCommit/TxAbort) between
-        // these two RPCs flips a leaf from "_pendingTx[txX]={K},
+        // Capture pending keys BEFORE the delta inside one leaf turn. The
+        // ordering mattered with separate calls: a saga drain (TxCommit/TxAbort)
+        // between observations flipped a leaf from "_pendingTx[txX]={K},
         // Entries[K]=pre" to "_pendingTx empty, Entries[K]=post". If
         // we fetched delta first, we could observe (pendingKeys=
         // empty, delta=pre) - the cache would then serve _cache[K]=
@@ -628,10 +628,8 @@ internal sealed class LeafCacheGrain(
         // leaf (which is post-drain, returns Entries=post) and the
         // sibling caches' post values are consistent. Under-claiming
         // a key as pending is a correctness-preserving over-
-        // approximation; over-claiming a key as fully cached is the
-        // bug we are avoiding.
-        var pendingKeys = await primaryLeaf.GetPendingKeysAsync();
-
+        // approximation; over-claiming a key as fully cached is the bug.
+        // The combined call retains that ordering without an intervening await.
         // Cursor-based delivery: decouples cache delivery from LWW
         // HLC ordering so cross-cluster applies whose source HLC is
         // below the destination leaf's published clock are still
@@ -640,7 +638,7 @@ internal sealed class LeafCacheGrain(
         // epoch match scans the leaf's per-key sequence map and
         // ships only entries newer than _deliveryCursor.Sequence.
         var priorCursor = _deliveryCursor;
-        var delta = await primaryLeaf.GetDeltaSinceCursorAsync(priorCursor);
+        var (pendingKeys, delta) = await primaryLeaf.GetCacheRefreshAsync(priorCursor);
 
         // Resolve the per-activation payload budget here, BEFORE the first
         // mutation of this activation's mirror state, so this await is the LAST

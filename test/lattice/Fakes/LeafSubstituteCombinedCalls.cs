@@ -16,6 +16,17 @@ namespace Orleans.Lattice.Tests.Fakes;
 /// </summary>
 internal static class LeafSubstituteCombinedCalls
 {
+    /// <summary>Preserves existing cache arrangements; call-budget tests override this composition.</summary>
+    internal static IBPlusLeafGrain ComposeCacheRefresh(this IBPlusLeafGrain leaf)
+    {
+        leaf.GetCacheRefreshAsync(Arg.Any<LeafDeliveryCursor>()).Returns(async call =>
+        {
+            var pending = await leaf.GetPendingKeysAsync();
+            return (pending, await leaf.GetDeltaSinceCursorAsync(call.Arg<LeafDeliveryCursor>()));
+        });
+        return leaf;
+    }
+
     /// <summary>
     /// Composes <see cref="IBPlusLeafGrain.GetKeyRangeAndNextSiblingAsync"/>
     /// from the substitute's own <see cref="IBPlusLeafGrain.GetKeyRangeAsync"/>

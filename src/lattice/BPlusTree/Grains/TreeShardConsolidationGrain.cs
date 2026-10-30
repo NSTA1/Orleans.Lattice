@@ -794,8 +794,7 @@ internal sealed class TreeShardConsolidationGrain(
 
         // Seal the donor's leaves first so no read crosses the freeze
         // observing an unsealed leaf under a frozen shard.
-        await donor.MarkLeavesMovedAwayAsync(slots, vsc);
-        await donor.EnterRejectPhaseAsync();
+        await donor.SealMovedSlotsAndEnterRejectAsync(slots, vsc);
 
         // Authoritative final sweep over the now-frozen donor. Unbounded on
         // purpose: the donor's folded slots can no longer change, and leaving

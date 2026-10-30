@@ -140,6 +140,13 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
+    public async Task SealMovedSlotsAndEnterRejectAsync(int[] sortedMovedSlots, int virtualShardCount)
+    {
+        await MarkLeavesMovedAwayAsync(sortedMovedSlots, virtualShardCount);
+        await EnterRejectPhaseAsync();
+    }
+
+    /// <inheritdoc />
     public async Task EnterRejectPhaseAsync()
     {
         var sip = state.State.SplitInProgress;

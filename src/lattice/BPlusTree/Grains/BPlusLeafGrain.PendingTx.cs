@@ -2316,6 +2316,11 @@ internal sealed partial class BPlusLeafGrain
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        return GetPendingKeysCore();
+    }
+
+    private List<string> GetPendingKeysCore()
+    {
         if (_pendingTx is null || _pendingTx.Count == 0)
             return new List<string>();
 

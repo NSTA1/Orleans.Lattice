@@ -740,15 +740,10 @@ internal sealed class TreeShardSplitGrain(
         // already recorded under the same virtual shard count.
         var movedSlotsForMark = state.State.MovedSlots.ToArray();
         var vscForMark = state.State.OriginalShardMap!.Slots.Length;
-        await source.MarkLeavesMovedAwayAsync(movedSlotsForMark, vscForMark);
-
-        // Source enters reject mode AFTER the leaves are marked. See
-        // the ordering invariant in the method summary.
-        // EnterRejectPhaseAsync is idempotent under crash recovery: a
-        // coordinator re-entry into SwapAsync after a crash between
-        // this call and the registry flip below finds the source
-        // already in Reject and the call returns immediately.
-        await source.EnterRejectPhaseAsync();
+        // Source enters reject mode AFTER the leaves are marked, in one turn.
+        // Both operations remain idempotent under crash recovery: re-entry
+        // repeats the leaf seals, then skips the already-persisted Reject write.
+        await source.SealMovedSlotsAndEnterRejectAsync(movedSlotsForMark, vscForMark);
 
         // Final authoritative drain BEFORE the registry map flips.
         //

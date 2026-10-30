@@ -64,6 +64,7 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [TestCase(nameof(IShardRootGrain.EnterRejectPhaseAsync))]
     [TestCase(nameof(IShardRootGrain.CompleteSplitAsync))]
     [TestCase(nameof(IShardRootGrain.MarkLeavesMovedAwayAsync))]
+    [TestCase(nameof(IShardRootGrain.SealMovedSlotsAndEnterRejectAsync))]
     [TestCase(nameof(IShardRootGrain.GetAsync))]
     public void ClassifyIncomingTurn_treats_split_and_fold_transitions_and_serial_reads_as_serial(string methodName)
     {

@@ -74,7 +74,7 @@ public partial class LeafCacheGrainTests
         // on. Default behaviour returns an empty delta and a tree id;
         // tests can override via .Returns(...) before exercising the
         // cache.
-        var mockPrimary = Substitute.For<IBPlusLeafGrain>();
+        var mockPrimary = Substitute.For<IBPlusLeafGrain>().ComposeCacheRefresh();
         mockPrimary.GetTreeIdAsync().Returns("test-tree");
         mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
@@ -140,7 +140,7 @@ public partial class LeafCacheGrainTests
         var unique = $"crosssilo-{Guid.NewGuid():N}";
         var leafId = GrainId.Create("leaf", unique);
 
-        var mockPrimary = Substitute.For<IBPlusLeafGrain>();
+        var mockPrimary = Substitute.For<IBPlusLeafGrain>().ComposeCacheRefresh();
         mockPrimary.GetTreeIdAsync().Returns("test-tree");
         mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
@@ -188,7 +188,7 @@ public partial class LeafCacheGrainTests
         var leafId = GrainId.Create("leaf", unique);
 
         var first = BPlusLeafGrainTests.CreateLeafGrainForCrossFixtureUse(replicaId: unique);
-        var mockPrimary = Substitute.For<IBPlusLeafGrain>();
+        var mockPrimary = Substitute.For<IBPlusLeafGrain>().ComposeCacheRefresh();
         mockPrimary.GetTreeIdAsync().Returns("test-tree");
         mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
@@ -257,7 +257,7 @@ public partial class LeafCacheGrainTests
         var unique = $"aba-{Guid.NewGuid():N}";
         var leafId = GrainId.Create("leaf", unique);
 
-        var mockPrimary = Substitute.For<IBPlusLeafGrain>();
+        var mockPrimary = Substitute.For<IBPlusLeafGrain>().ComposeCacheRefresh();
         mockPrimary.GetTreeIdAsync().Returns("test-tree");
         mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 
@@ -324,7 +324,7 @@ public partial class LeafCacheGrainTests
         var unique = $"replaypublish-{Guid.NewGuid():N}";
         var leafId = GrainId.Create("leaf", unique);
 
-        var mockPrimary = Substitute.For<IBPlusLeafGrain>();
+        var mockPrimary = Substitute.For<IBPlusLeafGrain>().ComposeCacheRefresh();
         mockPrimary.GetTreeIdAsync().Returns("test-tree");
         mockPrimary.GetDeltaSinceCursorAsync(Arg.Any<LeafDeliveryCursor>()).Returns(EmptyDelta());
 

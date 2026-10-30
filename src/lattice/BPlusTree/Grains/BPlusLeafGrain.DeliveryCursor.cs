@@ -145,6 +145,21 @@ internal sealed partial class BPlusLeafGrain
         await AwaitReplayBarrierAsync();
 
         EnsureInternalOrigin(LatticeOperation.RangeRead);
+        return GetDeltaSinceCursorCore(sinceCursor);
+    }
+
+    /// <inheritdoc />
+    public async Task<(List<string> PendingKeys, StateDelta Delta)> GetCacheRefreshAsync(LeafDeliveryCursor sinceCursor)
+    {
+        await AwaitReplayBarrierAsync();
+
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+        var pendingKeys = GetPendingKeysCore();
+        return (pendingKeys, GetDeltaSinceCursorCore(sinceCursor));
+    }
+
+    private StateDelta GetDeltaSinceCursorCore(LeafDeliveryCursor sinceCursor)
+    {
         EnsureDeliveryEpochInitialized();
         var current = new LeafDeliveryCursor
         {
