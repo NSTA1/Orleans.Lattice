@@ -30,6 +30,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Peer maintenance calls.** Re-add and barrier cleanup use fewer grain calls; decommission combines marker reads with durable writes and batches verdicts by encoded registry owner, retaining import fences, delegation and retention. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214), [#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
+- **Performance - Subtree structure reads.** Targeted structure queries combine physical-tree ownership checks and topology retrieval in one grain call instead of two. Foreign or unbound nodes are rejected before traversal. ([#5260](https://github.com/NSTA1/Orleans.Lattice/pull/5260)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
+
 - **Performance - Merkle node reads.** Anti-entropy reads each internal node's digest and routing table in one grain call instead of two, retaining the digest option gate and read-only topology traversal. ([#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
 - **Performance - Cache and migration calls.** Cache refresh, split freeze and consolidation freeze each replace two grain calls with one, preserving pending-before-delta reads, durable leaf seals, Reject and final-drain ordering. ([#5202](https://github.com/NSTA1/Orleans.Lattice/pull/5202)) (`Orleans.Lattice`)
@@ -42,7 +44,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Leaf binding calls.** Root leaf creation and single-key or batched CRDT self-heal each remove one grain call, retaining separate durable binding writes, birth protection and retry behavior. ([#5139](https://github.com/NSTA1/Orleans.Lattice/pull/5139)) (`Orleans.Lattice`)
 
-- **Performance - Internal-node construction.** Root promotion, bulk-load internal levels and split-sibling recovery each combine tree binding and initialization into one grain call, preserving durability and recovery ordering. ([#5133](https://github.com/NSTA1/Orleans.Lattice/pull/5133)) (`Orleans.Lattice`)
+- **Performance - Structural seeding.** Internal construction combines tree binding and initialization; leaf and internal child adoption combine parent binding and digest reads. Durable writes, replay barriers, gate ordering and recovery behavior are unchanged. ([#5133](https://github.com/NSTA1/Orleans.Lattice/pull/5133), [#5260](https://github.com/NSTA1/Orleans.Lattice/pull/5260)) (`Orleans.Lattice`)
 
 ### Fixed
 
