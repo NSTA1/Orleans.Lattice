@@ -107,6 +107,9 @@ lattice	formal-tlc-view-ready-closure	deterministic	0.65
 lattice	formal-tlc-view-source-admission	deterministic	0.91
 lattice	formal-tlc-view-resolved-identity	deterministic	0.30
 lattice	formal-tlc-view-joint-repair	deterministic	0.63
+# formal-tlc-view-numeric (#5232) is a provisional local measurement of its
+# 23 cases until a receipt-free CI run measures it.
+lattice	formal-tlc-view-numeric	deterministic	1.50
 lattice	formal-tlc-tree-lifecycle	deterministic	0.65
 lattice	formal-tlc-anti-entropy	deterministic	3.56
 lattice	formal-tlc-anti-entropy-2	deterministic	5.10

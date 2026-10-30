@@ -1,0 +1,12 @@
+# Flushing a batch without consulting its decision.
+MODULE: AbortedContributesNothingFlushesAbort
+TARGET: AbortedContributesNothing
+CLASS: Invariant
+SUMMARY: an aborted batch is flipped into the view
+PERTURBS: FlushBatch
+
+--- FIND
+       IN IF decision[u] = "commit" /\ ~Registered(TxId(u))
+--- REPLACE
+       IN IF ~Registered(TxId(u))
+--- END
