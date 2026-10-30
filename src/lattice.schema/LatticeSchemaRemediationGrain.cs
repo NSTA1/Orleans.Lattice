@@ -675,16 +675,29 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// holds exactly what the original served. A key a point read finds absent is
     /// skipped for the same reason.
     /// </para>
+    /// <para>
+    /// A schema-version migration reads the <b>stored</b> form: it scans keys only
+    /// and point-reads each value with <see cref="ReadStoredManyAsync"/>. The
+    /// client-facing entry scan and multi-get strip the envelope and upcast to the
+    /// tree's target, throwing <see cref="NotSupportedException"/> on a value they
+    /// cannot upcast before the per-value rewrite runs, so the migration threw and
+    /// stayed in flight holding the alias reservation instead of aborting (issue
+    /// #5208). Reading the stored form hands each value to
+    /// <see cref="LatticeSchemaVersionMigration.Migrate"/>, which upcasts it from its
+    /// own stamped version to the migration's target and whose failure the slice
+    /// turns into an abort.
+    /// </para>
     /// </summary>
     private async Task<SourceSlice> ReadSliceAsync(ILattice source, int sliceSize)
     {
         var keys = new List<string>(Math.Min(sliceSize, 1024));
+        var storedForm = state.State.Mode == SchemaRemediationMode.SchemaVersionMigration;
         ExceptionDispatchInfo? fault = null;
         try
         {
-            await foreach (var entry in source.ScanEntriesAsync(startInclusive: After(state.State.ScanCursor)))
+            await foreach (var key in ScanKeysAfterCursorAsync(source, storedForm))
             {
-                keys.Add(entry.Key);
+                keys.Add(key);
                 if (keys.Count == sliceSize)
                 {
                     break;
@@ -704,7 +717,9 @@ internal sealed class LatticeSchemaRemediationGrain(
             return new SourceSlice([], LastScannedKey: null, exhausted, Fault: null);
         }
 
-        var values = await source.GetManyAsync(keys);
+        var values = storedForm
+            ? await ReadStoredManyAsync(keys)
+            : await source.GetManyAsync(keys);
         var entries = new List<KeyValuePair<string, byte[]>>(values.Count);
         foreach (var key in keys)
         {
@@ -715,6 +730,58 @@ internal sealed class LatticeSchemaRemediationGrain(
         }
 
         return new SourceSlice(entries, keys[^1], exhausted, fault);
+    }
+
+    /// <summary>
+    /// The source's keys after the durable cursor, in key order. A schema-version
+    /// migration (<paramref name="keysOnly"/>) scans keys only: the entry scan runs
+    /// the client-facing decoding read on each value, which throws on a value it
+    /// cannot upcast (issue #5208), and the slice never uses the scanned values.
+    /// </summary>
+    private async IAsyncEnumerable<string> ScanKeysAfterCursorAsync(ILattice source, bool keysOnly)
+    {
+        var start = After(state.State.ScanCursor);
+        if (keysOnly)
+        {
+            await foreach (var key in source.ScanKeysAsync(startInclusive: start))
+            {
+                yield return key;
+            }
+
+            yield break;
+        }
+
+        await foreach (var entry in source.ScanEntriesAsync(startInclusive: start))
+        {
+            yield return entry.Key;
+        }
+    }
+
+    /// <summary>
+    /// Point-reads the stored form of each of <paramref name="keys"/> - the value
+    /// with its schema-version envelope intact, no upcast - routed to each key's
+    /// owner. Absent and tombstoned keys are omitted.
+    /// </summary>
+    private async Task<Dictionary<string, byte[]>> ReadStoredManyAsync(List<string> keys)
+    {
+        var reader = grainFactory.GetGrain<IReplicationApplyGrain>(TreeId);
+        var reads = new Task<VersionedValue>[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+        {
+            reads[i] = reader.ReadStoredWithVersionAsync(keys[i]);
+        }
+
+        await Task.WhenAll(reads);
+        var values = new Dictionary<string, byte[]>(keys.Count, StringComparer.Ordinal);
+        for (var i = 0; i < keys.Count; i++)
+        {
+            if (reads[i].Result.Value is { } value)
+            {
+                values[keys[i]] = value;
+            }
+        }
+
+        return values;
     }
 
     /// <summary>

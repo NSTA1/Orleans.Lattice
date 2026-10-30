@@ -64,11 +64,15 @@ public interface ILatticeSchemaVersionAdmin
     /// immediately for new writes; the migration then re-stamps existing values by
     /// upcasting each through the registered upcaster chain and re-enveloping it at
     /// the new target, so steady-state reads stop paying the per-read upcast cost.
-    /// It aborts on the first value that cannot be upcast, naming the offending key
-    /// and a value preview and leaving the tree's data untouched; the target version
-    /// advance is already committed and is not rolled back. If the tree has an
-    /// enforcement policy, the re-stamped values are validated against it during the
-    /// build; the policy itself is left unchanged. (<see cref="LatticeOperation.SchemaAdmin"/>.)
+    /// It aborts on the first value that cannot be upcast (no registered hop, or a
+    /// version newer than the target), naming the offending key and a value preview
+    /// and leaving the tree's data untouched; the abort is returned, not thrown, and
+    /// it ends the migration and releases the tree's alias reservation, so the tree
+    /// can be deleted, or the missing hop registered and a new migration started. The
+    /// target version advance is already committed and is not rolled back. If the
+    /// tree has an enforcement policy, the re-stamped values are validated against it
+    /// during the build; the policy itself is left unchanged.
+    /// (<see cref="LatticeOperation.SchemaAdmin"/>.)
     /// </summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="newTargetVersion">The new target version. Must be greater than the current target.</param>
@@ -85,7 +89,9 @@ public interface ILatticeSchemaVersionAdmin
     /// target version - the eager pass an operator or a retry can invoke repeatedly
     /// without advancing the target. It is a no-op success when the tree is already
     /// fully migrated, resumes an in-flight migration idempotently, and aborts on the
-    /// first value that cannot be upcast, leaving the tree's data untouched.
+    /// first value that cannot be upcast (no registered hop, or a version newer than
+    /// the target), leaving the tree's data untouched. The abort is returned, not
+    /// thrown, and it ends the migration and releases the tree's alias reservation.
     /// (<see cref="LatticeOperation.SchemaAdmin"/>.)
     /// </summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
