@@ -117,12 +117,12 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
             {
                 judged = await decoder.DecodeAsync(treeId, value, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+            catch (Exception ex) when (SchemaUndecodableValue.IsDecodeFailure(ex))
             {
                 // No reader can be served this value at the target shape (stamped
                 // newer than the target, no upcast path, or an upcast that cannot run
                 // over the body), so its body cannot be judged: fail closed.
-                reason = $"The value's version envelope cannot be decoded to the tree's target shape. {ex.Message}";
+                reason = SchemaUndecodableValue.Reason(ex);
                 return await ViolationAsync(compiled, treeId, key, value, operation, reason, cancellationToken)
                     .ConfigureAwait(false);
             }
