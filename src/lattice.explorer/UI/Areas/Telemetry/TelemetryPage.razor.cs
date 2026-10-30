@@ -31,7 +31,6 @@ public partial class TelemetryPage : IDisposable
     private bool _loading = true;
     private bool _stale = true;
     private bool _operator;
-    private bool _operatorAsked;
     private int _generation;
 
     [Inject]
@@ -208,26 +207,19 @@ public partial class TelemetryPage : IDisposable
             _scope = null;
         }
 
-        if (!_operatorAsked && Tenancy.IsActive)
-        {
-            _operatorAsked = true;
-            _operator = Services.GetService<IExplorerTenantSwitcher>() is { } switcher
-                && await IsOperatorAsync(switcher);
-        }
-
         if (_stale)
         {
             await LoadAsync();
         }
 
-        Resolve(address);
+        Resolve(Address);
     }
 
-    private async Task<bool> IsOperatorAsync(IExplorerTenantSwitcher switcher)
+    private static async Task<bool> IsOperatorAsync(IExplorerTenantSwitcher switcher, CancellationToken cancellationToken)
     {
         try
         {
-            return await switcher.IsOperatorAsync(_lifetime.Token);
+            return await switcher.IsOperatorAsync(cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -237,27 +229,57 @@ public partial class TelemetryPage : IDisposable
 
     private async Task LoadAsync()
     {
+        var cancellation = _lifetime.Renew();
+        if (cancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
         _stale = false;
         _loading = true;
         _failure = null;
+        _operator = false;
         try
         {
-            _catalog = await Catalog.GetAsync(_lifetime.Token);
-            _plans = TelemetryBoards.Plan(_catalog, Tenancy.IsActive);
+            var catalog = await Catalog.GetAsync(cancellation);
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var isOperator = Tenancy.IsActive
+                && Services.GetService<IExplorerTenantSwitcher>() is { } switcher
+                && await IsOperatorAsync(switcher, cancellation);
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _catalog = catalog;
+            _plans = TelemetryBoards.Plan(catalog, Tenancy.IsActive);
+            _operator = isOperator;
         }
-        catch (OperationCanceledException) when (_lifetime.IsLeft)
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
             return;
         }
         catch (Exception)
         {
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
             _catalog = null;
             _plans = [];
             _failure = "The cluster did not return its metric catalogue. Try again in a moment.";
         }
         finally
         {
-            _loading = false;
+            if (!cancellation.IsCancellationRequested)
+            {
+                _loading = false;
+            }
         }
     }
 
@@ -291,12 +313,22 @@ public partial class TelemetryPage : IDisposable
 
     private void OnCatalogChanged() => _ = InvokeAsync(async () =>
     {
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _stale = true;
         _generation++;
         _now = Time.GetUtcNow();
         _denied.Clear();
         _scope = null;
         await LoadAsync();
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         Resolve(Address);
         StateHasChanged();
     });
