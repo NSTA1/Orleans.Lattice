@@ -107,10 +107,14 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// of a key depend on whether it happened to pre-exist the merge.
     /// </para>
     /// <para>
-    /// Replication's read-merge-write loops must therefore route here: both
-    /// halves of a state merge then see the stored form, the write-back
-    /// preserves it, and no fold-time upcast can occur - the determinism
-    /// requirement documented on <see cref="ILatticeEnvelopeCodec"/>.
+    /// Replication's read-merge-write loops must therefore read the stored form:
+    /// both halves of a state merge then see it, the write-back preserves it, and
+    /// no fold-time upcast can occur - the determinism
+    /// requirement documented on <see cref="ILatticeEnvelopeCodec"/>. The
+    /// replication applier's own fold reads through
+    /// <see cref="ReadStoredForApplyAsync"/>, the same read routed as a
+    /// replication apply; this unscoped read serves the migration, remediation,
+    /// compliance and view readers, which are not replicated writes.
     /// </para>
     /// <para>
     /// A materialised-view rebuild or reconcile of an unaliased source reads
@@ -129,6 +133,24 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     Task<VersionedValue> ReadStoredWithVersionAsync(string key);
 
     /// <summary>
+    /// The read half of a replication read-merge-write loop: reads the stored
+    /// form of <paramref name="key"/> and its version exactly as
+    /// <see cref="ReadStoredWithVersionAsync"/> does, but resolves routing as a
+    /// replication apply (issue #5294). The read therefore reaches the held copy
+    /// while a bootstrap hold routes applies to it, and refuses with
+    /// <see cref="CopyReceiveFencedException"/> a copy whose receive fence a
+    /// coordinated restore holds closed, or whose admission floor post-dates the
+    /// apply. <see cref="ApplySetIfVersionAsync"/> routes the same way, so the
+    /// version this read returns is the version of the copy that write targets.
+    /// </summary>
+    /// <param name="key">The key to read.</param>
+    /// <returns>
+    /// The stored value and its version, or an empty
+    /// <see cref="VersionedValue"/> when the key is absent or tombstoned.
+    /// </returns>
+    Task<VersionedValue> ReadStoredForApplyAsync(string key);
+
+    /// <summary>
     /// The write half of a replication read-merge-write loop: installs
     /// <paramref name="value"/> at <paramref name="key"/> only when the key's
     /// current version equals <paramref name="expectedVersion"/>, through the same
@@ -136,12 +158,14 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// interceptor included. Unlike that method, it tells a version miss apart
     /// from a value the interceptor diverted (issue #5265): under strict ingest a
     /// refused full-state CRDT row must be diverted once, not retried as a
-    /// compare-and-swap miss until the loop's budget runs out.
+    /// compare-and-swap miss until the loop's budget runs out. It routes as a
+    /// replication apply (issue #5294), like every other replicated write: the
+    /// copy receive fence and the bootstrap-hold routing apply to it.
     /// </summary>
     /// <param name="key">The key to write.</param>
     /// <param name="value">The value to install.</param>
     /// <param name="expectedVersion">
-    /// The version read by <see cref="ReadStoredWithVersionAsync"/>;
+    /// The version read by <see cref="ReadStoredForApplyAsync"/>;
     /// <see cref="HybridLogicalClock.Zero"/> expects the key absent.
     /// </param>
     /// <returns>Whether the value was applied, missed the version, or was diverted.</returns>
