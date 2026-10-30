@@ -79,6 +79,7 @@ be quiet about one.
 | [`schema/`](schema/README.md) | `SchemaDurableOperation` | Tracked schema-operation admission before a handle, idempotent starts, the runner and the durable sliced remediation it follows, cancellation before cutover, terminal reporting, the superseded follower, and runner silo loss with a fresh start resuming the remediation. |
 | [`schema/`](schema/README.md) | `SchemaComplianceScan` | Compliance scans: policy read once at the start, the ungoverned report, count then ordered non-snapshot scan, per-reason tallies, undecodable values counted non-compliant, rule count versus failure-reason count, and cancellation or loss with no report. |
 | [`view-numeric/`](view-numeric/README.md) | `MaterialisedViewNumeric` | Schema-independent Count/Sum extraction and encoding, retract/add membership across create, update, regroup, filter exit, reserved keys and delete, overlapping batches, durable publication obligations, operation identity, and filter-version and physical-copy rebind. |
+| [`schema/`](schema/README.md) | `SchemaStrictIngest` | Strict ingest at a replication receiver: judgement by the held policy regardless of arrival order, diversion only after a durable dead-letter record, failed, cancelled and lost-response lookups, appends and commits, re-delivery, parking and at-least-once records. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

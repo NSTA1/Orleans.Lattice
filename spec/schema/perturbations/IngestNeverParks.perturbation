@@ -1,0 +1,12 @@
+# EveryEntryAcknowledged: a persistently failing entry is parked and acknowledged.
+MODULE: SchemaStrictIngest
+ROW: EveryEntryAcknowledged
+FILE: src/lattice.replication/DeadLetterTrackingReplicationApplier.cs
+DETECTORS: DeadLetterTrackingReplicationApplierTests.ApplyAsync_parks_entry_when_threshold_reached
+SUMMARY: a persistently failing apply is never parked
+
+--- FIND
+        if (attempts < max)
+--- REPLACE
+        if (attempts < int.MaxValue)
+--- END

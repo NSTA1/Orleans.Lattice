@@ -1,0 +1,14 @@
+# A commit that failed is acknowledged as applied.
+MODULE: AckedResolvedFailedCommitAcknowledged
+TARGET: AckedResolved
+CLASS: Invariant
+SUMMARY: a failed commit is acknowledged
+PERTURBS: Commit
+
+--- FIND
+    /\ IF r = "Ok" THEN Acknowledge(cur) ELSE FailAttempt
+    /\ UNCHANGED <<val, late, pol, seen, judged, appended, reported, lostLeft, dlq, parked>>
+--- REPLACE
+    /\ IF r # "Lost" THEN Acknowledge(cur) ELSE FailAttempt
+    /\ UNCHANGED <<val, late, pol, seen, judged, appended, reported, lostLeft, dlq, parked>>
+--- END

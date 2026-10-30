@@ -1,0 +1,15 @@
+# OneRecordPerDelivery: a delivery appends at most one record.
+MODULE: SchemaStrictIngest
+ROW: OneRecordPerDelivery
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Refused_entry_is_diverted_only_after_its_record_is_durable
+SUMMARY: one delivery appends its record twice
+
+--- FIND
+        await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
+        return LatticeWriteDecision.DeadLetter(reason);
+--- REPLACE
+        await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
+        await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
+        return LatticeWriteDecision.DeadLetter(reason);
+--- END

@@ -6,8 +6,9 @@ enforcement and versioning write stages compose at the `LatticeGrain` write
 choke point, how a tree's schema family, upcaster catalog and target version
 evolve under read-time upcasting and eager migration, and how tracked schema
 operations and compliance scans are admitted, driven, cancelled, lost and
-reported. Further schema modules (strict ingest and dead-letter, remediation
-and migration, and the atomic, replication and tenant interactions) are added here
+reported, and how strict ingest is judged and diverted to the dead-letter queue
+at a replication receiver. Further schema modules (remediation and migration,
+and the atomic, replication and tenant interactions) are added here
 as they land, so every schema module shares one directory, one fingerprint
 group and the operators below.
 
@@ -20,6 +21,7 @@ group and the operators below.
 | `SchemaVersionFamily` | One versioned tree's upcaster catalog (startup declarations plus the append-only runtime registry: whole-or-nothing registrations, idempotent replay, refused renames and conflicting hops); the facade's target moves (registered, reachable and not lower while the catalog governs, an advance strictly monotonic); no config change or registration rewriting stored data; the read-time decode of every stored value, with explicit failures for a value newer than the target or with no path; and the eager migration that re-stamps at its own captured target and either cuts over read-equivalently or aborts naming the value, leaving the data untouched and the reservation released. | [`SchemaVersionFamilyRefinement.md`](SchemaVersionFamilyRefinement.md) |
 | `SchemaDurableOperation` | Tracked remediation, migration and advance-and-migrate operations over one tree: admission before a handle, idempotent starts, the in-process runner and the durable sliced remediation it follows, cooperative cancellation before cutover, terminal reporting (including the superseded follower of #5267), and a lost runner's silo with a fresh start resuming the remediation. | [`SchemaDurableOperationRefinement.md`](SchemaDurableOperationRefinement.md) |
 | `SchemaComplianceScan` | One tracked compliance scan: the policy read once at the start, the ungoverned short-circuit, the count before an ordered non-snapshot pass over a writable tree, per-reason tallies, undecodable values counted non-compliant (#5253), the rule count kept apart from the failure-reason count (#4966), and cancellation or a lost runner ending it with no report. | [`SchemaComplianceScanRefinement.md`](SchemaComplianceScanRefinement.md) |
+| `SchemaStrictIngest` | Strict ingest at a replication receiver: each entry judged by the policy its silo holds, whatever order it and its batch's decision arrived in; a refused entry diverted only once its dead-letter record is durable; policy lookups, appends and commits that fail, are cancelled or lose their response; the applier's re-throw and park; lost acknowledgements and re-delivery; at-least-once records; and a policy change that reaches the silo late. | [`SchemaStrictIngestRefinement.md`](SchemaStrictIngestRefinement.md) |
 
 Shared vocabulary, for later modules here: a value is `Raw(body)` or
 `Env(body, tag)` with `body` in `{"Good", "Bad"}` and `tag` in
@@ -52,15 +54,21 @@ every state and action property and leave the liveness properties on the base.
 `SchemaComplianceScan` checks two keys, one write and one policy change against
 a scan; its `TwoWrites` variant re-checks every state and action property with
 two writes racing the scan.
+property over two-entry atomic and non-atomic batches. `SchemaStrictIngest`
+checks one entry through two failures before the applier parks it, one lost
+acknowledgement and one policy change; its `TwoEntries` variant re-checks every
+state and action property over two entries, and leaves the liveness property on
+the base for the TLC budget.
 
 ## What is not modelled
 
 Each refinement note's `## Deliberate abstraction gaps` register is the
 authority. In short: writes below the choke point (plain LWW replication apply,
 backup restore, tree merge) are never validated or stamped, so strict ingest is
-not a universal validation guarantee; rule
-semantics, CRDT deltas and dead-letter durability are left to the models that
-own them. The version-family model treats an upcaster as a total function, fixes
+not a universal validation guarantee; dead-letter
+records are at least once (a re-delivered entry refused again is recorded again)
+and are never retired; rule semantics, CRDT deltas and the upcaster graph are
+left to the models that own them. The version-family model treats an upcaster as a total function, fixes
 the configured family, leaves the in-process admins' unchecked config writes and
 the per-silo config caches to their own gaps, does not replicate the runtime
 catalog across regions, and leaves migration phases and the quiescence they
@@ -92,3 +100,4 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Tlc
 | `SchemaVersionFamily` | 6 | 9 | 9 | 15 | 21 | 4,889 |
 | `SchemaDurableOperation` | 8 | 6 | 13 | 17 | 25 | 72,732 |
 | `SchemaComplianceScan` | 10 | 4 | 9 | 16 | 21 | 23,580 |
+| `SchemaStrictIngest` | 3 | 7 | 9 | 16 | 16 | 5,326 |

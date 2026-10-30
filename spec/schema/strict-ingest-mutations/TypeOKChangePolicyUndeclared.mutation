@@ -1,0 +1,12 @@
+# TypeOK pairing: an administrator installs a policy outside the model.
+MODULE: TypeOKChangePolicyUndeclared
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a policy change installs an undeclared policy
+PERTURBS: ChangePolicy
+
+--- FIND
+    /\ pol = 1 /\ pol' = 2
+--- REPLACE
+    /\ pol = 1 /\ pol' = 3
+--- END

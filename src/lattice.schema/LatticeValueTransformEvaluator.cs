@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -37,7 +38,25 @@ internal static class LatticeValueTransformEvaluator
     /// </summary>
     public static byte[] Evaluate(byte[]? value, in LatticeValueTransform transform)
     {
-        if (value is null || value.Length == 0)
+        if (value is null)
+        {
+            throw new InvalidOperationException(
+                "The value is null or empty; a value transform requires a UTF-8 JSON document.");
+        }
+
+        return Evaluate(value.AsMemory(), in transform);
+    }
+
+    /// <summary>
+    /// Evaluates <paramref name="transform"/> against the JSON document in
+    /// <paramref name="value"/>, which may be a view into a larger buffer (a stored
+    /// value past its schema-version envelope header), so a caller holding enveloped
+    /// bytes need not copy the body out first. The input is materialised as an array
+    /// only if a conditional predicate needs it, and then at most once.
+    /// </summary>
+    public static byte[] Evaluate(ReadOnlyMemory<byte> value, in LatticeValueTransform transform)
+    {
+        if (value.IsEmpty)
         {
             throw new InvalidOperationException(
                 "The value is null or empty; a value transform requires a UTF-8 JSON document.");
@@ -47,7 +66,7 @@ internal static class LatticeValueTransformEvaluator
         try
         {
             input = JsonNode.Parse(
-                value,
+                value.Span,
                 nodeOptions: new JsonNodeOptions { PropertyNameCaseInsensitive = true });
         }
         catch (JsonException ex)
@@ -56,11 +75,29 @@ internal static class LatticeValueTransformEvaluator
                 "The value is not a well-formed UTF-8 JSON document; the value transform cannot be applied.", ex);
         }
 
-        var output = ApplyDocument(transform, value, input, 0);
+        var inputBytes = new InputBytes(value);
+        var output = ApplyDocument(transform, ref inputBytes, input, 0);
         return Serialize(output);
     }
 
-    private static JsonNode? ApplyDocument(in LatticeValueTransform transform, byte[] inputBytes, JsonNode? input, int depth)
+    /// <summary>
+    /// The input document's bytes as the predicate evaluator needs them: a whole
+    /// array. A view over a whole array is handed through; a view into part of one is
+    /// copied on first use only and reused for every later conditional.
+    /// </summary>
+    private struct InputBytes(ReadOnlyMemory<byte> memory)
+    {
+        private byte[]? _array;
+
+        public byte[] Array => _array ??=
+            MemoryMarshal.TryGetArray(memory, out var segment)
+            && segment.Offset == 0
+            && segment.Count == segment.Array!.Length
+                ? segment.Array
+                : memory.ToArray();
+    }
+
+    private static JsonNode? ApplyDocument(in LatticeValueTransform transform, ref InputBytes inputBytes, JsonNode? input, int depth)
     {
         ThrowIfTooDeep(depth);
 
@@ -82,12 +119,12 @@ internal static class LatticeValueTransformEvaluator
         }
 
         foreach (var operation in operations)
-            ApplyOperation(operation, inputBytes, input, document, depth + 1);
+            ApplyOperation(operation, ref inputBytes, input, document, depth + 1);
 
         return document;
     }
 
-    private static void ApplyOperation(in LatticeValueTransform operation, byte[] inputBytes, JsonNode? input, JsonObject document, int depth)
+    private static void ApplyOperation(in LatticeValueTransform operation, ref InputBytes inputBytes, JsonNode? input, JsonObject document, int depth)
     {
         ThrowIfTooDeep(depth);
 
@@ -99,7 +136,7 @@ internal static class LatticeValueTransformEvaluator
                 var children = operation.Children;
                 if (children is null || children.Length != 1)
                     throw new InvalidOperationException("A SetMember operation must carry exactly one value-expression child.");
-                document[path] = EvaluateValue(children[0], inputBytes, input, depth + 1);
+                document[path] = EvaluateValue(children[0], ref inputBytes, input, depth + 1);
                 break;
             }
 
@@ -130,7 +167,7 @@ internal static class LatticeValueTransformEvaluator
         }
     }
 
-    private static JsonNode? EvaluateValue(in LatticeValueTransform expression, byte[] inputBytes, JsonNode? input, int depth)
+    private static JsonNode? EvaluateValue(in LatticeValueTransform expression, ref InputBytes inputBytes, JsonNode? input, int depth)
     {
         ThrowIfTooDeep(depth);
 
@@ -158,12 +195,12 @@ internal static class LatticeValueTransformEvaluator
                 // are rare relative to member reads, and reusing the public helper
                 // keeps the boolean semantics identical to push-down rather than
                 // reimplementing predicate evaluation over the parsed JsonNode.
-                bool matched = LatticePredicateEvaluation.Matches(inputBytes, expression.Condition);
-                return EvaluateValue(matched ? children[0] : children[1], inputBytes, input, depth + 1);
+                bool matched = LatticePredicateEvaluation.Matches(inputBytes.Array, expression.Condition);
+                return EvaluateValue(matched ? children[0] : children[1], ref inputBytes, input, depth + 1);
             }
 
             case LatticeValueTransformKind.Compute:
-                return EvaluateCompute(expression, inputBytes, input, depth + 1);
+                return EvaluateCompute(expression, ref inputBytes, input, depth + 1);
 
             default:
                 throw new InvalidOperationException(
@@ -171,7 +208,7 @@ internal static class LatticeValueTransformEvaluator
         }
     }
 
-    private static JsonNode? EvaluateCompute(in LatticeValueTransform expression, byte[] inputBytes, JsonNode? input, int depth)
+    private static JsonNode? EvaluateCompute(in LatticeValueTransform expression, ref InputBytes inputBytes, JsonNode? input, int depth)
     {
         var operands = expression.Children;
         if (operands is null || operands.Length == 0)
@@ -182,7 +219,7 @@ internal static class LatticeValueTransformEvaluator
             case LatticeComputeOperator.Coalesce:
                 foreach (var operand in operands)
                 {
-                    var candidate = EvaluateValue(operand, inputBytes, input, depth + 1);
+                    var candidate = EvaluateValue(operand, ref inputBytes, input, depth + 1);
                     if (candidate is not null)
                         return candidate;
                 }
@@ -193,7 +230,7 @@ internal static class LatticeValueTransformEvaluator
             {
                 var builder = new StringBuilder();
                 foreach (var operand in operands)
-                    builder.Append(RenderScalar(EvaluateValue(operand, inputBytes, input, depth + 1)));
+                    builder.Append(RenderScalar(EvaluateValue(operand, ref inputBytes, input, depth + 1)));
                 return JsonValue.Create(builder.ToString());
             }
 
