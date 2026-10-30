@@ -1,0 +1,13 @@
+# DiversionAckedOnlyWhenRecorded: the record is a committed write of its own (#5297).
+MODULE: SchemaStrictIngest
+ROW: DiversionAckedOnlyWhenRecorded
+FILE: src/lattice.schema/LatticeSchemaDeadLetterStore.cs
+DETECTORS: StrictIngestCommittedDeadLetterIntegrationTests.Refused_atomic_entry_prepared_before_the_decision_leaves_one_ordinary_committed_dead_letter_record, StrictIngestCommittedDeadLetterIntegrationTests.Refused_atomic_entry_prepared_before_the_decision_under_a_bootstrap_hold_leaves_one_ordinary_committed_dead_letter_record, StrictIngestCommittedDeadLetterIntegrationTests.Refused_crdt_atomic_entry_prepared_before_the_decision_leaves_one_ordinary_committed_dead_letter_record, SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together, SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_the_receivers_policy_refuses_is_dead_lettered_and_its_batch_siblings_commit_together
+SUMMARY: a refused prepare's record is staged under the batch's transaction and never committed
+
+--- FIND
+        using (LatticeCommittedWriteBoundary.Enter())
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+--- REPLACE
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+--- END
