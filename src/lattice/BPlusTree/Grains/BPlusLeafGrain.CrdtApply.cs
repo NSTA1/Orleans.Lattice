@@ -81,17 +81,18 @@ internal sealed partial class BPlusLeafGrain
             ?? FallbackCrdtShapeRegistry;
 
     /// <summary>
-    /// The tree id this leaf resolves a <see cref="CrdtShape"/> under (issue
-    /// #5300): the logical tree a derived physical copy backs - a resize's copy, a
+    /// The tree id this leaf resolves its tree-declared CRDT configuration under:
+    /// the logical tree a derived physical copy backs - a resize's copy, a
     /// bootstrap hold's held copy, a shadow-cutover restore's copy or a schema
     /// remediation's destination - read from the copy's registry entry
     /// (<c>DerivedFrom</c>) when the leaf's tree id was bound, else the bound id
-    /// itself. A host registers an OR-Map shape under the logical tree name, so
-    /// resolving it under a copy's physical id found nothing and every CRDT fold
-    /// and join on the copy faulted.
+    /// itself. A host registers an OR-Map shape (issue #5300) and declares a
+    /// replicated merge mode (issue #5306) under the logical tree name, so
+    /// resolving either under a copy's physical id found nothing: a shape lookup
+    /// faulted, and a merge-mode lookup silently read last-writer-wins.
     /// </summary>
     /// <param name="boundTreeId">The tree id the leaf is bound to.</param>
-    private string ShapeTreeId(string boundTreeId) =>
+    private string LogicalTreeId(string boundTreeId) =>
         _metricTreeId is { Length: > 0 } logicalTreeId ? logicalTreeId : boundTreeId;
 
     /// <summary>
@@ -202,7 +203,9 @@ internal sealed partial class BPlusLeafGrain
     /// terminal drain can fold its typed delta. The same resolver instance
     /// stamps <see cref="WalRecord.Mode"/> at WAL-write time, so the
     /// foreground commit and the activation-time replay derive an identical
-    /// mode and reconstruct the side-map deterministically.
+    /// mode and reconstruct the side-map deterministically. Both resolve under
+    /// the logical tree (issue #5306), so a derived physical copy of a
+    /// replicated CRDT tree merges in the tree's declared mode.
     /// </summary>
     private LatticeMergeMode ResolveMergeMode()
     {
@@ -212,7 +215,7 @@ internal sealed partial class BPlusLeafGrain
                 context.ActivationServices.GetService<ILatticeMergeModeResolver>();
             _mergeModeResolverResolved = true;
         }
-        return _resolvedMergeModeResolver?.Resolve(state.State.TreeId ?? string.Empty)
+        return _resolvedMergeModeResolver?.Resolve(LogicalTreeId(state.State.TreeId ?? string.Empty))
             ?? LatticeMergeMode.LwwRegister;
     }
 
@@ -273,7 +276,7 @@ internal sealed partial class BPlusLeafGrain
                 nameof(mode));
         }
 
-        var treeId = ShapeTreeId(RequireBoundTreeId(key, mode, "the typed CRDT delta apply"));
+        var treeId = LogicalTreeId(RequireBoundTreeId(key, mode, "the typed CRDT delta apply"));
         var registry = ResolveCrdtShapeRegistry();
         var shape = registry.TryGet(treeId, mode);
         if (shape is null)
