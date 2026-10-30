@@ -1,0 +1,13 @@
+# #5238: the change is owed only to the silo that served the admin call, so
+# every other silo keeps its cached setting with nothing on its way to evict it.
+MODULE: CacheCurrentOrPendingAdminSiloOnly
+TARGET: CacheCurrentOrPending
+CLASS: Invariant
+SUMMARY: a committed change is delivered to the admin's silo only
+PERTURBS: Change
+
+--- FIND
+    /\ pending' = [t \in Silos |-> TRUE]
+--- REPLACE
+    /\ pending' = [t \in Silos |-> t = s]
+--- END

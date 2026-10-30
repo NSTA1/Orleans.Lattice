@@ -1,0 +1,15 @@
+# An invalid local write is quietly dead-lettered instead of rejected.
+MODULE: LocalRefusalRejectsDeadLetters
+TARGET: LocalRefusalRejects
+CLASS: Action
+SUMMARY: a local refusal is diverted to the dead-letter tree
+PERTURBS: RunEnforcement
+
+--- FIND
+       THEN /\ phase' = "Done" /\ outcome' = "Rejected" /\ refusedBy' = "E"
+            /\ UNCHANGED <<ei, idx, val, kept, dropped, dlq>>
+--- REPLACE
+       THEN /\ phase' = "Done" /\ outcome' = "DeadLettered" /\ refusedBy' = "E"
+            /\ dlq' = dlq + 1
+            /\ UNCHANGED <<ei, idx, val, kept, dropped>>
+--- END

@@ -1,0 +1,12 @@
+# Strict ingest trusts an invalid entry instead of diverting it.
+MODULE: StrictIngestDivertsTrustsInvalid
+TARGET: StrictIngestDiverts
+CLASS: Action
+SUMMARY: enforcement accepts invalid strict ingest
+PERTURBS: RunEnforcement
+
+--- FIND
+       ELSE IF ~tStrictE
+--- REPLACE
+       ELSE IF TRUE
+--- END

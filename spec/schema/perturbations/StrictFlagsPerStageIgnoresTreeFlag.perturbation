@@ -1,0 +1,12 @@
+# StrictFlagsPerStage: a stage diverts only under its own per-tree flag.
+MODULE: SchemaStageOrdering
+ROW: StrictFlagsPerStage
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: LatticeSchemaWriteInterceptorTests.OnWriteAsync_non_strict_policy_trusts_ingest
+SUMMARY: enforcement dead-letters ingest on a tree whose policy is not strict
+
+--- FIND
+        if (!compiled.StrictIngest)
+--- REPLACE
+        if (false)
+--- END

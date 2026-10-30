@@ -1,0 +1,13 @@
+# The #5239 mechanism: enforcement judges an enveloped value without the read
+# decoder, so the envelope header fails a body policy.
+MODULE: SchemaStageOrdering
+ROW: ValidBodyNeverRefusedByEnforcement
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: SchemaEnforcementEnvelopedBodyTests.Local_rewrite_of_enveloped_value_with_compliant_body_is_accepted_verbatim, SchemaEnforcementEnvelopedBodyTests.Strict_ingest_of_enveloped_value_with_compliant_body_is_accepted_verbatim
+SUMMARY: an enveloped value with a compliant body is judged by its envelope bytes
+
+--- FIND
+            && decoder.IsActive(treeId))
+--- REPLACE
+            && false)
+--- END

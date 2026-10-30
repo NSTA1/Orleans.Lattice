@@ -1,0 +1,27 @@
+# Validation after the append: a rejected entry is already stored.
+MODULE: RefusalAppliesNothingAppendedFirst
+TARGET: RefusalAppliesNothing
+CLASS: Action
+SUMMARY: a rejected local write is appended before the rejection
+PERTURBS: RunEnforcement
+
+--- FIND
+       THEN /\ phase' = "Done" /\ outcome' = "Rejected" /\ refusedBy' = "E"
+            /\ UNCHANGED <<ei, idx, val, kept, dropped, dlq>>
+--- REPLACE
+       THEN /\ phase' = "Done" /\ outcome' = "Rejected" /\ refusedBy' = "E"
+            /\ stored' = Append(kept, val)
+            /\ UNCHANGED <<ei, idx, val, kept, dropped, dlq>>
+--- END
+--- FIND
+            /\ UNCHANGED outcome
+    /\ UNCHANGED <<config, origin, atomic, req, path, stored>>
+
+\* The versioning stage
+--- REPLACE
+            /\ UNCHANGED <<outcome, stored>>
+    /\ UNCHANGED <<config, origin, atomic, req, path>>
+    /\ (outcome' # "Rejected" => stored' = stored)
+
+\* The versioning stage
+--- END

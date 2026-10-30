@@ -1,0 +1,12 @@
+# WriteDecides: a refusal short-circuits the remaining stages.
+MODULE: SchemaStageOrdering
+ROW: WriteDecides
+FILE: src/lattice.schema/CompositeLatticeWriteInterceptor.cs
+DETECTORS: CompositeLatticeWriteInterceptorTests.OnWriteAsync_reject_short_circuits_remaining_stages
+SUMMARY: a refusal does not stop the chain, which then accepts
+
+--- FIND
+                    return decision;
+--- REPLACE
+                    break;
+--- END

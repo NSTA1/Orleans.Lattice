@@ -1,0 +1,14 @@
+# An invalid local write is treated like trusted ingest and committed.
+MODULE: ValidationBeforeCommitLocalAccepted
+TARGET: ValidationBeforeCommit
+CLASS: Action
+SUMMARY: enforcement does not reject an invalid local write
+PERTURBS: RunEnforcement
+
+--- FIND
+       ELSE IF origin = "Local"
+       THEN /\ phase' = "Done" /\ outcome' = "Rejected" /\ refusedBy' = "E"
+--- REPLACE
+       ELSE IF FALSE
+       THEN /\ phase' = "Done" /\ outcome' = "Rejected" /\ refusedBy' = "E"
+--- END

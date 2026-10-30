@@ -1,0 +1,12 @@
+# ChangeRefused refuses an uncompilable policy before the durable write.
+MODULE: SchemaPolicyConfig
+ROW: ChangeRefused
+FILE: src/lattice.schema/LatticeSchemaPolicyStore.cs
+DETECTORS: LatticeSchemaPolicyStoreTests.SetPolicyAsync_negative_max_byte_length_is_rejected_and_not_stored
+SUMMARY: the store writes a policy without compiling it first
+
+--- FIND
+        _ = CompiledSchemaPolicy.Compile(policy);
+--- REPLACE
+        _ = policy;
+--- END

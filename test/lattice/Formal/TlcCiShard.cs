@@ -147,6 +147,15 @@ internal static class TlcCiShard
     public const string BPlusCascade = "TlcShardBPlusCascade";
 
     /// <summary>
+    /// Every base, variant and mutation of the Schema* modules under
+    /// <c>spec/schema/</c>, co-located so each base serves its mutations'
+    /// full-bound controls. Routed by name prefix into a dedicated shard so a
+    /// schema module never reaches the catch-all; split it from measured timings
+    /// as the area grows.
+    /// </summary>
+    public const string Schema = "TlcShardSchema";
+
+    /// <summary>
     /// The prefix of the per-module category every TLC base, variant and
     /// mutation case carries beside its shard category (contract C2 of #5148),
     /// so <c>TestCategory=TlcModule_&lt;Module&gt;</c> selects exactly one
@@ -166,7 +175,8 @@ internal static class TlcCiShard
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair, MaterialisedViewNumeric,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
-         Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants];
+         Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
+         Schema];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -185,6 +195,10 @@ internal static class TlcCiShard
         if (SchedulingCategory(module, mutation: mutation.Name) is { } schedulingCategory)
         {
             return schedulingCategory;
+        }
+        if (SchemaCategory(name) is { } schemaCategory)
+        {
+            return schemaCategory;
         }
         if (string.Equals(name, "AntiEntropy", StringComparison.Ordinal))
         {
@@ -242,7 +256,7 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return SchedulingCategory(module) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
+        return SchedulingCategory(module) ?? SchemaCategory(module.Name) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
     }
 
     /// <summary>
@@ -303,6 +317,11 @@ internal static class TlcCiShard
         if (SchedulingCategory(module, variant) is { } schedulingCategory)
         {
             return schedulingCategory;
+        }
+
+        if (SchemaCategory(module.Name) is { } schemaCategory)
+        {
+            return schemaCategory;
         }
 
         if (string.Equals(module.Name, "AntiEntropy", StringComparison.Ordinal)
@@ -376,6 +395,9 @@ internal static class TlcCiShard
             ? SchedulingWorkloadB
             : Scheduling;
     }
+
+    private static string? SchemaCategory(string name) =>
+        name.StartsWith("Schema", StringComparison.Ordinal) ? Schema : null;
 
     private static string? LifecycleCategory(string name) =>
         name == "MaterialisedViewFence" ? MaterialisedViewFence
