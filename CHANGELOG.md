@@ -10,11 +10,27 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
+### Security
+
+- **Security - Backup isolation.** Backup backing trees now require explicit grants or bootstrap administration. Default-allow and all-trees grants no longer expose captured bytes from denied source trees. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Auth`)
+
+- **Security - Topology boundaries.** Raw tree, shard and sub-path topology now requires unfiltered tree or view-source read access, preventing protected split keys from reaching prefix-only readers. Filtered entry scans remain available. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Api.State`)
+
+- **Security - Live-feed revocation.** Change feeds refresh caller read access across WAL pages and buffered consumer resumptions. Revoked grants end the stream; narrowed grants replace its key filter. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Api.State`)
+
+- **Security - View source provenance.** Partial source grants no longer expose re-keyed, history, aggregate or unknown view rows. Known key-preserving projections retain filtered access; whole-source grants are unchanged. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice.Api.State`)
+
+- **Security - Registry routing.** Authorization-enabled clusters refuse direct external calls to the internal tree registry, preventing forged physical routing entries from bypassing alias-target checks. Trusted infrastructure calls remain available. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice`)
+
+- **Security - Schema previews.** Schema backing trees now require explicit tree grants or bootstrap administration. Data-plane default-allow and all-trees grants no longer reveal dead-letter value previews from denied source trees. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice.Auth`)
+
 ### Changed
 
 - **Performance - App ownership calls.** Fresh structural app tree claims replace three registry fact reads with one, retaining retry freshness and foreign-alias checks. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice.Apps`)
 
-- **Performance - Peer barrier calls.** Peer re-add reads each live/tombstone index once, and eligible barrier cleanup validates origin and decision within the abandonment call, preserving whole-barrier cleanup and import fences. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+- **Performance - Peer maintenance calls.** Re-add and barrier cleanup use fewer grain calls; decommission combines marker reads with durable writes and batches verdicts by encoded registry owner, retaining import fences, delegation and retention. ([#5214](https://github.com/NSTA1/Orleans.Lattice/pull/5214), [#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
+- **Performance - Merkle node reads.** Anti-entropy reads each internal node's digest and routing table in one grain call instead of two, retaining the digest option gate and read-only topology traversal. ([#5221](https://github.com/NSTA1/Orleans.Lattice/pull/5221)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
 - **Performance - Cache and migration calls.** Cache refresh, split freeze and consolidation freeze each replace two grain calls with one, preserving pending-before-delta reads, durable leaf seals, Reject and final-drain ordering. ([#5202](https://github.com/NSTA1/Orleans.Lattice/pull/5202)) (`Orleans.Lattice`)
 

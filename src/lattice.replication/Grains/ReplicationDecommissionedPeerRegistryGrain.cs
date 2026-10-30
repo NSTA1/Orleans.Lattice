@@ -17,11 +17,15 @@ internal sealed class ReplicationDecommissionedPeerRegistryGrain(
 
     /// <inheritdoc />
     public async Task MarkDecommissionedAsync(string peerClusterId, DateTimeOffset decommissionedAtUtc)
+        => _ = await MarkDecommissionedAndGetPreviousAsync(peerClusterId, decommissionedAtUtc);
+
+    /// <inheritdoc />
+    public async Task<bool> MarkDecommissionedAndGetPreviousAsync(string peerClusterId, DateTimeOffset decommissionedAtUtc)
     {
         ArgumentException.ThrowIfNullOrEmpty(peerClusterId);
         if (state.State.DecommissionedAtUtc.ContainsKey(peerClusterId))
         {
-            return;
+            return true;
         }
 
         state.State.DecommissionedAtUtc[peerClusterId] = decommissionedAtUtc;
@@ -34,6 +38,8 @@ internal sealed class ReplicationDecommissionedPeerRegistryGrain(
             state.State.DecommissionedAtUtc.Remove(peerClusterId);
             throw;
         }
+
+        return false;
     }
 
     /// <inheritdoc />

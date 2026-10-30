@@ -12,6 +12,9 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// re-add index reads and matching-origin barrier abandonment. It excludes the
 /// unchanged alias survey, index withdrawals and persistence. Allocations are
 /// those of the dispatch model, not production row/status serialization.
+/// The --suite decommissionmerkle subset measures peer marker and Merkle node
+/// 2-to-1 calls and one-owner pending verdict reads (32-to-1, below the 128 cap).
+/// It excludes unchanged marker persistence and registry retention/delegation work.
 /// </summary>
 [MemoryDiagnoser]
 public class ReadFusionCallBenchmarks
@@ -31,6 +34,12 @@ public class ReadFusionCallBenchmarks
         BarrierIndex,
         /// <summary>Matching-origin status and abandonment become one serialized call.</summary>
         BarrierAbandon,
+        /// <summary>Peer marker observation and durable mark share one dispatch.</summary>
+        PeerDecommission,
+        /// <summary>Merkle internal-node digest and routing share one dispatch.</summary>
+        MerkleNode,
+        /// <summary>32 pending transactions on one registry share one status call.</summary>
+        DecommissionVerdicts,
     }
 
     /// <summary>The read path under measurement.</summary>
@@ -52,7 +61,8 @@ public class ReadFusionCallBenchmarks
         var beforeCalls = _calls;
         _calls = 0;
         var after = AfterAsync().GetAwaiter().GetResult();
-        if (before != after || beforeCalls != (Path == Site.AppOwnership ? 3 : 2) || _calls != 1)
+        var expectedCalls = Path == Site.DecommissionVerdicts ? 32 : Path == Site.AppOwnership ? 3 : 2;
+        if (before != after || beforeCalls != expectedCalls || _calls != 1)
             throw new InvalidOperationException("Read fusion changed the result or dispatch budget.");
     }
 
@@ -60,6 +70,12 @@ public class ReadFusionCallBenchmarks
     [Benchmark(Baseline = true)]
     public async Task<long> BeforeAsync()
     {
+        if (Path == Site.DecommissionVerdicts)
+        {
+            long total = 0;
+            for (var i = 0; i < 32; i++) total += (await DispatchAsync()).Live;
+            return total;
+        }
         var first = await DispatchAsync();
         var second = await DispatchAsync();
         if (Path == Site.AppOwnership)
@@ -89,6 +105,7 @@ public class ReadFusionCallBenchmarks
             Site.AppOwnership => read.Identity.Length + read.Partitions + read.Shards,
             Site.BarrierIndex => read.Partitions + read.Shards,
             Site.BarrierAbandon => read.Identity.Length + read.Live,
+            Site.DecommissionVerdicts => 32 * read.Live,
             _ => read.Identity.Length + read.Shards,
         };
     }

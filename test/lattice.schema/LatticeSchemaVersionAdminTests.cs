@@ -133,7 +133,7 @@ public sealed class LatticeSchemaVersionAdminTests
         var terminal = LatticeSchemaRemediationReport.Completed(3, "orders/remediated/op", "op");
         grain.AcceptVersionMigrationAsync(7, 5, Arg.Any<string>())
             .Returns(LatticeSchemaRemediationReport.InFlight(LatticeSchemaRemediationPhase.DryRun, 0, "orders/remediated/op", "op"));
-        grain.RunSliceAsync().Returns(new SchemaRemediationSlice(terminal, null));
+        grain.RunSliceAsync("op").Returns(new SchemaRemediationSlice(terminal, null));
 
         var report = await admin.AdvanceAndMigrateAsync("orders", 5);
 
@@ -146,7 +146,7 @@ public sealed class LatticeSchemaVersionAdminTests
             Arg.Any<CancellationToken>());
         provider.Received(1).Invalidate("orders");
         await grain.Received(1).AcceptVersionMigrationAsync(7, 5, Arg.Any<string>());
-        await grain.Received(1).RunSliceAsync();
+        await grain.Received(1).RunSliceAsync("op");
         Assert.That(report, Is.EqualTo(terminal));
     }
 
@@ -190,6 +190,7 @@ public sealed class LatticeSchemaVersionAdminTests
             Arg.Any<string>(), Arg.Any<LatticeSchemaVersionConfig>(), Arg.Any<CancellationToken>());
         await grain.Received(1).AcceptVersionMigrationAsync(7, 4, Arg.Any<string>());
         await grain.DidNotReceive().RunSliceAsync();
+        await grain.DidNotReceiveWithAnyArgs().RunSliceAsync(default!);
         Assert.That(report, Is.EqualTo(terminal));
     }
 

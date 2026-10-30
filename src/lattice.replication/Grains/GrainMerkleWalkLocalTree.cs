@@ -52,8 +52,7 @@ internal sealed class GrainMerkleWalkLocalTree(
         }
 
         var node = grainFactory.GetGrain<IBPlusInternalGrain>(nodeId);
-        var digest = await node.GetSubtreeProjectionDigestAsync().ConfigureAwait(false);
-        var routing = await node.GetRoutingTableAsync().ConfigureAwait(false);
+        var (digest, routing) = await node.GetSubtreeDigestAndRoutingAsync().ConfigureAwait(false);
 
         var separators = routing.SeparatorKeys;
         var childIds = routing.ChildIds;

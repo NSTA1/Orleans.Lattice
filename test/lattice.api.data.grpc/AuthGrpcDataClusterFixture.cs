@@ -92,7 +92,8 @@ internal sealed class AuthGrpcDataClusterFixture
     /// <summary>Registers an empty single-WAL-partition tree and returns the grain handle.</summary>
     public async Task<ILattice> RegisterTreeAsync(string treeId)
     {
-        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = SiloServices.GetRequiredService<IGrainFactory>()
+            .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(treeId, new TreeRegistryEntry
         {
             MaxLeafKeys = 4,

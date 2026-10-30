@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Schema;
 /// </summary>
 public static class SchemaOperationResultKeys
 {
-    /// <summary>How the remediation ended: <see cref="Completed"/>, <see cref="Aborted"/> or <see cref="Cancelled"/>.</summary>
+    /// <summary>How the remediation ended: <see cref="Completed"/>, <see cref="Aborted"/>, <see cref="Cancelled"/> or <see cref="Superseded"/>.</summary>
     public const string Outcome = "outcome";
 
     /// <summary>The values processed: the whole tree on completion, up to and including the offender on an abort.</summary>
@@ -35,4 +35,14 @@ public static class SchemaOperationResultKeys
 
     /// <summary>The <see cref="Outcome"/> of a remediation cancelled before cutover, with nothing cut over.</summary>
     public const string Cancelled = "cancelled";
+
+    /// <summary>
+    /// The <see cref="Outcome"/> of an operation whose start joined a remediation already
+    /// in flight, when that remediation ended under the operation that started it and a
+    /// later remediation replaced its outcome on the tree's coordinator. The operation
+    /// fails; <see cref="RemediationOperationId"/> names the remediation it followed,
+    /// whose outcome is on that operation's record, and this operation applied nothing
+    /// further.
+    /// </summary>
+    public const string Superseded = "superseded";
 }

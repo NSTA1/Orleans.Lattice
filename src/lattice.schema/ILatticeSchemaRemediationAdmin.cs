@@ -37,7 +37,7 @@ public interface ILatticeSchemaRemediationAdmin
     /// <returns>The terminal report: <see cref="LatticeSchemaRemediationReport.Succeeded"/> on cutover, or <see cref="LatticeSchemaRemediationReport.DidAbort"/> with the first offending entry.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="targetPolicy"/> carries an uncompilable regex rule.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="targetPolicy"/> is <c>null</c>.</exception>
-    /// <exception cref="InvalidOperationException">A remediation with different parameters is already in flight for the tree.</exception>
+    /// <exception cref="InvalidOperationException">A remediation with different parameters is already in flight for the tree, or the call joined a remediation already in flight that then ended under another operation and was replaced by a later remediation before its outcome could be read.</exception>
     Task<LatticeSchemaRemediationReport> RemediateAsync(
         string treeId,
         LatticeValueTransform transform,

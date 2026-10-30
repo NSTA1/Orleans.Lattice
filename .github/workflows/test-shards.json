@@ -329,7 +329,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchema"],
-        "note": "Every SchemaPolicyConfig, SchemaStageOrdering and SchemaVersionFamily base, variant and mutation (47 cases), bases co-located with their mutations so the base runs serve the full-bound controls. Measured locally at 1.97 minutes for the first two modules' 29 cases (#5226) and 1.77 minutes for SchemaVersionFamily's 18 (#5227), on a 16-core Windows workstation at default TLC concurrency; the SchemaPolicyConfig ThreeSilos variant dominates at about one minute, then the SchemaVersionFamily Undeclared and TwoKeys variants at about 40 seconds each. Refresh from the first receipt-free schema-assurance bucket push, and split the shard from measured timings as further Schema* modules join it."
+        "note": "Every SchemaPolicyConfig, SchemaStageOrdering and SchemaVersionFamily base, variant and mutation (48 cases), bases co-located with their mutations so the base runs serve the full-bound controls. The first two modules' 30 cases took 2.34 minutes (dotnet test 2 m 17 s) in the member pull request ci.yml run 41065598921 (head 675f6363f, job 124100785054) for #5226; all 48 took 1 m 54 s of dotnet test in ci.yml run 41087582284 (head e15b3091e, job 124175924963) for #5227. The SchemaPolicyConfig ThreeSilos variant dominates, then the SchemaVersionFamily TwoKeys and Undeclared variants. Split the shard from measured timings as further Schema* modules join it."
       },
       {
         "shard": "formal-tlc-smoke",

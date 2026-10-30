@@ -47,6 +47,12 @@ internal interface IReplicationDecommissionedPeerRegistryGrain : IGrainWithStrin
     Task MarkDecommissionedAsync(string peerClusterId, DateTimeOffset decommissionedAtUtc);
 
     /// <summary>
+    /// Durably marks the peer and returns whether it was already marked.
+    /// Preserves the first timestamp, like <see cref="MarkDecommissionedAsync"/>.
+    /// </summary>
+    Task<bool> MarkDecommissionedAndGetPreviousAsync(string peerClusterId, DateTimeOffset decommissionedAtUtc);
+
+    /// <summary>
     /// Clears the decommissioned marker for <paramref name="peerClusterId"/>,
     /// called when the operator re-configures the peer into
     /// <c>ReplicationPeers</c> (<see cref="ReplicationDriverActivationService"/>'s

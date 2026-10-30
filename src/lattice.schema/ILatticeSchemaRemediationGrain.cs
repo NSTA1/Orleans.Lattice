@@ -69,7 +69,7 @@ internal interface ILatticeSchemaRemediationGrain : IGrainWithStringKey
     /// Accepts a remediation of the tree with <paramref name="transform"/> and
     /// <paramref name="targetPolicy"/> without running any of it: persists the intent
     /// and returns the in-flight report. The caller then drives it with
-    /// <see cref="RunSliceAsync"/>, so no single call runs longer than one bounded
+    /// <see cref="RunSliceAsync(string)"/>, so no single call runs longer than one bounded
     /// slice (issue #4123).
     /// <para>
     /// Idempotent: while a remediation with the same parameters is in flight this
@@ -113,6 +113,19 @@ internal interface ILatticeSchemaRemediationGrain : IGrainWithStringKey
     /// </summary>
     /// <returns>The status after the slice, and the current phase's total when known.</returns>
     Task<SchemaRemediationSlice> RunSliceAsync();
+
+    /// <summary>
+    /// Runs one bounded slice of the in-flight remediation, as
+    /// <see cref="RunSliceAsync()"/> does, only when that remediation is the one named
+    /// by <paramref name="operationId"/>. Another operation's in-flight remediation is
+    /// left untouched and its status returned, so a caller that follows a remediation
+    /// never advances a later one accepted after it ended (issue #5267). A no-op slice
+    /// when nothing is in flight.
+    /// </summary>
+    /// <param name="operationId">The operation id of the remediation the caller follows. Must not be <c>null</c> or empty.</param>
+    /// <returns>The status after the call, and the current phase's total when a slice ran and the remediation is still in flight.</returns>
+    /// <exception cref="ArgumentException"><paramref name="operationId"/> is <c>null</c> or empty.</exception>
+    Task<SchemaRemediationSlice> RunSliceAsync(string operationId);
 
     /// <summary>
     /// Cancels the in-flight remediation named by <paramref name="operationId"/>:

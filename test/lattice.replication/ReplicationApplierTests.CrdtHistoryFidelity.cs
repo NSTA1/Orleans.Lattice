@@ -35,7 +35,7 @@ public partial class ReplicationApplierTests
         await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync(
             "k", LatticeMergeMode.PnCounter, Arg.Any<byte[]>(), 0L);
         await apply.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaManyAsync(default!);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetIfVersionAsync(default!, default!, default);
     }
 
     [Test]
@@ -54,7 +54,7 @@ public partial class ReplicationApplierTests
 
         Assert.That(result.Applied, Is.True);
         await apply.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaWithExpiryAsync(default!, default, default!, default);
-        await lattice.Received(1).SetIfVersionAsync(
-            "k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplySetIfVersionAsync(
+            "k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>());
     }
 }

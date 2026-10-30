@@ -426,6 +426,7 @@ internal sealed class RepoContextBootstrapService : IDisposable
             var pruning = new RepoWalkPruning
             {
                 PreviousDirectoryMtimes = priorPrune?.DirectoryMtimes,
+                PreviousWalkStartTicks = priorPrune?.WalkStartTicks ?? 0,
                 ForceFull = forceFull,
             };
 
@@ -514,7 +515,8 @@ internal sealed class RepoContextBootstrapService : IDisposable
                 forceFull ? 0 : passesSinceFullSweep + 1,
                 gapScanDue ? 0 : passesSinceGapScan + 1,
                 coverageConverged,
-                coverageUnmeasurable);
+                coverageUnmeasurable,
+                pruning.WalkStartTicks);
 
             // A full sweep whose wall clock overran the operator's configured interval
             // is the observable symptom of issue #2048: passes are slower than the
@@ -1363,13 +1365,19 @@ internal sealed class RepoContextBootstrapService : IDisposable
     /// unmeasurable pass backs the scan off to the periodic cadence instead of escalating
     /// it to every pass, whose whole-corpus sweep is the load that prevents the next
     /// measurement (issue #3340).</param>
+    /// <param name="WalkStartTicks">The wall-clock UTC tick at which the walk that observed
+    /// <paramref name="DirectoryMtimes"/> began. It belongs to that snapshot and travels
+    /// with it: the next walk prunes only directories whose unchanged modification time is
+    /// safely older than this tick (issue #5268, see
+    /// <see cref="RepoWalkPruning.PreviousWalkStartTicks"/>). <c>0</c> prunes nothing.</param>
     private sealed record PruneCacheEntry(
         IReadOnlyDictionary<string, long> DirectoryMtimes,
         long LastFullSweepTicks,
         int PassesSinceFullSweep,
         int PassesSinceGapScan,
         bool CoverageConverged,
-        bool CoverageUnmeasurable = false);
+        bool CoverageUnmeasurable = false,
+        long WalkStartTicks = 0);
 
     /// <summary>
     /// Banks the coverage slice of a faulting pass's snapshot - the embedding-coverage
@@ -1379,7 +1387,7 @@ internal sealed class RepoContextBootstrapService : IDisposable
     /// <remarks>
     /// The split exists because the two halves of <see cref="PruneCacheEntry"/> are
     /// earned by different arms. The pruning baseline
-    /// (<c>DirectoryMtimes</c>, <c>LastFullSweepTicks</c>, <c>PassesSinceFullSweep</c>)
+    /// (<c>DirectoryMtimes</c>, <c>WalkStartTicks</c>, <c>LastFullSweepTicks</c>, <c>PassesSinceFullSweep</c>)
     /// is a promise that everything the walk saw was applied, so a pass that threw may
     /// never advance it - publishing it would let the next run skip a directory whose
     /// changes were never committed. The coverage slice is a measurement the file

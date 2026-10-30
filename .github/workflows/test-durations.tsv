@@ -134,12 +134,13 @@ lattice	formal-tlc-atomic-variants-4	deterministic	8.88
 lattice	formal-tlc-atomic-variants-5	deterministic	9.43
 lattice	formal-tlc-atomic-variants-6	deterministic	8.97
 lattice	formal-tlc-backup	deterministic	3.94
-# formal-tlc-schema is a local measurement, not a CI one: every
-# SchemaPolicyConfig and SchemaStageOrdering case (29) took 1.97 minutes (#5226)
-# and every SchemaVersionFamily case (18) 1.77 minutes (#5227) on a 16-core
-# Windows workstation at the default TLC concurrency. Replace it with the item
-# time of the first receipt-free schema-assurance bucket push.
-lattice	formal-tlc-schema	deterministic	3.74
+# formal-tlc-schema is one measured item. Its 30 SchemaPolicyConfig and
+# SchemaStageOrdering cases took 2.34 minutes in the receipt-free member pull
+# request ci.yml run 41065598921 (head 675f6363f, job 124100785054) for #5226;
+# with SchemaVersionFamily's 18 cases added, all 48 ran (no schema receipt) in
+# 1 m 54 s of dotnet test in ci.yml run 41087582284 (head e15b3091e, job
+# 124175924963) for #5227. The row keeps the larger figure.
+lattice	formal-tlc-schema	deterministic	2.34
 lattice	formal-tlc-smoke	deterministic	0.27
 # lattice/rest (deterministic) uses complete passing item TRX from green run
 # 40648174016 (head c04710f914ed1628af05916aaf5f5272caa6d102); elapsed TRX

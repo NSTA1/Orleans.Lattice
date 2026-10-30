@@ -129,6 +129,28 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     Task<VersionedValue> ReadStoredWithVersionAsync(string key);
 
     /// <summary>
+    /// The write half of a replication read-merge-write loop: installs
+    /// <paramref name="value"/> at <paramref name="key"/> only when the key's
+    /// current version equals <paramref name="expectedVersion"/>, through the same
+    /// gated write path as <see cref="ILattice.SetIfVersionAsync"/>, write
+    /// interceptor included. Unlike that method, it tells a version miss apart
+    /// from a value the interceptor diverted (issue #5265): under strict ingest a
+    /// refused full-state CRDT row must be diverted once, not retried as a
+    /// compare-and-swap miss until the loop's budget runs out.
+    /// </summary>
+    /// <param name="key">The key to write.</param>
+    /// <param name="value">The value to install.</param>
+    /// <param name="expectedVersion">
+    /// The version read by <see cref="ReadStoredWithVersionAsync"/>;
+    /// <see cref="HybridLogicalClock.Zero"/> expects the key absent.
+    /// </param>
+    /// <returns>Whether the value was applied, missed the version, or was diverted.</returns>
+    Task<ReplicationConditionalSetOutcome> ApplySetIfVersionAsync(
+        string key,
+        byte[] value,
+        HybridLogicalClock expectedVersion);
+
+    /// <summary>
     /// Installs a range delete authored on the remote cluster identified
     /// by <paramref name="originClusterId"/>. The receiver walks the leaf
     /// chain locally and stamps every per-leaf tombstone with
