@@ -1,0 +1,12 @@
+# The #5239 fail-closed half lost: an envelope the decoder cannot serve is trusted.
+MODULE: StoredValidWhenJudgedUndecodableTrusted
+TARGET: StoredValidWhenJudged
+CLASS: Invariant
+SUMMARY: an undecodable enveloped entry is admitted
+PERTURBS: Judge
+
+--- FIND
+            /\ rphase' = IF Refused(val[cur], seen) THEN "DeadLettering" ELSE "Committing"
+--- REPLACE
+            /\ rphase' = IF Refused(val[cur], seen) /\ val[cur].tag # "Orphan" THEN "DeadLettering" ELSE "Committing"
+--- END

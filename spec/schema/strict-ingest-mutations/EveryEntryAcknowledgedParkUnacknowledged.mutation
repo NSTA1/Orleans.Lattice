@@ -1,0 +1,15 @@
+# The applier parks an entry but never answers its delivery.
+MODULE: EveryEntryAcknowledgedParkUnacknowledged
+TARGET: EveryEntryAcknowledged
+CLASS: Temporal
+SUMMARY: a parked entry is never acknowledged
+PERTURBS: Settle
+
+--- FIND
+       ELSE /\ parked' = parked \cup {cur}
+            /\ Acknowledge(cur)
+--- REPLACE
+       ELSE /\ parked' = parked \cup {cur}
+            /\ rphase' = "Idle" /\ cur' = 0
+            /\ UNCHANGED <<sstate, fails>>
+--- END

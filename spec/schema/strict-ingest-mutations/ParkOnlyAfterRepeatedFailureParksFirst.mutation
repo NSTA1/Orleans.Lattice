@@ -1,0 +1,12 @@
+# The applier quarantines an entry on its first failure.
+MODULE: ParkOnlyAfterRepeatedFailureParksFirst
+TARGET: ParkOnlyAfterRepeatedFailure
+CLASS: Action
+SUMMARY: the first failed attempt parks the entry
+PERTURBS: Settle
+
+--- FIND
+    /\ IF fails[cur] + 1 < MaxFailures
+--- REPLACE
+    /\ IF fails[cur] + 1 < 1
+--- END

@@ -1,0 +1,12 @@
+# One delivery appends its dead-letter record twice, as an in-call retry loop would.
+MODULE: OneRecordPerDeliveryAppendRetried
+TARGET: OneRecordPerDelivery
+CLASS: Action
+SUMMARY: a delivery appends two dead-letter records
+PERTURBS: DeadLetter
+
+--- FIND
+       ELSE /\ dlq' = [dlq EXCEPT ![cur] = @ + 1]
+--- REPLACE
+       ELSE /\ dlq' = [dlq EXCEPT ![cur] = @ + 2]
+--- END
