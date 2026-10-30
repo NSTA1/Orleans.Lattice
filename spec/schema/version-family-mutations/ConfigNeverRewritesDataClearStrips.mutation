@@ -1,0 +1,15 @@
+# Clearing the version config strips every stored envelope.
+MODULE: ConfigNeverRewritesDataClearStrips
+TARGET: ConfigNeverRewritesData
+CLASS: Action
+SUMMARY: a config change rewrites stored values
+PERTURBS: ClearConfig
+
+--- FIND
+    /\ cfg' = NoCfg /\ out' = Out("CfgAccepted")
+    /\ UNCHANGED <<rtD, rtH, data, mig, migT, shadow, reserved>>
+--- REPLACE
+    /\ cfg' = NoCfg /\ out' = Out("CfgAccepted")
+    /\ data' = [k \in Keys |-> IF data[k].tag = "Env" THEN Raw(data[k].ok) ELSE data[k]]
+    /\ UNCHANGED <<rtD, rtH, mig, migT, shadow, reserved>>
+--- END

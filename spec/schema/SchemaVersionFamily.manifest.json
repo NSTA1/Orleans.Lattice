@@ -1,0 +1,21 @@
+{
+  "mutations": "version-family-mutations",
+  "refinement": "SchemaVersionFamilyRefinement.md",
+  "nonBehaviouralActions": ["Stutter", "Put"],
+  "counts": {
+    "invariants": 6,
+    "properties": 9,
+    "actions": 9,
+    "mutations": 15,
+    "behaviourRows": 21,
+    "distinctStates": 4889
+  },
+  "variants": {
+    "TwoKeys": {
+      "distinctStates": 67982
+    },
+    "Undeclared": {
+      "distinctStates": 46974
+    }
+  }
+}

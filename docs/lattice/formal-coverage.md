@@ -75,7 +75,7 @@ once, either here or in the
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 196 | 244 | 119 | [Verified Scheduling and Progress](verified-scheduling.md) |
-| Schema enforcement and versioning | 2 | 26 | 30 | 70 | [Schema enforcement and versioning](../../spec/schema/README.md) |
+| Schema enforcement and versioning | 3 | 41 | 51 | 119 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those

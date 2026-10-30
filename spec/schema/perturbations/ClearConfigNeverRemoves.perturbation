@@ -1,0 +1,12 @@
+# ClearConfig removes the durable version config.
+MODULE: SchemaVersionFamily
+ROW: ClearConfig
+FILE: src/lattice.schema/LatticeSchemaVersionAdmin.cs
+DETECTORS: LatticeSchemaVersionAdminTests.ClearVersionConfigAsync_removes_and_invalidates
+SUMMARY: the clear reports success without removing the config
+
+--- FIND
+        var removed = await store.ClearConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
+--- REPLACE
+        var removed = await Task.FromResult(false).ConfigureAwait(false);
+--- END

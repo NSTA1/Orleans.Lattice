@@ -1,0 +1,12 @@
+# MigrateStep(k) upcasts each value's body from its own stamp.
+MODULE: SchemaVersionFamily
+ROW: MigrateStep(k)
+FILE: src/lattice.schema/LatticeSchemaVersionMigration.cs
+DETECTORS: LatticeSchemaVersionMigrationTests.Migrate_below_target_value_is_upcast_and_reenveloped_at_target
+SUMMARY: a stale value is re-stamped at the target without being upcast
+
+--- FIND
+        var upcast = registry.Upcast(stampedSchemaId, storedVersion, targetVersion, body);
+--- REPLACE
+        var upcast = body;
+--- END

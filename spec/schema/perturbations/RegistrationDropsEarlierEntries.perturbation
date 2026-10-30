@@ -1,0 +1,12 @@
+# CatalogAppendOnly: a registration keeps every earlier runtime entry.
+MODULE: SchemaVersionFamily
+ROW: CatalogAppendOnly
+FILE: src/lattice.schema/LatticeSchemaRuntimeRegistryGrain.cs
+DETECTORS: SchemaRuntimeRegistryTests.A_later_registration_keeps_every_earlier_entry
+SUMMARY: the registry merges each registration over an empty runtime catalog
+
+--- FIND
+        var effective = SchemaRuntimeCatalog.Merge(host, state.State.Registration, transforms, enforceMergedLimit: false);
+--- REPLACE
+        var effective = SchemaRuntimeCatalog.Merge(host, new(), transforms, enforceMergedLimit: false);
+--- END

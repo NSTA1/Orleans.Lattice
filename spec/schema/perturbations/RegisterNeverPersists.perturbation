@@ -1,0 +1,12 @@
+# Register(a) persists the merged registration.
+MODULE: SchemaVersionFamily
+ROW: Register(a)
+FILE: src/lattice.schema/LatticeSchemaRuntimeRegistryGrain.cs
+DETECTORS: SchemaRuntimeRegistryTests.Register_persists_round_trips_and_resolves_after_new_activation
+SUMMARY: the registry writes the previous catalog back instead of the merged one
+
+--- FIND
+        state.State.Registration = SchemaRuntimeCatalog.Snapshot(runtime);
+--- REPLACE
+        state.State.Registration = SchemaRuntimeCatalog.Snapshot(previous);
+--- END
