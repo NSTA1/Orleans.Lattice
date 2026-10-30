@@ -1,0 +1,15 @@
+# StampedWhenVersioned: either registration order stores a versioned entry
+# self-describing.
+MODULE: SchemaStageOrdering
+ROW: StampedWhenVersioned
+FILE: src/lattice.schema/LatticeSchemaEnforcementServiceCollectionExtensions.cs
+DETECTORS: SchemaWriteStageRegistrationTests.Reversed_registration_validates_then_stamps, SchemaWriteStageRegistrationTests.Either_registration_order_resolves_one_composed_interceptor
+SUMMARY: enforcement registered after versioning replaces the composed interceptor
+
+--- FIND
+        SchemaWriteStageComposition.Compose(builder.Services);
+--- REPLACE
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ILatticeWriteInterceptor>(
+                sp => sp.GetRequiredService<LatticeSchemaWriteInterceptor>()));
+--- END

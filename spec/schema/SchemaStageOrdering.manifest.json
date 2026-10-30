@@ -6,13 +6,13 @@
     "invariants": 2,
     "properties": 11,
     "actions": 7,
-    "mutations": 18,
+    "mutations": 19,
     "behaviourRows": 17,
-    "distinctStates": 40192
+    "distinctStates": 41808
   },
   "variants": {
     "Batch": {
-      "distinctStates": 367708
+      "distinctStates": 392072
     }
   }
 }
