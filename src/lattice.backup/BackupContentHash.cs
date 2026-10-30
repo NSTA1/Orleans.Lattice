@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 
 namespace Orleans.Lattice.Backup;
 
@@ -41,6 +42,23 @@ public static class BackupContentHash
         foreach (var chunk in chunks)
         {
             hasher.AppendData(chunk.Span);
+        }
+
+        return ToHexLowerAndReset(hasher);
+    }
+
+    /// <summary>
+    /// Hashes ordered UTF-8 strings, appending a newline after every string,
+    /// including the last. Shared by set identities and structural digests so
+    /// their persisted byte encoding has one definition.
+    /// </summary>
+    internal static string ComputeNewlineTerminatedUtf8(IReadOnlyList<string> values)
+    {
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var value in values)
+        {
+            hasher.AppendData(Encoding.UTF8.GetBytes(value));
+            hasher.AppendData("\n"u8);
         }
 
         return ToHexLowerAndReset(hasher);

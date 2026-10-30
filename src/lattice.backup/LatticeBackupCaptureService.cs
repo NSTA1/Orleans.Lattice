@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -1435,18 +1434,9 @@ internal sealed class LatticeBackupCaptureService(
 
     /// <summary>
     /// Aggregates the per-shard digests into a single structural digest: the
-    /// lowercase hexadecimal SHA-256 of the ordered, newline-joined per-shard
+    /// lowercase hexadecimal SHA-256 of the ordered, newline-terminated per-shard
     /// digests. Never empty (a tree always has at least one shard).
     /// </summary>
-    private static string ComputeStructuralDigest(IReadOnlyList<string> shardRootDigests)
-    {
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var digest in shardRootDigests)
-        {
-            hasher.AppendData(System.Text.Encoding.UTF8.GetBytes(digest));
-            hasher.AppendData("\n"u8);
-        }
-
-        return BackupContentHash.ToHexLowerAndReset(hasher);
-    }
+    private static string ComputeStructuralDigest(IReadOnlyList<string> shardRootDigests) =>
+        BackupContentHash.ComputeNewlineTerminatedUtf8(shardRootDigests);
 }
