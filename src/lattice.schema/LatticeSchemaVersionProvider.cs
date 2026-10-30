@@ -8,11 +8,14 @@ namespace Orleans.Lattice.Schema;
 /// <see cref="LatticeSchemaVersionConfig"/> (or a <c>null</c> sentinel for an
 /// unversioned tree) per governed tree so per-write / per-read resolution is a
 /// dictionary lookup. Also an <see cref="IMutationObserver"/>: a write to the
-/// reserved <c>sys-schema-version</c> tree evicts the affected tree's cache entry,
-/// so a config change is picked up on the next write / read without a restart.
+/// reserved <c>sys-schema-version</c> tree evicts the affected tree's cache entry on
+/// the silo that committed it. Every other silo drops its cache within
+/// <see cref="LatticeSchemaVersioningOptions.PropagationInterval"/> of the change,
+/// through <see cref="SchemaConfigEpochSynchronizer{TCache}"/>, so a config change is
+/// picked up cluster-wide without a restart.
 /// Shares cache admission and invalidation rules with the policy provider.
 /// </summary>
-internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvider, IMutationObserver
+internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvider, IMutationObserver, ISchemaConfigCache
 {
     private readonly ILatticeSchemaVersionStore _store;
     private readonly ConcurrentDictionary<string, LatticeSchemaVersionConfig?> _cache = new(StringComparer.Ordinal);
@@ -80,6 +83,9 @@ internal sealed class LatticeSchemaVersionProvider : ILatticeSchemaVersionProvid
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         _cache.Invalidate(_generations, treeId);
     }
+
+    /// <inheritdoc />
+    public void InvalidateAll() => _cache.InvalidateAll(_generations);
 
     /// <inheritdoc />
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)

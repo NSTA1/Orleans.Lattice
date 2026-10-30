@@ -36,4 +36,16 @@ public sealed class LatticeSchemaEnforcementOptions
     /// cost of retaining a diverted item. Values below 1 are clamped to 1. Defaults to 4096.
     /// </summary>
     public int DeadLetterPreviewMaxBytes { get; set; } = 4096;
+
+    /// <summary>
+    /// How often each silo checks whether a schema policy change was committed
+    /// elsewhere in the cluster, which bounds how long a silo can keep enforcing
+    /// the previous policy. The silo that served <see cref="ILatticeSchemaAdmin"/>
+    /// applies a change before the call returns; every other silo stops serving the
+    /// previous policy within this interval of the change being published, which
+    /// the silo that committed it does immediately. Each check is one small grain
+    /// call per silo and no store read; a shorter interval tightens the bound at the
+    /// cost of more frequent checks. Must be positive. Defaults to one second.
+    /// </summary>
+    public TimeSpan PropagationInterval { get; set; } = TimeSpan.FromSeconds(1);
 }

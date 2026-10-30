@@ -390,9 +390,7 @@ internal sealed partial class ViewMaintainerGrain
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
             sourceKeys,
             RebuildFanOutWidth,
-            k => string.Equals(sourceTreeId, walTreeId, StringComparison.Ordinal)
-                ? sourceTree.GetWithVersionAsync(k, cancellationToken)
-                : ReadPhysicalSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
+            k => ReadStoredSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
             cancellationToken))
         {
             var key = sourceKeys[index++];
@@ -416,21 +414,21 @@ internal sealed partial class ViewMaintainerGrain
 
             if (aggregationApplier is not null)
             {
-                foreach (var contribution in registration.AggregationProjection!.Project(synthetic))
+                foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, synthetic)))
                 {
                     await aggregationApplier.ApplyAsync(contribution, cancellationToken);
                 }
             }
             else if (registration.Accumulative)
             {
-                foreach (var write in registration.Projection!.Project(synthetic))
+                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, synthetic)))
                 {
                     await ApplyAsync(viewTree, ShapeHistoryWrite(write, historyPolicy, historyNowTicks), cancellationToken);
                 }
             }
             else
             {
-                foreach (var write in registration.Projection!.Project(synthetic))
+                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, synthetic)))
                 {
                     await ApplyAsync(viewTree, write, cancellationToken);
                 }
@@ -582,9 +580,7 @@ internal sealed partial class ViewMaintainerGrain
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
             sourceKeys,
             RebuildFanOutWidth,
-            k => string.Equals(sourceTreeId, walTreeId, StringComparison.Ordinal)
-                ? sourceTree.GetWithVersionAsync(k, cancellationToken)
-                : ReadPhysicalSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
+            k => ReadStoredSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
             cancellationToken))
         {
             var key = sourceKeys[index++];
@@ -611,21 +607,21 @@ internal sealed partial class ViewMaintainerGrain
 
             if (aggregationApplier is not null)
             {
-                foreach (var contribution in registration.AggregationProjection!.Project(synthetic))
+                foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, synthetic)))
                 {
                     await aggregationApplier.ApplyAsync(contribution, cancellationToken);
                 }
             }
             else if (registration.Accumulative)
             {
-                foreach (var write in registration.Projection!.Project(synthetic))
+                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, synthetic)))
                 {
                     await ApplyAsync(shadowTree, ShapeHistoryWrite(write, historyPolicy, historyNowTicks), cancellationToken);
                 }
             }
             else
             {
-                foreach (var write in registration.Projection!.Project(synthetic))
+                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, synthetic)))
                 {
                     await ApplyAsync(shadowTree, write, cancellationToken);
                 }

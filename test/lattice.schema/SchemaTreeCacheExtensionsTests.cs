@@ -119,4 +119,22 @@ public sealed class SchemaTreeCacheExtensionsTests
         Assert.That(cache.ContainsKey("orders"), Is.False);
         Assert.That(generations.IsCurrent("orders", captured), Is.False);
     }
+
+    [Test]
+    public void InvalidateAll_clears_every_entry_and_overtakes_every_in_flight_load()
+    {
+        var cache = new ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
+        var generations = new SchemaTreeCacheGenerations();
+        cache.CacheIfSpaceAvailable("orders", "cached");
+        cache.CacheIfSpaceAvailable("invoices", null);
+        var captured = Enumerable.Range(0, 200).Select(i => ("tree-" + i, generations.Capture("tree-" + i))).ToArray();
+
+        cache.InvalidateAll(generations);
+        foreach (var (treeId, generation) in captured)
+        {
+            cache.CacheIfCurrent(generations, treeId, generation, "stale");
+        }
+
+        Assert.That(cache, Is.Empty);
+    }
 }

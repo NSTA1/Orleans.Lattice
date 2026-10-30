@@ -32,4 +32,17 @@ public sealed class LatticeSchemaVersioningOptions
     /// Values below 1 are clamped to 1. Defaults to 4096.
     /// </summary>
     public int DeadLetterPreviewMaxBytes { get; set; } = 4096;
+
+    /// <summary>
+    /// How often each silo checks whether a version-config change was committed
+    /// elsewhere in the cluster, which bounds how long a silo can keep stamping and
+    /// decoding against the previous config. The silo that served
+    /// <see cref="ILatticeSchemaVersionAdmin"/> applies a change before the call
+    /// returns; every other silo stops serving the previous config within this
+    /// interval of the change being published, which the silo that committed it
+    /// does immediately. Each check is one small grain call per silo and no store
+    /// read; a shorter interval tightens the bound at the cost of more frequent
+    /// checks. Must be positive. Defaults to one second.
+    /// </summary>
+    public TimeSpan PropagationInterval { get; set; } = TimeSpan.FromSeconds(1);
 }
