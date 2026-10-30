@@ -133,25 +133,18 @@ internal sealed class LatticeStateObserver(
         // view because "view-" is not a reserved prefix - stream every key, change
         // kind and HLC timestamp of a source tree it may not read, and bypassed an
         // explicit Deny on that source, which was never evaluated. Resolving the
-        // source also yields the source's key filter, so a prefix-granted
-        // subscriber is pruned to the keys it may read rather than being handed
-        // the whole view. Fails closed when the source cannot be resolved.
+        // source also yields the source's key filter. Partial grants require a
+        // known key-preserving projection; filtering transformed output keys
+        // would not protect their source keys. Unknown provenance fails closed.
         Func<string, bool>? keyFilter = null;
         var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
         if (subject is { } resolved)
         {
-            var authorizationTreeId = effectiveTreeId;
-            if (LatticeViewTrees.IsViewTree(effectiveTreeId))
-            {
-                authorizationTreeId = await LatticeStateViewSource
-                    .ResolveAsync(services, _grainFactory, effectiveTreeId, cancellationToken)
-                    .ConfigureAwait(false)
-                    ?? throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");
-            }
-
-            var (allowed, filter) = await _visibility
-                .ResolveTreeReadAccessAsync(authorizationTreeId, resolved, cancellationToken)
-                .ConfigureAwait(false);
+            var (allowed, filter) = LatticeViewTrees.IsViewTree(effectiveTreeId)
+                ? await LatticeStateViewSource.ResolveReadAccessAsync(
+                    services, _grainFactory, _visibility, effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false)
+                : await _visibility.ResolveTreeReadAccessAsync(
+                    effectiveTreeId, resolved, cancellationToken).ConfigureAwait(false);
             if (!allowed)
             {
                 throw new KeyNotFoundException($"Tree '{request.TreeId}' was not found.");

@@ -100,7 +100,8 @@ internal sealed class AuthGrpcStateClusterFixture
     /// </summary>
     public async Task<ILattice> CreatePopulatedTreeAsync(string treeId, params string[] keys)
     {
-        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = SiloServices.GetRequiredService<IGrainFactory>()
+            .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(treeId, new TreeRegistryEntry
         {
             MaxLeafKeys = 4,

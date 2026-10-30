@@ -177,7 +177,7 @@ public sealed partial class LatticeStateApiEdgeCaseTests
     }
 
     [Test]
-    public async Task Resolve_view_key_filter_returns_null_for_anonymous_or_unresolved_views()
+    public async Task Resolve_view_key_filter_denies_anonymous_or_unresolved_views()
     {
         var anonymous = CreateQuery(services: VisibilityServicesWithoutMembership());
         var anonymousFilter = await InvokeInstanceAsync<Func<string, bool>?>(
@@ -195,8 +195,10 @@ public sealed partial class LatticeStateApiEdgeCaseTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(anonymousFilter, Is.Null);
-            Assert.That(unresolvedFilter, Is.Null);
+            Assert.That(anonymousFilter, Is.Not.Null);
+            Assert.That(unresolvedFilter, Is.Not.Null);
+            Assert.That(anonymousFilter!("any-key"), Is.False);
+            Assert.That(unresolvedFilter!("any-key"), Is.False);
         });
     }
 

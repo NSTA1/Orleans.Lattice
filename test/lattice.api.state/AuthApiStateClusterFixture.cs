@@ -105,7 +105,8 @@ internal sealed class AuthApiStateClusterFixture
     /// </summary>
     public async Task<ILattice> CreatePopulatedTreeAsync(string treeId, params string[] keys)
     {
-        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = SiloServices.GetRequiredService<IGrainFactory>()
+            .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(treeId, new TreeRegistryEntry
         {
             MaxLeafKeys = 4,
@@ -132,7 +133,8 @@ internal sealed class AuthApiStateClusterFixture
     /// </summary>
     public async Task<ILattice> RegisterTreeAsync(string treeId)
     {
-        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = SiloServices.GetRequiredService<IGrainFactory>()
+            .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(treeId, new TreeRegistryEntry
         {
             MaxLeafKeys = 4,
@@ -176,7 +178,7 @@ internal sealed class AuthApiStateClusterFixture
             string token;
             using (AsSubject(BootstrapAdmin))
             {
-                token = await StateObserveTailCursor.CaptureAsync(Cluster.Client, SiloServices, request.TreeId);
+                token = await StateObserveTailCursor.CaptureAsync(SiloServices, request.TreeId);
             }
 
             pinned = request with { ContinuationToken = token };
