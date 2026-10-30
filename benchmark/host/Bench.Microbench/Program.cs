@@ -112,6 +112,16 @@ if (string.Equals(suite, "readfusion", StringComparison.OrdinalIgnoreCase))
     return readSummary.HasCriticalValidationErrors || readSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "ownershipbarriers", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is ReadFusionCallBenchmarks.Site.AppOwnership
+            or ReadFusionCallBenchmarks.Site.BarrierIndex
+            or ReadFusionCallBenchmarks.Site.BarrierAbandon));
+    var ownershipSummary = BenchmarkRunner.Run<ReadFusionCallBenchmarks>(config);
+    return ownershipSummary.HasCriticalValidationErrors || ownershipSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "maintenancecalls", StringComparison.OrdinalIgnoreCase))
 {
     var maintenanceCalls = BenchmarkRunner.Run<MaintenanceCallReductionBenchmarks>(config);

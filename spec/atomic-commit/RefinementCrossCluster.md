@@ -14,6 +14,28 @@ protocol steps; the origin rows map only what each origin step writes for
 replication. Coverage of one half must not be read as coverage of the other
 (issue #2324).
 
+## Fused barrier observations
+
+`LatticeReplicationPeerDecommissioner.AbandonOriginBarriersAsync` reads the
+live/tombstone union through `ICrossTreeBarrierIndexGrain.GetAllAsync` only for
+`ReaddFresh`; `Decommission` still reads live entries alone. The returned keys
+are detached and deduplicated, and discovery still completes before abandonment.
+Each receiver's non-interleaved `AbandonForOriginAsync` checks its own origin and
+durable-decision flag, then awaits the unchanged `AbandonAsync` protocol. An
+unpersisted decision remains undecided, exactly as `GetStatusAsync` reports it.
+A decision completed before the mutating call is admitted is retained on
+decommission; re-add explicitly includes it. No status is cached across calls.
+
+These remove dispatch boundaries, not protocol steps: withdrawal from every
+index, tombstone removal, retention unregister and clear are unchanged and
+awaited. No per-tree bucket clearing moves before the whole-barrier abandon
+phase; the decommission mark and import-fence latch remain before it, and re-add
+clears the mark only afterwards. `Decommission`, `DecomWalk`, `ReaddFresh` and
+`FenceLift` retain their mappings below. The conditional receiver tests,
+`BarrierAbandonCallReductionTests`, `DecommissionPeerIntegrationTests` and
+`CrossTreeImportBarrierIntegrationTests` cover the implementation seam; this
+note does not turn the model into a machine-checked code refinement.
+
 ## Variable mapping
 
 | Spec variable | Protocol role | Code counterpart |

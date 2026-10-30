@@ -171,6 +171,19 @@ internal sealed class LatticeCrossTreeReceiverGrain(
     }
 
     /// <inheritdoc />
+    public async Task<bool> AbandonForOriginAsync(string originClusterId, bool includeDecided)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        if (!string.Equals(state.State.OriginClusterId, originClusterId, StringComparison.Ordinal)
+            || (state.State.Decided && !_decisionAwaitingPersist && !includeDecided))
+        {
+            return false;
+        }
+
+        return await AbandonAsync();
+    }
+
+    /// <inheritdoc />
     public async Task<bool> AbandonAsync()
     {
         var current = state.State;

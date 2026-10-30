@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree.State;
+
 namespace Orleans.Lattice.Apps.Tests;
 
 /// <summary>A scripted <see cref="IAppTreeFacts"/>: registered trees, derivations and aliases held in memory.</summary>
@@ -11,6 +13,16 @@ internal sealed class FakeAppTreeFacts : IAppTreeFacts
     public Dictionary<string, string> Aliases { get; } = new(StringComparer.Ordinal);
 
     public Task<bool> ExistsAsync(string treeId) => Task.FromResult(Registered.Contains(treeId));
+
+    public Task<TreeRegistryEntry?> GetEntryAsync(string treeId) =>
+        Task.FromResult<TreeRegistryEntry?>(
+            Registered.Contains(treeId) || DerivedFrom.ContainsKey(treeId) || Aliases.ContainsKey(treeId)
+                ? new TreeRegistryEntry
+                {
+                    DerivedFrom = DerivedFrom.GetValueOrDefault(treeId),
+                    PhysicalTreeId = Aliases.GetValueOrDefault(treeId),
+                }
+                : null);
 
     public Task<string?> GetDerivedFromAsync(string treeId) =>
         Task.FromResult(DerivedFrom.TryGetValue(treeId, out var source) ? source : null);

@@ -572,6 +572,16 @@ Prometheus is at <http://localhost:9090> for raw query access.
 
 ## `microbench` - micro-benchmark path
 
+The opt-in `--suite ownershipbarriers` subset of `ReadFusionCallBenchmarks`
+checks the 3-to-1 fresh structural ownership registry read, 2-to-1 re-add barrier
+index read, and 2-to-1 matching-origin barrier abandonment dispatch shapes.
+It uses the existing `Yield` and `Delay1Ms` hop models, not a live Orleans silo.
+The latter is subject to OS timer floors. Unchanged alias surveys, index
+withdrawals and storage writes are excluded from both lanes; reported allocation
+savings describe the dispatch model, not production serialization. Set
+`BENCH_MICROBENCH_FIDELITY=quick-oop` and
+`BENCH_MICROBENCH_INVOCATIONS=128` for a short isolated run.
+
 `microbench` does not stand up the docker stack and does not boot an Orleans silo. It
 targets `ILattice` directly through a [BenchmarkDotNet](https://benchmarkdotnet.org/)
 harness that hand-instantiates the tree routing and leaf-storage path behind the

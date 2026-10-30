@@ -87,6 +87,13 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     Task<CrossTreeReceiverStatus> GetStatusAsync();
 
     /// <summary>
+    /// Abandons only a barrier belonging to <paramref name="originClusterId"/>.
+    /// Unless <paramref name="includeDecided"/> is set, a durable decision is
+    /// preserved. The check is serialized with the existing abandonment protocol.
+    /// </summary>
+    Task<bool> AbandonForOriginAsync(string originClusterId, bool includeDecided);
+
+    /// <summary>
     /// Records the operation's decision stamps (issue #4684): per participating
     /// tree, that tree's snapshot export epoch read at the origin after the
     /// decision was durable. Every terminal and decision row of the operation
