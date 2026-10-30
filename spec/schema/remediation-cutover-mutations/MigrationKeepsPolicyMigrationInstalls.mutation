@@ -1,0 +1,12 @@
+# A migration's cutover installs a policy as a transform remediation does.
+MODULE: MigrationKeepsPolicyMigrationInstalls
+TARGET: MigrationKeepsPolicy
+CLASS: Action
+SUMMARY: a migration installs a policy at its cutover
+PERTURBS: CutPolicy
+
+--- FIND
+    /\ policy' = IF mode = "Transform" THEN "New" ELSE policy
+--- REPLACE
+    /\ policy' = "New"
+--- END

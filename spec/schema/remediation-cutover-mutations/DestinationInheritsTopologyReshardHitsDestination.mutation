@@ -1,0 +1,13 @@
+# A reshard addressed at the logical tree reshapes the destination still
+# being built instead of the copy the tree resolves to.
+MODULE: DestinationInheritsTopologyReshardHitsDestination
+TARGET: DestinationInheritsTopology
+CLASS: Invariant
+SUMMARY: a reshard of the tree lands on the unpublished destination
+PERTURBS: Reshard
+
+--- FIND
+    /\ shards' = [shards EXCEPT ![alias] = Shards]
+--- REPLACE
+    /\ shards' = [shards EXCEPT ![IF destReg /\ phase = "Build" THEN dest ELSE alias] = Shards]
+--- END

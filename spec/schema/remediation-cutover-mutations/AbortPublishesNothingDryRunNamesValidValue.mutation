@@ -1,0 +1,17 @@
+# The dry run aborts on any present value, naming one the remediation could
+# have rewritten.
+MODULE: AbortPublishesNothingDryRunNamesValidValue
+TARGET: AbortPublishesNothing
+CLASS: Action
+SUMMARY: the dry run aborts on a value it could rewrite
+PERTURBS: DryStep
+
+--- FIND
+    /\ IF Offends(data[alias][k])
+       THEN /\ Finish("Aborted", k) /\ last' = "Abort"
+            /\ UNCHANGED <<mode, begin, dest
+--- REPLACE
+    /\ IF data[alias][k] # Abs
+       THEN /\ Finish("Aborted", k) /\ last' = "Abort"
+            /\ UNCHANGED <<mode, begin, dest
+--- END

@@ -1,0 +1,18 @@
+# SupersededPublicationRefused: the cutover is checked and its swap fenced on the captured source.
+MODULE: SchemaRemediationCutover
+ROW: SupersededPublicationRefused
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: SchemaRemediationSupersededCutoverIntegrationTests.Cutover_after_the_alias_moved_to_another_tree_is_refused_with_no_swap_and_the_new_alias_intact
+SUMMARY: the cutover swaps over whatever the tree resolves to (#5289)
+
+--- FIND
+        if (await SupersedingCopyAsync(sourcePhysical, destinationPhysical) is { } supersededBeforeCutover)
+--- REPLACE
+        if (sourcePhysical is null && await SupersedingCopyAsync(sourcePhysical, destinationPhysical) is { } supersededBeforeCutover)
+--- END
+
+--- FIND
+                grainFactory, TreeId, destinationPhysical, expectedSourcePhysicalTreeId: sourcePhysical);
+--- REPLACE
+                grainFactory, TreeId, destinationPhysical, expectedSourcePhysicalTreeId: null);
+--- END

@@ -137,18 +137,19 @@ lattice	formal-tlc-atomic-variants-4	deterministic	8.88
 lattice	formal-tlc-atomic-variants-5	deterministic	9.43
 lattice	formal-tlc-atomic-variants-6	deterministic	8.97
 lattice	formal-tlc-backup	deterministic	3.94
-# formal-tlc-schema is one measured item. Its 30 SchemaPolicyConfig and
-# SchemaStageOrdering cases took 2.34 minutes in the receipt-free member pull
-# request ci.yml run 41065598921 (head 675f6363f, job 124100785054) for #5226;
-# with SchemaVersionFamily's 18 cases added, all 48 ran (no schema receipt) in
-# 1 m 54 s of dotnet test in ci.yml run 41087582284 (head e15b3091e, job
-# 124175924963) for #5227. With SchemaDurableOperation's and
-# SchemaComplianceScan's 38 cases added to the first two modules, all 68 took
-# 6.64 minutes (dotnet test 6 m 34 s) in ci.yml run 41088681728 (head
-# 4e5554713, job 124180139236) for #5229. The 18 SchemaStrictIngest cases
-# (#5228) add 0.78 minutes measured locally (16-core Windows workstation); the
-# row adds them to that figure until the #5228 member run measures all 104.
-lattice	formal-tlc-schema	deterministic	7.42
+# formal-tlc-schema is one measured item: every Schema* module's base,
+# variants and mutations. Earlier figures: 30 cases 2.34 min (ci.yml run
+# 41065598921, #5226); 48 cases 1 m 54 s of dotnet test (run 41087582284,
+# #5227); 68 cases 6.64 min (run 41088681728, #5229). With SchemaStrictIngest
+# (#5228) and SchemaRemediationCutover (#5230) all 133 cases ran (the shared
+# spec/schema fingerprint changed, so no receipt applied) in 9.76 minutes
+# (dotnet test 9 m 42 s) in the member pull request ci.yml run 41134925542
+# (head 7b8e1edf5, job 124337189421, leg 3); the row takes that figure. TRX
+# case-seconds per module in that run (upper bounds, slot waits included;
+# 2234 case-s in 582 s wall): SchemaDurableOperation 763,
+# SchemaRemediationCutover 630, SchemaStageOrdering 226, SchemaVersionFamily 212,
+# SchemaPolicyConfig 201, SchemaStrictIngest 118, SchemaComplianceScan 84.
+lattice	formal-tlc-schema	deterministic	9.76
 lattice	formal-tlc-smoke	deterministic	0.27
 # lattice/rest (deterministic) uses complete passing item TRX from green run
 # 40648174016 (head c04710f914ed1628af05916aaf5f5272caa6d102); elapsed TRX

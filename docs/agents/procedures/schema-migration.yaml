@@ -55,7 +55,7 @@ steps:
   - n: 4
     action: "If the tree is unversioned, opt it in at its current version before advancing."
     api: "ILatticeSchemaControl.SetVersionConfigAsync / SetVersionConfig / lattice_treeadmin_schema_set_version_config"
-    expects: "New writes are stamped at the configured target immediately; SetVersionConfigAsync replaces the whole config without the monotonic check."
+    expects: "New writes are stamped at the configured target on the serving silo as soon as the call returns and on every other silo within LatticeSchemaVersioningOptions.PropagationInterval (one second by default); SetVersionConfigAsync replaces the whole config without the monotonic check."
     source: "docs/lattice.schema/schema-versioning.md"
   - n: 5
     action: "Read the enforcement policy the migration will validate against."
@@ -70,7 +70,7 @@ steps:
   - n: 7
     action: "When nonCompliantCount is above zero, start a remediation with a transform and target policy and poll it to a terminal state before migrating."
     api: "ILatticeSchemaOperations.StartRemediationAsync / StartRemediation / lattice_treeadmin_schema_remediation_start"
-    expects: "Phases DryRun, Build, Cutover; Succeeded installs the target policy and cuts the tree over; a value that cannot be remediated fails the operation with outcome aborted and nothing cut over."
+    expects: "Phases DryRun, Build, Cutover; Succeeded installs the target policy and cuts the tree over; a value that cannot be remediated fails the operation with outcome aborted and nothing cut over. On a versioned tree this includes a value that cannot be upcast to the tree's target (no hop, or stamped newer than the target): the report is DidAbort naming the key, it is not thrown, and the alias reservation is released."
     source: "docs/lattice.api.schema/operations.md"
   - n: 8
     action: "Start the advance-and-migrate with the new target version and a caller-chosen operationId; on a lost response re-issue it with the same operationId."
@@ -112,9 +112,17 @@ failure_modes:
     effect: "Nothing is cut over and the tree's data is untouched; the advanced target stays in place and reads upcast lazily."
     response: "Remediate the offending values against the policy, then start a migration to the current target."
   - id: value-not-upcastable
-    signal: "The migration fails reading a value stamped at a version with no registered hop to the target or newer than the target (NotSupportedException)."
-    effect: "The migration stays in flight holding the tree's alias reservation, and every re-issue fails again until the registry can upcast the value."
-    response: "Register the missing descriptor and hop, then start a migration of the same tree again. The migration code comments instead describe an aborted report naming the value; the two sources disagree (#5208), so handle both outcomes."
+    signal: "A blocking MigrateToTargetVersionAsync or AdvanceAndMigrateAsync returns a report with DidAbort true naming the offending key, or the tracked operation reads Failed with outcome aborted, offendingKey and a reason naming the missing hop or the newer-than-target version."
+    effect: "The migration is no longer in flight, its alias reservation is released and the tree's data is untouched; an advance-and-migrate's target advance stays committed."
+    response: "Register the missing descriptor and hop (in the host registry or through runtime registration for the tree), then re-run MigrateToTargetVersionAsync or StartMigrationAsync. No release or cancel step is needed."
+  - id: cutover-superseded
+    signal: "The tracked operation reads Failed with outcome aborted, a reason naming the physical tree that superseded it, and no offendingKey; a blocking call returns DidAbort with no OffendingKey."
+    effect: "Another alias change moved the tree after the migration captured it: nothing was cut over, the migrated copy was discarded and the alias reservation was released."
+    response: "Resolve the tree's alias to confirm its current physical tree, then start a new migration."
+  - id: joined-remediation-superseded
+    signal: "The tracked operation reads Failed with outcome superseded and remediationOperationId naming the followed remediation; a blocking call throws InvalidOperationException with the same reason."
+    effect: "The operation joined a remediation that ended under the operation that started it and was then replaced by a later remediation; this operation applied nothing further."
+    response: "Read the outcome on the record of the operation named by remediationOperationId; start a new migration only if that outcome requires one."
   - id: registration-conflict
     signal: "RegisterSchemaAsync throws ArgumentException (gRPC invalid-argument) for a changed descriptor, a non-advancing or unregistered hop, an uninstalled transform id, or a catalog over 128 versions or hops."
     effect: "Nothing is appended and earlier registrations are not replaced."
@@ -154,7 +162,7 @@ concurrency:
     source: "docs/lattice.schema/schema-enforcement.md"
   - rule: "Advancing the target version only changes the config and is safe concurrently with live writes."
     source: "docs/lattice.schema/schema-versioning.md"
-  - rule: "An in-flight migration holds the tree's alias reservation, so a delete is refused and a migration of a deleted or delete-pending tree is refused."
+  - rule: "An in-flight migration holds the tree's alias reservation, so a delete and an explicit set-alias of the tree are refused, and a migration of a deleted or delete-pending tree is refused."
     source: "docs/lattice.schema/schema-versioning.md"
   - rule: "Work runs in bounded slices from a durable cursor; a cancel takes effect between slices and is declined during cutover."
     source: "docs/lattice.api.schema/operations.md"

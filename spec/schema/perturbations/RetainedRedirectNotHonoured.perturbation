@@ -1,0 +1,12 @@
+# SupersededCopyTakesNoWrite: an armed shard redirects logical-alias traffic.
+MODULE: SchemaRemediationCutover
+ROW: SupersededCopyTakesNoWrite
+FILE: src/lattice/BPlusTree/Grains/ShardRootGrain.RetainedRedirect.cs
+DETECTORS: SchemaRemediationCutoverAfterReshardIntegrationTests.Cutover_after_a_reshard_arms_every_source_shard, BareAliasRoutingIntegrationTests.SetAliasAsync_moves_every_warmed_router_and_never_writes_the_retained_copy
+SUMMARY: an armed shard serves logical traffic instead of redirecting it
+
+--- FIND
+        if (!logicalRouted) return;
+--- REPLACE
+        if (!logicalRouted || rr is not null) return;
+--- END

@@ -25,8 +25,14 @@ commits the batch's other entries.
 An entry is created only in [strict-ingest](schema-enforcement.md#strict-mode-ingest)
 mode. Each entry records the offending key, a bounded preview of the value
 (capped by the writing add-on's `DeadLetterPreviewMaxBytes` option), the full byte
-length, a human-readable reason, the source, and a UTC timestamp. The source is one
-of:
+length, a human-readable reason, the source, and a UTC timestamp. For an item that
+arrived already carrying a version envelope, the preview and the byte length cover
+the stored, enveloped bytes, while the reason describes the body it was judged by
+(see [composition with versioning](schema-enforcement.md#composition-with-versioning)).
+A refused item is diverted once: a refused full-state CRDT row (the bootstrap form)
+is not retried as a version conflict, and an entry of a replicated atomic batch
+whose apply a bootstrap hold mirrors onto a second copy is recorded once.
+The source is one of:
 
 | `LatticeSchemaDeadLetterSource` | Meaning |
 |---|---|

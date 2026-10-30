@@ -1,0 +1,14 @@
+# A refused cutover reports the supersession but leaves the destination.
+MODULE: SupersededLeavesNothingKeepsDestination
+TARGET: SupersededLeavesNothing
+CLASS: Action
+SUMMARY: a superseded cutover keeps its destination
+PERTURBS: Supersede
+
+--- FIND
+    /\ Finish("Superseded", 0) /\ last' = "Supersede"
+    /\ discarded' = discarded \cup {dest}
+--- REPLACE
+    /\ Finish("Superseded", 0) /\ last' = "Supersede"
+    /\ discarded' = discarded
+--- END

@@ -2863,8 +2863,10 @@ capabilities:
         source: "docs/lattice.schema/README.md"
       - statement: "Installing a stricter policy does not retroactively rewrite existing values."
         source: "docs/lattice.schema/schema-enforcement.md"
-      - statement: "ValidateCrdtMergeResults never rejects or rewrites a merge, and its annotation is not currently surfaced."
-        source: "docs/lattice.schema/schema-enforcement.md"
+      - statement: "ValidateCrdtMergeResults never rejects or rewrites a merge; a violation is only counted on orleans.lattice.leaf.merge_observer_events and logged as a warning, and MergeManyAsync merges are not observed."
+        source: "docs/lattice.schema/configuration.md"
+      - statement: "A schema policy or version-config change applies on the serving silo before the admin call returns but reaches every other silo only within the add-on's PropagationInterval (one second by default); propagation is eventual, not synchronous."
+        source: "docs/lattice.schema/configuration.md"
       - statement: "A direct local write rejected by schema policy is not mirrored into the dead-letter queue in the current release."
         source: "docs/lattice.schema/dead-letter-queue.md"
       - statement: "Replay or requeue of dead-lettered items and retention or cap policies are not part of the current dead-letter surface."
@@ -2872,12 +2874,6 @@ capabilities:
       - statement: "A version newer than the reader target or one with no upcaster to the target surfaces NotSupportedException on read."
         source: "docs/lattice.schema/schema-versioning.md"
     unsafe_sequences:
-      - sequence:
-          - "register schema versioning"
-          - "register schema enforcement second"
-          - "expect new writes to be version-stamped"
-        hazard: "Calling AddLatticeSchemaEnforcement second replaces the composed write interceptor with enforcement alone."
-        source: "docs/lattice.schema/README.md"
       - sequence:
           - "run schema remediation or eager version migration while the source tree is accepting writes"
           - "assume concurrent writes are shadow-forwarded into the destination"
@@ -2897,7 +2893,7 @@ capabilities:
         source: "docs/lattice.schema/schema-versioning.md"
       - statement: "Strict-ingest dead-lettering keeps intercepted replicated typed-CRDT and replicated atomic-batch ingest from blocking on a schema violation."
         source: "docs/lattice.schema/dead-letter-queue.md"
-      - statement: "A remediation pass holds the tree's alias reservation, so a delete of the tree is refused while it runs and a remediation of a deleted tree is refused."
+      - statement: "A remediation or migration pass holds the tree's alias reservation, so a delete and an explicit set-alias of the tree are refused while it runs, and a remediation of a deleted tree is refused."
         source: "docs/lattice.schema/schema-enforcement.md"
     sources:
       - "FEATURES.md"

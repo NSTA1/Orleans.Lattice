@@ -1,0 +1,13 @@
+# Reserve: the coordinator takes the tree's alias reservation.
+MODULE: SchemaRemediationCutover
+ROW: Reserve
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: SchemaRemediationSupersededCutoverIntegrationTests.An_explicit_alias_while_a_remediation_holds_the_reservation_is_refused_naming_it
+SUMMARY: the coordinator records a reservation id but never takes the reservation
+
+--- FIND
+        await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
+            .BeginAliasChangeAsync(state.State.AliasReservationId);
+--- REPLACE
+        await Task.CompletedTask;
+--- END

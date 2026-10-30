@@ -1089,7 +1089,7 @@
         "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceTargetVersionAsync"
       },
       "concurrency": {
-        "rule": "New writes are stamped at the new version immediately; existing values are upcast lazily on read.",
+        "rule": "New writes are stamped at the new version on the serving silo as soon as the call returns and on every other silo within LatticeSchemaVersioningOptions.PropagationInterval (one second by default); existing values are upcast lazily on read.",
         "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#AdvanceTargetVersionAsync"
       },
       "sources": [
@@ -1811,7 +1811,7 @@
         "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#SetVersionConfigAsync"
       },
       "concurrency": {
-        "rule": "New writes are stamped at the configured target version immediately.",
+        "rule": "New writes are stamped at the configured target version on the serving silo as soon as the call returns and on every other silo within LatticeSchemaVersioningOptions.PropagationInterval (one second by default).",
         "source": "src/lattice.schema/ILatticeSchemaVersionAdmin.cs#SetVersionConfigAsync"
       },
       "sources": [

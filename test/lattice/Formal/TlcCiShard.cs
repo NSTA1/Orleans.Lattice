@@ -150,8 +150,15 @@ internal static class TlcCiShard
     /// Every base, variant and mutation of the Schema* modules under
     /// <c>spec/schema/</c>, co-located so each base serves its mutations'
     /// full-bound controls. Routed by name prefix into a dedicated shard so a
-    /// schema module never reaches the catch-all; split it from measured timings
-    /// as the area grows.
+    /// schema module never reaches the catch-all, and a new Schema* module joins
+    /// it with no routing change.
+    /// <para>
+    /// Split by module, never by mutation, once the measured item would exceed
+    /// the largest other TLC item: give the module an exact-name branch in
+    /// <see cref="SchemaCategory"/> ahead of the prefix rule and a shard of its
+    /// own, so its base stays co-located with its mutations. The per-module
+    /// measured costs live in the shard's <c>test-shards.json</c> note.
+    /// </para>
     /// </summary>
     public const string Schema = "TlcShardSchema";
 
