@@ -155,11 +155,21 @@ public partial class ClusterToolsPage : IDisposable
 
     private async Task CompactAsync()
     {
+        if (_busy || _lifetime.IsLeft)
+        {
+            return;
+        }
+
         _busy = true;
         var shard = _compactionIndex;
         var result = await ClusterLoad<TreeCompactionTriggerResult>.RunAsync(
             ct => Facades.RequireTreeAdmin().TriggerShardCompactionAsync(TreeId, shard, ct),
             _lifetime.Token);
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
         _busy = false;
         _compaction = result.Value;
         if (result.Error is { } error)

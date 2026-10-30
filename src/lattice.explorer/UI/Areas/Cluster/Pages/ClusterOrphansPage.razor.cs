@@ -88,9 +88,15 @@ public partial class ClusterOrphansPage : IDisposable
         _access = ClusterTreeAccess.None(TreeId ?? string.Empty);
         if (TreeId is { } tree)
         {
-            _accessLoad = await ClusterLoad<LatticeTreeAdminCapabilities>.RunAsync(
+            var access = await ClusterLoad<LatticeTreeAdminCapabilities>.RunAsync(
                 ct => ClusterTreeAccess.ProbeAsync(Facades.RequireTreeAdmin(), tree, ct),
                 _lifetime.Token);
+            if (_lifetime.IsLeft)
+            {
+                return;
+            }
+
+            _accessLoad = access;
             _access = _accessLoad.Value ?? _access;
             if (_access.CanViewDiagnostics && TreeAdminOperationsAccess.Of(Facades.TreeAdmin) is { } operations)
             {
