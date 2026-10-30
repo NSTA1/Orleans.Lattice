@@ -1,0 +1,16 @@
+# The slice cursor is volatile, so a crash restarts the phase from its start.
+MODULE: ProgressNeverRegressesCrashLosesCursor
+TARGET: ProgressNeverRegresses
+CLASS: Action
+SUMMARY: a crash loses the banked cursor
+PERTURBS: Crash
+BOUNDS: KeyCount = 2
+
+--- FIND
+    /\ begin' = FALSE /\ pend' = FALSE /\ cstep' = 0 /\ last' = "Crash"
+    /\ UNCHANGED <<phase, mode, cursor, dest,
+--- REPLACE
+    /\ begin' = FALSE /\ pend' = FALSE /\ cstep' = 0 /\ last' = "Crash"
+    /\ cursor' = 0
+    /\ UNCHANGED <<phase, mode, dest,
+--- END

@@ -1,0 +1,12 @@
+# ReservationExcludesAliasChanges: every holder of the reservation, a remediation included, excludes an explicit alias set.
+MODULE: SchemaRemediationCutover
+ROW: ReservationExcludesAliasChanges
+FILE: src/lattice/BPlusTree/Grains/TreeDeletionGrain.Logical.cs
+DETECTORS: SchemaRemediationSupersededCutoverIntegrationTests.An_explicit_alias_while_a_remediation_holds_the_reservation_is_refused_naming_it
+SUMMARY: only a resize's reservation blocks an explicit alias set
+
+--- FIND
+        if (state.State.AliasOperationId is { } holder)
+--- REPLACE
+        if (state.State.AliasOperationId is { } holder && holder.StartsWith("resize:", StringComparison.Ordinal))
+--- END

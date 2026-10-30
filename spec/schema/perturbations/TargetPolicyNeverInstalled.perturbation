@@ -1,0 +1,12 @@
+# CutPolicy: a transform remediation installs its target policy at cutover.
+MODULE: SchemaRemediationCutover
+ROW: CutPolicy
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.Cutover_arms_the_target_policy_before_repointing_the_alias
+SUMMARY: the cutover never installs the target policy
+
+--- FIND
+            await policyStore.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+--- REPLACE
+            await Task.CompletedTask;
+--- END

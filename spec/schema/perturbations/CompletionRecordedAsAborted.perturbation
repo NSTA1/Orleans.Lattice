@@ -1,0 +1,12 @@
+# Complete: completion is recorded once the cutover has run.
+MODULE: SchemaRemediationCutover
+ROW: Complete
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.StartAsync_all_values_remediate_cuts_over_and_installs_policy
+SUMMARY: a completed cutover records the aborted phase
+
+--- FIND
+        state.State.Phase = LatticeSchemaRemediationPhase.Completed;
+--- REPLACE
+        state.State.Phase = LatticeSchemaRemediationPhase.Aborted;
+--- END

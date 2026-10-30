@@ -1,0 +1,18 @@
+# SupersededLeavesNothing: a refused swap puts back the policy its attempt installed.
+MODULE: SchemaRemediationCutover
+ROW: SupersededLeavesNothing
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.Cutover_superseded_at_its_swap_restores_the_prior_policy_and_aborts
+SUMMARY: a swap refused as superseded keeps the policy installed before it
+
+--- FIND
+            if (installedPolicy)
+            {
+                await RestorePolicyAsync(previousPolicy);
+            }
+--- REPLACE
+            if (installedPolicy && previousPolicy is { } && false.Equals(true))
+            {
+                await RestorePolicyAsync(previousPolicy);
+            }
+--- END

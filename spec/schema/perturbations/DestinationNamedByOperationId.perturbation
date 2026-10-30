@@ -1,0 +1,12 @@
+# FreshDestination: the destination suffix is fresh, never the operation id.
+MODULE: SchemaRemediationCutover
+ROW: FreshDestination
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.AcceptAsync_persists_intent_without_scanning_and_records_the_operation_id
+SUMMARY: a caller-chosen operation id names the destination tree
+
+--- FIND
+        var destinationTreeId = $"{TreeId}/remediated/{destinationSuffix}";
+--- REPLACE
+        var destinationTreeId = $"{TreeId}/remediated/{operationId}";
+--- END

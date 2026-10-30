@@ -1,0 +1,15 @@
+# The destination id is derived from something a later remediation can repeat
+# (a reused operation id), so it names the copy an earlier one built.
+MODULE: FreshDestinationReusesDestination
+TARGET: FreshDestination
+CLASS: Invariant
+SUMMARY: a later remediation reuses the previous destination id
+PERTURBS: Initiate
+BOUNDS: MaxRems = 2
+
+--- FIND
+    /\ dest' = nextId /\ nextId' = nextId + 1
+--- REPLACE
+    /\ dest' = IF nextId > 2 THEN nextId - 1 ELSE nextId
+    /\ nextId' = IF nextId > 2 THEN nextId ELSE nextId + 1
+--- END

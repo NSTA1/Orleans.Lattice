@@ -1,0 +1,15 @@
+# The build banks its first value as the last, cutting over a partial copy.
+MODULE: QuiescentCutoverCompleteCutsOverEarly
+TARGET: QuiescentCutoverComplete
+CLASS: Action
+SUMMARY: the build moves to the cutover before the source is exhausted
+PERTURBS: Bank
+BOUNDS: KeyCount = 2
+
+--- FIND
+    /\ IF cursor + 1 = KeyCount
+       THEN phase' = "Cutover" /\ cursor' = 0
+--- REPLACE
+    /\ IF TRUE
+       THEN phase' = "Cutover" /\ cursor' = 0
+--- END

@@ -1,0 +1,25 @@
+# ReservationHeldWhileInFlight: the reservation is released only once the remediation is terminal.
+MODULE: SchemaRemediationCutover
+ROW: ReservationHeldWhileInFlight
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: SchemaRemediationSupersededCutoverIntegrationTests.An_explicit_alias_while_a_remediation_holds_the_reservation_is_refused_naming_it
+SUMMARY: every slice releases the reservation, even mid-remediation
+
+--- FIND
+            finally
+            {
+                if (!state.State.InProgress)
+                    await ReleaseAliasAsync();
+            }
+        }
+    }
+    /// <inheritdoc />
+--- REPLACE
+            finally
+            {
+                await ReleaseAliasAsync();
+            }
+        }
+    }
+    /// <inheritdoc />
+--- END

@@ -1,0 +1,20 @@
+# The coordinator persists its intent without ever taking the alias reservation.
+MODULE: ReservationHeldWhileInFlightIntentBeforeReservation
+TARGET: ReservationHeldWhileInFlight
+CLASS: Invariant
+SUMMARY: intent is persisted without the alias reservation
+PERTURBS: Reserve, Initiate
+
+--- FIND
+    /\ reserved' = "Rem" /\ begin' = TRUE /\ rems' = rems + 1
+--- REPLACE
+    /\ reserved' = reserved /\ begin' = TRUE /\ rems' = rems + 1
+--- END
+
+--- FIND
+    /\ phase = "Idle" /\ begin /\ reserved = "Rem"
+    /\ phase' = "DryRun"
+--- REPLACE
+    /\ phase = "Idle" /\ begin
+    /\ phase' = "DryRun"
+--- END

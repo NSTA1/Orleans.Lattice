@@ -1,0 +1,19 @@
+# ExplicitPublish: an explicit alias set arms the copy it replaces.
+MODULE: SchemaRemediationCutover
+ROW: ExplicitPublish
+FILE: src/lattice/BPlusTree/AliasCutoverShardMaps.cs
+DETECTORS: AliasSwapRoutingAtomicityIntegrationTests.An_explicit_alias_moves_warm_point_reads_onto_the_target_and_back
+SUMMARY: an explicit alias set never arms the copy it replaces
+
+--- FIND
+        await ArmRedirectsAsync(
+            grainFactory,
+            current,
+            replaced,
+            targetPhysicalTreeId,
+            logicalTreeId,
+            $"alias:{logicalTreeId}->{targetPhysicalTreeId}",
+            cancellationToken);
+--- REPLACE
+        await Task.CompletedTask;
+--- END

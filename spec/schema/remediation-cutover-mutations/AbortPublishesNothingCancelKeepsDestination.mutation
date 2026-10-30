@@ -1,0 +1,13 @@
+# A cancel during the build ends the remediation without discarding the
+# destination it registered.
+MODULE: AbortPublishesNothingCancelKeepsDestination
+TARGET: AbortPublishesNothing
+CLASS: Action
+SUMMARY: a cancel during the build keeps the destination
+PERTURBS: Cancel
+
+--- FIND
+    /\ discarded' = IF destReg THEN discarded \cup {dest} ELSE discarded
+--- REPLACE
+    /\ discarded' = discarded
+--- END

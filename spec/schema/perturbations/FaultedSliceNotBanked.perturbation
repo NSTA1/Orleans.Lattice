@@ -1,0 +1,12 @@
+# ProgressNeverRegresses: a faulted slice banks its progress.
+MODULE: SchemaRemediationCutover
+ROW: ProgressNeverRegresses
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.A_faulted_build_slice_banks_the_values_it_wrote_and_the_next_slice_resumes_after_them, LatticeSchemaRemediationGrainTests.A_faulted_dry_run_slice_banks_its_progress_and_resumes_after_it
+SUMMARY: a faulted slice never banks the values it processed
+
+--- FIND
+        if (done == 0 || lastKey is null)
+--- REPLACE
+        if (done >= 0 || lastKey is null)
+--- END
