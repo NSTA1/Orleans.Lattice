@@ -523,7 +523,7 @@ internal sealed partial class LatticeGrain
                 // ambient HLC override makes the leaf re-stamp the source HLC;
                 // the absolute expiry is applied verbatim (never re-resolved
                 // from a relative TTL) so it stays strictly convergent.
-                await ApplyCrdtDeltaGuardedAsync(item.Key, item.Mode, item.Delta, item.ExpiresAtTicks, CancellationToken.None);
+                await ApplyCrdtDeltaGuardedAsync(item.Key, item.Mode, item.Delta, item.ExpiresAtTicks, judgement: null, CancellationToken.None);
             }
         }
     }
@@ -590,7 +590,7 @@ internal sealed partial class LatticeGrain
         // resolution it makes checks the copy's receive fence, and check it now.
         ReplicationApplyScope.Enter();
         await GetRoutingAsync();
-        await ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, CancellationToken.None);
+        await ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, judgement: null, CancellationToken.None);
     }
 
     /// <inheritdoc />
@@ -652,13 +652,17 @@ internal sealed partial class LatticeGrain
         // visible projection.
         // A receiver whose registry already holds this saga's decision
         // settles the prepare against it instead of staging it (#4482).
-        var lwwJudged = false;
-        var lwwDiverted = false;
-        var lwwValue = value;
+        //
+        // One delivery is judged at the write choke point once. A bootstrap
+        // hold (#4791) runs the stage or settle below twice - on the held copy
+        // and mirrored onto the original tree - and both passes reuse the first
+        // pass's verdict, so a refused entry is dead-lettered once and a
+        // transformed value is written identically to both trees (#5285).
+        var judgement = WriteInterceptionActive ? new WriteJudgement() : null;
         if (await TrySettleReplicatedPrepareAsync(
                 transactionId,
                 () => mode != LatticeMergeMode.LwwRegister && delta is not null
-                    ? ApplyCrdtDeltaPreparedCommittedAsync(key, mode, delta, expiresAtTicks, originClusterId)
+                    ? ApplyCrdtDeltaPreparedCommittedAsync(key, mode, delta, expiresAtTicks, originClusterId, judgement)
                     : ApplyLwwPreparedCommittedAsync()))
         {
             return;
@@ -692,12 +696,12 @@ internal sealed partial class LatticeGrain
                 }
                 else
                 {
-                    await SetAsync(key, value, TimeSpan.FromTicks(remainingTicks));
+                    await SetJudgedOnceAsync(key, value, TimeSpan.FromTicks(remainingTicks), judgement, CancellationToken.None);
                 }
             }
             else
             {
-                await SetAsync(key, value);
+                await SetJudgedOnceAsync(key, value, judgement, CancellationToken.None);
             }
         }
 
@@ -706,29 +710,24 @@ internal sealed partial class LatticeGrain
         // first, exactly as StageAsync's SetAsync judges a prepare that arrives
         // before the decision (#5266): a dead-lettered value is diverted and not
         // applied, a transformed value is applied transformed, and a rejection
-        // throws. The judgement is made once and reused when a bootstrap hold
-        // mirrors the apply, so one refused entry is dead-lettered once. An
-        // already-expired value is not judged, as StageAsync tombstones it
-        // without a judged write.
+        // throws. The verdict is shared with the hold's mirror pass through
+        // judgement. An already-expired value is not judged, as StageAsync
+        // tombstones it without a judged write.
         async Task ApplyLwwPreparedCommittedAsync()
         {
-            if (!lwwJudged)
+            var lwwValue = value;
+            var ttl = expiresAtTicks > 0
+                ? TimeSpan.FromTicks(expiresAtTicks - DateTimeOffset.UtcNow.UtcTicks)
+                : (TimeSpan?)null;
+            if (WriteInterceptionActive && (ttl is null || ttl > TimeSpan.Zero))
             {
-                lwwJudged = true;
-                var ttl = expiresAtTicks > 0
-                    ? TimeSpan.FromTicks(expiresAtTicks - DateTimeOffset.UtcNow.UtcTicks)
-                    : (TimeSpan?)null;
-                if (WriteInterceptionActive && (ttl is null || ttl > TimeSpan.Zero))
+                var outcome = await InterceptWriteOnceAsync(judgement, LatticeOperation.Write, key, value, ttl, CancellationToken.None);
+                if (!outcome.Proceed)
                 {
-                    var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl, CancellationToken.None);
-                    lwwDiverted = !outcome.Proceed;
-                    lwwValue = outcome.Value;
+                    return;
                 }
-            }
 
-            if (lwwDiverted)
-            {
-                return;
+                lwwValue = outcome.Value;
             }
 
             await ApplySetAsync(key, lwwValue, sourceHlc, originClusterId, sourceVectorClock, expiresAtTicks);
@@ -896,11 +895,11 @@ internal sealed partial class LatticeGrain
     /// absolute expiry the prepare carried.
     /// </summary>
     private async Task ApplyCrdtDeltaPreparedCommittedAsync(
-        string key, LatticeMergeMode mode, byte[] delta, long expiresAtTicks, string originClusterId)
+        string key, LatticeMergeMode mode, byte[] delta, long expiresAtTicks, string originClusterId, WriteJudgement? judgement)
     {
         using (LatticeOriginContext.With(originClusterId))
         {
-            await ApplyCrdtDeltaGuardedAsync(key, mode, delta, expiresAtTicks, CancellationToken.None);
+            await ApplyCrdtDeltaGuardedAsync(key, mode, delta, expiresAtTicks, judgement, CancellationToken.None);
         }
     }
 
