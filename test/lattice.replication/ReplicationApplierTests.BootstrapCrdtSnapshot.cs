@@ -186,7 +186,7 @@ public partial class ReplicationApplierTests
         var localMember = new byte[] { 0x01 };
         var remoteMember = new byte[] { 0x02 };
         var existing = EncodeOrSet(s => s.Add(localMember, "site-a", 1));
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue { Value = existing, Version = Hlc(5) });
 
         byte[]? written = null;
@@ -226,7 +226,7 @@ public partial class ReplicationApplierTests
         // A non-empty receiver forces the merge-and-write loop (not the
         // verbatim install fast-path), so each CAS attempt re-reads and
         // re-writes; the first two lose the race.
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue { Value = EncodeOrSet(s => s.Add(new byte[] { 0x01 }, "site-a", 1)), Version = Hlc(5) });
         apply.ApplySetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
             .Returns(ReplicationConditionalSetOutcome.VersionMismatch, ReplicationConditionalSetOutcome.VersionMismatch, ReplicationConditionalSetOutcome.Applied);

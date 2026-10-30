@@ -408,7 +408,7 @@ public partial class ReplicationApplierTests
         // client-facing ILattice.GetWithVersionAsync (issue #2813).
         // lattice.GetWithVersionAsync is deliberately left unstubbed so a
         // regression to that boundary faults rather than passing silently.
-        apply.ReadStoredWithVersionAsync(Arg.Any<string>())
+        apply.ReadStoredForApplyAsync(Arg.Any<string>())
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
         apply.ApplySetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
             .Returns(ReplicationConditionalSetOutcome.Applied);
