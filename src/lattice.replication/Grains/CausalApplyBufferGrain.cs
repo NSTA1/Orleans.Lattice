@@ -171,22 +171,6 @@ internal sealed class CausalApplyBufferGrain(
     public Task<int> CountAsync() => Task.FromResult(EnsureLoaded().Count);
 
     /// <inheritdoc />
-    public Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
-        foreach (var parked in state.State.Entries)
-        {
-            if (parked.Entry.Timestamp == timestamp
-                && string.Equals(parked.Entry.OriginClusterId, originClusterId, StringComparison.Ordinal))
-            {
-                return Task.FromResult(true);
-            }
-        }
-
-        return Task.FromResult(false);
-    }
-
-    /// <inheritdoc />
     public Task<bool[]> IsHoldingManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps)
     {
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);

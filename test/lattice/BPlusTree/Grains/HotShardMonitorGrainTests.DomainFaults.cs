@@ -9,7 +9,7 @@ public partial class HotShardMonitorGrainTests
     public async Task RunSamplingPass_still_defers_a_busy_split_until_the_next_pass()
     {
         var (grain, _, _, split, _, shardOf, _) = CreateGrain();
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness
+        shardOf(1).StubHotness(new ShardHotness
         {
             Reads = 10_000, Window = TimeSpan.FromSeconds(10),
         });
@@ -25,7 +25,7 @@ public partial class HotShardMonitorGrainTests
     public void RunSamplingPass_preserves_domain_refusals_from_split_dispatch()
     {
         var (grain, _, _, split, _, shardOf, _) = CreateGrain();
-        shardOf(1).GetHotnessAsync().Returns(new ShardHotness
+        shardOf(1).StubHotness(new ShardHotness
         {
             Reads = 10_000, Window = TimeSpan.FromSeconds(10),
         });

@@ -29,17 +29,16 @@ public partial class CrossClusterAtomicVisibilityTests
         registry.GetParticipantsAsync(live).Returns(Task.FromResult<IReadOnlyList<int>>(new[] { 0 }));
         registry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         registry.GetRecordedStatusAsync(kept).Returns(Task.FromResult(TxStatus.Committed));
-        registry.HasUndecidedParticipantsAsync(live).Returns(true);
         registry.IsPurgedAsync(Arg.Any<Guid>()).Returns(true);
         registry.IsPurgedAsync(kept).Returns(false);
         registry.IsPurgedAsync(live).Returns(false);
         registry.HasUndecidedParticipantsManyAsync(Arg.Any<IReadOnlyList<Guid>>())
-            .Returns(async call =>
+            .Returns(call =>
             {
                 var result = new Dictionary<Guid, bool>();
                 foreach (var txid in call.Arg<IReadOnlyList<Guid>>())
-                    result[txid] = await registry.HasUndecidedParticipantsAsync(txid);
-                return result;
+                    result[txid] = txid == live;
+                return Task.FromResult(result);
             });
         return registry;
     }

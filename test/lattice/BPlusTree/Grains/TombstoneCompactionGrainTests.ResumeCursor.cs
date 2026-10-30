@@ -74,11 +74,11 @@ public partial class TombstoneCompactionGrainTests
         // The identity a previous batch would have persisted as an id cursor is
         // now an empty virtual activation: no tree id, no sibling. The key
         // cursor never consults it, which is the whole point.
-        var dead = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var dead = LeafSubstituteCombinedCalls.CreateComposed();
         grainFactory.GetGrain<IBPlusLeafGrain>(reclaimed).Returns(dead);
         dead.GetTreeIdAsync().Returns(Task.FromResult<string?>(null));
         dead.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
-        dead.GetKeyRangeAsync().Returns(Task.FromResult(default(LeafKeyRange)));
+        dead.Separate().GetKeyRangeAsync().Returns(Task.FromResult(default(LeafKeyRange)));
 
         await grain.BeginCompactionStateAsync(startFromShard: 0);
         state.State.NextLeafKeyInShard = LeafResumeKey(1);

@@ -700,7 +700,7 @@ public class LatticeOptions
 
     /// <summary>
     /// When <c>true</c>, the autonomic <c>HotShardMonitorGrain</c> periodically
-    /// polls each physical shard's hotness counters (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetHotnessAsync"/>)
+    /// polls each physical shard's hotness counters (<see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetSamplingStatusAsync"/>)
     /// and triggers an online adaptive split when the observed
     /// operations-per-second exceeds <see cref="HotShardOpsPerSecondThreshold"/>.
     /// Splits happen fully online via shadow-writing - no shard is ever taken
@@ -2769,7 +2769,7 @@ public class LatticeOptions
     /// <c>GetEntryCountAsync</c> - contain no <c>await</c> at all, so they
     /// have no yield point to interleave at and their single <c>long</c> read
     /// cannot be torn regardless of what else is queued.
-    /// <c>GetLiveEntryCountAsync</c> does await, but reads through the
+    /// <c>GetResumeFloorAsync</c> does await, but its live count reads through the
     /// storage provider and documents in its own body that its two reads
     /// "do not need to be a consistent snapshot" - a diagnostic signal, not a
     /// correctness invariant - and interleaving multi-entry appends already

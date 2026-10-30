@@ -29,7 +29,7 @@ public partial class TreeShardSplitGrainTests
         var (grain, _, source, target, retired, _) = CreateGrainWithSweepWiring(
             [snap], TxStatus.InFlight, factory: factory);
         var newHead = GrainId.Create("leaf", "replacement");
-        var replacement = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var replacement = LeafSubstituteCombinedCalls.CreateComposed();
         replacement.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(new List<PendingMutationSnapshot> { snap });
         factory.GetGrain<IBPlusLeafGrain>(newHead).Returns(replacement);

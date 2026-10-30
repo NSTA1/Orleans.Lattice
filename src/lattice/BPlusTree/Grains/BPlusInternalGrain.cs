@@ -181,7 +181,7 @@ internal sealed partial class BPlusInternalGrain(
         // path is a no-op aside from a refresher publish.
         //
         // Overlapped: the two children are distinct grains and the seed
-        // calls touch only the child, so the four RPCs (two per child)
+        // calls touch only the child, so the two combined seed RPCs
         // are mutually independent. Each fold into THIS node's aggregates
         // still runs strictly in left-then-right order - see
         // SeedChildrenAsync.
@@ -244,13 +244,11 @@ internal sealed partial class BPlusInternalGrain(
     /// node's aggregates.
     /// <para>
     /// <b>Why this is split into an overlapped read and a serial fold.</b> The
-    /// per-child half - <c>SetParentAsync</c> followed by
-    /// <c>GetChildDigestSnapshotAsync</c> - targets a distinct child grain and
-    /// is independent of every other child's, so running the children serially
-    /// paid 2N round-trip latencies to do work that has no cross-child
-    /// ordering constraint at all. <see cref="BoundedFanOut.ReadAheadAsync"/>
-    /// issues the same 2N calls in ceil(N / <see cref="BoundedFanOut.DefaultWidth"/>)
-    /// overlapped waves and yields the snapshots strictly in input order.
+    /// per-child half persists the parent and reads its digest through one
+    /// combined call, independently of every other child.
+    /// <see cref="BoundedFanOut.ReadAheadAsync"/> issues N calls in
+    /// ceil(N / <see cref="BoundedFanOut.DefaultWidth"/>) overlapped waves
+    /// and yields the snapshots strictly in input order.
     /// </para>
     /// <para>
     /// The fold half is <b>not</b> overlapped, and must not be:
@@ -318,13 +316,11 @@ internal sealed partial class BPlusInternalGrain(
         if (childIsLeaf)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(childId);
-            await leaf.SetParentAsync(myId);
-            return await leaf.GetChildDigestSnapshotAsync();
+            return await leaf.SetParentAndGetChildDigestSnapshotAsync(myId);
         }
 
         var inner = grainFactory.GetGrain<IBPlusInternalGrain>(childId);
-        await inner.SetParentAsync(myId);
-        return await inner.GetChildDigestSnapshotAsync();
+        return await inner.SetParentAndGetChildDigestSnapshotAsync(myId);
     }
 
     public Task<(GrainId ChildId, bool ChildrenAreLeaves)> RouteWithMetadataAsync(string key) =>
@@ -350,9 +346,6 @@ internal sealed partial class BPlusInternalGrain(
 
     public Task<GrainId> GetLeftmostChildAsync() =>
         Task.FromResult(state.State.Children[0].ChildId);
-
-    public Task<GrainId> GetRightmostChildAsync() =>
-        Task.FromResult(state.State.Children[^1].ChildId);
 
     public Task<(GrainId ChildId, bool ChildrenAreLeaves)> GetLeftmostChildWithMetadataAsync() =>
         Task.FromResult((state.State.Children[0].ChildId, state.State.ChildrenAreLeaves));

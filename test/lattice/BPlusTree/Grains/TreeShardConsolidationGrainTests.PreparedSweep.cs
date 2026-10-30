@@ -98,7 +98,7 @@ public partial class TreeShardConsolidationGrainTests
     private static IBPlusLeafGrain WireDonorLeaf(Harness h)
     {
         var leafId = GrainId.Create("leaf", "donor-prepared-leaf");
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         h.Donor.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
         h.Factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);

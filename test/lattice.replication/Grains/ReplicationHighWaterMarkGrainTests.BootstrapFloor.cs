@@ -140,7 +140,7 @@ public partial class ReplicationHighWaterMarkGrainTests
         Assert.Multiple(async () =>
         {
             Assert.That((await grain.GetAdmissionAsync(OriginA)).Drops(Hlc(50)), Is.True);
-            Assert.That(await grain.HasAppliedAsync(OriginA, Hlc(40)), Is.False,
+            Assert.That((await grain.HasAppliedManyAsync(OriginA, [Hlc(40)]))[0], Is.False,
                 "the floor survives because the shadow copy contains its contents, but pre-cutover identities still reset");
         });
     }

@@ -180,8 +180,8 @@ public sealed class LeafReclaimUnderInterruptedSplitIntegrationTests
         var (router, shard) = await CreateTreeAsync(treeName);
         var window = await InterruptASplitInsideTheWindowAsync(router, shard);
 
-        var donorRangeBefore = await Leaf(window.Donor).GetKeyRangeAsync();
-        var siblingRangeBefore = await Leaf(window.Sibling).GetKeyRangeAsync();
+        var donorRangeBefore = (await Leaf(window.Donor).GetKeyRangeAndNextSiblingAsync()).KeyRange;
+        var siblingRangeBefore = (await Leaf(window.Sibling).GetKeyRangeAndNextSiblingAsync()).KeyRange;
 
         // The real pass, over the real chain, with a real division in flight.
         var reclaimed = await shard.ReclaimEmptyLeavesAsync(16);
@@ -192,12 +192,12 @@ public sealed class LeafReclaimUnderInterruptedSplitIntegrationTests
         Assert.That(await Leaf(window.Donor).GetNextSiblingAsync(), Is.EqualTo(window.Sibling),
             "the chain must still run through the division's target");
 
-        var donorRangeAfter = await Leaf(window.Donor).GetKeyRangeAsync();
+        var donorRangeAfter = (await Leaf(window.Donor).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         Assert.That(donorRangeAfter.HighKeyExclusive, Is.EqualTo(donorRangeBefore.HighKeyExclusive),
             "no widen may leak through a declined fold: a donor claiming a range it does not route to "
             + "loses every write into it on the next projection rebuild");
 
-        var siblingRangeAfter = await Leaf(window.Sibling).GetKeyRangeAsync();
+        var siblingRangeAfter = (await Leaf(window.Sibling).GetKeyRangeAndNextSiblingAsync()).KeyRange;
         Assert.That(siblingRangeAfter.LowKeyInclusive, Is.EqualTo(siblingRangeBefore.LowKeyInclusive),
             "and the sibling must still own the range the division seeded it with");
 

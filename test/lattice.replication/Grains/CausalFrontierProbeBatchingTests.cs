@@ -77,9 +77,6 @@ public sealed class CausalFrontierProbeBatchingTests
                 Is.EquivalentTo(required.Where(t => t.WallClockTicks % 2 == 0)));
             Assert.That(h.State.WriteCount, Is.EqualTo(1));
         });
-        await h.Buffer.DidNotReceiveWithAnyArgs().IsHoldingAsync(default!, default);
-        await h.DeadLetters.DidNotReceiveWithAnyArgs().IsHoldingAsync(default!, default, default);
-        await h.Hwm.DidNotReceiveWithAnyArgs().HasAppliedAsync(default!, default);
     }
 
     [Test]

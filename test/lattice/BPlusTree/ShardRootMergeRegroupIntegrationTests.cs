@@ -139,7 +139,7 @@ public sealed class ShardRootMergeRegroupIntegrationTests
         await AssertEveryKeyOnItsDeclaringLeafAsync(shard, router, batch, "after the merge");
 
         foreach (var leafId in await WalkChainAsync(shard))
-            await Leaf(leafId).RebuildProjectionFromWalAsync();
+            await Leaf(leafId).RebuildProjectionAndNextSiblingAsync();
         await AssertEveryKeyOnItsDeclaringLeafAsync(shard, router, batch, "after a full WAL rebuild of every leaf");
 
         foreach (var leafId in await WalkChainAsync(shard))
@@ -182,7 +182,7 @@ public sealed class ShardRootMergeRegroupIntegrationTests
         var current = from;
         for (var hop = 0; hop < 256; hop++)
         {
-            var range = await Leaf(current).GetKeyRangeAsync();
+            var range = (await Leaf(current).GetKeyRangeAndNextSiblingAsync()).KeyRange;
             if (SplitBoundary.Owns(key, range.LowKeyInclusive, range.HighKeyExclusive))
                 return current;
 

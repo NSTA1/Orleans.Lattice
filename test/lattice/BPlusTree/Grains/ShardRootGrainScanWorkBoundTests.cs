@@ -66,7 +66,7 @@ public class ShardRootGrainScanWorkBoundTests
 
         for (var i = 0; i < leafCount; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var entries = new List<KeyValuePair<string, byte[]>>();
             for (var j = 0; j < entriesPerLeaf; j++)
             {
@@ -102,7 +102,7 @@ public class ShardRootGrainScanWorkBoundTests
                 });
             // No bounds declared, so ForwardWalkLeftRangeAsync never terminates
             // the walk and the work bound is the only thing that can.
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = null,
                 HighKeyExclusive = null,
@@ -199,7 +199,7 @@ public class ShardRootGrainScanWorkBoundTests
         var factory = Substitute.For<IGrainFactory>();
         for (var i = 0; i < leafCount; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             // Only the final leaf yields anything; every earlier leaf is a
             // sterile visit (the shape a tombstoned or moved-away run creates).
             var entries = i == leafCount - 1
@@ -209,7 +209,7 @@ public class ShardRootGrainScanWorkBoundTests
             leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(_ => Task.FromResult(entries.ToList()));
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = null,
                 HighKeyExclusive = null,

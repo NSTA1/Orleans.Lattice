@@ -9,13 +9,13 @@ namespace Orleans.Lattice.BPlusTree;
 /// snapshot-baseline freeze pass pays one grain call per leaf instead of two.
 /// Not part of the end-user API surface. Deliberately not <c>[Immutable]</c>:
 /// <see cref="LeafBaselineFreeze"/> is a mutable class, so a same-silo hop must
-/// deep-copy it exactly as it does for <see cref="IBPlusLeafGrain.FreezeProjectionAsync"/>.
+/// deep-copy it on every hop.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafBaselineFreezePage)]
 internal readonly record struct LeafBaselineFreezePage
 {
-    /// <summary>The leaf's frozen projection, as <see cref="IBPlusLeafGrain.FreezeProjectionAsync"/> returns it.</summary>
+    /// <summary>The leaf's frozen projection: committed cache, per-partition frontier and in-flight prepared sagas.</summary>
     [Id(0)] public LeafBaselineFreeze Freeze { get; init; }
 
     /// <summary>The leaf's right sibling, as <see cref="IBPlusLeafGrain.GetNextSiblingAsync"/> returns it.</summary>

@@ -105,9 +105,9 @@ public class TreeShardSplitGrainBoundedDrainTests
             for (var i = 0; i < leafCount; i++)
             {
                 var index = i;
-                var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+                var leaf = LeafSubstituteCombinedCalls.CreateComposed();
                 grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leaf);
-                leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+                leaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
                     .Returns(_ => Task.FromResult(new StateDelta
                     {
                         Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -120,7 +120,7 @@ public class TreeShardSplitGrainBoundedDrainTests
                     }));
                 leaf.GetNextSiblingAsync().Returns(Task.FromResult(
                     index + 1 < leafCount ? (GrainId?)leafIds[index + 1] : null));
-                leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+                leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
                 {
                     LowKeyInclusive = Key(index),
                     HighKeyExclusive = index + 1 < leafCount ? Key(index + 1) : null,
@@ -301,7 +301,7 @@ public class TreeShardSplitGrainBoundedDrainTests
         // walk's own resume re-resolves it - does the leaf answer normally.
         var flakyLeaf = h.Factory.GetGrain<IBPlusLeafGrain>(h.LeafIds[1]);
         var attempts = 0;
-        flakyLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+        flakyLeaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(_ =>
             {
                 attempts++;
@@ -360,7 +360,7 @@ public class TreeShardSplitGrainBoundedDrainTests
             throw new LeafStateRowLostException(
                 h.LeafIds[1].ToString(), TreeId, "the row is genuinely gone, not momentarily retired", null);
         };
-        deadLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+        deadLeaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(alwaysReportsRowLost);
 
         Assert.That(
@@ -388,10 +388,10 @@ public class TreeShardSplitGrainBoundedDrainTests
         // Leaf 1 splits: its right half is grafted in ahead of leaf 2 and holds
         // an entry the first pass never saw.
         var rightHalf = GrainId.Create("leaf", "src-leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var rightHalfLeaf = LeafSubstituteCombinedCalls.CreateComposed();
 
         h.Factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
-        rightHalfLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+        rightHalfLeaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(_ => Task.FromResult(new StateDelta
             {
                 Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -401,7 +401,7 @@ public class TreeShardSplitGrainBoundedDrainTests
                 Version = new VersionVector(),
             }));
         rightHalfLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(h.LeafIds[2]));
-        rightHalfLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        rightHalfLeaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = "k0001m",
             HighKeyExclusive = Key(2),
@@ -409,7 +409,7 @@ public class TreeShardSplitGrainBoundedDrainTests
 
         var leftHalf = h.Factory.GetGrain<IBPlusLeafGrain>(h.LeafIds[1]);
         leftHalf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(rightHalf));
-        leftHalf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        leftHalf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = Key(1),
             HighKeyExclusive = "k0001m",

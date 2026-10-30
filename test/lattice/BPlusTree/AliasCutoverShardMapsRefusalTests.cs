@@ -34,13 +34,13 @@ public sealed class AliasCutoverShardMapsRefusalTests
     }
 
     [Test]
-    public async Task PrepareCutoverAsync_records_the_replaced_map_on_a_destination_with_no_row_yet()
+    public async Task PrepareCutoverResolvingAsync_records_the_replaced_map_on_a_destination_with_no_row_yet()
     {
         // A restore or remediation copy is routinely addressed before its row is
         // materialised; the prepare is what first records it, so it must not refuse.
         StubEntry(Logical, new TreeRegistryEntry { ShardCount = 2 });
 
-        await AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination);
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(_grains, Logical, Destination);
 
         await _registry.Received(1).UpdateAsync(Destination, Arg.Is<TreeRegistryEntry>(e => e.ReplacedShardMap != null));
         await _registry.DidNotReceive().UpdateAsync(Logical, Arg.Any<TreeRegistryEntry>());
@@ -66,11 +66,11 @@ public sealed class AliasCutoverShardMapsRefusalTests
     }
 
     [Test]
-    public async Task PrepareCutoverAsync_resumed_after_the_swap_with_no_destination_row_writes_nothing()
+    public async Task PrepareCutoverResolvingAsync_resumed_after_the_swap_with_no_destination_row_writes_nothing()
     {
         StubEntry(Logical, new TreeRegistryEntry { ShardCount = 2, PhysicalTreeId = Destination });
 
-        var replaced = await AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination);
+        var (replaced, _) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(_grains, Logical, Destination);
 
         Assert.That(replaced, Is.Null);
         await _registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());

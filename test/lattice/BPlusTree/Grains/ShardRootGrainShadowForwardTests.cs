@@ -108,7 +108,7 @@ public partial class ShardRootGrainShadowForwardTests
         var factory = Substitute.For<IGrainFactory>();
         var optionsResolver = TestOptionsResolver.Create(baseOptions: new LatticeOptions(), factory: factory);
 
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<byte[]?>(null));
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<long>()).Returns(Task.FromResult<SplitResult?>(null));

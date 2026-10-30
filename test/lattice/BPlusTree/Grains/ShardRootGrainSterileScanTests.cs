@@ -93,7 +93,7 @@ public class ShardRootGrainSterileScanTests
 
         for (var i = 0; i < leafCount; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var keys = new List<string>();
             for (var j = 0; j < keysPerLeaf; j++)
                 keys.Add(KeyIn(i, j));
@@ -134,7 +134,7 @@ public class ShardRootGrainSterileScanTests
 
             // Real bounds: the boundary the fix resumes from. The outermost
             // edges are open, as they are in a real tree.
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = i == 0 ? null : LeafBound(i),
                 HighKeyExclusive = i == leafCount - 1 ? null : LeafBound(i + 1),

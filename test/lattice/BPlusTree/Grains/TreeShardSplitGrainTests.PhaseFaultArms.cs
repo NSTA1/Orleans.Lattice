@@ -632,9 +632,9 @@ public partial class TreeShardSplitGrainTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leaf);
-            leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+            leaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
                 .Returns(_ => Task.FromResult(new StateDelta
                 {
                     Entries = new Dictionary<string, LwwValue<byte[]>>
@@ -647,7 +647,7 @@ public partial class TreeShardSplitGrainTests
                 }));
             leaf.GetNextSiblingAsync().Returns(Task.FromResult(
                 index + 1 < leafCount ? (GrainId?)leafIds[index + 1] : null));
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = $"k{index:D4}",
                 HighKeyExclusive = index + 1 < leafCount ? $"k{index + 1:D4}" : null,

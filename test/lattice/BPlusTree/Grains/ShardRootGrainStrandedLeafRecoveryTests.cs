@@ -159,7 +159,7 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
         for (var i = 0; i < leafCount; i++)
         {
             var index = i;
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             var rows = new List<KeyValuePair<string, byte[]>>
             {
                 new($"k{index:D4}", new byte[] { (byte)index }),
@@ -179,7 +179,7 @@ public partial class ShardRootGrainStrandedLeafRecoveryTests
             leaf.GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(_ => Task.FromResult(rows.Select(r => r.Key).ToList()));
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = null,
                 HighKeyExclusive = null,

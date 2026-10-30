@@ -50,11 +50,11 @@ public class BoundedLeafWalkTests
 
         for (var i = 0; i < leafCount; i++)
         {
-            var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leaf = LeafSubstituteCombinedCalls.CreateComposed();
             factory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leaf);
             leaf.GetNextSiblingAsync().Returns(Task.FromResult(
                 i + 1 < leafCount ? (GrainId?)leafIds[i + 1] : null));
-            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = Key(i),
                 HighKeyExclusive = i + 1 < leafCount ? Key(i + 1) : null,
@@ -262,16 +262,16 @@ public class BoundedLeafWalkTests
 
         // Leaf 2 is reclaimed: its identity is now an empty virtual activation.
         // The key cursor never names it, so the walk never sees it.
-        var reclaimed = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var reclaimed = LeafSubstituteCombinedCalls.CreateComposed();
         reclaimed.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
-        reclaimed.GetKeyRangeAsync().Returns(Task.FromResult(default(LeafKeyRange)));
+        reclaimed.Separate().GetKeyRangeAsync().Returns(Task.FromResult(default(LeafKeyRange)));
         factory.GetGrain<IBPlusLeafGrain>(leafIds[2]).Returns(reclaimed);
 
         var replacement = GrainId.Create("leaf", "leaf-2-replacement");
-        var replacementLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var replacementLeaf = LeafSubstituteCombinedCalls.CreateComposed();
         factory.GetGrain<IBPlusLeafGrain>(replacement).Returns(replacementLeaf);
         replacementLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(leafIds[3]));
-        replacementLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        replacementLeaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = Key(2),
             HighKeyExclusive = Key(3),
@@ -306,10 +306,10 @@ public class BoundedLeafWalkTests
         // Leaf 1, which owned [k0001, k0002), splits into [k0001, k0001m) and
         // [k0001m, k0002). The right half is grafted in before the old leaf 2.
         var rightHalf = GrainId.Create("leaf", "leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var rightHalfLeaf = LeafSubstituteCombinedCalls.CreateComposed();
         factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
         rightHalfLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(leafIds[2]));
-        rightHalfLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        rightHalfLeaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = "k0001m",
             HighKeyExclusive = Key(2),
@@ -317,7 +317,7 @@ public class BoundedLeafWalkTests
 
         var leftHalf = factory.GetGrain<IBPlusLeafGrain>(leafIds[1]);
         leftHalf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(rightHalf));
-        leftHalf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        leftHalf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = Key(1),
             HighKeyExclusive = "k0001m",
@@ -370,7 +370,7 @@ public class BoundedLeafWalkTests
         // exclusive high bound, so yielding on it would emit the key the pass
         // started from.
         var drifted = factory.GetGrain<IBPlusLeafGrain>(leafIds[1]);
-        drifted.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        drifted.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = Key(1),
             HighKeyExclusive = Key(1),
@@ -434,7 +434,7 @@ public class BoundedLeafWalkTests
         _ = shard;
 
         var drifted = factory.GetGrain<IBPlusLeafGrain>(leafIds[1]);
-        drifted.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        drifted.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = Key(1),
             HighKeyExclusive = Key(1),
@@ -477,7 +477,7 @@ public class BoundedLeafWalkTests
             visited.Add(walk.CurrentLeafId!.Value);
             var link = new LeafChainLink
             {
-                KeyRange = await leaf.GetKeyRangeAsync(),
+                KeyRange = await leaf.Separate().GetKeyRangeAsync(),
                 NextSibling = await leaf.GetNextSiblingAsync(),
             };
             if (!walk.MoveNext(link)) break;

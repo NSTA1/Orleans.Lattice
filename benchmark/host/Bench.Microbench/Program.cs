@@ -176,6 +176,18 @@ if (string.Equals(suite, "leafbinding", StringComparison.OrdinalIgnoreCase))
     return bindingSummary.HasCriticalValidationErrors || bindingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
+if (string.Equals(suite, "parentstructure", StringComparison.OrdinalIgnoreCase))
+{
+    if (!string.IsNullOrWhiteSpace(filterRaw))
+        config = config.AddFilter(new GlobFilter(filterRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)));
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is InternalNodeCallFusionBenchmarks.Site.LeafParentSeed
+            or InternalNodeCallFusionBenchmarks.Site.InternalParentSeed
+            or InternalNodeCallFusionBenchmarks.Site.OwnedTopology));
+    var parentSummary = BenchmarkRunner.Run<InternalNodeCallFusionBenchmarks>(config);
+    return parentSummary.HasCriticalValidationErrors || parentSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
 if (string.Equals(suite, "internalnodebinding", StringComparison.OrdinalIgnoreCase))
 {
     config = config.AddFilter(new SimpleFilter(benchmark =>

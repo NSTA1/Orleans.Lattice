@@ -1679,8 +1679,12 @@ internal sealed partial class WalShardGrain(
         return ValueTask.FromResult(DurableContiguousTailOffset());
     }
 
-    /// <inheritdoc />
-    public async Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// The trim-aware number of live entries this shard persists: the entries
+    /// between the lowest still-stored offset and the highest assigned offset,
+    /// inclusive. The core of <see cref="GetResumeFloorAsync"/>; not a grain call.
+    /// </summary>
+    internal async Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInternalOrigin(LatticeOperation.Read);
@@ -1771,7 +1775,7 @@ internal sealed partial class WalShardGrain(
     internal Func<bool>? TrimWatermarkSupportForTesting { get; set; }
 
     /// <inheritdoc />
-    [Obsolete("Use GetLiveEntryCountAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
+    [Obsolete("Use GetResumeFloorAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
     public Task<long> GetEntryCountAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

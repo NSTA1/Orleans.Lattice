@@ -13,6 +13,9 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// durable writes and child digest seeding are unchanged and excluded from
 /// these dispatch-only measurements. BulkConstruction sums per-node dispatch
 /// work; production uses parallel waves, so this is not bulk-load wall time.
+/// The parentstructure subset measures leaf adoption, internal adoption and a
+/// matching-owner targeted topology read, each with a two-to-one call budget.
+/// Denied topology reads already took one call and are not a claimed saving.
 /// </summary>
 [MemoryDiagnoser]
 public class InternalNodeCallFusionBenchmarks
@@ -32,6 +35,12 @@ public class InternalNodeCallFusionBenchmarks
         BulkConstruction,
         /// <summary>Split sibling recovery: bind and seed, 2 calls become 1.</summary>
         SiblingConstruction,
+        /// <summary>Leaf reparent plus child snapshot: 2 calls become 1.</summary>
+        LeafParentSeed,
+        /// <summary>Internal reparent plus subtree snapshot: 2 calls become 1.</summary>
+        InternalParentSeed,
+        /// <summary>Matching tree ownership plus topology: 2 calls become 1.</summary>
+        OwnedTopology,
     }
 
     /// <summary>The call site under measurement.</summary>
@@ -60,7 +69,8 @@ public class InternalNodeCallFusionBenchmarks
         {
             Site.SplitSeed => (SiblingChildren, 1),
             Site.GraftDescent => (Levels * 2, Levels),
-            Site.RootConstruction or Site.SiblingConstruction => (2, 1),
+            Site.RootConstruction or Site.SiblingConstruction or Site.LeafParentSeed
+                or Site.InternalParentSeed or Site.OwnedTopology => (2, 1),
             _ => (Nodes * 2, Nodes),
         };
         if (before != expectedBefore || _calls != expectedAfter)
@@ -87,7 +97,8 @@ public class InternalNodeCallFusionBenchmarks
     {
         Site.SplitSeed => before ? SiblingChildren : 1,
         Site.GraftDescent => before ? Levels * 2 : Levels,
-        Site.RootConstruction or Site.SiblingConstruction => before ? 2 : 1,
+        Site.RootConstruction or Site.SiblingConstruction or Site.LeafParentSeed
+            or Site.InternalParentSeed or Site.OwnedTopology => before ? 2 : 1,
         _ => before ? Nodes * 2 : Nodes,
     };
 

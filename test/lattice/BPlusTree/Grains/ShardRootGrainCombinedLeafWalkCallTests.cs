@@ -72,7 +72,6 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
     private static void AssertNoSeparateLinkReads(IBPlusLeafGrain leaf)
     {
         leaf.DidNotReceive().GetNextSiblingAsync();
-        leaf.DidNotReceive().GetKeyRangeAsync();
         leaf.DidNotReceive().GetKeyRangeAndNextSiblingAsync();
     }
 
@@ -142,7 +141,6 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
         foreach (var leaf in leaves)
         {
             await leaf.Received(1).RebuildProjectionAndNextSiblingAsync();
-            await leaf.DidNotReceive().RebuildProjectionFromWalAsync();
             AssertNoSeparateLinkReads(leaf);
         }
     }
@@ -249,7 +247,6 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
         foreach (var leaf in leaves)
         {
             await leaf.Received(1).GetProjectionCheckpointAndNextSiblingAsync();
-            await leaf.DidNotReceive().GetProjectionCheckpointOffsetAsync();
             AssertNoSeparateLinkReads(leaf);
         }
     }
@@ -307,7 +304,6 @@ public sealed class ShardRootGrainCombinedLeafWalkCallTests
         foreach (var leaf in leaves)
         {
             await leaf.Received(1).FreezeProjectionAndNextSiblingAsync(Arg.Any<CancellationToken>());
-            await leaf.DidNotReceive().FreezeProjectionAsync(Arg.Any<CancellationToken>());
             await leaf.Received(1).FoldTailOntoFrozenAsync(
                 Arg.Any<LeafBaselineFreeze>(), Arg.Any<long[]>(), Arg.Any<CancellationToken>());
             AssertNoSeparateLinkReads(leaf);

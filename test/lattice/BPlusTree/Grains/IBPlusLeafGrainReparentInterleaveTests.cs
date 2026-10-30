@@ -20,6 +20,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public sealed class IBPlusLeafGrainReparentInterleaveTests
 {
     [TestCase(nameof(IBPlusLeafGrain.SetParentAsync))]
+    [TestCase(nameof(IBPlusLeafGrain.SetParentAndGetChildDigestSnapshotAsync))]
     [TestCase(nameof(IBPlusLeafGrain.GetChildDigestSnapshotAsync))]
     public void Reparent_callback_is_marked_AlwaysInterleave(string methodName)
     {

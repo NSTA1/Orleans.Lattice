@@ -42,32 +42,21 @@ internal static class AliasCutoverShardMaps
     /// cutover keeps the original), and stamps that map onto the current physical
     /// tree's own entry when it is not the logical id itself. Leaves the logical
     /// entry untouched: its map moves only with the alias.
+    /// <para>
+    /// Also returns the physical tree the logical tree resolved to when the
+    /// prepare read its entry. That id is the entry's own projection (what
+    /// <c>ResolveAsync(logicalTreeId)</c> returns), so a caller that needs it
+    /// alongside the prepare reads it from here instead of paying a separate
+    /// registry round trip for it.
+    /// </para>
     /// </summary>
     /// <returns>
     /// The map the replaced physical tree's shards are addressed by, for arming or
-    /// enumerating them; <see langword="null"/> when the alias already resolves to
-    /// the destination and no map was recorded (a cutover begun before this
-    /// existed), in which case nothing is changed.
-    /// </returns>
-    public static async Task<ShardMap?> PrepareCutoverAsync(
-        IGrainFactory grainFactory,
-        string logicalTreeId,
-        string destinationPhysicalTreeId,
-        CancellationToken cancellationToken = default) =>
-        (await PrepareCutoverResolvingAsync(grainFactory, logicalTreeId, destinationPhysicalTreeId, cancellationToken))
-            .ReplacedMap;
-
-    /// <summary>
-    /// <see cref="PrepareCutoverAsync"/>, also returning the physical tree the
-    /// logical tree resolved to when the prepare read its entry. That id is the
-    /// entry's own projection (what <c>ResolveAsync(logicalTreeId)</c> returns), so
-    /// a caller that needs it alongside the prepare reads it from here instead of
-    /// paying a separate registry round trip for it.
-    /// </summary>
-    /// <returns>
-    /// The map <see cref="PrepareCutoverAsync"/> returns, and the physical tree
-    /// the logical tree resolved to before the prepare (the destination itself on
-    /// a cutover resumed after its swap).
+    /// enumerating them (<see langword="null"/> when the alias already resolves to
+    /// the destination and no map was recorded - a cutover begun before this
+    /// existed - in which case nothing is changed), and the physical tree the
+    /// logical tree resolved to before the prepare (the destination itself on a
+    /// cutover resumed after its swap).
     /// </returns>
     public static async Task<(ShardMap? ReplacedMap, string ReplacedPhysicalTreeId)> PrepareCutoverResolvingAsync(
         IGrainFactory grainFactory,
@@ -118,7 +107,7 @@ internal static class AliasCutoverShardMaps
     /// Swaps <paramref name="logicalTreeId"/> onto
     /// <paramref name="destinationPhysicalTreeId"/> together with the
     /// destination's own map and split allocation mark, in one registry write;
-    /// call it after <see cref="PrepareCutoverAsync"/>. A cutover resumed after the
+    /// call it after <see cref="PrepareCutoverResolvingAsync"/>. A cutover resumed after the
     /// swap changes nothing.
     /// <para>
     /// A split or fold may still have committed onto the replaced tree's map after

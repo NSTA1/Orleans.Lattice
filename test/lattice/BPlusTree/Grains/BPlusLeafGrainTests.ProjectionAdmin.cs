@@ -9,28 +9,28 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Unit tests for the operator-tooling seams on
 /// <see cref="BPlusLeafGrain"/>: the read-only checkpoint accessor
-/// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetProjectionCheckpointOffsetAsync"/>)
+/// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetProjectionCheckpointAndNextSiblingAsync"/>)
 /// and the destructive projection-rebuild path
-/// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.RebuildProjectionFromWalAsync"/>).
+/// (<see cref="BPlusLeafGrain.RebuildProjectionFromWalAsync"/>).
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
     [Test]
-    public async Task GetProjectionCheckpointOffsetAsync_returns_zero_on_fresh_grain()
+    public async Task GetProjectionCheckpointAndNextSiblingAsync_returns_zero_on_fresh_grain()
     {
         var grain = CreateGrain();
-        var offset = await grain.GetProjectionCheckpointOffsetAsync();
+        var offset = (await grain.GetProjectionCheckpointAndNextSiblingAsync()).CheckpointOffset;
         Assert.That(offset, Is.EqualTo(0L));
     }
 
     [Test]
-    public async Task GetProjectionCheckpointOffsetAsync_returns_persisted_value()
+    public async Task GetProjectionCheckpointAndNextSiblingAsync_returns_persisted_value()
     {
         var state = new FakePersistentState<LeafNodeState>();
         state.State.ProjectionCheckpointOffset = 42L;
         var grain = CreateGrain(state);
 
-        var offset = await grain.GetProjectionCheckpointOffsetAsync();
+        var offset = (await grain.GetProjectionCheckpointAndNextSiblingAsync()).CheckpointOffset;
         Assert.That(offset, Is.EqualTo(42L));
     }
 

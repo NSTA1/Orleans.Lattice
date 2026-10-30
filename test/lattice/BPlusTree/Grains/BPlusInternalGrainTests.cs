@@ -333,7 +333,7 @@ public partial class BPlusInternalGrainTests
             Orleans.Lattice.Primitives.SplitState.SplitComplete));
     }
 
-    // --- GetLeftmostChildAsync / GetRightmostChildAsync ---
+    // --- GetLeftmostChildAsync / GetRightmostChildWithMetadataAsync ---
 
     [Test]
     public async Task GetLeftmostChild_returns_first_child()
@@ -351,7 +351,7 @@ public partial class BPlusInternalGrainTests
         var grain = CreateGrain();
         await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
 
-        var result = await grain.GetRightmostChildAsync();
+        var (result, _) = await grain.GetRightmostChildWithMetadataAsync();
         Assert.That(result, Is.EqualTo(Child1));
     }
 
@@ -362,7 +362,7 @@ public partial class BPlusInternalGrainTests
         await grain.InitializeAsync("fox", Child0, Child1, childrenAreLeaves: true);
         await grain.AcceptSplitAsync("monkey", Child2);
 
-        var result = await grain.GetRightmostChildAsync();
+        var (result, _) = await grain.GetRightmostChildWithMetadataAsync();
         Assert.That(result, Is.EqualTo(Child2));
     }
 

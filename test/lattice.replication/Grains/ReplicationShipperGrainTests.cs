@@ -386,9 +386,6 @@ public partial class ReplicationShipperGrainTests
         public ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 
-        public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
-            Task.FromResult((long)Entries.Count);
-
         public Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken)
         {
             for (var seq = TrimmedThrough; seq < Entries.Count; seq++)

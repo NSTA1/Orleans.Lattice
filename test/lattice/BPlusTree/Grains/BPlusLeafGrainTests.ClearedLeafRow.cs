@@ -77,8 +77,9 @@ public partial class BPlusLeafGrainTests
     /// than delete the row underneath it, or the write lands afterwards and
     /// re-creates the row the clear removed.
     /// </summary>
-    [Test]
-    public async Task A_clear_waits_for_an_interleaved_persist_already_in_flight()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_clear_waits_for_an_interleaved_persist_already_in_flight(bool combined)
     {
         var wal = new GrowingWal();
         wal.GrowTo(3);
@@ -87,7 +88,10 @@ public partial class BPlusLeafGrainTests
 
         var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         state.BeforeWrite = () => hold.Task;
-        var reparent = grain.SetParentAsync(GrainId.Create("internal", "reparent-4914"));
+        var parentId = GrainId.Create("internal", "reparent-4914");
+        Task reparent = combined
+            ? grain.SetParentAndGetChildDigestSnapshotAsync(parentId)
+            : grain.SetParentAsync(parentId);
         Assert.That(reparent.IsCompleted, Is.False, "the reparent write must be held open");
 
         var clear = grain.ClearGrainStateAsync();

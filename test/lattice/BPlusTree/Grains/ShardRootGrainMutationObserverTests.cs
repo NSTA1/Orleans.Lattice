@@ -34,7 +34,7 @@ public class ShardRootGrainMutationObserverTests
         state.State.RootNodeId = leafId;
         state.State.RootIsLeaf = true;
 
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>())
             .Returns(Task.FromResult(new RangeDeleteResult { Deleted = leafDeletedCount, PastRange = true }));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
@@ -85,7 +85,7 @@ public class ShardRootGrainMutationObserverTests
 
         var predicate = LatticePredicateNode.Member("Score");
 
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LatticePredicateNode?>())
             .Returns(Task.FromResult(new RangeDeleteResult
             {
@@ -150,7 +150,7 @@ public class ShardRootGrainMutationObserverTests
         state.State.RootNodeId = leafId;
         state.State.RootIsLeaf = true;
 
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         leaf.DeleteRangeAsync(Arg.Any<string>(), Arg.Any<string>())
             .Returns(Task.FromResult(new RangeDeleteResult { Deleted = 1, PastRange = true }));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));

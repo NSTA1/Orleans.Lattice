@@ -1008,37 +1008,26 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys);
 
     /// <summary>
-    /// Returns volatile in-memory hotness counters for this shard. Counters
-    /// track reads and writes since grain activation and reset on deactivation.
-    /// Used by split coordinators to detect hot shards without persistence overhead.
+    /// Returns this shard's hotness counters, split status, and pending-bulk
+    /// status in one grain turn - the three values the hot-shard monitor and
+    /// the shard-healing orchestrator sample per shard on every pass, so a
+    /// sampler pays one call per shard. The hotness counters are volatile and
+    /// in memory: they track reads and writes since grain activation and reset
+    /// on deactivation, so split coordinators detect hot shards without
+    /// persistence overhead. The split status equals what
+    /// <see cref="IsSplittingAsync"/> returns, and the pending-bulk status is
+    /// <see langword="true"/> while a bulk-load or bulk-append operation has not
+    /// yet been fully grafted into the tree, which suppresses splits.
     /// <para>
-    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> because the implementation is a
-    /// pure synchronous read of three private fields wrapped in
-    /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
-    /// state mutation - it cannot race any other in-flight turn. Allowing the
-    /// hot-shard monitor's sampling RPC to bypass the
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> because
+    /// it is a pure synchronous read with no awaits and no mutation, so it cannot
+    /// race any other in-flight turn. Bypassing the
     /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetManyAsync(System.Collections.Generic.List{System.Collections.Generic.KeyValuePair{string, byte[]}})"/>
     /// reentrancy queue is required so the monitor does not time out (and fire
     /// spurious reshards) when the shard is at sustained producer pressure
-    /// (see U9d).
-    /// </para>
-    /// </summary>
-    [AlwaysInterleave]
-    Task<ShardHotness> GetHotnessAsync();
-
-    /// <summary>
-    /// Returns this shard's hotness counters, split status, and pending-bulk
-    /// status in one grain turn - the three values the hot-shard monitor and
-    /// the shard-healing orchestrator sample per shard on every pass. Each
-    /// component equals what <see cref="GetHotnessAsync"/>,
-    /// <see cref="IsSplittingAsync"/>, and <see cref="HasPendingBulkOperationAsync"/>
-    /// return, so a sampler pays one call per shard instead of three.
-    /// <para>
-    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> for the
-    /// same reason as those three: it is a pure synchronous read with no awaits
-    /// and no mutation. The three values are read in one synchronous step, so
-    /// they are at least as consistent with each other as three interleaved
-    /// calls were.
+    /// (see U9d, and issue 2262). The three values are read in one synchronous
+    /// step, so they are at least as consistent with each other as three
+    /// interleaved calls were.
     /// </para>
     /// </summary>
     [AlwaysInterleave]
@@ -1494,10 +1483,11 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// turn. This completes the interleaved set that the split and healing
     /// coordinators fan out per shard and then await together:
     /// <c>HotShardMonitorGrain.RunSamplingPassAsync</c> and
-    /// <c>ShardHealingOrchestratorGrain.ObserveLoadAsync</c> each dispatch
-    /// <see cref="GetHotnessAsync"/>, <see cref="HasPendingBulkOperationAsync"/>,
-    /// and this probe across every shard, awaiting each set with a separate
-    /// <c>Task.WhenAll</c>. While this member alone lacked the attribute it
+    /// <c>ShardHealingOrchestratorGrain.ObserveLoadAsync</c> each dispatched
+    /// separate hotness, pending-bulk and split probes across every shard
+    /// (since folded into <see cref="GetSamplingStatusAsync"/>), awaiting each
+    /// set with a separate <c>Task.WhenAll</c>. While this member alone lacked
+    /// the attribute it
     /// queued behind long non-reentrant turns on a busy shard until the 30s
     /// response timeout fired, and because the fan-out is awaited with
     /// <c>Task.WhenAll</c> that one shard's timeout aborted sampling for the
@@ -1560,24 +1550,6 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<int?> GetMigrationTargetShardIndexAsync();
-
-    /// <summary>
-    /// Returns <c>true</c> if this shard has a pending bulk-load or bulk-append
-    /// operation that has not yet been fully grafted into the tree. Used by the
-    /// auto-split monitor to suppress splits while bulk operations are mid-flight.
-    /// <para>
-    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> because the implementation is a
-    /// pure synchronous read of <c>state.State.PendingBulkGraft</c> wrapped in
-    /// <see cref="Task.FromResult{TResult}(TResult)"/> with zero awaits and zero
-    /// state mutation - it cannot race any other in-flight turn. Paired with
-    /// <see cref="GetHotnessAsync"/> and <see cref="IsSplittingAsync"/> so the
-    /// hot-shard monitor's per-tick fan-out (which awaits all three) is not
-    /// gated on producer <see cref="SetManyAsync"/> work (see U9d, and issue
-    /// 2262 for the third probe).
-    /// </para>
-    /// </summary>
-    [AlwaysInterleave]
-    Task<bool> HasPendingBulkOperationAsync();
 
     /// <summary>
     /// Strongly-consistent variant of <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CountAsync()"/> for use by

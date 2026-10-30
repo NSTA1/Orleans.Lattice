@@ -18,6 +18,6 @@ internal readonly record struct LeafClockPage
     /// <summary>The leaf's right sibling, as <see cref="IBPlusLeafGrain.GetNextSiblingAsync"/> returns it.</summary>
     [Id(1)] public GrainId? NextSibling { get; init; }
 
-    /// <summary>The leaf's bounds, as <see cref="IBPlusLeafGrain.GetKeyRangeAsync"/> returns them.</summary>
+    /// <summary>The leaf's bounds, as <see cref="IBPlusLeafGrain.GetKeyRangeAndNextSiblingAsync"/> returns them.</summary>
     [Id(2)] public LeafKeyRange KeyRange { get; init; }
 }

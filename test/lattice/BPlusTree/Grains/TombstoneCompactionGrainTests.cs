@@ -133,14 +133,14 @@ public partial class TombstoneCompactionGrainTests
 
         for (int i = 0; i < leafIds.Length; i++)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leafMock = LeafSubstituteCombinedCalls.CreateComposed();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
             leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(LeafCompactionResult.Complete(0)));
             leafMock.GetTreeIdAsync().Returns(Task.FromResult<string?>(TreeId));
 
             // Leaf i owns [k{i}, k{i+1}); the last leaf has no high bound, which
             // is also what makes it a non-stopping point for the walk.
-            leafMock.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leafMock.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = LeafResumeKey(i),
                 HighKeyExclusive = i + 1 < leafIds.Length ? LeafResumeKey(i + 1) : null,

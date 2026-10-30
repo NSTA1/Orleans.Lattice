@@ -294,9 +294,9 @@ public partial class ReplicationDeadLetterGrainTests
         var entry = MakeEntry("a");
 
         var id = await grain.EnqueueAsync(entry, "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
-        var heldWhileParked = await grain.IsHoldingAsync("site-b", entry.Timestamp, CancellationToken.None);
+        var heldWhileParked = (await grain.IsHoldingManyAsync("site-b", [entry.Timestamp], CancellationToken.None))[0];
         await grain.RemoveReplayedAsync(id, CancellationToken.None);
-        var heldAfterRemoval = await grain.IsHoldingAsync("site-b", entry.Timestamp, CancellationToken.None);
+        var heldAfterRemoval = (await grain.IsHoldingManyAsync("site-b", [entry.Timestamp], CancellationToken.None))[0];
 
         Assert.Multiple(() =>
         {

@@ -89,9 +89,9 @@ public partial class TreeShardConsolidationGrainTests
     private static void WireSurvivorLeaf(Harness h, int[]? sealedSlots, string[] rows)
     {
         var leafId = GrainId.Create("leaf", "survivor-leaf-0");
-        var leaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var leaf = LeafSubstituteCombinedCalls.CreateComposed();
         var entries = rows.ToDictionary(k => k, _ => LwwValue<byte[]>.Create([7], OrphanStamp));
-        leaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+        leaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(_ => Task.FromResult(new StateDelta
             {
                 Entries = entries,
@@ -100,7 +100,7 @@ public partial class TreeShardConsolidationGrainTests
                 MovedAwayVsc = sealedSlots is null ? null : VirtualShardCount,
             }));
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
-        leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange()));
+        leaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange()));
         h.Survivor.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafId));
         h.Factory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leaf);
     }

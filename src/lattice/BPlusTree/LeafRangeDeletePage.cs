@@ -20,7 +20,7 @@ internal readonly record struct LeafRangeDeletePage
     [Id(1)] public GrainId? NextSibling { get; init; }
 
     /// <summary>
-    /// The leaf's bounds, as <see cref="IBPlusLeafGrain.GetKeyRangeAsync"/> returns
+    /// The leaf's bounds, as <see cref="IBPlusLeafGrain.GetKeyRangeAndNextSiblingAsync"/> returns
     /// them, read in the same turn after the delete (and any split it caused)
     /// completed, so the walk can pick a resume key without a further call.
     /// </summary>

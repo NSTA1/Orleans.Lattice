@@ -140,9 +140,9 @@ public partial class TreeShardConsolidationGrainTests
         // The donor leaf the cursor names splits: its right half is grafted in
         // ahead of the next leaf and holds an entry no earlier pass could see.
         var rightHalf = GrainId.Create("leaf", "donor-leaf-1-right");
-        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+        var rightHalfLeaf = LeafSubstituteCombinedCalls.CreateComposed();
         h.Factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
-        rightHalfLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+        rightHalfLeaf.Separate().GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
             .Returns(_ => Task.FromResult(new StateDelta
             {
                 Entries = Entries("b-right"),
@@ -152,7 +152,7 @@ public partial class TreeShardConsolidationGrainTests
         var leaf1 = (await h.Donor.GetLeafIdForKeyAsync(cursor))!.Value;
         var leaf2 = (await h.Donor.GetLeafIdForKeyAsync(DonorLeafResumeKey(2)))!.Value;
         rightHalfLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(leaf2));
-        rightHalfLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        rightHalfLeaf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = "k0001m",
             HighKeyExclusive = DonorLeafResumeKey(2),
@@ -160,7 +160,7 @@ public partial class TreeShardConsolidationGrainTests
 
         var leftHalf = h.Factory.GetGrain<IBPlusLeafGrain>(leaf1);
         leftHalf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(rightHalf));
-        leftHalf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        leftHalf.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
         {
             LowKeyInclusive = DonorLeafResumeKey(1),
             HighKeyExclusive = "k0001m",

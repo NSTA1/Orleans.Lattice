@@ -94,7 +94,7 @@ public partial class TreeSnapshotGrainTests
 
         for (int i = 0; i < leafIds.Length; i++)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leafMock = LeafSubstituteCombinedCalls.CreateComposed();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
 
             // snapshot TTL preservation: snapshot now drains raw LwwValue
@@ -114,7 +114,7 @@ public partial class TreeSnapshotGrainTests
             leafMock.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
                 .Returns(Task.FromResult(new List<PendingMutationSnapshot>()));
 
-            leafMock.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            leafMock.Separate().GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = SnapshotLeafResumeKey(i),
                 HighKeyExclusive = i + 1 < leafIds.Length ? SnapshotLeafResumeKey(i + 1) : null,

@@ -136,9 +136,9 @@ public partial class ShardHealingOrchestratorGrainTests
         {
             if (shardSubs.TryGetValue(i, out var s)) return s;
             var sub = Substitute.For<IShardRootGrain>();
-            sub.GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(30) });
+            sub.StubHotness(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(30) });
             sub.IsSplittingAsync().Returns(false);
-            sub.HasPendingBulkOperationAsync().Returns(false);
+            sub.StubPendingBulkOperation(false);
             ShardSamplingStatusStub.BridgeFromProbes(sub);
             shardSubs[i] = sub;
             return sub;
@@ -223,7 +223,7 @@ public partial class ShardHealingOrchestratorGrainTests
     {
         for (var i = 0; i < shardCount; i++)
         {
-            h.ShardOf(i).GetHotnessAsync().Returns(new ShardHotness
+            h.ShardOf(i).StubHotness(new ShardHotness
             {
                 Reads = opsPerShard, Writes = 0, Window = TimeSpan.FromSeconds(1),
             });
@@ -259,7 +259,7 @@ public partial class ShardHealingOrchestratorGrainTests
         await h.Grain.RunHealingPassAsync();
 
         await h.ShardOf(0).DidNotReceive().GetSamplingStatusAsync();
-        await h.ShardOf(0).DidNotReceive().GetHotnessAsync();
+        await h.ShardOf(0).DidNotReceive().GetSamplingStatusAsync();
         await h.Lattice.DidNotReceive().IsResizeCompleteAsync();
     }
 
@@ -357,7 +357,7 @@ public partial class ShardHealingOrchestratorGrainTests
         await h.Grain.RunHealingPassAsync();
 
         await h.ShardOf(0).DidNotReceive().GetSamplingStatusAsync();
-        await h.ShardOf(0).DidNotReceive().GetHotnessAsync();
+        await h.ShardOf(0).DidNotReceive().GetSamplingStatusAsync();
         await h.Lattice.DidNotReceive().IsResizeCompleteAsync();
         await h.ShardOf(0).DidNotReceive().IsSplittingAsync();
     }
@@ -512,7 +512,7 @@ public partial class ShardHealingOrchestratorGrainTests
         LoadUniformly(h, 8, opsPerShard: 10);
         // One shard carrying 40x the median: concentrated load a fold would
         // make worse, and exactly what the splitter is for.
-        h.ShardOf(0).GetHotnessAsync().Returns(new ShardHotness
+        h.ShardOf(0).StubHotness(new ShardHotness
         {
             Reads = 400, Writes = 0, Window = TimeSpan.FromSeconds(1),
         });
@@ -630,7 +630,7 @@ public partial class ShardHealingOrchestratorGrainTests
     public async Task RunHealingPass_stands_aside_for_a_pending_bulk_graft()
     {
         var h = CreateGrain(physicalShardCount: 8, baseShardCount: 2);
-        h.ShardOf(5).HasPendingBulkOperationAsync().Returns(true);
+        h.ShardOf(5).StubPendingBulkOperation(true);
 
         await h.Grain.RunHealingPassAsync();
 

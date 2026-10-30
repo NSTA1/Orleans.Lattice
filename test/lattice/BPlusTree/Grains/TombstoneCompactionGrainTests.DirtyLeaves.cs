@@ -44,7 +44,7 @@ public partial class TombstoneCompactionGrainTests
 
         foreach (var leafId in dirtyLeaves)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leafMock = LeafSubstituteCombinedCalls.CreateComposed();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafId).Returns(leafMock);
             leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(LeafCompactionResult.Complete(0)));
             // The fast path indexes into the snapshot list; sibling

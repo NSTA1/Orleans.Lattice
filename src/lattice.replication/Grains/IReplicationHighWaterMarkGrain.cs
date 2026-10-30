@@ -234,16 +234,10 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
 
     /// <summary>
     /// Whether the tree recorded <paramref name="originClusterId"/>'s write at
-    /// <paramref name="timestamp"/> as applied and still remembers it (issue
-    /// #4586 part 2b). Interleaves: the origin's frontier asks while this grain
-    /// may be waiting on it inside <see cref="CheckDependenciesAsync"/>.
-    /// </summary>
-    [AlwaysInterleave]
-    Task<bool> HasAppliedAsync(string originClusterId, HybridLogicalClock timestamp);
-
-    /// <summary>
-    /// Batch form of <see cref="HasAppliedAsync"/>, with one result per timestamp
-    /// in request order. Uses the same remembered identities and interleaving contract.
+    /// each of <paramref name="timestamps"/> as applied and still remembers it
+    /// (issue #4586 part 2b), with one result per timestamp in request order.
+    /// Interleaves: the origin's frontier asks while this grain may be waiting on
+    /// it inside <see cref="CheckDependenciesAsync"/>.
     /// </summary>
     [AlwaysInterleave]
     Task<bool[]> HasAppliedManyAsync(string originClusterId, IReadOnlyList<HybridLogicalClock> timestamps);

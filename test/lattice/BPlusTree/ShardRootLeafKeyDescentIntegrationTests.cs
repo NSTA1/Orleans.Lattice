@@ -100,7 +100,7 @@ public class ShardRootLeafKeyDescentIntegrationTests
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            var bounds = await leaf.GetKeyRangeAsync();
+            var bounds = (await leaf.GetKeyRangeAndNextSiblingAsync()).KeyRange;
             if (bounds.HighKeyExclusive is { } high)
             {
                 var resolved = await shard.GetLeafIdForKeyAsync(high);

@@ -75,7 +75,7 @@ public partial class TombstoneCompactionGrainTests
         var leaves = new IBPlusLeafGrain[dirtyLeaves.Length];
         for (int i = 0; i < dirtyLeaves.Length; i++)
         {
-            var leafMock = Substitute.For<IBPlusLeafGrain>().ComposeChainLink();
+            var leafMock = LeafSubstituteCombinedCalls.CreateComposed();
             grainFactory.GetGrain<IBPlusLeafGrain>(dirtyLeaves[i]).Returns(leafMock);
             if (throwsAtIndex(i))
             {

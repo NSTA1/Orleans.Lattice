@@ -24,7 +24,7 @@ internal readonly record struct LeafDeltaPage
     [Id(1)] public GrainId? NextSibling { get; init; }
 
     /// <summary>
-    /// The leaf's bounds, as <see cref="IBPlusLeafGrain.GetKeyRangeAsync"/> returns
+    /// The leaf's bounds, as <see cref="IBPlusLeafGrain.GetKeyRangeAndNextSiblingAsync"/> returns
     /// them, read in the same turn so a bounded walk can advance past this leaf
     /// without a further call. <see langword="default"/> from a leaf that predates
     /// the field, which a bounded walk treats as a leaf with no resume bound.

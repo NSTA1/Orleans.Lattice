@@ -53,6 +53,15 @@
   </ItemGroup>
 
   <!--
+    Lets NSubstitute's proxy generator implement internal test-only interfaces
+    such as Fakes/ILeafSeparateCalls, whose members use the core library's
+    internal types.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
     Byte-for-byte legacy leaf-snapshot blob, serialised by the same Newtonsoft
     path the grain-storage serializer uses, committed so the codec's dual-read
     guarantee is proved against a real pre-codec persisted shape rather than a
