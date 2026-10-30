@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>The guarantees</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/scene.js"></script>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="guarantees"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="199.554"
+    >
+      <div
+        id="title"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="the-guarantees"
+        data-track-index="0"
+        data-variable-values='{"kicker":"Evaluate / E2","title":"The guarantees","subtitle":"Caller-visible promises, and what survives a silo stop","beats":"0.5,6.994","end":13.923}'
+        data-start="0"
+        data-duration="13.923"
+      ></div>
+      <div
+        id="consistency-levels"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="four-kinds-of-promise"
+        data-track-index="0"
+        data-variable-values='{"heading":"Four kinds of promise","items":"[{\"title\":\"Linearizable\",\"detail\":\"One point between invocation and return\",\"beat\":1},{\"title\":\"Strong consistency\",\"detail\":\"A real point during the call, without missing or misattributed entries\",\"beat\":2},{\"title\":\"Online snapshot\",\"detail\":\"Correct per key, not one global instant\",\"beat\":3}]","beats":"0.6,7.403,14.388,23.864","end":29.517}'
+        data-start="13.923"
+        data-duration="29.517"
+      ></div>
+      <div
+        id="eventual-consistency"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="bounded-staleness"
+        data-track-index="0"
+        data-variable-values='{"heading":"Bounded staleness","items":"[{\"title\":\"Eventual consistency\",\"detail\":\"Bounded staleness, then convergence within a configurable interval\",\"beat\":0}]","beats":"0.6","end":6.921}'
+        data-start="43.44"
+        data-duration="6.921"
+      ></div>
+      <div
+        id="point-operations"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="point-operations"
+        data-track-index="0"
+        data-variable-values='{"heading":"Point operations","items":"[{\"title\":\"GetAsync\",\"detail\":\"Default CacheTtl zero: linearizable\",\"beat\":0},{\"title\":\"SetAsync\",\"detail\":\"The WAL append is the commit boundary\",\"beat\":1}]","beats":"0.6,13.093","end":21.135}'
+        data-start="50.361"
+        data-duration="21.135"
+      ></div>
+      <div
+        id="batches"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="batches"
+        data-track-index="0"
+        data-variable-values='{"heading":"Batches","items":"[{\"title\":\"GetManyAsync\",\"detail\":\"Per-key consistency, not a snapshot across unrelated keys\",\"beat\":0},{\"title\":\"SetManyAsync\",\"detail\":\"Per-key linearizability; a failure can leave partial writes\",\"beat\":1},{\"title\":\"SetManyAtomicAsync\",\"detail\":\"All-or-nothing, atomically visible across the tree\",\"beat\":2}]","beats":"0.6,7.593,19.953","end":29.778}'
+        data-start="71.496"
+        data-duration="29.778"
+      ></div>
+      <div
+        id="scans"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="scans"
+        data-track-index="0"
+        data-variable-values='{"heading":"Scans","items":"[{\"title\":\"Strongly consistent and ordered\",\"detail\":\"No gaps or duplicates through topology changes\",\"beat\":0},{\"title\":\"Bounded recovery\",\"detail\":\"Topology, reconnect and stalled-page retries have separate budgets\",\"beat\":1},{\"title\":\"Fault on exhaustion\",\"detail\":\"Never return an incomplete scan; a reopen captures a fresh saga-decision view\",\"beat\":2}]","beats":"0.6,8.771,17.261","end":32.352}'
+        data-start="101.274"
+        data-duration="32.352"
+      ></div>
+      <div
+        id="snapshots-and-recovery"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="snapshots-and-recovery"
+        data-track-index="0"
+        data-variable-values='{"heading":"Snapshots and recovery","items":"[{\"title\":\"Snapshot cursor\",\"detail\":\"Frozen per-shard baselines across pages; atomic batches stay on one side\",\"beat\":0},{\"title\":\"WAL durability\",\"detail\":\"The append commits; the provider decides whether it survives restart\",\"beat\":1},{\"title\":\"Saga recovery\",\"detail\":\"Keepalive resumes; the caller deadline determines compensation\",\"beat\":2}]","beats":"0.6,28.629,39.016","end":53.067}'
+        data-start="133.626"
+        data-duration="53.067"
+      ></div>
+      <div
+        id="where-next"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="where-next"
+        data-track-index="0"
+        data-variable-values='{"heading":"Where next","items":"[{\"title\":\"Next on Evaluate: The evidence\",\"detail\":\"Continue the Evaluate path\",\"beat\":0},{\"title\":\"The deep dive: Clocks and version vectors\",\"detail\":\"Explore the mechanism in depth\",\"beat\":0}]","beats":"0.6","end":12.861}'
+        data-start="186.693"
+        data-duration="12.861"
+      ></div>
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/guarantees/narration.wav" data-start="0" data-duration="199.554" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["guarantees"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

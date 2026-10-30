@@ -1,0 +1,248 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:04.084
+The guarantees:
+what each operation promises its caller,
+
+2
+00:00:04.084 --> 00:00:06.644
+and what remains true when a silo stops.
+
+3
+00:00:06.994 --> 00:00:09.682
+When Lattice fits named its limits.
+
+4
+00:00:09.682 --> 00:00:13.523
+Here, we make the caller-visible
+promises precise.
+
+5
+00:00:14.523 --> 00:00:17.721
+The consistency guide classifies
+the operations it lists.
+
+6
+00:00:17.721 --> 00:00:20.976
+A method it does not list is
+not classified by that table.
+
+7
+00:00:21.326 --> 00:00:27.102
+Linearizable means a call takes effect
+at one point between its invocation
+
+8
+00:00:27.102 --> 00:00:27.961
+and return.
+
+9
+00:00:28.311 --> 00:00:32.721
+Strong consistency means a result
+reflects a real point during the call,
+
+10
+00:00:32.721 --> 00:00:37.437
+without missing, double-counted or
+misattributed entries as the tree changes.
+
+11
+00:00:37.787 --> 00:00:40.135
+An online snapshot is correct per key,
+
+12
+00:00:40.135 --> 00:00:43.040
+but is not guaranteed
+to be one global instant.
+
+13
+00:00:44.040 --> 00:00:47.001
+Eventual consistency
+allows bounded staleness,
+
+14
+00:00:47.001 --> 00:00:49.961
+then converges within
+a configurable interval.
+
+15
+00:00:50.961 --> 00:00:55.569
+With the default cache TTL of zero,
+`GetAsync` is linearizable.
+
+16
+00:00:55.569 --> 00:00:59.373
+A positive cache TTL makes
+it eventually consistent,
+
+17
+00:00:59.373 --> 00:01:03.104
+with staleness bounded
+by the TTL plus one refresh.
+
+18
+00:01:03.454 --> 00:01:05.218
+`SetAsync` is linearizable.
+
+19
+00:01:05.218 --> 00:01:08.483
+Its write-ahead log append
+is the commit boundary,
+
+20
+00:01:08.483 --> 00:01:11.096
+before the in-memory projection changes.
+
+21
+00:01:12.096 --> 00:01:15.383
+`GetManyAsync` is consistent per key
+by default,
+
+22
+00:01:15.383 --> 00:01:18.739
+but it is not one snapshot
+across unrelated keys.
+
+23
+00:01:19.089 --> 00:01:22.988
+`SetManyAsync` is linearizable per key,
+not atomic as a batch.
+
+24
+00:01:22.988 --> 00:01:27.326
+On failure, some keys may have committed;
+sibling writes may still be
+
+25
+00:01:27.326 --> 00:01:31.099
+in flight after the exception,
+so re-read after they settle.
+
+26
+00:01:31.449 --> 00:01:37.243
+`SetManyAtomicAsync` is all or nothing,
+and atomic-visible across the tree.
+
+27
+00:01:37.243 --> 00:01:40.874
+A concurrent reader sees every change,
+or none.
+
+28
+00:01:41.874 --> 00:01:45.785
+`ScanKeysAsync`
+and `ScanEntriesAsync` stay ordered,
+
+29
+00:01:45.785 --> 00:01:49.695
+without gaps
+or duplicates through topology changes.
+
+30
+00:01:50.045 --> 00:01:53.865
+Topology retries default to three;
+resilient scans separately
+
+31
+00:01:53.865 --> 00:01:58.185
+reconnect up to eight times,
+with a smaller budget for stalled pages.
+
+32
+00:01:58.535 --> 00:02:02.337
+Exhaustion faults rather
+than returning an incomplete scan.
+
+33
+00:02:02.337 --> 00:02:06.074
+A reconnect or resume captures
+a fresh saga-decision view,
+
+34
+00:02:06.074 --> 00:02:11.293
+so an atomic saga crossing that boundary
+can appear pre-commit in earlier results
+
+35
+00:02:11.293 --> 00:02:13.226
+and post-commit in later ones.
+
+36
+00:02:14.226 --> 00:02:17.439
+An online snapshot is
+not a strict snapshot.
+
+37
+00:02:17.439 --> 00:02:21.748
+A snapshot cursor freezes
+each shard's baseline during open
+
+38
+00:02:21.748 --> 00:02:23.647
+and uses it on every page.
+
+39
+00:02:23.647 --> 00:02:28.613
+The saga-decision gate keeps an atomic
+batch on one side of capture.
+
+40
+00:02:28.613 --> 00:02:34.675
+For a multi-page cursor, its baselines are
+durable before the continuation returns,
+
+41
+00:02:34.675 --> 00:02:36.793
+so it survives silo failover;
+
+42
+00:02:36.793 --> 00:02:41.905
+eviction before the first read can
+expire it, and it must be reopened.
+
+43
+00:02:42.255 --> 00:02:44.521
+The WAL append is the commit point,
+
+44
+00:02:44.521 --> 00:02:48.083
+but the provider decides
+whether it survives a restart.
+
+45
+00:02:48.083 --> 00:02:52.292
+The default in-memory log does not;
+a durable provider is needed.
+
+46
+00:02:52.642 --> 00:02:56.220
+If the silo hosting an atomic
+saga crashes mid-flight,
+
+47
+00:02:56.220 --> 00:02:58.937
+its keepalive resumes it on reactivation.
+
+48
+00:02:58.937 --> 00:03:00.992
+A recorded commit is completed;
+
+49
+00:03:00.992 --> 00:03:06.293
+an undecided saga is compensated once
+its caller's decision deadline has passed.
+
+50
+00:03:07.293 --> 00:03:09.400
+Next on Evaluate: The evidence.
+
+51
+00:03:09.400 --> 00:03:13.613
+The deep dive on how this works is Clocks
+and version vectors.
+
+52
+00:03:13.613 --> 00:03:17.554
+The links are on this episode's page
+in the documentation.

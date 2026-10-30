@@ -1,0 +1,16 @@
+{
+  "path": "evaluate",
+  "order": 2,
+  "items": [
+    "E2"
+  ],
+  "poster": {
+    "scene": "batches",
+    "beat": 2,
+    "offset": -0.5
+  },
+  "published": {
+    "cut": "ed280209ec3e",
+    "bytes": 10074776
+  }
+}
