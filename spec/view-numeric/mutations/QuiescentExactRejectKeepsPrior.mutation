@@ -1,0 +1,16 @@
+# The #5236 defect: a contribution rejected for a reserved group key leaves the
+# key's prior membership in place, so the view is no longer a function of the
+# source.
+MODULE: QuiescentExactRejectKeepsPrior
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: a reserved group key keeps the source key's prior contribution instead of retracting it
+PERTURBS: Flip
+
+--- FIND
+           new == Extract(e, viewDefn)
+           old == mem[k]
+--- REPLACE
+           new == IF Grp(e) = "R" THEN mem[k] ELSE Extract(e, viewDefn)
+           old == mem[k]
+--- END

@@ -1,0 +1,12 @@
+# A committed write the view's log never carries.
+MODULE: QuiescentExactWriteNotLogged
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: a source write changes the winner without reaching the log the view tails
+PERTURBS: Write
+
+--- FIND
+       /\ logs' = [logs EXCEPT ![phys] = Append(@, u)]
+--- REPLACE
+       /\ logs' = logs
+--- END

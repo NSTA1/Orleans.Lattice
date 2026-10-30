@@ -1,0 +1,16 @@
+# Without freshening the generation, the rebuild's scan re-attaches to the
+# retained sagas of rows it cleared and installs nothing for them.
+MODULE: QuiescentExactReconcileReusesEpoch
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: a reconcile rebuild scans under the current generation, so retained sagas swallow its contributions
+PERTURBS: Reconcile
+BOUNDS: MaxReconciles = 1
+
+--- FIND
+    /\ Live /\ reconciles < MaxReconciles
+    /\ Rebuild(epoch + 1)
+--- REPLACE
+    /\ Live /\ reconciles < MaxReconciles
+    /\ Rebuild(epoch)
+--- END

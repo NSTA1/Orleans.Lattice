@@ -1,0 +1,18 @@
+# A pass that completes the current unit and returns to it instead of the next.
+MODULE: ConvergesAdvanceNeverMoves
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the drain finishes an ordinary unit without moving past it
+PERTURBS: Advance
+
+--- FIND
+    /\ read' = read + 1 /\ phase' = "idle"
+    /\ UNCHANGED <<appended, logs, phys, decision, src, defn, bound, viewDefn,
+         epoch, checkpoint, mem, slots, pub, intent, registry, conflict, faults,
+         reconciles>>
+--- REPLACE
+    /\ phase' = "idle"
+    /\ UNCHANGED <<appended, logs, phys, decision, src, defn, bound, viewDefn,
+         epoch, read, checkpoint, mem, slots, pub, intent, registry, conflict, faults,
+         reconciles>>
+--- END

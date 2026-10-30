@@ -286,10 +286,11 @@ do not establish bounded latency.
 ## Focused materialised-view companions
 
 The tail row in the area census above is one lifecycle model, not a claim that
-it checks every view interaction. Eight focused companions supply separate
-replay, admission, physical identity, projection and joint-repair contracts.
-Together with the tail they have nine modules, 166 mutations, 213 behaviour
-rows and 192 TLC harness cases, derived from their checked manifests.
+it checks every view interaction. Nine focused companions supply separate
+replay, admission, physical identity, projection, joint-repair and
+schema-independent numeric contracts. Together with the tail they have ten
+modules, 186 mutations, 232 behaviour rows and 215 TLC harness cases, derived
+from their checked manifests.
 
 | Module | Base states | Variant states | Mutants | Harness cases | Production refinement |
 |--------|-------------|----------------|---------|---------------|-----------------------|
@@ -301,6 +302,7 @@ rows and 192 TLC harness cases, derived from their checked manifests.
 | `MaterialisedViewSourceAdmission` | 22,720 | 836 (`CrossTree`); 16,412 (`History`); 660 (`PendingSource`); 1,028 (`PendingOverlay`) | 21 | 26 | Yes, logical tuple/participant admission |
 | `MaterialisedViewResolvedIdentity` | 196 | 52 (`SameLog`); 60 (`FailedCandidate`); 49 (`LostCandidate`) | 16 | 20 | Yes, actual-log cache ownership |
 | `MaterialisedViewJointRepair` | 11,006 | 144 (`Legacy`); 4,572 (`SingleTarget`); 16,437 (`TwoFaults`) | 25 | 29 | Yes, conditional joint lifecycle |
+| `MaterialisedViewNumeric` | 8,208 | 44,134 (`Swap`); 38,698 (`TwoFaults`) | 20 | 23 | Yes, schema-independent Count/Sum extraction |
 
 **Yes is a bounded seam mapping, not a machine-checked implementation proof.**
 The full refinement acceptance/resolver audit passes without waived Pending or

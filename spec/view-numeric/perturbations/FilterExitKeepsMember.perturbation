@@ -1,0 +1,18 @@
+# A value that leaves the projection's filter no longer retracts the key's
+# prior contribution, so the view keeps a member the source no longer admits.
+MODULE: MaterialisedViewNumeric
+ROW: QuiescentExact
+FILE: src/lattice/Views/AggregationLatticeViewProjection.cs
+DETECTORS: MaterialisedViewNumericCompanionTests.Count_and_sum_follow_create_update_regroup_filter_exit_and_delete_exactly, AggregationLatticeViewProjectionTests.Project_set_failing_filter_emits_retract
+SUMMARY: a filter exit yields no contribution instead of a retraction
+
+--- FIND
+                    // The entry fell out of the filter: retract whatever it last
+                    // contributed (the maintainer recovers the prior group).
+                    yield return AggregationContribution.Retract(mutation.Key, mutation.Timestamp);
+                    yield break;
+--- REPLACE
+                    // The entry fell out of the filter: retract whatever it last
+                    // contributed (the maintainer recovers the prior group).
+                    yield break;
+--- END

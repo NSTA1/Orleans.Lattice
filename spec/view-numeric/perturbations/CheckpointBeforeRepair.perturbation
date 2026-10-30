@@ -1,0 +1,17 @@
+# The drain retires its checkpoint without completing the durable intents of
+# the source keys it read, so an interrupted publication whose successor
+# projects nothing is banked unrepaired.
+MODULE: MaterialisedViewNumeric
+ROW: CheckpointAfterPublication
+FILE: src/lattice/Views/ViewMaintainerGrain.Aggregation.cs
+DETECTORS: MaterialisedViewNumericIntentCompositionTests.Source_suppression_and_a_no_output_successor_complete_numeric_intent_before_checkpoint, ViewMaintainerReplayFlushTests.A_suppressed_interrupted_numeric_event_and_empty_successor_complete_repair_before_checkpoint
+SUMMARY: the pass checkpoints without completing pending numeric intents
+
+--- FIND
+            foreach (var sourceKey in numericSourceKeys)
+            {
+                await applier.CompletePendingNumericSourceAsync(sourceKey, cancellationToken);
+            }
+--- REPLACE
+            _ = numericSourceKeys;
+--- END
