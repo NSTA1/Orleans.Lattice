@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using Orleans.Lattice.BPlusTree;
 
@@ -252,7 +253,10 @@ public sealed class LatticeBackupCaptureIntegrationTests
             Assert.That(catalogued, Is.Not.Null);
             Assert.That(catalogued!.Id, Is.EqualTo(result.BackupId));
             Assert.That(catalogued.Kind, Is.EqualTo(BackupKind.Full));
-            Assert.That(catalogued.StructuralDigest, Is.Not.Empty);
+            var structuralBytes = Encoding.UTF8.GetBytes(
+                string.Concat(catalogued.Topology.ShardRootDigests.Select(digest => digest + "\n")));
+            Assert.That(catalogued.StructuralDigest,
+                Is.EqualTo(Convert.ToHexStringLower(SHA256.HashData(structuralBytes))));
             Assert.That(catalogued.Topology.ShardCount, Is.GreaterThan(0));
             Assert.That(catalogued.Topology.ShardRootDigests, Has.Count.EqualTo(catalogued.Topology.ShardCount));
             Assert.That(catalogued.ConsistencyCut.HlcTimestamp, Is.EqualTo(result.Manifest.ConsistencyCut.HlcTimestamp),

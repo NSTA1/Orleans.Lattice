@@ -1,6 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
@@ -43,13 +40,6 @@ internal static class BackupSetIdentity
     {
         ArgumentNullException.ThrowIfNull(memberBackupIds);
 
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var id in memberBackupIds)
-        {
-            hasher.AppendData(Encoding.UTF8.GetBytes(id));
-            hasher.AppendData("\n"u8);
-        }
-
-        return BackupContentHash.ToHexLowerAndReset(hasher);
+        return BackupContentHash.ComputeNewlineTerminatedUtf8(memberBackupIds);
     }
 }

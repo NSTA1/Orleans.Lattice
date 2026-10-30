@@ -99,4 +99,16 @@ public sealed class BackupSetIdentityTests
             BackupSetIdentity.Compute(Array.Empty<string>()),
             Is.EqualTo(Convert.ToHexStringLower(SHA256.HashData(Array.Empty<byte>()))));
     }
+
+    [TestCase("")]
+    [TestCase("a\nb")]
+    [TestCase("\u00e9\u6f22\ud83d\ude00")]
+    [TestCase("\ud800")]
+    public void Compute_preserves_utf8_encoding_and_a_terminator_for_each_member(string member)
+    {
+        var expected = Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(member + "\nlast\n")));
+
+        Assert.That(BackupSetIdentity.Compute(new[] { member, "last" }), Is.EqualTo(expected));
+    }
 }
