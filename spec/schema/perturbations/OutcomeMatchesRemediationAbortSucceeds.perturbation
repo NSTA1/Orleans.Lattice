@@ -10,9 +10,11 @@ SUMMARY: an aborted remediation is recorded as succeeded
             return new LatticeOperationCompletion
             {
                 State = LatticeOperationState.Failed,
+                FailureReason = $"Stopped at key '{report.OffendingKey}': {report.Reason} Nothing was cut over.",
 --- REPLACE
             AddRemediationId(result, report);
             return new LatticeOperationCompletion
             {
                 State = LatticeOperationState.Succeeded,
+                FailureReason = $"Stopped at key '{report.OffendingKey}': {report.Reason} Nothing was cut over.",
 --- END
