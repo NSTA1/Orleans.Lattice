@@ -227,7 +227,7 @@ public sealed class AggregationMembershipAtomicityTests
 
     [TestCase("")]
     [TestCase("\0reserved")]
-    public async Task ApplyAsync_rejected_numeric_regroup_completes_the_previous_durable_intent(string reserved)
+    public async Task ApplyAsync_rejected_numeric_regroup_completes_the_previous_durable_intent_then_retracts_the_member(string reserved)
     {
         var store = new ObservedStore(1, true);
         AggregationApplier Create() => new(store, AggregationKind.Sum, 1, 0, "epoch");
@@ -238,10 +238,13 @@ public sealed class AggregationMembershipAtomicityTests
             () => Create().ApplyAsync(AggregationContribution.OfNumeric("blue", "a", 7, new() { WallClockTicks = 3 })),
             Throws.TypeOf<InvalidOperationException>());
 
+        // The reserved regroup first completes the pending blue intent (so red no
+        // longer counts "a"), then retracts "a" from blue as a filter exit would
+        // (#5236): "a" now belongs to no valid group.
         await Create().ApplyAsync(AggregationContribution.OfNumeric(reserved, "a", 9, new() { WallClockTicks = 4 }));
         Assert.That(LatticeAggregationValue.DecodeDouble((await store.GetAsync("red"))!), Is.EqualTo(5));
-        Assert.That(LatticeAggregationValue.DecodeDouble((await store.GetAsync("blue"))!), Is.EqualTo(7));
-        Assert.That(DecodeMembership((await store.GetAsync(MembershipKey("a")))!).GroupKey, Is.EqualTo("blue"));
+        Assert.That(await store.GetAsync("blue"), Is.Null);
+        Assert.That(await store.GetAsync(MembershipKey("a")), Is.Null);
         Assert.That(await store.GetAsync(NumericMaterialisationKey("a")), Is.Null);
     }
 
