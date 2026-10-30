@@ -1,0 +1,12 @@
+# Cancel: a cancel during the build discards the destination.
+MODULE: SchemaRemediationCutover
+ROW: Cancel
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.CancelAsync_during_the_build_discards_the_destination_and_records_cancelled
+SUMMARY: a cancel during the build keeps the destination
+
+--- FIND
+                    await DiscardDestinationAsync(grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!));
+--- REPLACE
+                    await Task.CompletedTask;
+--- END

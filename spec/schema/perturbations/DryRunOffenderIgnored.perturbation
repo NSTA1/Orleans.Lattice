@@ -1,0 +1,18 @@
+# DryStep(k): the first dry-run offender aborts with no destination built.
+MODULE: SchemaRemediationCutover
+ROW: DryStep(k)
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.StartAsync_dry_run_violation_aborts_with_no_cutover_and_leaves_original_untouched
+SUMMARY: the dry run lets an offender through to the build
+
+--- FIND
+        if (offender is { } failed)
+        {
+            await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
+        }
+--- REPLACE
+        if (offender is { } failed && slice.Fault is not null)
+        {
+            await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
+        }
+--- END

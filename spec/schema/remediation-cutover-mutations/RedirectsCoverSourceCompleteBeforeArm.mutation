@@ -1,0 +1,14 @@
+# Completion is recorded once the swap lands, before the source is armed.
+MODULE: RedirectsCoverSourceCompleteBeforeArm
+TARGET: RedirectsCoverSource
+CLASS: Action
+SUMMARY: the remediation completes before arming the source
+PERTURBS: Complete
+
+--- FIND
+    /\ phase = "Cutover" /\ cstep = 3
+    /\ Finish("Completed", 0)
+--- REPLACE
+    /\ phase = "Cutover" /\ cstep \in {2, 3}
+    /\ Finish("Completed", 0)
+--- END

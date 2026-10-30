@@ -1,0 +1,12 @@
+# DestinationInheritsTopology: the destination inherits the source's map, pins and overrides.
+MODULE: SchemaRemediationCutover
+ROW: DestinationInheritsTopology
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.The_destination_inherits_the_source_topology_pins_and_overrides, SchemaRemediationTopologyInheritanceIntegrationTests.Remediation_of_a_resharded_pinned_tree_keeps_its_map_shard_count_and_pins
+SUMMARY: the destination is registered with defaults
+
+--- FIND
+            var inherited = await DerivedTreeEntries.InheritingAsync(grainFactory, TreeId, derivedFrom: TreeId);
+--- REPLACE
+            var inherited = new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry { DerivedFrom = TreeId };
+--- END

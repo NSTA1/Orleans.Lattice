@@ -1,0 +1,13 @@
+# The destination is registered with defaults rather than the source's
+# layout, silently undoing a reshard.
+MODULE: DestinationInheritsTopologyDefaultLayout
+TARGET: DestinationInheritsTopology
+CLASS: Invariant
+SUMMARY: the destination is registered with the default layout
+PERTURBS: BuildStep
+
+--- FIND
+    /\ LET lay == IF destReg THEN shards[dest] ELSE shards[alias] IN
+--- REPLACE
+    /\ LET lay == IF destReg THEN shards[dest] ELSE {1} IN
+--- END

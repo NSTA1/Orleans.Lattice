@@ -1,0 +1,14 @@
+# Initiate(m): intent is persisted at the dry run before any side effect.
+MODULE: SchemaRemediationCutover
+ROW: Initiate(m)
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.AcceptAsync_persists_intent_without_scanning_and_records_the_operation_id, LatticeSchemaRemediationGrainTests.InitiateCoreAsync_reads_entry_directly_for_source_physical_tree_id
+SUMMARY: intent is persisted at the wrong phase
+
+--- FIND
+        state.State.InProgress = true;
+        state.State.Phase = LatticeSchemaRemediationPhase.DryRun;
+--- REPLACE
+        state.State.InProgress = true;
+        state.State.Phase = LatticeSchemaRemediationPhase.Build;
+--- END

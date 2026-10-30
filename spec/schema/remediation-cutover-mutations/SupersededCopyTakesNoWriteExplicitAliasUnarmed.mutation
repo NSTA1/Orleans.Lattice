@@ -1,0 +1,13 @@
+# An explicit alias set leaves the replaced copy unarmed, so stale routers
+# keep writing into it.
+MODULE: SupersededCopyTakesNoWriteExplicitAliasUnarmed
+TARGET: SupersededCopyTakesNoWrite
+CLASS: Invariant
+SUMMARY: an explicit alias set never arms the copy it replaces
+PERTURBS: ExplicitPublish
+
+--- FIND
+    /\ armed' = armed \cup {<<alias, s, Other>> : s \in shards[alias]}
+--- REPLACE
+    /\ armed' = armed
+--- END
