@@ -1,0 +1,12 @@
+# ConvergesWhenAligned: once the receiver holds the version, an older value upcasts.
+MODULE: SchemaCrossRegion
+ROW: ConvergesWhenAligned
+FILE: src/lattice.schema/LatticeSchemaVersionDecoder.cs
+DETECTORS: SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_becomes_readable_once_the_receiver_advances_to_it
+SUMMARY: an older value is refused instead of upcast along the receiver's hop
+
+--- FIND
+        return effectiveRegistry.Upcast(schemaId, storedVersion, version.TargetVersion, body);
+--- REPLACE
+        throw new NotSupportedException("perturbed: no upcast");
+--- END

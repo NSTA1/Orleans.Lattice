@@ -7,10 +7,11 @@ choke point, how a tree's schema family, upcaster catalog and target version
 evolve under read-time upcasting and eager migration, and how tracked schema
 operations and compliance scans are admitted, driven, cancelled, lost and
 reported, and how strict ingest is judged and diverted to the dead-letter queue
-at a replication receiver. Further schema modules (remediation and migration,
-and the atomic, replication and tenant interactions) are added here
-as they land, so every schema module shares one directory, one fingerprint
-group and the operators below.
+at a replication receiver, and how schema definitions that are local to each
+region meet replicated values and atomic batches, and how the facade scopes
+every schema operation to the caller's tenant. Further schema modules
+(remediation and migration) are added here as they land, so every schema module
+shares one directory, one fingerprint group and the operators below.
 
 ## Modules
 
@@ -22,6 +23,8 @@ group and the operators below.
 | `SchemaDurableOperation` | Tracked remediation, migration and advance-and-migrate operations over one tree: admission before a handle, idempotent starts, the in-process runner and the durable sliced remediation it follows, cooperative cancellation before cutover, terminal reporting (including the superseded follower of #5267), and a lost runner's silo with a fresh start resuming the remediation. | [`SchemaDurableOperationRefinement.md`](SchemaDurableOperationRefinement.md) |
 | `SchemaComplianceScan` | One tracked compliance scan: the policy read once at the start, the ungoverned short-circuit, the count before an ordered non-snapshot pass over a writable tree, per-reason tallies, undecodable values counted non-compliant (#5253), the rule count kept apart from the failure-reason count (#4966), and cancellation or a lost runner ending it with no report. | [`SchemaComplianceScanRefinement.md`](SchemaComplianceScanRefinement.md) |
 | `SchemaStrictIngest` | Strict ingest at a replication receiver: each entry judged by the policy its silo holds, whatever order it and its batch's decision arrived in; a refused entry diverted only once its dead-letter record is durable; policy lookups, appends and commits that fail, are cancelled or lose their response; the applier's re-throw and park; lost acknowledgements and re-delivery; at-least-once records; and a policy change that reaches the silo late. | [`SchemaStrictIngestRefinement.md`](SchemaStrictIngestRefinement.md) |
+| `SchemaCrossRegion` | A versioned tree replicated between regions whose policies, targets and upcaster catalogs are region-local: plain writes stored below the check with their own stamp, deltas and atomic-batch entries judged by the receiver's own policy and catalog under strict ingest (a delta lifted to the receiver's target once, a refused batch entry left out while its siblings commit together), nothing admitted while the stream, a collaborator or a restore-fenced copy is unavailable, reads that serve or fail explicitly, and convergence once the receiver holds the source's version. | [`SchemaCrossRegionRefinement.md`](SchemaCrossRegionRefinement.md) |
+| `SchemaTenantScope` | The schema facade under tenancy: the caller's tree resolved once to its tenant-scoped effective tree, an unattributed caller and a confined tenant's escape into a reserved or malformed namespace refused before the gate, `SchemaAdmin` or `Read` authorized over the whole effective tree while the tenancy layer can confirm its policy, the operation acting on exactly that tree, and tracked operations found only under the caller's tenant. | [`SchemaTenantScopeRefinement.md`](SchemaTenantScopeRefinement.md) |
 
 Shared vocabulary, for later modules here: a value is `Raw(body)` or
 `Env(body, tag)` with `body` in `{"Good", "Bad"}` and `tag` in
@@ -52,12 +55,16 @@ set, which reaches the in-band refusal of a different remediation. Both re-check
 every state and action property and leave the liveness properties on the base.
 `SchemaComplianceScan` checks two keys, one write and one policy change against
 a scan; its `TwoWrites` variant re-checks every state and action property with
-two writes racing the scan.
-property over two-entry atomic and non-atomic batches. `SchemaStrictIngest`
+two writes racing the scan. `SchemaStrictIngest`
 checks one entry through two failures before the applier parks it, one lost
 acknowledgement and one policy change; its `TwoEntries` variant re-checks every
 state and action property over two entries, and leaves the liveness property on
-the base for the TLC budget.
+the base for the TLC budget. `SchemaCrossRegion` checks two replicated entries of
+every shape and one fault of the stream, a receiver collaborator or the
+receiver's physical copy; its `ThreeEntries` variant re-checks every state and
+action property over three entries, and leaves both liveness properties on the
+base. `SchemaTenantScope` checks two facade requests and one loss of tenancy
+confirmation; its `ThreeRequests` variant re-checks every property with three.
 
 ## What is not modelled
 
@@ -74,7 +81,14 @@ the per-silo config caches to their own gaps, does not replicate the runtime
 catalog across regions, and leaves migration phases and the quiescence they
 require to the remediation model. The operation models do not resume a lost
 remediation on their own, do not claim a compliance scan is a snapshot, and leave
-the cutover, reservation and migration specifics to the remediation model.
+the cutover, reservation and migration specifics to the remediation model. The
+cross-region model does not replicate any schema definition (each region
+registers its own), keeps writes below the check and the batched merges the
+merge-result observer does not see unchecked, treats a diversion as permanent
+(convergence exempts diverted entries), and leaves the CRDT fold, batch loss
+paths and policy propagation to the models that own them. The tenant model relies
+on the tenancy layer's own model for snapshot freshness and grant propagation, and
+covers the facade only: the in-process admins authorize nothing.
 
 ## How to run TLC
 
@@ -101,3 +115,5 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Tlc
 | `SchemaDurableOperation` | 8 | 6 | 13 | 17 | 25 | 72,732 |
 | `SchemaComplianceScan` | 10 | 4 | 9 | 16 | 21 | 23,580 |
 | `SchemaStrictIngest` | 3 | 7 | 9 | 16 | 16 | 5,326 |
+| `SchemaCrossRegion` | 3 | 9 | 8 | 17 | 16 | 47,890 |
+| `SchemaTenantScope` | 4 | 6 | 7 | 12 | 12 | 124,968 |

@@ -1,0 +1,13 @@
+# A diverted batch entry aborts the batch's other staged entries at the
+# receiver, as a refused local atomic write aborts its batch.
+MODULE: AdmittedNeverDroppedDivertAbortsBatch
+TARGET: AdmittedNeverDropped
+CLASS: Action
+SUMMARY: a diversion drops the batch's admitted entries
+PERTURBS: Deliver
+
+--- FIND
+                    ELSE /\ st' = [st EXCEPT ![e] = "Diverted"]
+--- REPLACE
+                    ELSE /\ st' = [x \in Entries |-> IF x = e \/ st[x] = "Staged" THEN "Diverted" ELSE st[x]]
+--- END

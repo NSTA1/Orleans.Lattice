@@ -1,0 +1,14 @@
+# Regaining confirmation is counted as a further fault.
+MODULE: TypeOKReconfirmCountsFault
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: reconfirmation spends the fault budget past its bound
+PERTURBS: Reconfirm
+
+--- FIND
+    /\ confirm' = TRUE
+    /\ UNCHANGED <<grant, cross, faults, count, req, Data>>
+--- REPLACE
+    /\ confirm' = TRUE /\ faults' = faults + 1
+    /\ UNCHANGED <<grant, cross, count, req, Data>>
+--- END

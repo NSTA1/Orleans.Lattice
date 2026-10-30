@@ -1,0 +1,12 @@
+# AtomicAllOrNothing: a staged replicated prepare is judged before it is staged.
+MODULE: SchemaCrossRegion
+ROW: AtomicAllOrNothing
+FILE: src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs
+DETECTORS: SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together
+SUMMARY: an on-time prepare is staged without being judged, so a refused entry is revealed with its batch
+
+--- FIND
+                await SetJudgedOnceAsync(key, value, judgement, CancellationToken.None);
+--- REPLACE
+                await SetAsyncCore(key, value, CancellationToken.None);
+--- END

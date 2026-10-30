@@ -1,0 +1,15 @@
+# Advancing the target rewrites every stored stamp to the new target.
+MODULE: StoredStampFixedAdvanceRestamps
+TARGET: StoredStampFixed
+CLASS: Action
+SUMMARY: a target advance re-stamps stored values
+PERTURBS: Advance
+
+--- FIND
+    /\ tgt' = 2
+    /\ UNCHANGED <<kind, body, stamp, strict, hop, st, tag, retried, decided, up, faults, lastRead>>
+--- REPLACE
+    /\ tgt' = 2
+    /\ tag' = [e \in Entries |-> IF st[e] = "Pending" THEN tag[e] ELSE 2]
+    /\ UNCHANGED <<kind, body, stamp, strict, hop, st, retried, decided, up, faults, lastRead>>
+--- END

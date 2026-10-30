@@ -22,8 +22,10 @@ have one perturbation for every behaviour row. `SchemaVersionFamily`
 ([`SchemaVersionFamilyRefinement.md`](../SchemaVersionFamilyRefinement.md)),
 `SchemaDurableOperation`
 ([`SchemaDurableOperationRefinement.md`](../SchemaDurableOperationRefinement.md))
-and `SchemaComplianceScan`
-([`SchemaComplianceScanRefinement.md`](../SchemaComplianceScanRefinement.md))
+`SchemaComplianceScan`
+([`SchemaComplianceScanRefinement.md`](../SchemaComplianceScanRefinement.md)),
+`SchemaCrossRegion` ([`SchemaCrossRegionRefinement.md`](../SchemaCrossRegionRefinement.md))
+and `SchemaTenantScope` ([`SchemaTenantScopeRefinement.md`](../SchemaTenantScopeRefinement.md))
 seed every behaviour row except those listed below. The gate requires every
 behaviour row of a module that has any perturbation to be either seeded here or
 listed below, never both.
@@ -44,3 +46,14 @@ listed below, never both.
 | SchemaComplianceScan | ScanTerminates | Liveness: every edit that stops a scan terminating is one of the seeded `Count` or `Step` perturbations, whose detectors this row cites. |
 | SchemaStrictIngest | ChangePolicy | The same production edit as `SchemaPolicyConfig`'s `Change(s,p)` row, which `ChangeNeverStored` seeds against the same detector; a second copy adds no evidence. |
 | SchemaStrictIngest | Propagate | The same production edit as `SchemaPolicyConfig`'s `Propagate(s)` row, which `PropagateIgnoresChangeFeed` seeds against the same detector; a second copy adds no evidence. |
+| SchemaCrossRegion | Deliver(e) | Every single-file edit to the receiver's ingest path is one of the seeded `StrictAdmitsOnlyServable`, `CrdtLiftedAtIngest`, `UncheckedStoredVerbatim` or `AtomicAllOrNothing` perturbations, whose detectors this row cites. |
+| SchemaCrossRegion | Decide | Applying a batch's terminal is the atomic-commit protocol's step, with no schema code on it; the schema-specific part, that a diverted entry leaves nothing staged, is the `AtomicAllOrNothing` perturbation's edit. |
+| SchemaCrossRegion | Read(e) | The same production edit as the `ReadsServeOrFail` perturbation, against the same detector; a second copy adds no evidence. |
+| SchemaCrossRegion | Register | The same production edit as `SchemaVersionFamily`'s `Register(a)` row, which `RegisterNeverPersists` seeds; a second copy adds no evidence. |
+| SchemaCrossRegion | Advance | The same production edit as `SchemaVersionFamily`'s `Advance(t)` row, which `AdvanceSkipsCatalogCheck` seeds; a second copy adds no evidence. |
+| SchemaCrossRegion | StoredStampFixed | The version admins, the runtime registry and the fold hold no path that rewrites a stored value's envelope, so no edit to one production file introduces one; the detectors pin the contract end to end against any future such path. |
+| SchemaCrossRegion | NothingAdmittedWhileUnavailable | The same production edit as `SchemaStrictIngest`'s `Judge(r)` row, which `IngestJudgeTrustsFailedLookup` seeds against the same detector; a second copy adds no evidence. |
+| SchemaCrossRegion | AdmittedNeverDropped | No receiver code aborts a replicated batch's other entries on a diversion; an edit that did would have to add the abort path, not perturb an existing one. The detectors pin the contract against any future such path. |
+| SchemaCrossRegion | EveryEntryResolved | Liveness: every edit that stops an entry resolving is one of the seeded `StrictAdmitsOnlyServable` or `AtomicAllOrNothing` perturbations, or the applier's re-throw that `SchemaStrictIngest`'s `Settle` row seeds. |
+| SchemaTenantScope | EffectsStayInTenant | Every single-file edit that lands an effect outside the caller's tenant is one of the seeded `Resolve`, `Act`, `UnattributableDenied` or `EscapeRefusedAtResolution` perturbations against the same facade seam this row's detectors drive. |
+| SchemaCrossRegion | NothingLandsOnFencedCopy | The copy check is a core routing step shared by every replicated write path, with no schema code on it, and is `BackupRestore`'s `Land(r)` step; the detectors pin each replicated path end to end, the full-state fold included. |

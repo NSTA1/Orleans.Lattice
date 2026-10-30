@@ -1,0 +1,13 @@
+# Strict ingest trusts the source region's verdict instead of judging the body
+# by the receiver's own policy.
+MODULE: StrictAdmitsOnlyServableJudgedBySourcePolicy
+TARGET: StrictAdmitsOnlyServable
+CLASS: Invariant
+SUMMARY: strict ingest skips the receiver's policy
+PERTURBS: Deliver
+
+--- FIND
+            THEN /\ IF Servable(stamp[e]) /\ body[e] = "Good"
+--- REPLACE
+            THEN /\ IF Servable(stamp[e])
+--- END

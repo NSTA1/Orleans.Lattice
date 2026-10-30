@@ -1,0 +1,12 @@
+# DisclosureStaysInTenant: a policy read is served from the effective tree.
+MODULE: SchemaTenantScope
+ROW: DisclosureStaysInTenant
+FILE: src/lattice.api.schema/LatticeSchemaControl.cs
+DETECTORS: LatticeSchemaControlTenantScopeTests.GetPolicyAsync_under_a_confined_tenant_reads_the_composed_tree_under_read_authority
+SUMMARY: a policy read is served from the bare name's tree
+
+--- FIND
+        return await _admin.GetPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+--- REPLACE
+        return await _admin.GetPolicyAsync(treeId.Substring(treeId.LastIndexOf('/') + 1), cancellationToken).ConfigureAwait(false);
+--- END
