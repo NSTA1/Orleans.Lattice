@@ -3,7 +3,7 @@
 An elastic pool of single-use GitHub Actions runners on Azure Container Apps Jobs. It
 absorbs the matrix legs GitHub-hosted runners have no room for. The account's hosted
 runners share one 20-job concurrency cap; when this repository's hosted jobs (running
-plus queued) reach a budget of 18, further legs run here instead of queueing.
+plus queued) reach a budget of 15, further legs run here instead of queueing.
 Self-hosted jobs do not count against the cap.
 
 It scales from zero: with nothing queued for it there are no replicas and no compute bill.
@@ -13,12 +13,14 @@ It scales from zero: with nothing queued for it there are no replicas and no com
 Every matrix lane routes its legs at plan time with
 [`.github/workflows/runner-overflow.py`](../../.github/workflows/runner-overflow.py):
 `ci.yml` (pull requests and pushes), the nightly `coverage.yml` (coverage and TLC legs)
-and `formal-receipts.yml` (TLC legs).
+and `formal-receipts.yml` (TLC legs). `ci.yml`'s single Content gates job is routed the
+same way by a small `route-content-gates` job, so it need not wait for the planner.
 
 - The planner counts this repository's hosted jobs that are running or queued (a queued
   hosted job is waiting behind the cap, so a new hosted leg would wait behind it).
 - Legs stay on `ubuntu-latest` while that count is under `HOSTED_RUNNER_BUDGET`
-  (default 18, two short of the cap so lanes planning at the same moment do not tip into
+  (default 15, five short of the cap so lanes planning at the same moment, and the planning
+  and routing jobs that always run hosted, do not tip into
   a queue). The rest go to the pool, longest first, since a long leg holds a slot longest.
 - A pool leg's check name starts with `[pool] `. A routed job must declare no `services:`
   or `container:`: the runner probes the Docker daemon for any services block, even one
@@ -33,7 +35,7 @@ Repository variables:
 | Variable | Value | Effect |
 |---|---|---|
 | `RUNNER_POOL` | `["self-hosted","lattice-pool"]` | The pool's labels. Unset turns overflow off. |
-| `HOSTED_RUNNER_BUDGET` | `18` (default when unset) | Hosted jobs in flight before legs overflow. |
+| `HOSTED_RUNNER_BUDGET` | `15` (default when unset) | Hosted jobs in flight before legs overflow. |
 
 The count covers this repository only; the cap is account-wide, so jobs in other
 repositories of the account are invisible to it.
@@ -133,7 +135,7 @@ spend pool compute up to the replica timeout; keep an Azure budget alert on the 
 
    ```powershell
    gh variable set RUNNER_POOL --body '["self-hosted","lattice-pool"]' -R NSTA1/Orleans.Lattice
-   gh variable set HOSTED_RUNNER_BUDGET --body 18 -R NSTA1/Orleans.Lattice
+   gh variable set HOSTED_RUNNER_BUDGET --body 15 -R NSTA1/Orleans.Lattice
    ```
 
    Delete `RUNNER_POOL` to keep every leg on hosted runners, for example while the pool
