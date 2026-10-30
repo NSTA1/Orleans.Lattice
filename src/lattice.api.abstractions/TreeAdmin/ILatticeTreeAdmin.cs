@@ -208,7 +208,7 @@ public interface ILatticeTreeAdmin
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The resulting alias state.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="physicalTreeId"/> is <c>null</c>, empty, or equal to <paramref name="treeId"/>.</exception>
-    /// <exception cref="InvalidOperationException">The physical target is itself aliased (multi-level indirection), or either tree is deleted or a delete of it is pending.</exception>
+    /// <exception cref="InvalidOperationException">The physical target is itself aliased (multi-level indirection), either tree is deleted or a delete of it is pending, or an in-flight resize, restore, restore revert, or schema remediation or migration holds the tree's alias reservation (the message names it; retry after it completes).</exception>
     /// <exception cref="LatticeTreeOwnershipDeniedException">The registered ownership guard refuses the alias.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to administer the tree.</exception>
     Task<TreeAliasResolution> SetTreeAliasAsync(

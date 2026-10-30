@@ -8368,6 +8368,32 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>(LeafSpanFailOpenCommitsName, unit: "{key}",
             description: "Keys a leaf committed locally although its declared span excludes them, because declared-span admission found no neighbouring leaf to forward them to (fail-open). Tagged by tree, reason (no_sibling or self_reference) and origin (client_write, merge or cross_shard_migration). A leaf with no declared span never advances it.");
 
+    /// <summary>
+    /// Canonical name of <see cref="LeafMergeObserverEvents"/>.
+    /// </summary>
+    public const string LeafMergeObserverEventsName = "orleans.lattice.leaf.merge_observer_events";
+
+    /// <summary>
+    /// Completed per-key merges for which the registered
+    /// <see cref="ILatticeMergeObserver"/> returned
+    /// <see cref="MergeOutcomeKind.AcceptWithEvent"/> (issue #5242). With the
+    /// schema add-on's <c>ValidateCrdtMergeResults</c> option on, each one is a
+    /// merged value that fails the tree's schema policy.
+    /// <para>
+    /// The merge observer is consulted on the foreground leaf set path and the
+    /// typed-CRDT apply path only; merges that arrive through
+    /// <c>MergeManyAsync</c> (plain LWW replication apply, tree merge, merging
+    /// restore, snapshot and resize copies) never reach it and never advance this
+    /// counter. Each event also logs a warning naming the leaf, the tree, the
+    /// merge mode and the observer's reason. Tagged <see cref="TagTree"/>. Not
+    /// pre-minted, so an absent series reads "no observer event on this silo".
+    /// Observability only: the merge outcome itself is unchanged.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafMergeObserverEvents =
+        Meter.CreateCounter<long>(LeafMergeObserverEventsName, unit: "{merge}",
+            description: "Completed per-key merges for which the registered merge observer returned AcceptWithEvent, such as a schema merge-result violation. Observed on the foreground leaf set and typed-CRDT apply paths only, not on MergeManyAsync paths. Tagged by tree. Observability only: the merged value is unchanged.");
+
     // --- Storage-usage instruments (retained payload and physical occupancy) ------
     //
     // The five byte gauges and the over-threshold gauge are observable gauges

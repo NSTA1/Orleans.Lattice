@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree;
+
 namespace Orleans.Lattice.Schema;
 
 /// <summary>
@@ -24,6 +26,13 @@ namespace Orleans.Lattice.Schema;
 /// tree id (tests that drive the observer directly). Absent both, it accepts every
 /// merge, never blocking convergence.
 /// </para>
+/// <para>
+/// <b>System trees.</b> A merge on a core system tree (id prefixed
+/// <c>_lattice_</c>) is accepted without a policy lookup. Those trees carry no
+/// schema policy, and the lookup itself reads a schema tree whose registration
+/// writes the tree registry, so consulting the store from a registry merge
+/// deadlocked the first tree access in a fresh cluster.
+/// </para>
 /// </remarks>
 internal sealed class LatticeSchemaMergeObserver(ILatticeSchemaPolicyProvider provider) : ILatticeMergeObserver
 {
@@ -35,7 +44,7 @@ internal sealed class LatticeSchemaMergeObserver(ILatticeSchemaPolicyProvider pr
         // Absent both, there is nothing to validate against, so accept (never block
         // convergence).
         var treeId = ctx.TreeId ?? LatticeSchemaMergeTree.Current;
-        if (treeId is null)
+        if (treeId is null || treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             return new ValueTask<LatticeMergeOutcome>(LatticeMergeOutcome.Accept());
         }

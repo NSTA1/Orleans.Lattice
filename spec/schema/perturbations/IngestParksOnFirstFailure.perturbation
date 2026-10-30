@@ -1,0 +1,12 @@
+# ParkOnlyAfterRepeatedFailure: the applier parks only at its threshold.
+MODULE: SchemaStrictIngest
+ROW: ParkOnlyAfterRepeatedFailure
+FILE: src/lattice.replication/DeadLetterTrackingReplicationApplier.cs
+DETECTORS: DeadLetterTrackingReplicationApplierTests.ApplyAsync_rethrows_failure_below_threshold
+SUMMARY: the first failed apply is parked
+
+--- FIND
+        if (attempts < max)
+--- REPLACE
+        if (attempts < 1)
+--- END

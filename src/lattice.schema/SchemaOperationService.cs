@@ -183,6 +183,24 @@ internal sealed class SchemaOperationService(
         }
 
         var processed = report.ScannedCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (report.DidAbort && report.OffendingKey is null)
+        {
+            // A cutover another alias change superseded (#5289): no value is at fault.
+            var result = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SchemaOperationResultKeys.Outcome] = SchemaOperationResultKeys.Aborted,
+                [SchemaOperationResultKeys.ValuesProcessed] = processed,
+                [SchemaOperationResultKeys.Reason] = report.Reason ?? string.Empty,
+            };
+            AddRemediationId(result, report);
+            return new LatticeOperationCompletion
+            {
+                State = LatticeOperationState.Failed,
+                FailureReason = report.Reason ?? "The remediation was aborted. Nothing was cut over.",
+                Result = result,
+            };
+        }
+
         if (report.DidAbort)
         {
             var result = new Dictionary<string, string>(StringComparer.Ordinal)

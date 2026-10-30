@@ -1,0 +1,14 @@
+# A policy lookup that throws or is cancelled admits the entry unjudged.
+MODULE: StoredValidWhenJudgedTrustsFailedLookup
+TARGET: StoredValidWhenJudged
+CLASS: Invariant
+SUMMARY: a failed policy lookup proceeds to the commit
+PERTURBS: Judge
+
+--- FIND
+       ELSE /\ rphase' = "Failed"
+            /\ UNCHANGED judged
+--- REPLACE
+       ELSE /\ rphase' = "Committing"
+            /\ UNCHANGED judged
+--- END

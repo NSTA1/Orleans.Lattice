@@ -142,8 +142,10 @@ lattice	formal-tlc-backup	deterministic	3.94
 # 124175924963) for #5227. With SchemaDurableOperation's and
 # SchemaComplianceScan's 38 cases added to the first two modules, all 68 took
 # 6.64 minutes (dotnet test 6 m 34 s) in ci.yml run 41088681728 (head
-# 4e5554713, job 124180139236) for #5229. The row keeps the larger figure.
-lattice	formal-tlc-schema	deterministic	6.64
+# 4e5554713, job 124180139236) for #5229. The 18 SchemaStrictIngest cases
+# (#5228) add 0.78 minutes measured locally (16-core Windows workstation); the
+# row adds them to that figure until the #5228 member run measures all 104.
+lattice	formal-tlc-schema	deterministic	7.42
 lattice	formal-tlc-smoke	deterministic	0.27
 # lattice/rest (deterministic) uses complete passing item TRX from green run
 # 40648174016 (head c04710f914ed1628af05916aaf5f5272caa6d102); elapsed TRX

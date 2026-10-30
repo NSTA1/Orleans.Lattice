@@ -1,0 +1,14 @@
+# Judgement reads the durable policy instead of the silo's held one.
+MODULE: JudgedByHeldPolicyReadsDurable
+TARGET: JudgedByHeldPolicy
+CLASS: Action
+SUMMARY: an entry is judged by the durable policy, not the held one
+PERTURBS: Judge
+
+--- FIND
+       THEN /\ judged' = seen
+            /\ rphase' = IF Refused(val[cur], seen) THEN "DeadLettering" ELSE "Committing"
+--- REPLACE
+       THEN /\ judged' = pol
+            /\ rphase' = IF Refused(val[cur], pol) THEN "DeadLettering" ELSE "Committing"
+--- END

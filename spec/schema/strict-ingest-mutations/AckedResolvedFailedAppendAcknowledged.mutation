@@ -1,0 +1,14 @@
+# A dead-letter append that failed is reported as a diversion.
+MODULE: AckedResolvedFailedAppendAcknowledged
+TARGET: AckedResolved
+CLASS: Invariant
+SUMMARY: a failed dead-letter append is acknowledged as diverted
+PERTURBS: DeadLetter
+
+--- FIND
+    /\ IF r = "Ok" THEN Acknowledge(cur) ELSE FailAttempt
+    /\ UNCHANGED <<val, late, pol, seen, judged, lostLeft, stored, storedUnder, parked>>
+--- REPLACE
+    /\ IF r # "Lost" THEN Acknowledge(cur) ELSE FailAttempt
+    /\ UNCHANGED <<val, late, pol, seen, judged, lostLeft, stored, storedUnder, parked>>
+--- END

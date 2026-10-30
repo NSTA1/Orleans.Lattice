@@ -261,6 +261,14 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// this constraint would be violated.
     /// </para>
     /// <para>
+    /// Refused with <see cref="InvalidOperationException"/>, naming the holder and
+    /// changing nothing, while an alias operation - an in-flight resize,
+    /// shadow-cutover restore, restore revert, or schema remediation or migration -
+    /// holds <paramref name="treeId"/>'s alias reservation, as a delete is
+    /// (issue #5289). Those operations publish through
+    /// <see cref="SwapAliasAsync"/>, which does not consult the reservation.
+    /// </para>
+    /// <para>
     /// Unlike the per-field mutators, this verb may create the logical tree's
     /// row: pointing a new logical name at an existing physical tree is a
     /// deliberate create. A purged logical id is still refused, because the

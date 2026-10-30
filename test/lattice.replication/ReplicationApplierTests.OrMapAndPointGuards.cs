@@ -44,7 +44,7 @@ public partial class ReplicationApplierTests
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         // See CreateTypedCrdtApplier: the applier reads local state through
         // the apply seam, not through ILattice (issue #2813).
-        apply.ReadStoredWithVersionAsync(Arg.Any<string>())
+        apply.ReadStoredForApplyAsync(Arg.Any<string>())
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
         apply.ApplySetIfVersionAsync(
             Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
@@ -136,7 +136,7 @@ public partial class ReplicationApplierTests
         var (applier, lattice, apply, _) = CreateOrMapApplier();
         var existing = OrMapState(("orders", "site-a", 5));
         var incoming = OrMapState(("shipments", "site-b", 2));
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue { Value = existing, Version = Hlc(4) });
         byte[]? installed = null;
         apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
