@@ -585,7 +585,7 @@ public class ScratchKeyWindowTrimBenchmarks
                 }
             }
 
-            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(OrSetProvenanceDecoder.CausalOrderComparer.Comparison);
+            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CrdtMemberChangeOrdinalFirstComparer.Comparison);
         }
 
         return result;
@@ -656,7 +656,7 @@ public class ScratchKeyWindowTrimBenchmarks
                 }
             }
 
-            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(RwSetProvenanceDecoder.CausalOrderComparer.Comparison);
+            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CrdtMemberChangeOrdinalFirstComparer.Comparison);
         }
         return result;
     }
