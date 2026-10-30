@@ -56,11 +56,15 @@ param(
 	[string] $NamePrefix = 'latrun',
 	[string] $Location = 'westus3',
 	[string] $Repository = 'NSTA1/Orleans.Lattice',
-	[string] $RunnerLabels = 'lattice-tlc',
+	[string] $RunnerLabels = 'lattice-pool',
 	[string] $AppConfigDirectory = (Join-Path $HOME '.lattice-ci-runners'),
 	[ValidateRange(1, 100)] [int] $MaxExecutions = 30,
-	[ValidateSet('1.0', '2.0', '3.0', '3.5', '4.0')] [string] $RunnerCpu = '3.5',
-	[ValidateSet('2Gi', '4Gi', '6Gi', '7Gi', '8Gi')] [string] $RunnerMemory = '7Gi',
+	# Dedicated D4 (4 vCPU / 16 GiB per node, one runner per node): the general
+	# test legs host Orleans clusters that ran out of memory at Consumption's
+	# 8 GiB ceiling. 'Consumption' remains valid for TLC-only use.
+	[string] $WorkloadProfileType = 'D4',
+	[string] $RunnerCpu = '3.5',
+	[string] $RunnerMemory = '13Gi',
 	[ValidateRange(600, 86400)] [int] $ReplicaTimeoutSec = 10800,
 	[ValidateRange(10, 300)] [int] $PollingIntervalSec = 20,
 	[switch] $SkipImageBuild
@@ -201,9 +205,18 @@ if (-not $SkipImageBuild) {
 	Write-Host "[runners] building $image (remote)" -ForegroundColor Cyan
 	Push-Location $repoRoot
 	try {
-		& az acr build --registry $names.Acr --image $names.Image --file tools/ci-runners/Dockerfile `
-			--platform linux/amd64 . 2>&1 | ForEach-Object { "$_" } | Select-Object -Last 15
-		if ($LASTEXITCODE -ne 0) { throw 'az acr build failed.' }
+		# --no-logs: streaming the build log through az on a Windows console crashes the
+		# CLI on the log's non-ASCII characters. Queue the build, then poll its status.
+		$queued = Invoke-AzCli @('acr', 'build', '--registry', $names.Acr, '--image', $names.Image,
+			'--file', 'tools/ci-runners/Dockerfile', '--platform', 'linux/amd64', '--no-logs', '-o', 'json', '.') | ConvertFrom-Json
+		$runId = $queued.runId
+		do {
+			Start-Sleep -Seconds 15
+			$status = (Invoke-AzCli @('acr', 'task', 'show-run', '--registry', $names.Acr, '--run-id', $runId,
+				'--query', 'status', '-o', 'tsv')).Trim()
+		} while ($status -in 'Queued', 'Started', 'Running')
+		if ($status -ne 'Succeeded') { throw "az acr build run $runId ended '$status' (az acr task logs -r $($names.Acr) --run-id $runId)." }
+		Write-Host "[runners] image build $runId succeeded" -ForegroundColor Green
 	} finally { Pop-Location }
 }
 
@@ -227,6 +240,23 @@ if (-not (Test-AzShow @('containerapp', 'env', 'show', '-g', $names.Rg, '-n', $n
 }
 $envId = (Invoke-AzCli @('containerapp', 'env', 'show', '-g', $names.Rg, '-n', $names.Env, '--query', 'id', '-o', 'tsv')).Trim()
 
+# Dedicated runners get their own workload profile, scaling nodes from zero.
+$workloadProfileName = 'Consumption'
+if ($WorkloadProfileType -ne 'Consumption') {
+	$workloadProfileName = $WorkloadProfileType.ToLowerInvariant()
+	$profiles = Invoke-AzCli @('containerapp', 'env', 'show', '-g', $names.Rg, '-n', $names.Env,
+		'--query', 'properties.workloadProfiles[].name', '-o', 'tsv')
+	if (-not (($profiles -split "`n") -contains $workloadProfileName)) {
+		Write-Host "[runners] adding workload profile $workloadProfileName ($WorkloadProfileType, 0..$MaxExecutions nodes)" -ForegroundColor Cyan
+		Invoke-AzCli @('containerapp', 'env', 'workload-profile', 'add', '-g', $names.Rg, '-n', $names.Env,
+			'--workload-profile-name', $workloadProfileName, '--workload-profile-type', $WorkloadProfileType,
+			'--min-nodes', '0', '--max-nodes', "$MaxExecutions", '-o', 'none') | Out-Null
+	} else {
+		Invoke-AzCli @('containerapp', 'env', 'workload-profile', 'update', '-g', $names.Rg, '-n', $names.Env,
+			'--workload-profile-name', $workloadProfileName, '--min-nodes', '0', '--max-nodes', "$MaxExecutions", '-o', 'none') | Out-Null
+	}
+}
+
 # ---------------------------------------------------------------------------
 # 4. The event-triggered runner Job. YAML rather than flags because the init
 #    container, the EmptyDir hand-off and the per-container secret scoping have
@@ -247,7 +277,7 @@ identity:
     $($identity.id): {}
 properties:
   environmentId: $envId
-  workloadProfileName: Consumption
+  workloadProfileName: $workloadProfileName
   configuration:
     triggerType: Event
     replicaTimeout: $ReplicaTimeoutSec
@@ -285,8 +315,8 @@ properties:
       image: $image
       command: [ "python3", "/opt/ci-runner/mint-jit.py" ]
       resources:
-        cpu: 0.5
-        memory: 1Gi
+        cpu: 0.25
+        memory: 0.5Gi
       env:
       - name: GITHUB_APP_ID
         value: '$($app.id)'

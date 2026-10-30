@@ -166,6 +166,10 @@ jobs:
     if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # actions: read lets runner-overflow.py count the hosted jobs in flight.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       legs: ${{ steps.matrix.outputs.legs }}
       tlc_legs: ${{ steps.matrix.outputs.tlc_legs }}
@@ -179,6 +183,12 @@ jobs:
           TLC_SHARDS: ${{ inputs.tlc_shards }}
           TRACK_TLC_FAILURES: ${{ inputs.track_tlc_failures }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          # Runner routing (runner-overflow.py): hosted while the repository's busy
+          # hosted jobs stay under HOSTED_RUNNER_BUDGET, the self-hosted pool
+          # (tools/ci-runners) beyond it. Unset RUNNER_POOL keeps every leg hosted.
+          RUNNER_POOL: ${{ vars.RUNNER_POOL }}
+          HOSTED_RUNNER_BUDGET: ${{ vars.HOSTED_RUNNER_BUDGET }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           shards="${TLC_SHARDS:-}"
@@ -194,6 +204,8 @@ jobs:
             --output-matrix /tmp/coverage-matrix.json \
             --output-tlc-matrix /tmp/tlc-matrix.json \
             --tlc-shards "$shards"
+          python3 .github/workflows/runner-overflow.py \
+            --matrix /tmp/coverage-matrix.json --matrix /tmp/tlc-matrix.json
           # The tracking issue follows the default branch's full runs: the
           # schedule, its catch-up and a manual dispatch there. A branch run
           # touches it only when asked to, to validate the tracking itself.
@@ -227,8 +239,9 @@ jobs:
   coverage:
     needs: [measured, plan]
     if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' && needs.plan.outputs.coverage == 'true' }}
-    name: Coverage / ${{ matrix.leg.name }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.leg.pool && '[pool] ' || '' }}Coverage / ${{ matrix.leg.name }}
+    # Hosted or the self-hosted pool, as runner-overflow.py decided at plan time.
+    runs-on: ${{ fromJSON(matrix.leg.runsOn || '"ubuntu-latest"') }}
     # Per-leg backstop; a hung leg cannot hold the nightly lane for six hours.
     timeout-minutes: 150
     strategy:
@@ -242,7 +255,9 @@ jobs:
     # rather than self-skipping. Mirrors the build-and-test job in ci.yml.
     services:
       azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+        # Empty on a pool leg: Container Apps runs no Docker, so the service is
+        # skipped and the step below starts the Azurite baked into the pool image.
+        image: ${{ matrix.leg.pool && '' || 'mcr.microsoft.com/azure-storage/azurite:3.36.0' }}
         ports:
           - 10000:10000
           - 10001:10001
@@ -285,6 +300,14 @@ jobs:
           CACHE_HIT: ${{ steps.pwcache.outputs.cache-hit }}
         run: |
           bash .github/workflows/install-playwright-browsers.sh "$CACHE_HIT" chromium firefox webkit
+
+      - name: Start Azurite on the self-hosted pool
+        if: ${{ matrix.leg.pool }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/azurite"
+          nohup azurite --silent --location "$RUNNER_TEMP/azurite" \
+            --blobHost 127.0.0.1 --queueHost 127.0.0.1 --tableHost 127.0.0.1 \
+            > "$RUNNER_TEMP/azurite.log" 2>&1 &
 
       - name: Wait for Azurite
         run: |
@@ -630,13 +653,9 @@ jobs:
   tlc:
     needs: [measured, plan]
     if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' }}
-    name: Exhaustive TLC / ${{ matrix.leg.name }}
-    # TLC_RUNNER (a repository variable holding a JSON runs-on value, e.g.
-    # ["self-hosted","lattice-tlc"]) moves these legs onto the elastic
-    # self-hosted pool in tools/ci-runners, off the hosted runners PR CI uses.
-    # Unset, they run on ubuntu-latest. Only trusted workflows (push to main,
-    # schedule, owner dispatch) may opt in: never a pull_request workflow.
-    runs-on: ${{ fromJSON(vars.TLC_RUNNER || '"ubuntu-latest"') }}
+    name: ${{ matrix.leg.pool && '[pool] ' || '' }}Exhaustive TLC / ${{ matrix.leg.name }}
+    # Hosted or the self-hosted pool, as runner-overflow.py decided at plan time.
+    runs-on: ${{ fromJSON(matrix.leg.runsOn || '"ubuntu-latest"') }}
     timeout-minutes: ${{ matrix.leg.timeout }}
     strategy:
       fail-fast: false
