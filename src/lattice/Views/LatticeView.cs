@@ -185,8 +185,7 @@ internal sealed class LatticeView(
 
     /// <inheritdoc />
     public Task WaitForSourceHeadAsync(TimeSpan timeout, CancellationToken cancellationToken = default) =>
-        // Single maintainer round-trip: the grain captures the source head and
-        // waits for the view to apply up to it in-process, instead of this
-        // handle issuing a separate CaptureSourceHeadHlc then WaitForSourceHlc.
+        // Single maintainer round-trip: the grain captures the source head
+        // positions and waits for the view to reflect them in-process.
         maintainer.WaitForSourceHeadAsync(timeout, cancellationToken);
 }
