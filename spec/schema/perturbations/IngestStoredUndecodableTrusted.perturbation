@@ -1,0 +1,15 @@
+# StoredValidWhenJudged: an undecodable envelope fails closed.
+MODULE: SchemaStrictIngest
+ROW: StoredValidWhenJudged
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Undecodable_enveloped_entry_is_diverted_never_admitted
+SUMMARY: an envelope the decoder cannot serve is admitted
+
+--- FIND
+                reason = SchemaUndecodableValue.Reason(ex);
+                return await ViolationAsync(compiled, treeId, key, value, operation, reason, cancellationToken)
+                    .ConfigureAwait(false);
+--- REPLACE
+                _ = ex;
+                return LatticeWriteDecision.Accept();
+--- END

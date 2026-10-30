@@ -1,0 +1,20 @@
+# Judge: a failed policy lookup fails the write.
+MODULE: SchemaStrictIngest
+ROW: Judge(r)
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Failed_policy_lookup_fails_the_write_instead_of_admitting_it
+SUMMARY: a policy lookup that throws admits the write unjudged
+
+--- FIND
+        var compiled = await _provider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+--- REPLACE
+        CompiledSchemaPolicy? compiled;
+        try
+        {
+            compiled = await _provider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            compiled = null;
+        }
+--- END

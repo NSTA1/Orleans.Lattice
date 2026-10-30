@@ -1,0 +1,12 @@
+# TypeOK pairing: a propagated change installs a policy outside the model.
+MODULE: TypeOKPropagateUndeclaredPolicy
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: propagation installs an undeclared policy
+PERTURBS: Propagate
+
+--- FIND
+    /\ seen # pol /\ seen' = pol
+--- REPLACE
+    /\ seen # pol /\ seen' = 3
+--- END

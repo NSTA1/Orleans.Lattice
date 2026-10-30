@@ -1,0 +1,22 @@
+# AckedResolved: a failing stage fails the write.
+MODULE: SchemaStrictIngest
+ROW: AckedResolved
+FILE: src/lattice/LatticeWriteInterceptorEnforcement.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Cancelled_dead_letter_append_fails_the_write_instead_of_diverting_it, SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it
+SUMMARY: a stage that throws is taken for a dropped write
+
+--- FIND
+        var request = new LatticeWriteRequest(treeId, key, value, operation, ttl);
+        var decision = await interceptor.OnWriteAsync(in request, cancellationToken);
+--- REPLACE
+        var request = new LatticeWriteRequest(treeId, key, value, operation, ttl);
+        LatticeWriteDecision decision;
+        try
+        {
+            decision = await interceptor.OnWriteAsync(in request, cancellationToken);
+        }
+        catch (Exception)
+        {
+            return LatticeWriteInterceptionOutcome.Drop();
+        }
+--- END
