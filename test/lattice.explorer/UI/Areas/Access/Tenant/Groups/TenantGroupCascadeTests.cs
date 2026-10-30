@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.TenantAdmin;
+using NSubstitute;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
 using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant.Groups;
@@ -126,7 +127,73 @@ public sealed class TenantGroupCascadeTests
             Assert.That(() => TenantGroupUsage.ReadAsync(_access, "acme", null!, CancellationToken.None), Throws.ArgumentNullException);
             Assert.That(() => TenantGroupUsage.ReadReferencesAsync(null!, "acme", "ops", CancellationToken.None), Throws.ArgumentNullException);
             Assert.That(() => TenantGroupCascade.ReadAsync(null!, "acme", "ops", CancellationToken.None), Throws.ArgumentNullException);
+            Assert.That(() => TenantGroupCascade.ReadAsync(_access, null!, "ops", CancellationToken.None), Throws.ArgumentNullException);
             Assert.That(() => TenantGroupCascade.ReadAsync(_access, "acme", null!, CancellationToken.None), Throws.ArgumentNullException);
+        });
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_resolution_failure_keeps_known_usage_and_unknown_set_membership(bool denied)
+    {
+        var directory = Substitute.For<ILatticeTenantDirectoryAdmin>();
+        directory.ListGroupMembersAsync("acme", "ops", CancellationToken.None)
+            .Returns(call => _facades.DirectoryFake.ListGroupMembersAsync("acme", "ops", CancellationToken.None));
+        Exception failure = denied ? new UnauthorizedAccessException("private detail") : new InvalidOperationException("offline");
+        directory.ResolveSubjectAsync("acme", "ops", TenantSubjectKind.TenantGroup, CancellationToken.None)
+            .Returns(Task.FromException<TenantSubjectResolution>(failure));
+        _facades.DirectoryOverride = directory;
+
+        var cascade = await TenantGroupCascade.ReadAsync(_access, "acme", "ops", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade.Usage.MemberCount, Is.EqualTo(2));
+            Assert.That(cascade.Usage.TenantRuleCount, Is.EqualTo(1));
+            Assert.That(cascade.Usage.AppRoleCount, Is.EqualTo(1));
+            Assert.That(cascade.InMemberSet, Is.Null, "a failed read must not claim the group is absent");
+            Assert.That(cascade.InAdminSet, Is.Null);
+            Assert.That(cascade.Text("ops"), Does.Not.Contain("private detail").And.Not.Contain("offline"));
+        });
+        await directory.Received(1).ResolveSubjectAsync("acme", "ops", TenantSubjectKind.TenantGroup, CancellationToken.None);
+    }
+
+    [Test]
+    public async Task Cancellation_during_subject_resolution_propagates_with_the_callers_token()
+    {
+        using var request = new CancellationTokenSource();
+        var directory = Substitute.For<ILatticeTenantDirectoryAdmin>();
+        directory.ListGroupMembersAsync("acme", "ops", request.Token)
+            .Returns(Task.FromResult<IReadOnlyList<TenantGroupMember>>([]));
+        var reply = new TaskCompletionSource<TenantSubjectResolution>(TaskCreationOptions.RunContinuationsAsynchronously);
+        directory.ResolveSubjectAsync("acme", "ops", TenantSubjectKind.TenantGroup, request.Token).Returns(reply.Task);
+        _facades.DirectoryOverride = directory;
+        var running = TenantGroupCascade.ReadAsync(_access, "acme", "ops", request.Token);
+        Assert.That(running.IsCompleted, Is.False);
+
+        request.Cancel();
+        reply.SetCanceled(request.Token);
+        var thrown = Assert.ThrowsAsync<TaskCanceledException>(
+            async () => await running.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.That(thrown!.CancellationToken, Is.EqualTo(request.Token));
+        await directory.Received(1).ResolveSubjectAsync("acme", "ops", TenantSubjectKind.TenantGroup, request.Token);
+    }
+
+    [Test]
+    public async Task An_absent_directory_keeps_policy_usage_without_guessing_membership()
+    {
+        _facades.ServesDirectory = false;
+
+        var cascade = await TenantGroupCascade.ReadAsync(_access, "acme", "ops", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade.Usage.MemberCount, Is.Null);
+            Assert.That(cascade.Usage.TenantRuleCount, Is.EqualTo(1));
+            Assert.That(cascade.InMemberSet, Is.Null);
+            Assert.That(cascade.InAdminSet, Is.Null);
+            Assert.That(cascade.Text("ops"), Does.StartWith("What deleting ops removes could not be read in full."));
         });
     }
 

@@ -89,6 +89,34 @@ public sealed class CiContentGateWiringTests
     private const string ClassifierJob = "classify";
 
     /// <summary>
+    /// The job that picks a runner for <c>content-gates</c> (hosted, or the
+    /// self-hosted pool when hosted runners are busy). It may be a dependency only
+    /// because the permitted condition starts with <c>!cancelled()</c>, so its
+    /// failure or skip cannot skip the gates, and <c>runs-on</c> falls back to hosted.
+    /// </summary>
+    private const string RouterJob = "route-content-gates";
+
+    [Test]
+    public void The_runner_choice_cannot_skip_the_content_gate_and_falls_back_to_hosted()
+    {
+        var job = JobBlock(ContentGateJob);
+        var router = JobBlock(RouterJob);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(job, Does.Contain(
+                    "runs-on: ${{ fromJSON(needs." + RouterJob + ".outputs.runs_on || '\"ubuntu-latest\"') }}"),
+                $"'{ContentGateJob}' must fall back to a hosted runner when '{RouterJob}' publishes nothing");
+            Assert.That(PermittedCondition, Does.StartWith("${{ !cancelled()"),
+                $"without !cancelled(), a failed or skipped '{RouterJob}' would skip the gates");
+            Assert.That(router, Does.Match(@"(?m)^    needs: " + ClassifierJob + @"\r?$"),
+                $"'{RouterJob}' must need only the classifier");
+            Assert.That(router, Does.Contain("    if: " + PermittedCondition),
+                $"'{RouterJob}' must carry the gates' own condition, so it is skipped exactly where they are");
+        });
+    }
+
+    /// <summary>
     /// The only condition <c>content-gates</c> may carry. Every term is
     /// load-bearing: <c>!cancelled()</c> stops the classifier's pull-request
     /// skip from propagating, and the comparison is false only on a push the
@@ -110,13 +138,13 @@ public sealed class CiContentGateWiringTests
             .Select(match => (Key: match.Groups["key"].Value, Value: match.Groups["value"].Value))
             .ToArray();
 
-        var permitted = new[] { ("needs", ClassifierJob), ("if", PermittedCondition) };
+        var permitted = new[] { ("needs", "[" + ClassifierJob + ", " + RouterJob + "]"), ("if", PermittedCondition) };
 
         Assert.That(
             conditions,
             Is.EquivalentTo(permitted),
             $"the '{ContentGateJob}' job in {WorkflowPath} must run on every pull request without "
-            + $"exception. Its only permitted keys are 'needs: {ClassifierJob}' and 'if: {PermittedCondition}', "
+            + $"exception. Its only permitted keys are 'needs: [{ClassifierJob}, {RouterJob}]' and 'if: {PermittedCondition}', "
             + "which skip it on a member-branch push and nowhere else. Any other 'if:' or 'needs:' can SKIP "
             + "it on a pull request - by its own condition, or because an upstream job failed or was skipped - "
             + "and Actions does not treat a skipped dependency as blocking. That is precisely the defect this "

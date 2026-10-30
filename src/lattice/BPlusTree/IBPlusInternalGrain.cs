@@ -250,6 +250,12 @@ internal interface IBPlusInternalGrain : IGrainWithGuidKey
     Task<LeafProjectionDigest> GetSubtreeProjectionDigestAsync();
 
     /// <summary>
+    /// Reads the subtree digest followed by its routing table in one dispatch.
+    /// Retains the digest option gate and returns defensive routing arrays.
+    /// </summary>
+    Task<(LeafProjectionDigest Digest, RoutingTableSnapshot Routing)> GetSubtreeDigestAndRoutingAsync();
+
+    /// <summary>
     /// Returns this internal node's current contribution to its own
     /// parent's subtree fold: the raw 16-byte
     /// <c>SubtreeProjectionHash</c>, the descendant entry count, and the

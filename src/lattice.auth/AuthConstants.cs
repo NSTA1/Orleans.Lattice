@@ -96,21 +96,26 @@ internal static class AuthConstants
     /// Whether <paramref name="treeId"/> names a control-plane system-data tree that a
     /// data-plane grant must never expose: either registry namespace
     /// (<see cref="IsControlPlaneRegistryTree"/>) or the membership store
-    /// (<c>sys-membership-*</c>, owned by <c>Orleans.Lattice.Membership</c>), which
-    /// holds every group and membership edge in the cluster - every tenant's tenant
-    /// groups included. The enforcement gate governs these with control-plane read
+    /// (<c>sys-membership-*</c>, owned by <c>Orleans.Lattice.Membership</c>) or schema
+    /// backing stores (<c>sys-schema-*</c>, owned by <c>Orleans.Lattice.Schema</c>)
+    /// or backup stores (<c>sys-backup-*</c>, owned by <c>Orleans.Lattice.Backup</c>).
+    /// These hold cross-tenant membership, source-value dead-letter previews and
+    /// captured source data.
+    /// The enforcement gate governs these with control-plane read
     /// isolation rather than the data-plane default effect, and the evaluator excludes
     /// them from the all-trees tier, so neither <see cref="LatticeEffect.Allow"/> as
     /// the default nor a cluster-wide all-trees wildcard can read them; an explicit
     /// rule scoped at the tree, or a bootstrap administrator, still can. Allocation-
-    /// free: at most three ordinal prefix probes on the request's tree id.
+    /// free: at most five ordinal prefix probes on the request's tree id.
     /// </summary>
     /// <param name="treeId">The candidate tree id. Must not be <c>null</c>.</param>
     /// <returns><c>true</c> if the id is a control-plane system-data tree; otherwise <c>false</c>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <c>null</c>.</exception>
     internal static bool IsControlPlaneDataTree(string treeId) =>
         IsControlPlaneRegistryTree(treeId)
-        || treeId.StartsWith(Membership.MembershipConstants.TreePrefix, StringComparison.Ordinal);
+        || treeId.StartsWith(Membership.MembershipConstants.TreePrefix, StringComparison.Ordinal)
+        || treeId.StartsWith("sys-schema-", StringComparison.Ordinal)
+        || treeId.StartsWith("sys-backup-", StringComparison.Ordinal);
 
     /// <summary>
     /// Whether <paramref name="rule"/> is well formed: a non-empty rule id; a defined

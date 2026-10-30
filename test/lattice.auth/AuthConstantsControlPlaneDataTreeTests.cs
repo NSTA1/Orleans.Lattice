@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Auth.Tests;
 /// <summary>
 /// Unit coverage for <see cref="AuthConstants.IsControlPlaneDataTree"/> - the predicate
 /// that routes every control-plane system-data tree (the tenant and app registries and
-/// the membership store) through control-plane read isolation at the enforcement gate
+/// the membership and schema stores) through control-plane read isolation at the enforcement gate
 /// and out of the evaluator's all-trees tier.
 /// </summary>
 [TestFixture]
@@ -19,7 +19,11 @@ public sealed class AuthConstantsControlPlaneDataTreeTests
     [TestCase("sys-membership-edges-history")]
     [TestCase("sys-tenant-registry")]
     [TestCase("sys-app-registry")]
-    public void IsControlPlaneDataTree_true_for_registries_and_the_membership_store(string treeId)
+    [TestCase("sys-schema-dlq")]
+    [TestCase("sys-schema-policy")]
+    [TestCase("sys-schema-version")]
+    [TestCase("sys-schema-policy-history")]
+    public void IsControlPlaneDataTree_true_for_control_plane_backing_stores(string treeId)
     {
         Assert.That(AuthConstants.IsControlPlaneDataTree(treeId), Is.True);
     }
@@ -30,6 +34,9 @@ public sealed class AuthConstantsControlPlaneDataTreeTests
     [TestCase("membership")]
     [TestCase("sys-auth-policy")]
     [TestCase("orders")]
+    [TestCase("sys-schema")]
+    [TestCase("SYS-SCHEMA-DLQ")]
+    [TestCase("t/acme/sys-schema-dlq")]
     public void IsControlPlaneDataTree_false_for_everything_else(string treeId)
     {
         Assert.That(AuthConstants.IsControlPlaneDataTree(treeId), Is.False);

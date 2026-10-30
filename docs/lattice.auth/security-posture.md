@@ -71,7 +71,7 @@ path:
   decision in the reserved authorization namespace resolves to deny, so only a
   bootstrap administrator (or an explicitly modelled grant) is ever an
   administrator. The same isolation governs the tenant-registry (`sys-tenant-*`)
-  namespace, the installable-apps (`sys-app-*`) namespace (the app registry, activation status and `sys-app-trees` tree ownership ledger), the membership store (`sys-membership-*`, every group and membership edge, every tenant's tenant groups included), the tenant-administration capability ids, and a cluster-wide
+  namespace, the installable-apps (`sys-app-*`) namespace (the app registry, activation status and `sys-app-trees` tree ownership ledger), the membership store (`sys-membership-*`, every group and membership edge, every tenant's tenant groups included), the schema stores (`sys-schema-*`, including dead-letter source-value previews), the backup stores (`sys-backup-*`, including captured source data), the tenant-administration capability ids, and a cluster-wide
   capability request on the `*` sentinel (such as `Telemetry` or `AppInstall`): each
   is granted only by an explicit matched allow rule.
 - **App-owned rules are write-protected.** A policy-store write or delete of a rule
