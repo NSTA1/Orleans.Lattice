@@ -1,0 +1,17 @@
+# A rebind that only relabels the binding and version keeps membership the old
+# filter extracted.
+MODULE: QuiescentExactRebindWithoutScan
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: the rebind adopts the new version and binding but keeps the old membership instead of rescanning
+PERTURBS: Rebind
+
+--- FIND
+    /\ ~Live
+    /\ Rebuild(epoch + 1)
+--- REPLACE
+    /\ ~Live
+    /\ bound' = phys /\ viewDefn' = defn
+    /\ UNCHANGED <<epoch, read, checkpoint, phase, mem, slots, pub, intent,
+         registry>>
+--- END

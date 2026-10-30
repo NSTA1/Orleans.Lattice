@@ -2200,7 +2200,28 @@ internal sealed partial class LatticeGrain(
             cancellationToken);
     }
 
-    public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
+    public Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
+    {
+        var outcome = SetIfVersionGatedAsync(key, value, expectedVersion, cancellationToken);
+        if (outcome.IsCompletedSuccessfully)
+            return outcome.Result == ReplicationConditionalSetOutcome.Applied ? TrueTask : FalseTask;
+        return AwaitAppliedAsync(outcome);
+
+        static async Task<bool> AwaitAppliedAsync(Task<ReplicationConditionalSetOutcome> pending) =>
+            await pending == ReplicationConditionalSetOutcome.Applied;
+    }
+
+    private static readonly Task<bool> TrueTask = Task.FromResult(true);
+    private static readonly Task<bool> FalseTask = Task.FromResult(false);
+
+    /// <summary>
+    /// The gated body shared by <see cref="SetIfVersionAsync"/> and
+    /// <see cref="ApplySetIfVersionAsync"/>: every guard, the access gate, write
+    /// interception, and the version-conditioned write. It reports a diversion
+    /// by the write interceptor apart from a version miss, which the public
+    /// surface folds into the same <see langword="false"/> (issue #5265).
+    /// </summary>
+    private async Task<ReplicationConditionalSetOutcome> SetIfVersionGatedAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
@@ -2216,7 +2237,7 @@ internal sealed partial class LatticeGrain(
         if (WriteInterceptionActive)
         {
             var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
-            if (!outcome.Proceed) return false;
+            if (!outcome.Proceed) return ReplicationConditionalSetOutcome.Diverted;
             value = outcome.Value;
         }
         cancellationToken.ThrowIfCancellationRequested();
@@ -2227,8 +2248,9 @@ internal sealed partial class LatticeGrain(
         var applied = LatticeIdempotencyContext.IsActive
             ? await RunMutationAsync(ct => SetIfVersionAsyncCore(key, value, expectedVersion, ct), cancellationToken)
             : await SetIfVersionAsyncCore(key, value, expectedVersion, cancellationToken);
-        if (applied) await PublishEventAsync(LatticeTreeEventKind.Set, key);
-        return applied;
+        if (!applied) return ReplicationConditionalSetOutcome.VersionMismatch;
+        await PublishEventAsync(LatticeTreeEventKind.Set, key);
+        return ReplicationConditionalSetOutcome.Applied;
     }
 
     private Task<bool> SetIfVersionAsyncCore(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)

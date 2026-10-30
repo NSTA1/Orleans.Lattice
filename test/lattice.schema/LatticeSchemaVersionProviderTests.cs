@@ -234,6 +234,27 @@ public sealed class LatticeSchemaVersionProviderTests
     }
 
     [Test]
+    public async Task InvalidateAll_forces_reload_of_every_tree_and_overtakes_an_in_flight_load()
+    {
+        var blockedRead = new TaskCompletionSource<LatticeSchemaVersionConfig?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ILatticeSchemaVersionStore>();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>()).Returns(Config());
+        store.GetConfigAsync("invoices", Arg.Any<CancellationToken>())
+            .Returns(blockedRead.Task, Task.FromResult<LatticeSchemaVersionConfig?>(Config()));
+        var provider = CreateProvider(store);
+        _ = await provider.GetConfigAsync("orders");
+
+        var inFlight = provider.GetConfigAsync("invoices").AsTask();
+        provider.InvalidateAll();
+        blockedRead.SetResult(null);
+        _ = await inFlight;
+
+        Assert.That(await provider.GetConfigAsync("invoices"), Is.Not.Null);
+        _ = await provider.GetConfigAsync("orders");
+        await store.Received(2).GetConfigAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Invalidate_null_tree_throws()
     {
         var provider = CreateProvider(Substitute.For<ILatticeSchemaVersionStore>());

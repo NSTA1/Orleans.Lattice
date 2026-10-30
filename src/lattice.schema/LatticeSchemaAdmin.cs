@@ -3,10 +3,11 @@ namespace Orleans.Lattice.Schema;
 /// <summary>
 /// The default <see cref="ILatticeSchemaAdmin"/>. It delegates policy mutations to
 /// the durable <see cref="ILatticeSchemaPolicyStore"/> and dead-letter reads to the
-/// <see cref="ILatticeSchemaDeadLetterStore"/>, and it eagerly evicts the local
-/// <see cref="ILatticeSchemaPolicyProvider"/> cache on a policy change so the new
-/// policy takes effect on this silo's next write without waiting for the mutation
-/// observer to propagate the eviction.
+/// <see cref="ILatticeSchemaDeadLetterStore"/>, and it evicts this silo's
+/// <see cref="ILatticeSchemaPolicyProvider"/> cache before a policy change returns,
+/// so the new policy is enforced on this silo's next write. Every other silo picks
+/// the change up within <see cref="LatticeSchemaEnforcementOptions.PropagationInterval"/>
+/// through the cluster-wide policy epoch; propagation is eventual, not synchronous.
 /// </summary>
 internal sealed class LatticeSchemaAdmin(
     ILatticeSchemaPolicyStore policyStore,

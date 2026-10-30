@@ -112,6 +112,12 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// preserves it, and no fold-time upcast can occur - the determinism
     /// requirement documented on <see cref="ILatticeEnvelopeCodec"/>.
     /// </para>
+    /// <para>
+    /// A materialised-view rebuild or reconcile of an unaliased source reads
+    /// here too, for the same reason: it must re-project the stored form that
+    /// incremental apply read from the WAL, never the decoded and upcast body
+    /// (issue #5240).
+    /// </para>
     /// </remarks>
     /// <param name="key">The key to read.</param>
     /// <returns>
@@ -121,6 +127,28 @@ internal interface IReplicationApplyGrain : IGrainWithStringKey
     /// absent or tombstoned.
     /// </returns>
     Task<VersionedValue> ReadStoredWithVersionAsync(string key);
+
+    /// <summary>
+    /// The write half of a replication read-merge-write loop: installs
+    /// <paramref name="value"/> at <paramref name="key"/> only when the key's
+    /// current version equals <paramref name="expectedVersion"/>, through the same
+    /// gated write path as <see cref="ILattice.SetIfVersionAsync"/>, write
+    /// interceptor included. Unlike that method, it tells a version miss apart
+    /// from a value the interceptor diverted (issue #5265): under strict ingest a
+    /// refused full-state CRDT row must be diverted once, not retried as a
+    /// compare-and-swap miss until the loop's budget runs out.
+    /// </summary>
+    /// <param name="key">The key to write.</param>
+    /// <param name="value">The value to install.</param>
+    /// <param name="expectedVersion">
+    /// The version read by <see cref="ReadStoredWithVersionAsync"/>;
+    /// <see cref="HybridLogicalClock.Zero"/> expects the key absent.
+    /// </param>
+    /// <returns>Whether the value was applied, missed the version, or was diverted.</returns>
+    Task<ReplicationConditionalSetOutcome> ApplySetIfVersionAsync(
+        string key,
+        byte[] value,
+        HybridLogicalClock expectedVersion);
 
     /// <summary>
     /// Installs a range delete authored on the remote cluster identified

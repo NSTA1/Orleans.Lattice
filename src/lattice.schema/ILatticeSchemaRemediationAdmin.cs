@@ -11,6 +11,14 @@ namespace Orleans.Lattice.Schema;
 /// alias change, no policy change). Only a fully successful build cuts the logical
 /// tree over to the remediated destination and installs the target policy.
 /// </para>
+/// <para>
+/// On a versioning-enabled tree the transform sees each value as a client read
+/// returns it (envelope stripped, upcast to the tree's target version). A stored
+/// value that cannot be upcast to the target - no registered upcaster hop, or a
+/// value stamped newer than the target - is an offending value like any other: the
+/// abort report is returned, not thrown, and the remediation releases its alias
+/// reservation, so the tree is not left in flight.
+/// </para>
 /// </summary>
 public interface ILatticeSchemaRemediationAdmin
 {
@@ -29,7 +37,7 @@ public interface ILatticeSchemaRemediationAdmin
     /// <returns>The terminal report: <see cref="LatticeSchemaRemediationReport.Succeeded"/> on cutover, or <see cref="LatticeSchemaRemediationReport.DidAbort"/> with the first offending entry.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="targetPolicy"/> carries an uncompilable regex rule.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="targetPolicy"/> is <c>null</c>.</exception>
-    /// <exception cref="InvalidOperationException">A remediation with different parameters is already in flight for the tree.</exception>
+    /// <exception cref="InvalidOperationException">A remediation with different parameters is already in flight for the tree, or the call joined a remediation already in flight that then ended under another operation and was replaced by a later remediation before its outcome could be read.</exception>
     Task<LatticeSchemaRemediationReport> RemediateAsync(
         string treeId,
         LatticeValueTransform transform,

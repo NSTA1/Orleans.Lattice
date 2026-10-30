@@ -57,8 +57,8 @@ public partial class ReplicationApplierTests
             });
 
         byte[]? written = null;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return true; });
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return ReplicationConditionalSetOutcome.Applied; });
 
         var result = await applier.ApplyAsync(SnapshotEntry(
             "k",
@@ -102,8 +102,8 @@ public partial class ReplicationApplierTests
             });
 
         HybridLogicalClock? expected = null;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(ci => { expected = ci.ArgAt<HybridLogicalClock>(2); return true; });
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ci => { expected = ci.ArgAt<HybridLogicalClock>(2); return ReplicationConditionalSetOutcome.Applied; });
 
         await applier.ApplyAsync(SnapshotEntry(
             "k",
@@ -150,8 +150,8 @@ public partial class ReplicationApplierTests
             .Returns(new VersionedValue { Value = OrMapState(("decoded", "site-a", 5)), Version = Hlc(4) });
 
         byte[]? written = null;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return true; });
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return ReplicationConditionalSetOutcome.Applied; });
 
         var result = await applier.ApplyAsync(
             OrMapEntry("k", Hlc(10)) with { Value = OrMapState(("incoming", "site-b", 2)) });

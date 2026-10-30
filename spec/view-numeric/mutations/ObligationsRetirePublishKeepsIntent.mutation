@@ -1,0 +1,17 @@
+# The intent row is never deleted after its group writes succeed.
+MODULE: ObligationsRetirePublishKeepsIntent
+TARGET: ObligationsRetire
+CLASS: Temporal
+SUMMARY: republishing a group never retires the intent naming it
+PERTURBS: Publish
+
+--- FIND
+    /\ intent' = [intent EXCEPT ![k] = @ \ {g}]
+    /\ UNCHANGED <<appended, logs, phys, decision, src, defn, bound, viewDefn,
+         epoch, read, checkpoint, phase, mem, slots, registry, conflict, faults,
+         reconciles>>
+--- REPLACE
+    /\ UNCHANGED <<appended, logs, phys, decision, src, defn, bound, viewDefn,
+         epoch, read, checkpoint, phase, mem, slots, intent, registry, conflict, faults,
+         reconciles>>
+--- END

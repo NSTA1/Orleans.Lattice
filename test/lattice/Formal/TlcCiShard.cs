@@ -107,6 +107,9 @@ internal static class TlcCiShard
     /// <summary>The bounded fresh joint-repair, retry and acknowledgement-closure runs.</summary>
     public const string MaterialisedViewJointRepair = "TlcShardMaterialisedViewJointRepair";
 
+    /// <summary>The schema-independent numeric (Count/Sum) projection companion runs.</summary>
+    public const string MaterialisedViewNumeric = "TlcShardMaterialisedViewNumeric";
+
     /// <summary>The anti-entropy base and first measured mutation group.</summary>
     public const string AntiEntropy = "TlcShardAntiEntropy";
 
@@ -170,7 +173,7 @@ internal static class TlcCiShard
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
-         MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair,
+         MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair, MaterialisedViewNumeric,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
          Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
          Schema];
@@ -405,6 +408,7 @@ internal static class TlcCiShard
         : name == "MaterialisedViewSourceAdmission" ? MaterialisedViewSourceAdmission
         : name == "MaterialisedViewResolvedIdentity" ? MaterialisedViewResolvedIdentity
         : string.Equals(name, "MaterialisedViewJointRepair", StringComparison.Ordinal) ? MaterialisedViewJointRepair
+        : string.Equals(name, "MaterialisedViewNumeric", StringComparison.Ordinal) ? MaterialisedViewNumeric
         : name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
         : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
         : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle

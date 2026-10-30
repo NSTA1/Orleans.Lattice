@@ -1,0 +1,16 @@
+# Adopting a new projection version forward is right for an accumulative
+# history view, not for a current-state numeric one: members extracted under the
+# old filter stay.
+MODULE: QuiescentExactVersionAdoptedForward
+TARGET: QuiescentExact
+CLASS: Invariant
+SUMMARY: a changed filter version is adopted forward without rebuilding the numeric view
+PERTURBS: ChangeFilter
+
+--- FIND
+    /\ Topology = FilterChange /\ defn = 1 /\ defn' = 2
+    /\ UNCHANGED <<appended, logs, phys, decision, src, bound, viewDefn, epoch,
+--- REPLACE
+    /\ Topology = FilterChange /\ defn = 1 /\ defn' = 2 /\ viewDefn' = 2
+    /\ UNCHANGED <<appended, logs, phys, decision, src, bound, epoch,
+--- END

@@ -66,7 +66,8 @@ internal sealed class LatticeSchemaRemediationGrain(
     ILatticeSchemaPolicyStore? policyStore = null,
     ILatticeSchemaPolicyProvider? policyProvider = null,
     ILatticeSchemaRegistry? schemaRegistry = null,
-    SchemaRuntimeRegistry? runtimeRegistry = null)
+    SchemaRuntimeRegistry? runtimeRegistry = null,
+    ILatticeValueDecoder? valueDecoder = null)
     : IGrainBase, ILatticeSchemaRemediationGrain
 {
     private readonly int _previewMaxBytes = Math.Max(1, options.Value.DeadLetterPreviewMaxBytes);
@@ -102,7 +103,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         catch { state.State.AliasReservationId = id; throw; }
     }
 
-    /// <summary>The number of values one <see cref="RunSliceAsync"/> processes before it persists its progress and returns.</summary>
+    /// <summary>The number of values one <see cref="RunSliceAsync(string)"/> processes before it persists its progress and returns.</summary>
     internal const int DefaultSliceSize = 512;
 
     /// <summary>
@@ -158,6 +159,22 @@ internal sealed class LatticeSchemaRemediationGrain(
     public async Task<SchemaRemediationSlice> RunSliceAsync()
     {
         EnsureControlPlaneOrigin();
+        await RunSliceCoreAsync();
+        return new SchemaRemediationSlice(GetStatus(), state.State.InProgress ? state.State.PhaseTotal : null);
+    }
+
+    /// <inheritdoc />
+    public async Task<SchemaRemediationSlice> RunSliceAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        EnsureControlPlaneOrigin();
+        if (state.State.InProgress
+            && !string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+        {
+            // Another operation's remediation: the caller does not follow it.
+            return new SchemaRemediationSlice(GetStatus(), null);
+        }
+
         await RunSliceCoreAsync();
         return new SchemaRemediationSlice(GetStatus(), state.State.InProgress ? state.State.PhaseTotal : null);
     }
@@ -276,7 +293,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// Runs slices until the remediation is terminal, all within the current turn.
     /// Serves the in-turn <see cref="StartAsync"/>, <see cref="StartVersionMigrationAsync"/>
     /// and <see cref="RunRemediationPassAsync"/> verbs; a caller that must not hold
-    /// one call open for the whole run drives <see cref="RunSliceAsync"/> instead.
+    /// one call open for the whole run drives <see cref="RunSliceAsync(string)"/> instead.
     /// </summary>
     private async Task DriveToTerminalAsync()
     {
@@ -513,6 +530,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     {
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var rewrite = await CreateRewriteAsync();
+        var decode = TransformInputDecoderOrNull();
         var policyView = PolicyViewOrNull();
         var compiled = CompiledPolicyOrNull();
         var sliceSize = Math.Max(1, SliceSize);
@@ -528,7 +546,8 @@ internal sealed class LatticeSchemaRemediationGrain(
                 byte[] rewritten;
                 try
                 {
-                    rewritten = rewrite(entry.Value);
+                    var input = decode is null ? entry.Value : await decode(entry.Value);
+                    rewritten = rewrite(input);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
                 {
@@ -600,6 +619,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var compiled = CompiledPolicyOrNull();
         var policyView = PolicyViewOrNull();
         var rewrite = await CreateRewriteAsync();
+        var decode = TransformInputDecoderOrNull();
         var sliceSize = Math.Max(1, SliceSize);
         var done = 0;
         string? lastKey = null;
@@ -613,7 +633,8 @@ internal sealed class LatticeSchemaRemediationGrain(
                 byte[] rewritten;
                 try
                 {
-                    rewritten = rewrite(entry.Value);
+                    var input = decode is null ? entry.Value : await decode(entry.Value);
+                    rewritten = rewrite(input);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
                 {
@@ -675,16 +696,40 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// holds exactly what the original served. A key a point read finds absent is
     /// skipped for the same reason.
     /// </para>
+    /// <para>
+    /// A schema-version migration reads the <b>stored</b> form: it scans keys only
+    /// and point-reads each value with <see cref="ReadStoredManyAsync"/>. The
+    /// client-facing entry scan and multi-get strip the envelope and upcast to the
+    /// tree's target, throwing <see cref="NotSupportedException"/> on a value they
+    /// cannot upcast before the per-value rewrite runs, so the migration threw and
+    /// stayed in flight holding the alias reservation instead of aborting (issue
+    /// #5208). Reading the stored form hands each value to
+    /// <see cref="LatticeSchemaVersionMigration.Migrate"/>, which upcasts it from its
+    /// own stamped version to the migration's target and whose failure the slice
+    /// turns into an abort.
+    /// </para>
+    /// <para>
+    /// A transform remediation over a tree the read-path
+    /// <see cref="ILatticeValueDecoder"/> is active for (a versioning-enabled silo)
+    /// also reads the stored form, then decodes each value itself, per value, through
+    /// that same decoder (<see cref="TransformInputDecoderOrNull"/>): the transform
+    /// sees exactly the body a client read returns, but a value the decoder cannot
+    /// upcast to the tree's target fails on its own key and becomes the abort, rather
+    /// than throwing the whole slice out of the decoding scan or multi-get and
+    /// leaving the remediation in flight holding the alias reservation (issue #5252).
+    /// </para>
     /// </summary>
     private async Task<SourceSlice> ReadSliceAsync(ILattice source, int sliceSize)
     {
         var keys = new List<string>(Math.Min(sliceSize, 1024));
+        var storedForm = state.State.Mode == SchemaRemediationMode.SchemaVersionMigration
+            || TransformDecoderActive;
         ExceptionDispatchInfo? fault = null;
         try
         {
-            await foreach (var entry in source.ScanEntriesAsync(startInclusive: After(state.State.ScanCursor)))
+            await foreach (var key in ScanKeysAfterCursorAsync(source, storedForm))
             {
-                keys.Add(entry.Key);
+                keys.Add(key);
                 if (keys.Count == sliceSize)
                 {
                     break;
@@ -704,7 +749,9 @@ internal sealed class LatticeSchemaRemediationGrain(
             return new SourceSlice([], LastScannedKey: null, exhausted, Fault: null);
         }
 
-        var values = await source.GetManyAsync(keys);
+        var values = storedForm
+            ? await ReadStoredManyAsync(keys)
+            : await source.GetManyAsync(keys);
         var entries = new List<KeyValuePair<string, byte[]>>(values.Count);
         foreach (var key in keys)
         {
@@ -715,6 +762,59 @@ internal sealed class LatticeSchemaRemediationGrain(
         }
 
         return new SourceSlice(entries, keys[^1], exhausted, fault);
+    }
+
+    /// <summary>
+    /// The source's keys after the durable cursor, in key order. A slice that reads
+    /// the stored form (<paramref name="keysOnly"/>) scans keys only: the entry scan
+    /// runs the client-facing decoding read on each value, which throws on a value it
+    /// cannot upcast (issues #5208 and #5252), and the slice never uses the scanned
+    /// values.
+    /// </summary>
+    private async IAsyncEnumerable<string> ScanKeysAfterCursorAsync(ILattice source, bool keysOnly)
+    {
+        var start = After(state.State.ScanCursor);
+        if (keysOnly)
+        {
+            await foreach (var key in source.ScanKeysAsync(startInclusive: start))
+            {
+                yield return key;
+            }
+
+            yield break;
+        }
+
+        await foreach (var entry in source.ScanEntriesAsync(startInclusive: start))
+        {
+            yield return entry.Key;
+        }
+    }
+
+    /// <summary>
+    /// Point-reads the stored form of each of <paramref name="keys"/> - the value
+    /// with its schema-version envelope intact, no upcast - routed to each key's
+    /// owner. Absent and tombstoned keys are omitted.
+    /// </summary>
+    private async Task<Dictionary<string, byte[]>> ReadStoredManyAsync(List<string> keys)
+    {
+        var reader = grainFactory.GetGrain<IReplicationApplyGrain>(TreeId);
+        var reads = new Task<VersionedValue>[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+        {
+            reads[i] = reader.ReadStoredWithVersionAsync(keys[i]);
+        }
+
+        await Task.WhenAll(reads);
+        var values = new Dictionary<string, byte[]>(keys.Count, StringComparer.Ordinal);
+        for (var i = 0; i < keys.Count; i++)
+        {
+            if (reads[i].Result.Value is { } value)
+            {
+                values[keys[i]] = value;
+            }
+        }
+
+        return values;
     }
 
     /// <summary>
@@ -813,6 +913,41 @@ internal sealed class LatticeSchemaRemediationGrain(
     }
 
     /// <summary>
+    /// <c>true</c> when this is a <see cref="SchemaRemediationMode.Transform"/>
+    /// remediation and the registered read-path <see cref="ILatticeValueDecoder"/> is
+    /// active for the tree, so the slice reads the stored form and decodes each value
+    /// itself (issue #5252).
+    /// </summary>
+    private bool TransformDecoderActive =>
+        state.State.Mode == SchemaRemediationMode.Transform
+        && valueDecoder is { } decoder
+        && decoder.IsActive(TreeId);
+
+    /// <summary>
+    /// The per-value decode a transform remediation applies to each stored value
+    /// before its transform: the same read-path <see cref="ILatticeValueDecoder"/> a
+    /// client read runs (strip the schema-version envelope, upcast to the tree's
+    /// target), so the transform sees, and remediation writes, exactly what it did
+    /// when it read through the decoding client read. The decoder throws
+    /// <see cref="NotSupportedException"/> on a value it cannot upcast, which the
+    /// dry-run / build turns into an abort naming that value. Returns <c>null</c> when
+    /// the decoder is inactive (the stored form is then the decoded form) and in
+    /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/>, whose rewrite
+    /// upcasts the stored form itself.
+    /// </summary>
+    private Func<byte[], ValueTask<byte[]>>? TransformInputDecoderOrNull()
+    {
+        if (!TransformDecoderActive)
+        {
+            return null;
+        }
+
+        var decoder = valueDecoder!;
+        var treeId = TreeId;
+        return value => decoder.DecodeAsync(treeId, value, CancellationToken.None);
+    }
+
+    /// <summary>
     /// Compiles the target policy for build-time revalidation, or returns <c>null</c>
     /// when the tree has no policy (a pure version migration of an unenforced tree).
     /// </summary>
@@ -867,7 +1002,8 @@ internal sealed class LatticeSchemaRemediationGrain(
         // guards the source's logical id for the brief instant before the swap - it
         // can never reject an existing destination value. Evict the local policy
         // cache eagerly (as the admin does) so the coordinating silo enforces the new
-        // policy on its next write without waiting for the change feed to propagate.
+        // policy on its next write; every other silo follows the cluster-wide policy
+        // epoch within the propagation interval (#5238).
         //
         // Only the enforcement-transform mode installs a policy. A pure version
         // migration validates each value against the tree's EXISTING policy during

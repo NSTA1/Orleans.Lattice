@@ -157,6 +157,13 @@
         "note": "Fresh joint-repair base, Legacy, SingleTarget and TwoFaults variants, and 25 typed mutation/control pairs: all 29 cases measured at 97.221 seconds including VSTest startup on Java 17, two visible CPUs and one TLC slot. Isolated from the existing materialised-view tail work; bounded two-participant repair, automatic historical completion cleanup and durable acknowledgement closure."
       },
       {
+        "shard": "formal-tlc-view-numeric",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardMaterialisedViewNumeric"],
+        "note": "Schema-independent numeric (Count/Sum) projection companion: MaterialisedViewNumeric base, Swap and TwoFaults variants and twenty paired mutations, 23 cases, measured at 1.43 minutes on its leg in receipt-free ci.yml run 41064780376 (head ff6cc0c64), where every TLC module ran exhaustively. Extraction and encoding, durable publication obligations, operation identity, filter-version and physical-copy rebind."
+      },
+      {
         "shard": "formal-tlc-anti-entropy",
         "tlc": true,
         "tiers": ["deterministic"],
@@ -322,7 +329,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchema"],
-        "note": "Every SchemaPolicyConfig, SchemaStageOrdering and SchemaStrictIngest base, variant and mutation (47 cases), bases co-located with their mutations so the base runs serve the full-bound controls. Measured locally at 1.97 minutes for the first 29 (#5226) and 0.78 minutes for the 18 SchemaStrictIngest cases (#5228) (16-core Windows workstation, default TLC concurrency); the SchemaPolicyConfig ThreeSilos variant dominates at about one minute. Refresh from the first receipt-free schema-assurance bucket push, and split the shard from measured timings as further Schema* modules join it."
+        "note": "Every SchemaPolicyConfig, SchemaStageOrdering and SchemaStrictIngest base, variant and mutation (48 cases), bases co-located with their mutations so the base runs serve the full-bound controls. The SchemaPolicyConfig and SchemaStageOrdering item (30 cases) took 2.34 minutes (dotnet test 2 m 17 s) in the member pull request ci.yml run 41065598921 (head 675f6363f, job 124100785054) for #5226, where the SchemaPolicyConfig ThreeSilos variant dominates; the 18 SchemaStrictIngest cases took 0.78 minutes locally (16-core Windows workstation, default TLC concurrency) for #5228. Refresh from the #5228 member pull request run, and split the shard from measured timings as further Schema* modules join it."
       },
       {
         "shard": "formal-tlc-smoke",

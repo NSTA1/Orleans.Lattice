@@ -34,5 +34,14 @@ internal sealed class SchemaTreeCacheGenerations
     /// <param name="treeId">The governed tree id.</param>
     public void Advance(string treeId) => Interlocked.Increment(ref _stripes[Stripe(treeId)]);
 
+    /// <summary>Advances every tree's generation; call before clearing the whole cache.</summary>
+    public void AdvanceAll()
+    {
+        for (var i = 0; i < _stripes.Length; i++)
+        {
+            Interlocked.Increment(ref _stripes[i]);
+        }
+    }
+
     private static int Stripe(string treeId) => (int)((uint)treeId.GetHashCode() % StripeCount);
 }

@@ -78,7 +78,7 @@ internal sealed partial class ViewMaintainerGrain
             {
                 numericSourceKeys?.Add(mutation.Key);
                 var spanStart = contributions.Count;
-                foreach (var contribution in registration.AggregationProjection!.Project(mutation))
+                foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, mutation)))
                 {
                     contributions.Add(contribution);
                     if (contribution.Kind == AggregationContributionKind.RangeReconcile)
@@ -292,7 +292,7 @@ internal sealed partial class ViewMaintainerGrain
                     continue;
                 }
 
-                foreach (var contribution in registration.AggregationProjection!.Project(prepared))
+                foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, prepared)))
                 {
                     contributions.Add(contribution);
                 }

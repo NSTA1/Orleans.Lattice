@@ -1,0 +1,13 @@
+# A flip that subtracts the old member twice leaves its slot outside the
+# count domain.
+MODULE: TypeOKSlotUnderflow
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an ordinary flip retracts the prior member twice, driving a slot count negative
+PERTURBS: Flip
+
+--- FIND
+                       /\ slots' = Add(Retract(slots, old), new)
+--- REPLACE
+                       /\ slots' = Add(Retract(Retract(slots, old), old), new)
+--- END

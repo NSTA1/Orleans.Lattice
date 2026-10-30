@@ -480,9 +480,15 @@ public sealed class CoordinatedRestoreCopyReceiveFenceTests
                 seam.FinalizeCrossTreeTerminalAsync(tx, committed: true, [0], Hlc(8), Origin),
         };
 
-        // A read is not a write path: the applier reads the stored value and
-        // writes the fold back through one of the methods above.
-        var exempt = new HashSet<string>(StringComparer.Ordinal) { nameof(IReplicationApplyGrain.ReadStoredWithVersionAsync) };
+        // A read is not a write path. The full-state fold's version-conditioned
+        // set (#5265) is the public SetIfVersionAsync body behind a richer
+        // result: it routes unscoped, like the read it pairs with and the public
+        // write it replaced, so it stays outside the fence as that write was.
+        var exempt = new HashSet<string>(StringComparer.Ordinal)
+        {
+            nameof(IReplicationApplyGrain.ReadStoredWithVersionAsync),
+            nameof(IReplicationApplyGrain.ApplySetIfVersionAsync),
+        };
 
         var declared = typeof(IReplicationApplyGrain)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
