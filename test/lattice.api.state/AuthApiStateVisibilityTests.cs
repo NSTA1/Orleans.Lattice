@@ -115,13 +115,13 @@ public sealed class AuthApiStateVisibilityTests
     }
 
     [Test]
-    public async Task GetTreeStructure_reader_can_see_a_readable_tree()
+    public async Task GetTreeStructure_partial_reader_cannot_see_unfiltered_topology()
     {
         using (AuthApiStateClusterFixture.AsSubject(Reader))
         {
             var result = await _fixture.Query.GetTreeStructureAsync(new StructureRequest { TreeId = TreeA });
 
-            Assert.That(result.Status, Is.EqualTo(StateQueryStatus.Found));
+            Assert.That(result.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
         }
     }
 

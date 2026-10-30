@@ -34,6 +34,9 @@ internal sealed class AuthViewApiStateClusterFixture
     /// <summary>The state-API read facade under test.</summary>
     public ILatticeStateQuery Query => SiloServices.GetRequiredService<ILatticeStateQuery>();
 
+    /// <summary>The state-API change observer under test.</summary>
+    public ILatticeStateObserver Observer => SiloServices.GetRequiredService<ILatticeStateObserver>();
+
     /// <summary>The silo-side authorization policy store (rule authoring).</summary>
     public ILatticeAuthorizationPolicyStore Store =>
         SiloServices.GetRequiredService<ILatticeAuthorizationPolicyStore>();
@@ -86,7 +89,8 @@ internal sealed class AuthViewApiStateClusterFixture
     /// </summary>
     public async Task<ILattice> CreatePopulatedTreeAsync(string treeId, params string[] keys)
     {
-        var registry = Cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var registry = SiloServices.GetRequiredService<IGrainFactory>()
+            .GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(treeId, new TreeRegistryEntry
         {
             MaxLeafKeys = 4,
@@ -113,12 +117,17 @@ internal sealed class AuthViewApiStateClusterFixture
     /// <c>view-{viewName}</c>. The rebuild runs under the bootstrap administrator so
     /// the view maintainer's source reads are authorized.
     /// </summary>
-    public async Task<string> CreateViewAsync(string sourceTreeId, string viewName)
+    public async Task<string> CreateViewAsync(
+        string sourceTreeId,
+        string viewName,
+        LatticeRuntimeViewProjectionDescriptor? runtimeProjection = null)
     {
         var factory = SiloServices.GetRequiredService<ILatticeViewFactory>();
         var source = Cluster.Client.GetGrain<ILattice>(sourceTreeId);
-        var view = factory.Create(
-            source, viewName, new LatticeViewDefinition(viewName, new PredicateLatticeViewProjection()));
+        var view = runtimeProjection is null
+            ? await factory.CreateAsync(
+                source, viewName, new LatticeViewDefinition(viewName, new PredicateLatticeViewProjection()))
+            : await factory.CreateAsync(source, viewName, runtimeProjection);
 
         using (AsSubject(BootstrapAdmin))
         {
@@ -134,7 +143,13 @@ internal sealed class AuthViewApiStateClusterFixture
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeViews();
+            siloBuilder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
+                "auth-rekey",
+                static (_, context) => new LatticeViewDefinition(
+                    context.ViewName,
+                    new PredicateLatticeViewProjection(
+                        keySelector: key => "x/" + key,
+                        keySelectorVersion: "prefix-v1"))));
             siloBuilder.AddLatticeStateApi();
             siloBuilder.AddLatticeMembership();
             siloBuilder.Services.AddSingleton<ILatticeCredentialAuthenticator, ApiStateTestCredentialAuthenticator>();

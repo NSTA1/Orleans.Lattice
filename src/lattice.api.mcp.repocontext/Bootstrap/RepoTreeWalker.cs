@@ -239,7 +239,9 @@ internal static class RepoTreeWalker
     /// discovery order.
     /// <para>
     /// When a <paramref name="pruning"/> context with a non-empty prior snapshot is
-    /// supplied and the directory's modification time is unchanged, the directory's
+    /// supplied and the directory's modification time is unchanged (and was already
+    /// safely in the past when the previous walk read it - see
+    /// <see cref="RepoWalkPruning.PreviousWalkStartTicks"/>), the directory's
     /// per-file <c>stat</c> is skipped entirely: its known files are carried forward
     /// from <paramref name="knownFiles"/> as fast-path candidates and its subdirectories
     /// are re-derived from the prior snapshot (an unchanged directory modification time
@@ -285,6 +287,17 @@ internal static class RepoTreeWalker
         var rootScope = respectGitignore
             ? GitignoreScope.Empty.Add(string.Empty, ReadGitignore(root))
             : GitignoreScope.Empty;
+
+        // Stamp the walk's start before reading any directory's modification time, so the
+        // next walk can tell a directory last modified safely before this read from one
+        // modified in the same timestamp tick (see RepoWalkPruning.PreviousWalkStartTicks).
+        var trustedBeforeTicks = 0L;
+        if (pruning is not null)
+        {
+            pruning.WalkStartTicks = DateTime.UtcNow.Ticks;
+            trustedBeforeTicks = pruning.PreviousWalkStartTicks - RepoWalkPruning.RacyWindow.Ticks;
+        }
+
         var rootMtime = pruning is not null ? Directory.GetLastWriteTimeUtc(root).Ticks : (long?)null;
         pending.Push((root, string.Empty, rootScope, rootMtime));
         while (pending.Count != 0)
@@ -293,7 +306,8 @@ internal static class RepoTreeWalker
             var (directory, relativeDir, scope, frameMtime) = pending.Pop();
 
             // Decide whether this directory can be pruned: its modification time is
-            // unchanged since the previous walk. Record the current modification time
+            // unchanged since the previous walk and was already safely in the past when
+            // that walk read it (not racily clean). Record the current modification time
             // either way so the next walk has a complete, self-healing snapshot.
             var prune = false;
             if (pruning is not null)
@@ -302,7 +316,8 @@ internal static class RepoTreeWalker
                 pruning.CurrentDirectoryMtimes[relativeDir] = dirMtime;
                 prune = pruneEnabled
                     && pruning.PreviousDirectoryMtimes!.TryGetValue(relativeDir, out var previousMtime)
-                    && previousMtime == dirMtime;
+                    && previousMtime == dirMtime
+                    && previousMtime < trustedBeforeTicks;
             }
 
             if (prune)

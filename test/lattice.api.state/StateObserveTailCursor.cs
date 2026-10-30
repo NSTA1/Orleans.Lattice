@@ -42,11 +42,11 @@ internal static class StateObserveTailCursor
     /// positioned at the current tail.
     /// </summary>
     public static async Task<string> CaptureAsync(
-        IClusterClient client,
         IServiceProvider siloServices,
         string treeId)
     {
-        var registry = client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var siloGrains = siloServices.GetRequiredService<IGrainFactory>();
+        var registry = siloGrains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var physicalTreeId = await registry.ResolveAsync(treeId) ?? treeId;
         var entry = await registry.GetEntryAsync(treeId);
 
@@ -65,7 +65,6 @@ internal static class StateObserveTailCursor
         // guard, exactly as it refuses one from any other external caller. Read
         // the tail through the silo's own grain factory, which is how
         // LatticeStateObserver reaches them when it seeds a fresh cursor.
-        var siloGrains = siloServices.GetRequiredService<IGrainFactory>();
         for (var partition = 0; partition < partitions; partition++)
         {
             var wal = siloGrains.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");

@@ -146,6 +146,13 @@ jobs:
       - name: Plan TLC for the modules without a receipt
         id: matrix
         if: steps.listing.outputs.missing != '0'
+        env:
+          # Runner routing (runner-overflow.py): hosted while the repository's busy
+          # hosted jobs stay under HOSTED_RUNNER_BUDGET, the self-hosted pool
+          # (tools/ci-runners) beyond it. Unset RUNNER_POOL keeps every leg hosted.
+          RUNNER_POOL: ${{ vars.RUNNER_POOL }}
+          HOSTED_RUNNER_BUDGET: ${{ vars.HOSTED_RUNNER_BUDGET }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           jq -r '.modules | to_entries[] | select(.value.status == "run") | .key' \
@@ -155,6 +162,7 @@ jobs:
             --tlc-census tlc-plan/census.json \
             --tlc-case-categories tlc-plan/categories.json \
             --output-tlc-matrix "$RUNNER_TEMP/tlc-matrix.json"
+          python3 .github/workflows/runner-overflow.py --matrix "$RUNNER_TEMP/tlc-matrix.json"
           {
             echo "legs<<MATRIX_EOF"
             cat "$RUNNER_TEMP/tlc-matrix.json"
@@ -178,13 +186,9 @@ jobs:
   tlc:
     needs: plan
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.leg_count != '0' }}
-    name: TLC / ${{ matrix.leg.name }}
-    # TLC_RUNNER (a repository variable holding a JSON runs-on value, e.g.
-    # ["self-hosted","lattice-tlc"]) moves these legs onto the elastic
-    # self-hosted pool in tools/ci-runners, off the hosted runners PR CI uses.
-    # Unset, they run on ubuntu-latest. Only trusted workflows (push to main,
-    # schedule, owner dispatch) may opt in: never a pull_request workflow.
-    runs-on: ${{ fromJSON(vars.TLC_RUNNER || '"ubuntu-latest"') }}
+    name: ${{ matrix.leg.pool && '[pool] ' || '' }}TLC / ${{ matrix.leg.name }}
+    # Hosted or the self-hosted pool, as runner-overflow.py decided at plan time.
+    runs-on: ${{ fromJSON(matrix.leg.runsOn || '"ubuntu-latest"') }}
     timeout-minutes: ${{ matrix.leg.timeout }}
     strategy:
       fail-fast: false

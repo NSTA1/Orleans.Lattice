@@ -620,7 +620,8 @@ class PlanShellTests(unittest.TestCase):
         self.root = shell_root(self)
         workflows = self.root / ".github" / "workflows"
         workflows.mkdir(parents=True)
-        for name in ("plan-coverage-matrix.py", "plan-test-matrix.py", "test-shards.json", "test-durations.tsv"):
+        for name in ("plan-coverage-matrix.py", "plan-test-matrix.py", "runner-overflow.py",
+                     "test-shards.json", "test-durations.tsv"):
             shutil.copyfile(WORKFLOWS / name, workflows / name)
         for package, project in (("lattice", "Orleans.Lattice.Tests"), ("other", "Other.Tests")):
             path = self.root / "test" / package / f"{project}.csproj"
@@ -628,6 +629,9 @@ class PlanShellTests(unittest.TestCase):
             path.touch()
         self.env = dict(os.environ, GITHUB_OUTPUT="output.txt", GITHUB_STEP_SUMMARY="summary.txt",
                         DEFAULT_BRANCH="main", TLC_SHARDS="", TRACK_TLC_FAILURES="false")
+        # Hermetic: no pool configured, so runner-overflow.py routes every leg hosted
+        # without calling the GitHub API.
+        self.env.pop("RUNNER_POOL", None)
 
     def plan(self, ref: str, **inputs: str) -> dict:
         self.env.update(GITHUB_REF=ref, TLC_SHARDS="", TRACK_TLC_FAILURES="false")
@@ -648,6 +652,10 @@ class PlanShellTests(unittest.TestCase):
         self.assertGreater(len(json.loads(outputs["legs"])), 0)
         shards = {item["shard"] for leg in json.loads(outputs["tlc_legs"]) for item in leg["items"]}
         self.assertEqual(set(declared_tlc_shards()), shards)
+        # Both matrices pass through runner-overflow.py before they are published.
+        for leg in json.loads(outputs["legs"]) + json.loads(outputs["tlc_legs"]):
+            self.assertEqual('"ubuntu-latest"', leg["runsOn"])
+            self.assertIs(False, leg["pool"])
 
     def test_a_restricted_branch_run_skips_coverage_and_tracks_only_on_request(self):
         outputs = self.plan("refs/heads/ci/probe", TLC_SHARDS="formal-tlc-smoke")

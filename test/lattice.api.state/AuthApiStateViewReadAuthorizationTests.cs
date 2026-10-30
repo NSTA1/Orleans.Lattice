@@ -82,6 +82,24 @@ public sealed class AuthApiStateViewReadAuthorizationTests
         }
     }
 
+    [TestCase(PrefixReader, StateQueryStatus.TreeNotFound)]
+    [TestCase(Outsider, StateQueryStatus.TreeNotFound)]
+    [TestCase(SourceReader, StateQueryStatus.Found)]
+    public async Task GetTreeStructure_view_requires_an_unfiltered_source_grant(
+        string subject, StateQueryStatus expected)
+    {
+        using (AuthViewApiStateClusterFixture.AsSubject(subject))
+        {
+            var result = await _fixture.Query.GetTreeStructureAsync(
+                new StructureRequest { TreeId = _viewTreeId });
+
+            Assert.That(result.Status, Is.EqualTo(expected));
+            Assert.That(result.Roots.Count, expected == StateQueryStatus.Found
+                ? Is.GreaterThan(0)
+                : Is.Zero);
+        }
+    }
+
     [Test]
     public async Task ScanEntries_view_is_hidden_from_an_anonymous_caller()
     {
@@ -167,6 +185,45 @@ public sealed class AuthApiStateViewReadAuthorizationTests
 
             Assert.That(result.Status, Is.EqualTo(StateQueryStatus.KeyNotFound));
             Assert.That(result.Entry, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task Rekeyed_view_cannot_launder_a_denied_source_key_into_an_allowed_prefix()
+    {
+        const string viewName = "a1rekey";
+        var viewTree = await _fixture.CreateViewAsync(
+            Source,
+            viewName,
+            new LatticeRuntimeViewProjectionDescriptor("auth-rekey", []));
+
+        using (AuthViewApiStateClusterFixture.AsSubject(SourceReader))
+        {
+            var control = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest { TreeId = viewTree });
+            Assert.That(control.Entries.Select(e => e.Key), Does.Contain("x/y/1"),
+                "The denied source row must actually be materialised under an allowed-looking output key.");
+        }
+
+        using (AuthViewApiStateClusterFixture.AsSubject(PrefixReader))
+        {
+            var scan = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest { TreeId = viewTree });
+            var point = await _fixture.Query.GetEntryAsync(viewTree, "x/y/1");
+            var history = await _fixture.Query.GetEntryHistoryAsync(
+                new EntryHistoryRequest { TreeId = viewTree, Key = "x/y/1" });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(scan.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+                Assert.That(scan.Entries, Is.Empty);
+                Assert.That(point.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+                Assert.That(point.Entry, Is.Null);
+                Assert.That(history.Status, Is.EqualTo(StateQueryStatus.TreeNotFound));
+            });
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await using var changes = _fixture.Observer.ObserveAsync(
+                new StateObserveRequest { TreeId = viewTree }, timeout.Token).GetAsyncEnumerator();
+            Assert.ThrowsAsync<KeyNotFoundException>(async () => { await changes.MoveNextAsync(); });
         }
     }
 }

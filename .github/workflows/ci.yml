@@ -1678,6 +1678,12 @@ jobs:
           SKIP_TLC_REASON: ${{ steps.tierscope.outputs.skip_tlc_reason }}
           MAX_LEGS: ${{ steps.tierscope.outputs.max_legs }}
           TLC_RECEIPTS: ${{ steps.receipts.outputs.on }}
+          # Runner routing (runner-overflow.py): hosted while the repository's busy
+          # hosted jobs stay under HOSTED_RUNNER_BUDGET, the self-hosted pool
+          # (tools/ci-runners) beyond it. Unset RUNNER_POOL keeps every leg hosted.
+          RUNNER_POOL: ${{ vars.RUNNER_POOL }}
+          HOSTED_RUNNER_BUDGET: ${{ vars.HOSTED_RUNNER_BUDGET }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -1711,6 +1717,8 @@ jobs:
             "${receipts[@]}" \
             --output-matrix /tmp/matrix.json \
             --report-file "$GITHUB_STEP_SUMMARY"
+
+          python3 .github/workflows/runner-overflow.py --matrix /tmp/matrix.json
 
           {
             echo "legs<<MATRIX_EOF"
@@ -2205,7 +2213,7 @@ jobs:
   # a red X in the checks list already says what broke before you open it.
   # ---------------------------------------------------------------------------
   test:
-    name: ${{ matrix.leg.name }}
+    name: ${{ matrix.leg.pool && '[pool] ' || '' }}${{ matrix.leg.name }}
     needs: plan
     # An empty matrix is a valid plan, not a failure: it is what a docs-only or
     # version-bump-only change produces. The `build-and-test` gate below still
@@ -2215,7 +2223,8 @@ jobs:
     # `success()`, which would also read the `classify` job's pull-request skip
     # through `plan` and skip every leg; see the note on `extras`.
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.leg_count != '0' }}
-    runs-on: ubuntu-latest
+    # Hosted or the self-hosted pool, as runner-overflow.py decided at plan time.
+    runs-on: ${{ fromJSON(matrix.leg.runsOn || '"ubuntu-latest"') }}
 
     strategy:
       # Never fail-fast. A cancelled sibling leg is an unreported leg, and an
@@ -2232,16 +2241,8 @@ jobs:
     # caching.azureblob, backup.azureblob, and lattice.integration) drive via
     # `UseDevelopmentStorage=true`.
     # Without it those tests self-skip (Assert.Inconclusive) and never validate their
-    # coverage in CI. The image's default command binds blob/queue/table on 0.0.0.0;
-    # publishing 10000-10002 to the runner host makes the SDK dev endpoints
-    # (127.0.0.1:10000-10002) resolve. Pinned to the version validated locally.
-    services:
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
+    # coverage in CI. It is started by the "Start Azurite" step rather than a
+    # `services:` container: see that step for why.
     # Carried over from the serial job, and load-bearing. Legs are bin-packed
     # dynamically, so any leg can contain storage.azuretable, caching.azureblob,
     # backup.azureblob, or lattice.integration. Without the service those
@@ -2296,12 +2297,40 @@ jobs:
           # offender is prose. Describe it in words instead, as here.
           fetch-depth: 0
 
+      # Azurite is started here, not as a `services:` container. Any services
+      # block - even one whose image evaluates empty - makes the runner probe the
+      # Docker daemon and create a job network in "Initialize containers", which
+      # fails on the self-hosted pool (Container Apps runs no Docker daemon).
+      # Hosted legs run the pinned image; pool legs run the same version from npm,
+      # baked into the pool image. Started first so it is warm by "Wait for
+      # Azurite". Both listen on 127.0.0.1:10000-10002, the SDK dev endpoints.
+      - name: Start Azurite
+        env:
+          POOL: ${{ matrix.leg.pool }}
+        run: |
+          if [ "$POOL" = "true" ]; then
+            mkdir -p "$RUNNER_TEMP/azurite"
+            nohup azurite --silent --location "$RUNNER_TEMP/azurite" \
+              --blobHost 127.0.0.1 --queueHost 127.0.0.1 --tableHost 127.0.0.1 \
+              > "$RUNNER_TEMP/azurite.log" 2>&1 &
+          else
+            docker run -d --name azurite -p 10000:10000 -p 10001:10001 -p 10002:10002 \
+              mcr.microsoft.com/azure-storage/azurite:3.36.0
+          fi
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
+      # Not on a pool leg: the pool image carries a NuGet package snapshot in
+      # ~/.nuget/packages (tools/ci-runners/Dockerfile), so restore fetches only
+      # what changed since the image was built. Skipping the ~800 MB cache keeps
+      # pool legs off the repository's Actions cache egress limit, which a burst
+      # of concurrent legs otherwise exceeds (throttling every cache restore,
+      # TLC receipts included).
       - name: Cache NuGet packages
+        if: ${{ !matrix.leg.pool }}
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
@@ -2333,9 +2362,9 @@ jobs:
       # `src/foo/` that has no `test/foo/`).
       # Ensure Azurite is accepting connections before the AzureStorageEmulator
       # tests run (they self-skip on a connection failure, so a not-yet-ready
-      # emulator would silently drop that coverage rather than fail). The service
-      # starts at job start and restore/build precede this, so it is normally
-      # already satisfied; this is a cheap guard against a cold-start race.
+      # emulator would silently drop that coverage rather than fail). It is
+      # started right after checkout and restore/build precede this, so it is
+      # normally already satisfied; this is a cheap guard against a cold-start race.
       - name: Wait for Azurite
         run: |
           for port in 10000 10001 10002; do
@@ -2504,8 +2533,45 @@ jobs:
   # `CiContentGateWiringTests` guards the wiring and the filter's coverage of
   # every declared gate fixture.
   # ---------------------------------------------------------------------------
+  # Where Content gates runs. It is one job, not a planned matrix, and it does
+  # not wait for `plan` (that would add the plan's minutes to its own path), so
+  # this small job runs the same router (runner-overflow.py) over a single-leg
+  # matrix. It carries Content gates' own condition, so it is skipped exactly
+  # where Content gates is. If it fails, Content gates still runs - its `if:`
+  # starts with `!cancelled()` - and falls back to a hosted runner.
+  route-content-gates:
+    name: Route content gates
+    needs: classify
+    if: ${{ !cancelled() && needs.classify.outputs.push_is_member != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      runs_on: ${{ steps.route.outputs.runs_on }}
+      pool: ${{ steps.route.outputs.pool }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/workflows/runner-overflow.py
+          sparse-checkout-cone-mode: false
+
+      - name: Route
+        id: route
+        env:
+          RUNNER_POOL: ${{ vars.RUNNER_POOL }}
+          HOSTED_RUNNER_BUDGET: ${{ vars.HOSTED_RUNNER_BUDGET }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          leg="$RUNNER_TEMP/content-gates-leg.json"
+          echo '[{"name": "Content gates"}]' > "$leg"
+          python3 .github/workflows/runner-overflow.py --matrix "$leg"
+          jq -r '.[0] | "runs_on=\(.runsOn)", "pool=\(.pool)"' "$leg" >> "$GITHUB_OUTPUT"
+
   content-gates:
-    name: Content gates (formal, hygiene, docs)
+    name: ${{ needs.route-content-gates.outputs.pool == 'true' && '[pool] ' || '' }}Content gates (formal, hygiene, docs)
     # The ONE condition this job may carry, and it cannot skip it on a pull
     # request. `classify` is push-only, so on every pull request it is skipped
     # and its flag is empty; `!cancelled()` stops that skip propagating, and
@@ -2516,9 +2582,12 @@ jobs:
     # exact condition, the single dependency, and the classifier's push-only
     # guard. Lightweight PRs run video order here but skip the .NET fixtures
     # at step level; the job must still succeed for the required verdict.
-    needs: classify
+    # `route-content-gates` only chooses the runner: because the condition
+    # starts with `!cancelled()`, its failure or skip cannot skip this job, and
+    # `runs-on` then falls back to a hosted runner.
+    needs: [classify, route-content-gates]
     if: ${{ !cancelled() && needs.classify.outputs.push_is_member != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.route-content-gates.outputs.runs_on || '"ubuntu-latest"') }}
 
     env:
       # Single source of truth for what this gate selects, read back by
@@ -2595,8 +2664,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Not on the pool: its image carries a NuGet snapshot (tools/ci-runners),
+      # and the ~800 MB cache per pool job exceeds the Actions cache egress limit.
       - name: Cache NuGet packages
-        if: steps.lightweight.outputs.only != 'true'
+        if: steps.lightweight.outputs.only != 'true' && needs.route-content-gates.outputs.pool != 'true'
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages

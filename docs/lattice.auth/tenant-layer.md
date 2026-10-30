@@ -45,7 +45,7 @@ default that fails closed. Turning the layer off takes effect on the next decisi
   3. Otherwise a matching **tenant-wide allow** grants.
   4. Otherwise `DefaultEffect` applies.
 
-The control-plane trees (`sys-auth-*`, `sys-tenant-*`, `sys-app-*`, the
+The control-plane trees (`sys-auth-*`, `sys-tenant-*`, `sys-app-*`, `sys-membership-*`, `sys-schema-*`, `sys-backup-*`, the
 tenant-administration capability ids and the `*` sentinel) are never tenant-layer
 trees, so their fail-closed rule is unchanged.
 
