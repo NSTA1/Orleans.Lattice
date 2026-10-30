@@ -6,6 +6,10 @@
 # These regression inputs are byte-hashed before the TLC overlay is built.
 tools/tlc/** text eol=lf
 
+# The CI runner image is built from the working tree (az acr build), so its
+# shell entrypoint must keep LF line endings on a Windows checkout.
+tools/ci-runners/** text eol=lf
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #
