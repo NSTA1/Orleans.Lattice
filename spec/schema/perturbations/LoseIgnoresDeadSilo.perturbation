@@ -1,0 +1,12 @@
+# Lose: a lost runner's scan reads failed.
+MODULE: SchemaComplianceScan
+ROW: Lose
+FILE: src/lattice/Operations/LatticeOperationGrain.cs
+DETECTORS: LatticeOperationGrainTests.A_running_operation_whose_runner_silo_is_dead_reads_as_failed
+SUMMARY: a scan whose runner silo died keeps reading running
+
+--- FIND
+        if (record.RunnerSilo is { } silo && liveness.IsDead(silo))
+--- REPLACE
+        if (record.RunnerSilo is { } silo && liveness.IsDead(silo) && !liveness.IsDead(silo))
+--- END

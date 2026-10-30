@@ -1,0 +1,23 @@
+# The #5267 defect: a driver that joined a remediation drives a later one
+# and records its outcome.
+MODULE: OutcomeOfFollowedDrivesAnother
+TARGET: OutcomeOfFollowed
+CLASS: Invariant
+SUMMARY: a driver slices and reports whatever remediation is in flight (#5267)
+PERTURBS: Slice, Observe
+BOUNDS: OpCount = 3, MaxStalls = 0
+
+--- FIND
+    /\ remOwner = opFollows[o]
+    /\ (~Stop(o) \/ ~CancelAccepted(o))
+--- REPLACE
+    /\ (~Stop(o) \/ ~CancelAccepted(o))
+--- END
+
+--- FIND
+    /\ (~remInProgress \/ remOwner # opFollows[o])
+    /\ Report(o, IF ~remInProgress /\ remLast = opFollows[o] THEN remLast ELSE NoOp)
+--- REPLACE
+    /\ ~remInProgress
+    /\ Report(o, remLast)
+--- END

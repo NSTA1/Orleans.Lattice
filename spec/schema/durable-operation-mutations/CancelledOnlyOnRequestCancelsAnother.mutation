@@ -1,0 +1,15 @@
+# A cancel without identity: a cancelled operation stops another operation's remediation.
+MODULE: CancelledOnlyOnRequestCancelsAnother
+TARGET: CancelledOnlyOnRequest
+CLASS: Invariant
+SUMMARY: a driver cancels a remediation it does not follow
+PERTURBS: DriveCancel
+BOUNDS: OpCount = 3, MaxStalls = 0
+
+--- FIND
+    /\ remInProgress /\ CancelAccepted(o)
+    /\ remInProgress' = FALSE
+--- REPLACE
+    /\ remInProgress /\ remPhase \in {"DryRun", "Build"}
+    /\ remInProgress' = FALSE
+--- END

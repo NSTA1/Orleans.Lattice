@@ -1,0 +1,12 @@
+# Pairing for the loss step: the failure is recorded but not attributed to the lost runner.
+MODULE: FailsOnlyWhenLostUnattributed
+TARGET: FailsOnlyWhenLost
+CLASS: Invariant
+SUMMARY: a lost runner's scan fails without the loss being the cause
+PERTURBS: Lose
+
+--- FIND
+    /\ phase' = "Failed" /\ lost' = TRUE
+--- REPLACE
+    /\ phase' = "Failed" /\ lost' = lost
+--- END

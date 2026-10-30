@@ -139,8 +139,11 @@ lattice	formal-tlc-backup	deterministic	3.94
 # request ci.yml run 41065598921 (head 675f6363f, job 124100785054) for #5226;
 # with SchemaVersionFamily's 18 cases added, all 48 ran (no schema receipt) in
 # 1 m 54 s of dotnet test in ci.yml run 41087582284 (head e15b3091e, job
-# 124175924963) for #5227. The row keeps the larger figure.
-lattice	formal-tlc-schema	deterministic	2.34
+# 124175924963) for #5227. With SchemaDurableOperation's and
+# SchemaComplianceScan's 38 cases added to the first two modules, all 68 took
+# 6.64 minutes (dotnet test 6 m 34 s) in ci.yml run 41088681728 (head
+# 4e5554713, job 124180139236) for #5229. The row keeps the larger figure.
+lattice	formal-tlc-schema	deterministic	6.64
 lattice	formal-tlc-smoke	deterministic	0.27
 # lattice/rest (deterministic) uses complete passing item TRX from green run
 # 40648174016 (head c04710f914ed1628af05916aaf5f5272caa6d102); elapsed TRX

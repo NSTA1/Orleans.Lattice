@@ -1,0 +1,12 @@
+# TypeOK pairing: a start writes a record state the lifecycle does not declare.
+MODULE: TypeOKBeginUndeclaredState
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an admitted start records a state outside the operation lifecycle
+PERTURBS: Begin
+
+--- FIND
+    /\ opState' = [opState EXCEPT ![o] = "Queued"]
+--- REPLACE
+    /\ opState' = [opState EXCEPT ![o] = "Started"]
+--- END

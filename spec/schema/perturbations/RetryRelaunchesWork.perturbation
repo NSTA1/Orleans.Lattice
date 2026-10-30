@@ -1,0 +1,15 @@
+# Retry(o): a start with an existing id starts nothing.
+MODULE: SchemaDurableOperation
+ROW: Retry(o)
+FILE: src/lattice/Operations/LatticeOperationRunner.cs
+DETECTORS: LatticeOperationRunnerTests.Starting_an_existing_id_starts_nothing
+SUMMARY: a start with an existing id launches the work again
+
+--- FIND
+        if (!begin.Created)
+        {
+            return new LatticeOperationLaunch<TResult>(begin.Record, null);
+        }
+--- REPLACE
+        _ = begin.Created;
+--- END

@@ -1,0 +1,12 @@
+# Finish(o): the terminal report maps to the recorded completion.
+MODULE: SchemaDurableOperation
+ROW: Finish(o)
+FILE: src/lattice.schema/SchemaOperationService.cs
+DETECTORS: SchemaOperationServiceTests.ToCompletion_records_a_cancelled_remediation_as_cancelled
+SUMMARY: a cancelled remediation is recorded as succeeded
+
+--- FIND
+                State = LatticeOperationState.Cancelled,
+--- REPLACE
+                State = LatticeOperationState.Succeeded,
+--- END

@@ -1,0 +1,12 @@
+# NothingCutOverUnlessCompleted: a cancel at cutover is declined.
+MODULE: SchemaDurableOperation
+ROW: NothingCutOverUnlessCompleted
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.CancelAsync_at_cutover_is_declined_and_the_remediation_completes
+SUMMARY: the coordinator accepts a cancel at cutover
+
+--- FIND
+            || state.State.Phase is not (LatticeSchemaRemediationPhase.DryRun or LatticeSchemaRemediationPhase.Build))
+--- REPLACE
+            || state.State.Phase is not (LatticeSchemaRemediationPhase.DryRun or LatticeSchemaRemediationPhase.Build or LatticeSchemaRemediationPhase.Cutover))
+--- END

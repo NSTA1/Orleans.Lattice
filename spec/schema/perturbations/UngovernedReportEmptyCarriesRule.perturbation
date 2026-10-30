@@ -1,0 +1,17 @@
+# UngovernedReportEmpty: an ungoverned report has every count zero.
+MODULE: SchemaComplianceScan
+ROW: UngovernedReportEmpty
+FILE: src/lattice.schema/LatticeSchemaComplianceReport.cs
+DETECTORS: LatticeSchemaComplianceReportTests.Ungoverned_reports_no_policy_and_all_zero_counts
+SUMMARY: an ungoverned report carries a rule count
+
+--- FIND
+            ScannedCount = 0,
+            RuleBreakdown = ReadOnlyCollection<LatticeSchemaComplianceRuleCount>.Empty,
+        };
+--- REPLACE
+            ScannedCount = 0,
+            RuleBreakdown = ReadOnlyCollection<LatticeSchemaComplianceRuleCount>.Empty,
+            RuleCount = 1,
+        };
+--- END

@@ -1,0 +1,12 @@
+# UndecodableCountedNonCompliant: an undecodable value is non-compliant under the decode reason.
+MODULE: SchemaComplianceScan
+ROW: UndecodableCountedNonCompliant
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminUndecodableTests.ScanCompliance_after_a_decode_fault_judges_the_rest_from_the_stored_form, SchemaComplianceUndecodableValueIntegrationTests.ScanComplianceAsync_counts_undecodable_values_as_non_compliant_and_completes
+SUMMARY: an undecodable value is counted compliant
+
+--- FIND
+                reason = SchemaUndecodableValue.Reason(ex);
+--- REPLACE
+                reason = null;
+--- END

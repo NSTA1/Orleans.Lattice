@@ -1,0 +1,13 @@
+# CancelledOnlyOnRequest: a cancel names the remediation it stops.
+MODULE: SchemaDurableOperation
+ROW: CancelledOnlyOnRequest
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.CancelAsync_for_another_operation_leaves_the_remediation_running
+SUMMARY: the coordinator cancels its remediation for any operation id
+
+--- FIND
+            || !string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal)
+
+--- REPLACE
+
+--- END

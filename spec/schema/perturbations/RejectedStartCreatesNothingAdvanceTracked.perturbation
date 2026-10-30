@@ -1,0 +1,14 @@
+# RejectedStartCreatesNothing: a refused start creates no operation.
+MODULE: SchemaDurableOperation
+ROW: RejectedStartCreatesNothing
+FILE: src/lattice.schema/SchemaOperationService.cs
+DETECTORS: LatticeSchemaOperationsIntegrationTests.An_advance_that_does_not_advance_rejects_before_creating_an_operation
+SUMMARY: an advance that does not advance is tracked before it fails
+
+--- FIND
+        if (newTargetVersion <= current.TargetVersion)
+
+--- REPLACE
+        if (newTargetVersion <= current.TargetVersion && current.SchemaId == uint.MaxValue)
+
+--- END

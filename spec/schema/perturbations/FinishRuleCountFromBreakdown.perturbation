@@ -1,0 +1,12 @@
+# Finish: the report carries the start policy's rule count.
+MODULE: SchemaComplianceScan
+ROW: Finish
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: LatticeSchemaComplianceAdminTests.ScanCompliance_rule_count_matches_policy_not_failure_population
+SUMMARY: the report's rule count is taken from the failure breakdown
+
+--- FIND
+            RuleCount = policy.RuleCount,
+--- REPLACE
+            RuleCount = tally.Breakdown?.Count ?? 0,
+--- END

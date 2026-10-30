@@ -1,0 +1,12 @@
+# TypeOK pairing: the counting phase hands over to an undeclared phase.
+MODULE: TypeOKCountUndeclaredPhase
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the count moves the scan to a phase the operation does not declare
+PERTURBS: Count
+
+--- FIND
+    /\ phase' = "Scanning" /\ total' = LiveCount /\ totalKnown' = TRUE
+--- REPLACE
+    /\ phase' = "Counted" /\ total' = LiveCount /\ totalKnown' = TRUE
+--- END

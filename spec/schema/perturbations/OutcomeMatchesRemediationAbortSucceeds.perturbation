@@ -1,0 +1,18 @@
+# OutcomeMatchesRemediation: an aborted remediation reads failed.
+MODULE: SchemaDurableOperation
+ROW: OutcomeMatchesRemediation
+FILE: src/lattice.schema/SchemaOperationService.cs
+DETECTORS: SchemaOperationServiceTests.ToCompletion_records_an_aborted_remediation_as_failed_naming_the_offending_value
+SUMMARY: an aborted remediation is recorded as succeeded
+
+--- FIND
+            AddRemediationId(result, report);
+            return new LatticeOperationCompletion
+            {
+                State = LatticeOperationState.Failed,
+--- REPLACE
+            AddRemediationId(result, report);
+            return new LatticeOperationCompletion
+            {
+                State = LatticeOperationState.Succeeded,
+--- END

@@ -1,0 +1,14 @@
+# The pre-#4966 shape: a refused start returns a handle to an operation that never existed.
+MODULE: HandleHasRecordRejectedHandle
+TARGET: HandleHasRecord
+CLASS: Invariant
+SUMMARY: a start refused at admission still hands the caller a handle
+PERTURBS: StartRejected
+
+--- FIND
+    /\ rejects' = rejects + 1
+    /\ UNCHANGED <<alive, crashes, stalls, handles, launches>>
+--- REPLACE
+    /\ rejects' = rejects + 1 /\ handles' = handles \cup {o}
+    /\ UNCHANGED <<alive, crashes, stalls, launches>>
+--- END

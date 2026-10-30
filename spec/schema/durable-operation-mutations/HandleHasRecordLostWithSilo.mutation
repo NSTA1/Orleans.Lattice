@@ -1,0 +1,20 @@
+# The record is durable grain state; losing it with the runner's silo strands every handle.
+MODULE: HandleHasRecordLostWithSilo
+TARGET: HandleHasRecord
+CLASS: Invariant
+SUMMARY: a silo's death also loses the records of operations it ran
+PERTURBS: Crash
+
+--- FIND
+    /\ alive' = [alive EXCEPT ![s] = FALSE]
+    /\ crashes' = crashes + 1
+    /\ UNCHANGED <<stalls, rejects, handles, launches>>
+    /\ UNCHANGED opVars /\ UNCHANGED remVars
+--- REPLACE
+    /\ alive' = [alive EXCEPT ![s] = FALSE]
+    /\ crashes' = crashes + 1
+    /\ opState' = [o \in Ops |-> IF opRunner[o] = s THEN "Absent" ELSE opState[o]]
+    /\ UNCHANGED <<stalls, rejects, handles, launches>>
+    /\ UNCHANGED <<opRunner, opParams, opCancel, opWork, opFollows, opSeen, opOutcome, opResultRem>>
+    /\ UNCHANGED remVars
+--- END

@@ -1,0 +1,17 @@
+# A partial pass must never read as a compliance report.
+MODULE: ReportOnlyWhenSucceededCancelPublishes
+TARGET: ReportOnlyWhenSucceeded
+CLASS: Invariant
+SUMMARY: a cancelled scan publishes its partial counts as a report
+PERTURBS: Cancel
+
+--- FIND
+    /\ Running
+    /\ phase' = "Cancelled"
+    /\ UNCHANGED envVars /\ UNCHANGED reportVars
+--- REPLACE
+    /\ Running
+    /\ phase' = "Cancelled"
+    /\ hasReport' = TRUE
+    /\ UNCHANGED envVars /\ UNCHANGED <<repHasPolicy, repRuleCount, repReasons>>
+--- END

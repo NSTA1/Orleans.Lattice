@@ -1,0 +1,12 @@
+# DetectLoss(o): a read fails a live record whose runner's silo is dead.
+MODULE: SchemaDurableOperation
+ROW: DetectLoss(o)
+FILE: src/lattice/Operations/LatticeOperationGrain.cs
+DETECTORS: LatticeOperationGrainTests.A_running_operation_whose_runner_silo_is_dead_reads_as_failed
+SUMMARY: a read never fails a record whose runner silo is dead
+
+--- FIND
+        if (record.RunnerSilo is { } silo && liveness.IsDead(silo))
+--- REPLACE
+        if (record.RunnerSilo is { } silo && liveness.IsDead(silo) && !liveness.IsDead(silo))
+--- END
