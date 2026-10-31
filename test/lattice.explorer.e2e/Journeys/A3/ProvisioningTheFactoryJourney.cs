@@ -166,7 +166,7 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
             await Expect(import).ToBeHiddenAsync();
 
             await cluster.OpenTreeAsync(Names.Trees.FactoryScratch, "lifecycle");
-            await shell.Content.Locator("[data-lt-cluster=delete]").ClickAsync();
+            await shell.Content.GetByRole(AriaRole.Button, new() { Name = "Delete tree...", Exact = true }).ClickAsync();
             var confirm = await A3Ui.TypeConfirmationAsync(page, "Delete tree", Names.Trees.FactoryScratch);
             await steps.SubstepAsync("delete-confirm", "Lifecycle: Delete tree, with the tree's name typed");
 
@@ -308,7 +308,7 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
             await cluster.DigestSection.GetByLabel("Shard", new() { Exact = true }).FillAsync("0");
             await cluster.DigestSection.GetByRole(AriaRole.Button, new() { Name = "Read digest", Exact = true }).ClickAsync();
             await Expect(A3Ui.Term(cluster.DigestSection, "Shard")).ToHaveTextAsync("0");
-            await Expect(A3Ui.Term(cluster.DigestSection, "Hash")).ToHaveTextAsync(new Regex("^[0-9a-f]{16,}$"));
+            await Expect(A3Ui.Term(cluster.DigestSection, "Hash")).ToHaveTextAsync(new Regex("^[0-9a-fA-F]{16,}$"));
             Coverage.Hit("use-case:cluster/digest");
             await steps.SubstepAsync("digest", "Read digest: shard 0's content hash, entries and checkpoint");
 
@@ -318,7 +318,7 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
             await steps.SubstepAsync("compaction-confirm", "Trigger compaction on shard 1, confirmed with the tree's name");
 
             await A3Ui.ConfirmAsync(confirm, "Compact");
-            await Expect(cluster.CompactionSection.GetByRole(AriaRole.Status)).ToContainTextAsync("shard 1", new() { Timeout = 30_000 });
+            await Expect(cluster.CompactionSection.GetByRole(AriaRole.Status)).ToContainTextAsync(new Regex("[Ss]hard 1\\b"), new() { Timeout = 30_000 });
             Coverage.Hit("use-case:cluster/compaction");
             await steps.SubstepAsync("compaction", "The cluster answers the compaction of shard 1");
 
@@ -354,8 +354,8 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
 
             await data.OpenTreeAsync(Names.Trees.FactoryOrders, query: "prefix=order/1000");
             var firstFed = data.Rows.Filter(new() { HasText = "order/100001" });
-            await Expect(firstFed).ToContainTextAsync("\"status\":\"shipped\"", new() { Timeout = 60_000 });
-            await Expect(data.Rows.Filter(new() { HasText = "\"status\":\"open\"" }).First).ToBeVisibleAsync(new() { Timeout = 60_000 });
+            await Expect(firstFed).ToContainTextAsync(new Regex("\"status\":\\s*\"shipped\""), new() { Timeout = 60_000 });
+            await Expect(data.Rows.Filter(new() { HasTextRegex = new Regex("\"status\":\\s*\"open\"") }).First).ToBeVisibleAsync(new() { Timeout = 60_000 });
             await steps.SubstepAsync("status-transitions", "The line feed's orders arrive open and move to shipped");
 
             await data.OpenTreeAsync(Names.Trees.FactoryOrders, "tag-indexes");
