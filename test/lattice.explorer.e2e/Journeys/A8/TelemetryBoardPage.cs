@@ -74,7 +74,7 @@ internal sealed class TelemetryBoardPage(ShellPage shell) : A8PageObject(shell)
                 await series.First.WaitForAsync(new() { Timeout = 15_000 });
                 return true;
             }
-            catch (PlaywrightException)
+            catch (Exception exception) when (exception is PlaywrightException or System.TimeoutException)
             {
                 // Prometheus has not scraped the writes into this window yet: read the charts again.
                 await Refresh.ClickAsync();
