@@ -6,8 +6,8 @@
  * are filled nodes, the current one is the join node, the rest are hollow), and
  * notes. Tables, dialogs, fields and pills are the Shell's primitives.
  *
- * No width query appears here: the compact band is the layout's
- * lt-shell--compact class. The marker paints only aria-current states, always
+ * The compact band queries the Shell root's lt-viewport container at the
+ * breakpoint layer's declared width. The marker paints only aria-current states, always
  * with a weight or a rule. No shadows on the page, no cards.
  *
  * Plain ASCII only: the repository's hygiene gates scan this file.
@@ -226,8 +226,10 @@
   white-space: nowrap;
 }
 
-.lt-shell--compact .lt-schema-stages {
-  flex-direction: column;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-schema-stages {
+    flex-direction: column;
+  }
 }
 
 .lt-schema-result,
@@ -292,12 +294,14 @@
   border-left: 1px solid var(--lt-rule);
 }
 
-.lt-shell--compact .lt-schema-rulebuilder__aside {
-  max-width: none;
-  padding-left: 0;
-  padding-top: var(--lt-space-3);
-  border-left: 0;
-  border-top: 1px solid var(--lt-rule);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-schema-rulebuilder__aside {
+    max-width: none;
+    padding-left: 0;
+    padding-top: var(--lt-space-3);
+    border-left: 0;
+    border-top: 1px solid var(--lt-rule);
+  }
 }
 
 /* The rule set, as a chain of sentences. */
@@ -616,8 +620,10 @@
   gap: var(--lt-space-2);
 }
 
-.lt-shell--compact .lt-schema-gallery {
-  grid-template-columns: minmax(0, 1fr);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-schema-gallery {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .lt-schema-gallery__option {
