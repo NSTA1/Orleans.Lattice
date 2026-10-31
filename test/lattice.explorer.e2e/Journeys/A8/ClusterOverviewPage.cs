@@ -55,9 +55,10 @@ internal sealed class ClusterOverviewPage(ShellPage shell) : A8PageObject(shell)
     /// <param name="dialog">The open confirmation.</param>
     public async Task MeasureToTheEndAsync(ConfirmDialog dialog)
     {
+        var before = await MeasuredAsync();
         await dialog.ConfirmAsync("Re-measure");
-        await Expect(Term("Measured")).ToContainTextAsync("Re-measured by a leaf walk at", new() { Timeout = (float)Structural.TotalMilliseconds });
-        await Expect(Measure).ToBeVisibleAsync();
+        await UntilAsync("the re-measured figures", async () => await FinishedSinceAsync(before), Structural);
+        await Expect(Term("Measured")).ToContainTextAsync("Re-measured by a leaf walk at");
         await Expect(RefreshError).ToHaveCountAsync(0);
         Coverage.Hit("use-case:cluster/overview-re-measure");
     }
@@ -67,11 +68,12 @@ internal sealed class ClusterOverviewPage(ShellPage shell) : A8PageObject(shell)
     /// </summary>
     /// <param name="dialog">The open confirmation.</param>
     /// <returns>
-    /// <see langword="true"/> when the stop was pressed while the re-measure ran;
-    /// <see langword="false"/> when the leaf walk finished before the overview could offer the stop.
+    /// <see langword="true"/> when the stop was pressed while the re-measure ran and the overview
+    /// says why it ended; <see langword="false"/> when the leaf walk finished first.
     /// </returns>
     public async Task<bool> MeasureAndStopAsync(ConfirmDialog dialog)
     {
+        var before = await MeasuredAsync();
         await dialog.ConfirmAsync("Re-measure");
         var pressed = false;
         await UntilAsync("the re-measure running, or finished", async () =>
@@ -83,14 +85,22 @@ internal sealed class ClusterOverviewPage(ShellPage shell) : A8PageObject(shell)
                 return true;
             }
 
-            return await Measure.IsVisibleAsync();
+            return await FinishedSinceAsync(before);
         }, TimeSpan.FromMinutes(2));
 
         // The cluster honours the stop at the walk's next progress report, so the walk can
         // still finish first; either way the overview ends with the measure button back.
         await Expect(Measure).ToBeVisibleAsync(new() { Timeout = (float)Structural.TotalMilliseconds });
+        await Expect(Stop).ToHaveCountAsync(0);
         return pressed && await RefreshError.IsVisibleAsync();
     }
+
+    // A walk has finished when the measure button is back and the Measured line has moved on
+    // from what it said before the walk was asked for (it names the instant it measured).
+    private async Task<bool> FinishedSinceAsync(string before) =>
+        await Measure.IsVisibleAsync() && await Stop.CountAsync() == 0 && await MeasuredAsync() != before;
+
+    private async Task<string> MeasuredAsync() => (await Term("Measured").TextContentAsync())?.Trim() ?? string.Empty;
 
     /// <summary>Sees the overview say the re-measure was stopped.</summary>
     public Task ExpectStoppedAsync() => Expect(RefreshError).ToHaveTextAsync(StoppedText);
