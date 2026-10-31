@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 /// <para>
 /// The Explorer has no single clock or rate component to target, so the defaults match
 /// volatile <em>text</em> in the leaf elements that carry values (<c>code</c>, <c>kbd</c>,
-/// <c>samp</c>, <c>time</c>, table and definition cells): the run's loopback endpoints (their
+/// <c>samp</c>, <c>time</c>, table and definition cells, and a dialog's description, which names the endpoint): the run's loopback endpoints (their
 /// ports are free ports), wall times and dates (clocks and HLC stamps, which the Explorer
 /// writes as <c>yyyy-MM-dd HH:mm:ss UTC</c>), durations ago, rates, and GUID-shaped operation
 /// ids. Any element carrying <c>data-lt-volatile</c> is masked too, which is the hook to add
@@ -25,7 +25,7 @@ public static partial class JourneyMasks
     public const string Colour = "#FF00FF";
 
     /// <summary>The leaf elements whose text the defaults match.</summary>
-    public const string ValueElements = "code, kbd, samp, time, td, th, dd, .lt-mono-cell__value, .lt-pill__text";
+    public const string ValueElements = "code, kbd, samp, time, td, th, dd, .lt-mono-cell__value, .lt-pill__text, .lt-dialog__description";
 
     /// <summary>Volatile text: what makes an element a mask under the defaults.</summary>
     public static Regex VolatileText { get; } = VolatileTextPattern();
