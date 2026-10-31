@@ -99,7 +99,7 @@ public sealed class A10Contract() : ChapterContract("A10")
         {
             await ContractWait.UntilAsync("the catalogue to list A10's backups", async () =>
             {
-                catalogue = await ContractCalls.BackupsAsync(backup, newestFirst: false);
+                catalogue = await ContractCalls.BackupsAsync(backup);
                 return HistoricalCount(catalogue) >= Names.Backups.HistoricalCount
                     && expected.All(name => catalogue.Any(manifest => manifest.Name == name))
                     && catalogue.Count(manifest => manifest.SetName == Names.Backups.FactorySet1) >= 2;
@@ -108,15 +108,6 @@ public sealed class A10Contract() : ChapterContract("A10")
         catch (TimeoutException)
         {
             // The assertions below name what is missing.
-        }
-
-        // The Explorer's catalogue reads the newest-first index; report any row it lacks that
-        // the catalogue itself holds, so a lagging or lossy index is visible in the run.
-        var indexed = await ContractCalls.BackupsAsync(backup);
-        var unindexed = expected.Where(name => catalogue.Any(manifest => manifest.Name == name) && !indexed.Any(manifest => manifest.Name == name)).ToList();
-        if (unindexed.Count > 0)
-        {
-            TestContext.Progress.WriteLine($"A10: the newest-first catalogue index lacks {string.Join(", ", unindexed)} ({indexed.Count} indexed, {catalogue.Count} catalogued).");
         }
 
         Require(

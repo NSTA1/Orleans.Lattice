@@ -229,15 +229,10 @@ public static class ContractCalls
         await ContractWait.UntilAsync($"the purge of {treeId}", () => TreeIsPurgedAsync(admin, treeId));
     }
 
-    /// <summary>
-    /// Every catalogued backup of <paramref name="treeId"/> (or of every tree): newest first from
-    /// the catalogue index, or with <paramref name="newestFirst"/> off in backup-id order streamed
-    /// from the catalogue itself (the store of record; the tree filter is applied here).
-    /// </summary>
+    /// <summary>Every catalogued backup of <paramref name="treeId"/> (or of every tree), newest first.</summary>
     /// <param name="backup">The Backup API.</param>
     /// <param name="treeId">The tree, or <see langword="null"/> for every tree.</param>
-    /// <param name="newestFirst">Whether to read the newest-first index listing.</param>
-    public static async Task<IReadOnlyList<BackupManifest>> BackupsAsync(LatticeBackupApiGrpcClient backup, string? treeId = null, bool newestFirst = true)
+    public static async Task<IReadOnlyList<BackupManifest>> BackupsAsync(LatticeBackupApiGrpcClient backup, string? treeId = null)
     {
         var manifests = new List<BackupManifest>();
         string? token = null;
@@ -248,14 +243,14 @@ public static class ContractCalls
                 PageSize = 200,
                 PageToken = token,
                 TreeId = treeId,
-                OrderByCreatedDescending = newestFirst,
+                OrderByCreatedDescending = true,
             });
             manifests.AddRange(page.Entries);
             token = page.NextPageToken;
         }
         while (token is not null);
 
-        return newestFirst || treeId is null ? manifests : [.. manifests.Where(manifest => manifest.Scope.TreeId == treeId)];
+        return manifests;
     }
 
     /// <summary>The newest catalogued backup named <paramref name="name"/>, or <see langword="null"/>.</summary>
