@@ -8,12 +8,12 @@ command:backups.capture	command	BackupsArea.CaptureCommandId	The palette command
 command:cluster.create-tree	command	ClusterArea.CreateTreeCommandId	New tree... from the Cluster trees list (G4)	A3
 command:cluster.plan-wal-move	command	ClusterArea.PlanWalMoveCommandId	The palette command cluster.plan-wal-move	A8
 command:cluster.reshard-tree	command	ClusterArea.ReshardCommandId	The palette command cluster.reshard-tree	A8
-command:data.create-view	command	pending:#5369	New view... on a tree's Views tab (G5)	A3
-command:data.delete-entry	command	pending:#5367	Delete... an entry (G3)	U1
-command:data.edit-entry	command	pending:#5367	Edit... an entry (G3)	U1
-command:data.export	command	pending:#5366	Export... a tree or prefix as a streamed download (G2)	U1
+command:data.create-view	command	DataArea.CreateViewCommandId	New view... on a tree's Views tab (G5)	A3
+command:data.delete-entry	command	DataEntryCommands.DeleteEntryId	Delete... an entry (G3)	U1
+command:data.edit-entry	command	DataEntryCommands.EditEntryId	Edit... an entry (G3)	U1
+command:data.export	command	DataArea.ExportCommandId	Export... a tree or prefix as a streamed download (G2)	U1
 command:data.import	command	pending:#5365	Import... NDJSON or CSV into a tree (G1)	A3
-command:data.new-entry	command	pending:#5367	New entry... in a tree (G3)	U1
+command:data.new-entry	command	DataEntryCommands.NewEntryId	New entry... in a tree (G3)	U1
 command:data.refresh	command	DataArea.RefreshCommandId	The palette command data.refresh	U1
 command:go.home	command	ChromeCommands.GoHomeId	The palette command go.home	A1
 command:replication.refresh	command	ReplicationArea.RefreshCommandId	The palette command replication.refresh	A7
@@ -75,7 +75,7 @@ query:cluster.target	query	ClusterAddresses.TargetQuery	The ?target= query key i
 query:cluster.tree	query	ClusterAddresses.TreeQuery	The ?tree= query key in cluster	A12
 query:data.filter	query	DataTabs.FilterQuery	The ?filter= query key in data	U1
 query:data.index	query	DataTabs.IndexQuery	The ?index= query key in data	U1
-query:data.new	query	pending:#5369	The ?new= query key in data, which opens a tree's New view dialog (G5)	A3
+query:data.new	query	DataTabs.NewQuery	The ?new= query key in data, which opens a tree's New view dialog (G5)	A3
 query:data.tab	query	DataTabs.TabQuery	The ?tab= query key in data	U1
 query:data.tag	query	DataTabs.TagQuery	The ?tag= query key in data	U1
 query:replication.app	query	ReplicationAddresses.AppQuery	The ?app= query key in replication	A7
@@ -318,7 +318,7 @@ use-case:data/alias-resolution	use-case	docs/lattice.explorer/areas.md#data	An a
 use-case:data/app-column	use-case	docs/lattice.explorer/areas.md#data	The directory's App column names the app that owns a tree	U3
 use-case:data/app-data-live	use-case	docs/lattice.explorer/areas.md#data	An app's data arrives live in Data	U3
 use-case:data/cursor-expiry	use-case	docs/lattice.explorer/areas.md#data	An expired scan cursor recovers with Restart from the first page	U1
-use-case:data/dead-letters-paging	use-case	docs/lattice.explorer/areas.md#data	Dead letters list diverted writes; Load more dead letters pages through them	U1
+use-case:data/dead-letters-paging	use-case	docs/lattice.explorer/areas.md#data	Dead letters list diverted writes; Load more dead letters pages through them	C1
 use-case:data/directory-filters	use-case	docs/lattice.explorer/areas.md#data	The Data directory's text, kind and shared filters, and Refresh	U1
 use-case:data/edit-diverted	use-case	docs/lattice.explorer/areas.md#data	An invalid edit saved anyway is diverted to dead letters, and the UI says so	U1
 use-case:data/entry-edit-binary-and-raw	use-case	docs/lattice.explorer/areas.md#data	Replace a binary value, and edit a value in raw UTF-8 mode	U1
@@ -447,3 +447,5 @@ use-case:tenancy/switching	use-case	docs/lattice.explorer/tenant-scope.md#switch
 use-case:tenancy/tenant-access	use-case	docs/lattice.explorer/tenant-scope.md#tenant-access	A tenant administrator manages the tenant's own access	T2
 use-case:tenancy/tenant-group-confinement	use-case	docs/lattice.explorer/tenant-scope.md#tenant-rules-on-the-cluster-pages	A rule naming a tenant group is confined to that tenant's trees	T3
 use-case:tenancy/what-is-scoped	use-case	docs/lattice.explorer/tenant-scope.md#what-is-scoped	Tenant-rooted variants of every area root and child page	T7
+use-case:data/entry-create-edit-delete	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	Create, edit and delete a single entry, with the schema preview and the concurrent-change warning	U1
+use-case:data/export	use-case	docs/lattice.explorer/areas.md#exporting-a-tree	Export a tree, prefix or key range as a streamed NDJSON or CSV download	U1

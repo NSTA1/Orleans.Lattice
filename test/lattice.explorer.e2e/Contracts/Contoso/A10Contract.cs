@@ -82,12 +82,29 @@ public sealed class A10Contract() : ChapterContract("A10")
     {
         var facades = ContractFacades.Of(context);
         var backup = facades.Backup;
-        var catalogue = await ContractCalls.BackupsAsync(backup);
         var offboarded = context.IsProduced("C3");
 
+        // A just-captured backup can be missing from the listing for a moment: the catalogue
+        // hides a row until its manifest is in the backup store. Read until it settles.
+        IReadOnlyList<BackupManifest> catalogue = [];
+        try
+        {
+            await ContractWait.UntilAsync("the catalogue to list A10's backups", async () =>
+            {
+                catalogue = await ContractCalls.BackupsAsync(backup);
+                return HistoricalCount(catalogue) >= Names.Backups.HistoricalCount
+                    && catalogue.Any(manifest => manifest.Name == Names.Backups.LinesInc1)
+                    && catalogue.Count(manifest => manifest.SetName == Names.Backups.FactorySet1) >= 2;
+            }, TimeSpan.FromMinutes(2));
+        }
+        catch (TimeoutException)
+        {
+            // The assertions below name what is missing.
+        }
+
         Require(
-            catalogue.Count(manifest => manifest.Name.StartsWith(ContosoHarness.HistoricalBackupPrefix, StringComparison.Ordinal)) >= Names.Backups.HistoricalCount,
-            "the 60 historical telemetry backups are catalogued");
+            HistoricalCount(catalogue) >= Names.Backups.HistoricalCount,
+            $"the 60 historical telemetry backups are catalogued ({HistoricalCount(catalogue)} listed)");
         RequireBackup(catalogue, Names.Backups.OrdersPrefix0001, BackupKind.Full, BackupScopeSelector.Prefix(Names.Trees.FactoryOrders, Names.Orders.BackupPrefix));
         RequireBackup(catalogue, Names.Backups.OrdersKey42, BackupKind.Full, BackupScopeSelector.Key(Names.Trees.FactoryOrders, Names.Orders.Order42));
         if (!offboarded)
@@ -147,6 +164,9 @@ public sealed class A10Contract() : ChapterContract("A10")
 
     private void RequireBackup(IReadOnlyList<BackupManifest> catalogue, string name, BackupKind kind, BackupScopeSelector scope) =>
         Require(catalogue.Any(manifest => manifest.Name == name && manifest.Kind == kind && manifest.Scope == scope), $"{name} is a {kind} backup of {scope.Kind} {scope.TreeId} {scope.KeyOrPrefix}");
+
+    private static int HistoricalCount(IReadOnlyList<BackupManifest> catalogue) =>
+        catalogue.Select(manifest => manifest.Name).Where(name => name.StartsWith(ContosoHarness.HistoricalBackupPrefix, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).Count();
 
     private static int RateOf(byte[] value)
     {

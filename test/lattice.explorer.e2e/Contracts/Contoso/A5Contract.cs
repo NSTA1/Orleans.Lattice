@@ -35,8 +35,8 @@ public sealed class A5Contract() : ChapterContract("A5")
     public override async Task EstablishAsync(ChapterContext context)
     {
         var apps = ContractFacades.Of(context).Apps;
-        var installed = await apps.DescribeAsync(Apps.TaskBoard);
-        if (installed is null or { State: AppLifecycleState.NotInstalled or AppLifecycleState.Uninstalled })
+        var installed = await InstalledAsync(apps);
+        if (installed is null)
         {
             await apps.InstallAsync(new AppInstallRequest
             {
@@ -47,12 +47,12 @@ public sealed class A5Contract() : ChapterContract("A5")
                 RoleBindings = [Bindings[0], Bindings[1]],
             });
             await apps.EnableAsync(Apps.TaskBoard);
-            installed = await apps.DescribeAsync(Apps.TaskBoard);
         }
 
-        if (installed!.Version != Apps.TaskBoardNextVersion)
+        var current = (await apps.DescribeAsync(Apps.TaskBoard))!;
+        if (current.Version != Apps.TaskBoardNextVersion)
         {
-            await apps.UpdateRoleBindingsAsync(new AppRoleBindingsUpdate { Slug = Apps.TaskBoard, Version = installed.Version, RoleBindings = Bindings });
+            await apps.UpdateRoleBindingsAsync(new AppRoleBindingsUpdate { Slug = Apps.TaskBoard, Version = current.Version, RoleBindings = Bindings });
             await apps.InstallAsync(new AppInstallRequest
             {
                 Slug = Apps.TaskBoard,
@@ -62,9 +62,9 @@ public sealed class A5Contract() : ChapterContract("A5")
                 RoleBindings = Bindings,
             });
         }
-        else if (!SameBindings(installed.RoleBindings))
+        else if (!SameBindings(current.RoleBindings))
         {
-            await apps.UpdateRoleBindingsAsync(new AppRoleBindingsUpdate { Slug = Apps.TaskBoard, Version = installed.Version, RoleBindings = Bindings });
+            await apps.UpdateRoleBindingsAsync(new AppRoleBindingsUpdate { Slug = Apps.TaskBoard, Version = current.Version, RoleBindings = Bindings });
         }
 
         if ((await apps.DescribeAsync(Apps.TaskBoard))!.State != AppLifecycleState.Enabled)
@@ -95,6 +95,16 @@ public sealed class A5Contract() : ChapterContract("A5")
         Require(app.Replication.Length > 0, "its tree is declared replicated by its manifest");
         Require((await ContractFacades.Of(context).TreeAdmin.CheckTreeExistsAsync(TaskBoardTree)).Exists, "its tasks tree exists");
     }
+
+    /// <summary>
+    /// The task board's live install in the caller's scope, or <see langword="null"/> when it is
+    /// not installed. Read from the installed-app list: describing an app that is not installed
+    /// is refused (FailedPrecondition), not answered empty.
+    /// </summary>
+    /// <param name="apps">The Apps API.</param>
+    public static async Task<AppSummary?> InstalledAsync(Orleans.Lattice.Api.Apps.Grpc.LatticeAppsApiGrpcClient apps) =>
+        (await apps.ListAsync()).Apps.FirstOrDefault(app =>
+            app.Slug == Apps.TaskBoard && app.State is not (AppLifecycleState.NotInstalled or AppLifecycleState.Uninstalled));
 
     private static bool SameBindings(ImmutableArray<AppRoleBindingDescriptor> bindings) =>
         bindings.Length == Bindings.Length

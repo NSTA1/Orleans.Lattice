@@ -41,7 +41,7 @@ public sealed class C3Contract() : ChapterContract("C3")
         }
 
         var apps = facades.Apps;
-        if (await apps.DescribeAsync(Names.Apps.TaskBoard) is { State: not (AppLifecycleState.Uninstalled or AppLifecycleState.NotInstalled) } app)
+        if (await A5Contract.InstalledAsync(apps) is { } app)
         {
             if (app.State == AppLifecycleState.Enabled)
             {
@@ -106,8 +106,8 @@ public sealed class C3Contract() : ChapterContract("C3")
         Require(!rules.Any(rule => rule.RuleId == Names.Rules.StewardsFactory), "stewards-factory is gone");
         Require(!rules.Any(rule => rule.Subject == LatticeSubjectSelector.User(Personas.Priya.Id) || rule.Subject == LatticeSubjectSelector.Group(Names.Groups.DataStewards)), "no rule names priya or her group");
 
-        var app = await facades.Apps.DescribeAsync(Names.Apps.TaskBoard);
-        Require(app is null or { State: AppLifecycleState.Uninstalled or AppLifecycleState.NotInstalled }, $"the task board is uninstalled ({app?.State})");
+        var app = await A5Contract.InstalledAsync(facades.Apps);
+        Require(app is null, $"the task board is uninstalled ({app?.State})");
 
         foreach (var region in new[] { JourneyEstate.West, JourneyEstate.East })
         {

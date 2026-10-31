@@ -35,6 +35,14 @@ public sealed class A8Contract() : ChapterContract("A8")
         var admin = ContractFacades.Of(context).TreeAdmin;
         var telemetry = Names.Trees.FactoryTelemetry;
 
+        // Reshard before resizing: a resize stays undoable until its previous copy is purged,
+        // and while it can be undone the tree's shards cannot be split or folded.
+        if (!await ReshardedAsync(admin))
+        {
+            await admin.ReshardTreeAsync(telemetry, TelemetryShardCount);
+            await ContractWait.UntilAsync("the telemetry reshard", async () => await ReshardedAsync(admin), StructuralPatience);
+        }
+
         var resize = await admin.GetResizeStatusAsync(telemetry);
         if (resize.CurrentMaxLeafKeys != TelemetryMaxLeafKeys || resize.CurrentMaxInternalChildren != TelemetryMaxInternalChildren)
         {
@@ -42,9 +50,6 @@ public sealed class A8Contract() : ChapterContract("A8")
         }
 
         await ContractWait.UntilAsync("the telemetry resize", async () => await ResizedAsync(admin), StructuralPatience);
-
-        await admin.ReshardTreeAsync(telemetry, TelemetryShardCount);
-        await ContractWait.UntilAsync("the telemetry reshard", async () => await ReshardedAsync(admin), StructuralPatience);
 
         if (!await ContractCalls.TreeIsLiveAsync(admin, Names.Trees.FactoryOrdersSnapshot))
         {
