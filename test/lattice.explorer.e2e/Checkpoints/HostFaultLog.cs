@@ -23,15 +23,7 @@ public sealed partial class HostFaultLog
     /// of these is reported as expected, never as a failure. Add an entry only with an issue,
     /// and remove it when the issue is fixed.
     /// </summary>
-    internal static IReadOnlyList<KnownHostRecord> Expected { get; } =
-    [
-        // #5442: GrainStorageFencingProbe deliberately writes its reserved probe row with a stale
-        // ETag on every silo start; the rejection is the success case, but the Azure Table
-        // provider logs every rejected write at Error (event 200107) before it throws.
-        new("#5442", new Regex(
-            @"^fail: Orleans\.Storage\.AzureTableGrainStorage\[200107\]\s+Error Writing: GrainType=_lattice_grain-storage-fencing-probe GrainId=_lattice_grain-storage-fencing-probe/probe .*InconsistentStateException: Table storage condition not Satisfied\.",
-            RegexOptions.Singleline)),
-    ];
+    internal static IReadOnlyList<KnownHostRecord> Expected { get; } = [];
 
     private readonly Func<IEnumerable<HostLogSource>> _sources;
     private readonly Dictionary<string, long> _offsets = new(StringComparer.Ordinal);
