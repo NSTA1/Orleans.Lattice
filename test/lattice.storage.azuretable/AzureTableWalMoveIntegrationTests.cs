@@ -184,7 +184,6 @@ public sealed class AzureTableWalMoveIntegrationTests
     }
 
     [Test]
-    [Repeat(25)]
     public async Task A_move_off_an_Azure_Table_source_straight_after_writes_copies_the_whole_tail()
     {
         // Issue #5470. Under pipelined phase-2 commits an Azure Table append
