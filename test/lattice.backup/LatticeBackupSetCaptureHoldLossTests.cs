@@ -246,7 +246,7 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
         Assert.Multiple(() =>
         {
             Assert.That(result.SetManifest.Fence!.Attempts, Is.EqualTo(2), "the first attempt must have been discarded");
-            Assert.That(listed.Where(m => stampedIds.Contains(m.Id)).Select(m => m.SetId),
+            Assert.That(listed.Where(m => stampedIds.Contains(m.Id)).Select(m => m.SetId).ToList(),
                 Has.Count.EqualTo(2).And.All.EqualTo(result.SetManifest.SetId), "the accepted attempt's members are listed, stamped");
             Assert.That(unstamped.Select(m => m.Scope.TreeId), Is.EquivalentTo(new[] { treeA, treeB }),
                 "the discarded attempt's members are listed beside them");
