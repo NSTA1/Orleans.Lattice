@@ -42,6 +42,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The Explorer reflected by the feature catalogue is an ASP.NET Core library; the framework supplies its runtime packages. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="NUnit.Framework" />
   </ItemGroup>
 
@@ -52,6 +57,8 @@
     <ProjectReference Include="..\..\src\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <!-- Reflected by the feature catalogue (FeatureCoverage/ExplorerSurface.cs, #5361); the journeys drive it out of process. -->
+    <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
   </ItemGroup>
 
   <!--

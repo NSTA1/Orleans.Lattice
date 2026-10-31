@@ -28,6 +28,8 @@ on:
       - '!test/lattice.explorer.e2e/**/*.md'
       - 'src/lattice.explorer/**'
       - '!src/lattice.explorer/**/*.md'
+      # The feature catalogue's curated half cites these docs' anchors (#5361).
+      - 'docs/lattice.explorer/**'
       - 'reference-architecture/hosts/Silo/**'
       - 'reference-architecture/hosts/Explorer/**'
       - 'reference-architecture/hosts/Common/**'
@@ -44,6 +46,8 @@ on:
       - '!test/lattice.explorer.e2e/**/*.md'
       - 'src/lattice.explorer/**'
       - '!src/lattice.explorer/**/*.md'
+      # The feature catalogue's curated half cites these docs' anchors (#5361).
+      - 'docs/lattice.explorer/**'
       - 'reference-architecture/hosts/Silo/**'
       - 'reference-architecture/hosts/Explorer/**'
       - 'reference-architecture/hosts/Common/**'
