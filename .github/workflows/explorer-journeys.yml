@@ -423,12 +423,16 @@ jobs:
         run: |
           set -uo pipefail
           docker stop azurite
+          # Actions runs `bash -e`; the expected failure must not end the step
+          # before the verdict.
+          set +e
           dotnet test "$E2E_PROJECT" --no-build --configuration Release \
             --filter "FullyQualifiedName~Orleans.Lattice.Explorer.EndToEnd.Tests.Smoke.EstateSmokeTests" \
             --results-directory "$RESULTS" \
             --logger "trx;LogFileName=fail-closed-probe.trx" \
             --blame-hang-timeout 10m --blame-hang-dump-type none
           code=$?
+          set -e
           docker start azurite
           python3 .github/workflows/explorer-journeys-plan.py probe \
             --trx "$RESULTS/fail-closed-probe.trx" --exit-code "$code"

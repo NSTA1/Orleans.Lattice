@@ -338,6 +338,9 @@ class WiringTests(unittest.TestCase):
         self.assertIn("docker stop azurite", probe)
         self.assertIn("explorer-journeys-plan.py probe", probe)
         self.assertLess(probe.index("docker stop azurite"), probe.index("dotnet test"))
+        # Actions runs `bash -e`: without this the expected failure ends the step before the verdict.
+        self.assertLess(probe.index("set +e"), probe.index("dotnet test"))
+        self.assertLess(probe.index("code=$?"), probe.index("set -e"))
 
     def test_the_coverage_gate_aggregates_every_leg(self):
         block = job(self.text, "coverage-gate")
