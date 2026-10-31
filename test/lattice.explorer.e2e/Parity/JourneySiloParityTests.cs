@@ -37,6 +37,28 @@ public sealed class JourneySiloParityTests
             + "test/lattice.explorer.e2e/Hosts/JourneySilo/Program.cs: " + string.Join(", ", missing));
     }
 
+    /// <summary>
+    /// The journey silo's disclosed deviations from the reference silo's configuration, each
+    /// with its reason. A deviation is a deliberate operator choice the story depends on; this
+    /// list keeps each one visible, and fails when the source no longer carries it.
+    /// </summary>
+    private static readonly (string Source, string Reason)[] Deviations =
+    [
+        ("AddLatticeSchemaEnforcement(options => options.StrictIngest = true)", "dead-letter feature coverage (#5389)"),
+        ("AddLatticeWalStorageProvider(JourneyHostEnvironment.SecondaryWalProviderKey", "a WAL move target for the Cluster area's WAL tools (A8, A12)"),
+    ];
+
+    /// <summary>Every disclosed deviation is still made by the journey silo, so the list cannot rot into fiction.</summary>
+    [Test]
+    public void Every_disclosed_deviation_is_still_made_by_the_journey_silo()
+    {
+        var journey = File.ReadAllText(Path.Combine(JourneyPaths.ProjectDirectory, "Hosts", "JourneySilo", "Program.cs"));
+        var absent = Deviations.Where(deviation => !journey.Contains(deviation.Source, StringComparison.Ordinal))
+            .Select(deviation => $"{deviation.Source} ({deviation.Reason})")
+            .ToArray();
+        Assert.That(absent, Is.Empty, "Disclosed deviations the journey silo no longer makes; remove them from the list: " + string.Join("; ", absent));
+    }
+
     /// <summary>The pattern matches the call shapes the hosts use, and not a lookalike in prose.</summary>
     [Test]
     public void The_pattern_reads_registration_calls_only()
