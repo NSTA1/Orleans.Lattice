@@ -80,8 +80,23 @@ internal sealed partial class FirstContactRun
         for (var press = 0; press < MaximumTabs && !reached; press++)
         {
             await Page.Keyboard.PressAsync("Tab");
-            reached = await Page.EvaluateAsync<bool>(
-                "() => document.activeElement?.getAttribute('data-lt-command') === 'go.schema' && !!document.activeElement.closest('nav[aria-label=\"Estate\"]')");
+            var focused = await Page.EvaluateAsync<string>(
+                """
+                () => {
+                  const element = document.activeElement;
+                  if (element?.getAttribute('data-lt-command') === 'go.schema' && element.closest('nav[aria-label="Estate"]')) { return 'schema'; }
+                  if (element?.tagName === 'BUTTON' && element.closest('header') && element.textContent.trim() === 'Directory') { return 'directory'; }
+                  return '';
+                }
+                """);
+            if (focused == "directory")
+            {
+                // Compact, the spine lives in the Directory sheet: Enter opens it, and Tab carries on inside it.
+                await Page.Keyboard.PressAsync("Enter");
+                await Expect(Shell.DirectorySheet).ToBeVisibleAsync();
+            }
+
+            reached = focused == "schema";
         }
 
         Assert.That(reached, Is.True, $"Tab reaches the spine's Schema stop within {MaximumTabs} presses");

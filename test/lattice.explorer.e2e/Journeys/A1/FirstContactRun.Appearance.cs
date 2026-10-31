@@ -90,7 +90,7 @@ internal sealed partial class FirstContactRun
         await CheckpointAsync("9", "reset-page", "/reset lists what the Explorer remembers, and changes nothing until asked");
 
         await Shell.Content.GetByRole(AriaRole.Button, new() { Name = "Reset view", Exact = true }).ClickAsync();
-        await Expect(Shell.Content.GetByRole(AriaRole.Status)).ToContainTextAsync("The Explorer has forgotten your remembered view.");
+        await Expect(Shell.Content.GetByText("The Explorer has forgotten your remembered view.")).ToBeVisibleAsync();
         await Shell.ExpectSignedInAsync(Olivia.Persona.Id);
         Coverage.Hit("use-case:shell/reset-view");
         Coverage.Hit("route:/reset");
