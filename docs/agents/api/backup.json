@@ -1526,21 +1526,22 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry by reissuing the same request.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+        "policy": "Reissuing is harmless, but the catalog row is removed before the sink manifest and the backup's own artifacts, so a retry after an interruption past that removal finds no catalog row, returns false and does not finish deleting the sink manifest or artifacts.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "idempotency": {
-        "idempotent": true,
-        "basis": "Missing backup returns false.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+        "idempotent": "conditional",
+        "basis": "A missing backup returns false; a completed delete is idempotent, but a delete interrupted after its catalog row was removed is not completed by a retry.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+        "rule": "Delete keeps every artifact still referenced by another retained manifest, matched by artifact id rather than by base chain, then removes the catalog row, the sink manifest and the backup's unshared artifacts in that order.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync",
-        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#DeleteBackup"
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#DeleteBackup",
+        "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       ]
     },
     {

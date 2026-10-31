@@ -1,0 +1,172 @@
+schema: lattice.agents/procedure/v1
+id: repocontext-repository-index
+name: "Onboard, reset or remove a repository's repository-context index"
+surfaces:
+  mcp_tool:
+    api: "repocontext_add_repo"
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildAddRepoTool"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/mcp.json and, for each MCP tool used (repocontext_add_repo, repocontext_bootstrap, repocontext_reset_index, repocontext_remove_repo, repocontext_index_status, repocontext_list_repos, repocontext_health), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/mcp.json"
+  - id: writes-opted-in
+    check: "The host called AddRepoContextTools with enableWrites true; without it none of repocontext_add_repo, repocontext_bootstrap, repocontext_reset_index or repocontext_remove_repo is contributed."
+    source: "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+  - id: host-mode-selects-tools
+    check: "In single-repository mode (workspaceMode false) the onboarding tool is repocontext_bootstrap and repocontext_list_repos, repocontext_add_repo, repocontext_reset_index and repocontext_remove_repo are not offered; in workspace mode (workspaceMode true) repocontext_bootstrap is replaced by repocontext_add_repo, repocontext_reset_index and repocontext_remove_repo, and repocontext_list_repos is added."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+  - id: workspace-root-enforcing
+    check: "Onboarding (repocontext_add_repo or repocontext_bootstrap) requires a non-empty workspaceRoot passed to AddRepoContextTools so the path guard is enforcing; without one neither onboarding tool is advertised, and at invocation each refuses unless the effective guard is enforcing. repocontext_reset_index and repocontext_remove_repo take a repository id, not a path, and are unaffected."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+  - id: write-grant
+    check: "The caller cleared the fail-closed authorization gate with a grant that includes a write-shaped data-plane operation (Write, Delete, RangeDelete, CrdtApply, AtomicWrite or BulkLoad); a caller without such a grant is neither offered nor able to reach the mutating tools."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.MutatingOperations"
+  - id: durable-job-backing
+    check: "A durable grain-storage provider and the Orleans reminder service are configured on the host, because each indexing job is anchored by a reminder that resumes it after a host restart."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+  - id: repo-id-resolved
+    check: "The repository id is resolved from repocontext_list_repos, and its indexedRoot is the tree intended, because an id defaults to the final segment of the registered path and a worktree registered from the wrong root indexes under the base repository's id."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildListReposTool"
+  - id: reset-not-remove-for-repair
+    check: "A wedged, stale or corrupt code index is repaired with repocontext_reset_index followed by repocontext_add_repo, never with repocontext_remove_repo, which also destroys the repository's agent memory."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+  - id: remove-explicit-consent
+    check: "repocontext_remove_repo is called only when a human has explicitly asked for that specific repository's context to be destroyed; the server itself asks for no consent."
+    source: "docs/lattice.api.mcp.repocontext/memory-durability.md"
+  - id: current-region
+    check: "The region argument is omitted, because no peer region serves the repository-context group and a region naming a peer is refused."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+steps:
+  - n: 1
+    action: "Confirm the surface is reachable and read the host retrieval verdict."
+    api: "repocontext_health"
+    expects: "available is true; retrievalReady and retrievalPhase report whether retrieval can serve, and with repoId the passive per-repository verdict and blocking reason."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+  - n: 2
+    action: "Resolve the repository id and its indexed root."
+    api: "repocontext_list_repos"
+    expects: "Rows in ascending id order with repoId, indexedRoot, lastIngested, fileCount and embeddedVectorCount; a repository in its first ingest may be absent until its structural records materialise."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildListReposTool"
+  - n: 3
+    action: "Read the repository's current indexing job before any mutation."
+    api: "repocontext_index_status"
+    expects: "status None for a never-onboarded repository, Running with a phase (Pending, Walking, Reconciling, Applying, Vectorising, or Resetting during a reset sweep), Completed, or Failed."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.IndexStatusAsync"
+  - n: 4
+    action: "To onboard or re-ingest, start the indexing job: repocontext_add_repo with a path under the workspace root (workspace mode) or repocontext_bootstrap with repoRoot and repoId (single-repository mode)."
+    api: "repocontext_add_repo / repocontext_bootstrap"
+    expects: "Returns at once with the job's acceptance RepoIndexProgress snapshot in status Running; the walk continues in the background and survives a client disconnect or a host restart."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.StartIndexAsync"
+  - n: 5
+    action: "Poll the job with the same repository id until it is terminal."
+    api: "repocontext_index_status"
+    expects: "status reaches Completed or Failed; a Running job with pacing.state Backoff, Waiting, Resting or Yielding and advancing counters is paced, not stalled."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+  - n: 6
+    action: "To repair a degraded code index while keeping memory, reset it."
+    api: "repocontext_reset_index"
+    expects: "Returns RepoContextIndexResetResult with repoId, entriesDeleted, elapsedMilliseconds, treesSwept, memoryPreserved true and censusCleared; if the call times out or the connection drops, the sweep keeps running."
+    source: "src/lattice.api.mcp.repocontext/Indexing/RepoIndexResetLauncher.cs#RepoIndexResetLauncher.ResetAsync"
+  - n: 7
+    action: "Poll the reset with the same repository id until it is terminal, instead of re-running it."
+    api: "repocontext_index_status"
+    expects: "status Running in phase Resetting with treesSwept and entriesDeleted advancing, then Completed or Failed."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ResetIndexAsync"
+  - n: 8
+    action: "Rebuild the reset index from the working files and poll it as in step 5."
+    api: "repocontext_add_repo"
+    expects: "A new Running job that rebuilds the code index and its vectors and repopulates the listing fields the reset cleared; surviving memory records are re-embedded on the next indexing pass."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildResetIndexTool"
+  - n: 9
+    action: "Only with explicit human consent, remove the repository's context entirely."
+    api: "repocontext_remove_repo"
+    expects: "Returns RepoContextRepoRemovalResult with repoId and entriesDeleted; removing an unknown repository is a no-op reporting zero deletions."
+    source: "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.RemoveRepoAsync"
+  - n: 10
+    action: "Confirm the outcome in the listing."
+    api: "repocontext_list_repos"
+    expects: "After onboarding the repository is listed with the intended indexedRoot; after a reset it stays listed with null lastIngested, fileCount, indexedCommit and indexedRoot; after a removal it is no longer listed."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+postconditions:
+  - check: "A completed onboarding pass is idempotent: re-running on an unchanged repository is a no-op, a changed repository updates only changed files and prunes deleted ones."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildAddRepoTool"
+  - check: "After onboarding, a per-repository self-index grain keeps the repository indexed until it is removed or its index is reset, re-driving the index for missing embeddings, failed runs and on-disk edits or deletions."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+  - check: "After a reset, the structural, symbol, content, cross-reference, session and every vector tree are dropped for the repository and the memory tree is not touched, so every memory entry keeps its fields, tags, links and remaining time-to-live."
+    source: "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.ResetIndexAsync"
+  - check: "After a reset, the repository stays registered but unindexed until a subsequent repocontext_add_repo re-arms the self-index grain."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+  - check: "After a removal, the repository's structural nodes, symbols, content and cross-reference projections, session bookkeeping, memory and every vector tree are removed and its in-flight run, reminders and approximate-index build coordinator are torn down."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+  - check: "Neither reset nor removal touches the working tree on disk."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+  - check: "On a host with LATTICE_REPOCONTEXT_SOURCE_INDEXING=off, repocontext_add_repo validates the path and registers the repository with fileCount 0 without reading any file, and only repocontext_reset_index drops a code index left by an earlier run."
+    source: "docs/lattice.api.mcp.repocontext/container.md"
+failure_modes:
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+  - id: workspace-boundary-not-enforcing
+    signal: "Onboarding fails with an McpException stating the repository-context workspace boundary is not configured."
+    effect: "Onboarding is refused before any file is read."
+    response: "Report that the host must supply a workspaceRoot to AddRepoContextTools; do not retry."
+  - id: path-rejected
+    signal: "Onboarding fails as an invalid argument because the path resolves outside the workspace or no repository id can be derived from it, or as not found because the root is not a directory."
+    effect: "No job is recorded."
+    response: "Supply a path that resolves inside the workspace root, or pass repoId explicitly."
+  - id: git-sourced-repository
+    signal: "Onboarding fails stating the repository is configured with a git source and cannot also be registered from a mounted path."
+    effect: "No job is recorded; the git-sourced index keeps tracking its configured ref."
+    response: "Do not onboard it from a mount; remove the git source configuration first if mounting is intended."
+  - id: indexing-job-failed
+    signal: "repocontext_index_status reports status Failed with a failure reason."
+    effect: "The pass stopped; the self-index grain's keep-alive re-drives a failed run at the start of its next scan cycle."
+    response: "Read the failure reason, then re-issue repocontext_add_repo for the same repository id, which is idempotent and resumable."
+  - id: reset-response-lost
+    signal: "repocontext_reset_index times out or the connection drops before a result arrives."
+    effect: "Only the wait is abandoned; the sweep keeps running under the caller's credential."
+    response: "Poll repocontext_index_status until Completed or Failed instead of re-running the reset."
+  - id: reset-interrupted-by-restart
+    signal: "After a host restart, repocontext_index_status stays Running in phase Resetting and never completes."
+    effect: "The reset sweep was interrupted by host shutdown."
+    response: "Re-run repocontext_reset_index, which is idempotent and finishes it."
+  - id: reset-incomplete
+    signal: "The reset ends Failed with an error naming each skipped code-index tree or teardown step, or is refused naming a damaged tree that another repository shares."
+    effect: "Everything already drained stays dropped; the named trees were not swept."
+    response: "Report each named tree or teardown step; re-running repocontext_reset_index is idempotent, and repocontext_remove_repo is not a substitute."
+  - id: removal-teardown-fault
+    signal: "repocontext_remove_repo fails during its control-plane teardown."
+    effect: "The removal stops at the first fault, before its delete sweep."
+    response: "Read repocontext_index_status and repocontext_list_repos to establish the state before deciding, with consent, whether to retry."
+  - id: authorization-denied
+    signal: "The coarse MCP authorizer or the tree access gate denies the call."
+    effect: "No mutation is performed."
+    response: "Obtain a grant with a write-shaped data-plane operation; do not retry under the same credential."
+rollback:
+  supported: false
+  mechanism: "No inverse is surfaced. repocontext_remove_repo destroys the store-of-record memory, which derives from nothing; a reset code index is rebuilt forward by repocontext_add_repo from the working files, not restored."
+  steps: []
+  source: "docs/lattice.api.mcp.repocontext/memory-durability.md"
+concurrency:
+  - rule: "Self-index re-drives are single-flight: they are a no-op while a run is already in flight for the repository."
+    source: "docs/lattice.api.mcp.repocontext/tools.md"
+  - rule: "Each repocontext_reset_index call launches its own sweep; concurrent calls are not merged into one run."
+    source: "src/lattice.api.mcp.repocontext/Indexing/RepoIndexResetLauncher.cs#RepoIndexResetLauncher"
+  - rule: "A reset fault is not stamped onto the job once a later onboarding has taken it over."
+    source: "src/lattice.api.mcp.repocontext/Indexing/RepoIndexResetLauncher.cs#RepoIndexResetLauncher.RecordFailureAsync"
+  - rule: "A removal must not run with an index writer still live: every teardown step must succeed before its delete sweep starts."
+    source: "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs#RepoContextStore.TearDownIndexingControlAsync"
+  - rule: "A repository is indexed from either a mounted path or a git source, never both."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.StartIndexAsync"
+  - rule: "During a first ingest repocontext_list_repos can omit a repository that repocontext_index_status already reports Running; index_status is the authority for an onboarding in progress."
+    source: "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildListReposTool"
+sources:
+  - "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs"
+  - "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs"
+  - "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs"
+  - "src/lattice.api.mcp.repocontext/Capture/RepoContextStore.cs"
+  - "src/lattice.api.mcp.repocontext/Indexing/RepoIndexResetLauncher.cs"
+  - "docs/lattice.api.mcp.repocontext/tools.md"
+  - "docs/lattice.api.mcp.repocontext/container.md"
+  - "docs/lattice.api.mcp.repocontext/memory-durability.md"

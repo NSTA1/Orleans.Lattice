@@ -1,0 +1,148 @@
+schema: lattice.agents/procedure/v1
+id: storage-usage-refresh
+name: "Run a tracked storage-usage refresh and read the refreshed storage usage"
+surfaces:
+  in_process:
+    api: "ILatticeStorageUsageOperations.StartStorageUsageRefreshAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#StartStorageUsageRefreshAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/StartStorageUsageRefresh"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartStorageUsageRefreshMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_storage_usage_refresh_start"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_storage_usage_refresh_start, lattice_treeadmin_storage_usage_refresh_status, lattice_treeadmin_storage_usage_refresh_list, lattice_treeadmin_storage_usage_refresh_cancel, lattice_treeadmin_storage_usage), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
+  - id: cluster-telemetry
+    check: "Caller holds the Telemetry capability over the cluster-wide scope; the gate denies an unmatched request even under DefaultEffect = Allow."
+    source: "src/lattice.api.treeadmin/TreeAdminAccessAuthorizer.cs#AuthorizeClusterTelemetryAsync"
+  - id: active-tenant
+    check: "The caller's active tenant resolves to a value; refresh operations are recorded and looked up per tenant."
+    source: "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations.ResolveActiveTenantAsync"
+  - id: operation-id-format
+    check: "A caller-chosen operation id is 1 to 128 ASCII letters, digits, '-', '_' or '.'; omit it to have one generated."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#StartStorageUsageRefreshAsync"
+  - id: wal-byte-accounting
+    check: "Know whether each tree's WAL provider supports byte accounting; a provider that does not marks that tree's reading Partial."
+    source: "src/lattice/BPlusTree/ILatticeStorageUsage.cs#GetReportAsync"
+steps:
+  - n: 1
+    action: "List storage-usage refreshes to find one already in flight or to recover a lost operation id."
+    api: "ILatticeStorageUsageOperations.ListOperationsAsync / ListStorageUsageRefreshes / lattice_treeadmin_storage_usage_refresh_list"
+    expects: "Returns one page of the caller's treeadmin.storage-usage-refresh operations, newest-first."
+    source: "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations.ListOperationsAsync"
+  - n: 2
+    action: "Start the refresh, passing a caller-chosen operation id so a retry is idempotent."
+    api: "ILatticeStorageUsageOperations.StartStorageUsageRefreshAsync / StartStorageUsageRefresh / lattice_treeadmin_storage_usage_refresh_start"
+    expects: "Returns an operation handle of kind treeadmin.storage-usage-refresh at once; Created is false when the id already named a refresh."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#StartStorageUsageRefreshAsync"
+  - n: 3
+    action: "Poll the refresh status until the state is terminal."
+    api: "ILatticeStorageUsageOperations.GetOperationStatusAsync / GetStorageUsageRefreshStatus / lattice_treeadmin_storage_usage_refresh_status"
+    expects: "Reports phase Measuring with progress as trees measured of the registered tree count, then Succeeded, Failed or Cancelled."
+    source: "src/lattice.api.abstractions/TreeAdmin/StorageUsageRefreshOperation.cs#StorageUsageRefreshOperation"
+  - n: 4
+    action: "On Succeeded, read the cluster totals from the status result map."
+    api: "StorageUsageRefreshResults.TryReadSummary"
+    expects: "Result keys treeCount, walRetainedBytes, snapshotBytes, leafStateBytes, totalBytes, partial and sampledAt rebuild a ClusterStorageUsageSummary with Deep set and no per-tree rows."
+    source: "src/lattice.api.abstractions/TreeAdmin/StorageUsageRefreshResults.cs#TryReadSummary"
+  - n: 5
+    action: "Read the refreshed per-tree figures with the cheap storage-usage read (deep false)."
+    api: "ILatticeTreeAdmin.GetStorageUsageAsync / GetStorageUsage / lattice_treeadmin_storage_usage"
+    expects: "Returns per-tree WAL, snapshot, leaf-state and total bytes with each tree's SampledAt and Partial flag."
+    source: "docs/lattice.api.treeadmin/operations.md"
+  - n: 6
+    action: "To abandon a running refresh, request cancellation and poll status until it reads Cancelled."
+    api: "ILatticeStorageUsageOperations.CancelOperationAsync / CancelStorageUsageRefresh / lattice_treeadmin_storage_usage_refresh_cancel"
+    expects: "The status stays non-terminal until the refresh observes the request; a terminal refresh is returned unchanged."
+    source: "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+postconditions:
+  - check: "A succeeded refresh re-measured every registered tree with its per-tree cache bypassed, under the LatticeOptions.MaxConcurrentStorageUsageTrees bound."
+    source: "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations.RefreshAsync"
+  - check: "partial true means at least one tree reported a partial reading, so the cluster totals are a lower bound."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/ClusterStorageUsageSummary.cs#Partial"
+  - check: "Each tree's total bytes sum its physical WAL bytes, snapshot bytes and leaf-state bytes, so totalBytes can exceed walRetainedBytes plus snapshotBytes plus leafStateBytes."
+    source: "src/lattice/BPlusTree/TreeStorageUsageReport.cs#TreeStorageUsageReport.TotalBytes"
+  - check: "Each measured tree's report is cached by its aggregator; a cheap read within LatticeOptions.StorageUsageCacheTtl (10 seconds by default) of that tree's sample returns the refreshed report."
+    source: "src/lattice/BPlusTree/Grains/LatticeStorageUsageGrain.cs#LatticeStorageUsageGrain.GetReportAsync"
+  - check: "The forced refresh re-anchors each shard root's byte totals from a whole-chain leaf walk; a cheap read after the cache TTL re-samples those shard-root totals and the WAL partitions without walking leaves."
+    source: "src/lattice/BPlusTree/Grains/LatticeStorageUsageGrain.cs#LatticeStorageUsageGrain.RefreshShardUsageAsync"
+  - check: "The cheap read reports Deep false and a per-tree SampledAt; compare SampledAt with the refresh's sampledAt to judge how stale a tree's figures are."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.GetStorageUsageAsync"
+  - check: "A finished refresh stays readable and listed for seven days, and each tenant's listing keeps at most 1000 operations."
+    source: "docs/lattice.api.abstractions/operations.md"
+failure_modes:
+  - id: refresh-not-registered
+    signal: "gRPC Unimplemented or an MCP InvalidOperationException stating the host registers no ILatticeStorageUsageOperations."
+    effect: "No refresh is started, read or cancelled."
+    response: "Register the tree-admin facade with AddLatticeTreeAdminApi on the host."
+  - id: telemetry-denied
+    signal: "LatticeAuthorizationDeniedException (gRPC PermissionDenied) from the start call."
+    effect: "No refresh is recorded."
+    response: "Obtain the cluster-wide Telemetry capability and retry."
+  - id: malformed-operation-id
+    signal: "ArgumentException from the start call for an empty, overlong or disallowed-character operation id."
+    effect: "No refresh is recorded."
+    response: "Retry with a valid id or omit it."
+  - id: id-kind-conflict
+    signal: "InvalidOperationException because the operation id is in use by an operation of a different kind."
+    effect: "No refresh is started."
+    response: "Retry with a different operation id."
+  - id: tenant-unresolved
+    signal: "LatticeTenantAccessDeniedException when the caller's active tenant does not resolve."
+    effect: "No refresh is started, read or cancelled."
+    response: "Call with a resolvable active tenant."
+  - id: refresh-not-found
+    signal: "Status or cancel returns null (MCP found=false) for an unknown id, another tenant's or kind's operation, a caller without cluster telemetry, or a refresh pruned after retention."
+    effect: "Nothing is disclosed or cancelled."
+    response: "List refreshes to recover the id, confirm the caller's authority, or start a new refresh."
+  - id: runner-silo-lost
+    signal: "Status reads Failed with a reason that the running silo was lost or the heartbeat lease lapsed."
+    effect: "The refresh is not resumed and records no cluster totals."
+    response: "Start a new refresh."
+  - id: partial-reading
+    signal: "Status reads Succeeded with partial true, or a tree row has Partial set."
+    effect: "A tree or surface that could not be measured, or a WAL provider without byte accounting, makes the figures a lower bound."
+    response: "Treat the totals as a lower bound; refresh again after the failing surface recovers."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: false
+  mechanism: "No inverse exists or is needed: the refresh records an operation and re-measures storage accounting but never mutates data. Cancellation stops further measurement and records no cluster totals."
+  steps: []
+  source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs"
+concurrency:
+  - rule: "A start with an operation id already naming a refresh in the caller's tenant returns the existing operation with Created false and starts nothing."
+    source: "src/lattice/Operations/LatticeOperationRunner.cs#LatticeOperationRunner.StartAsync"
+  - rule: "The start path checks no other in-flight refresh, so a start with a new operation id runs another full re-measure; reuse the id to avoid duplicate work."
+    source: "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations.StartStorageUsageRefreshAsync"
+  - rule: "The refresh runs on the accepting silo independently of the start call; the start call's cancellation token, a caller timeout or a dropped connection does not stop it."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs#ILatticeStorageUsageOperations"
+  - rule: "A cancel request stops the refresh at once on the running silo, otherwise at its next progress report or heartbeat."
+    source: "src/lattice/Operations/LatticeOperationRunner.cs#LatticeOperationRunner.RequestCancelAsync"
+  - rule: "Status, list and cancel see only treeadmin.storage-usage-refresh operations in the caller's tenant, and only for callers holding cluster telemetry."
+    source: "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations.IsVisibleAsync"
+  - rule: "Trees keep serving writes during the measure, so a tree's live-key count may lag or lead the true count slightly."
+    source: "src/lattice/BPlusTree/TreeStorageUsageReport.cs#TreeStorageUsageReport.LiveKeys"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeStorageUsageOperations.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/StorageUsageRefreshOperation.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/StorageUsageRefreshResults.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/ClusterStorageUsageSummary.cs"
+  - "src/lattice.api.abstractions/Operations/ILatticeOperations.cs"
+  - "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs"
+  - "src/lattice.api.treeadmin/LatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin/TreeAdminAccessAuthorizer.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "src/lattice/BPlusTree/ILatticeStorageUsage.cs"
+  - "src/lattice/BPlusTree/Grains/LatticeStorageUsageGrain.cs"
+  - "src/lattice/BPlusTree/TreeStorageUsageReport.cs"
+  - "src/lattice/Operations/LatticeOperationRunner.cs"
+  - "docs/lattice.api.treeadmin/operations.md"
+  - "docs/lattice.api.abstractions/operations.md"

@@ -1,0 +1,174 @@
+schema: lattice.agents/procedure/v1
+id: auth-policy-administration
+name: "Administer cluster authorization rules, groups and group membership"
+surfaces:
+  in_process:
+    api: "ILatticeAuthAdmin.PutRuleAsync"
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#PutRuleAsync"
+  grpc:
+    api: "/orleans.lattice.api.auth/PutRule"
+    source: "src/lattice.api.auth.grpc/LatticeAuthApiGrpcMethods.cs#PutRuleMethodName"
+  mcp_tool:
+    api: "lattice_auth_put_rule"
+    source: "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/auth.json and, for each MCP tool used (lattice_auth_explain, lattice_auth_effective_permissions, lattice_auth_get_rule, lattice_auth_list_rules_for_tree, lattice_auth_get_group, lattice_auth_list_group_members, lattice_auth_list_subject_groups, lattice_auth_put_rule, lattice_auth_remove_rule, lattice_auth_upsert_group, lattice_auth_remove_group, lattice_auth_add_member, lattice_auth_remove_member), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/auth.json"
+  - id: caller-is-access-administrator
+    check: "The calling subject receives an Admin verdict over the whole sys-auth-policy tree from the access gate; every facade call, reads included, is refused otherwise."
+    source: "src/lattice.api.auth/LatticeAuthAdmin.cs#LatticeAuthAdmin.AuthorizeAdminAsync"
+  - id: administrator-source
+    check: "That verdict comes from membership of LatticeAuthOptions.BootstrapAdministrators, or, only while AccessAdministrationDelegationEnabled is true, from an Allow whole-tree Admin rule on sys-auth-policy naming the caller or one of its groups; a Tree:* rule never satisfies it."
+    source: "docs/lattice.api.auth/README.md"
+  - id: grpc-transport-authorizer
+    check: "On gRPC the configured ILatticeAuthApiAuthorizer admits the call before the facade check; the default DenyAllAuthApiAuthorizer with RequireAuthorization true rejects every call with PermissionDenied."
+    source: "src/lattice.api.auth.grpc/Security/LatticeAuthApiGrpcAuthInterceptor.cs#LatticeAuthApiGrpcAuthInterceptor"
+  - id: mcp-administration-opt-in
+    check: "On MCP the mutating auth tools are listed only when LatticeApiMcpOptions.EnableAuthAdministration is set, and a non-administrator session is offered none of the auth tools."
+    source: "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+  - id: rule-scope-authorable
+    check: "The rule is not scoped at the reserved sys-auth-* namespace, except exactly a whole-tree rule on sys-auth-policy whose operation set is exactly Admin, which is authorable only while AccessAdministrationDelegationEnabled is true; a Tree:* rule whose operations intersect LatticeAuthOperations.All is authorable only while AllTreesGrantsEnabled is true."
+    source: "src/lattice.auth/AuthConstants.cs#AuthConstants.EnsureAuthorableRuleScope"
+  - id: ids-outside-owned-namespaces
+    check: "The rule id does not start with app: or tenant:, the scope is not a tenant-wide t/{tenant}/* sentinel, and a group id being upserted or removed does not start with t/."
+    source: "src/lattice.api.auth/LatticeAuthAdmin.cs#LatticeAuthAdmin.PutRuleAsync"
+  - id: control-plane-trees-explicit
+    check: "Access to a control-plane system-data tree (sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, sys-backup-*, tag-*) needs a rule scoped at that tree; neither DefaultEffect nor an all-trees Tree:* rule grants there."
+    source: "src/lattice.auth/AuthConstants.cs#AuthConstants.IsControlPlaneDataTree"
+  - id: directory-ids-resolve
+    check: "When LatticeIdentityDirectoryOptions.ValidationRequired is set and a real identity directory is registered, every group id and non-t/ member id written by UpsertGroup or AddMember resolves to a principal of the matching kind."
+    source: "src/lattice.api.auth/LatticeAuthAdmin.cs#LatticeAuthAdmin.ValidateDirectoryPrincipalAsync"
+steps:
+  - n: 1
+    action: "Read the authorization posture before authoring a Tree:* rule or a sys-auth-policy delegation rule."
+    api: "ILatticeAuthAdmin.ExplainAsync / Explain / lattice_auth_explain"
+    expects: "Posture reports AllTreesGrantsEnabled and AccessAdministrationDelegationEnabled, and DefaultEffect is reported beside it."
+    source: "src/lattice.api.abstractions/Auth/Model/AuthExplanation.cs"
+  - n: 2
+    action: "Record the current rule for rollback by its governed tree id and rule id, and list the tree's rules to find overlapping ones."
+    api: "ILatticeAuthAdmin.GetRuleAsync / GetRule / lattice_auth_get_rule and ILatticeAuthAdmin.ListRulesForTreeAsync / ListRulesForTree / lattice_auth_list_rules_for_tree"
+    expects: "The existing rule or null; the tree's own rules plus the Tree:* bucket rules, which carry Scope.TreeId equal to *."
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#ListRulesForTreeAsync"
+  - n: 3
+    action: "Record the current group record and its direct members for rollback before changing a group or an edge."
+    api: "ILatticeAuthAdmin.GetGroupAsync / GetGroup / lattice_auth_get_group and ILatticeAuthAdmin.ListGroupMembersAsync / ListGroupMembers / lattice_auth_list_group_members"
+    expects: "The group record or null, and its direct members (users and nested groups) in ascending ordinal order."
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#ListGroupMembersAsync"
+  - n: 4
+    action: "Before removing or denying a whole-tree Admin rule on sys-auth-policy, or removing an edge into a group such a rule names, explain Admin over Tree(sys-auth-policy) for your own subject and each other administrator you rely on."
+    api: "ILatticeAuthAdmin.ExplainAsync / Explain / lattice_auth_explain"
+    expects: "At least one administrator other than the one being revoked is allowed, or a bootstrap administrator is available; the explained group closure comes from the membership directory only, not token-asserted or claim-projected groups."
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#ExplainAsync"
+  - n: 5
+    action: "Create or replace the rule, or remove it by governed tree id and rule id."
+    api: "ILatticeAuthAdmin.PutRuleAsync / PutRule / lattice_auth_put_rule or ILatticeAuthAdmin.RemoveRuleAsync / RemoveRule / lattice_auth_remove_rule"
+    expects: "Put completes and the MCP tool returns the rule as submitted; remove returns true when a rule was removed and false when none existed."
+    source: "src/lattice.api.auth/LatticeAuthAdmin.cs#LatticeAuthAdmin.PutRuleAsync"
+  - n: 6
+    action: "Create or replace a cluster group record, or remove one; to retire a group, remove its membership edges first."
+    api: "ILatticeAuthAdmin.UpsertGroupAsync / UpsertGroup / lattice_auth_upsert_group or ILatticeAuthAdmin.RemoveGroupAsync / RemoveGroup / lattice_auth_remove_group"
+    expects: "Upsert writes the record; remove is a no-op when the group does not exist and leaves edges naming the group in place."
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#RemoveGroupAsync"
+  - n: 7
+    action: "Add or remove a direct membership edge, naming the member kind (User or Group) on add."
+    api: "ILatticeAuthAdmin.AddMemberAsync / AddMember / lattice_auth_add_member or ILatticeAuthAdmin.RemoveMemberAsync / RemoveMember / lattice_auth_remove_member"
+    expects: "Add is idempotent; remove is a no-op when the edge does not exist."
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#AddMemberAsync"
+  - n: 8
+    action: "Confirm the stored state: read the rule back and read the subject's transitive groups."
+    api: "ILatticeAuthAdmin.GetRuleAsync / GetRule / lattice_auth_get_rule and ILatticeAuthAdmin.ListSubjectGroupsAsync / ListSubjectGroups / lattice_auth_list_subject_groups"
+    expects: "The rule equals the one written, or null after a removal; the subject's transitive group ids reflect the edge change."
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#ListSubjectGroupsAsync"
+  - n: 9
+    action: "Confirm the effect: explain the target operation and scope for the affected subject and list its effective rules."
+    api: "ILatticeAuthAdmin.ExplainAsync / Explain / lattice_auth_explain and ILatticeAuthAdmin.EffectivePermissionsAsync / EffectivePermissions / lattice_auth_effective_permissions"
+    expects: "Allowed matches the intended verdict and DecidingRuleId names the deciding rule when one rule decided (null when the default effect decided); effective permissions list matching rules without resolving precedence."
+    source: "docs/lattice.api.auth/README.md"
+postconditions:
+  - check: "A put rule is stored in sys-auth-policy under its governed tree id and rule id, replacing any rule with the same pair."
+    source: "src/lattice.auth/LatticeAuthorizationPolicyStore.cs#LatticeAuthorizationPolicyStore.PutRuleAsync"
+  - check: "Every policy-store mutation goes through the standard write path and is captured by the per-key history view of sys-auth-policy."
+    source: "src/lattice.auth/LatticeAuthorizationPolicyStore.cs#LatticeAuthorizationPolicyStore"
+  - check: "A policy change takes effect on every silo within about a second of the write plus the snapshot rebuild; the first rule written to a silo with an empty snapshot makes requests wait for the rebuild instead of answering from the empty snapshot."
+    source: "docs/lattice.auth/README.md"
+  - check: "A membership change flushes the subject-resolution cache only on the silo that observed the write; another silo can serve a pre-change subject until its cache entry expires (ResolutionCacheTtl, default 5 minutes)."
+    source: "docs/lattice.membership/architecture.md"
+  - check: "Removing a group record does not remove membership edges naming it; those edges keep contributing the group to their members' resolved closure."
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#RemoveGroupAsync"
+  - check: "Turning AccessAdministrationDelegationEnabled or AllTreesGrantsEnabled off does not delete existing rules; remove a rule to revoke it."
+    source: "docs/lattice.auth/configuration.md"
+failure_modes:
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+  - id: administrator-denied
+    signal: "LatticeAuthorizationDeniedException in process, PermissionDenied on gRPC, or authorization-denied on MCP."
+    effect: "The transport authorizer or the facade administrator gate refused the caller; nothing was read or mutated."
+    response: "Run as a bootstrap administrator or a delegated access administrator; on gRPC also configure an ILatticeAuthApiAuthorizer that admits the caller."
+  - id: rule-malformed-or-unconfined
+    signal: "ArgumentException (gRPC InvalidArgument) for an empty id, an undefined effect or kind, a key or prefix mismatched to the scope kind, or a rule naming a tenant group outside its tenant's trees."
+    effect: "The rule is refused before anything is read or written."
+    response: "Correct the rule shape and resubmit."
+  - id: reserved-scope-refused
+    signal: "ArgumentException naming the reserved sys-auth-* namespace, the delegation flag AccessAdministrationDelegationEnabled, or the all-trees flag AllTreesGrantsEnabled."
+    effect: "The rule targets the reserved namespace in a non-delegation shape, is the delegation shape while delegation is off, or is a data-plane Tree:* rule while the all-trees tier is off; nothing is persisted."
+    response: "Do not retry; enable the named LatticeAuthOptions flag on the silo first, or scope the rule at an ordinary tree."
+  - id: owned-namespace-refused
+    signal: "LatticeAppOwnedRuleException, LatticeTenantOwnedRuleException, LatticeTenantOwnedGroupException, an ArgumentException naming ILatticeTenantPolicyAdmin, or LatticeTenantGroupNestingException."
+    effect: "An app: rule, a tenant: rule or tenant-wide scope, a t/ group, or an edge nesting a tenant group outside its tenant was refused; nothing is written."
+    response: "Change app rules through the app manifest or role bindings and tenant groups or rules through the tenant administration surfaces; a tenant: rule may still be removed here as break-glass."
+  - id: directory-validation-failed
+    signal: "LatticeDirectoryValidationException on UpsertGroup or AddMember."
+    effect: "A referenced id did not resolve in the identity directory or resolved to the wrong kind; nothing is written."
+    response: "Resolve the principal through the identity directory and resubmit with the correct id and member kind."
+  - id: self-lockout
+    signal: "After removing or denying a delegated Admin grant on sys-auth-policy, or an edge feeding it, the caller's next facade call fails with the administrator-denied signal."
+    effect: "The caller is no longer an access administrator and cannot undo the change itself."
+    response: "Have a bootstrap administrator, who is never affected by policy, re-put the recorded rule or re-add the recorded edge."
+  - id: stale-verdict
+    signal: "Explain or a data-plane decision on another silo still reflects the previous policy or membership."
+    effect: "Policy propagates within about a second plus rebuild; membership waits for the resolution cache entry to expire."
+    response: "Wait and re-explain; do not reapply the change."
+  - id: strict-fence-denied
+    signal: "A user write to a tree listed in StrictConsistencyTrees is denied while the caller stamped a LatticePolicyEpochFenceContext.RequireAtLeast floor."
+    effect: "The silo's locally compiled policy epoch has not reached the stamped floor; reads, unstamped writes and system-origin writes are not fenced."
+    response: "Retry the data-plane write after the local policy epoch catches up."
+rollback:
+  supported: true
+  mechanism: "There is no transactional undo; apply the inverse operation with the state recorded in steps 2 and 3. The inverse is a new write with a later HLC, so it supersedes the change under the per-key last-writer-wins merge."
+  steps:
+    - action: "Re-put the recorded previous rule, or remove a rule that did not exist before."
+      api: "ILatticeAuthAdmin.PutRuleAsync / PutRule / lattice_auth_put_rule or ILatticeAuthAdmin.RemoveRuleAsync / RemoveRule / lattice_auth_remove_rule"
+      source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#PutRuleAsync"
+    - action: "Re-upsert the recorded group record, or remove a group that did not exist before."
+      api: "ILatticeAuthAdmin.UpsertGroupAsync / UpsertGroup / lattice_auth_upsert_group or ILatticeAuthAdmin.RemoveGroupAsync / RemoveGroup / lattice_auth_remove_group"
+      source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#UpsertGroupAsync"
+    - action: "Remove an added edge or re-add a removed edge with its recorded member kind."
+      api: "ILatticeAuthAdmin.RemoveMemberAsync / RemoveMember / lattice_auth_remove_member or ILatticeAuthAdmin.AddMemberAsync / AddMember / lattice_auth_add_member"
+      source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#RemoveMemberAsync"
+  source: "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
+concurrency:
+  - rule: "Rules, group records and membership edges are per-key LWW rows; concurrent writes to the same row resolve by the highest HLC, and a delete tombstone wins an exact HLC tie."
+    source: "src/lattice/Primitives/LwwValue.cs#LwwValue.Merge"
+  - rule: "PutRule and UpsertGroup create or replace unconditionally and take no expected-version argument, so two administrators editing the same rule id or group id keep only the later write."
+    source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#PutRuleAsync"
+  - rule: "Each membership edge is stored twice in sys-membership-edges, once keyed by member and once keyed by group."
+    source: "docs/lattice.membership/architecture.md"
+  - rule: "In a multi-cluster deployment enrolled with ReplicateLatticeSystemTrees, a rule authored or revoked in one cluster converges to the others."
+    source: "docs/lattice.auth/README.md"
+sources:
+  - "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs"
+  - "src/lattice.api.abstractions/Auth/Model/AuthExplanation.cs"
+  - "src/lattice.api.auth/LatticeAuthAdmin.cs"
+  - "src/lattice.api.auth.grpc/LatticeAuthApiGrpcMethods.cs"
+  - "src/lattice.api.auth.grpc/Security/LatticeAuthApiGrpcAuthInterceptor.cs"
+  - "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs"
+  - "src/lattice.auth/AuthConstants.cs"
+  - "src/lattice.auth/LatticeAuthorizationPolicyStore.cs"
+  - "src/lattice/Primitives/LwwValue.cs"
+  - "docs/lattice.api.auth/README.md"
+  - "docs/lattice.auth/README.md"
+  - "docs/lattice.auth/configuration.md"
+  - "docs/lattice.membership/architecture.md"
