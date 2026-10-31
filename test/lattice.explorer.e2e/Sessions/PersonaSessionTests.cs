@@ -60,11 +60,15 @@ public sealed class PersonaSessionTests
 
         await olivia.Shell.SubmitSignInAsync(olivia.Persona.Id, olivia.Persona.Password + "-mistyped");
         var refused = await olivia.Shell.ReadSpineAsync();
-        await olivia.SubstepAsync("wrong-password-refused", "A mistyped password: the cluster refuses it, and nothing of the estate opens");
+
+        // Known defect #5415: the Explorer does not say the cluster refused the password; the
+        // session reads as signed in with no grants. Once F3's KnownDefect lands this step is
+        // wrapped in KnownDefect("#5415"), and on the fix it asserts the refusal and Sign in.
+        await olivia.SubstepAsync("wrong-password-refused", "A mistyped password: the cluster refuses it and nothing opens, though the header still names her (#5415)");
         TestContext.Out.WriteLine($"After a refused password the spine is {refused}; the connection reads '{await olivia.Shell.Banner.GetByRole(AriaRole.Status).First.InnerTextAsync()}'.");
         Assert.That(refused.CanOpen("access"), Is.False, $"a refused password opens nothing: {refused}");
 
-        // Whichever the chrome offers after a refusal - Sign in, or the session to sign out of.
+        // Today (#5415) the refused session is presented as signed in, so it is signed out first.
         if (await olivia.Shell.SessionButton(olivia.Persona.Id).IsVisibleAsync())
         {
             await olivia.Shell.SignOutAsync();
