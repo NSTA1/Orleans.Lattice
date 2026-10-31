@@ -100,6 +100,7 @@ internal sealed class TreeAdminBulkLoadStreamCall
         using var call = invoker.AsyncDuplexStreamingCall(method, host: null, new CallOptions(cancellationToken: attempt.Token));
         using var slots = new SemaphoreSlim(_options.MaxUnacknowledgedChunks);
         var receive = ReceiveAsync(call.ResponseStream, slots, attempt);
+        var sourceFaulted = false;
         try
         {
             await call.RequestStream.WriteAsync(new TreeAdminBulkLoadStreamRequest
@@ -122,7 +123,17 @@ internal sealed class TreeAdminBulkLoadStreamCall
 
             while (!_sourceDrained)
             {
-                var chunk = await FillAsync(source, cancellationToken).ConfigureAwait(false);
+                List<DataEntry> chunk;
+                try
+                {
+                    chunk = await FillAsync(source, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    sourceFaulted = true;
+                    throw;
+                }
+
                 if (chunk.Count == 0)
                 {
                     break;
@@ -154,18 +165,27 @@ internal sealed class TreeAdminBulkLoadStreamCall
                 receiveFault = exception;
             }
 
-            // When the server or the transport ended the call, the sender only noticed it
-            // (a failed write, or a wait the abandoned attempt woke): the call's own status
-            // says why, and decides whether the stream resumes. A fault of the input or of
-            // the caller's own cancellation stands as it is.
-            if (receiveFault is RpcException callFault
-                && sendFault is OperationCanceledException or RpcException or IOException
-                && !cancellationToken.IsCancellationRequested)
+            // A fault of the input, or the caller's own cancellation, stands as it is. Any
+            // other fault means the call broke, and the sender may only have noticed it (a
+            // failed write, or a wait the abandoned attempt woke): the server's own status
+            // says why when it sent one, and it decides whether the stream resumes.
+            if (sourceFaulted || cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            if (receiveFault is RpcException { StatusCode: not StatusCode.Cancelled } callFault)
             {
                 ExceptionDispatchInfo.Throw(callFault);
             }
 
-            throw;
+            if (sendFault is RpcException)
+            {
+                throw;
+            }
+
+            throw new RpcException(
+                new Status(StatusCode.Unavailable, "The bulk-load stream broke before the server answered.", sendFault));
         }
     }
 
