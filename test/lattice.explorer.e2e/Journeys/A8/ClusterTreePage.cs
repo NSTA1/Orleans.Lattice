@@ -71,7 +71,8 @@ internal sealed class ClusterTreePage(ShellPage shell, string tree) : A8PageObje
         var header = Content.Locator("th").Filter(new() { Has = Page.Locator("button.lt-table__sort", new() { HasTextRegex = new Regex("^Writes$") }) });
         var sort = header.Locator("button.lt-table__sort");
         await sort.ClickAsync();
-        if (await header.GetAttributeAsync("aria-sort") != "descending")
+        await Expect(header).ToHaveAttributeAsync("aria-sort", new Regex("^(ascending|descending)$"));
+        if (await header.GetAttributeAsync("aria-sort") == "ascending")
         {
             await sort.ClickAsync();
         }
