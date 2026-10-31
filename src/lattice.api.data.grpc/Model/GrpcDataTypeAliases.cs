@@ -73,4 +73,10 @@ public static class GrpcDataTypeAliases
 
     /// <summary>Alias for <see cref="DataProbeRequest"/>.</summary>
     public const string DataProbeRequest = "oladg.prbq";
+
+    /// <summary>Alias for <see cref="DataSetManyStreamRequest"/>.</summary>
+    public const string DataSetManyStreamRequest = "oladg.smsq";
+
+    /// <summary>Alias for <see cref="DataSetManyStreamResponse"/>.</summary>
+    public const string DataSetManyStreamResponse = "oladg.smsr";
 }
