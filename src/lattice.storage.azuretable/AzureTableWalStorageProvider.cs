@@ -1893,6 +1893,14 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// orphan above a gap back rather than forward.
     /// </para>
     /// <para>
+    /// The walk is anchored on the higher of the <c>TAIL</c> read and
+    /// the <c>TAIL</c> the worker has itself committed. The read can go
+    /// stale before the fold runs: a phase-2 commit landing in between
+    /// prunes its batch from the accepted set, and a walk from the stale
+    /// value would then stop short of that committed batch (issue #5466,
+    /// where a WAL move's verification read the target one batch short).
+    /// </para>
+    /// <para>
     /// The fold degrades to the persisted value alone whenever this
     /// provider instance has no live worker for the shard - a fresh
     /// activation or another silo. With
@@ -1961,9 +1969,9 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // Fold in the live worker's accepted ranges. The worker
         // dictionary is keyed by the same manifest partition key, so
         // this is one lookup and no extra round-trip. The worker
-        // walks upward from the persisted value and returns it
-        // unchanged when nothing contiguously extends it, so the
-        // answer can never be dragged below TAIL.
+        // walks upward from the higher of the persisted value and its
+        // own committed TAIL - the read above can already be stale
+        // (#5466) - so the answer can never be dragged below TAIL.
         return _phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var worker)
             ? worker.ContiguousAcceptedEndOffsetInclusive(persistedTail)
             : persistedTail;

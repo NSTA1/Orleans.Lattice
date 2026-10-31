@@ -123,6 +123,7 @@ public sealed class AzureTableWalMoveIntegrationTests
     }
 
     [Test]
+    [Repeat(25)]
     public async Task A_move_with_default_options_copies_a_partition_larger_than_a_copy_page_to_Azure_Table()
     {
         var treeId = $"move-azure-{Guid.NewGuid():N}";
@@ -152,13 +153,20 @@ public sealed class AzureTableWalMoveIntegrationTests
         var azure = Providers.Azure;
         Assert.That(azure, Is.Not.Null, "the move must have resolved the Azure Table provider");
 
+        // ReadAsync streams only batches whose phase-2 manifest commit has
+        // landed, and the copy's final append returns before its own phase 2
+        // does, so read the target back behind the provider's visibility
+        // barrier rather than racing that commit.
+        await azure!.FlushPhaseTwoAsync(CancellationToken.None);
         var sourceOffsets = await ReadOffsetsAsync(Providers.Baseline, physical);
-        var targetOffsets = await ReadOffsetsAsync(azure!, physical);
+        var targetOffsets = await ReadOffsetsAsync(azure, physical);
         Assert.Multiple(() =>
         {
             Assert.That(sourceOffsets, Has.Count.GreaterThan(WalMoveOptions.DefaultCopyPageSize));
             Assert.That(targetOffsets, Is.EqualTo(sourceOffsets),
                 "every source entry lands on the Azure Table target at its original offset");
+            Assert.That(receipt.TargetHighestOffset, Is.EqualTo(sourceOffsets[^1]),
+                "the verification read of the target saw the whole copy (#5466)");
         });
 
         var placement = await admin.GetWalPlacementAsync(treeId);
