@@ -1,10 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
-using Orleans.Lattice.Api.Replication;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Browser;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
@@ -144,21 +141,13 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
             await eastTrees.NameBootstrapAsync(JourneyEstate.West);
             await east.SubstepAsync(recorder, "3", "east-composed", "A7.3 - In east: factory-orders, last-writer-wins, bootstrapped from west");
             await eastTrees.EnableButton.ClickAsync();
-            var refused = eastTrees.EnableDialog.GetByText($"No tree is named {orders}. Choose one from the list.");
-            var enabled = east.Shell.Toasts.Filter(new() { HasText = $"Replication enabled for {orders} ({MergeModeLabel}). A snapshot bootstrap was requested." });
-            await Expect(refused.Or(enabled)).ToBeVisibleAsync(new() { Timeout = 30_000 });
-            if (await refused.IsVisibleAsync())
-            {
-                // Capture-only first run: the picker refuses a tree that only the bootstrap will bring.
-                await east.SubstepAsync(recorder, "3", "east-refused", "A7.3 - BEFORE the fix: east's picker refuses factory-orders, which only the bootstrap brings");
-                await eastTrees.CancelButton.ClickAsync();
-                await ContractFacades.Of(context, region: JourneyEstate.East).Replication
-                    .EnableReplicationAsync(orders, LatticeMergeMode.LwwRegister, bootstrapSourceClusterId: JourneyEstate.West);
-                await east.Page.EvaluateAsync("() => { window.__ltLeaving = true; }");
-                await east.Page.ReloadAsync();
-                await JourneyBrowser.WaitForInteractiveAsync(east.Page);
-            }
 
+            // Regression (#5379): east does not hold factory-orders yet; with a bootstrap source
+            // named, the picker accepts it rather than refusing a tree only the bootstrap brings.
+            await Expect(east.Shell.Toasts.Filter(new() { HasText = $"Replication enabled for {orders} ({MergeModeLabel}). A snapshot bootstrap was requested." }))
+                .ToBeVisibleAsync(new() { Timeout = 30_000 });
+            await Expect(eastTrees.EnableDialog).ToBeHiddenAsync();
+            await Expect(east.Page.GetByText($"No tree is named {orders}. Choose one from the list.")).ToHaveCountAsync(0);
             var eastRow = eastTrees.Row(orders, eastCompact);
             await Expect(eastRow).ToContainTextAsync("Enabled", new() { Timeout = 30_000 });
             await Expect(eastRow).ToContainTextAsync(MergeModeLabel);
@@ -219,6 +208,9 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
                 var hiddenAt = await tree.ReadAtAsync();
                 await Task.Delay(TimeSpan.FromSeconds(12));
                 Assert.That(await tree.ReadAtAsync(), Is.EqualTo(hiddenAt), "the page did not re-read its links while hidden");
+
+                // Regression (#5379): the status line itself says the refresh is paused.
+                await tree.ExpectPausedAsync();
                 await west.SubstepAsync(recorder, "5", "hidden", "A7.5 - Hidden: the cadence pauses, and the read time stands still");
 
                 await tree.ShowAsync();
