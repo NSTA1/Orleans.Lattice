@@ -1,4 +1,5 @@
 using Orleans.Lattice.Explorer.UI.Areas.Schema;
+using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 
@@ -93,6 +94,51 @@ public sealed class SchemaFormatPatternsTests
     [TestCase("a@b", false)]
     [TestCase("a b@example.com", false)]
     public void Email(string text, bool expected) => Assert.That(SchemaFormatPatterns.IsMatch(SchemaTextFormat.Email, text), Is.EqualTo(expected));
+
+    [TestCase("1.2.3-01", false)]
+    [TestCase("1.2.3-alpha.01", false)]
+    [TestCase("1.2.3-.", false)]
+    [TestCase("1.2.3-alpha..1", false)]
+    [TestCase("1.2.3-alpha.", false)]
+    [TestCase("1.2.3+.", false)]
+    [TestCase("1.2.3+build..1", false)]
+    [TestCase("1.2.3+build.", false)]
+    [TestCase("1.2.3-0", true)]
+    [TestCase("1.2.3-alpha.0.rc-1+build.001", true)]
+    [TestCase("1.2.3-01a", true)]
+    [TestCase("1.2.3--", true)]
+    public void Semantic_version_card_enforces_identifier_rules_in_the_compiled_policy(string text, bool expected)
+    {
+        var card = SchemaRuleCard.Of(SchemaCardKind.Format, "version");
+        card.Format = SchemaTextFormat.SemanticVersion;
+
+        Assert.That(SchemaCardCompiler.TryCompile(card, out var rule, out var error), Is.True, error);
+        var sample = new SchemaSample("t", null,
+            [new SchemaSampleValue("k", System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { version = text }))], 0, false);
+        var preview = SchemaPreviewResult.Evaluate([rule], sample);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaFormatPatterns.IsMatch(SchemaTextFormat.SemanticVersion, text), Is.EqualTo(expected));
+            Assert.That(preview.Passed, Is.EqualTo(expected ? 1 : 0));
+        });
+    }
+
+    [Test]
+    public void Semantic_version_legacy_policy_reopens_without_silently_changing_its_pattern()
+    {
+        const string legacy = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?\\z";
+        var original = LatticeSchemaRule.Regex(legacy, "version");
+        var card = SchemaCardDecompiler.Decompile(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(card.Kind, Is.EqualTo(SchemaCardKind.Pattern));
+            Assert.That(card.Pattern, Is.EqualTo(legacy));
+            Assert.That(SchemaCardCompiler.TryCompile(card, out var recompiled, out var error), Is.True, error);
+            Assert.That(recompiled, Is.EqualTo(original));
+        });
+    }
 
     [TestCase("2026-02-30", true)]
     [TestCase("2026-13-01", false)]

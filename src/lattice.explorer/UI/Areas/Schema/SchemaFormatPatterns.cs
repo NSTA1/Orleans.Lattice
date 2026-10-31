@@ -29,6 +29,8 @@ internal static class SchemaFormatPatterns
 
     private const string Hex = "[0-9A-Fa-f]{1,4}";
 
+    private const string PrereleaseIdentifier = "(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
+
     private static readonly Format[] Formats =
     [
         new(SchemaTextFormat.Email, "Email address", "an email address",
@@ -64,7 +66,8 @@ internal static class SchemaFormatPatterns
         new(SchemaTextFormat.HexColour, "Hex colour", "a hex colour",
             "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})\\z", "#1a2b3c", "1a2b3c"),
         new(SchemaTextFormat.SemanticVersion, "Semantic version", "a semantic version",
-            "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?\\z", "2.1.0", "v2.1"),
+            "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-"
+            + PrereleaseIdentifier + "(\\." + PrereleaseIdentifier + ")*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?\\z", "2.1.0", "v2.1"),
         new(SchemaTextFormat.Phone, "Phone number", "an E.164 phone number",
             "^\\+[1-9][0-9]{1,14}\\z", "+441632960961", "01632 960961"),
     ];

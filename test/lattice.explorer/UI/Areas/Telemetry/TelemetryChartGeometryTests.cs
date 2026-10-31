@@ -87,6 +87,36 @@ public sealed class TelemetryChartGeometryTests
         });
     }
 
+    [TestCase(0d, 1e307)]
+    [TestCase(0d, double.MaxValue)]
+    [TestCase(-double.MaxValue, double.MaxValue)]
+    [TestCase(-double.MaxValue, -double.MaxValue)]
+    [TestCase(0d, double.Epsilon)]
+    public void Build_finite_extreme_readings_stay_inside_a_finite_plot(double first, double last)
+    {
+        var geometry = Build(TelemetryTestData.Series("orders", TelemetryTestData.Now, first, last));
+        var floor = Math.Min(first, last);
+        var ceiling = Math.Max(first, last);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(double.IsFinite(geometry.Minimum), Is.True);
+            Assert.That(double.IsFinite(geometry.Maximum), Is.True);
+            Assert.That(geometry.Minimum, Is.LessThanOrEqualTo(floor));
+            Assert.That(geometry.Maximum, Is.GreaterThanOrEqualTo(ceiling));
+            Assert.That(geometry.Maximum, Is.GreaterThan(geometry.Minimum));
+            Assert.That(geometry.Y(floor), Is.InRange(TelemetryChartGeometry.Top, TelemetryChartGeometry.PlotBottom));
+            Assert.That(geometry.Y(ceiling), Is.InRange(TelemetryChartGeometry.Top, TelemetryChartGeometry.PlotBottom));
+            Assert.That(geometry.Lines[0].LabelY, Is.InRange(TelemetryChartGeometry.Top, TelemetryChartGeometry.PlotBottom));
+            Assert.That(geometry.Lines[0].Path, Does.Not.Contain("NaN").And.Not.Contain("Infinity"));
+            Assert.That(geometry.Ticks.All(tick => double.IsFinite(tick.Y)), Is.True);
+        });
+        if (floor < ceiling)
+        {
+            Assert.That(geometry.Y(ceiling), Is.LessThan(geometry.Y(floor)));
+        }
+    }
+
     [Test]
     public void A_wholly_negative_answer_keeps_its_floor_and_tops_out_at_one()
     {

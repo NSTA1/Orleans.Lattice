@@ -6,6 +6,42 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 [TestFixture]
 public sealed class SchemaCardCompilerTests
 {
+    [TestCase("9007199254740993", "9007199254740992")]
+    [TestCase("9223372036854775807", "9223372036854775806")]
+    [TestCase("-9223372036854775807", "-9223372036854775808")]
+    public void TryCompile_reversed_large_integer_bounds_reports_the_range_error(string minimum, string maximum)
+    {
+        var card = SchemaRuleCard.Of(SchemaCardKind.NumberRange, "order.total");
+        card.Minimum = minimum;
+        card.Maximum = maximum;
+
+        Assert.That(SchemaCardCompiler.TryCompile(card, out var rule, out var error), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(error, Is.EqualTo("The smallest number is larger than the largest."));
+            Assert.That(rule, Is.EqualTo(default(LatticeSchemaRule)));
+        });
+    }
+
+    [TestCase("9007199254740992", "9007199254740993")]
+    [TestCase("9223372036854775806", "9223372036854775807")]
+    [TestCase("-9223372036854775808", "-9223372036854775807")]
+    public void TryCompile_ordered_large_integer_bounds_preserves_the_exact_constants(string minimum, string maximum)
+    {
+        var card = SchemaRuleCard.Of(SchemaCardKind.NumberRange, "order.total");
+        card.Minimum = minimum;
+        card.Maximum = maximum;
+
+        Assert.That(SchemaCardCompiler.TryCompile(card, out var rule, out var error), Is.True, error);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rule.Predicate!.Value.Children![0].Children![1].Constant,
+                Is.EqualTo(LatticeConstant.Integer(long.Parse(minimum, System.Globalization.CultureInfo.InvariantCulture))));
+            Assert.That(rule.Predicate.Value.Children![1].Children![1].Constant,
+                Is.EqualTo(LatticeConstant.Integer(long.Parse(maximum, System.Globalization.CultureInfo.InvariantCulture))));
+        });
+    }
+
     [Test]
     public void TryCompile_invalid_pattern_returns_its_diagnostic_without_a_rule()
     {
