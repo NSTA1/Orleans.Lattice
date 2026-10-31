@@ -99,6 +99,33 @@ public sealed partial class BackupSchedulerGrainUnitTests
     }
 
     [Test]
+    public async Task PruneAsync_with_both_knobs_keeps_a_backup_only_max_age_retains()
+    {
+        // Keep-last-one keeps only "newest"; max-age keeps "young" too, which keep-last
+        // does not. A backup either knob keeps is retained, so only "old" is pruned.
+        var log = new List<string>();
+        var old = RetentionManifest("old", 30);
+        var young = RetentionManifest("young", 1);
+        var newest = RetentionManifest("newest", 0);
+        var catalog = new RecordingCatalog(log, old, young, newest);
+        var sink = RecordingSink(log, () => [old, young, newest]);
+        var options = new LatticeBackupScheduleOptions
+        {
+            RetentionEnabled = true,
+            RetentionKeepLast = 1,
+            RetentionMaxAge = TimeSpan.FromDays(7),
+        };
+
+        var report = await CreateGrain(catalog: catalog, sink: sink, options: options).PruneAsync(TestScope);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.PrunedBackupIds, Is.EqualTo(new[] { "old" }));
+            Assert.That(catalog.Ids, Is.EquivalentTo(new[] { "young", "newest" }));
+        });
+    }
+
+    [Test]
     public async Task A_retention_pass_is_skipped_while_another_is_in_flight()
     {
         // The first pass is held at its first row removal, after it has listed and

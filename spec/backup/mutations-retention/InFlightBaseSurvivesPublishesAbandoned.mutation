@@ -8,9 +8,9 @@ PERTURBS: Register
 
 --- FIND
     /\ cap[c].ph = "ok"
-    /\ cat' = cat \cup {cap[c].id}
+    /\ \/ /\ cat' = cat \cup {cap[c].id}
 --- REPLACE
     \* MUTATION: a failed check publishes too.
     /\ cap[c].ph \in {"ok", "abandon"}
-    /\ cat' = cat \cup {cap[c].id}
+    /\ \/ /\ cat' = cat \cup {cap[c].id}
 --- END

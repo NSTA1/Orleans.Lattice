@@ -1,0 +1,20 @@
+# Pairs with ListedRestorable. Production before the fix of #5449: a member
+# of a multi-tree backup set registered its catalog row as soon as it was
+# captured, and the set's membership stamp re-wrote its sink manifest and
+# registered the row again once every member was captured. In between, the
+# member was an ordinary listed backup, so a retention pass could prune it;
+# the stamp then listed it again over the artifact the pass had deleted.
+MODULE: ListedRestorableStampReregisters
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: a set member is registered at capture and again by the stamp
+PERTURBS: Register
+
+--- FIND
+          \* A set member: its row waits for the stamp.
+          /\ UNCHANGED <<cat, pub>>
+--- REPLACE
+          \* MUTATION: the member is registered now, and again by the stamp.
+          /\ cat' = cat \cup {cap[c].id}
+          /\ pub' = pub \cup {cap[c].id}
+--- END

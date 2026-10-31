@@ -238,7 +238,13 @@ public sealed partial class BackupSchedulerGrainUnitTests
         {
             CreatedAtUtc = DateTimeOffset.UtcNow,
         };
-        var catalog = new FakeSchedulerCatalog(recentManifest);
+        var expiredManifest = BackupManifestModelTests.Sample("full-expired") with
+        {
+            CreatedAtUtc = DateTimeOffset.UtcNow.AddDays(-30),
+        };
+        var log = new List<string>();
+        var catalog = new RecordingCatalog(log, recentManifest, expiredManifest);
+        var sink = RecordingSink(log, () => [recentManifest, expiredManifest]);
 
         var captureResult = new LatticeBackupCaptureResult("full-recent", recentManifest);
         var captureService = Substitute.For<ILatticeBackupCaptureService>();
@@ -255,10 +261,14 @@ public sealed partial class BackupSchedulerGrainUnitTests
             RetentionMaxAge = TimeSpan.FromDays(7),
         };
 
-        var grain = CreateGrain(captureService: captureService, catalog: catalog, options: opts, state: state);
+        var grain = CreateGrain(captureService: captureService, catalog: catalog, sink: sink, options: opts, state: state);
         var resultId = await grain.RunScheduledCycleAsync(incremental: false);
 
-        Assert.That(resultId, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(resultId, Is.Not.Null);
+            Assert.That(catalog.Ids, Is.EquivalentTo(new[] { "full-recent" }), "max-age keeps the recent backup and prunes the expired one");
+        });
     }
 
     [Test]

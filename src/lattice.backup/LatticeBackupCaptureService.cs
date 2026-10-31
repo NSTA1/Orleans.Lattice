@@ -467,20 +467,57 @@ internal sealed class LatticeBackupCaptureService(
 
         var scopes = request.Scopes;
 
-        // Single-tree or non-flagged sets issue no cross-tree coordination: each
-        // member takes the cheap per-tree cut, exactly as a direct CaptureAsync
-        // would. This keeps the common case free of the fence machinery.
-        if (!request.CrossTreeConsistent || scopes.Count == 1)
+        // Members of a multi-tree set are captured with their catalog row deferred
+        // to the set's membership stamp (issue #5449), so each member's row is
+        // registered once, already stamped. Registered first and re-registered by
+        // the stamp, a member was an ordinary listed backup in between: a retention
+        // pass could prune it, and the stamp then re-registered its row over the
+        // artifact the pass had deleted. A member nothing will stamp - the set
+        // failed, or a fenced attempt was discarded - is registered unstamped, as an
+        // ordinary per-tree backup.
+        var unregistered = new List<LatticeBackupCaptureResult>();
+        try
         {
-            var plainMembers = await CaptureMembersAsync(request, cancellationToken).ConfigureAwait(false);
+            // Single-tree or non-flagged sets issue no cross-tree coordination: each
+            // member takes the cheap per-tree cut, exactly as a direct CaptureAsync
+            // would. This keeps the common case free of the fence machinery.
+            if (!request.CrossTreeConsistent || scopes.Count == 1)
+            {
+                var plainMembers = await CaptureMembersAsync(request, unregistered, cancellationToken).ConfigureAwait(false);
 
-            var plainManifest = BuildSetManifest(request.Name, plainMembers, crossTreeConsistent: false, fence: null);
-            var stampedPlainMembers = await StampSetMembershipAsync(plainManifest, plainMembers, cancellationToken)
-                .ConfigureAwait(false);
-            return new LatticeBackupSetCaptureResult(plainManifest, stampedPlainMembers);
+                var plainManifest = BuildSetManifest(request.Name, plainMembers, crossTreeConsistent: false, fence: null);
+                var stampedPlainMembers = await StampSetMembershipAsync(plainManifest, plainMembers, unregistered, cancellationToken)
+                    .ConfigureAwait(false);
+                return new LatticeBackupSetCaptureResult(plainManifest, stampedPlainMembers);
+            }
+
+            return await CaptureFencedSetAsync(request, unregistered, cancellationToken).ConfigureAwait(false);
         }
+        catch (Exception ex) when (unregistered.Count > 0)
+        {
+            logger.LogWarning(
+                ex,
+                "Backup set '{SetName}' failed; registering its {MemberCount} captured member(s) as unstamped backups.",
+                request.Name,
+                unregistered.Count);
+            await RegisterUnstampedAsync(unregistered, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
 
-        return await CaptureFencedSetAsync(request, cancellationToken).ConfigureAwait(false);
+    /// <summary>
+    /// Registers, unstamped, every captured set member whose catalog row was
+    /// deferred to a stamp that will not run, and empties <paramref name="unregistered"/>.
+    /// </summary>
+    private async Task RegisterUnstampedAsync(
+        List<LatticeBackupCaptureResult> unregistered,
+        CancellationToken cancellationToken)
+    {
+        while (unregistered.Count > 0)
+        {
+            await catalog.RegisterAsync(unregistered[0].Manifest, cancellationToken).ConfigureAwait(false);
+            unregistered.RemoveAt(0);
+        }
     }
 
     /// <summary>
@@ -503,6 +540,7 @@ internal sealed class LatticeBackupCaptureService(
     /// </summary>
     private async Task<LatticeBackupSetCaptureResult> CaptureFencedSetAsync(
         LatticeBackupSetCaptureRequest request,
+        List<LatticeBackupCaptureResult> unregistered,
         CancellationToken cancellationToken)
     {
         var scopes = request.Scopes;
@@ -599,7 +637,7 @@ internal sealed class LatticeBackupCaptureService(
                             fenceHlc = DateTimeOffset.UtcNow.UtcTicks;
                             using (SnapshotDecisionGateContext.With(gateToken))
                             {
-                                members = await CaptureMembersAsync(request, cancellationToken).ConfigureAwait(false);
+                                members = await CaptureMembersAsync(request, unregistered, cancellationToken).ConfigureAwait(false);
                             }
 
                             // Step 5: re-observe. The window is stable iff no
@@ -699,7 +737,7 @@ internal sealed class LatticeBackupCaptureService(
                     request.Name, scopes.Count, fenceHlc, attempt, totalDrained, totalDrainWait.TotalMilliseconds);
 
                 var manifest = BuildSetManifest(request.Name, members, crossTreeConsistent: true, fence);
-                var stampedMembers = await StampSetMembershipAsync(manifest, members, cancellationToken)
+                var stampedMembers = await StampSetMembershipAsync(manifest, members, unregistered, cancellationToken)
                     .ConfigureAwait(false);
                 return new LatticeBackupSetCaptureResult(manifest, stampedMembers);
             }
@@ -707,8 +745,9 @@ internal sealed class LatticeBackupCaptureService(
             // A cross-tree saga was still delegated under the gate, one registered
             // on the set mid-capture, or the gate was not held throughout: the
             // captured members may be torn. Discard them (they remain as
-            // orphan per-tree backups) and retry with a fresh
-            // fence and gate.
+            // orphan per-tree backups, registered unstamped) and retry with a
+            // fresh fence and gate.
+            await RegisterUnstampedAsync(unregistered, cancellationToken).ConfigureAwait(false);
             BackupMetrics.CrossTreeFenceRetries.Add(1, LatticeTenantLabel.Platform);
             logger.LogDebug(
                 "Backup set '{SetName}' fence attempt {Attempt} was not accepted (re-check clean: {RecheckClean}, "
@@ -850,9 +889,10 @@ internal sealed class LatticeBackupCaptureService(
     }
 
     /// <summary>
-    /// Stamps each member of a multi-tree set with the set's id and name and
-    /// re-writes the stamped manifest to the sink and catalog (both writes are
-    /// idempotent, keyed by backup id), so a catalog consumer can group the set's
+    /// Stamps each member of a multi-tree set with the set's id and name,
+    /// re-writes the stamped manifest to the sink, and registers its catalog row -
+    /// the member's first and only registration (issue #5449) - so a catalog
+    /// consumer can group the set's
     /// per-tree members into one logical entry from a first-class fact rather than
     /// inferring the grouping from the backup name. A single-member set is left
     /// unstamped: it is indistinguishable from a plain backup and lists as one.
@@ -863,6 +903,7 @@ internal sealed class LatticeBackupCaptureService(
     private async Task<IReadOnlyList<LatticeBackupCaptureResult>> StampSetMembershipAsync(
         BackupSetManifest setManifest,
         IReadOnlyList<LatticeBackupCaptureResult> members,
+        List<LatticeBackupCaptureResult> unregistered,
         CancellationToken cancellationToken)
     {
         if (setManifest.SetId is not { } setId)
@@ -876,6 +917,7 @@ internal sealed class LatticeBackupCaptureService(
             var manifest = member.Manifest with { SetId = setId, SetName = setManifest.Name, SetCreatedAtUtc = setManifest.CreatedAtUtc };
             await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
             await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+            unregistered.Remove(member);
             stamped.Add(new LatticeBackupCaptureResult(member.BackupId, manifest));
         }
 
@@ -904,7 +946,8 @@ internal sealed class LatticeBackupCaptureService(
         string name,
         BackupScopeSelector scope,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool register = true)
     {
         var treeId = scope.TreeId;
         var stopwatch = Stopwatch.StartNew();
@@ -1041,8 +1084,11 @@ internal sealed class LatticeBackupCaptureService(
 
                 phase = LatticeBackupMetrics.PhaseSinkWrite;
                 await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
-                phase = LatticeBackupMetrics.PhaseManifestCommit;
-                await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+                if (register)
+                {
+                    phase = LatticeBackupMetrics.PhaseManifestCommit;
+                    await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+                }
 
                 LatticeBackupMetrics.RecordCaptureSuccess(
                     manifest,
@@ -1097,13 +1143,17 @@ internal sealed class LatticeBackupCaptureService(
     /// <summary>
     /// Captures every member of a set in scope order, reporting one unit per
     /// member. Member captures run with the ambient progress suppressed, so a
-    /// member's own entry counts never overwrite the set-level phase.
+    /// member's own entry counts never overwrite the set-level phase. A member of
+    /// a set that records membership is captured with its catalog row deferred to
+    /// <see cref="StampSetMembershipAsync"/> and added to <paramref name="unregistered"/>.
     /// </summary>
     private async Task<List<LatticeBackupCaptureResult>> CaptureMembersAsync(
         LatticeBackupSetCaptureRequest request,
+        List<LatticeBackupCaptureResult> unregistered,
         CancellationToken cancellationToken)
     {
         var scopes = request.Scopes;
+        var deferRegistration = BackupSetIdentity.RecordsMembership(scopes.Count);
         var progress = LatticeOperationProgress.Current;
         if (progress is not null)
         {
@@ -1116,9 +1166,15 @@ internal sealed class LatticeBackupCaptureService(
         {
             foreach (var scope in scopes)
             {
-                members.Add(
-                    await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
-                        .ConfigureAwait(false));
+                var member = await CaptureTreeAsync(
+                        request.Name, scope, request.PageSize, cancellationToken, register: !deferRegistration)
+                    .ConfigureAwait(false);
+                if (deferRegistration)
+                {
+                    unregistered.Add(member);
+                }
+
+                members.Add(member);
                 if (progress is not null)
                 {
                     await progress.ReportAsync(

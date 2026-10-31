@@ -16,6 +16,8 @@ public sealed class BackupRetentionConcurrencyTests
 {
     private const string Tree = "orders";
 
+    private const string ItemsTree = "items";
+
     private SchedulerClusterFixture _fixture = null!;
 
     [TearDown]
@@ -51,6 +53,7 @@ public sealed class BackupRetentionConcurrencyTests
         });
         await AssertEveryListedChainResolvesAsync();
         Assert.That(await _fixture.Catalog.GetAsync(baseId), Is.Not.Null, "the depended-on base must stay listed");
+        Assert.That(await _fixture.Catalog.GetAsync(increment.BackupId), Is.Not.Null, "the published increment must be listed");
     }
 
     [Test]
@@ -125,6 +128,55 @@ public sealed class BackupRetentionConcurrencyTests
         {
             Assert.That(await _fixture.Catalog.GetAsync(recaptured!.BackupId), Is.Not.Null, "the new capture must stay listed");
             Assert.That((await _fixture.Sink.ProbeAsync(recaptured.BackupId)).IsResolvable, Is.True, "the new capture must stay resolvable from the sink");
+        });
+        await AssertEveryListedBackupResolvesFromTheSinkAsync();
+    }
+
+    [Test]
+    public async Task A_pass_during_a_set_capture_does_not_leave_a_member_listed_over_a_deleted_artifact()
+    {
+        // Issue #5449. A multi-tree set captures its orders member, and before the
+        // items member is written a newer orders backup is captured and a pass runs,
+        // which under keep-last-one dooms every older orders backup. Were the member
+        // registered at capture and re-registered by the set's membership stamp, the
+        // pass would prune it and the stamp would list it again over the artifact
+        // the pass had deleted.
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync(
+            o =>
+            {
+                o.RetentionEnabled = true;
+                o.RetentionKeepLast = 1;
+            },
+            intercepted: true);
+        var orders = BackupScopeSelector.WholeTree(Tree);
+        var items = BackupScopeSelector.WholeTree(ItemsTree);
+        await SeedAsync("k1", "v1");
+        await _fixture.GrainFactory.GetGrain<ILattice>(ItemsTree).SetAsync("i1", Encoding.UTF8.GetBytes("v1"));
+
+        BackupRetentionReport? report = null;
+        InterceptingBackupSink.BeforeManifestWrite = async manifest =>
+        {
+            if (manifest.Scope.TreeId != ItemsTree || report is not null)
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+            await SeedAsync("k2", "v2");
+            await _fixture.CaptureService.CaptureAsync(new LatticeBackupCaptureRequest("newer", orders));
+            report = await _fixture.Scheduler(orders).PruneAsync(orders);
+        };
+
+        var set = await _fixture.CaptureService.CaptureSetAsync(
+            new LatticeBackupSetCaptureRequest("set", [orders, items]));
+
+        var member = set.Members.Single(m => m.Manifest.Scope.TreeId == Tree);
+        Assert.That(report, Is.Not.Null, "the pass must have run inside the set capture");
+        Assert.Multiple(async () =>
+        {
+            Assert.That(report!.PrunedBackupIds, Does.Not.Contain(member.BackupId), "the pass must not prune an unpublished member");
+            Assert.That((await _fixture.Catalog.GetAsync(member.BackupId))?.SetId, Is.EqualTo(set.SetManifest.SetId), "the member must be listed, stamped");
         });
         await AssertEveryListedBackupResolvesFromTheSinkAsync();
     }
