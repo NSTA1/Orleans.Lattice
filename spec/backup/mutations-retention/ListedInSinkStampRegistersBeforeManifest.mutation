@@ -1,0 +1,18 @@
+# Pairs with ListedInSink. The stamp replaces the member's sink manifest by
+# deleting the unstamped one, registering the stamped row, and only then
+# writing the stamped manifest. Until that write lands - for good, if the
+# capture stops there - the catalog lists a backup the sink does not hold.
+MODULE: ListedInSinkStampRegistersBeforeManifest
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: the stamp registers a member's row while its sink manifest is withdrawn
+PERTURBS: Stamp
+
+--- FIND
+    /\ cap[c].ph = "stamp"
+    /\ snk' = snk \cup {cap[c].id}
+--- REPLACE
+    /\ cap[c].ph = "stamp"
+    \* MUTATION: the unstamped manifest is withdrawn before the row is registered.
+    /\ snk' = snk \ {cap[c].id}
+--- END

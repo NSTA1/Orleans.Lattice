@@ -103,6 +103,21 @@ public sealed class BackupRetentionPlannerTests
     }
 
     [Test]
+    public void Max_age_keeps_a_backup_keep_last_does_not_when_both_knobs_are_set()
+    {
+        var listing = new[]
+        {
+            Full("old", Now.AddDays(-10)),
+            Full("young", Now.AddMinutes(-30)),
+            Full("newest", Now.AddMinutes(-5)),
+        };
+
+        var retained = BackupRetentionPlanner.ComputeRetained(listing, keepLast: 1, maxAge: TimeSpan.FromHours(1), Now);
+
+        Assert.That(retained, Is.EquivalentTo(new[] { "young", "newest" }));
+    }
+
+    [Test]
     public void The_base_chain_of_a_retained_increment_is_retained_transitively()
     {
         var listing = new[]

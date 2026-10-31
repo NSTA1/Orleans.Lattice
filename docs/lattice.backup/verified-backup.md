@@ -109,6 +109,13 @@ not to hold in production:
   storage no longer held, or lose the new backup outright. Every capture now gets
   its own backup id, derived from its own artifact, so no capture ever reuses
   another backup's id. Found by the specification's independent review.
+- **A retention pass could prune a backup set's member before the set listed
+  it, and the set then listed it again without its data (#5449, fixed).** A
+  multi-tree backup set registered each member as soon as it was captured and
+  registered it again, stamped with the set, once every member was captured. A
+  retention pass in between could prune the member, and the stamp then listed a
+  backup whose data was gone. A member is now listed only by the stamp. Found by
+  the specification's confirmation review.
 
 ## Which parts run in production code
 

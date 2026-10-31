@@ -22,8 +22,10 @@ dependent scan (`Scan(p)`) and the one-pass guard (`PruneList(p)`); and at the
 two rows the module's independent review (#5352) found its detectors did not
 reach: a listing read under that guard (`ListedRestorable`, #5412) and the
 grain's tip-first delete order (`SinkChainIntact`); and at the capture-unique
-backup id that #5418 added (`ListedInSink`). No other backup module has a
-perturbation yet.
+backup id that #5418 added (`ListedInSink`); and, after the confirmation
+review, at the increment's registration (`Register(c)`) and the set membership
+stamp that #5449 made a member's only registration (`Stamp(c)`). No other backup
+module has a perturbation yet.
 
 ## Unseeded rows
 
@@ -33,8 +35,7 @@ perturbation yet.
 | BackupRetention | Start(c,k,b) | An environment action: a capture starting. Its id allocation is seeded through `ListedInSink` (`CaptureRepublishesContentId`); its one other production check, that the base's sink manifest exists, is shared by every incremental capture and pinned by the incremental capture suite, outside retention. |
 | BackupRetention | WriteArt(c) | The artifact write is the capture engine's, common to every capture; an edit that drops it fails every capture test, which measures the capture engine rather than retention. |
 | BackupRetention | WriteMan(c) | The manifest write is the capture engine's, common to every capture; dropping it fails every capture test, not the retention detectors specifically. |
-| BackupRetention | Register(c) | The catalog registration is the capture engine's, common to every capture; dropping it fails every capture test, not the retention detectors specifically. |
-| BackupRetention | Abandon(c) | Its safety half is the publish check, which `IncrementPublishesWithoutBaseRecheck` seeds; withdrawing the sink manifest is a tidy-up whose loss leaves an unlisted manifest, observable only to a catalog rebuild. |
+| BackupRetention | Abandon(c) | Its safety half is the publish check, which `IncrementPublishesWithoutBaseRecheck` seeds; withdrawing the sink manifest is a tidy-up whose loss leaves an unlisted manifest, which `BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup` detects by listing the sink directly. |
 | BackupRetention | CaptureCrash(c) | An environment action: a crash is injected by the detectors' stores, so no production code implements it. |
 | BackupRetention | RemoveRow(p,m) | Removing the row later than the scan is the same production reordering as the scan finding nothing for an in-flight increment; `PassKeepsNothingBuiltOn` seeds that outcome against the same detectors. |
 | BackupRetention | RestoreRow(p,m) | Restoring the row and still deleting is the scan's outcome discarded; `PassKeepsNothingBuiltOn` seeds it against the same detectors. |

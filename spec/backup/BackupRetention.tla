@@ -69,7 +69,7 @@ vars == <<now, pol, next, meta, arts, snk, cat, cap,
 storeVars == <<arts, snk, cat, pub>>
 passVars == <<prPh, prDoomed, prGone, prBlocked, prManGone>>
 
-CapPhases == {"idle", "drain", "art", "man", "ok", "abandon"}
+CapPhases == {"idle", "drain", "art", "man", "ok", "stamp", "abandon"}
 PassPhases == {"idle", "rows", "restore", "delete"}
 
 TypeOK ==
@@ -154,7 +154,9 @@ Tick ==
 (* incremental capture at any time; the scheduler's own captures, the      *)
 (* backup API's and another silo's are all such slots. Every capture gets  *)
 (* a fresh id (BackupIdentity folds the capture's own artifact id into     *)
-(* it), so no capture ever republishes an existing backup's id (#5418).    *)
+(* it), so no capture ever republishes an existing backup's id (#5418);   *)
+(* a set member's second sink-manifest write, by the stamp, precedes its   *)
+(* only registration (#5449).                                              *)
 (* An increment names any base whose sink manifest it can read - the       *)
 (* scheduler names the newest catalog row, the API whatever its caller     *)
 (* supplies - and the read is its only check of the base before it drains. *)
@@ -204,13 +206,37 @@ Check(c) ==
     /\ UNCHANGED storeVars
     /\ UNCHANGED passVars
 
-\* The capture publishes its manifest: it registers the catalog row.
+(***************************************************************************)
+(* The capture publishes its manifest: it registers the catalog row. A     *)
+(* full capture may instead be a member of a multi-tree backup set, whose  *)
+(* row is deferred to the set's membership stamp (Stamp) and registered    *)
+(* there, once (#5449): until then the member is in the sink but not       *)
+(* listed, so no pass can doom it. The choice is nondeterministic, so a    *)
+(* full capture is checked both ways.                                      *)
+(***************************************************************************)
 Register(c) ==
     /\ cap[c].ph = "ok"
+    /\ \/ /\ cat' = cat \cup {cap[c].id}
+          /\ pub' = pub \cup {cap[c].id}
+          /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
+       \/ /\ meta[cap[c].id].kind = "full"
+          \* A set member: its row waits for the stamp.
+          /\ UNCHANGED <<cat, pub>>
+          /\ cap' = [cap EXCEPT ![c].ph = "stamp"]
+    /\ UNCHANGED <<now, pol, next, meta, arts, snk, crashes>>
+    /\ UNCHANGED passVars
+
+\* The set's membership stamp (LatticeBackupCaptureService.
+\* StampSetMembershipAsync), once every member is captured: it re-writes the
+\* member's sink manifest, stamped with the set id, and then registers the
+\* member's catalog row.
+Stamp(c) ==
+    /\ cap[c].ph = "stamp"
+    /\ snk' = snk \cup {cap[c].id}
     /\ cat' = cat \cup {cap[c].id}
     /\ pub' = pub \cup {cap[c].id}
     /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
-    /\ UNCHANGED <<now, pol, next, meta, arts, snk, crashes>>
+    /\ UNCHANGED <<now, pol, next, meta, arts, crashes>>
     /\ UNCHANGED passVars
 
 \* An increment whose base was being pruned deletes its own sink manifest
@@ -375,6 +401,7 @@ Next ==
     \/ \E c \in Caps : WriteMan(c)
     \/ \E c \in Caps : Check(c)
     \/ \E c \in Caps : Register(c)
+    \/ \E c \in Caps : Stamp(c)
     \/ \E c \in Caps : Abandon(c)
     \/ \E c \in Caps : CaptureCrash(c)
     \/ \E p \in Passes : PruneList(p)
