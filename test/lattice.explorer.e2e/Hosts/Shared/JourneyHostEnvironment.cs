@@ -34,6 +34,12 @@ internal static class JourneyHostEnvironment
     /// <summary>The value <see cref="Faults"/> carries when the fault seams are enabled.</summary>
     public const string Enabled = "1";
 
+    /// <summary>
+    /// The key of every journey silo's second WAL storage provider, on a table of its own, so a
+    /// WAL partition can be moved off the default provider and its source reclaimed (A8, A12).
+    /// </summary>
+    public const string SecondaryWalProviderKey = "wal-secondary";
+
     /// <summary>Whether the fault and diagnostic seams are enabled in this process.</summary>
     public static bool FaultsEnabled =>
         string.Equals(Environment.GetEnvironmentVariable(Faults), Enabled, StringComparison.Ordinal);
