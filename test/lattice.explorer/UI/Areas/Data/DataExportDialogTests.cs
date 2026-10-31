@@ -5,6 +5,7 @@ using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Downloads;
+using Orleans.Lattice.Explorer.UI.Navigation.Address;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Data;
 
@@ -20,10 +21,8 @@ public sealed class DataExportDialogTests : DataTestContext
 {
     private const string ExportControl = "[data-lt-command=\"data.export\"]";
 
-    private readonly FakeDataExportSources _sources = new();
-
-    /// <summary>Registers the in-memory export sources over the Shell's.</summary>
-    public DataExportDialogTests() => Services.AddSingleton<IDataExportSources>(_sources);
+    /// <summary>Lets the in-memory Data API admit export unless a test narrows it.</summary>
+    public DataExportDialogTests() => ExportSources.Source.Coverage = LatticeRangeReadGateCoverage.Unrestricted;
 
     [Test]
     public void A_caller_who_may_range_read_the_tree_sees_export_as_the_command_control()
@@ -34,14 +33,14 @@ public sealed class DataExportDialogTests : DataTestContext
 
         cut.WaitUntil(() => Assert.That(cut.FindAll(ExportControl), Has.Count.EqualTo(1)));
         ExplorerCommandControls.AssertVisibleControl(cut, Area.Commands.Single(command => command.Id == DataArea.ExportCommandId));
-        Assert.That(_sources.Source.Requests.Single(), Has.Property(nameof(DataRangeRequest.IncludeGateCoverage)).True.And.Property(nameof(DataRangeRequest.PageSize)).EqualTo(1));
+        Assert.That(ExportSources.Source.Requests.Single(), Has.Property(nameof(DataRangeRequest.IncludeGateCoverage)).True.And.Property(nameof(DataRangeRequest.PageSize)).EqualTo(1));
     }
 
     [Test]
     public void A_narrowed_grant_still_sees_export()
     {
         Client.WithTree("orders", keys: 3);
-        _sources.Source.Coverage = LatticeRangeReadGateCoverage.Filtered;
+        ExportSources.Source.Coverage = LatticeRangeReadGateCoverage.Filtered;
 
         var cut = RenderAt("data/orders");
 
@@ -49,27 +48,43 @@ public sealed class DataExportDialogTests : DataTestContext
     }
 
     [Test]
-    public void A_caller_without_range_read_sees_no_export_and_the_command_opens_nothing()
+    public void A_caller_without_range_read_sees_no_export_and_the_palette_offers_none()
     {
         Client.WithTree("orders", keys: 3);
-        _sources.Source.Coverage = LatticeRangeReadGateCoverage.Denied;
+        ExportSources.Source.Coverage = LatticeRangeReadGateCoverage.Denied;
         var cut = RenderAt("data/orders");
-        cut.WaitUntil(() => Assert.That(_sources.Source.Requests, Has.Count.EqualTo(1)));
-
-        cut.InvokeAsync(async () => await Area.Commands.Single(command => command.Id == DataArea.ExportCommandId).InvokeAsync!(CancellationToken.None));
+        cut.WaitUntil(() => Assert.That(ExportSources.Source.Requests, Has.Count.EqualTo(1)));
 
         Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll(ExportControl), Is.Empty);
-            Assert.That(cut.FindAll(".lt-data-export"), Is.Empty);
+            Assert.That(Area.Commands.Select(command => command.Id), Has.None.EqualTo(DataArea.ExportCommandId));
         });
+
+        // A request delivered anyway, as a stale palette entry would, opens nothing.
+        cut.InvokeAsync(async () => await Services.GetRequiredService<DataCommandSignals>().RequestAsync(DataArea.ExportCommandId));
+        Assert.That(cut.FindAll(".lt-data-export"), Is.Empty);
+    }
+
+    [Test]
+    public void The_palette_offers_export_only_while_an_exportable_tree_is_open()
+    {
+        Client.WithTree("orders", keys: 3);
+        var cut = RenderAt("data/orders");
+        cut.WaitUntil(() => Assert.That(Area.Commands.Select(command => command.Id), Does.Contain(DataArea.ExportCommandId)));
+
+        var command = Area.Commands.Single(candidate => candidate.Id == DataArea.ExportCommandId);
+        Assert.That(command.Target, Is.EqualTo(ExplorerAddress.ForTree("data", "orders")));
+
+        Navigation.NavigateTo("data");
+        cut.WaitUntil(() => Assert.That(Area.Commands.Select(candidate => candidate.Id), Has.None.EqualTo(DataArea.ExportCommandId)));
     }
 
     [Test]
     public void A_probe_that_fails_hides_export()
     {
         Client.WithTree("orders", keys: 3);
-        _sources.ProbeFault = new InvalidOperationException("no data api");
+        ExportSources.ProbeFault = new InvalidOperationException("no data api");
 
         var cut = RenderAt("data/orders");
 
@@ -90,7 +105,7 @@ public sealed class DataExportDialogTests : DataTestContext
         Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll(ExportControl), Is.Empty);
-            Assert.That(_sources.Source.Requests, Is.Empty, "a view is not even probed");
+            Assert.That(ExportSources.Source.Requests, Is.Empty, "a view is not even probed");
         });
     }
 
@@ -171,14 +186,14 @@ public sealed class DataExportDialogTests : DataTestContext
             Assert.That(cut.Find(".lt-data-export").GetAttribute("data-lt-export-state"), Is.EqualTo("ready"));
             Assert.That(cut.Markup, Does.Contain("orders.csv"));
         });
-        Assert.That(_sources.Prepared.Single().Address, Is.Not.Empty, "the download runs over the captured connection");
+        Assert.That(ExportSources.Prepared.Single().Address, Is.Not.Empty, "the download runs over the captured connection");
     }
 
     [Test]
     public async Task A_finished_complete_export_reports_how_many_entries_it_holds()
     {
         Client.WithTree("orders", keys: 3);
-        _sources.Source.With("order/1", "{\"total\":1}"u8.ToArray()).With("order/2", "{\"total\":2}"u8.ToArray());
+        ExportSources.Source.With("order/1", "{\"total\":1}"u8.ToArray()).With("order/2", "{\"total\":2}"u8.ToArray());
         var cut = OpenDialog("data/orders");
         cut.Find(".lt-data-export__form").Submit();
 
@@ -196,8 +211,8 @@ public sealed class DataExportDialogTests : DataTestContext
     public async Task A_narrowed_export_says_the_file_is_not_complete_and_why()
     {
         Client.WithTree("orders", keys: 3);
-        _sources.Source.With("order/1", "1"u8.ToArray());
-        _sources.Source.Coverage = LatticeRangeReadGateCoverage.Filtered;
+        ExportSources.Source.With("order/1", "1"u8.ToArray());
+        ExportSources.Source.Coverage = LatticeRangeReadGateCoverage.Filtered;
         var cut = OpenDialog("data/orders");
         cut.Find(".lt-data-export__form").Submit();
 

@@ -294,7 +294,7 @@ The Data palette commands are:
 | Command id | Label | Effect |
 | --- | --- | --- |
 | `data.refresh` | Refresh the tree directory | Drops the circuit's loaded tree and view list, reloads it, and updates the directory and workspace surfaces. |
-| `data.export` | Export... | Opens the Export dialog of the open tree workspace (see [Exporting a tree](#exporting-a-tree)). Run elsewhere, it is held until a tree workspace opens. It opens nothing for a caller the workspace offers no export. |
+| `data.export` | Export... | Opens the Export dialog of the open tree workspace (see [Exporting a tree](#exporting-a-tree)). The palette offers it only while a tree workspace that draws **Export...** is open - the same verdict, for the same caller - and leaves it out everywhere else. |
 
 The directory remembers a successful tree/view catalogue for one caller,
 endpoint and active tenant. It forgets the list when sign-in, endpoint or active
