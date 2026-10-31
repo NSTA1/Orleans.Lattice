@@ -1,7 +1,7 @@
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 
-namespace Orleans.Lattice.Explorer.EndToEnd.Hosting;
+namespace Orleans.Lattice.Explorer.EndToEnd.HostContract;
 
 /// <summary>
 /// The environment contract between the journey harness and the journey hosts. Every

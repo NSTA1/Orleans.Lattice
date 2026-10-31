@@ -25,7 +25,7 @@ using Orleans.Lattice.Apps;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Backup.AzureBlob;
-using Orleans.Lattice.Explorer.EndToEnd.Hosting;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 using Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.ReferenceArchitecture.Hosting;

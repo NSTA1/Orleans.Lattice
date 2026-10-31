@@ -1,4 +1,4 @@
-using Orleans.Lattice.Explorer.EndToEnd.Hosting;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;
 

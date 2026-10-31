@@ -1,6 +1,6 @@
 using System.Net;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Orleans.Lattice.Explorer.EndToEnd.Hosting;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 using Orleans.Lattice.Explorer.EndToEnd.Hosts.Gateway;
 using Yarp.ReverseProxy;
 using Yarp.ReverseProxy.Configuration;

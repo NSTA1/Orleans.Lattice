@@ -1,7 +1,7 @@
 using System.Net;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Orleans.Lattice.Explorer.EndToEnd.Hosting;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.ReferenceArchitecture.Hosting;
 

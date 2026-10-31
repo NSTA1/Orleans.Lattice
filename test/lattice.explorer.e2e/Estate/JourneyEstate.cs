@@ -1,6 +1,6 @@
 using System.Net.Http.Json;
 using System.Security.Cryptography;
-using Orleans.Lattice.Explorer.EndToEnd.Hosting;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 

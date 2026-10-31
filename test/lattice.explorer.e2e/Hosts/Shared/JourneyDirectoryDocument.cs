@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Orleans.Lattice.Explorer.EndToEnd.Hosting;
+namespace Orleans.Lattice.Explorer.EndToEnd.HostContract;
 
 /// <summary>
 /// The identity directory the harness supplies to the silo, as a JSON file: the users

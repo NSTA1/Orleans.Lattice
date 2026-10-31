@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
-using Orleans.Lattice.Explorer.EndToEnd.Hosting;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;

@@ -99,6 +99,7 @@
     ".github/workflows/coverage-catch-up.yml",
     ".github/workflows/coverage-matrix-selftest.py",
     ".github/workflows/docs.yml",
+    ".github/workflows/explorer-journeys.yml",
     ".github/workflows/failed-tests-filter.py",
     ".github/workflows/formal-impact.py",
     ".github/workflows/formal-perturbations.yml",

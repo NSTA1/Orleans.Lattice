@@ -151,7 +151,8 @@ internal sealed class JourneyProcess : IAsyncDisposable
 
         Write("harness", "--- killed ---");
         process.Kill(entireProcessTree: true);
-        await process.WaitForExitAsync();
+        using var exit = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await process.WaitForExitAsync(exit.Token);
     }
 
     /// <summary>The last lines of the log, for a failure message.</summary>

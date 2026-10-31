@@ -5,7 +5,7 @@ using Grpc.Core;
 using Grpc.Core.Interceptors;
 using Grpc.Net.Client;
 using Orleans.Lattice.Api.Data.Grpc;
-using Orleans.Lattice.Explorer.EndToEnd.Hosting;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.LineFeed;
 
