@@ -95,15 +95,19 @@ public sealed class LineFeedTests
         Orleans.Lattice.Api.TreeAdmin.Grpc.LatticeTreeAdminApiGrpcClient admin, string viewName, string key)
     {
         var deadline = DateTime.UtcNow + Patience;
+        var state = Orleans.Lattice.Api.State.Grpc.LatticeStateApiGrpcClient.Create(Estate.Invoker(), JourneyEstate.Serialization);
         while (true)
         {
+            // A view is read by its name through the State API, as the Explorer reads it: the
+            // Data API refuses a direct read of a view's backing tree, whose generation a
+            // rebuild can swap.
             var status = await admin.GetViewStatusAsync(viewName);
             if (!string.IsNullOrEmpty(status.ActiveTreeId))
             {
-                var read = await Data.GetAsync(new DataGetRequest { TreeId = status.ActiveTreeId, Key = key });
-                if (read.Found)
+                var read = await state.GetEntryAsync(new Orleans.Lattice.Api.State.Grpc.EntryGetRequest { TreeId = viewName, Key = key });
+                if (read.Entry is { IsTombstone: false } entry)
                 {
-                    return System.Text.Encoding.UTF8.GetString(read.Value);
+                    return System.Text.Encoding.UTF8.GetString(entry.ValuePreview);
                 }
             }
 
