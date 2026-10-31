@@ -135,6 +135,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
         destinationFactory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(Substitute.For<ILeafCacheGrain>());
         var destinationRegistry = Substitute.For<ITxRegistryGrain>();
         destinationRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+        destinationRegistry.GetStatusForPrepareDedupAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         destinationRegistry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         destinationRegistry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([SourceShardIndex]));
         destinationFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>()).Returns(destinationRegistry);
@@ -328,6 +329,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
         // [11] would be served over the newer row as the committed value.
         var h = CreateHotPathOrphanHarness(ShardSplitPhase.Swap);
         h.DestinationRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.Committed));
+        h.DestinationRegistry.GetStatusForPrepareDedupAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.Committed));
         var txid = Guid.NewGuid();
 
         await h.DestinationLeaf.SetAsync("k", [99]);
@@ -345,7 +347,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
             Assert.That(read, Is.EqualTo(new byte[] { 22 }),
                 "the committed saga's stale prepared value must not be served over the newer row");
         });
-        await h.DestinationRegistry.Received().GetStatusAsync(txid);
+        await h.DestinationRegistry.Received(1).GetStatusForPrepareDedupAsync(txid);
     }
 
     [Test]

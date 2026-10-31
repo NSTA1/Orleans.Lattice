@@ -774,6 +774,22 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// <returns>The per-txid recorded status.</returns>
     [AlwaysInterleave]
     Task<Dictionary<Guid, TxStatus>> GetStatusManyForTerminalAsync(IReadOnlyList<Guid> txids);
+
+    /// <summary>
+    /// Terminal-intent status followed, only for an Indeterminate answer,
+    /// by the local recorded verdict. For settlement callers, not reader visibility.
+    /// Preserves both reads' durability waits and the capture decision gate.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<TxStatus> GetStatusForSettlementAsync(Guid txid);
+
+    /// <summary>
+    /// Reader-intent status followed, only for an Indeterminate answer,
+    /// by the local recorded verdict. Used to deduplicate a forwarded prepare, never
+    /// to apply a terminal or answer a value read.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<TxStatus> GetStatusForPrepareDedupAsync(Guid txid);
 }
 
 /// <summary>

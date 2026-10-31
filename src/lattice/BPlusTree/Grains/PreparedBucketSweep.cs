@@ -301,12 +301,8 @@ internal static class PreparedBucketSweep
     /// <see cref="ITxRegistryGrain.GetRecordedStatusAsync"/> exists for, and a
     /// decided saga takes the terminal-with-backstop branch.
     /// </summary>
-    private static async Task<TxStatus> DecisionForSweepAsync(IGrainFactory grainFactory, string decisionTreeId, Guid txid)
-    {
-        var registry = TxRegistryRouting.GetRegistry(grainFactory, decisionTreeId, txid);
-        var status = await registry.GetStatusForTerminalAsync(txid);
-        return status == TxStatus.Indeterminate ? await registry.GetRecordedStatusAsync(txid) : status;
-    }
+    private static Task<TxStatus> DecisionForSweepAsync(IGrainFactory grainFactory, string decisionTreeId, Guid txid) =>
+        TxRegistryRouting.GetRegistry(grainFactory, decisionTreeId, txid).GetStatusForSettlementAsync(txid);
 
     private static Task<TxStatus> RecordedDecisionAsync(IGrainFactory grainFactory, string decisionTreeId, Guid txid) =>
         TxRegistryRouting.GetRegistry(grainFactory, decisionTreeId, txid).GetRecordedStatusAsync(txid);

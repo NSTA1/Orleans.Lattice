@@ -263,6 +263,32 @@ internal sealed partial class TxRegistryGrain
         }
     }
 
+    /// <inheritdoc />
+    public Task<TxStatus> GetStatusForSettlementAsync(Guid txid) =>
+        WithRecordedFallbackAsync(txid, GetStatusForTerminalAsync(txid));
+
+    /// <inheritdoc />
+    public Task<TxStatus> GetStatusForPrepareDedupAsync(Guid txid) =>
+        WithRecordedFallbackAsync(txid, GetStatusAsync(txid));
+
+    private Task<TxStatus> WithRecordedFallbackAsync(Guid txid, Task<TxStatus> read)
+    {
+        if (read.IsCompletedSuccessfully)
+        {
+            return read.Result == TxStatus.Indeterminate
+                ? GetRecordedStatusAsync(txid)
+                : read;
+        }
+
+        return AwaitReadAsync(txid, read);
+    }
+
+    private async Task<TxStatus> AwaitReadAsync(Guid txid, Task<TxStatus> read)
+    {
+        var status = await read;
+        return status == TxStatus.Indeterminate ? await GetRecordedStatusAsync(txid) : status;
+    }
+
     /// <summary>
     /// The unguarded body of <see cref="GetStatusForTerminalAsync"/>: identical
     /// to the reader's answer for a locally decided or undecided txid, and for a

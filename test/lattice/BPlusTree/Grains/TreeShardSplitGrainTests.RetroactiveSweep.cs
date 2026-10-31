@@ -109,6 +109,7 @@ public partial class TreeShardSplitGrainTests
         var effectivePost = postSweepStatus ?? preCheckStatus;
         var txRegistry = Substitute.For<ITxRegistryGrain>();
         txRegistry.GetStatusForTerminalAsync(Arg.Any<Guid>()).Returns(Task.FromResult(preCheckStatus));
+        txRegistry.GetStatusForSettlementAsync(Arg.Any<Guid>()).Returns(Task.FromResult(preCheckStatus));
         txRegistry.GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>())
             .Returns(ci =>
             {
@@ -126,6 +127,7 @@ public partial class TreeShardSplitGrainTests
         {
             var physicalRegistry = Substitute.For<ITxRegistryGrain>();
             physicalRegistry.GetStatusForTerminalAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+            physicalRegistry.GetStatusForSettlementAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
             physicalRegistry.GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>())
                 .Returns(ci => Task.FromResult(((IReadOnlyList<Guid>)ci[0]).ToDictionary(id => id, _ => TxStatus.InFlight)));
             grainFactory.GetGrain<ITxRegistryGrain>(physicalTreeId).Returns(physicalRegistry);

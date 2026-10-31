@@ -76,6 +76,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 
 // The readfusion suite models WAL activation, resume and structure read dispatch.
 // The terminalcalls suite isolates chain reuse, clock fusion and no-writer clock elision.
+// The settlementcalls suite models conditional registry fallback dispatch at three callers.
 // The bootstrapcalls suite models capture, foreign scan and per-leaf saga discard fusion.
 // The maintenanceelisions suite selects the reshard, consolidation and options
 // lanes of autonomicprobes.
@@ -98,6 +99,12 @@ if (string.Equals(suite, "bootstrapcalls", StringComparison.OrdinalIgnoreCase))
 {
     var bootstrapSummary = BenchmarkRunner.Run<BootstrapCallReductionBenchmarks>(config);
     return bootstrapSummary.HasCriticalValidationErrors || bootstrapSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "settlementcalls", StringComparison.OrdinalIgnoreCase))
+{
+    var settlementSummary = BenchmarkRunner.Run<SettlementCallBenchmarks>(config);
+    return settlementSummary.HasCriticalValidationErrors || settlementSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "terminalcalls", StringComparison.OrdinalIgnoreCase))

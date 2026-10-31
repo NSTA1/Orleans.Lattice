@@ -21,6 +21,7 @@ public partial class TreeShardSplitGrainTests
             leafSnapshots: [snap],
             preCheckStatus: TxStatus.Indeterminate);
         registry.GetRecordedStatusAsync(txid).Returns(Task.FromResult(TxStatus.Committed));
+        registry.GetStatusForSettlementAsync(txid).Returns(TxStatus.Committed);
 
         await grain.InitiateSplitStateAsync(0);
 
@@ -30,6 +31,9 @@ public partial class TreeShardSplitGrainTests
             txid,
             committed: true,
             Arg.Is<IReadOnlyDictionary<string, byte[]>>(d => d != null && d.Count == 1 && d[key].SequenceEqual(snap.Value!)));
+        await registry.Received(1).GetStatusForSettlementAsync(txid);
+        await registry.DidNotReceive().GetStatusForTerminalAsync(txid);
+        await registry.DidNotReceive().GetRecordedStatusAsync(txid);
     }
 
     [Test]
@@ -41,6 +45,7 @@ public partial class TreeShardSplitGrainTests
             leafSnapshots: [snap],
             preCheckStatus: TxStatus.Indeterminate);
         registry.GetRecordedStatusAsync(txid).Returns(Task.FromResult(TxStatus.Aborted));
+        registry.GetStatusForSettlementAsync(txid).Returns(TxStatus.Aborted);
 
         await grain.InitiateSplitStateAsync(0);
 
@@ -62,6 +67,7 @@ public partial class TreeShardSplitGrainTests
             leafSnapshots: [snap],
             preCheckStatus: TxStatus.Indeterminate);
         registry.GetRecordedStatusAsync(txid).Returns(Task.FromResult(TxStatus.InFlight));
+        registry.GetStatusForSettlementAsync(txid).Returns(TxStatus.InFlight);
 
         await grain.InitiateSplitStateAsync(0);
 

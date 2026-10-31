@@ -58,6 +58,7 @@ public sealed class PreparedBucketSweepMarkerStampTests
         var registry = Substitute.For<ITxRegistryGrain>();
         registry.GetStatusAsync(tx).Returns(TxStatus.InFlight);
         registry.GetStatusForTerminalAsync(tx).Returns(TxStatus.InFlight);
+        registry.GetStatusForSettlementAsync(tx).Returns(TxStatus.InFlight);
         registry.GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>())
             .Returns(new Dictionary<Guid, TxStatus> { [tx] = TxStatus.InFlight });
         factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry);

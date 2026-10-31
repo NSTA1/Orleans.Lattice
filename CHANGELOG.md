@@ -30,6 +30,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Settlement grain calls.** Replicated prepares, migration pre-checks and forwarded-prepare deduplication resolve Indeterminate status with one registry call instead of two, retaining local verdict durability, capture gates and reader intent. (`Orleans.Lattice`)
+
 - **Internal - Orphaned grain methods removed.** Internal grain-interface methods that no production code has called since 10.2.0, left behind by the call elisions above and in 10.2.0, are deleted or reduced to internal cores of the combined calls that replaced them. A rolling upgrade from 10.2.0 is unaffected; one straight from an earlier release would fail calls to the removed methods, so upgrade through 10.2.0. ([#5217](https://github.com/NSTA1/Orleans.Lattice/pull/5217)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
 - **Performance - Point-read warmup.** Stable stamped ownership probes now return their value or absence directly, omitting a redundant cache grain call. Unstamped and routing-invalidated probes keep their existing fallback. ([#5288](https://github.com/NSTA1/Orleans.Lattice/pull/5288)) (`Orleans.Lattice`)
