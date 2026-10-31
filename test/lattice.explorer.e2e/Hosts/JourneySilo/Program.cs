@@ -160,6 +160,24 @@ builder.Host.UseOrleans(silo =>
     silo.AddAzureTableWalStorage(options =>
         storage.ConfigureWal(options, config["Wal:TableName"] ?? "OrleansLatticeWal"));
 
+    // Not in the reference silo: a second, keyed WAL provider on a table of its own, so a
+    // tree's WAL partition can be moved off the default provider and its source reclaimed
+    // (the Cluster area's WAL tools, A8 and A12). Every silo registers it, as the provider
+    // catalog's cluster contract requires.
+    silo.AddLatticeWalStorageProvider(JourneyHostEnvironment.SecondaryWalProviderKey, services =>
+    {
+        var secondary = new AzureTableWalStorageOptions();
+        storage.ConfigureWal(secondary, (config["Wal:TableName"] ?? "OrleansLatticeWal") + "Secondary");
+        IWalStorageProvider provider = new AzureTableWalStorageProvider(
+            Options.Create(secondary),
+            services.GetRequiredService<Orleans.Serialization.Serializer<WalRecord>>(),
+            services.GetService<IWalSaturationSignal>(),
+            services.GetServices<ILatticeCompressor>());
+
+        // A12 holds this provider's writes for one tree to stop a WAL move before its flip.
+        return JourneyHostEnvironment.FaultsEnabled ? new JourneyGatedWalStorageProvider(provider) : provider;
+    });
+
     silo.AddLatticeReplication(options =>
     {
         options.ClusterId = replicationClusterId;
@@ -289,7 +307,12 @@ builder.Host.UseOrleans(silo =>
         silo.AddLatticeTenantAdminApi();
     }
 
-    silo.AddLatticeSchemaEnforcement();
+    // Deliberate deviation from the reference silo, which keeps the default: the operator
+    // turns strict ingest on, so an intercepted system-origin write (a replicated atomic batch
+    // or typed-CRDT delta) that breaks a strict tree's policy is dead-lettered rather than
+    // trusted. Without it no write can ever reach the dead letters, and the Explorer's
+    // dead-letter views have nothing to show (dead-letter feature coverage, #5389).
+    silo.AddLatticeSchemaEnforcement(options => options.StrictIngest = true);
     if (config.GetValue("Schema:EnableVersioning", false))
     {
         silo.AddLatticeSchemaVersioning();

@@ -695,7 +695,9 @@ succeeds. A re-measure still running is picked up again when the overview opens.
 up the replication peer report, draws the local region and peers, marks stalled
 peers without relying on colour alone, and links to Replication.
 
-The tree list is filtered by tree name, app or tenant. It filters out restore
+The tree list's filter matches a tree's name (which carries its tenant and app), its
+owner as the Owner column reads it ("app crm, tenant acme"), or its state as the State
+column reads it, so "deleted" or "aliased" narrows the list to those trees. The list leaves out restore
 shadows and physical resize or restore targets, so rows show logical trees only.
 App and tenant ownership are parsed from `t/{tenant}/a/{app}/...` and shown as
 text. The visible `cluster.reshard-tree` control opens a dialog whose tree field
